@@ -188,7 +188,9 @@ it.effect("runtime-invalid settings fail before document commit or projection pu
         const before = yield* service.snapshot;
         const publishedBefore = codePreviewSettings;
         const saveContextBefore = settingsSaveContextProjection();
-        const invalid = { ...before.settings, tools: null } as unknown as typeof before.settings;
+        const invalidFixture = { ...before.settings, tools: null };
+        // SAFETY: This deliberately malformed fixture exercises save-time settings validation.
+        const invalid = invalidFixture as typeof invalidFixture & typeof before.settings;
         const failure = yield* service.save(invalid).pipe(Effect.flip);
         assert.ok(failure instanceof JsonDocumentError);
         assert.equal(failure.operation, "validate");

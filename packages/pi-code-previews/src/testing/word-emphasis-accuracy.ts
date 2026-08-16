@@ -137,14 +137,19 @@ function evaluateCase(accuracyCase: WordEmphasisAccuracyCase): WordEmphasisAccur
     ? pairAccuracyCounts(accuracyCase, emphasizedLinePairs(accuracyCase))
     : undefined;
 
-  return {
-    name: accuracyCase.name,
-    exactSpans: exactSpanLines === rendered.length,
-    exactSpanLines,
-    spanLines: rendered.length,
-    spans: metrics(spanCounts),
-    ...(pairCounts ? { pairs: metrics(pairCounts) } : {}),
-  };
+  return (() => {
+    const objectPart5121_0 = {
+      name: accuracyCase.name,
+      exactSpans: exactSpanLines === rendered.length,
+      exactSpanLines,
+      spanLines: rendered.length,
+      spans: metrics(spanCounts),
+    };
+    const objectPart5121_1 = pairCounts
+      ? { ...objectPart5121_0, pairs: metrics(pairCounts) }
+      : objectPart5121_0;
+    return objectPart5121_1;
+  })();
 }
 
 function rangesForExpectedSpans(

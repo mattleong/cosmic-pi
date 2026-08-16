@@ -88,7 +88,8 @@ const SETTINGS_OPTION_BY_ID = new Map(
   SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
 );
 const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
-const isJsonObject = (value: unknown): value is JsonObject => Schema.is(JsonObjectSchema)(value);
+const isJsonObject = <Value>(value: Value): value is Value & JsonObject =>
+  Schema.is(JsonObjectSchema)(value);
 
 export type RawConfigUpdate = (current: JsonObject) => JsonObject;
 
@@ -102,7 +103,8 @@ export const decodeSettingUpdate = Effect.fn("XaiConfig.decodeSettingUpdate")(fu
   return ((current: JsonObject) => {
     const next: JsonObject = { ...current };
     const currentSection = next[descriptor.section];
-    const section: JsonObject = isJsonObject(currentSection) ? { ...currentSection } : {};
+    const existing: JsonObject = isJsonObject(currentSection) ? currentSection : {};
+    const section: JsonObject = { ...existing };
     section[descriptor.key] = parsedValue;
     next[descriptor.section] = section;
     return next;

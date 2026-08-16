@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -5,7 +6,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { SynchronousIngressOfferResult } from "pi-cosmic-core";
 import { snapshotData } from "../domain/safe-data.ts";
-import { isRecord } from "../shared/utils.ts";
 import { AdvisorModelError } from "./client.ts";
 import { isolateCallback, isToolCallDelta } from "./session.ts";
 import {
@@ -15,6 +15,13 @@ import {
   type AdvisorChildEvent,
   type AdvisorFinalizationCompletion,
 } from "./types.ts";
+
+const AdvisorMessageEndSnapshotSchema = Schema.Struct({
+  role: Schema.Literal("assistant"),
+  stopReason: Schema.optional(Schema.Unknown),
+  errorMessage: Schema.optional(Schema.Unknown),
+  usage: Schema.optional(Schema.Unknown),
+});
 
 interface AdvisorSessionEventPort {
   readonly epoch: () => number;
@@ -72,10 +79,14 @@ export const makeAdvisorSessionEvents = (port: AdvisorSessionEventPort) => {
         return;
       }
       if (event.type !== "message_end") return;
-      const messageSnapshot = snapshotData(event.message);
-      if (!isRecord(messageSnapshot) || messageSnapshot.role !== "assistant") return;
-      const stopReason =
-        typeof messageSnapshot.stopReason === "string" ? messageSnapshot.stopReason : undefined;
+      const decodedMessage = Schema.decodeUnknownOption(AdvisorMessageEndSnapshotSchema)(
+        snapshotData(event.message),
+      );
+      if (Option.isNone(decodedMessage)) return;
+      const messageSnapshot = decodedMessage.value;
+      const stopReason = isStringValue(messageSnapshot.stopReason)
+        ? messageSnapshot.stopReason
+        : undefined;
       const active = port.activeCheckpoint();
       if (
         active &&
@@ -96,15 +107,18 @@ export const makeAdvisorSessionEvents = (port: AdvisorSessionEventPort) => {
           child.finalizations.offer({ epoch: finalizationEpoch, succeeded: false });
         }
       }
-      offerChildEvent(child, {
+      const messageEnd: AdvisorChildEvent = {
         epoch: child.epoch,
         type: "message-end",
-        ...(stopReason === undefined ? {} : { stopReason }),
-        ...(typeof messageSnapshot.errorMessage === "string"
-          ? { errorMessage: messageSnapshot.errorMessage }
-          : {}),
         usage: snapshotData(messageSnapshot.usage),
-      });
+      };
+      const withStopReason = stopReason === undefined ? messageEnd : { ...messageEnd, stopReason };
+      offerChildEvent(
+        child,
+        isStringValue(messageSnapshot.errorMessage)
+          ? { ...withStopReason, errorMessage: messageSnapshot.errorMessage }
+          : withStopReason,
+      );
     } catch {
       port.invalidateForReprime("Advisor child event boundary failed.");
     }

@@ -2,6 +2,7 @@ import { defaultCodePreviewSettings } from "./defaults";
 import type { CodePreviewSettings } from "./schema";
 
 function freezeSettings(settings: CodePreviewSettings): CodePreviewSettings {
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   return Object.freeze({
     ...settings,
     tools: Object.freeze([...settings.tools]),

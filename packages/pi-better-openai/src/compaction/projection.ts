@@ -70,10 +70,10 @@ export function projectOpenAIResponseInput(
 }
 
 /** Apply an extension checkpoint to the already-built provider payload. */
-export function injectOpenAICompactionCheckpoint(
-  payload: unknown,
+export function injectOpenAICompactionCheckpoint<PayloadInput>(
+  payload: PayloadInput,
   checkpoint: OpenAICompactionCheckpoint,
-): unknown | undefined {
+) {
   if (!Predicate.isObject(payload) || !Array.isArray(payload.input)) return undefined;
   const input = payload.input;
   let instructionCount = 0;

@@ -195,14 +195,20 @@ function createSettingListItems(
 }
 
 function createSettingItem(current: CodePreviewSettings, id: SettingsUiItemId): SettingItem {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const definition = SETTING_ITEM_DEFINITIONS[id] as SettingItemDefinition;
-  const item: SettingItem = {
-    id,
-    label: definition.label,
-    description: definition.description,
-    currentValue: id === "settingsFile" ? getSettingsPath() : formatSettingValue(current, id),
-    ...(definition.values ? { values: [...definition.values] } : {}),
-  };
+  const item: SettingItem = (() => {
+    const objectPart6831_0 = {
+      id,
+      label: definition.label,
+      description: definition.description,
+      currentValue: id === "settingsFile" ? getSettingsPath() : formatSettingValue(current, id),
+    };
+    const objectPart6831_1 = definition.values
+      ? { ...objectPart6831_0, values: [...definition.values] }
+      : objectPart6831_0;
+    return objectPart6831_1;
+  })();
   if (id === "shikiTheme")
     item.submenu = (currentValue, done) => new ThemeSelectSubmenu(currentValue, done);
   return item;

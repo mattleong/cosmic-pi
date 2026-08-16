@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType, isBooleanValue, isNumberValue, isStringValue } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -18,7 +19,7 @@ const SerializedErrorSchema = Schema.Struct({
   message: Schema.String,
   stack: Schema.optional(Schema.String),
 });
-const FailureRecordSchema = Schema.Struct({
+export const AdvisorFailureRecordSchema = Schema.Struct({
   timestamp: Schema.String,
   provider: Schema.optional(Schema.String),
   model: Schema.optional(Schema.String),
@@ -27,7 +28,7 @@ const FailureRecordSchema = Schema.Struct({
   durationMs: Schema.Number,
   error: SerializedErrorSchema,
 });
-const FailureRecordJson = Schema.fromJsonString(FailureRecordSchema);
+const FailureRecordJson = Schema.fromJsonString(AdvisorFailureRecordSchema);
 
 export interface AdvisorFailureDetails {
   contextChars: number;
@@ -68,15 +69,19 @@ export const logAdvisorFailureEffect = Effect.fn("AdvisorFailureLog.append")(fun
         const now = yield* Clock.currentTimeMillis;
         const provider = safeAdvisorLabel(details.provider);
         const model = safeAdvisorLabel(details.model);
-        const record = {
-          timestamp: DateTime.formatIso(DateTime.makeUnsafe(now)),
-          ...(provider ? { provider } : {}),
-          ...(model ? { model } : {}),
-          timeoutMs: details.timeoutMs,
-          contextChars: details.contextChars,
-          durationMs: Math.round(details.durationMs),
-          error: serializeError(details.error),
-        };
+        const record = (() => {
+          const objectPart2824_0 = { timestamp: DateTime.formatIso(DateTime.makeUnsafe(now)) };
+          const objectPart2824_1 = provider ? { ...objectPart2824_0, provider } : objectPart2824_0;
+          const objectPart2824_2 = model ? { ...objectPart2824_1, model } : objectPart2824_1;
+          const objectPart2824_3 = {
+            ...objectPart2824_2,
+            timeoutMs: details.timeoutMs,
+            contextChars: details.contextChars,
+            durationMs: Math.round(details.durationMs),
+            error: serializeError(details.error),
+          };
+          return objectPart2824_3;
+        })();
         const line = yield* Schema.encodeUnknownEffect(FailureRecordJson)(record);
         yield* fs.writeFileString(logPath, `${line}\n`, { flag: "a", mode: 0o600 });
         yield* fs.chmod(logPath, 0o600);
@@ -86,10 +91,10 @@ export const logAdvisorFailureEffect = Effect.fn("AdvisorFailureLog.append")(fun
     .pipe(Effect.catch(() => Effect.sync((): undefined => undefined)));
 });
 
-function serializeError(error: unknown): { name: string; message: string; stack?: string } {
-  if (typeof error !== "object" || error === null) {
+function serializeError<ErrorInput>(error: ErrorInput) {
+  if (!hasObjectRuntimeType(error) || error === null) {
     const primitive =
-      typeof error === "string" || typeof error === "number" || typeof error === "boolean"
+      isStringValue(error) || isNumberValue(error) || isBooleanValue(error)
         ? String(error)
         : "Unknown error.";
     return {
@@ -98,14 +103,19 @@ function serializeError(error: unknown): { name: string; message: string; stack?
     };
   }
   const snapshot = snapshotDataRecord(error);
-  const name = typeof snapshot?.name === "string" ? snapshot.name : "Error";
-  const message = typeof snapshot?.message === "string" ? snapshot.message : "Unknown error.";
-  const stack = typeof snapshot?.stack === "string" ? snapshot.stack : undefined;
-  return {
-    name: clip(redactSensitiveText(name), MAX_ERROR_MESSAGE_CHARS),
-    message: clip(redactSensitiveText(message), MAX_ERROR_MESSAGE_CHARS),
-    ...(stack ? { stack: clip(redactSensitiveText(stack), MAX_ERROR_STACK_CHARS) } : {}),
-  };
+  const name = isStringValue(snapshot?.name) ? snapshot.name : "Error";
+  const message = isStringValue(snapshot?.message) ? snapshot.message : "Unknown error.";
+  const stack = isStringValue(snapshot?.stack) ? snapshot.stack : undefined;
+  return (() => {
+    const objectPart4225_0 = {
+      name: clip(redactSensitiveText(name), MAX_ERROR_MESSAGE_CHARS),
+      message: clip(redactSensitiveText(message), MAX_ERROR_MESSAGE_CHARS),
+    };
+    const objectPart4225_1 = stack
+      ? { ...objectPart4225_0, stack: clip(redactSensitiveText(stack), MAX_ERROR_STACK_CHARS) }
+      : objectPart4225_0;
+    return objectPart4225_1;
+  })();
 }
 function clip(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `${value.slice(0, maxChars)}…`;

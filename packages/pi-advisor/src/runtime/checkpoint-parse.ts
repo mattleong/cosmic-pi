@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -62,7 +63,7 @@ function parseCheckpointText(raw: string): AdvisorCheckpoint {
   throw new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." });
 }
 
-function finishCheckpoint(gated: unknown): AdvisorCheckpoint {
+function finishCheckpoint<GatedInput>(gated: GatedInput): AdvisorCheckpoint {
   const checkpoint = normalizeCheckpoint(gated);
   if (Option.isNone(Schema.decodeUnknownOption(AdvisorCheckpointWireSchema)(checkpoint))) {
     throw new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." });
@@ -71,7 +72,7 @@ function finishCheckpoint(gated: unknown): AdvisorCheckpoint {
 }
 
 /** Granular correlation/exact-key diagnostics on an already-decoded JSON value. */
-function normalizeCheckpoint(parsed: unknown): AdvisorCheckpoint {
+function normalizeCheckpoint<ParsedInput>(parsed: ParsedInput): AdvisorCheckpoint {
   if (!isRecord(parsed))
     throw new AdvisorModelError({ message: "Advisor checkpoint must be an object." });
   const expected = [
@@ -90,7 +91,7 @@ function normalizeCheckpoint(parsed: unknown): AdvisorCheckpoint {
     throw new AdvisorModelError({ message: "Advisor checkpoint fields are invalid." });
   }
   if (
-    typeof parsed.checkpointId !== "string" ||
+    !isStringValue(parsed.checkpointId) ||
     !parsed.checkpointId ||
     parsed.checkpointId.length > MAX_ADVISOR_CHECKPOINT_ID_CHARS
   ) {
@@ -100,7 +101,7 @@ function normalizeCheckpoint(parsed: unknown): AdvisorCheckpoint {
     throw new AdvisorModelError({ message: "Advisor processedThrough is invalid." });
   }
   if (
-    typeof parsed.stateSummary !== "string" ||
+    !isStringValue(parsed.stateSummary) ||
     parsed.stateSummary.length > MAX_ADVISOR_STATE_SUMMARY_CHARS
   ) {
     throw new AdvisorModelError({ message: "Advisor state summary is invalid or too large." });

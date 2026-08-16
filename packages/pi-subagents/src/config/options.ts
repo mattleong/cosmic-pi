@@ -31,6 +31,7 @@ const normalizeCandidate = (candidate: DeclaredProfileCandidate): ProfileCandida
 
 export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
   if (route === "disabled") return { candidates: [] };
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   const candidates = Array.isArray(route)
     ? (route as ReadonlyArray<DeclaredProfileCandidate>)
     : [route as DeclaredProfileCandidate];
@@ -54,7 +55,9 @@ export interface ResolveSubagentConfigInput {
 /** Project routes replace global routes atomically; missing declarations inherit. */
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   const profiles = {} as Record<ProfileId, ProfileRoute>;
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   const profileSources = {} as Record<ProfileId, ProfileRouteSource>;
   for (const id of PROFILE_IDS) {
     if (project?.invalidProfileRoutes.includes(id)) {

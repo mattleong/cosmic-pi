@@ -1,35 +1,41 @@
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/asyncFunction:off
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import subagentChildBridge from "../src/boundary/host-child.ts";
+import { extensionApiFixture, extensionContextFixture, modelFixture } from "./fixtures/pi-host.ts";
 
 describe("subagent child host bridge", () => {
   it("injects the priority service tier only for fast-capable OpenAI models", () => {
     const previousChild = process.env.PI_SUBAGENT_CHILD;
     process.env.PI_SUBAGENT_CHILD = "1";
     try {
-      const handlers = new Map<string, (...args: unknown[]) => unknown>();
-      const pi = {
+      const handlers = new Map<string, ExtensionHandler<any, any>>();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const pi = extensionApiFixture({
         registerFlag: vi.fn(),
         getFlag: vi.fn(() => true),
         registerTool: vi.fn(),
-        on: vi.fn((name: string, handler: (...args: unknown[]) => unknown) =>
+        on: vi.fn((name: string, handler: ExtensionHandler<any, any>) =>
           handlers.set(name, handler),
         ),
-      } as unknown as ExtensionAPI;
+      });
       subagentChildBridge(pi);
       const beforeRequest = handlers.get("before_provider_request");
       expect(
         beforeRequest?.(
           { payload: { input: "task" } },
-          { model: { provider: "openai-codex", id: "gpt-5.6-sol" } },
+          extensionContextFixture({
+            model: modelFixture({ provider: "openai-codex", id: "gpt-5.6-sol" }),
+          }),
         ),
       ).toEqual({ input: "task", service_tier: "priority" });
       expect(
         beforeRequest?.(
           { payload: { input: "task" } },
-          { model: { provider: "anthropic", id: "claude-opus-4-6" } },
+          extensionContextFixture({
+            model: modelFixture({ provider: "anthropic", id: "claude-opus-4-6" }),
+          }),
         ),
       ).toBeUndefined();
     } finally {
@@ -47,13 +53,14 @@ describe("subagent child host bridge", () => {
     process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER = "custom-provider";
     try {
       const registerProvider = vi.fn();
-      const pi = {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const pi = extensionApiFixture({
         registerProvider,
         registerFlag: vi.fn(),
         getFlag: vi.fn(() => false),
         registerTool: vi.fn(),
         on: vi.fn(),
-      } as unknown as ExtensionAPI;
+      });
 
       subagentChildBridge(pi);
 
@@ -92,24 +99,29 @@ describe("subagent child host bridge", () => {
       Object.defineProperty(process, "connected", { configurable: true, value: true });
       Object.defineProperty(process, "send", {
         configurable: true,
-        value: (message: object, callback: (error?: Error | null) => void) => {
+        value: (
+          message: Parameters<NonNullable<typeof process.send>>[0],
+          callback: (error?: Error | null) => void,
+        ) => {
           outbound = message;
           callback(null);
         },
       });
-      const pi = {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const pi = extensionApiFixture({
         registerFlag: vi.fn(),
         getFlag: vi.fn(() => false),
         registerTool: vi.fn((tool: typeof registered) => {
           registered = tool;
         }),
         on: vi.fn((name: string, handler: () => void) => handlers.set(name, handler)),
-      } as unknown as ExtensionAPI;
+      });
       subagentChildBridge(pi);
       handlers.get("session_start")?.();
 
       const executing = registered?.execute("call", { kind: "question", message: "Question?" });
       await Promise.resolve();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       (process.emit as (...args: unknown[]) => boolean)("message", {
         channel: "pi-subagents",
         type: "parent_reply",
@@ -123,9 +135,9 @@ describe("subagent child host bridge", () => {
       handlers.get("session_shutdown")?.();
     } finally {
       if (sendDescriptor) Object.defineProperty(process, "send", sendDescriptor);
-      else delete (process as { send?: unknown }).send;
+      else Reflect.deleteProperty(process, "send");
       if (connectedDescriptor) Object.defineProperty(process, "connected", connectedDescriptor);
-      else delete (process as { connected?: unknown }).connected;
+      else Reflect.deleteProperty(process, "connected");
       if (previousChild === undefined) delete process.env.PI_SUBAGENT_CHILD;
       else process.env.PI_SUBAGENT_CHILD = previousChild;
     }
@@ -136,7 +148,8 @@ describe("subagent child host bridge", () => {
     process.env.PI_SUBAGENT_CHILD = "1";
     try {
       let registered: Pick<ToolDefinition, "name" | "executionMode" | "parameters"> | undefined;
-      const pi = {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const pi = extensionApiFixture({
         registerFlag: vi.fn(),
         getFlag: vi.fn(() => false),
         registerTool: vi.fn(
@@ -145,7 +158,7 @@ describe("subagent child host bridge", () => {
           },
         ),
         on: vi.fn(),
-      } as unknown as ExtensionAPI;
+      });
 
       subagentChildBridge(pi);
 

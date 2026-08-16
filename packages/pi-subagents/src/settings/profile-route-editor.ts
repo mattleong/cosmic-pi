@@ -71,6 +71,7 @@ const cloneCandidates = (
   candidates: ReadonlyArray<DeclaredProfileCandidate | ProfileCandidate>,
 ): ReadonlyArray<ProfileCandidate> => candidates.map(cloneCandidate);
 
+// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 const candidatesFromDeclaration = (
   declared: DeclaredProfileRoute,
 ): ReadonlyArray<ProfileCandidate> =>

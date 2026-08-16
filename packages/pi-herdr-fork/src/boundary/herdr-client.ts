@@ -232,7 +232,7 @@ export const decodeJson = <A>(
   mutation = false,
 ): Effect.Effect<A, HerdrForkError> =>
   Effect.try({
-    try: (): unknown => JSON.parse(source),
+    try: () => JSON.parse(source),
     catch: () =>
       herdrForkError(
         operation,
@@ -267,13 +267,18 @@ export const command = (
   timeoutMillis?: number,
   confirmedRejectionCodes?: ReadonlyArray<string>,
 ): Effect.Effect<HerdrCommandOutput, HerdrForkError> =>
-  runner({
-    args,
-    operation,
-    mutation,
-    ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
-    ...(confirmedRejectionCodes === undefined ? {} : { confirmedRejectionCodes }),
-  });
+  runner(
+    (() => {
+      const objectPart9136_0 = { args, operation, mutation };
+      const objectPart9136_1 =
+        timeoutMillis === undefined ? objectPart9136_0 : { ...objectPart9136_0, timeoutMillis };
+      const objectPart9136_2 =
+        confirmedRejectionCodes === undefined
+          ? objectPart9136_1
+          : { ...objectPart9136_1, confirmedRejectionCodes };
+      return objectPart9136_2;
+    })(),
+  );
 
 export const paneCommand = (
   runner: HerdrCommandRunner,

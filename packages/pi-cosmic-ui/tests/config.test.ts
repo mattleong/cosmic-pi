@@ -9,7 +9,7 @@ import {
   JsonDocumentError,
   JsonDocumentStore,
   nodePlatformLayer,
-  type JsonDocumentStoreShape,
+  type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import {
@@ -100,7 +100,7 @@ describe("Cosmic UI config", () => {
         operations.push(`${operation}:${path}`);
         return method(path, ...rest);
       };
-    const service: JsonDocumentStoreShape = {
+    const service: JsonDocumentStoreContract = {
       exists: record("exists", memory.service.exists),
       readObject: record("read", memory.service.readObject),
       writeObject: record("write", memory.service.writeObject),
@@ -176,7 +176,7 @@ describe("Cosmic UI config", () => {
       path: "/secret/path",
       message: "credential=do-not-log",
     });
-    const service: JsonDocumentStoreShape = {
+    const service: JsonDocumentStoreContract = {
       exists: () => Effect.succeed(true),
       readObject: () => Effect.fail(failure),
       writeObject: () => Effect.fail(failure),

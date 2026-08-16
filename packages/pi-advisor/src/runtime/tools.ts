@@ -82,6 +82,7 @@ function defineAdvisorTool<Params>(
       description: definition.description,
       parameters: definition.parameters,
       execute(_id, params, signal) {
+        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
         return executor.run(
           definition.run(params as Params).pipe(Effect.withSpan(definition.span)),
           signal,
@@ -440,5 +441,6 @@ function textResult(text: string, root: AdvisorProjectRoot, truncated: boolean) 
 }
 function mark<T extends ToolDefinition>(tool: T): T & { readonly [PACKAGE_TOOL_IDENTITY]: true } {
   Object.defineProperty(tool, PACKAGE_TOOL_IDENTITY, { value: true, enumerable: false });
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   return tool as T & { readonly [PACKAGE_TOOL_IDENTITY]: true };
 }

@@ -48,7 +48,7 @@ export const formatWorkingMessage = (
     : `Working · ${elapsed} · ~${tokensPerSecond.toFixed(1)} tok/s`;
 };
 
-export interface WorkingTimerServiceShape {
+export interface WorkingTimerServiceContract {
   readonly start: Effect.Effect<void>;
   readonly recordOutputCharacters: (characters: number) => Effect.Effect<void>;
   readonly noteOutputCharacters: (characters: number) => void;
@@ -59,7 +59,7 @@ export interface WorkingTimerServiceShape {
 /** Owns the elapsed-time ticker for Pi's live working row. */
 export class WorkingTimerService extends Context.Service<
   WorkingTimerService,
-  WorkingTimerServiceShape
+  WorkingTimerServiceContract
 >()("pi-cosmic-ui/working/service/WorkingTimerService") {
   static readonly layer = Layer.effect(
     this,

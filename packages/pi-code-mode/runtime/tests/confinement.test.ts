@@ -15,7 +15,15 @@ import {
 } from "../src/interpreter/confinement.js";
 
 const run = (code: string, limits?: CodeMode.ExecutionLimits) =>
-  Effect.runPromise(CodeMode.execute({ code, ...(limits ? { limits } : {}) }));
+  Effect.runPromise(
+    CodeMode.execute(
+      (() => {
+        const objectPart805_0 = { code };
+        const objectPart805_1 = limits ? { ...objectPart805_0, limits } : objectPart805_0;
+        return objectPart805_1;
+      })(),
+    ),
+  );
 
 const failure = async (code: string, limits?: CodeMode.ExecutionLimits) => {
   const result = await run(code, limits);

@@ -105,9 +105,7 @@ function harness(
   } = {},
 ) {
   const registry = handlerRegistry();
-  const { commands, registerCommand } = commandRegistry<{
-    handler: (args: string, ctx: never) => unknown;
-  }>();
+  const { commands, registerCommand } = commandRegistry();
   const { layer: runtimeServiceLayer, pending, requests } = controllableRuntimeService();
   const entries: AdvisorHostEntry[] = [
     {
@@ -123,7 +121,7 @@ function harness(
   const pi = advisorExtensionApi({
     on: registry.on,
     registerCommand,
-    appendEntry: (customType: string, data: unknown) => {
+    appendEntry: (customType: string, data) => {
       if (customType === ADVISOR_REVIEW_CARD_TYPE && remainingCardAppendFailures > 0) {
         remainingCardAppendFailures -= 1;
         throw new Error("card append failed");
@@ -139,7 +137,7 @@ function harness(
         data,
       });
     },
-    sendMessage: vi.fn((message: unknown) => {
+    sendMessage: vi.fn((message) => {
       if (options.failSend) throw new Error("send failed");
       sent.push(message);
     }),
@@ -168,7 +166,8 @@ function harness(
     ),
     runtimeService: runtimeServiceLayer,
   })(pi);
-  const emit = async (name: string, event: unknown) => registry.emitWithContext(name, event, ctx);
+  const emit = async <Event>(name: string, event: Event) =>
+    registry.emitWithContext(name, event, ctx);
   return { pi, ctx, commands, requests, pending, entries, sent, emit };
 }
 
@@ -187,6 +186,7 @@ async function createManualCard(
   value: ReturnType<typeof harness>,
   result: (request: AdvisorCheckpointRequest) => AdvisorCheckpoint,
 ): Promise<void> {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   await value.commands.get("advisor")!.handler("review", value.ctx as never);
   await tick();
   value.pending.at(-1)!.resolve(result(value.requests.at(-1)!));
@@ -284,6 +284,7 @@ describe("Advisor extension product behavior", () => {
     await value.emit("session_start", { type: "session_start" });
     await settleAutomatic(value, pass);
     await createManualCard(value, (request) => finding(request, "concern", "manual-one"));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await value.commands.get("advisor")!.handler("fix", value.ctx as never);
     expect(value.sent).toHaveLength(1);
     expect(value.entries.at(-1)).toMatchObject({
@@ -293,8 +294,10 @@ describe("Advisor extension product behavior", () => {
 
     await createManualCard(value, suggestion);
     const before = value.sent.length;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await value.commands.get("advisor")!.handler("dismiss", value.ctx as never);
     expect(value.sent).toHaveLength(before);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect(
       [...value.entries]
         .reverse()
@@ -314,6 +317,7 @@ describe("Advisor extension product behavior", () => {
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", progressTurn());
     const before = value.entries.length;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await value.commands.get("advisor")!.handler("cancel", value.ctx as never);
     expect(value.entries).toHaveLength(before);
   });
@@ -355,6 +359,7 @@ describe("Advisor extension product behavior", () => {
     await value.emit("session_start", { type: "session_start" });
     await settleAutomatic(value, pass);
     await createManualCard(value, (request) => finding(request, "concern"));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await value.commands.get("advisor")!.handler("fix", value.ctx as never);
     expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_ACTION_TYPE)).toBe(
       false,
@@ -370,6 +375,7 @@ describe("Advisor extension product behavior", () => {
     await value.emit("session_start", { type: "session_start" });
     await settleAutomatic(value, pass);
     await createManualCard(value, (request) => finding(request, "concern"));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await value.commands.get("advisor")!.handler("fix", value.ctx as never);
     expect(value.sent).toHaveLength(1);
     expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_ACTION_TYPE)).toBe(
@@ -393,6 +399,7 @@ describe("Advisor extension product behavior", () => {
       }),
     );
     expect(value.sent).toHaveLength(0);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await value.commands.get("advisor")!.handler("", value.ctx as never);
     expect(value.ctx.ui.select).toHaveBeenLastCalledWith(
       expect.stringContaining("issue shown"),

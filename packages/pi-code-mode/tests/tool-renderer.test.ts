@@ -25,12 +25,14 @@ import {
 } from "../src/tools/format.ts";
 
 /** Identity theme: no ANSI, so assertions read plain text. */
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   bold: (text: string) => text,
   fg: (_key: string, text: string) => text,
 } as Theme;
 
 /** Marking theme: color keys become visible tags for the few color-sensitive assertions. */
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const markingTheme = {
   bold: (text: string) => `<b>${text}</b>`,
   fg: (key: string, text: string) => `<${key}>${text}</${key}>`,
@@ -132,6 +134,7 @@ describe("nestedToolIcon", () => {
       }),
     ).toBeUndefined();
     expect(nestedToolIcon("read", () => "📖")).toBeUndefined();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect(nestedToolIcon("pi.read", () => 42 as never)).toBeUndefined();
     expect(nestedToolIcon("pi.read", () => "📖\u001b]0;title\u0007")).toBe("📖");
     expect(nestedToolIcon("pi.read", () => "📖")).toBe("📖");
@@ -444,14 +447,16 @@ describe("renderCodeModeToolResult", () => {
   });
 
   it("degrades to a bounded custom result instead of throwing into Pi's generic fallback", () => {
-    const throwingTheme = {
+    const themeFixture = {
       bold: () => {
         throw new Error("theme unavailable");
       },
       fg: () => {
         throw new Error("theme unavailable");
       },
-    } as unknown as Theme;
+    };
+    // SAFETY: The renderer uses only bold and fg from this deliberately hostile theme.
+    const throwingTheme = themeFixture as typeof themeFixture & Theme;
     const result = resultOf("SECRET-MODEL-OUTPUT", {
       toolCalls: [{ tool: "pi.read", status: "completed", activity: "Read a" }],
     });

@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import { redactSensitiveText, stringifyRedactedObservation } from "../domain/redaction.ts";
 import { isRecord } from "../shared/utils.ts";
 export const DEFAULT_MAX_CONTEXT_CHARS = 240_000;
@@ -189,8 +190,11 @@ function composeTranscript(
     .join("\n\n");
 }
 
-function serializeMessage(value: unknown, index: number): SerializedMessage | undefined {
-  if (!isRecord(value) || typeof value.role !== "string") return undefined;
+function serializeMessage<ValueInput>(
+  value: ValueInput,
+  index: number,
+): SerializedMessage | undefined {
+  if (!isRecord(value) || !isStringValue(value.role)) return undefined;
 
   switch (value.role) {
     case "user":
@@ -218,7 +222,7 @@ function serializeMessage(value: unknown, index: number): SerializedMessage | un
     case "bashExecution": {
       if (value.excludeFromContext === true) return undefined;
       const command = nonEmptyString(value.command);
-      const output = typeof value.output === "string" ? value.output : "";
+      const output = isStringValue(value.output) ? value.output : "";
       const text = [command ? `$ ${command}` : undefined, output].filter(Boolean).join("\n");
       return withText(index, "shell execution", text);
     }
@@ -240,17 +244,17 @@ function withText(
   return normalized ? { index, role, text: redactSensitiveText(normalized) } : undefined;
 }
 
-function serializeAssistantContent(content: unknown): string {
+function serializeAssistantContent<ContentInput>(content: ContentInput): string {
   if (!Array.isArray(content)) return serializeContent(content, false);
   return content
     .flatMap((part) => {
-      if (!isRecord(part) || typeof part.type !== "string") return [];
-      if (part.type === "text" && typeof part.text === "string") return [part.text];
+      if (!isRecord(part) || !isStringValue(part.type)) return [];
+      if (part.type === "text" && isStringValue(part.text)) return [part.text];
       if (part.type === "thinking") {
-        if (typeof part.thinking === "string" && part.thinking) {
+        if (isStringValue(part.thinking) && part.thinking) {
           return [`[assistant thinking]\n${part.thinking}`];
         }
-        if (typeof part.signature === "string" && part.signature) {
+        if (isStringValue(part.signature) && part.signature) {
           return ["[assistant thinking was exposed only as an opaque/redacted signature]"];
         }
         return ["[assistant thinking was redacted or unavailable]"];
@@ -264,13 +268,13 @@ function serializeAssistantContent(content: unknown): string {
     .join("\n");
 }
 
-function serializeContent(content: unknown, includeImages: boolean): string {
-  if (typeof content === "string") return content;
+function serializeContent<ContentInput>(content: ContentInput, includeImages: boolean): string {
+  if (isStringValue(content)) return content;
   if (!Array.isArray(content)) return "";
   return content
     .flatMap((part) => {
-      if (!isRecord(part) || typeof part.type !== "string") return [];
-      if (part.type === "text" && typeof part.text === "string") return [part.text];
+      if (!isRecord(part) || !isStringValue(part.type)) return [];
+      if (part.type === "text" && isStringValue(part.text)) return [part.text];
       if (includeImages && part.type === "image") {
         const mimeType = nonEmptyString(part.mimeType);
         return [`[image${mimeType ? `: ${mimeType}` : ""} omitted]`];
@@ -280,7 +284,7 @@ function serializeContent(content: unknown, includeImages: boolean): string {
     .join("\n");
 }
 
-function safeJson(value: unknown): string | undefined {
+function safeJson<ValueInput>(value: ValueInput): string | undefined {
   if (value === undefined) return undefined;
   return stringifyRedactedObservation(value);
 }
@@ -337,8 +341,8 @@ function normalizeMaxChars(value: number | undefined): number {
   return Math.floor(value);
 }
 
-function nonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+function nonEmptyString<ValueInput>(value: ValueInput): string | undefined {
+  if (!isStringValue(value)) return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
 }

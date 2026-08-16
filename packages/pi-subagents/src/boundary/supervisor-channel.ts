@@ -6,6 +6,7 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
@@ -128,7 +129,7 @@ export interface SupervisorChannelHandle {
   readonly close: Effect.Effect<void, SupervisorChannelError>;
 }
 
-export interface SupervisorChannelShape {
+export interface SupervisorChannelContract {
   readonly open: (
     request: SupervisorChannelOpenRequest,
   ) => Effect.Effect<SupervisorChannelHandle, SupervisorChannelError, Scope.Scope>;
@@ -198,9 +199,9 @@ const channelError = (operation: string, code: string, message: string) =>
 const isLoopbackPeer = (address: string | undefined): boolean =>
   address === LOOPBACK_HOST || address === "::ffff:127.0.0.1";
 
-const authenticatedToken = (expected: string, value: unknown): boolean => {
+const authenticatedToken = <ValueInput>(expected: string, value: ValueInput): boolean => {
   const expectedBytes = Buffer.from(expected, "utf8");
-  const supplied = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.alloc(0);
+  const supplied = isStringValue(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
   if (supplied.length !== expectedBytes.length) {
     // Keep malformed-token work on the same constant-time primitive without accepting it.
     timingSafeEqual(expectedBytes, expectedBytes);
@@ -209,7 +210,7 @@ const authenticatedToken = (expected: string, value: unknown): boolean => {
   return timingSafeEqual(expectedBytes, supplied);
 };
 
-const exactConfig = (value: unknown) => {
+const exactConfig = <ValueInput>(value: ValueInput) => {
   const decoded = Schema.decodeUnknownOption(SupervisorChannelConfigSchema, {
     onExcessProperty: "error",
   })(value);
@@ -289,7 +290,7 @@ const prepareStateDirectory = async (
   };
 };
 
-const writePrivateConfig = async (path: string, value: unknown): Promise<void> => {
+const writePrivateConfig = async <ValueInput>(path: string, value: ValueInput): Promise<void> => {
   const source = `${JSON.stringify(value)}\n`;
   if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
     throw new Error("config-size");
@@ -321,7 +322,7 @@ const listen = (server: Server): Promise<number> =>
     const onListening = () => {
       server.off("error", onError);
       const address = server.address();
-      if (!address || typeof address === "string") {
+      if (!address || isStringValue(address)) {
         rejectListen(new Error("invalid-listener-address"));
         return;
       }
@@ -807,13 +808,14 @@ const acceptSocket = (state: NodeChannelState, socket: Socket): void => {
     onLine: (line) => {
       let value: unknown;
       try {
+        // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
         value = JSON.parse(line) as unknown;
       } catch {
         destroy();
         return;
       }
       const token =
-        value && typeof value === "object" && "token" in value ? value.token : undefined;
+        value && hasObjectRuntimeType(value) && "token" in value ? value.token : undefined;
       if (!authenticatedToken(state.token, token)) {
         destroy();
         return;
@@ -971,7 +973,7 @@ const acquireNodeChannel = async (
 
 export const makeSupervisorChannel = (
   options: SupervisorChannelLayerOptions,
-): SupervisorChannelShape => ({
+): SupervisorChannelContract => ({
   open: (request) =>
     Effect.gen(function* () {
       if (!isSupervisorRunId(request.runId))
@@ -1192,9 +1194,10 @@ export const makeSupervisorChannel = (
     }),
 });
 
-export class SupervisorChannel extends Context.Service<SupervisorChannel, SupervisorChannelShape>()(
-  "pi-subagents/boundary/supervisor-channel/SupervisorChannel",
-) {
+export class SupervisorChannel extends Context.Service<
+  SupervisorChannel,
+  SupervisorChannelContract
+>()("pi-subagents/boundary/supervisor-channel/SupervisorChannel") {
   static readonly layer = (
     options: SupervisorChannelLayerOptions,
   ): Layer.Layer<SupervisorChannel> => Layer.succeed(this, makeSupervisorChannel(options));

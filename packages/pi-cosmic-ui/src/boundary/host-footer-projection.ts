@@ -3,7 +3,7 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
-import type { HostCallbackBoundaryShape } from "./host-callback.ts";
+import type { HostCallbackBoundaryContract } from "./host-callback.ts";
 
 export type FooterContextUsage = ReturnType<ExtensionContext["getContextUsage"]>;
 export type FooterModel = NonNullable<ExtensionContext["model"]>;
@@ -39,14 +39,14 @@ export interface FooterHostProjection {
 }
 
 export const hostQuery = <A>(
-  callbacks: HostCallbackBoundaryShape,
+  callbacks: HostCallbackBoundaryContract,
   callback: () => A,
   fallback: A,
 ): A => callbacks.invoke("host-query", callback, fallback);
 
 export const materializeModel = (
   ctx: ExtensionContext,
-  callbacks: HostCallbackBoundaryShape,
+  callbacks: HostCallbackBoundaryContract,
 ): FooterModelView | undefined =>
   hostQuery<FooterModelView | undefined>(
     callbacks,
@@ -67,7 +67,7 @@ export const materializeModel = (
 
 export const materializeContextUsage = (
   ctx: ExtensionContext,
-  callbacks: HostCallbackBoundaryShape,
+  callbacks: HostCallbackBoundaryContract,
 ): FooterContextUsage =>
   hostQuery<FooterContextUsage>(
     callbacks,
@@ -90,11 +90,12 @@ export const materializeFooterHostProjection = (options: {
   readonly pi: ExtensionAPI;
   readonly ctx: ExtensionContext | undefined;
   readonly footerData: ReadonlyFooterDataProvider;
-  readonly callbacks: HostCallbackBoundaryShape;
+  readonly callbacks: HostCallbackBoundaryContract;
   readonly model: FooterModelView | undefined;
   readonly contextUsage: FooterContextUsage;
 }): FooterHostProjection => {
   const { pi, ctx, footerData, callbacks, model, contextUsage } = options;
+  // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
   const extensionStatuses = hostQuery(
     callbacks,
     () =>

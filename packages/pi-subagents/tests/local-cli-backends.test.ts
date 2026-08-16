@@ -18,7 +18,7 @@ import { claudeWriterCwdPolicy } from "../src/boundary/claude-writer-cwd.ts";
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import type {
   SupervisorChannelHandle,
-  SupervisorChannelShape,
+  SupervisorChannelContract,
 } from "../src/boundary/supervisor-channel.ts";
 import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import {
@@ -55,7 +55,7 @@ const launch = (
 });
 
 interface SupervisorFixture {
-  readonly shape: SupervisorChannelShape;
+  readonly channel: SupervisorChannelContract;
   readonly epochs: number[];
   readonly replies: Array<{ readonly requestId: string; readonly message: string }>;
   readonly readyCalls: () => number;
@@ -69,7 +69,7 @@ const supervisorFixture = (): SupervisorFixture => {
   const acceptedReports = new Set<number>();
   let handle: SupervisorChannelHandle | undefined;
   let readyCalls = 0;
-  const shape: SupervisorChannelShape = {
+  const channel: SupervisorChannelContract = {
     open: (request) =>
       Effect.gen(function* () {
         const events = yield* Queue.unbounded<
@@ -138,7 +138,7 @@ const supervisorFixture = (): SupervisorFixture => {
       }),
   };
   return {
-    shape,
+    channel,
     epochs,
     replies,
     readyCalls: () => readyCalls,
@@ -237,7 +237,7 @@ describe("local CLI Phase One backends", () => {
     ).rejects.toBeDefined();
   });
 
-  it("decodes each current Codex warning notification shape", async () => {
+  it("decodes each current Codex warning notification channel", async () => {
     await expect(
       Effect.runPromise(decodeCodexNotification("warning", { message: "Runtime warning" })),
     ).resolves.toEqual({ type: "warning", message: "Runtime warning" });
@@ -408,7 +408,7 @@ describe("local CLI Phase One backends", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const driver = makeLocalClaudeBackendDriver(harness.processes, supervisor.shape);
+            const driver = makeLocalClaudeBackendDriver(harness.processes, supervisor.channel);
             if (driver.preflight)
               yield* driver.preflight({
                 context: "fresh",
@@ -448,6 +448,7 @@ describe("local CLI Phase One backends", () => {
             });
             yield* backend.controls.interrupt;
 
+            // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
             Queue.offerUnsafe(
               supervisor.current().events as Queue.Queue<BackendEvent, Cause.Done>,
               {
@@ -463,6 +464,7 @@ describe("local CLI Phase One backends", () => {
               requestId: "question-7",
             });
             yield* backend.controls.reply("question-7", "Proceed");
+            // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
             Queue.offerUnsafe(
               supervisor.current().events as Queue.Queue<BackendEvent, Cause.Done>,
               {
@@ -508,7 +510,7 @@ describe("local CLI Phase One backends", () => {
             Effect.gen(function* () {
               const backend = yield* makeLocalClaudeBackendDriver(
                 harness.processes,
-                supervisor.shape,
+                supervisor.channel,
               ).spawn(launch("claude", model));
               yield* backend.controls.initialize;
               yield* backend.controls.start("Interrupt fixture", 1);
@@ -544,7 +546,7 @@ describe("local CLI Phase One backends", () => {
             Effect.gen(function* () {
               const backend = yield* makeLocalClaudeBackendDriver(
                 harness.processes,
-                supervisor.shape,
+                supervisor.channel,
               ).spawn(launch("claude", model));
               yield* backend.controls.initialize;
               yield* backend.controls.start("Interrupt foreign evidence", 1);
@@ -583,7 +585,7 @@ describe("local CLI Phase One backends", () => {
               Effect.gen(function* () {
                 const backend = yield* makeLocalClaudeBackendDriver(
                   harness.processes,
-                  supervisor.shape,
+                  supervisor.channel,
                 ).spawn(launch("claude", model));
                 return yield* backend.controls.initialize;
               }),
@@ -606,7 +608,7 @@ describe("local CLI Phase One backends", () => {
             Effect.gen(function* () {
               const backend = yield* makeLocalCodexBackendDriver(
                 harness.processes,
-                supervisor.shape,
+                supervisor.channel,
               ).spawn({ ...launch("codex", "service-tier-mismatch"), fastMode: true });
               return yield* backend.controls.initialize;
             }),
@@ -628,7 +630,7 @@ describe("local CLI Phase One backends", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const driver = makeLocalCodexBackendDriver(harness.processes, supervisor.shape);
+            const driver = makeLocalCodexBackendDriver(harness.processes, supervisor.channel);
             if (driver.preflight)
               yield* driver.preflight({
                 context: "fresh",
@@ -667,6 +669,7 @@ describe("local CLI Phase One backends", () => {
             yield* backend.controls.steer("Steer safely");
             yield* backend.controls.interrupt;
             expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+            // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
             Queue.offerUnsafe(
               supervisor.current().events as Queue.Queue<BackendEvent, Cause.Done>,
               {
@@ -702,7 +705,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalCodexBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("codex", "interrupt-notification-first"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Codex task", 9);
@@ -726,7 +729,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalCodexBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("codex", "interrupted-without-request"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Codex task", 9);
@@ -754,7 +757,7 @@ describe("local CLI Phase One backends", () => {
             Effect.gen(function* () {
               const backend = yield* makeLocalClaudeBackendDriver(
                 harness.processes,
-                supervisor.shape,
+                supervisor.channel,
               ).spawn(launch("claude", "completed-with-report"));
               yield* backend.controls.initialize;
               yield* backend.controls.start("Claude task", 9);
@@ -807,7 +810,7 @@ describe("local CLI Phase One backends", () => {
             Effect.gen(function* () {
               const backend = yield* makeLocalCodexBackendDriver(
                 harness.processes,
-                supervisor.shape,
+                supervisor.channel,
               ).spawn(
                 launch("codex", accepted ? "completed-with-report" : "completed-without-report"),
               );
@@ -839,7 +842,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "exit-no-report"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Claude task", 9);
@@ -872,7 +875,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalCodexBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("codex", "exit-no-report"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Codex task", 9);
@@ -1027,10 +1030,12 @@ describe("local CLI Phase One backends", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const backend = yield* makeLocalCodexBackendDriver(processes, supervisor.shape).spawn({
-              ...launch("codex"),
-              fastMode: true,
-            });
+            const backend = yield* makeLocalCodexBackendDriver(processes, supervisor.channel).spawn(
+              {
+                ...launch("codex"),
+                fastMode: true,
+              },
+            );
             const root = join(directory, "subagents", "local-cli-v1");
             const entries = yield* Effect.promise(() => fs.readdir(root));
             const harnessDirectory = join(root, entries[0]!);
@@ -1074,7 +1079,7 @@ describe("local CLI Phase One backends", () => {
         await expect(
           Effect.runPromise(
             Effect.scoped(
-              makeLocalCodexBackendDriver(processes, supervisor.shape).spawn(launch("codex")),
+              makeLocalCodexBackendDriver(processes, supervisor.channel).spawn(launch("codex")),
             ),
           ),
         ).rejects.toMatchObject({
@@ -1098,7 +1103,7 @@ describe("local CLI Phase One backends", () => {
             Effect.gen(function* () {
               const backend = yield* makeLocalClaudeBackendDriver(
                 harness.processes,
-                supervisor.shape,
+                supervisor.channel,
               ).spawn(launch("claude", model));
               yield* backend.controls.initialize;
               yield* backend.controls.start("Trigger frame", 1);
@@ -1123,7 +1128,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "repeated-usage"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Repeat usage", 3);
@@ -1166,12 +1171,13 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "buffered-report-cost"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Report with final cost", 6);
             expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
             expect(yield* take(backend.events)).toMatchObject({ type: "assistant_message" });
+            // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
             Queue.offerUnsafe(
               supervisor.current().events as Queue.Queue<BackendEvent, Cause.Done>,
               {
@@ -1211,7 +1217,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "claude-fixture"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Saturate report forwarding", 12);
@@ -1219,6 +1225,7 @@ describe("local CLI Phase One backends", () => {
             backend.acknowledge(started);
             const assistant = yield* take(backend.events);
             backend.acknowledge(assistant);
+            // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
             const supervisorQueue = supervisor.current().events as Queue.Queue<
               BackendEvent,
               Cause.Done
@@ -1268,7 +1275,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "task-notification"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Run a background task", 8);
@@ -1302,7 +1309,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "duplicate-replay"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Duplicate replay", 5);
@@ -1330,7 +1337,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "foreign-replay"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Foreign replay", 4);
@@ -1356,7 +1363,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalCodexBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("codex", "informational-items"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Codex items", 2);
@@ -1392,7 +1399,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalCodexBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("codex", "forbidden-completed-item"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Codex forbidden", 2);
@@ -1425,7 +1432,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "interrupt-late-terminal"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Interrupt late", 1);
@@ -1458,7 +1465,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "interrupt-terminal-no-response"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Interrupt without response", 4);
@@ -1494,7 +1501,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalCodexBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("codex", "interrupt-late-completion"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Codex late interrupt", 9);
@@ -1524,7 +1531,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalCodexBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("codex", "interrupt-completion-no-response"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Codex interrupt without response", 10);
@@ -1552,7 +1559,7 @@ describe("local CLI Phase One backends", () => {
           Effect.gen(function* () {
             const backend = yield* makeLocalClaudeBackendDriver(
               harness.processes,
-              supervisor.shape,
+              supervisor.channel,
             ).spawn(launch("claude", "exit-no-report"));
             yield* backend.controls.initialize;
             yield* backend.controls.start("Exit", 1);

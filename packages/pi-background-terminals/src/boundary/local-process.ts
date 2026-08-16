@@ -50,13 +50,13 @@ export class LocalProcessError extends Schema.TaggedError<LocalProcessError>()(
   { operation: Schema.String, message: Schema.String },
 ) {}
 
-export interface LocalProcessShape {
+export interface LocalProcessContract {
   readonly spawn: (
     request: LocalProcessRequest,
   ) => Effect.Effect<LocalProcessHandle, LocalProcessError, Scope.Scope>;
 }
 
-const processError = (operation: string, error: unknown) =>
+const processError = <ErrorInput>(operation: string, error: ErrorInput) =>
   new LocalProcessError({
     operation,
     message: error instanceof Error ? error.message : `Unable to ${operation} local process.`,
@@ -197,11 +197,16 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   const settleExit = (code: number | null, signal: NodeJS.Signals | null) =>
     Deferred.doneUnsafe(
       exited,
-      Effect.succeed({
-        exitCode: code,
-        ...(signal ? { signal } : {}),
-        ...(spawnError ? { error: spawnError } : {}),
-      }),
+      Effect.succeed(
+        (() => {
+          const objectPart7073_0 = { exitCode: code };
+          const objectPart7073_1 = signal ? { ...objectPart7073_0, signal } : objectPart7073_0;
+          const objectPart7073_2 = spawnError
+            ? { ...objectPart7073_1, error: spawnError }
+            : objectPart7073_1;
+          return objectPart7073_2;
+        })(),
+      ),
     );
   const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
     terminateLingeringGroup(child);
@@ -257,7 +262,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   };
 });
 
-export class LocalProcess extends Context.Service<LocalProcess, LocalProcessShape>()(
+export class LocalProcess extends Context.Service<LocalProcess, LocalProcessContract>()(
   "pi-background-terminals/boundary/local-process/LocalProcess",
 ) {
   static readonly layer = Layer.succeed(this, {

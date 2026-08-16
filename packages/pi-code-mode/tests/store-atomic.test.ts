@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { AgentDirectory, JsonDocumentStore, type JsonDocumentStoreShape } from "pi-cosmic-core";
+import { AgentDirectory, JsonDocumentStore, type JsonDocumentStoreContract } from "pi-cosmic-core";
 import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
 import { CodeModeConfigStore, type CodeModeState } from "../src/config/store.ts";
 
@@ -18,11 +18,13 @@ const storeLayer = (
   projectTrusted: boolean,
   publish?: (state: CodeModeState) => void,
 ) =>
-  CodeModeConfigStore.layer({
-    cwd: "/project",
-    projectTrusted,
-    ...(publish ? { publish } : {}),
-  }).pipe(Layer.provide(Layer.mergeAll(memory.layer, Path.layer, AgentDirectory.layer("/agent"))));
+  CodeModeConfigStore.layer(
+    (() => {
+      const objectPart953_0 = { cwd: "/project", projectTrusted };
+      const objectPart953_1 = publish ? { ...objectPart953_0, publish } : objectPart953_0;
+      return objectPart953_1;
+    })(),
+  ).pipe(Layer.provide(Layer.mergeAll(memory.layer, Path.layer, AgentDirectory.layer("/agent"))));
 
 describe("code mode store atomic publication", () => {
   it.effect("publishes the committed document before interruption is observable", () => {
@@ -186,7 +188,7 @@ describe("code mode store atomic publication", () => {
 describe("code mode untrusted project I/O", () => {
   const recordingLayer = (memory: InMemoryDocuments, operations: string[]) => {
     const record = (operation: string, path: string) => operations.push(`${operation}:${path}`);
-    const service: JsonDocumentStoreShape = {
+    const service: JsonDocumentStoreContract = {
       exists: (path) => {
         record("exists", path);
         return memory.service.exists(path);

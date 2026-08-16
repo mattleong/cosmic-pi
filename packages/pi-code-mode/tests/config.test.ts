@@ -52,6 +52,7 @@ describe("code mode config resolution", () => {
 
   it("documents defensible bounds around every numeric default", () => {
     for (const [field, bounds] of Object.entries(CODE_MODE_INTEGER_BOUNDS)) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const defaultValue = DEFAULT_CODE_MODE_CONFIG[field as keyof typeof CODE_MODE_INTEGER_BOUNDS];
       expect(bounds.minimum).toBeLessThanOrEqual(defaultValue);
       expect(bounds.maximum).toBeGreaterThanOrEqual(defaultValue);

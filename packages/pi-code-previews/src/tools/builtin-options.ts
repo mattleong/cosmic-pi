@@ -15,10 +15,14 @@ export function getBuiltinToolOptions(cwd: string, projectTrusted: boolean): Bui
   const commandPrefix = settings.getShellCommandPrefix();
   const shellPath = settings.getShellPath();
   return {
-    bash: {
-      ...(commandPrefix === undefined ? {} : { commandPrefix }),
-      ...(shellPath === undefined ? {} : { shellPath }),
-    },
+    bash: (() => {
+      const objectPart532_0 = {};
+      const objectPart532_1 =
+        commandPrefix === undefined ? objectPart532_0 : { ...objectPart532_0, commandPrefix };
+      const objectPart532_2 =
+        shellPath === undefined ? objectPart532_1 : { ...objectPart532_1, shellPath };
+      return objectPart532_2;
+    })(),
     read: {
       autoResizeImages: settings.getImageAutoResize(),
     },

@@ -6,7 +6,7 @@ import {
 } from "../../checkpoint/ledger.ts";
 import type { AdvisorReviewQueue } from "../../queue/service.ts";
 import type { LoadedAdvisorInstructions } from "../../review/instructions.ts";
-import type { AdvisorRuntimeServiceShape } from "../../runtime/runtime.ts";
+import type { AdvisorRuntimeServiceContract } from "../../runtime/runtime.ts";
 import type { AdvisorSessionInput } from "../../boundary/host-context.ts";
 import type { CancellationLatch } from "../controller-helpers.ts";
 import type { LastCandidate, ParentAnchor } from "../controller-types.ts";
@@ -22,7 +22,7 @@ export interface SessionRefs {
   configRevision: number;
   checkpointId: number;
   queue: AdvisorReviewQueue | undefined;
-  runtime: AdvisorRuntimeServiceShape | undefined;
+  runtime: AdvisorRuntimeServiceContract | undefined;
   runtimeCursor: { anchor: ParentAnchor; fingerprint: string } | undefined;
   activeContext: ExtensionContext | undefined;
   activeSessionInput: AdvisorSessionInput | undefined;

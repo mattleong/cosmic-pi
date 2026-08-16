@@ -4,7 +4,7 @@ import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
 
 export function formatLastReview(metrics: Readonly<AdvisorSessionMetrics>): string {
   if (!metrics.lastAction) return "none yet";
-  const labels: Record<NonNullable<AdvisorSessionMetrics["lastAction"]>, string> = {
+  const labels = {
     advice: "issue shown",
     discarded: "review discarded",
     failure: "review unavailable",
@@ -14,7 +14,7 @@ export function formatLastReview(metrics: Readonly<AdvisorSessionMetrics>): stri
     recovery: "stalled work recovered",
     revision: "response corrected",
     suppressed: "no new issues",
-  };
+  } satisfies Record<NonNullable<AdvisorSessionMetrics["lastAction"]>, string>;
   const duration =
     metrics.latestDurationMs === undefined
       ? ""

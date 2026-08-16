@@ -90,13 +90,15 @@ describe("AdvisorController", () => {
           }),
       }),
     );
-    const pi = {
+    const piFixture = {
       on: () => undefined,
       registerCommand: () => undefined,
       sendMessage: () => undefined,
       appendEntry: () => undefined,
-    } as unknown as ExtensionAPI;
-    const ctx = {
+    };
+    // SAFETY: Controller registration uses only the four ExtensionAPI methods implemented here.
+    const pi = piFixture as typeof piFixture & ExtensionAPI;
+    const contextFixture = {
       cwd: "/project",
       mode: "tui",
       hasUI: true,
@@ -113,7 +115,9 @@ describe("AdvisorController", () => {
         getLeafId: () => "root",
         getSessionId: () => "session",
       },
-    } as unknown as ExtensionContext;
+    };
+    // SAFETY: This scenario exercises only the context fields implemented by the fixture.
+    const ctx = contextFixture as typeof contextFixture & ExtensionContext;
     const configStore = configStoreLayerFromLoad(() => ({
       configPath: "/tmp/pi-advisor-controller-test.json",
       enabled: true,
@@ -147,12 +151,15 @@ describe("AdvisorController", () => {
         const context = yield* Layer.build(application);
         const controller = Context.get(context, AdvisorController);
         const input = yield* captureAdvisorSessionInputEffect(ctx);
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         yield* controller.sessionInitialize(undefined as never, input);
         expect(starts).toBe(1);
         expect(controller.getSnapshot().config.model).toBe("model");
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         yield* controller.sessionInitialize(undefined as never, input);
         expect(starts).toBe(2);
         expect(disposals).toBe(1);
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         yield* controller.sessionShutdown(undefined as never, ctx);
         expect(disposals).toBe(2);
         expect(controller.getSnapshot().started).toBe(false);

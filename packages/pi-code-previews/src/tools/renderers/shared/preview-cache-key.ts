@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType, isFunctionValue } from "pi-cosmic-core";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { hashString } from "../../../shared/helpers";
 import { codePreviewSettings } from "../../../config/state";
@@ -72,8 +73,9 @@ function shikiStatusCacheKey(): string {
 }
 
 function themeCacheKey(theme: Theme): string {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const namedTheme = (theme as Theme & { name?: string }).name ?? "";
-  if ((typeof theme !== "object" && typeof theme !== "function") || theme === null)
+  if ((!hasObjectRuntimeType(theme) && !isFunctionValue(theme)) || theme === null)
     return namedTheme;
   let id = themeCacheIds.get(theme);
   if (id === undefined) {

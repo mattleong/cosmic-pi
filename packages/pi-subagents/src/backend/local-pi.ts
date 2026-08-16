@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -7,7 +8,7 @@ import * as Stream from "effect/Stream";
 import {
   type ChildLaunchRequest,
   type ChildProcessHandle,
-  type ChildProcessShape,
+  type ChildProcessContract,
   type ChildWireEvent,
 } from "../boundary/child-process.ts";
 import {
@@ -43,15 +44,21 @@ const EVENT_CAPACITY = 512;
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
 const noBackendEvent: Effect.Effect<BackendEvent | undefined> = Effect.as(Effect.void, undefined);
-const usageFromRpc = (usage: ReturnType<typeof decodeRpcUsageOption>): SubagentUsage => ({
-  input: usage?.input ?? 0,
-  output: usage?.output ?? 0,
-  cacheRead: usage?.cacheRead ?? 0,
-  cacheWrite: usage?.cacheWrite ?? 0,
-  totalTokens: usage?.totalTokens ?? 0,
-  // Pi reports a known client-side cost total; absence remains unknown, never $0.
-  ...(usage?.cost?.total === undefined ? {} : { cost: usage.cost.total }),
-});
+const usageFromRpc = (usage: ReturnType<typeof decodeRpcUsageOption>): SubagentUsage =>
+  (() => {
+    const objectPart1552_0 = {
+      input: usage?.input ?? 0,
+      output: usage?.output ?? 0,
+      cacheRead: usage?.cacheRead ?? 0,
+      cacheWrite: usage?.cacheWrite ?? 0,
+      totalTokens: usage?.totalTokens ?? 0,
+    };
+    const objectPart1552_1 =
+      usage?.cost?.total === undefined
+        ? objectPart1552_0
+        : { ...objectPart1552_0, cost: usage.cost.total };
+    return objectPart1552_1;
+  })();
 
 const rpcOutcomeCode = (command: string): string => {
   switch (command) {
@@ -75,7 +82,7 @@ const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): Sub
       })
     : error;
 
-const normalizeRpcEvent = (value: unknown, assignmentEpoch: number) =>
+const normalizeRpcEvent = <ValueInput>(value: ValueInput, assignmentEpoch: number) =>
   decodeRpcEnvelope(value).pipe(
     Effect.flatMap((envelope) => {
       switch (envelope.type) {
@@ -98,12 +105,20 @@ const normalizeRpcEvent = (value: unknown, assignmentEpoch: number) =>
           return decodeAssistantMessage(envelope.message).pipe(
             Effect.map((message) =>
               message
-                ? {
-                    type: "assistant_message" as const,
-                    assignmentEpoch,
-                    ...(assistantText(message) ? { text: assistantText(message) } : {}),
-                    usage: usageFromRpc(decodeRpcUsageOption(message.usage)),
-                  }
+                ? (() => {
+                    const objectPart3609_0 = {
+                      type: "assistant_message" as const,
+                      assignmentEpoch,
+                    };
+                    const objectPart3609_1 = assistantText(message)
+                      ? { ...objectPart3609_0, text: assistantText(message) }
+                      : objectPart3609_0;
+                    const objectPart3609_2 = {
+                      ...objectPart3609_1,
+                      usage: usageFromRpc(decodeRpcUsageOption(message.usage)),
+                    };
+                    return objectPart3609_2;
+                  })()
                 : undefined,
             ),
           );
@@ -141,7 +156,10 @@ const normalizeRpcEvent = (value: unknown, assignmentEpoch: number) =>
     ),
   );
 
-const normalizeIpcEvent = (value: unknown, assignmentEpoch: number): Effect.Effect<BackendEvent> =>
+const normalizeIpcEvent = <ValueInput>(
+  value: ValueInput,
+  assignmentEpoch: number,
+): Effect.Effect<BackendEvent> =>
   decodeContactParentEnvelope(value).pipe(
     Effect.map((envelope) => ({
       type: "supervisor_contact" as const,
@@ -168,15 +186,16 @@ const localPiResumeToken = (sessionFile: string): LocalPiResumeToken => ({
   sessionFile,
 });
 
+// SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
 const decodeLocalPiResumeToken = (
   token: BackendResumeToken,
 ): Effect.Effect<LocalPiResumeToken, SubagentProtocolError> =>
-  typeof token === "object" &&
+  hasObjectRuntimeType(token) &&
   token !== null &&
   "type" in token &&
   token.type === "local-pi-session-file" &&
   "sessionFile" in token &&
-  typeof token.sessionFile === "string" &&
+  isStringValue(token.sessionFile) &&
   token.sessionFile.length > 0
     ? Effect.succeed(token as LocalPiResumeToken)
     : Effect.fail(protocolError("Local Pi received an invalid backend resume token."));
@@ -375,17 +394,27 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
           Effect.mapError(() => protocolError("Subagent returned invalid startup state.")),
         ),
       ),
-      Effect.map((state) => ({
-        ...(rpcStateModelId(state.model) ? { model: rpcStateModelId(state.model) } : {}),
-        effort: state.thinkingLevel,
-        sessionId: state.sessionId,
-        ...(state.sessionFile
-          ? {
-              sessionFile: state.sessionFile,
-              resumeToken: localPiResumeToken(state.sessionFile),
-            }
-          : {}),
-      })),
+      Effect.map((state) =>
+        (() => {
+          const objectPart12987_0 = {};
+          const objectPart12987_1 = rpcStateModelId(state.model)
+            ? { ...objectPart12987_0, model: rpcStateModelId(state.model) }
+            : objectPart12987_0;
+          const objectPart12987_2 = {
+            ...objectPart12987_1,
+            effort: state.thinkingLevel,
+            sessionId: state.sessionId,
+          };
+          const objectPart12987_3 = state.sessionFile
+            ? {
+                ...objectPart12987_2,
+                sessionFile: state.sessionFile,
+                resumeToken: localPiResumeToken(state.sessionFile),
+              }
+            : objectPart12987_2;
+          return objectPart12987_3;
+        })(),
+      ),
     ),
     start: (message: string, nextAssignmentEpoch: number) =>
       Effect.suspend(() => {
@@ -421,12 +450,16 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     pid: child.pid,
     events,
     awaitExit: child.awaitExit.pipe(
-      Effect.map((event) => ({
-        type: "exit" as const,
-        exitCode: event.exitCode,
-        ...(event.signal ? { signal: event.signal } : {}),
-        diagnostic: event.stderr,
-      })),
+      Effect.map((event) =>
+        (() => {
+          const objectPart14668_0 = { type: "exit" as const, exitCode: event.exitCode };
+          const objectPart14668_1 = event.signal
+            ? { ...objectPart14668_0, signal: event.signal }
+            : objectPart14668_0;
+          const objectPart14668_2 = { ...objectPart14668_1, diagnostic: event.stderr };
+          return objectPart14668_2;
+        })(),
+      ),
       Effect.tapError((error) => Effect.sync(() => cancelPending(error))),
     ),
     controls,
@@ -436,7 +469,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   };
 });
 
-export const makeLocalPiBackendDriver = (childProcesses: ChildProcessShape): BackendDriver => ({
+export const makeLocalPiBackendDriver = (childProcesses: ChildProcessContract): BackendDriver => ({
   host: "local",
   runtime: "pi",
   capabilities: PI_SUBAGENT_CAPABILITIES,
@@ -455,24 +488,38 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessShape): Bac
       const resumeSessionFile = request.resumeToken
         ? (yield* decodeLocalPiResumeToken(request.resumeToken)).sessionFile
         : undefined;
-      const childRequest: ChildLaunchRequest = {
-        runId: request.runId,
-        name: request.name,
-        cwd: request.cwd,
-        context: request.context,
-        writeIntent: request.writeIntent,
-        fastMode: request.fastMode,
-        model: request.model,
-        effort: request.effort,
-        ...(request.runtimeApiKey ? { runtimeApiKey: request.runtimeApiKey } : {}),
-        activeTools: request.activeTools,
-        projectTrusted: request.projectTrusted,
-        parentSessionId: request.parentSessionId,
-        ...(request.parentSessionFile ? { parentSessionFile: request.parentSessionFile } : {}),
-        ...(request.parentLeafId ? { parentLeafId: request.parentLeafId } : {}),
-        ...(resumeSessionFile ? { resumeSessionFile } : {}),
-        systemPrompt: request.systemPrompt,
-      };
+      const childRequest: ChildLaunchRequest = (() => {
+        const objectPart15832_0 = {
+          runId: request.runId,
+          name: request.name,
+          cwd: request.cwd,
+          context: request.context,
+          writeIntent: request.writeIntent,
+          fastMode: request.fastMode,
+          model: request.model,
+          effort: request.effort,
+        };
+        const objectPart15832_1 = request.runtimeApiKey
+          ? { ...objectPart15832_0, runtimeApiKey: request.runtimeApiKey }
+          : objectPart15832_0;
+        const objectPart15832_2 = {
+          ...objectPart15832_1,
+          activeTools: request.activeTools,
+          projectTrusted: request.projectTrusted,
+          parentSessionId: request.parentSessionId,
+        };
+        const objectPart15832_3 = request.parentSessionFile
+          ? { ...objectPart15832_2, parentSessionFile: request.parentSessionFile }
+          : objectPart15832_2;
+        const objectPart15832_4 = request.parentLeafId
+          ? { ...objectPart15832_3, parentLeafId: request.parentLeafId }
+          : objectPart15832_3;
+        const objectPart15832_5 = resumeSessionFile
+          ? { ...objectPart15832_4, resumeSessionFile }
+          : objectPart15832_4;
+        const objectPart15832_6 = { ...objectPart15832_5, systemPrompt: request.systemPrompt };
+        return objectPart15832_6;
+      })();
       const child = yield* childProcesses.spawn(childRequest);
       return yield* makeLocalPiHandle(child);
     }),

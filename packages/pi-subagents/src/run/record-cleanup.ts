@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
-import type { WriterLeaseConflictError, WriterLeaseShape } from "../boundary/writer-lease.ts";
+import type { WriterLeaseConflictError, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import {
   InvalidSubagentRequestError,
   type SubagentError,
@@ -26,7 +26,7 @@ export interface RunRecordCleanupDependencies {
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly publish: () => void;
-  readonly writerLeases: WriterLeaseShape;
+  readonly writerLeases: WriterLeaseContract;
 }
 
 /**

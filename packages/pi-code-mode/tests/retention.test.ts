@@ -21,6 +21,7 @@ describe("failure details retention", () => {
     const retention = makeFailureDetailsRetention();
     const value = details("pi.read");
     retention.retain("a", value);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.toolCalls[0] as { tool: string }).tool = "mutated";
     expect(retention.consume("a")?.toolCalls[0]?.tool).toBe("pi.read");
     expect(retention.consume("a")).toBeUndefined();

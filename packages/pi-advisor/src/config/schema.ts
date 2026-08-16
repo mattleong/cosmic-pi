@@ -1,3 +1,4 @@
+import { isBooleanValue, isStringValue } from "pi-cosmic-core";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
@@ -58,7 +59,7 @@ const AdvisorRawFieldSchemas = {
   model: Schema.String,
   setupDismissed: Schema.Boolean,
 } as const;
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
 const REMOVED_CONFIG_FIELDS = [
   "mode",
   "reviewPolicy",
@@ -68,7 +69,7 @@ const REMOVED_CONFIG_FIELDS = [
   "maxContextChars",
 ] as const;
 
-const normalizeAdvisorConfigData = (raw: unknown, configPath: string): ResolvedAdvisorConfig => {
+const normalizeAdvisorConfigData = <Raw>(raw: Raw, configPath: string): ResolvedAdvisorConfig => {
   const record = safeDataRecord(raw);
   const decoded = decodeTolerantFields(record, AdvisorRawFieldSchemas, {
     path: "advisor",
@@ -76,14 +77,20 @@ const normalizeAdvisorConfigData = (raw: unknown, configPath: string): ResolvedA
   }).value;
   const provider = nonEmptyString(decoded.provider);
   const model = nonEmptyString(decoded.model);
-  return {
-    configPath,
-    enabled: decoded.enabled ?? DEFAULT_ADVISOR_CONFIG.enabled,
-    ...(provider ? { provider } : {}),
-    ...(model ? { model } : {}),
-    setupDismissed: decoded.setupDismissed ?? DEFAULT_ADVISOR_CONFIG.setupDismissed,
-    configured: Boolean(provider && model),
-  };
+  return (() => {
+    const objectPart2673_0 = {
+      configPath,
+      enabled: decoded.enabled ?? DEFAULT_ADVISOR_CONFIG.enabled,
+    };
+    const objectPart2673_1 = provider ? { ...objectPart2673_0, provider } : objectPart2673_0;
+    const objectPart2673_2 = model ? { ...objectPart2673_1, model } : objectPart2673_1;
+    const objectPart2673_3 = {
+      ...objectPart2673_2,
+      setupDismissed: decoded.setupDismissed ?? DEFAULT_ADVISOR_CONFIG.setupDismissed,
+      configured: Boolean(provider && model),
+    };
+    return objectPart2673_3;
+  })();
 };
 
 export const AdvisorConfigSchema = (configPath: string) =>
@@ -94,7 +101,10 @@ export const AdvisorConfigSchema = (configPath: string) =>
     }),
   );
 
-export function normalizeAdvisorConfig(raw: unknown, configPath: string): ResolvedAdvisorConfig {
+export function normalizeAdvisorConfig<RawInput>(
+  raw: RawInput,
+  configPath: string,
+): ResolvedAdvisorConfig {
   try {
     return Schema.decodeUnknownSync(AdvisorConfigSchema(configPath))(raw);
   } catch {
@@ -107,7 +117,7 @@ export function normalizeAdvisorConfig(raw: unknown, configPath: string): Resolv
 }
 
 /** Patch only the current persisted contract while preserving unrelated root fields. */
-export function patchAdvisorConfig(raw: unknown, patch: AdvisorConfigPatch): JsonObject {
+export function patchAdvisorConfig<RawInput>(raw: RawInput, patch: AdvisorConfigPatch): JsonObject {
   const next: JsonObject = safeDataRecord(raw);
   for (const field of REMOVED_CONFIG_FIELDS) delete next[field];
   if ("enabled" in patch) setOptionalBoolean(next, "enabled", patch.enabled);
@@ -117,18 +127,18 @@ export function patchAdvisorConfig(raw: unknown, patch: AdvisorConfigPatch): Jso
   return next;
 }
 
-function safeDataRecord(value: unknown): JsonObject {
+function safeDataRecord<ValueInput>(value: ValueInput): JsonObject {
   const snapshot = snapshotDataRecord(value);
   if (snapshot === undefined) return {};
   const decoded = Schema.decodeUnknownOption(JsonObjectSchema)(snapshot);
   return decoded._tag === "Some" ? decoded.value : {};
 }
 function setOptionalBoolean(target: JsonObject, key: string, value: boolean | undefined) {
-  if (typeof value === "boolean") target[key] = value;
+  if (isBooleanValue(value)) target[key] = value;
   else delete target[key];
 }
-function nonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+function nonEmptyString<ValueInput>(value: ValueInput): string | undefined {
+  if (!isStringValue(value)) return undefined;
   return value.trim() || undefined;
 }
 function patchOptionalString(target: JsonObject, key: "provider" | "model", value?: string) {

@@ -1,3 +1,4 @@
+import { isFunctionValue } from "pi-cosmic-core";
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { getBuiltinToolOptions, type BuiltinToolOptions } from "../builtin-options";
 import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../names";
@@ -75,9 +76,11 @@ function syncActiveCodePreviewTools(
   activatedTools: Set<CodePreviewToolName> | undefined,
 ): void {
   if (desiredTools.size === 0 && (!activatedTools || activatedTools.size === 0)) return;
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const getActiveTools = (pi as Partial<ExtensionAPI>).getActiveTools;
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const setActiveTools = (pi as Partial<ExtensionAPI>).setActiveTools;
-  if (typeof getActiveTools !== "function" || typeof setActiveTools !== "function") return;
+  if (!isFunctionValue(getActiveTools) || !isFunctionValue(setActiveTools)) return;
   try {
     const current = getActiveTools.call(pi);
     const currentSet = new Set(current);
@@ -86,6 +89,7 @@ function syncActiveCodePreviewTools(
       ? [...activatedTools].filter((tool) => !desiredTools.has(tool))
       : [];
     const removalsInCurrent = new Set(removals.filter((tool) => currentSet.has(tool)));
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const next = current.filter((tool) => !removalsInCurrent.has(tool as CodePreviewToolName));
     next.push(...additions);
     if (additions.length > 0 || removalsInCurrent.size > 0) setActiveTools.call(pi, next);
@@ -97,8 +101,9 @@ function syncActiveCodePreviewTools(
 }
 
 function getExistingToolsByName(pi: ExtensionAPI): Map<string, ToolInfo> {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const getAllTools = (pi as Partial<ExtensionAPI>).getAllTools;
-  if (typeof getAllTools !== "function") return new Map();
+  if (!isFunctionValue(getAllTools)) return new Map();
   try {
     return new Map(getAllTools.call(pi).map((tool) => [tool.name, tool]));
   } catch {

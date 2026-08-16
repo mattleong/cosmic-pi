@@ -38,6 +38,7 @@ export const makeAdvisorSessionSafety = (port: {
       ),
     );
 
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const assertSessionSafeToolsEffect = (session: AgentSession) =>
     Effect.gen(function* () {
       const activeToolNames = yield* Effect.try({

@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { SubagentUsage } from "../run/model.ts";
@@ -201,7 +202,7 @@ export const CLAUDE_SUPERVISOR_TOOL_NAMES = [
 ] as const;
 
 const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
-  typeof content === "string"
+  isStringValue(content)
     ? content
     : content
         .flatMap((part) => {
@@ -225,8 +226,8 @@ const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): S
   };
 };
 
-export const decodeClaudeProtocolEvent = (
-  value: unknown,
+export const decodeClaudeProtocolEvent = <ValueInput>(
+  value: ValueInput,
 ): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
   Effect.gen(function* () {
     const discriminant = yield* Schema.decodeUnknownEffect(Discriminant)(value);
@@ -248,25 +249,37 @@ export const decodeClaudeProtocolEvent = (
       }
       case "user": {
         const event = yield* Schema.decodeUnknownEffect(User)(value);
-        const toolResults =
-          typeof event.message.content === "string"
-            ? []
-            : event.message.content.flatMap((part) => {
-                const decoded = Schema.decodeUnknownOption(ToolResultPart)(part);
-                return decoded._tag === "Some"
-                  ? [{ id: decoded.value.tool_use_id, isError: decoded.value.is_error === true }]
-                  : [];
-              });
-        return {
-          type: "user",
-          text: textFromContent(event.message.content),
-          toolResults,
-          ...(event.uuid ? { uuid: event.uuid } : {}),
-          ...(event.session_id ? { sessionId: event.session_id } : {}),
-          ...(event.origin ? { originKind: event.origin.kind } : {}),
-          isSynthetic: event.isSynthetic === true,
-          isReplay: event.isReplay === true,
-        };
+        const toolResults = isStringValue(event.message.content)
+          ? []
+          : event.message.content.flatMap((part) => {
+              const decoded = Schema.decodeUnknownOption(ToolResultPart)(part);
+              return decoded._tag === "Some"
+                ? [{ id: decoded.value.tool_use_id, isError: decoded.value.is_error === true }]
+                : [];
+            });
+        const protocolEvent: ClaudeProtocolEvent = (() => {
+          const objectPart8981_0 = {
+            type: "user" as const,
+            text: textFromContent(event.message.content),
+            toolResults,
+          };
+          const objectPart8981_1 = event.uuid
+            ? { ...objectPart8981_0, uuid: event.uuid }
+            : objectPart8981_0;
+          const objectPart8981_2 = event.session_id
+            ? { ...objectPart8981_1, sessionId: event.session_id }
+            : objectPart8981_1;
+          const objectPart8981_3 = event.origin
+            ? { ...objectPart8981_2, originKind: event.origin.kind }
+            : objectPart8981_2;
+          const objectPart8981_4 = {
+            ...objectPart8981_3,
+            isSynthetic: event.isSynthetic === true,
+            isReplay: event.isReplay === true,
+          };
+          return objectPart8981_4;
+        })();
+        return protocolEvent;
       }
       case "assistant": {
         const event = yield* Schema.decodeUnknownEffect(Assistant)(value);
@@ -277,13 +290,20 @@ export const decodeClaudeProtocolEvent = (
             : [];
         });
         const text = textFromContent(event.message.content).trim();
-        return {
-          type: "assistant",
-          ...(text ? { text } : {}),
-          ...(event.message.id ? { messageId: event.message.id } : {}),
-          tools,
-          usage: usageFromNative(event.message.usage),
-        };
+        const protocolEvent: ClaudeProtocolEvent = (() => {
+          const objectPart9885_0 = { type: "assistant" as const };
+          const objectPart9885_1 = text ? { ...objectPart9885_0, text } : objectPart9885_0;
+          const objectPart9885_2 = event.message.id
+            ? { ...objectPart9885_1, messageId: event.message.id }
+            : objectPart9885_1;
+          const objectPart9885_3 = {
+            ...objectPart9885_2,
+            tools,
+            usage: usageFromNative(event.message.usage),
+          };
+          return objectPart9885_3;
+        })();
+        return protocolEvent;
       }
       case "stream_event":
         yield* Schema.decodeUnknownEffect(StreamEvent)(value);
@@ -296,18 +316,36 @@ export const decodeClaudeProtocolEvent = (
             ?.map((error) => error.trim())
             .filter(Boolean)
             .join("\n");
-        return {
-          type: "result",
-          isError: event.is_error === true,
-          ...(event.subtype ? { subtype: event.subtype } : {}),
-          ...(event.stop_reason ? { stopReason: event.stop_reason } : {}),
-          ...(event.session_id ? { sessionId: event.session_id } : {}),
-          ...(event.user_message_uuid ? { userMessageUuid: event.user_message_uuid } : {}),
-          ...(event.origin ? { originKind: event.origin.kind } : {}),
-          ...(event.usage ? { usage: usageFromNative(event.usage) } : {}),
-          ...(event.total_cost_usd === undefined ? {} : { totalCostUsd: event.total_cost_usd }),
-          ...(diagnostic ? { diagnostic } : {}),
-        };
+        const protocolEvent: ClaudeProtocolEvent = (() => {
+          const objectPart10534_0 = { type: "result" as const, isError: event.is_error === true };
+          const objectPart10534_1 = event.subtype
+            ? { ...objectPart10534_0, subtype: event.subtype }
+            : objectPart10534_0;
+          const objectPart10534_2 = event.stop_reason
+            ? { ...objectPart10534_1, stopReason: event.stop_reason }
+            : objectPart10534_1;
+          const objectPart10534_3 = event.session_id
+            ? { ...objectPart10534_2, sessionId: event.session_id }
+            : objectPart10534_2;
+          const objectPart10534_4 = event.user_message_uuid
+            ? { ...objectPart10534_3, userMessageUuid: event.user_message_uuid }
+            : objectPart10534_3;
+          const objectPart10534_5 = event.origin
+            ? { ...objectPart10534_4, originKind: event.origin.kind }
+            : objectPart10534_4;
+          const objectPart10534_6 = event.usage
+            ? { ...objectPart10534_5, usage: usageFromNative(event.usage) }
+            : objectPart10534_5;
+          const objectPart10534_7 =
+            event.total_cost_usd === undefined
+              ? objectPart10534_6
+              : { ...objectPart10534_6, totalCostUsd: event.total_cost_usd };
+          const objectPart10534_8 = diagnostic
+            ? { ...objectPart10534_7, diagnostic }
+            : objectPart10534_7;
+          return objectPart10534_8;
+        })();
+        return protocolEvent;
       }
       case "control_response": {
         const event = yield* Schema.decodeUnknownEffect(ControlResponse)(value);
@@ -317,23 +355,28 @@ export const decodeClaudeProtocolEvent = (
           return { type: "ignored" } as const;
         }
         const success = event.response?.subtype === "success";
-        return {
-          type: "control_response",
-          requestId,
-          success,
-          ...(event.response?.error ? { diagnostic: event.response.error } : {}),
-          ...(event.response?.response === undefined ? {} : { response: event.response.response }),
-        };
+        const protocolEvent: ClaudeProtocolEvent = (() => {
+          const objectPart11655_0 = { type: "control_response" as const, requestId, success };
+          const objectPart11655_1 = event.response?.error
+            ? { ...objectPart11655_0, diagnostic: event.response.error }
+            : objectPart11655_0;
+          const objectPart11655_2 =
+            event.response?.response === undefined
+              ? objectPart11655_1
+              : { ...objectPart11655_1, response: event.response.response };
+          return objectPart11655_2;
+        })();
+        return protocolEvent;
       }
       default:
         return { type: "ignored" };
     }
   });
 
-export const decodeClaudeInitializeControlResponse = (value: unknown) =>
+export const decodeClaudeInitializeControlResponse = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(InitializeControlResponse)(value);
 
-export const decodeClaudeMcpStatusControlResponse = (value: unknown) =>
+export const decodeClaudeMcpStatusControlResponse = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(McpStatusControlResponse)(value);
 
 export interface ClaudeUserFrame {
@@ -369,12 +412,24 @@ export type ClaudeControlRequestFrame =
 export const claudeUserFrame = (
   message: string,
   options: { readonly shouldQuery?: boolean | undefined; readonly uuid?: string | undefined } = {},
-): ClaudeUserFrame => ({
-  type: "user",
-  ...(options.uuid ? { uuid: options.uuid } : {}),
-  message: { role: "user", content: message },
-  ...(options.shouldQuery === undefined ? {} : { shouldQuery: options.shouldQuery }),
-});
+): ClaudeUserFrame => {
+  const frame: ClaudeUserFrame = (() => {
+    const objectPart13295_0 = { type: "user" as const };
+    const objectPart13295_1 = options.uuid
+      ? { ...objectPart13295_0, uuid: options.uuid }
+      : objectPart13295_0;
+    const objectPart13295_2 = {
+      ...objectPart13295_1,
+      message: { role: "user" as const, content: message },
+    };
+    const objectPart13295_3 =
+      options.shouldQuery === undefined
+        ? objectPart13295_2
+        : { ...objectPart13295_2, shouldQuery: options.shouldQuery };
+    return objectPart13295_3;
+  })();
+  return frame;
+};
 
 export const claudeInitializeFrame = (requestId: string): ClaudeInitializeFrame => ({
   type: "control_request",

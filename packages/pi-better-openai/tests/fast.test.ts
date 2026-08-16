@@ -4,19 +4,25 @@
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/floatingEffect:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import type * as Schema from "effect/Schema";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI from "../index.ts";
 import type { ConfigFile } from "../src/config/schema.ts";
 
-type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
-type CommandHandler = (args: string, ctx: ExtensionContext) => unknown | Promise<unknown>;
+type EventHandler = ExtensionHandler<any, any>;
+type CommandHandler = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
 
 type Harness = {
-  ctx: ExtensionContext;
+  ctx: ExtensionCommandContext;
   handlers: Map<string, EventHandler[]>;
   commands: Map<string, { handler: CommandHandler }>;
 };
@@ -52,6 +58,7 @@ function writeProjectConfig(cwd: string, overrides: ConfigFile = {}): void {
 }
 
 function createModel(provider: string, id: string) {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   return { provider, id } as ExtensionContext["model"];
 }
 
@@ -59,7 +66,7 @@ function createHarness(cwd: string, model = createModel("openai", "gpt-5.5")): H
   const handlers = new Map<string, EventHandler[]>();
   const commands = new Map<string, { handler: CommandHandler }>();
 
-  const pi = {
+  const piFixture = {
     on(event: string, handler: EventHandler) {
       const currentHandlers = handlers.get(event) ?? [];
       currentHandlers.push(handler);
@@ -74,9 +81,11 @@ function createHarness(cwd: string, model = createModel("openai", "gpt-5.5")): H
     sendMessage: vi.fn(),
     getFlag: vi.fn(() => false),
     getThinkingLevel: vi.fn(() => "off"),
-  } as unknown as ExtensionAPI;
+  };
+  // SAFETY: Better OpenAI registration uses only the ExtensionAPI methods implemented here.
+  const pi = piFixture as typeof piFixture & ExtensionAPI;
 
-  const ctx = {
+  const contextFixture = {
     cwd,
     isProjectTrusted: () => true,
     hasUI: false,
@@ -96,26 +105,29 @@ function createHarness(cwd: string, model = createModel("openai", "gpt-5.5")): H
       isUsingOAuth: vi.fn(() => false),
     },
     getContextUsage: vi.fn(() => ({ contextWindow: 0, percent: 0 })),
-  } as unknown as ExtensionContext;
+  };
+  // SAFETY: This harness supplies every context member exercised by events and commands.
+  const ctx = contextFixture as typeof contextFixture & ExtensionCommandContext;
 
   betterOpenAI(pi);
 
   return { ctx, handlers, commands };
 }
 
-async function emit(harness: Harness, event: string, payload: unknown = {}): Promise<unknown[]> {
+async function emit<PayloadInput>(
+  harness: Harness,
+  event: string,
+  payload?: PayloadInput,
+): Promise<unknown[]> {
   const results: unknown[] = [];
   const handlers = harness.handlers.get(event) ?? [];
   for (const handler of handlers) {
-    results.push(await handler(payload, harness.ctx));
+    results.push(await handler(payload ?? {}, harness.ctx));
   }
   return results;
 }
 
-async function beforeProviderRequest(
-  harness: Harness,
-  payload: Record<string, unknown>,
-): Promise<unknown> {
+async function beforeProviderRequest(harness: Harness, payload: Schema.JsonObject) {
   const results = await emit(harness, "before_provider_request", { payload });
   return results.find((result) => result !== undefined);
 }

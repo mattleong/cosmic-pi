@@ -2,16 +2,18 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterXai, {
   betterXaiWithDependencies,
   type BetterXaiExtensionDependencies,
 } from "../src/extension.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -19,8 +21,8 @@ afterEach(() => {
   delete process.env.PI_CODING_AGENT_DIR;
 });
 
-type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
-type Command = (args: string, ctx: ExtensionContext) => unknown;
+type Handler = ExtensionHandler<any, any>;
+type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
 
 function harness(dependencies?: BetterXaiExtensionDependencies) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-better-xai-project-"));
@@ -39,7 +41,7 @@ function harness(dependencies?: BetterXaiExtensionDependencies) {
   const notify = vi.fn();
   const setStatus = vi.fn();
   const setFooter = vi.fn();
-  const pi = {
+  const pi = extensionApiFixture({
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
     },
@@ -47,8 +49,8 @@ function harness(dependencies?: BetterXaiExtensionDependencies) {
       commands.set(name, options.handler);
     },
     events: { emit: vi.fn(), on: vi.fn() },
-  } as unknown as ExtensionAPI;
-  const ctx = {
+  });
+  const ctx = extensionContextFixture({
     cwd,
     mode: "tui",
     hasUI: true,
@@ -59,7 +61,7 @@ function harness(dependencies?: BetterXaiExtensionDependencies) {
     },
     ui: { notify, setStatus, setFooter },
     isProjectTrusted: vi.fn(() => true),
-  } as unknown as ExtensionContext;
+  });
 
   if (dependencies) betterXaiWithDependencies(pi, dependencies);
   else betterXai(pi);
@@ -79,7 +81,7 @@ function stalledStartup() {
   return { effect, started, interruptions: () => interruptions };
 }
 
-async function invoke(value: unknown) {
+async function invoke<ValueInput>(value: ValueInput) {
   await value;
 }
 

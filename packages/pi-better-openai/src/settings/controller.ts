@@ -1,3 +1,4 @@
+import { isFunctionValue, isStringValue } from "pi-cosmic-core";
 import {
   getSettingsListTheme,
   type ExtensionAPI,
@@ -42,7 +43,7 @@ function quoted(value: string): string {
     .replaceAll("\t", "\\t")}"`;
 }
 
-function formatDiagnosticValue(value: unknown, depth = 0): string[] {
+function formatDiagnosticValue<ValueInput>(value: ValueInput, depth = 0): string[] {
   const indent = "  ".repeat(depth);
   if (Array.isArray(value)) {
     if (value.length === 0) return [`${indent}[]`];
@@ -64,8 +65,11 @@ function formatDiagnosticValue(value: unknown, depth = 0): string[] {
     lines.push(`${indent}}`);
     return lines;
   }
-  const scalar =
-    typeof value === "string" ? quoted(value) : value === undefined ? "undefined" : String(value);
+  const scalar = isStringValue(value)
+    ? quoted(value)
+    : value === undefined
+      ? "undefined"
+      : String(value);
   return [`${indent}${scalar}`];
 }
 
@@ -327,10 +331,9 @@ export function registerSettingsController(
                 safeHostUi(() => tui.requestRender());
               },
               onCancel: () => done(undefined),
-              matchesKeybinding:
-                typeof keyboard?.matches === "function"
-                  ? (data, id) => keyboard.matches(data, id)
-                  : undefined,
+              matchesKeybinding: isFunctionValue(keyboard?.matches)
+                ? (data, id) => keyboard.matches(data, id)
+                : undefined,
               requestRender: () => safeHostUi(() => tui.requestRender()),
               dim: (text) => theme.fg("dim", text),
               bridge: { afterInput: () => safeHostUi(() => tui.requestRender()) },

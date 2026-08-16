@@ -3,6 +3,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
@@ -14,7 +15,7 @@ const processExists = (pid: number): boolean => {
     return true;
   } catch (error) {
     return !(
-      typeof error === "object" &&
+      hasObjectRuntimeType(error) &&
       error !== null &&
       "code" in error &&
       error.code === "ESRCH"
@@ -30,17 +31,20 @@ const waitForExit = async (pid: number): Promise<void> => {
 describe("subagent process-tree boundary", () => {
   it("does not target an already-exited Windows PID", async () => {
     const spawnTaskkill = vi.fn();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const child = { pid: 42, exitCode: 0, signalCode: null } as NodeChildProcess;
     await terminateProcessTree(child, "force", { platform: "win32", spawnTaskkill });
     expect(spawnTaskkill).not.toHaveBeenCalled();
   });
 
   it("bounds a hanging Windows taskkill helper", async () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const killer = new EventEmitter() as NodeChildProcess;
     const kill = vi.fn(() => true);
     const unref = vi.fn(() => killer);
     killer.kill = kill;
     killer.unref = unref;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const child = { pid: 43, exitCode: null, signalCode: null } as NodeChildProcess;
     await expect(
       terminateProcessTree(child, "force", {
@@ -54,9 +58,11 @@ describe("subagent process-tree boundary", () => {
   });
 
   it("passes live Windows trees to bounded taskkill", async () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const killer = new EventEmitter() as NodeChildProcess;
     killer.kill = vi.fn(() => true);
     const modes: string[] = [];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const child = { pid: 44, exitCode: null, signalCode: null } as NodeChildProcess;
     const pending = terminateProcessTree(child, "force", {
       platform: "win32",

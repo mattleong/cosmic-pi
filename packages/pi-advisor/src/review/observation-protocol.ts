@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import { stringifyJson } from "../boundary/json.ts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -302,22 +303,24 @@ export function renderObservations(observations: readonly AdvisorObservation[]):
   ].join("\n\n");
 }
 
-function sanitizeObservation(value: unknown): AdvisorObservation {
+function sanitizeObservation<ValueInput>(value: ValueInput): AdvisorObservation {
   const redacted = redactObservationValue(value);
-  if (!isRecord(redacted) || typeof redacted.type !== "string")
+  if (!isRecord(redacted) || !isStringValue(redacted.type))
     throw new AdvisorObservationError({ message: "Invalid observation." });
-  const clipped: Record<string, unknown> = { ...redacted };
+  const clipped: Schema.MutableJsonObject = Object.fromEntries(Object.entries(redacted));
   for (const key of ["text", "args", "update", "result", "marker", "reason", "evidence"] as const) {
-    if (typeof clipped[key] === "string")
+    if (isStringValue(clipped[key]))
       clipped[key] = clip(clipped[key], MAX_OBSERVATION_CHANNEL_CHARS);
   }
   if (Array.isArray(clipped.toolCalls)) {
-    clipped.toolCalls = clipped.toolCalls.slice(0, 32).map((call) => clip(String(call), 2_000));
+    clipped.toolCalls = clipped.toolCalls
+      .slice(0, 32)
+      .map((call: Schema.MutableJson) => clip(String(call), 2_000));
   }
   if (Array.isArray(clipped.findingIds)) {
     clipped.findingIds = clipped.findingIds
       .map(String)
-      .filter((id) => /^af_[a-f\d]{32}$/u.test(id))
+      .filter((id: string) => /^af_[a-f\d]{32}$/u.test(id))
       .slice(0, 5);
   }
   const decoded = Schema.decodeUnknownOption(AdvisorObservationWireSchema)(clipped);
@@ -340,11 +343,15 @@ function coalesce(left: AdvisorObservation, right: AdvisorObservation): AdvisorO
     return { ...right, text: clip(`${left.text}${right.text}`, MAX_OBSERVATION_CHANNEL_CHARS) };
   }
   if (left.type === "assistant_thinking_delta" && right.type === "assistant_thinking_delta") {
-    return {
-      ...right,
-      text: clip(`${left.text}${right.text}`, MAX_OBSERVATION_CHANNEL_CHARS),
-      ...(left.opaque || right.opaque ? { opaque: true } : {}),
-    };
+    return (() => {
+      const objectPart12615_0 = {
+        ...right,
+        text: clip(`${left.text}${right.text}`, MAX_OBSERVATION_CHANNEL_CHARS),
+      };
+      const objectPart12615_1 =
+        left.opaque || right.opaque ? { ...objectPart12615_0, opaque: true } : objectPart12615_0;
+      return objectPart12615_1;
+    })();
   }
   return right;
 }

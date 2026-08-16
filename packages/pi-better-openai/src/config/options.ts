@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import type { JsonObject } from "pi-cosmic-core";
+import { isJsonObject, type JsonObject } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
 import {
   FOOTER_MODES,
@@ -177,7 +176,9 @@ export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate
       const sectionName = descriptor.id.slice(0, separator);
       const key = descriptor.id.slice(separator + 1);
       const currentSection = next[sectionName];
-      const section = Predicate.isObject(currentSection) ? { ...currentSection } : {};
+      const section: JsonObject = isJsonObject(currentSection)
+        ? Object.fromEntries(Object.entries(currentSection))
+        : {};
       section[key] = parsedValue;
       next[sectionName] = section;
     }

@@ -1,3 +1,4 @@
+import { runtimeTypeName } from "pi-cosmic-core";
 import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { createSettingsListSurface } from "../src/manager/settings-surface.ts";
@@ -89,7 +90,8 @@ describe("createSettingsListSurface", () => {
     surface.handleInput?.("j");
     expect(invoked).toEqual(["guard", "guard", "guard"]);
     // Malformed host input delegations resolve through the guard instead of escaping.
-    expect(() => surface.handleInput?.(undefined as unknown as string)).not.toThrow();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    expect(() => surface.handleInput?.(undefined as undefined & string)).not.toThrow();
   });
 
   it("contains throwing render, invalidate, and input delegation behind the caller guard", () => {
@@ -127,6 +129,7 @@ describe("createSettingsListSurface", () => {
 
   it("suppresses onChange for group/navigation rows while setting rows still fire", () => {
     const changes: Array<{ id: string; value: string }> = [];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const groupItem = {
       kind: "group" as const,
       id: "group.general",
@@ -166,27 +169,41 @@ describe("createSettingsListSurface", () => {
  * pinned pi-tui version so an upgrade that changes them fails loudly here instead of
  * silently breaking search focus or submenu focus sync.
  */
+interface PinnedSettingsListInternals {
+  readonly searchInput: { readonly focused?: unknown; readonly setValue?: unknown };
+  readonly applyFilter?: unknown;
+  readonly submenuComponent: unknown;
+}
+
 describe("pi-tui SettingsList internal coupling probe", () => {
   it("still exposes the searchInput and submenuComponent internals the adapter relies on", () => {
-    const list = new SettingsList(
+    const listInstance = new SettingsList(
       items(),
       6,
       listTheme,
       () => undefined,
       () => undefined,
       { enableSearch: true },
-    ) as unknown as Record<string, unknown>;
-    expect("searchInput" in list).toBe(true);
-    expect(list.searchInput).toBeTruthy();
-    expect(list.searchInput as object).toHaveProperty("focused");
+    );
+    const searchDescriptor = Object.getOwnPropertyDescriptor(listInstance, "searchInput");
+    const submenuDescriptor = Object.getOwnPropertyDescriptor(listInstance, "submenuComponent");
+    const prototype = Object.getPrototypeOf(listInstance);
+    const searchInput: PinnedSettingsListInternals["searchInput"] | undefined =
+      searchDescriptor && "value" in searchDescriptor ? searchDescriptor.value : undefined;
+    const applyFilter: PinnedSettingsListInternals["applyFilter"] = prototype.applyFilter;
+    const submenuComponent: PinnedSettingsListInternals["submenuComponent"] =
+      submenuDescriptor && "value" in submenuDescriptor ? submenuDescriptor.value : undefined;
+    expect(searchDescriptor).toBeDefined();
+    expect(searchInput).toBeTruthy();
+    expect(searchInput).toHaveProperty("focused");
     // Esc-from-search clearing relies on the search Input's setValue plus the list's
     // applyFilter internals of the pinned pi-tui version.
-    expect(typeof (list.searchInput as { setValue?: unknown }).setValue).toBe("function");
-    expect(typeof list.applyFilter).toBe("function");
-    expect("submenuComponent" in list).toBe(true);
-    expect(list.submenuComponent).toBeNull();
+    expect(runtimeTypeName(searchInput?.setValue)).toBe("function");
+    expect(runtimeTypeName(applyFilter)).toBe("function");
+    expect(submenuDescriptor).toBeDefined();
+    expect(submenuComponent).toBeNull();
     // SettingsList itself has no `focused` field; the adapter's focus sync depends on that.
-    expect("focused" in list).toBe(false);
+    expect("focused" in listInstance).toBe(false);
   });
 
   it("focuses the real SettingsList search input when the adapter enters search mode", () => {

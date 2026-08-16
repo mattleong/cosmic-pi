@@ -1,3 +1,4 @@
+import { isNumberValue, isStringValue } from "pi-cosmic-core";
 import type { BashToolOptions, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -17,10 +18,10 @@ import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderHiddenPreviewPrelude, renderResultPrelude } from "./shared/result-prelude";
 import { withSecretWarning } from "./shared/secret-preview";
 
-function shouldHideBashResult(args: unknown): boolean {
+function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
   const command = getObjectValue(args, "command");
   return shouldHideShellResultByCommand(
-    typeof command === "string" ? getFirstShellCommandName(command) : undefined,
+    isStringValue(command) ? getFirstShellCommandName(command) : undefined,
     codePreviewSettings,
   );
 }
@@ -36,9 +37,10 @@ export function registerBash(pi: ExtensionAPI, cwd: string, options?: BashToolOp
     renderCall(args, theme, context) {
       return previewShell.renderCall(context, theme, (renderContext) => {
         if (!renderContext) throw new TypeError("Code preview render context is required.");
-        const command = typeof args.command === "string" ? args.command : "";
-        const timeout =
-          typeof args.timeout === "number" ? theme.fg("muted", ` (timeout ${args.timeout}s)`) : "";
+        const command = isStringValue(args.command) ? args.command : "";
+        const timeout = isNumberValue(args.timeout)
+          ? theme.fg("muted", ` (timeout ${args.timeout}s)`)
+          : "";
         const highlighted = renderHighlightedText(
           command || "...",
           "bash",
@@ -87,7 +89,7 @@ export function registerBash(pi: ExtensionAPI, cwd: string, options?: BashToolOp
           text += showingFooter(theme, preview.shown, rawLines.length, "output lines");
         if (isTruncated(result.details)) text += previewFooter(theme, "Output truncated by bash");
         const fullOutputPath = getObjectValue(result.details, "fullOutputPath");
-        if (typeof fullOutputPath === "string")
+        if (isStringValue(fullOutputPath))
           text += previewFooter(theme, `Full output: ${escapeControlChars(fullOutputPath)}`);
         return new Text(text, 0, 0);
       });

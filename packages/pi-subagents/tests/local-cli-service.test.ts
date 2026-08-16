@@ -22,12 +22,12 @@ import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "../src/bac
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import type {
   SupervisorChannelHandle,
-  SupervisorChannelShape,
+  SupervisorChannelContract,
 } from "../src/boundary/supervisor-channel.ts";
 import { WriterLeaseService } from "../src/boundary/writer-lease.ts";
 import type { SubagentError } from "../src/run/errors.ts";
 import type { StartSubagentRequest } from "../src/run/model.ts";
-import { SubagentService, type SubagentServiceShape } from "../src/run/service.ts";
+import { SubagentService, type SubagentServiceContract } from "../src/run/service.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/local-cli-fixture.mjs", import.meta.url));
 
@@ -52,7 +52,7 @@ const request = (runtime: LocalRuntime, model: string): StartSubagentRequest => 
 
 const supervisorFixture = (
   options: { readonly reportOnEpoch?: boolean; readonly progressBeforeReport?: number } = {},
-): SupervisorChannelShape => ({
+): SupervisorChannelContract => ({
   open: (openRequest) =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<
@@ -145,7 +145,7 @@ const writerLeaseLayer = Layer.succeed(WriterLeaseService, {
 
 const withService = async <A>(
   runtime: LocalRuntime,
-  use: (service: SubagentServiceShape) => Effect.Effect<A, SubagentError, Scope.Scope>,
+  use: (service: SubagentServiceContract) => Effect.Effect<A, SubagentError, Scope.Scope>,
   supervisorOptions: {
     readonly reportOnEpoch?: boolean;
     readonly progressBeforeReport?: number;

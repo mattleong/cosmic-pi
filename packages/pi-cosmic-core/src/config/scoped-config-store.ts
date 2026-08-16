@@ -103,13 +103,21 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     cwd: string,
     agentDir: string,
   ) {
-    return yield* scopedDocumentPaths(cwd, agentDir, {
-      projectConfigDirectory: options.projectConfigDirectory,
-      basename,
-      ...(options.extensionsDirectory === undefined
-        ? {}
-        : { extensionsDirectory: options.extensionsDirectory }),
-    });
+    return yield* scopedDocumentPaths(
+      cwd,
+      agentDir,
+      (() => {
+        const objectPart4297_0 = {
+          projectConfigDirectory: options.projectConfigDirectory,
+          basename,
+        };
+        const objectPart4297_1 =
+          options.extensionsDirectory === undefined
+            ? objectPart4297_0
+            : { ...objectPart4297_0, extensionsDirectory: options.extensionsDirectory };
+        return objectPart4297_1;
+      })(),
+    );
   });
 
   const readRawConfig = Effect.fn(`${spanPrefix}.readRawConfig`)(function* (path: string) {

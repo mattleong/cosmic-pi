@@ -99,13 +99,18 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     const generation = ++record.completionGeneration;
     const text = report.text;
     const completionWarning = foldRunWarnings(record.warningSlots);
-    record.completionGenerations.set(generation, {
+    record.completionGenerations.set(
       generation,
-      outcome: "completed",
-      ...(text ? { finalText: text } : {}),
-      ...(completionWarning ? { warning: completionWarning } : {}),
-      retained: true,
-    });
+      (() => {
+        const objectPart3858_0 = { generation, outcome: "completed" as const };
+        const objectPart3858_1 = text ? { ...objectPart3858_0, finalText: text } : objectPart3858_0;
+        const objectPart3858_2 = completionWarning
+          ? { ...objectPart3858_1, warning: completionWarning }
+          : objectPart3858_1;
+        const objectPart3858_3 = { ...objectPart3858_2, retained: true };
+        return objectPart3858_3;
+      })(),
+    );
     record.notificationGeneration += 1;
     delivery.discardQuestionLocked(record.view.id);
     record.replyPendingRequestId = undefined;

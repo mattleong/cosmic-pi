@@ -7,6 +7,7 @@
  * `pi-cosmic-core` sanitizers first, so hostile program output, hostile nested inputs, and
  * hostile persisted details can never inject terminal control sequences.
  */
+import { isFunctionValue, isNumberValue, isStringValue } from "pi-cosmic-core";
 import type {
   AgentToolResult,
   Theme,
@@ -15,6 +16,8 @@ import type {
 import { Container, getKeybindings, Text, type Component } from "@earendil-works/pi-tui";
 import * as codePreviews from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { brailleSpinnerFrame, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
@@ -42,14 +45,31 @@ export const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes
  * The sanitized bounded intent headline for one call, falling back to a neutral phrase for
  * a missing, non-string, or effectively empty intent.
  */
-export const describeCodeModeIntent = (intent: unknown): string => {
-  if (typeof intent !== "string") return CODE_MODE_FALLBACK_INTENT;
+export const describeCodeModeIntent = <Intent>(intent: Intent): string => {
+  if (!isStringValue(intent)) return CODE_MODE_FALLBACK_INTENT;
   const sanitized = sanitizeTerminalLine(intent);
   if (sanitized.length === 0) return CODE_MODE_FALLBACK_INTENT;
   return truncateDisplay(sanitized, MAX_INTENT_LENGTH);
 };
 
 /** Presentation-side projection of the persisted `code_mode` result details. */
+interface DecodedCodeModeCallEntry {
+  tool: string;
+  status: CodeModeCallEntry["status"];
+  activity?: string;
+  durationMs?: number;
+}
+
+interface MutableCodeModeRenderDetails {
+  toolCalls: ReadonlyArray<CodeModeCallEntry>;
+  totalToolCalls: number;
+  counts: CodeModeCallCounts;
+  hasExactCounts: boolean;
+  outputKind?: "text" | "structured";
+  cancelled: boolean;
+  truncated: boolean;
+}
+
 export interface CodeModeRenderDetails {
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   readonly totalToolCalls: number;
@@ -60,12 +80,51 @@ export interface CodeModeRenderDetails {
   readonly truncated: boolean;
 }
 
-const safeInteger = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+const safeInteger = <Value>(value: Value): number | undefined =>
+  isNumberValue(value) && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 
-const decodeCallEntry = (value: unknown): CodeModeCallEntry | undefined => {
-  if (typeof value !== "object" || value === null) return undefined;
-  const entry = value as Record<string, unknown>;
+const CallEntryInputSchema = Schema.Struct({
+  status: Schema.Unknown,
+  tool: Schema.optional(Schema.Unknown),
+  activity: Schema.optional(Schema.Unknown),
+  durationMs: Schema.optional(Schema.Unknown),
+});
+const RenderDetailsInputSchema = Schema.Struct({
+  toolCalls: Schema.optional(Schema.Unknown),
+  totalToolCalls: Schema.optional(Schema.Unknown),
+  counts: Schema.optional(Schema.Unknown),
+  outputKind: Schema.optional(Schema.Unknown),
+  cancelled: Schema.optional(Schema.Unknown),
+  truncated: Schema.optional(Schema.Unknown),
+});
+const CallCountsInputSchema = Schema.Struct({
+  total: Schema.Unknown,
+  queued: Schema.Unknown,
+  running: Schema.Unknown,
+  succeeded: Schema.Unknown,
+  failed: Schema.Unknown,
+  cancelled: Schema.Unknown,
+});
+const TextContentPartInputSchema = Schema.Struct({
+  type: Schema.Unknown,
+  text: Schema.Unknown,
+});
+const CodeModeArgumentsInputSchema = Schema.Struct({
+  intent: Schema.optional(Schema.Unknown),
+  code: Schema.optional(Schema.Unknown),
+});
+
+const decodeInput = <S extends Schema.ConstraintDecoder<unknown>, Value>(
+  schema: S,
+  value: Value,
+): S["Type"] | undefined => {
+  const decoded = Schema.decodeUnknownOption(schema)(value);
+  return Option.isSome(decoded) ? decoded.value : undefined;
+};
+
+const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => {
+  const entry = decodeInput(CallEntryInputSchema, value);
+  if (entry === undefined) return undefined;
   const status = entry.status;
   if (
     status !== "queued" &&
@@ -75,15 +134,13 @@ const decodeCallEntry = (value: unknown): CodeModeCallEntry | undefined => {
     status !== "cancelled"
   )
     return undefined;
-  const tool = typeof entry.tool === "string" ? entry.tool : "";
-  const activity = typeof entry.activity === "string" ? entry.activity : undefined;
+  const tool = isStringValue(entry.tool) ? entry.tool : "";
+  const activity = isStringValue(entry.activity) ? entry.activity : undefined;
   const durationMs = safeInteger(entry.durationMs);
-  return {
-    tool,
-    status,
-    ...(activity === undefined ? {} : { activity }),
-    ...(durationMs === undefined ? {} : { durationMs }),
-  };
+  const decodedEntry: DecodedCodeModeCallEntry = { tool, status };
+  if (activity !== undefined) decodedEntry.activity = activity;
+  if (durationMs !== undefined) decodedEntry.durationMs = durationMs;
+  return decodedEntry;
 };
 
 /**
@@ -95,24 +152,25 @@ const decodeCallEntry = (value: unknown): CodeModeCallEntry | undefined => {
  * everything beyond the bounded rows) and accepts a larger persisted total only as
  * a safe non-negative integer.
  */
-export const decodeCodeModeRenderDetails = (details: unknown): CodeModeRenderDetails => {
-  const record =
-    typeof details === "object" && details !== null ? (details as Record<string, unknown>) : {};
+export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeModeRenderDetails => {
+  const record = decodeInput(RenderDetailsInputSchema, details) ?? {};
   const rawCalls = Array.isArray(record.toolCalls) ? record.toolCalls : [];
   const toolCalls = rawCalls.slice(0, MAX_PROGRESS_ENTRIES).flatMap((entry) => {
     const decoded = decodeCallEntry(entry);
     return decoded === undefined ? [] : [decoded];
   });
   const suppliedTotal = safeInteger(record.totalToolCalls) ?? 0;
-  const rawCounts =
-    typeof record.counts === "object" && record.counts !== null
-      ? (record.counts as Record<string, unknown>)
-      : undefined;
+  const rawCounts = decodeInput(CallCountsInputSchema, record.counts);
   const hasExactCounts =
     rawCounts !== undefined &&
-    ["total", "queued", "running", "succeeded", "failed", "cancelled"].every(
-      (key) => safeInteger(rawCounts[key]) !== undefined,
-    );
+    [
+      rawCounts.total,
+      rawCounts.queued,
+      rawCounts.running,
+      rawCounts.succeeded,
+      rawCounts.failed,
+      rawCounts.cancelled,
+    ].every((count) => safeInteger(count) !== undefined);
   const visible = {
     queued: toolCalls.filter((call) => call.status === "queued").length,
     running: toolCalls.filter((call) => call.status === "running").length,
@@ -141,46 +199,41 @@ export const decodeCodeModeRenderDetails = (details: unknown): CodeModeRenderDet
     suppliedCountTotal,
   );
   const hiddenLegacySucceeded = hasExactCounts ? 0 : Math.max(0, total - toolCalls.length);
-  return {
+  const counts: CodeModeCallCounts = hasExactCounts
+    ? { total, ...(suppliedCounts ?? visible) }
+    : { total, ...visible, succeeded: visible.succeeded + hiddenLegacySucceeded };
+  const decodedDetails: MutableCodeModeRenderDetails = {
     toolCalls,
     totalToolCalls: total,
-    counts: hasExactCounts
-      ? { total, ...(suppliedCounts ?? visible) }
-      : { total, ...visible, succeeded: visible.succeeded + hiddenLegacySucceeded },
+    counts,
     hasExactCounts,
-    ...(record.outputKind === "text" || record.outputKind === "structured"
-      ? { outputKind: record.outputKind }
-      : {}),
     cancelled: record.cancelled === true,
     truncated: record.truncated === true,
   };
+  if (record.outputKind === "text" || record.outputKind === "structured")
+    decodedDetails.outputKind = record.outputKind;
+  return decodedDetails;
 };
 
 const textContentOf = (result: AgentToolResult<unknown>): string => {
   const content: unknown = result.content;
   if (!Array.isArray(content)) return "";
   return content
-    .flatMap((part: unknown) => {
-      if (typeof part !== "object" || part === null) return [];
-      const record = part as Record<string, unknown>;
-      return record.type === "text" && typeof record.text === "string" ? [record.text] : [];
+    .flatMap((part) => {
+      const record = decodeInput(TextContentPartInputSchema, part);
+      return record?.type === "text" && isStringValue(record.text) ? [record.text] : [];
     })
     .join("\n");
 };
 
-const intentHeadline = (args: unknown, theme: Theme): string => {
-  const intent = describeCodeModeIntent(
-    typeof args === "object" && args !== null
-      ? (args as Record<string, unknown>).intent
-      : undefined,
-  );
+const intentHeadline = <Args>(args: Args, theme: Theme): string => {
+  const intent = describeCodeModeIntent(decodeInput(CodeModeArgumentsInputSchema, args)?.intent);
   return `${theme.fg("toolTitle", theme.bold("Code Mode"))} ${theme.fg("dim", `· ${intent}`)}`;
 };
 
-const sourceOf = (args: unknown): string | undefined => {
-  if (typeof args !== "object" || args === null) return undefined;
-  const code = (args as Record<string, unknown>).code;
-  return typeof code === "string" ? code : undefined;
+const sourceOf = <Args>(args: Args): string | undefined => {
+  const code = decodeInput(CodeModeArgumentsInputSchema, args)?.code;
+  return isStringValue(code) ? code : undefined;
 };
 
 /**
@@ -197,8 +250,8 @@ export interface CodeModeRenderContext {
  * Call projection: collapsed shows `Code Mode · <intent>` only; expanded adds the full
  * sanitized program source under a small label (newlines preserved, no JSON framing).
  */
-export const renderCodeModeToolCall = (
-  args: unknown,
+export const renderCodeModeToolCall = <Args>(
+  args: Args,
   theme: Theme,
   context: CodeModeRenderContext | undefined,
 ): Component => {
@@ -240,12 +293,13 @@ type ToolIconLookup = (tool: string) => string | undefined;
 /** Optional cross-package presentation must never take down the complete result renderer. */
 export const nestedToolIcon = (
   tool: string,
-  lookup: unknown = codePreviews.getCodePreviewToolIcon,
+  lookup: ToolIconLookup | null | undefined = codePreviews.getCodePreviewToolIcon,
 ): string | undefined => {
-  if (!tool.startsWith("pi.") || typeof lookup !== "function") return undefined;
+  if (!tool.startsWith("pi.") || !isFunctionValue(lookup)) return undefined;
   try {
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const icon = (lookup as ToolIconLookup)(tool.slice("pi.".length));
-    if (typeof icon !== "string") return undefined;
+    if (!isStringValue(icon)) return undefined;
     const sanitized = truncateDisplay(sanitizeTerminalLine(icon), 8);
     return sanitized.length === 0 ? undefined : sanitized;
   } catch {

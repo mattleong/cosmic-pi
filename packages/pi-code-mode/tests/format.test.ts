@@ -88,7 +88,9 @@ describe("progress containment", () => {
   it("defensively copies bounded entries (including activity) so later mutation is not observable", () => {
     const calls: CodeModeCallEntry[] = [{ tool: "pi.read", status: "running", activity: "Read a" }];
     const bounded = boundedCallEntries(calls);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (calls[0] as { status: string }).status = "completed";
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (calls[0] as { activity: string }).activity = "Read b";
     expect(bounded[0]?.status).toBe("running");
     expect(bounded[0]?.activity).toBe("Read a");

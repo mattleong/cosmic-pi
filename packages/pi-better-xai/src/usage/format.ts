@@ -1,3 +1,4 @@
+import { isNumberValue } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -76,8 +77,8 @@ function parseIsoToSecondsFromNow(value: string | undefined, now: number): numbe
   return Math.max(0, (DateTime.toEpochMillis(parsed.value) - now) / 1000);
 }
 
-export function parseMonthlyBilling(
-  payload: unknown,
+export function parseMonthlyBilling<PayloadInput>(
+  payload: PayloadInput,
   now: number,
 ): Pick<
   UsageSnapshot,
@@ -106,8 +107,8 @@ export function parseMonthlyBilling(
   };
 }
 
-export function parseWeeklyBilling(
-  payload: unknown,
+export function parseWeeklyBilling<PayloadInput>(
+  payload: PayloadInput,
   now: number,
 ): Pick<
   UsageSnapshot,
@@ -115,12 +116,11 @@ export function parseWeeklyBilling(
 > {
   const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WeeklyBillingSchema)(payload));
   const config = decoded?.config;
-  const weeklyUsedPercent =
-    typeof config?.creditUsagePercent === "number"
-      ? clampPercent(config.creditUsagePercent)
-      : config
-        ? 0
-        : null;
+  const weeklyUsedPercent = isNumberValue(config?.creditUsagePercent)
+    ? clampPercent(config.creditUsagePercent)
+    : config
+      ? 0
+      : null;
   const resetIso = config?.billingPeriodEnd ?? config?.currentPeriod?.end;
   return {
     weeklyUsedPercent,
@@ -130,8 +130,8 @@ export function parseWeeklyBilling(
   };
 }
 
-export function parseUsageSnapshot(
-  monthlyPayload: unknown,
+export function parseUsageSnapshot<MonthlyPayloadInput>(
+  monthlyPayload: MonthlyPayloadInput,
   weeklyPayload: unknown | null | undefined,
   now: number,
 ): UsageSnapshot {
@@ -265,8 +265,12 @@ export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
   const decodedMonthly = monthly.body;
   const decodedWeekly = weekly?._tag === "Accepted" ? weekly.body : undefined;
   const now = yield* Clock.currentTimeMillis;
-  return {
-    snapshot: parseUsageSnapshot(decodedMonthly, decodedWeekly, now),
-    ...(credentials.teamId ? { teamId: credentials.teamId } : {}),
-  } satisfies XaiUsageResult;
+  const result: XaiUsageResult = (() => {
+    const objectPart8888_0 = { snapshot: parseUsageSnapshot(decodedMonthly, decodedWeekly, now) };
+    const objectPart8888_1 = credentials.teamId
+      ? { ...objectPart8888_0, teamId: credentials.teamId }
+      : objectPart8888_0;
+    return objectPart8888_1;
+  })();
+  return result;
 });

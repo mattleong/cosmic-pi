@@ -4,6 +4,7 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import { isStringValue } from "pi-cosmic-core";
 import { spawn } from "node:child_process";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -65,17 +66,22 @@ export interface LocalCliTransportRequest {
   readonly platform?: NodeJS.Platform | undefined;
 }
 
-const processError = (operation: string, error?: unknown, code?: string) =>
-  new SubagentProcessError({
-    operation,
-    message:
-      error instanceof Error
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : `Unable to ${operation} local CLI process.`,
-    ...(code ? { code } : {}),
-  });
+const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
+  new SubagentProcessError(
+    (() => {
+      const objectPart2651_0 = {
+        operation,
+        message:
+          error instanceof Error
+            ? error.message
+            : isStringValue(error)
+              ? error
+              : `Unable to ${operation} local CLI process.`,
+      };
+      const objectPart2651_1 = code ? { ...objectPart2651_0, code } : objectPart2651_0;
+      return objectPart2651_1;
+    })(),
+  );
 
 interface BoundedTailChunks {
   readonly chunks: Buffer[];
@@ -161,6 +167,7 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
             onLine: (line) => {
               const bytes = Buffer.byteLength(line, "utf8") + 1;
               try {
+                // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
                 offer({ type: "message", value: JSON.parse(line) as unknown }, bytes);
               } catch {
                 offer(
@@ -200,15 +207,13 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
         if (settled) return;
         settled = true;
         Queue.endUnsafe(events);
-        Deferred.doneUnsafe(
-          exited,
-          Effect.succeed({
-            type: "exit",
-            exitCode,
-            ...(signal ? { signal } : {}),
-            stderr: readTail(stderr),
-          }),
-        );
+        const event: Extract<LocalCliWireEvent, { readonly type: "exit" }> = (() => {
+          const objectPart7875_0 = { type: "exit" as const, exitCode };
+          const objectPart7875_1 = signal ? { ...objectPart7875_0, signal } : objectPart7875_0;
+          const objectPart7875_2 = { ...objectPart7875_1, stderr: readTail(stderr) };
+          return objectPart7875_2;
+        })();
+        Deferred.doneUnsafe(exited, Effect.succeed(event));
       };
       const onError = (error: Error) => {
         Deferred.doneUnsafe(

@@ -1,4 +1,5 @@
 /* oxlint-disable typescript/no-this-alias -- Effect.gen uses an explicit stable class receiver. */
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -13,7 +14,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import type {
   AdvisorCheckpoint,
   AdvisorCheckpointRequest,
-  AdvisorRuntimeServiceShape,
+  AdvisorRuntimeServiceContract,
 } from "../runtime/runtime.ts";
 import { AdvisorRuntimeResetRequiredError } from "../runtime/runtime.ts";
 import { classifyAdvisorRuntimeFailure } from "../domain/runtime-error-classifier.ts";
@@ -78,7 +79,7 @@ export interface AdvisorReviewQueueOptions {
 }
 
 export class AdvisorReviewQueue {
-  private readonly runtime: AdvisorRuntimeServiceShape;
+  private readonly runtime: AdvisorRuntimeServiceContract;
   private readonly options: AdvisorReviewQueueOptions;
   private readonly resourceScope: Scope.Closeable;
   private readonly state: SynchronizedRef.SynchronizedRef<ReviewQueueState>;
@@ -91,7 +92,7 @@ export class AdvisorReviewQueue {
   private initialized = false;
 
   constructor(
-    runtime: AdvisorRuntimeServiceShape,
+    runtime: AdvisorRuntimeServiceContract,
     options: AdvisorReviewQueueOptions,
     resourceScope: Scope.Closeable,
     state: SynchronizedRef.SynchronizedRef<ReviewQueueState>,
@@ -360,15 +361,18 @@ export class AdvisorReviewQueue {
       }
       isolate(() => self.options.onCheckpointStart?.(waiter.request));
       const batch = self.observations.peekThrough(waiter.target);
-      const runtimeRequest: AdvisorCheckpointRequest = {
-        checkpointId: waiter.request.checkpointId,
-        processedThrough: waiter.target,
-        observations: batch?.rendered ?? renderPreviouslyProcessed(waiter.target),
-        focus: waiter.request.focus,
-        ...(waiter.request.verificationReview
-          ? { verificationReview: waiter.request.verificationReview }
-          : {}),
-      };
+      const runtimeRequest: AdvisorCheckpointRequest = (() => {
+        const objectPart13409_0 = {
+          checkpointId: waiter.request.checkpointId,
+          processedThrough: waiter.target,
+          observations: batch?.rendered ?? renderPreviouslyProcessed(waiter.target),
+          focus: waiter.request.focus,
+        };
+        const objectPart13409_1 = waiter.request.verificationReview
+          ? { ...objectPart13409_0, verificationReview: waiter.request.verificationReview }
+          : objectPart13409_0;
+        return objectPart13409_1;
+      })();
       const result = yield* self
         .checkpointWithBoundedRecovery(runtimeRequest, waiter.epoch)
         .pipe(Effect.exit);
@@ -577,15 +581,15 @@ export class AdvisorReviewQueue {
 
 const toQueueError =
   (fallback: string) =>
-  (error: unknown): AdvisorReviewQueueError =>
+  <ErrorInput>(error: ErrorInput): AdvisorReviewQueueError =>
     error instanceof AdvisorRuntimeResetRequiredError
       ? new AdvisorQueueResetRequiredError({ message: failureMessage(error, fallback) })
       : new AdvisorQueueError({ message: failureMessage(error, fallback) });
-function failureMessage(error: unknown, fallback: string): string {
-  return typeof error === "object" &&
+function failureMessage<ErrorInput>(error: ErrorInput, fallback: string): string {
+  return hasObjectRuntimeType(error) &&
     error !== null &&
     "message" in error &&
-    typeof error.message === "string"
+    isStringValue(error.message)
     ? error.message
     : fallback;
 }

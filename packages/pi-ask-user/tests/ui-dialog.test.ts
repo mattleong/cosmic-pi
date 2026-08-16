@@ -29,12 +29,14 @@ const request: AskUserRequest = {
   ],
 };
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   fg: (_color: string, text: string) => text,
   bg: (_color: string, text: string) => text,
   bold: (text: string) => text,
-} as unknown as Theme;
+} as Theme;
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const keybindings = {
   matches: (data: string, id: string) => {
     if (id === "tui.select.up") return matchesKey(data, Key.up);
@@ -43,7 +45,7 @@ const keybindings = {
     if (id === "tui.select.cancel") return matchesKey(data, Key.escape);
     return false;
   },
-} as unknown as KeybindingsManager;
+} as KeybindingsManager;
 
 const make = (
   dialogKeybindings: KeybindingsManager = keybindings,
@@ -51,8 +53,11 @@ const make = (
 ) => {
   const done = vi.fn();
   const requestRender = vi.fn();
+  const tuiFixture = { requestRender, terminal: { rows: 24, columns: 80 } };
+  // SAFETY: AskUserDialog uses only requestRender and terminal dimensions from this TUI fixture.
+  const tui = tuiFixture as typeof tuiFixture & TUI;
   const dialog = new AskUserDialog({
-    tui: { requestRender, terminal: { rows: 24, columns: 80 } } as unknown as TUI,
+    tui,
     theme,
     keybindings: dialogKeybindings,
     request: dialogRequest,
@@ -192,12 +197,13 @@ describe("ask-user TUI", () => {
   });
 
   it("keeps printable configured cancel keys typeable and reserves the note shortcut", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const printableCancel = {
       matches: (data: string, id: Parameters<KeybindingsManager["matches"]>[1]) =>
         id === "tui.select.cancel"
           ? data === "q" || data === "n" || matchesKey(data, Key.escape)
           : keybindings.matches(data, id),
-    } as unknown as KeybindingsManager;
+    } as KeybindingsManager;
     const { dialog, done } = make(printableCancel);
     dialog.handleInput("\u001b[110u");
     expect(dialog.render(80).join("\n")).toContain("Note");
@@ -208,6 +214,7 @@ describe("ask-user TUI", () => {
 
   it("collapses through the mounted overlay without a terminal input listener", () => {
     const { dialog } = make();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const handle = {
       setHidden: vi.fn(),
       unfocus: vi.fn(),
@@ -215,7 +222,7 @@ describe("ask-user TUI", () => {
       isHidden: vi.fn(),
       isFocused: vi.fn(),
       hide: vi.fn(),
-    } as unknown as OverlayHandle;
+    } as OverlayHandle;
     dialog.setOverlayHandle(handle);
     dialog.handleInput("b");
     expect(handle.setHidden).toHaveBeenCalledWith(true);

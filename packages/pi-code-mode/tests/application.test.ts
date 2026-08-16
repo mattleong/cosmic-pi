@@ -3,14 +3,17 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Schema from "effect/Schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerCodeModeApplication } from "../src/application.ts";
 import type { NestedPiToolDefinitions } from "../src/boundary/host-builtin-tools.ts";
 import { CODE_MODE_TOOL_NAME } from "../src/tools/controller.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -18,8 +21,8 @@ afterEach(() => {
   delete process.env.PI_CODING_AGENT_DIR;
 });
 
-type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
-type CommandDefinition = { handler: (args: string, ctx: ExtensionContext) => unknown };
+type Handler = ExtensionHandler<any, any>;
+type CommandDefinition = Parameters<ExtensionAPI["registerCommand"]>[1];
 
 function harness() {
   const agentDir = mkdtempSync(join(tmpdir(), "pi-code-mode-app-agent-"));
@@ -33,7 +36,7 @@ function harness() {
   const registerTool = vi.fn();
   const notify = vi.fn();
   let activeTools: string[] = ["read", "bash"];
-  const pi = {
+  const pi = extensionApiFixture({
     on(name: string, handler: Handler) {
       registeredEvents.push(name);
       handlers.set(name, handler);
@@ -48,22 +51,23 @@ function harness() {
       activeTools = [...names];
     },
     events: { emit: vi.fn(), on: vi.fn() },
-  } as unknown as ExtensionAPI;
+  });
 
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerCodeModeApplication(pi, {
     loadSettings: () => Promise.resolve(undefined),
     wrapTool: (tool) => tool,
     makeNestedDefinitions: () => ({}) as NestedPiToolDefinitions,
   });
 
-  const makeContext = (cwd: string): ExtensionContext =>
-    ({
+  const makeContext = (cwd: string) =>
+    extensionContextFixture({
       cwd,
       mode: "rpc",
       hasUI: true,
       ui: { notify, custom: vi.fn(), select: vi.fn() },
       isProjectTrusted: vi.fn(() => true),
-    }) as unknown as ExtensionContext;
+    });
 
   return {
     handlers,
@@ -111,9 +115,9 @@ describe("code mode Pi registration", () => {
     const secondCtx = h.makeContext(secondCwd);
     await h.handlers.get("session_start")?.({ reason: "new" }, secondCtx);
     await command?.handler("project timeoutMs 45000", secondCtx);
-    const secondProjectDoc = JSON.parse(
-      readFileSync(join(secondCwd, ".pi", "extensions", "pi-code-mode.json"), "utf8"),
-    ) as Record<string, unknown>;
+    const secondProjectDoc = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(
+      JSON.parse(readFileSync(join(secondCwd, ".pi", "extensions", "pi-code-mode.json"), "utf8")),
+    );
     expect(secondProjectDoc).toEqual({ timeoutMs: 45_000 });
     expect(() =>
       readFileSync(join(firstCwd, ".pi", "extensions", "pi-code-mode.json"), "utf8"),

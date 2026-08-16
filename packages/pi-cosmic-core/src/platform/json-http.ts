@@ -41,7 +41,7 @@ export type JsonHttpResponseSchema<A, R> =
 /** A request whose decoded response type is concrete rather than `any` or `unknown`. */
 export type JsonHttpRequestInput<A, R> = JsonHttpRequest<JsonHttpResponseSchema<A, R>>;
 
-export interface JsonHttpClientShape {
+export interface JsonHttpClientContract {
   readonly request: <A, R>(
     input: JsonHttpRequestInput<A, R>,
   ) => Effect.Effect<JsonHttpResponse<A>, JsonHttpError, R>;
@@ -52,14 +52,14 @@ const jsonHttpError = (operation: JsonHttpError["operation"], message: string) =
   new JsonHttpError({ operation, message });
 const responseReadError = jsonHttpError("response", "Unable to read HTTP response.");
 
-export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClientShape>()(
+export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClientContract>()(
   "pi-cosmic-core/platform/json-http/JsonHttpClient",
 ) {
   static readonly layer = Layer.effect(
     this,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
-      const request: JsonHttpClientShape["request"] = Effect.fn("JsonHttpClient.request")(
+      const request: JsonHttpClientContract["request"] = Effect.fn("JsonHttpClient.request")(
         function* <A, R>(input: JsonHttpRequestInput<A, R>) {
           let outgoing =
             input.method === "POST"

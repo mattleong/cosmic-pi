@@ -1,3 +1,4 @@
+import { isNumberValue } from "pi-cosmic-core";
 import type { AdvisorSeverity } from "./schema.ts";
 
 export const ADVISOR_IMMUNITY_COMPLETED_TURNS = 3;
@@ -88,6 +89,6 @@ export const clearAdvisorCancellation = (
   state: AdvisorRoutingStateSnapshot,
 ): AdvisorRoutingStateSnapshot => ({ ...state, cancellationLatched: false });
 
-function nonNegativeInteger(value: unknown): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+function nonNegativeInteger<ValueInput>(value: ValueInput): number {
+  return isNumberValue(value) && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }

@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createLsToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -11,7 +12,7 @@ export function registerLs(pi: ExtensionAPI, cwd: string) {
   registerPathListTool(pi, cwd, {
     createToolDefinition: createLsToolDefinition,
     renderCall(args, theme, renderCwd) {
-      const path = typeof args.path === "string" && args.path ? args.path : ".";
+      const path = isStringValue(args.path) && args.path ? args.path : ".";
       return new Text(
         `${renderCodePreviewToolTitle("ls", theme)} ${renderDisplayPath(path, renderCwd, theme)}`,
         0,

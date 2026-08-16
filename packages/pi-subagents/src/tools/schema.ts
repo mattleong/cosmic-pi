@@ -1,3 +1,5 @@
+import type { JsonObject } from "pi-cosmic-core";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { PROFILE_IDS } from "../profiles/model.ts";
@@ -178,11 +180,13 @@ export type SubagentToolInput =
   | SubagentLifecycleInput
   | ({ readonly action: "rename" } & SubagentRenameInput);
 
-export const prepareSubagentStartArguments = (args: unknown): SubagentStartInput => {
+export const prepareSubagentStartArguments = <ArgsInput>(args: ArgsInput): SubagentStartInput => {
   // Pi performs the authoritative TypeBox validation immediately after this friendly preflight.
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   const prepared = args as SubagentStartInput;
-  if (!args || typeof args !== "object" || Array.isArray(args)) return prepared;
-  const record = args as Readonly<Record<string, unknown>>;
+  if (!args || !hasObjectRuntimeType(args) || Array.isArray(args)) return prepared;
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
+  const record = args as Readonly<JsonObject>;
   const agents = record.agents;
   if (!Array.isArray(agents)) {
     if (Object.prototype.hasOwnProperty.call(record, "task"))
@@ -192,10 +196,9 @@ export const prepareSubagentStartArguments = (args: unknown): SubagentStartInput
     return prepared;
   }
   agents.forEach((agent, index) => {
-    if (!agent || typeof agent !== "object" || Array.isArray(agent)) return;
-    const disallowedField = firstDisallowedLaunchOverride(
-      agent as Readonly<Record<string, unknown>>,
-    );
+    if (!agent || !hasObjectRuntimeType(agent) || Array.isArray(agent)) return;
+    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
+    const disallowedField = firstDisallowedLaunchOverride(agent as Readonly<JsonObject>);
     if (disallowedField)
       throw new Error(
         disallowedLaunchOverrideMessage(disallowedField, `subagent_start agents[${index}]`),

@@ -22,7 +22,7 @@ export function selectPreviewLines<T>(
 
 const PREVIEW_SPLIT_MIN_LIMIT = 8;
 
-function previewSplitCounts(limit: number): { head: number; tail: number } {
+function previewSplitCounts(limit: number) {
   const head = Math.ceil(limit * 0.65);
   return { head, tail: Math.max(1, limit - head - 1) };
 }
@@ -38,7 +38,7 @@ function collectPreviewEntries<T>(
   total: number,
   limit: number,
   visit: (push: (line: T, index: number) => void) => void,
-): { entries: Array<PreviewLineEntry<T>>; shown: number; hidden: number } {
+) {
   const plan = previewWindowPlan(total, limit);
   const entries: Array<PreviewLineEntry<T>> = [];
   let markerAdded = false;
@@ -64,10 +64,7 @@ function collectPreviewEntries<T>(
   return { entries, shown: plan.shown, hidden: plan.hidden };
 }
 
-export function selectPreviewTextLines(
-  text: string,
-  limit: number,
-): { entries: Array<PreviewLineEntry<string>>; shown: number; hidden: number; total: number } {
+export function selectPreviewTextLines(text: string, limit: number) {
   const entries: Array<PreviewLineEntry<string>> = [];
   const split = limit >= PREVIEW_SPLIT_MIN_LIMIT;
   const counts = split ? previewSplitCounts(limit) : undefined;

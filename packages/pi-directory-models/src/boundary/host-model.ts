@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -21,16 +22,16 @@ export class DirectoryModelHostError extends Schema.TaggedError<DirectoryModelHo
 const hostError = (operation: string, message: string) => () =>
   new DirectoryModelHostError({ operation, message });
 
-function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return typeof value === "string" && THINKING_LEVELS.some((level) => level === value);
+function isThinkingLevel<ValueInput>(value: ValueInput): value is ValueInput & ThinkingLevel {
+  return isStringValue(value) && THINKING_LEVELS.some((level) => level === value);
 }
 
-export function captureSelectedModel(value: unknown): SelectedModel | undefined {
+export function captureSelectedModel<ValueInput>(value: ValueInput): SelectedModel | undefined {
   try {
-    if (!value || typeof value !== "object") return undefined;
+    if (!value || !hasObjectRuntimeType(value)) return undefined;
+    // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
     const candidate = value as { provider?: unknown; id?: unknown };
-    if (typeof candidate.provider !== "string" || typeof candidate.id !== "string")
-      return undefined;
+    if (!isStringValue(candidate.provider) || !isStringValue(candidate.id)) return undefined;
     return { provider: candidate.provider, id: candidate.id };
   } catch {
     return undefined;

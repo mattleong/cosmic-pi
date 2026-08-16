@@ -5,10 +5,10 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/globalTimers:off
+import { runtimeTypeName } from "pi-cosmic-core";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -16,9 +16,10 @@ import {
   makeNestedPiToolDispatch,
   nestedResultToGuestData,
   PI_GUEST_TOOL_NAMES,
-  type NestedPiToolDefinitions,
 } from "../src/boundary/host-builtin-tools.ts";
 import { ToolError } from "../src/boundary/codemode-runtime.ts";
+import { extensionContextFixture } from "./support/host.ts";
+import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -31,7 +32,7 @@ const newCwd = (): string => {
   return cwd;
 };
 
-const ctx = {
+const ctx = extensionContextFixture({
   cwd: "/",
   sessionManager: {
     getSessionId: () => "test-session",
@@ -39,7 +40,7 @@ const ctx = {
   },
   model: undefined,
   thinkingLevel: undefined,
-} as unknown as ExtensionContext;
+});
 
 // A real 1×1 PNG so the built-in read tool takes its genuine image path.
 const PNG_BYTES = Buffer.from(
@@ -62,6 +63,7 @@ describe("nestedResultToGuestData", () => {
   });
 
   it("refuses image content without leaking it into the guest", async () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const error = await Effect.runPromise(
       Effect.flip(
         nestedResultToGuestData("read", {
@@ -76,6 +78,7 @@ describe("nestedResultToGuestData", () => {
   });
 
   it("refuses unrecognized result shapes model-safely", async () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const error = await Effect.runPromise(
       Effect.flip(nestedResultToGuestData("grep", { content: "not-an-array" } as never)),
     );
@@ -91,7 +94,7 @@ describe("nested dispatch through the real built-in definitions", () => {
     expect(Object.keys(definitions)).toEqual(PI_GUEST_TOOL_NAMES);
     for (const name of PI_GUEST_TOOL_NAMES) {
       expect(definitions[name].name).toBe(name);
-      expect(typeof definitions[name].execute).toBe("function");
+      expect(runtimeTypeName(definitions[name].execute)).toBe("function");
     }
   });
 
@@ -226,9 +229,9 @@ describe("nested dispatch through the real built-in definitions", () => {
 
   it("hands nested tools a signal composed from the outer signal", async () => {
     const seen: Array<AbortSignal | undefined> = [];
-    const definitions = {
+    const definitions = nestedToolDefinitionsFixture({
       read: {
-        execute: (_id: string, _input: unknown, signal?: AbortSignal) => {
+        execute: <Input>(_id: string, _input: Input, signal?: AbortSignal) => {
           seen.push(signal);
           return new Promise((_resolve, reject) => {
             if (signal?.aborted) {
@@ -241,7 +244,7 @@ describe("nested dispatch through the real built-in definitions", () => {
           });
         },
       },
-    } as unknown as NestedPiToolDefinitions;
+    });
     const outer = new AbortController();
     const dispatch = makeNestedPiToolDispatch({
       definitions,

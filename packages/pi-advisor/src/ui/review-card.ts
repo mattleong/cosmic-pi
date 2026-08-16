@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
@@ -83,7 +84,9 @@ export function makeAdvisorReviewCard(
     : undefined;
 }
 
-export function decodeAdvisorReviewCard(value: unknown): AdvisorReviewCard | undefined {
+export function decodeAdvisorReviewCard<ValueInput>(
+  value: ValueInput,
+): AdvisorReviewCard | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, ["version", "cardId", "kind", "summary", "items"]))
     return undefined;
   if (
@@ -108,6 +111,7 @@ export function decodeAdvisorReviewCard(value: unknown): AdvisorReviewCard | und
   if (items.some((item) => !item)) return undefined;
   const summary = clip(sanitizeCardText(decoded.value.summary), MAX_SUMMARY);
   if (!summary) return undefined;
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return {
     ...decoded.value,
     summary,
@@ -115,7 +119,9 @@ export function decodeAdvisorReviewCard(value: unknown): AdvisorReviewCard | und
   };
 }
 
-export function decodeAdvisorReviewAction(value: unknown): AdvisorReviewAction | undefined {
+export function decodeAdvisorReviewAction<ValueInput>(
+  value: ValueInput,
+): AdvisorReviewAction | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, ["version", "cardId", "action"])) return undefined;
   const decoded = Schema.decodeUnknownOption(ReviewActionWireSchema, {
     onExcessProperty: "error",
@@ -124,8 +130,8 @@ export function decodeAdvisorReviewAction(value: unknown): AdvisorReviewAction |
 }
 
 /** Pure TUI projection. It deliberately renders no provider, model, verdict, IDs, or finding metadata. */
-export function renderAdvisorReviewCard(
-  data: unknown,
+export function renderAdvisorReviewCard<DataInput>(
+  data: DataInput,
   expanded: boolean,
   theme: Theme,
 ): Text | undefined {
@@ -176,12 +182,12 @@ function sanitizeCardText(value: string): string {
 function validItem(item: AdvisorReviewCardItem): boolean {
   return Boolean(item.issue && item.evidence && item.suggestedFix);
 }
-function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+function hasOnlyKeys(value: Schema.JsonObject, allowed: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === allowed.length && keys.every((key) => allowed.includes(key));
 }
-function sanitizeId(value: unknown): string | undefined {
-  return typeof value === "string" && CARD_ID_PATTERN.test(value) ? value : undefined;
+function sanitizeId<ValueInput>(value: ValueInput): string | undefined {
+  return isStringValue(value) && CARD_ID_PATTERN.test(value) ? value : undefined;
 }
 function clip(value: string, limit: number): string {
   const trimmed = value.trim();

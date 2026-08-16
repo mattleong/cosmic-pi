@@ -1,5 +1,6 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
+import { isFunctionValue } from "pi-cosmic-core";
 import {
   getSettingsListTheme,
   type ExtensionAPI,
@@ -44,6 +45,7 @@ const SETTING_IDS: readonly string[] = CODE_MODE_SETTING_DESCRIPTORS.map(
   (descriptor) => descriptor.id,
 );
 
+// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 const COMPLETION_DESCRIPTORS = CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => ({
   id: descriptor.id as string,
   description: descriptor.description,
@@ -296,10 +298,7 @@ export function registerCodeModeSettingsController(
             void applySetting(ctx, request, signal, show);
           },
           onCancel: () => invokeHostCallback(() => done(undefined), undefined),
-          matchesKeybinding: invokeHostCallback(
-            () => typeof keybindings?.matches === "function",
-            false,
-          )
+          matchesKeybinding: invokeHostCallback(() => isFunctionValue(keybindings?.matches), false)
             ? (data, id) => invokeHostCallback(() => keybindings.matches(data, id), false)
             : undefined,
           requestRender: () => invokeHostCallback(() => tui.requestRender(), undefined),

@@ -1,3 +1,4 @@
+import { isNumberValue } from "../runtime-values.ts";
 /**
  * Conservative first-character analysis for regular-expression alternation branches (local
  * confinement helper, not vendored from upstream OpenCode 2; see PROVENANCE.md deviation 8).
@@ -185,11 +186,12 @@ export const parseEscape = (
  * a leading `]` is never a literal member). Negated or unparseable classes degrade to
  * "unknown". `width` spans through the closing `]`.
  */
-export const classFirst = (
-  source: string,
-  index: number,
-  flags: string,
-): { readonly first: FirstSet; readonly width: number } => {
+export interface ClassFirstResult {
+  readonly first: FirstSet;
+  readonly width: number;
+}
+
+export const classFirst = (source: string, index: number, flags: string): ClassFirstResult => {
   let i = index + 1;
   let negated = false;
   let unknown = false;
@@ -224,7 +226,7 @@ export const classFirst = (
     if (source[i] === "-" && i + 1 < source.length && source[i + 1] !== "]") {
       i += 1; // consume the range dash
       const high = member();
-      if (typeof high !== "number" || high < low) unknown = true;
+      if (!isNumberValue(high) || high < low) unknown = true;
       else ranges.push([low, high]);
       continue;
     }
@@ -240,6 +242,7 @@ export const classFirst = (
 export const unionFirstSets = (sets: ReadonlyArray<FirstSet>): FirstSet => {
   if (sets.length === 1) return sets[0]!;
   if (sets.some((set) => set === "unknown" || set === "empty")) return "unknown";
+  // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
   return sets.flatMap((set) => set as ReadonlyArray<CodeUnitRange>);
 };
 

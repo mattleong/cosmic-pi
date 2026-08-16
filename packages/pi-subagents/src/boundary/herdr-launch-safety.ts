@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import { hasAvailableHerdrShell } from "../backend/herdr-shell-readiness.ts";
 import { matchingPaneIdentity } from "../backend/herdr-ownership.ts";
 import { SubagentProcessError } from "../run/errors.ts";
-import type { HerdrCliShape, HerdrPane, HerdrSnapshot } from "./herdr-cli.ts";
+import type { HerdrCliContract, HerdrPane, HerdrSnapshot } from "./herdr-cli.ts";
 import type { HerdrPreparedHarness } from "./herdr-harness.ts";
 
 const SHELL_READINESS_ATTEMPTS = 51;
@@ -58,7 +58,7 @@ export interface HerdrLaunchSafety {
 
 /** I/O safety gate for provisional pane mutation and non-stealing focus restoration. */
 export const makeHerdrLaunchSafety = (
-  cli: HerdrCliShape,
+  cli: HerdrCliContract,
   exactProject: (snapshot: HerdrSnapshot) => boolean,
 ): HerdrLaunchSafety => {
   const inspectProvisionalPane: HerdrLaunchSafety["inspectProvisionalPane"] = (

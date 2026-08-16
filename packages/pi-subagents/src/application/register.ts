@@ -32,7 +32,10 @@ import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-rel
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
 
 export interface SubagentApplicationBoundaries {
-  readonly loadSettings: (cwd: string, projectTrusted: boolean) => Promise<unknown>;
+  readonly loadSettings: (
+    cwd: string,
+    projectTrusted: boolean,
+  ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
   readonly getAgentDirectory?: (() => string) | undefined;
 }
 
@@ -110,25 +113,37 @@ export function registerSubagentApplication(
     makeRuntime: (activation) =>
       makePiManagedRuntime(
         pi,
-        makeSubagentLayer({
-          cwd: activation.cwd,
-          agentDirectory: activation.agentDirectory,
-          projectTrusted: activation.projectTrusted,
-          ...(activation.sessionBaseConfig
-            ? { sessionBaseConfig: activation.sessionBaseConfig }
-            : {}),
-          publishSessionBaseConfig: (config) =>
-            profileOverrideHandoff.publishBaseConfig(
-              activation.generation,
-              activeProfileGeneration,
-              config,
-            ),
-          initialSessionOverrides: activation.sessionOverrides,
-          publishSessionOverrides: (seed) =>
-            profileOverrideHandoff.publish(activation.generation, activeProfileGeneration, seed),
-          publish: bridge.publish,
-          notify,
-        }),
+        makeSubagentLayer(
+          (() => {
+            const objectPart4155_0 = {
+              cwd: activation.cwd,
+              agentDirectory: activation.agentDirectory,
+              projectTrusted: activation.projectTrusted,
+            };
+            const objectPart4155_1 = activation.sessionBaseConfig
+              ? { ...objectPart4155_0, sessionBaseConfig: activation.sessionBaseConfig }
+              : objectPart4155_0;
+            const objectPart4155_2 = {
+              ...objectPart4155_1,
+              publishSessionBaseConfig: (config: ResolvedSubagentConfig) =>
+                profileOverrideHandoff.publishBaseConfig(
+                  activation.generation,
+                  activeProfileGeneration,
+                  config,
+                ),
+              initialSessionOverrides: activation.sessionOverrides,
+              publishSessionOverrides: (seed: SessionProfileOverrideSeed) =>
+                profileOverrideHandoff.publish(
+                  activation.generation,
+                  activeProfileGeneration,
+                  seed,
+                ),
+              publish: bridge.publish,
+              notify,
+            };
+            return objectPart4155_2;
+          })(),
+        ),
         { agentDirectory: () => activation.agentDirectory, packageName: "pi-subagents" },
       ),
     startup: () =>
@@ -264,7 +279,11 @@ export function registerSubagentApplication(
       });
     }
     const settings = Promise.resolve()
-      .then(() => boundaries.loadSettings(captured.cwd, projectTrusted))
+      .then(() =>
+        Promise.resolve(boundaries.loadSettings(captured.cwd, projectTrusted)).then(
+          () => undefined,
+        ),
+      )
       .catch(() => undefined);
     return Promise.all([shutdown, settings])
       .then(() => {
@@ -273,17 +292,29 @@ export function registerSubagentApplication(
         const sessionKey = profileReloadSessionKey(ctx);
         if (restoredReload)
           profileOverrideHandoff.publish(generation, generation, restoredReload.seed);
-        const activation: CapturedActivation = {
-          ctx,
-          cwd: captured.cwd,
-          projectTrusted,
-          agentDirectory,
-          generation,
-          ...(sessionKey ? { sessionKey } : {}),
-          ...(restoredReload ? { reloadHandoffKey: restoredReload.sessionKey } : {}),
-          ...(sessionBaseConfig ? { sessionBaseConfig } : {}),
-          sessionOverrides: restoredReload?.seed ?? profileOverrideHandoff.capture(),
-        };
+        const activation: CapturedActivation = (() => {
+          const objectPart10835_0 = {
+            ctx,
+            cwd: captured.cwd,
+            projectTrusted,
+            agentDirectory,
+            generation,
+          };
+          const objectPart10835_1 = sessionKey
+            ? { ...objectPart10835_0, sessionKey }
+            : objectPart10835_0;
+          const objectPart10835_2 = restoredReload
+            ? { ...objectPart10835_1, reloadHandoffKey: restoredReload.sessionKey }
+            : objectPart10835_1;
+          const objectPart10835_3 = sessionBaseConfig
+            ? { ...objectPart10835_2, sessionBaseConfig }
+            : objectPart10835_2;
+          const objectPart10835_4 = {
+            ...objectPart10835_3,
+            sessionOverrides: restoredReload?.seed ?? profileOverrideHandoff.capture(),
+          };
+          return objectPart10835_4;
+        })();
         activeProfileGeneration = generation;
         try {
           registerSubagentTools(pi, {

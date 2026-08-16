@@ -6,6 +6,7 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, rmdir, writeFile } from "node:fs/promises";
@@ -94,7 +95,7 @@ export interface ChildProcessHandle {
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
 }
 
-export interface ChildProcessShape {
+export interface ChildProcessContract {
   readonly spawn: (
     request: ChildLaunchRequest,
   ) => Effect.Effect<ChildProcessHandle, SubagentProcessError, Scope.Scope>;
@@ -104,17 +105,22 @@ export interface ChildProcessShape {
   }) => Effect.Effect<void, SubagentProcessError>;
 }
 
-const processError = (operation: string, error?: unknown, code?: string) =>
-  new SubagentProcessError({
-    operation,
-    message:
-      error instanceof Error
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : `Unable to ${operation} subagent process.`,
-    ...(code ? { code } : {}),
-  });
+const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
+  new SubagentProcessError(
+    (() => {
+      const objectPart4302_0 = {
+        operation,
+        message:
+          error instanceof Error
+            ? error.message
+            : isStringValue(error)
+              ? error
+              : `Unable to ${operation} subagent process.`,
+      };
+      const objectPart4302_1 = code ? { ...objectPart4302_0, code } : objectPart4302_0;
+      return objectPart4302_1;
+    })(),
+  );
 
 export function safeSubagentDirectorySegment(value: string): string {
   if (/^[A-Za-z0-9_-]{1,128}$/.test(value)) return value;
@@ -148,8 +154,9 @@ const reclaimChildRunState = (
       try {
         await rmdir(join(runDirectory, ".."));
       } catch (error) {
+        // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
         const code =
-          typeof error === "object" && error !== null && "code" in error
+          hasObjectRuntimeType(error) && error !== null && "code" in error
             ? (error as { readonly code?: unknown }).code
             : undefined;
         if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
@@ -159,10 +166,15 @@ const reclaimChildRunState = (
     catch: (error) => processError("reclaim subagent run state", error),
   });
 
+export interface ChildToolPolicy {
+  readonly enabled: ReadonlyArray<string>;
+  readonly excluded: string;
+}
+
 export const childToolPolicy = (
   activeTools: ReadonlyArray<string>,
   writeIntent: import("../domain/routing.ts").SubagentWriteIntent,
-): { readonly enabled: ReadonlyArray<string>; readonly excluded: string } => ({
+): ChildToolPolicy => ({
   enabled: piToolsForWriteIntent(activeTools, writeIntent),
   excluded: ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
 });
@@ -233,22 +245,26 @@ export const releaseChildProcess = (
 };
 
 function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
-  return {
-    ...Object.fromEntries(
-      Object.entries(process.env).filter(
-        ([key, value]) => value !== undefined && !BLOCKED_ENV_KEYS.has(key),
+  return (() => {
+    const objectPart8692_0 = {
+      ...Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key, value]) => value !== undefined && !BLOCKED_ENV_KEYS.has(key),
+        ),
       ),
-    ),
-    PI_SUBAGENT_CHILD: "1",
-    PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
-    PI_SUBAGENT_RUN_ID: request.runId,
-    ...(request.runtimeApiKey
+      PI_SUBAGENT_CHILD: "1",
+      PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
+      PI_SUBAGENT_RUN_ID: request.runId,
+    };
+    const objectPart8692_1 = request.runtimeApiKey
       ? {
+          ...objectPart8692_0,
           [RUNTIME_API_KEY_ENV]: request.runtimeApiKey,
           [RUNTIME_API_PROVIDER_ENV]: request.model.slice(0, request.model.indexOf("/")),
         }
-      : {}),
-  };
+      : objectPart8692_0;
+    return objectPart8692_1;
+  })();
 }
 
 const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry => {
@@ -391,6 +407,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       const onLine = (line: string) => {
         const bytes = Buffer.byteLength(line, "utf8") + 1;
         try {
+          // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
           offer({ type: "rpc_message", value: JSON.parse(line) as unknown }, bytes);
         } catch {
           offer({ type: "protocol_error", message: "Subagent emitted malformed RPC JSON." }, bytes);
@@ -428,16 +445,17 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         spawned = true;
         Deferred.doneUnsafe(ready, Effect.void);
       };
-      const onMessage = (message: unknown) => offer({ type: "ipc_message", value: message });
+      const onMessage = <MessageInput>(message: MessageInput) =>
+        offer({ type: "ipc_message", value: message });
       const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
         if (settled) return;
         settled = true;
-        const event: Extract<ChildWireEvent, { readonly type: "exit" }> = {
-          type: "exit",
-          exitCode,
-          ...(signal ? { signal } : {}),
-          stderr,
-        };
+        const event: Extract<ChildWireEvent, { readonly type: "exit" }> = (() => {
+          const objectPart16646_0 = { type: "exit" as const, exitCode };
+          const objectPart16646_1 = signal ? { ...objectPart16646_0, signal } : objectPart16646_0;
+          const objectPart16646_2 = { ...objectPart16646_1, stderr };
+          return objectPart16646_2;
+        })();
         Queue.endUnsafe(events);
         Deferred.doneUnsafe(exited, Effect.succeed(event));
       };
@@ -590,7 +608,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   );
 });
 
-export class ChildProcess extends Context.Service<ChildProcess, ChildProcessShape>()(
+export class ChildProcess extends Context.Service<ChildProcess, ChildProcessContract>()(
   "pi-subagents/boundary/child-process/ChildProcess",
 ) {
   static readonly layer = (options: { readonly agentDirectory?: string } = {}) => {

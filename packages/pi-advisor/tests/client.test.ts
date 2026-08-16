@@ -46,8 +46,9 @@ function harness(
       async () => options.childAuth ?? { auth: { apiKey: "child-key" }, source: "test" },
     ),
   };
-  vi.spyOn(ModelRuntime, "create").mockResolvedValue(runtime as unknown as ModelRuntime);
-  const ctx = {
+  // SAFETY: createAdvisorChildModel calls only the four ModelRuntime methods implemented here.
+  vi.spyOn(ModelRuntime, "create").mockResolvedValue(runtime as typeof runtime & ModelRuntime);
+  const contextFixture = {
     modelRegistry: {
       find: vi.fn(() => parentModel),
       getRegisteredProviderIds: vi.fn(() => ["custom-provider"]),
@@ -55,7 +56,9 @@ function harness(
       getApiKeyAndHeaders: vi.fn(async () => options.auth ?? { ok: true, apiKey: "runtime-key" }),
       isUsingOAuth: vi.fn(() => options.usingOAuth ?? false),
     },
-  } as unknown as Pick<ExtensionContext, "modelRegistry">;
+  };
+  // SAFETY: createAdvisorChildModel reads only modelRegistry from this context fixture.
+  const ctx = contextFixture as typeof contextFixture & Pick<ExtensionContext, "modelRegistry">;
   return { ctx, runtime };
 }
 
@@ -89,6 +92,7 @@ describe("advisor child model construction", () => {
     const { ctx, runtime } = harness({
       auth: { ok: true, apiKey: "runtime-key", headers: { "X-Provider-Default": null } },
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (ctx.modelRegistry.getRegisteredProviderConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       name: "Custom",
       headers: { "x-provider-default": "legacy", "x-keep": "kept" },
@@ -124,6 +128,7 @@ describe("advisor child model construction", () => {
 
   test("fails open for missing models and parent authentication failures", async () => {
     const missing = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (missing.ctx.modelRegistry.find as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
     await expect(createAdvisorChildModel(missing.ctx, config())).rejects.toThrow(AdvisorModelError);
 
@@ -141,8 +146,7 @@ describe("advisor child model construction", () => {
   ] as const)("maps a throwing model-registry %s callback to AdvisorModelError", async (method) => {
     const secret = `sensitive-${method}`;
     const { ctx } = harness();
-    const registry = ctx.modelRegistry as unknown as Record<string, ReturnType<typeof vi.fn>>;
-    registry[method]?.mockImplementation(() => {
+    ctx.modelRegistry[method].mockImplementation(() => {
       throw new Error(secret);
     });
 
@@ -173,6 +177,7 @@ describe("advisor child model construction", () => {
     });
     // Explicitly override the default supplied by the harness.
     const runtime = await ModelRuntime.create();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (runtime.getAuth as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
     await expect(createAdvisorChildModel(ctx, config())).rejects.toThrow(

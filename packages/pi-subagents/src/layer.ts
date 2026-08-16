@@ -36,13 +36,18 @@ export interface SubagentLayerOptions {
 export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   // The store remains the single persistence door and is exposed for the human settings command.
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
-  const profiles = subagentProfileServiceLayer({
-    ...options,
-    ...(options.sessionBaseConfig ? { baseConfig: options.sessionBaseConfig } : {}),
-    ...(options.publishSessionBaseConfig
-      ? { publishBaseConfig: options.publishSessionBaseConfig }
-      : {}),
-  }).pipe(Layer.provide(configStore));
+  const profiles = subagentProfileServiceLayer(
+    (() => {
+      const objectPart2178_0 = { ...options };
+      const objectPart2178_1 = options.sessionBaseConfig
+        ? { ...objectPart2178_0, baseConfig: options.sessionBaseConfig }
+        : objectPart2178_0;
+      const objectPart2178_2 = options.publishSessionBaseConfig
+        ? { ...objectPart2178_1, publishBaseConfig: options.publishSessionBaseConfig }
+        : objectPart2178_1;
+      return objectPart2178_2;
+    })(),
+  ).pipe(Layer.provide(configStore));
   const herdrEnvironment = captureHerdrEnvironment();
   const herdrBoundaries = Layer.merge(
     HerdrCli.layer({ environment: herdrEnvironment }),

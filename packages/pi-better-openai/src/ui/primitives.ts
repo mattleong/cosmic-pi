@@ -19,12 +19,17 @@ export interface OpenAIUsageUiState {
 }
 
 export function fastModeUiState(ctx: ExtensionContext, snapshot: FastSnapshot): FastModeUiState {
-  return {
-    desired: snapshot.desiredActive,
-    active: isFastActive(ctx, snapshot),
-    supported: supportsFast(ctx),
-    ...(ctx.model?.id ? { modelId: ctx.model.id } : {}),
-  };
+  return (() => {
+    const objectPart775_0 = {
+      desired: snapshot.desiredActive,
+      active: isFastActive(ctx, snapshot),
+      supported: supportsFast(ctx),
+    };
+    const objectPart775_1 = ctx.model?.id
+      ? { ...objectPart775_0, modelId: ctx.model.id }
+      : objectPart775_0;
+    return objectPart775_1;
+  })();
 }
 
 export function fastModeFooterPrimitive(state: FastModeUiState): FooterTextPrimitive | undefined {

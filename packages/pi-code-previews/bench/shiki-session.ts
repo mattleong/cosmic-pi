@@ -21,13 +21,14 @@ export async function startBenchmarkShikiSession(theme: string): Promise<() => P
   );
   const runtime = ManagedRuntime.make(layer);
   await runtime.runPromise(initializeShikiEffect(theme));
+  // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
   const capability = {
     token: 1,
     run: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
       runtime.runPromise(effect, signal ? { signal } : undefined),
     fork: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
       runtime.runFork(effect, signal ? { signal } : undefined),
-  } as unknown as CodePreviewSessionCapability;
+  } as CodePreviewSessionCapability;
   installCodePreviewSessionCapability(capability);
   return async () => {
     clearCodePreviewSessionCapability(1);

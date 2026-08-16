@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import { stringifyJson } from "../boundary/json.ts";
 import { createHash } from "node:crypto";
 import * as Option from "effect/Option";
@@ -161,26 +162,29 @@ export function createCheckpointLedger(input: {
   findingLifecycle?: readonly AdvisorFindingRecord[];
   emissionHashes?: readonly string[];
 }): AdvisorCheckpointLedger {
-  return {
+  const routing: AdvisorCheckpointLedger["routing"] = {
+    cancellationLatched: input.cancellationLatched ?? false,
+    completedPrimaryTurns: Math.max(0, Math.floor(input.completedPrimaryTurns ?? 0)),
+    immunityUntilCompletedTurn: Math.max(0, Math.floor(input.immunityUntilCompletedTurn ?? 0)),
+  };
+  const ledger: AdvisorCheckpointLedger = {
     protocolVersion: ADVISOR_CHECKPOINT_PROTOCOL_VERSION,
     fingerprint: input.fingerprint,
     anchorId: input.anchorId,
     reviewSummary: sanitizeReviewSummary(input.reviewSummary),
-    routing: {
-      cancellationLatched: input.cancellationLatched ?? false,
-      completedPrimaryTurns: Math.max(0, Math.floor(input.completedPrimaryTurns ?? 0)),
-      immunityUntilCompletedTurn: Math.max(0, Math.floor(input.immunityUntilCompletedTurn ?? 0)),
-      ...(input.interventionBudget
-        ? { interventionBudget: sanitizeInterventionBudgetSnapshot(input.interventionBudget) }
-        : {}),
-    },
-    ...(input.findingLifecycle
-      ? { findingLifecycle: sanitizeFindingLifecycle(input.findingLifecycle) }
-      : {}),
+    routing: input.interventionBudget
+      ? {
+          ...routing,
+          interventionBudget: sanitizeInterventionBudgetSnapshot(input.interventionBudget),
+        }
+      : routing,
     emissionHashes: (input.emissionHashes ?? [])
       .filter(isEmissionRecord)
       .slice(-MAX_LEDGER_EMISSION_HASHES),
   };
+  return input.findingLifecycle
+    ? { ...ledger, findingLifecycle: sanitizeFindingLifecycle(input.findingLifecycle) }
+    : ledger;
 }
 
 /** Restore only a valid ledger whose anchor remains on the active branch. */
@@ -204,7 +208,7 @@ export function restoreCheckpointLedger(
   return undefined;
 }
 
-export function parseLedger(value: unknown): AdvisorCheckpointLedger | undefined {
+export function parseLedger<ValueInput>(value: ValueInput): AdvisorCheckpointLedger | undefined {
   const snapshot = snapshotDataRecord(value);
   if (!snapshot) return undefined;
   const routing = snapshotDataRecord(snapshot.routing);
@@ -228,28 +232,28 @@ export function parseLedger(value: unknown): AdvisorCheckpointLedger | undefined
   const input = decoded.value;
   const routingSnapshot = routing;
   const lifecycleSnapshot = snapshotData(snapshot.findingLifecycle);
-  const ledger: AdvisorCheckpointLedger = {
+  const interventionBudget = snapshotDataRecord(routingSnapshot.interventionBudget);
+  const parsedRouting: AdvisorCheckpointLedger["routing"] = {
+    cancellationLatched: input.routing.cancellationLatched,
+    completedPrimaryTurns: input.routing.completedPrimaryTurns ?? 0,
+    immunityUntilCompletedTurn: input.routing.immunityUntilCompletedTurn,
+  };
+  const base: AdvisorCheckpointLedger = {
     protocolVersion: ADVISOR_CHECKPOINT_PROTOCOL_VERSION,
     fingerprint: input.fingerprint,
     anchorId: input.anchorId,
     reviewSummary: input.reviewSummary,
-    routing: {
-      cancellationLatched: input.routing.cancellationLatched,
-      completedPrimaryTurns: input.routing.completedPrimaryTurns ?? 0,
-      immunityUntilCompletedTurn: input.routing.immunityUntilCompletedTurn,
-      ...(snapshotDataRecord(routingSnapshot?.interventionBudget)
-        ? {
-            interventionBudget: sanitizeInterventionBudgetSnapshot(
-              snapshotDataRecord(routingSnapshot?.interventionBudget)!,
-            ),
-          }
-        : {}),
-    },
-    ...(Array.isArray(lifecycleSnapshot)
-      ? { findingLifecycle: sanitizeFindingLifecycle(lifecycleSnapshot) }
-      : {}),
+    routing: interventionBudget
+      ? {
+          ...parsedRouting,
+          interventionBudget: sanitizeInterventionBudgetSnapshot(interventionBudget),
+        }
+      : parsedRouting,
     emissionHashes: [...input.emissionHashes],
   };
+  const ledger: AdvisorCheckpointLedger = Array.isArray(lifecycleSnapshot)
+    ? { ...base, findingLifecycle: sanitizeFindingLifecycle(lifecycleSnapshot) }
+    : base;
   return Option.isSome(Schema.decodeUnknownOption(AdvisorCheckpointLedgerWireSchema)(ledger))
     ? ledger
     : undefined;
@@ -271,7 +275,9 @@ function sanitizeReviewSummary(
   return parseReviewSummary(value) ?? emptyReviewSummary();
 }
 
-function parseReviewSummary(value: unknown): AdvisorDurableReviewSummary | undefined {
+function parseReviewSummary<ValueInput>(
+  value: ValueInput,
+): AdvisorDurableReviewSummary | undefined {
   const decoded = Schema.decodeUnknownOption(ReviewSummaryWireSchema)(snapshotData(value));
   return Option.isSome(decoded) ? decoded.value : undefined;
 }
@@ -284,6 +290,6 @@ function sanitizeFindingLifecycle(values: readonly unknown[]): AdvisorFindingRec
     );
 }
 
-function isEmissionRecord(value: unknown): value is string {
-  return typeof value === "string" && /^(?:concern|blocker):[a-f\d]{64}$/i.test(value);
+function isEmissionRecord<ValueInput>(value: ValueInput): value is ValueInput & string {
+  return isStringValue(value) && /^(?:concern|blocker):[a-f\d]{64}$/i.test(value);
 }

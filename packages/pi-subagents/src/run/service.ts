@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -70,7 +71,7 @@ export interface SubagentStatusObservations {
   readonly missingIds: ReadonlyArray<string>;
 }
 
-export interface SubagentServiceShape {
+export interface SubagentServiceContract {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
   /** Submit one launch to the session owner; cancelling the waiter never abandons ownership. */
   readonly startSessionOwned: (
@@ -162,7 +163,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const allocateClaimToken = (): string => `completion-${runtimeNamespace}-${nextClaimOrdinal++}`;
   const allocateAssignmentAttemptToken = (): string =>
     `assignment-${runtimeNamespace}-${nextAssignmentAttemptOrdinal++}`;
-  const allocateRunIdentity = (requestedName: string): { id: string; name: string } => {
+  const allocateRunIdentity = (requestedName: string) => {
     const ordinal = nextRunOrdinal++;
     return {
       id: `agent-${runtimeNamespace}-${ordinal}`,
@@ -192,7 +193,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const notify = (notification: SubagentNotification): SubagentNotificationDelivery | undefined => {
     try {
       const delivery = options.notify?.(notification);
-      return typeof delivery === "object" && delivery !== null ? delivery : undefined;
+      return hasObjectRuntimeType(delivery) && delivery !== null ? delivery : undefined;
     } catch {
       // Host transcript delivery is acknowledged only when the boundary returned normally.
       return notification.type === "completed"
@@ -332,7 +333,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
 
   const list = withLock(Effect.sync(() => currentProjection().runs));
-  const status: SubagentServiceShape["status"] = (id) =>
+  const status: SubagentServiceContract["status"] = (id) =>
     observations
       .withStatusObservations([id], ({ observations: selected }) => {
         const observation = selected[0];
@@ -385,7 +386,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const projection = withLock(Effect.sync(() => frozenProjection()));
 
-  const service: SubagentServiceShape = {
+  const service: SubagentServiceContract = {
     start,
     startSessionOwned,
     awaitTerminal: observations.awaitTerminal,
@@ -442,13 +443,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   return service;
 });
 
-export class SubagentService extends Context.Service<SubagentService, SubagentServiceShape>()(
+export class SubagentService extends Context.Service<SubagentService, SubagentServiceContract>()(
   "pi-subagents/run/service/SubagentService",
 ) {
   static readonly layer = (options: SubagentServiceOptions = {}) =>
     Layer.effect(this, makeService(options));
 
   static override readonly use = <A, E>(
-    f: (service: SubagentServiceShape) => Effect.Effect<A, E>,
+    f: (service: SubagentServiceContract) => Effect.Effect<A, E>,
   ) => Effect.flatMap(this, f);
 }

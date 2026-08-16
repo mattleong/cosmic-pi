@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { stringifyJson } from "../boundary/json.ts";
@@ -55,7 +56,7 @@ export function parseAdvisorReview(raw: string): AdvisorReview {
 }
 
 /** Decode an already-parsed JSON value, used by the checkpoint parser for its review fields. */
-export function parseAdvisorReviewValue(value: unknown): AdvisorReview {
+export function parseAdvisorReviewValue<ValueInput>(value: ValueInput): AdvisorReview {
   // Embedded reviews never pass through a raw response string, so the response bound is applied to
   // their canonical serialization instead.
   if (stringifyJson(value).length > MAX_ADVISOR_REVIEW_CHARS) {
@@ -69,7 +70,7 @@ export function parseAdvisorReviewValue(value: unknown): AdvisorReview {
   throw reviewError("Advisor review failed schema validation.");
 }
 
-function finishAdvisorReview(gated: unknown): AdvisorReview {
+function finishAdvisorReview<GatedInput>(gated: GatedInput): AdvisorReview {
   const candidate = normalizeAdvisorReview(gated);
   if (Option.isNone(Schema.decodeUnknownOption(AdvisorReviewWireSchema)(candidate))) {
     throw reviewError("Advisor review failed schema validation.");
@@ -78,7 +79,7 @@ function finishAdvisorReview(gated: unknown): AdvisorReview {
 }
 
 /** Granular exact-key/lane/limit diagnostics on an already-decoded JSON value. */
-function normalizeAdvisorReview(parsed: unknown): AdvisorReview {
+function normalizeAdvisorReview<ParsedInput>(parsed: ParsedInput): AdvisorReview {
   if (
     !isRecord(parsed) ||
     !hasExactKeys(parsed, ["verdict", "summary", "suggestions", "findings"])
@@ -157,7 +158,7 @@ function unwrapJson(raw: string): string {
   return fenced[1].trim();
 }
 
-function parseSuggestion(value: unknown, index: number): AdvisorSuggestion {
+function parseSuggestion<ValueInput>(value: ValueInput, index: number): AdvisorSuggestion {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["fingerprint", "kind", "suggestion", "rationale", "relevance"])
@@ -193,7 +194,7 @@ function parseSuggestion(value: unknown, index: number): AdvisorSuggestion {
   };
 }
 
-function parseFinding(value: unknown, index: number): AdvisorFinding {
+function parseFinding<ValueInput>(value: ValueInput, index: number): AdvisorFinding {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
@@ -247,8 +248,12 @@ function parseFinding(value: unknown, index: number): AdvisorFinding {
   };
 }
 
-function requireBoundedString(value: unknown, field: string, maxChars: number): string {
-  if (typeof value !== "string" || !value.trim()) {
+function requireBoundedString<ValueInput>(
+  value: ValueInput,
+  field: string,
+  maxChars: number,
+): string {
+  if (!isStringValue(value) || !value.trim()) {
     throw reviewError(`Advisor ${field} must be a non-empty string.`);
   }
   const trimmed = value.trim();
@@ -266,7 +271,7 @@ export function canonicalAdvisorFindingFingerprint(value: string): string {
     .trim();
 }
 
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+function hasExactKeys(value: Schema.JsonObject, expected: readonly string[]): boolean {
   const keys = Object.keys(value).sort();
   const expectedKeys = [...expected].sort();
   return (

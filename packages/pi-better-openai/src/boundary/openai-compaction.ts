@@ -48,11 +48,14 @@ const boundaryError = (
   message: string,
   status?: number,
 ) =>
-  new OpenAICompactionBoundaryError({
-    operation,
-    message,
-    ...(status === undefined ? {} : { status }),
-  });
+  new OpenAICompactionBoundaryError(
+    (() => {
+      const objectPart1921_0 = { operation, message };
+      const objectPart1921_1 =
+        status === undefined ? objectPart1921_0 : { ...objectPart1921_0, status };
+      return objectPart1921_1;
+    })(),
+  );
 
 export interface OpenAICompactRequest {
   readonly model: Model<"openai-responses">;
@@ -69,7 +72,7 @@ export interface OpenAICompactResult {
   };
 }
 
-export interface OpenAICompactionClientShape {
+export interface OpenAICompactionClientContract {
   readonly compact: (
     request: OpenAICompactRequest,
   ) => Effect.Effect<OpenAICompactResult, OpenAICompactionBoundaryError>;
@@ -116,14 +119,14 @@ function concatenateBytes(values: readonly Uint8Array[]): Uint8Array {
 
 export class OpenAICompactionClient extends Context.Service<
   OpenAICompactionClient,
-  OpenAICompactionClientShape
+  OpenAICompactionClientContract
 >()("pi-better-openai/boundary/openai-compaction/OpenAICompactionClient") {
   static layer(getRegistry: () => Registry) {
     return Layer.effect(
       this,
       Effect.gen(function* () {
         const http = yield* StreamingHttpClient;
-        const compact: OpenAICompactionClientShape["compact"] = Effect.fn(
+        const compact: OpenAICompactionClientContract["compact"] = Effect.fn(
           "OpenAICompactionClient.compact",
         )(function* (request) {
           const authRaw = yield* Effect.tryPromise({
@@ -142,11 +145,13 @@ export class OpenAICompactionClient extends Context.Service<
           );
           if (!hasAuthorization(headers))
             return yield* boundaryError("auth", "OpenAI API credentials were unavailable.");
-          const body = {
-            model: request.model.id,
-            input: request.input,
-            ...(request.instructions ? { instructions: request.instructions } : {}),
-          };
+          const body = (() => {
+            const objectPart5275_0 = { model: request.model.id, input: request.input };
+            const objectPart5275_1 = request.instructions
+              ? { ...objectPart5275_0, instructions: request.instructions }
+              : objectPart5275_0;
+            return objectPart5275_1;
+          })();
           const response = yield* http
             .requestJsonRawBytes(
               {

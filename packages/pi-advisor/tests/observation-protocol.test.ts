@@ -58,8 +58,10 @@ describe("observation protocol", () => {
       },
     );
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect(() => buffer.ingest(1, accessor as never)).toThrow(/observation/i);
     expect(getterCalls).toBe(0);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect(() => buffer.ingest(1, hostile as never)).toThrow(/observation/i);
   });
 

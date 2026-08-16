@@ -12,7 +12,7 @@ import type { ResolvedAdvisorConfig } from "../../src/config/options.ts";
 import type { AdvisorChildModel } from "../../src/runtime/client.ts";
 import {
   AdvisorChildFactory,
-  type AdvisorChildFactoryShape,
+  type AdvisorChildFactoryContract,
 } from "../../src/runtime/child-factory.ts";
 import { toModelError } from "../../src/runtime/session.ts";
 import { createAdvisorToolsEffect } from "../../src/runtime/tools.ts";
@@ -32,7 +32,7 @@ export interface TestChildFactoryOverrides {
  */
 export const makeTestChildFactory = (
   overrides: TestChildFactoryOverrides = {},
-): AdvisorChildFactoryShape => ({
+): AdvisorChildFactoryContract => ({
   createChildModel: (ctx, config) =>
     overrides.createChildModel
       ? Effect.tryPromise({

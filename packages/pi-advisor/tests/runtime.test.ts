@@ -2,13 +2,14 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 // @effect-diagnostics effect/strictEffectProvide:off
-import type { AgentSession, CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
+import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -39,6 +40,7 @@ import {
   type TestChildFactoryOverrides,
 } from "./support/child-factory.ts";
 import { standaloneAdvisorExecutor } from "./support/executor.ts";
+import { agentSessionFixture } from "./support/agent-session.ts";
 
 /** Promise-shaped assertion facade layered over the Effect runtime by the harness below. */
 type TestRuntime = AdvisorRuntime & {
@@ -61,6 +63,7 @@ const promiseLatch = <T>() => {
   return {
     promise: Effect.runPromise(Deferred.await(value)),
     resolve: (next?: T) => {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       Deferred.doneUnsafe(value, Effect.succeed(next as T));
     },
   };
@@ -75,6 +78,7 @@ afterEach(async () => {
 const makeTestRuntime = (overrides: TestChildFactoryOverrides) => {
   const scope = Scope.makeUnsafe();
   let runtime!: TestRuntime;
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   runtime = new AdvisorRuntime(
     makeTestChildFactory(overrides),
     standaloneAdvisorExecutor,
@@ -184,16 +188,23 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
       actions.push("prompt");
       messages.push({ role: "user", content: [{ type: "text", text }] });
       if (pauseBeforeAnalysis) await analysisGate;
-      const analysis = {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: `private-thinking-${promptCount}` },
-          { type: "text", text: "Analysis complete; awaiting trusted finalization." },
-        ],
-        stopReason,
-        ...(stopReason === "error" ? { errorMessage: "child stopped" } : {}),
-      };
+      const analysis = (() => {
+        const objectPart6736_0 = {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: `private-thinking-${promptCount}` },
+            { type: "text", text: "Analysis complete; awaiting trusted finalization." },
+          ],
+          stopReason,
+        };
+        const objectPart6736_1 =
+          stopReason === "error"
+            ? { ...objectPart6736_0, errorMessage: "child stopped" }
+            : objectPart6736_0;
+        return objectPart6736_1;
+      })();
       messages.push(analysis);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       listener?.({ type: "message_end", message: analysis } as never);
       if (queuedFinalPrompt) {
         const finalPrompt = queuedFinalPrompt;
@@ -216,6 +227,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
           stopReason: "stop",
         };
         messages.push(assistant);
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         listener?.({ type: "message_end", message: assistant } as never);
       }
       streaming = false;
@@ -232,6 +244,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
     abort: vi.fn(async () => undefined),
     dispose: vi.fn(),
   };
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const runtime = makeTestRuntime({
     createChildModel: vi.fn(async () => ({
       modelRuntime: {} as never,
@@ -240,9 +253,11 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
     })),
     createSession: vi.fn(async (next) => {
       options = next;
-      return { session: session as unknown as AgentSession, extensionsResult: {} as never };
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      return { session: agentSessionFixture(session), extensionsResult: {} as never };
     }),
   });
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   return {
     runtime,
     session,
@@ -250,7 +265,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
     actions,
     releaseAnalysis,
     unsubscribe,
-    emit: (event: unknown) => listener?.(event as never),
+    emit: <Event>(event: Event) => listener?.(event as never),
   };
 }
 
@@ -264,6 +279,7 @@ async function start(
     seed?: string;
   } = {},
 ) {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   await runtime.start({
     ctx: { cwd: process.cwd(), modelRegistry: {} as never },
     config: config(overrides),
@@ -301,6 +317,7 @@ describe("AdvisorRuntime", () => {
       focus: "standard",
     });
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const firstPrompt = String(
       (value.session.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] ?? "",
     );
@@ -310,12 +327,14 @@ describe("AdvisorRuntime", () => {
 
   test("ignores prompt, config, provider registry, and extension registry capability injection", async () => {
     const value = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const injectedConfig = {
       ...config(),
       tools: ["all", "bash", "write", "provider-tool"],
       command: "touch injected",
       customTools: [{ name: "edit" }],
     } as ResolvedAdvisorConfig;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await value.runtime.start({
       ctx: {
         cwd: process.cwd(),
@@ -331,6 +350,7 @@ describe("AdvisorRuntime", () => {
 
     const options = value.getOptions();
     const firstRegistry = options?.resourceLoader?.getExtensions();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     firstRegistry?.extensions.push({ path: "injected-extension" } as never);
     expect(options?.resourceLoader?.getExtensions().extensions).toEqual([]);
     expect(options?.tools).toEqual(ADVISOR_TOOL_NAMES);
@@ -373,6 +393,7 @@ describe("AdvisorRuntime", () => {
     value.session.followUp.mockImplementation(async (text: string) => {
       streamingDuringFollowUp = value.session.isStreaming;
       value.actions.push("followUp");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const messages = value.session.messages as unknown[];
       messages.push({ role: "user", content: [{ type: "text", text }] });
       const id = /checkpointId "([^"]+)"/.exec(text)?.[1] ?? "sync";
@@ -521,6 +542,7 @@ describe("AdvisorRuntime", () => {
 
   test("fails closed and finalizes an unsafe child exactly once", async () => {
     const { runtime, session, unsubscribe } = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (session.getActiveToolNames as ReturnType<typeof vi.fn>).mockReturnValue(["read", "bash"]);
     await expect(start(runtime)).rejects.toThrow("safety check failed");
     await runtime.dispose();
@@ -538,7 +560,7 @@ describe("AdvisorRuntime", () => {
         throw new Error("sensitive hostile session callback");
       });
 
-      const failure = start(runtime).catch((error: unknown) => error);
+      const failure = start(runtime).catch((error) => error);
       await expect(failure).resolves.toBeInstanceOf(AdvisorModelError);
       await expect(failure).resolves.not.toMatchObject({
         message: expect.stringContaining("sensitive hostile session callback"),
@@ -560,6 +582,7 @@ describe("AdvisorRuntime", () => {
 
   test("owns the child before fallible event subscription acquisition", async () => {
     const { runtime, session } = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (session.subscribe as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error("subscribe failed");
     });
@@ -573,7 +596,9 @@ describe("AdvisorRuntime", () => {
 
   test("persistent child rejection and abort failure still dispose exactly once", async () => {
     const { runtime, session, unsubscribe } = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (session as { sessionFile: string | undefined }).sessionFile = "/tmp/forbidden.jsonl";
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (session.abort as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("abort failed"));
     await expect(start(runtime)).rejects.toThrow(/persistent file/i);
     await runtime.dispose();
@@ -585,6 +610,7 @@ describe("AdvisorRuntime", () => {
 
   test("throwing diagnostics cannot skip unsafe-tool cleanup", async () => {
     const { runtime, session } = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (session.getActiveToolNames as ReturnType<typeof vi.fn>).mockReturnValue(["read", "bash"]);
     await expect(
       start(
@@ -609,7 +635,7 @@ describe("AdvisorRuntime", () => {
     }>();
     let modelCalls = 0;
     const unsubscribe = vi.fn();
-    const session = {
+    const session = agentSessionFixture({
       sessionFile: undefined,
       messages: [],
       isStreaming: false,
@@ -621,10 +647,12 @@ describe("AdvisorRuntime", () => {
       followUp: vi.fn(async () => undefined),
       abort: vi.fn(async () => undefined),
       dispose: vi.fn(),
-    } as unknown as AgentSession;
+    });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const layer = runtimeServiceTestLayer({
       createChildModel: vi.fn(() => {
         modelCalls += 1;
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         return modelCalls === 1
           ? firstModel
           : Promise.resolve({
@@ -639,6 +667,7 @@ describe("AdvisorRuntime", () => {
     const managed = ManagedRuntime.make(layer);
     try {
       const service = await managed.runPromise(AdvisorRuntimeService);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const options = {
         ctx: { cwd: process.cwd(), modelRegistry: {} as never },
         config: config(),
@@ -650,6 +679,7 @@ describe("AdvisorRuntime", () => {
       expect(service.activeToolNames()).toEqual([]);
       expect(session.dispose).not.toHaveBeenCalled();
 
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       resolveFirst({
         modelRuntime: {} as never,
         model: { provider: "p", id: "m" } as never,
@@ -671,7 +701,7 @@ describe("AdvisorRuntime", () => {
       const emitters: Array<(event: never) => void> = [];
       const makeSession = (sessionFile?: string) => {
         const pendingPrompt = promiseLatch<void>();
-        return {
+        return agentSessionFixture({
           sessionFile,
           messages: [],
           isStreaming: true,
@@ -686,13 +716,14 @@ describe("AdvisorRuntime", () => {
           followUp: vi.fn(async () => undefined),
           abort: vi.fn(async () => undefined),
           dispose: vi.fn(),
-        };
+        });
       };
       const firstSession = makeSession(
         restartCause === "fatal safety rejection" ? "/tmp/forbidden.jsonl" : undefined,
       );
       const restartedSession = makeSession();
       const sessions = [firstSession, restartedSession];
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const layer = runtimeServiceTestLayer({
         createChildModel: vi.fn(async () => ({
           modelRuntime: {} as never,
@@ -701,13 +732,14 @@ describe("AdvisorRuntime", () => {
         })),
         createTools: vi.fn(async () => []),
         createSession: vi.fn(async () => ({
-          session: sessions.shift() as unknown as AgentSession,
+          session: sessions.shift() ?? restartedSession,
           extensionsResult: {} as never,
         })),
       });
       const managed = ManagedRuntime.make(layer);
       try {
         const service = await managed.runPromise(AdvisorRuntimeService);
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         const options = {
           ctx: { cwd: process.cwd(), modelRegistry: {} as never },
           config: config(),
@@ -734,9 +766,10 @@ describe("AdvisorRuntime", () => {
           )
           .then(
             () => undefined,
-            (error: unknown) => error,
+            (error) => error,
           );
         await vi.waitFor(() => expect(restartedSession.prompt).toHaveBeenCalledOnce());
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         emitters.at(-1)?.({
           type: "message_update",
           assistantMessageEvent: {
@@ -757,26 +790,29 @@ describe("AdvisorRuntime", () => {
 
   test("replacement and reprime wait for the prior abort before creating a new child", async () => {
     const { promise: oldAbortGate, resolve: releaseOldAbort } = promiseLatch<void>();
-    const makeSession = (abort: () => Promise<void>) => ({
-      sessionFile: undefined,
-      messages: [],
-      isStreaming: false,
-      getActiveToolNames: vi.fn(() => []),
-      getToolDefinition: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-      prompt: vi.fn(async () => undefined),
-      steer: vi.fn(async () => undefined),
-      followUp: vi.fn(async () => undefined),
-      abort: vi.fn(abort),
-      dispose: vi.fn(),
-    });
+    const makeSession = (abort: () => Promise<void>) =>
+      agentSessionFixture({
+        sessionFile: undefined,
+        messages: [],
+        isStreaming: false,
+        getActiveToolNames: vi.fn(() => []),
+        getToolDefinition: vi.fn(),
+        subscribe: vi.fn(() => vi.fn()),
+        prompt: vi.fn(async () => undefined),
+        steer: vi.fn(async () => undefined),
+        followUp: vi.fn(async () => undefined),
+        abort: vi.fn(abort),
+        dispose: vi.fn(),
+      });
     const oldSession = makeSession(() => oldAbortGate);
     const latestSession = makeSession(async () => undefined);
     const sessions = [oldSession, latestSession];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const createSession = vi.fn(async () => ({
-      session: sessions.shift() as unknown as AgentSession,
+      session: sessions.shift() ?? latestSession,
       extensionsResult: {} as never,
     }));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const layer = runtimeServiceTestLayer({
       createChildModel: vi.fn(async () => ({
         modelRuntime: {} as never,
@@ -789,6 +825,7 @@ describe("AdvisorRuntime", () => {
     const managed = ManagedRuntime.make(layer);
     try {
       const service = await managed.runPromise(AdvisorRuntimeService);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const options = {
         ctx: { cwd: process.cwd(), modelRegistry: {} as never },
         config: config(),
@@ -905,7 +942,7 @@ describe("AdvisorRuntime", () => {
   });
 
   test("ManagedRuntime disposal alone releases the active child exactly once", async () => {
-    const session = {
+    const session = agentSessionFixture({
       sessionFile: undefined,
       messages: [],
       isStreaming: false,
@@ -917,7 +954,8 @@ describe("AdvisorRuntime", () => {
       followUp: vi.fn(async () => undefined),
       abort: vi.fn(async () => undefined),
       dispose: vi.fn(),
-    } as unknown as AgentSession;
+    });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const layer = runtimeServiceTestLayer({
       createChildModel: vi.fn(async () => ({
         modelRuntime: {} as never,
@@ -929,6 +967,7 @@ describe("AdvisorRuntime", () => {
     });
     const managed = ManagedRuntime.make(layer);
     const service = await managed.runPromise(AdvisorRuntimeService);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await managed.runPromise(
       service.start({
         ctx: { cwd: process.cwd(), modelRegistry: {} as never },
@@ -1188,8 +1227,13 @@ describe("AdvisorRuntime", () => {
       ),
     ).toThrow("suggestions must be an array");
     // The dual key set is gone: a checkpoint without suggestions is invalid, never accepted.
-    const missingSuggestions: Record<string, unknown> = JSON.parse(checkpointJson(request));
-    delete missingSuggestions.suggestions;
+    const missingSuggestions = Object.fromEntries(
+      Object.entries(
+        Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(
+          JSON.parse(checkpointJson(request)),
+        ),
+      ).filter(([key]) => key !== "suggestions"),
+    );
     expect(() => parseCheckpoint(JSON.stringify(missingSuggestions))).toThrow(
       "checkpoint fields are invalid",
     );

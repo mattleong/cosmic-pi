@@ -5,14 +5,14 @@ import type * as Scope from "effect/Scope";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { advisorNow } from "../../boundary/clock.ts";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../../boundary/executor.ts";
-import type { CheckpointOrchestratorShape } from "../../checkpoint/orchestrator.ts";
+import type { CheckpointOrchestratorContract } from "../../checkpoint/orchestrator.ts";
 import {
   captureAdvisorAbortInputAtHostBoundary,
   registerAdvisorAbortListenerAtHostBoundary,
   type AdvisorHostContextError,
 } from "../../boundary/host-context.ts";
 import { ADVISOR_OPERATION_TIMEOUT_MS, type ResolvedAdvisorConfig } from "../../config/options.ts";
-import type { FailureLoggerShape } from "../../logging/logger.ts";
+import type { FailureLoggerContract } from "../../logging/logger.ts";
 import type { AdvisorReviewQueue } from "../../queue/service.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
 import type { AdvisorReviewFocus } from "../../review/index.ts";
@@ -64,9 +64,9 @@ export interface CheckpointDeps {
   readonly persistLedger: (anchor: ParentAnchor) => void;
   readonly notifyBestEffort: CheckpointNotify;
   readonly setAdvisorStatus: (ctx: ExtensionContext, text?: string) => void;
-  readonly failureLogger: FailureLoggerShape;
+  readonly failureLogger: FailureLoggerContract;
   readonly applicationScope: Scope.Scope;
-  readonly checkpointOrchestrator: CheckpointOrchestratorShape;
+  readonly checkpointOrchestrator: CheckpointOrchestratorContract;
   readonly parentExecutor: AdvisorEffectExecutor;
   readonly runSessionEffect: <A, E>(
     effect: Effect.Effect<
@@ -263,14 +263,24 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
             next.lastAction = "failure";
             next.lastFailureKind = kind;
           });
-          const failureDetails = {
-            contextChars: activeQueue?.backlog ?? 0,
-            durationMs: d.getState().metrics.latestDurationMs ?? 0,
-            error,
-            ...(d.currentConfig().model ? { model: d.currentConfig().model } : {}),
-            ...(d.currentConfig().provider ? { provider: d.currentConfig().provider } : {}),
-            timeoutMs: ADVISOR_OPERATION_TIMEOUT_MS,
-          };
+          const failureDetails = (() => {
+            const objectPart10776_0 = {
+              contextChars: activeQueue?.backlog ?? 0,
+              durationMs: d.getState().metrics.latestDurationMs ?? 0,
+              error,
+            };
+            const objectPart10776_1 = d.currentConfig().model
+              ? { ...objectPart10776_0, model: d.currentConfig().model }
+              : objectPart10776_0;
+            const objectPart10776_2 = d.currentConfig().provider
+              ? { ...objectPart10776_1, provider: d.currentConfig().provider }
+              : objectPart10776_1;
+            const objectPart10776_3 = {
+              ...objectPart10776_2,
+              timeoutMs: ADVISOR_OPERATION_TIMEOUT_MS,
+            };
+            return objectPart10776_3;
+          })();
           yield* Effect.forkIn(
             d.failureLogger.log(d.currentConfig().configPath, failureDetails),
             d.applicationScope,

@@ -22,17 +22,24 @@ export const agentOwnershipEvidence = (
   agent: HerdrAgent,
 ): HerdrAgentOwnershipEvidence | undefined =>
   agent.name && agent.runtime && agent.agentSession
-    ? {
-        workspaceId: agent.workspaceId,
-        tabId: agent.tabId,
-        paneId: agent.paneId,
-        terminalId: agent.terminalId,
-        name: agent.name,
-        runtime: agent.runtime,
-        agentSession: { ...agent.agentSession },
-        ...(agent.cwd === undefined ? {} : { cwd: agent.cwd }),
-        ...(agent.foregroundCwd === undefined ? {} : { foregroundCwd: agent.foregroundCwd }),
-      }
+    ? (() => {
+        const objectPart688_0 = {
+          workspaceId: agent.workspaceId,
+          tabId: agent.tabId,
+          paneId: agent.paneId,
+          terminalId: agent.terminalId,
+          name: agent.name,
+          runtime: agent.runtime,
+          agentSession: { ...agent.agentSession },
+        };
+        const objectPart688_1 =
+          agent.cwd === undefined ? objectPart688_0 : { ...objectPart688_0, cwd: agent.cwd };
+        const objectPart688_2 =
+          agent.foregroundCwd === undefined
+            ? objectPart688_1
+            : { ...objectPart688_1, foregroundCwd: agent.foregroundCwd };
+        return objectPart688_2;
+      })()
     : undefined;
 
 export const sameStartedAgent = (

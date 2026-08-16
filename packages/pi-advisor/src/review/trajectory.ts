@@ -1,4 +1,7 @@
+import { isJsonObject, isStringValue } from "pi-cosmic-core";
 import { stringifyJson } from "../boundary/json.ts";
+import * as Schema from "effect/Schema";
+import { snapshotData } from "../domain/safe-data.ts";
 const MAX_PENDING_CHARS = 600;
 const MIN_SEGMENT_CHARS = 80;
 const RECENT_SEGMENT_LIMIT = 8;
@@ -62,7 +65,7 @@ export const pushAdvisorTrajectory = (
   state: AdvisorTrajectoryDetectorState,
   channel: TrajectoryChannel,
   delta: string,
-): { readonly state: AdvisorTrajectoryDetectorState; readonly signal?: TrajectorySignal } => {
+) => {
   if (!delta) return { state };
   const previous = state.channels[channel] ?? { pending: "", recent: [], similarRun: 0, tail: "" };
   let tail = `${previous.tail}${delta}`.slice(-TAIL_LIMIT);
@@ -107,10 +110,13 @@ export const pushAdvisorTrajectory = (
       break;
     }
   }
-  return {
-    state: { channels: { ...state.channels, [channel]: { pending, recent, similarRun, tail } } },
-    ...(signal ? { signal } : {}),
-  };
+  return (() => {
+    const objectPart3646_0 = {
+      state: { channels: { ...state.channels, [channel]: { pending, recent, similarRun, tail } } },
+    };
+    const objectPart3646_1 = signal ? { ...objectPart3646_0, signal } : objectPart3646_0;
+    return objectPart3646_1;
+  })();
 };
 
 export interface AdvisorToolTrajectoryDetectorState {
@@ -234,18 +240,15 @@ function fingerprintToolEvent(input: ToolTrajectoryEndInput): ToolEventFingerpri
   };
 }
 
-function boundedStableValue(value: unknown): string {
-  const seen = new WeakSet<object>();
-  const visit = (item: unknown, depth: number): unknown => {
+function boundedStableValue<ValueInput>(value: ValueInput): string {
+  const visit = (item: Schema.MutableJson, depth: number): Schema.MutableJson => {
     if (depth > 8) return "[nested]";
-    if (typeof item === "string")
+    if (isStringValue(item))
       return redactFingerprintText(item).slice(0, MAX_TOOL_FINGERPRINT_INPUT_CHARS);
-    if (typeof item !== "object" || item === null) return item;
-    if (seen.has(item)) return "[circular]";
-    seen.add(item);
     if (Array.isArray(item)) return item.slice(0, 64).map((entry) => visit(entry, depth + 1));
+    if (!isJsonObject(item)) return item;
     return Object.fromEntries(
-      Object.entries(item as Record<string, unknown>)
+      Object.entries(item)
         .sort(([left], [right]) => left.localeCompare(right))
         .slice(0, 64)
         .map(([key, entry]) =>
@@ -256,7 +259,9 @@ function boundedStableValue(value: unknown): string {
     );
   };
   try {
-    return stringifyJson(visit(value, 0)).slice(0, MAX_TOOL_FINGERPRINT_INPUT_CHARS);
+    const snapshot = snapshotData(value);
+    if (snapshot === undefined) return "[unavailable]";
+    return stringifyJson(visit(snapshot, 0)).slice(0, MAX_TOOL_FINGERPRINT_INPUT_CHARS);
   } catch {
     return "[unavailable]";
   }

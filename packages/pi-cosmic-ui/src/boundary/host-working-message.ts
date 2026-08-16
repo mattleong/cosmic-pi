@@ -5,14 +5,14 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import { HostCallbackBoundary } from "./host-callback.ts";
 
-export interface WorkingMessageHostShape {
+export interface WorkingMessageHostContract {
   /** Updates Pi's live working row. Returns false when the TUI host is unavailable. */
   readonly set: (message?: string) => Effect.Effect<boolean>;
 }
 
 export class WorkingMessageHost extends Context.Service<
   WorkingMessageHost,
-  WorkingMessageHostShape
+  WorkingMessageHostContract
 >()("pi-cosmic-ui/boundary/host-working-message/WorkingMessageHost") {
   static layer(options: { readonly context: MutableRef.MutableRef<ExtensionContext> }) {
     return Layer.effect(

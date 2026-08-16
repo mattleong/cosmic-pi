@@ -1,8 +1,10 @@
+import { isFunctionValue } from "pi-cosmic-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   makeHostCallbackBoundary,
   snapshotHostAbortSignal,
 } from "../src/boundary/host-callback.ts";
+import { abortSignalFixture } from "./support/host.ts";
 
 function controlledSignal(registerThenThrow = false) {
   let aborted = false;
@@ -18,19 +20,22 @@ function controlledSignal(registerThenThrow = false) {
       if (listener) listeners.delete(listener);
     },
   );
-  const signal = {
+  const signal = abortSignalFixture({
     get aborted() {
       return aborted;
     },
     addEventListener,
     removeEventListener,
-  } as unknown as AbortSignal;
+  });
   const abort = () => {
     aborted = true;
     const event = new Event("abort");
     for (const listener of listeners) {
-      if (typeof listener === "function") listener(event);
-      else listener.handleEvent(event);
+      if (isFunctionValue(listener)) {
+        // SAFETY: isFunctionValue proved this listener has the EventListener callable branch.
+        const callback = listener as EventListener;
+        callback(event);
+      } else listener.handleEvent(event);
     }
   };
   return { signal, abort, listeners, addEventListener, removeEventListener };

@@ -1,3 +1,4 @@
+import { isNumberValue, isStringValue } from "pi-cosmic-core";
 import { createHash } from "node:crypto";
 import {
   ADVISOR_FINDING_CATEGORIES,
@@ -39,7 +40,7 @@ export const reconcileAdvisorFindings = (
   state: AdvisorFindingLifecycleState,
   findings: readonly AdvisorFinding[],
   options: { scope: string; completedTurn: number; complete: boolean },
-): { readonly state: AdvisorFindingLifecycleState; readonly findings: AdvisorFinding[] } => {
+) => {
   const records = new Map(state.records.map((record) => [record.id, { ...record }]));
   const generations = new Map<string, number>();
   for (const record of records.values())
@@ -119,9 +120,7 @@ export const supersedeAdvisorFindings = (
     ),
   };
 };
-export const advisorFindingLifecycleCounts = (
-  state: AdvisorFindingLifecycleState,
-): Record<AdvisorFindingStatus, number> => {
+export const advisorFindingLifecycleCounts = (state: AdvisorFindingLifecycleState) => {
   const counts = { open: 0, acknowledged: 0, resolved: 0, superseded: 0 };
   for (const record of state.records) counts[record.status] += 1;
   return counts;
@@ -140,23 +139,25 @@ function trimRecords(records: AdvisorFindingRecord[]): AdvisorFindingRecord[] {
   );
   return records.filter((record) => !evicted.has(record.id));
 }
-export function isValidAdvisorFindingRecord(value: unknown): value is AdvisorFindingRecord {
+export function isValidAdvisorFindingRecord<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & AdvisorFindingRecord {
   if (!isRecord(value)) return false;
   return (
-    typeof value.id === "string" &&
+    isStringValue(value.id) &&
     /^af_[a-f\d]{32}$/.test(value.id) &&
-    typeof value.key === "string" &&
+    isStringValue(value.key) &&
     /^[a-f\d]{64}$/.test(value.key) &&
-    typeof value.generation === "number" &&
+    isNumberValue(value.generation) &&
     Number.isSafeInteger(value.generation) &&
     value.generation >= 0 &&
     isOneOf(value.category, ADVISOR_FINDING_CATEGORIES) &&
     isOneOf(value.severity, ADVISOR_SEVERITIES) &&
     isOneOf(value.status, ADVISOR_FINDING_STATUSES) &&
-    typeof value.firstSeenTurn === "number" &&
+    isNumberValue(value.firstSeenTurn) &&
     Number.isSafeInteger(value.firstSeenTurn) &&
     value.firstSeenTurn >= 0 &&
-    typeof value.lastSeenTurn === "number" &&
+    isNumberValue(value.lastSeenTurn) &&
     Number.isSafeInteger(value.lastSeenTurn) &&
     value.lastSeenTurn >= value.firstSeenTurn &&
     value.id === advisorFindingId(value.key, value.generation)

@@ -56,6 +56,7 @@ it.effect("does not publish or commit a failed transition", () =>
 
 it.effect("serializes transitions and publishes each successful next state", () =>
   Effect.gen(function* () {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const projection = yield* makeFrozenProjection({ values: [] as number[] }, (state) => state);
     yield* projection.transition((state) =>
       Effect.succeed([undefined, { values: [...state.values, 1] }] as const),
@@ -93,6 +94,7 @@ it("reports unsupported values as typed projection failures", () => {
     throw new Error("expected projection failure");
   } catch (error) {
     expect(error).toBeInstanceOf(ProjectionError);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((error as ProjectionError).path).toBe("$.nested.capability");
   }
 });

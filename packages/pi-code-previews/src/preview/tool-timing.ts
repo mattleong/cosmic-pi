@@ -3,6 +3,7 @@ import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { synchronousNow } from "../boundary/clock";
 import { deferProjectedCodePreview, scheduleProjectedCodePreview } from "../application/projection";
 import { codePreviewSettings } from "../config/state";
+import type { RendererState } from "../tools/renderers/shared/types";
 
 type ToolTimingUpdateContext = {
   state: unknown;
@@ -15,7 +16,7 @@ type ToolTimingRenderContext = ToolTimingUpdateContext & {
   lastComponent: Component | undefined;
 };
 
-export type TimingState = Record<string, unknown> & {
+export type TimingState = RendererState & {
   codePreviewTimingStartedAt?: number | undefined;
   codePreviewTimingEndedAt?: number | undefined;
   codePreviewTimingCancel?: (() => void) | undefined;
@@ -88,6 +89,7 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
 }
 
 export function timingState(context: { state?: unknown } | undefined): TimingState | undefined {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   return context?.state as TimingState | undefined;
 }
 
@@ -103,6 +105,7 @@ export function withLastComponent<TContext extends ToolTimingRenderContext>(
   context: TContext,
   lastComponent: Component | undefined,
 ): TContext {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   return { ...context, lastComponent } as TContext;
 }
 

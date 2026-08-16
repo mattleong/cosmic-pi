@@ -9,6 +9,7 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -79,7 +80,7 @@ export interface LocalCliHarness {
 
 export const approvedCodexApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
   const apiKey = source.OPENAI_API_KEY;
-  return typeof apiKey === "string" &&
+  return isStringValue(apiKey) &&
     apiKey.length > 0 &&
     apiKey.length <= 8_192 &&
     !apiKey.includes("\0") &&
@@ -95,21 +96,25 @@ export const sanitizeLocalCliEnvironment = (
   launch?: BackendLaunchRequest,
 ): NodeJS.ProcessEnv => {
   const codexApiKey = runtime === "codex" ? approvedCodexApiKey(source) : undefined;
-  return {
-    ...Object.fromEntries(
+  return (() => {
+    const objectPart3581_0 = Object.fromEntries(
       Object.entries(source).filter(
         ([key, value]) => value !== undefined && SAFE_ENV_KEYS.has(key),
       ),
-    ),
-    ...(codexApiKey ? { OPENAI_API_KEY: codexApiKey } : {}),
-    ...(launch
+    );
+    const objectPart3581_1 = codexApiKey
+      ? { ...objectPart3581_0, OPENAI_API_KEY: codexApiKey }
+      : objectPart3581_0;
+    const objectPart3581_2 = launch
       ? {
+          ...objectPart3581_1,
           PI_SUBAGENT_CHILD: "1",
           PI_SUBAGENT_PARENT_SESSION: launch.parentSessionId,
           PI_SUBAGENT_RUN_ID: launch.runId,
         }
-      : {}),
-  };
+      : objectPart3581_1;
+    return objectPart3581_2;
+  })();
 };
 
 export const codexArgv = (): ReadonlyArray<string> => ["app-server", "--stdio", "--strict-config"];
@@ -277,9 +282,13 @@ export interface ProbeResult {
 
 export const claudeAuthLoggedIn = (source: string): boolean => {
   try {
+    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
     const value = JSON.parse(source) as unknown;
     return (
-      typeof value === "object" && value !== null && "loggedIn" in value && value.loggedIn === true
+      hasObjectRuntimeType(value) &&
+      value !== null &&
+      "loggedIn" in value &&
+      value.loggedIn === true
     );
   } catch {
     return false;

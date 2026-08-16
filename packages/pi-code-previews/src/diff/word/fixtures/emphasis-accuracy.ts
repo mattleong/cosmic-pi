@@ -19,6 +19,7 @@ function largeReorderedBlockCase(count: number): WordEmphasisAccuracyCase {
     return `+${position + 1} const record${index} = transform(source${index}, newMode);`;
   });
 
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return {
     name: `sparse anchors recover a reordered ${count}x${count} block`,
     diff: [...removed, ...added],
@@ -40,6 +41,7 @@ function mediumScoreReorderedBlockCase(count: number): WordEmphasisAccuracyCase 
     return `+${position + 1} ${profileLine(count - position - 1, placement, "added")}`;
   });
 
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return {
     name: `medium-score sparse anchors recover a reordered ${count}x${count} block`,
     diff: [...removed, ...added],

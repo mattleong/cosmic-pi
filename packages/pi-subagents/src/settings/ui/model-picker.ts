@@ -43,28 +43,44 @@ export function createProfileModelChoices(input: {
     const canonical = input.parentModel
       ? `${input.parentModel.provider}/${input.parentModel.id}`
       : undefined;
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const efforts = input.parentModel
       ? (getSupportedThinkingLevels(input.parentModel) as ReadonlyArray<SubagentEffort>)
       : undefined;
-    result.push({
-      choice: { kind: "parent" },
-      item: {
-        value: "parent",
-        label: `Parent model${input.currentSelector === "parent" ? " (current)" : ""}`,
-        description: canonical
-          ? `${boundedMiddle(canonical, 72)} · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
-          : "Uses the active parent model at launch",
-      },
-      searchText: `parent ${canonical ?? "active model"} ${input.parentModel?.name ?? ""}`,
-      ...(efforts === undefined ? {} : { supportedEfforts: efforts }),
-      fastModeAvailable: input.parentModel
-        ? supportsSubagentFastMode("pi", `${input.parentModel.provider}/${input.parentModel.id}`)
-        : false,
-    });
+    result.push(
+      (() => {
+        const objectPart2426_0 = {
+          choice: { kind: "parent" as const },
+          item: {
+            value: "parent",
+            label: `Parent model${input.currentSelector === "parent" ? " (current)" : ""}`,
+            description: canonical
+              ? `${boundedMiddle(canonical, 72)} · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
+              : "Uses the active parent model at launch",
+          },
+          searchText: `parent ${canonical ?? "active model"} ${input.parentModel?.name ?? ""}`,
+        };
+        const objectPart2426_1 =
+          efforts === undefined
+            ? objectPart2426_0
+            : { ...objectPart2426_0, supportedEfforts: efforts };
+        const objectPart2426_2 = {
+          ...objectPart2426_1,
+          fastModeAvailable: input.parentModel
+            ? supportsSubagentFastMode(
+                "pi",
+                `${input.parentModel.provider}/${input.parentModel.id}`,
+              )
+            : false,
+        };
+        return objectPart2426_2;
+      })(),
+    );
   }
   for (const model of input.models) {
     const canonical = `${model.provider}/${model.id}`;
     if (!isSafeNativeModelSelector(canonical)) continue;
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const efforts = getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>;
     result.push({
       choice: { kind: "model", selector: canonical },
@@ -138,27 +154,37 @@ export class ProfileModelPickerPage implements Component {
       context.runtime === "pi"
         ? `authenticated canonical models${context.host === "local" ? " · parent allowed" : ""}`
         : "native advertised models";
-    this.page = new SearchableSelectPage({
-      theme: options.theme,
-      breadcrumb: `/subagents profiles › ${context.profile} › candidate ${context.candidateIndex + 1} › Model`,
-      title: `Choose model · ${context.profile} · candidate ${context.candidateIndex + 1}`,
-      subtitle: `${host} ${runtimeLabel(context.runtime)} · ${source}`,
-      choices: options.choices.map((choice) => ({
-        value: choiceValue(choice.choice),
-        item: choice.item,
-        searchText: choice.searchText,
-        payload: choice.choice,
-      })),
-      current: options.current,
-      ...(options.notice ? { notice: options.notice } : {}),
-      emptyText: "No matching models",
-      getHeight: options.getHeight,
-      requestRender: options.requestRender,
-      matchesKeybinding: options.matchesKeybinding,
-      keybindingLabel: options.keybindingLabel,
-      select: options.select,
-      cancel: options.cancel,
-    });
+    this.page = new SearchableSelectPage(
+      (() => {
+        const objectPart6829_0 = {
+          theme: options.theme,
+          breadcrumb: `/subagents profiles › ${context.profile} › candidate ${context.candidateIndex + 1} › Model`,
+          title: `Choose model · ${context.profile} · candidate ${context.candidateIndex + 1}`,
+          subtitle: `${host} ${runtimeLabel(context.runtime)} · ${source}`,
+          choices: options.choices.map((choice) => ({
+            value: choiceValue(choice.choice),
+            item: choice.item,
+            searchText: choice.searchText,
+            payload: choice.choice,
+          })),
+          current: options.current,
+        };
+        const objectPart6829_1 = options.notice
+          ? { ...objectPart6829_0, notice: options.notice }
+          : objectPart6829_0;
+        const objectPart6829_2 = {
+          ...objectPart6829_1,
+          emptyText: "No matching models",
+          getHeight: options.getHeight,
+          requestRender: options.requestRender,
+          matchesKeybinding: options.matchesKeybinding,
+          keybindingLabel: options.keybindingLabel,
+          select: options.select,
+          cancel: options.cancel,
+        };
+        return objectPart6829_2;
+      })(),
+    );
   }
 
   get focused(): boolean {

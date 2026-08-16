@@ -165,20 +165,24 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           Effect.flatMap((now) =>
             mutateView(record, event.assignmentEpoch, (current) => {
               record.latestAssistantText = latestAssistantText;
-              return {
-                ...current,
-                lastActivityAt: now,
-                ...(latestAssistantText
+              return (() => {
+                const objectPart6077_0 = { ...current, lastActivityAt: now };
+                const objectPart6077_1 = latestAssistantText
                   ? {
+                      ...objectPart6077_0,
                       sessionEvents: appendAssistantSessionEvent(
                         current.sessionEvents,
                         latestAssistantText,
                         now,
                       ),
                     }
-                  : {}),
-                usage: addUsage(current.usage, event.usage),
-              };
+                  : objectPart6077_0;
+                const objectPart6077_2 = {
+                  ...objectPart6077_1,
+                  usage: addUsage(current.usage, event.usage),
+                };
+                return objectPart6077_2;
+              })();
             }),
           ),
           Effect.asVoid,

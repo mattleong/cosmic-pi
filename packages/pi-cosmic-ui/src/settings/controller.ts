@@ -1,3 +1,4 @@
+import { isFunctionValue, isStringValue } from "pi-cosmic-core";
 import {
   getSettingsListTheme,
   type ExtensionAPI,
@@ -17,7 +18,7 @@ import {
 } from "../config/schema.ts";
 import {
   snapshotHostAbortSignal,
-  type HostCallbackBoundaryShape,
+  type HostCallbackBoundaryContract,
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../protocol/service.ts";
 import { createSettingsListSurface } from "../manager/settings-surface.ts";
@@ -33,11 +34,11 @@ export type CosmicUiSettingChange =
   | { readonly _tag: "SetVisibility"; readonly id: string; readonly visible: boolean };
 
 /** Decodes the third-party SettingsList callback into a closed set of valid updates. */
-export function decodeCosmicUiSettingChange(
-  id: unknown,
-  value: unknown,
+export function decodeCosmicUiSettingChange<IdInput, ValueInput>(
+  id: IdInput,
+  value: ValueInput,
 ): CosmicUiSettingChange | undefined {
-  if (typeof id !== "string") return undefined;
+  if (!isStringValue(id)) return undefined;
   const booleanValue = Option.getOrUndefined(
     Schema.decodeUnknownOption(BooleanSettingSchema)(value),
   );
@@ -69,7 +70,7 @@ export function decodeCosmicUiSettingChange(
 /** Converts an update rejection into a contained host notification and a resolved recovery. */
 export function recoverSettingsUpdate(
   update: Promise<unknown>,
-  callbacks: HostCallbackBoundaryShape,
+  callbacks: HostCallbackBoundaryContract,
   notify: () => void,
 ): Promise<void> {
   return update.then(
@@ -87,7 +88,7 @@ export function registerSettingsCommand(
     updateContext(ctx: ExtensionContext): void;
     update(ctx: ExtensionContext): void;
     run<A, E>(effect: Effect.Effect<A, E, CosmicUiService>, signal?: AbortSignal): Promise<A>;
-    callbacks: HostCallbackBoundaryShape;
+    callbacks: HostCallbackBoundaryContract;
   },
 ): void {
   const hostQuery = <A>(callback: () => A, fallback: A) =>
@@ -131,6 +132,7 @@ export function registerSettingsCommand(
           values: ["true", "false"],
         })),
       ];
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       const inertComponent = () => ({
         focused: false,
         render: () => [] as string[],
@@ -181,10 +183,9 @@ export function registerSettingsCommand(
                   );
                 },
                 onCancel: () => hostQuery(() => done(undefined), undefined),
-                matchesKeybinding:
-                  typeof keybindings?.matches === "function"
-                    ? (data, id) => keybindings.matches(data, id)
-                    : undefined,
+                matchesKeybinding: isFunctionValue(keybindings?.matches)
+                  ? (data, id) => keybindings.matches(data, id)
+                  : undefined,
                 requestRender: () => tui.requestRender(),
                 dim: (text) => theme.fg("dim", text),
                 // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained

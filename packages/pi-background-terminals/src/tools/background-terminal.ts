@@ -132,14 +132,19 @@ export function registerBackgroundTerminalTool(
             case "start": {
               const command = yield* required(input.command, "command");
               const cwd = path.resolve(ctx.cwd, input.cwd ?? ".");
-              const snapshot = yield* service.start({
-                command,
-                cwd,
-                ...(input.name ? { name: input.name } : {}),
-                ...(input.timeoutSeconds !== undefined
-                  ? { timeoutSeconds: input.timeoutSeconds }
-                  : {}),
-              });
+              const snapshot = yield* service.start(
+                (() => {
+                  const objectPart6028_0 = { command, cwd };
+                  const objectPart6028_1 = input.name
+                    ? { ...objectPart6028_0, name: input.name }
+                    : objectPart6028_0;
+                  const objectPart6028_2 =
+                    input.timeoutSeconds !== undefined
+                      ? { ...objectPart6028_1, timeoutSeconds: input.timeoutSeconds }
+                      : objectPart6028_1;
+                  return objectPart6028_2;
+                })(),
+              );
               return {
                 content: `Started ${formatJob(snapshot)}`,
                 details: {
@@ -149,6 +154,7 @@ export function registerBackgroundTerminalTool(
               };
             }
             case "list": {
+              // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
               const jobs = yield* service.list((input.state ?? "all") as BackgroundJobFilter);
               return {
                 content: jobs.length > 0 ? jobs.map(formatJob).join("\n") : "No background jobs.",
@@ -166,20 +172,30 @@ export function registerBackgroundTerminalTool(
               };
             }
             case "logs": {
-              const logs = yield* service.logs({
-                id: yield* required(input.id, "id"),
-                ...(input.afterCursor !== undefined ? { afterCursor: input.afterCursor } : {}),
-                ...(input.tailLines !== undefined ? { tailLines: input.tailLines } : {}),
-                ...(input.waitSeconds !== undefined ? { waitSeconds: input.waitSeconds } : {}),
-              });
+              const logRequestBase = { id: yield* required(input.id, "id") };
+              const logRequestWithCursor =
+                input.afterCursor === undefined
+                  ? logRequestBase
+                  : { ...logRequestBase, afterCursor: input.afterCursor };
+              const logRequestWithTail =
+                input.tailLines === undefined
+                  ? logRequestWithCursor
+                  : { ...logRequestWithCursor, tailLines: input.tailLines };
+              const logRequest =
+                input.waitSeconds === undefined
+                  ? logRequestWithTail
+                  : { ...logRequestWithTail, waitSeconds: input.waitSeconds };
+              const logs = yield* service.logs(logRequest);
               const formatted = formatLogs(logs);
               return {
                 content: formatted.text,
-                details: {
-                  action: input.action,
-                  logs: { ...logs, events: [] },
-                  ...(formatted.truncation.truncated ? { truncation: formatted.truncation } : {}),
-                } satisfies BackgroundTerminalToolDetails,
+                details: (() => {
+                  const objectPart7999_0 = { action: input.action, logs: { ...logs, events: [] } };
+                  const objectPart7999_1 = formatted.truncation.truncated
+                    ? { ...objectPart7999_0, truncation: formatted.truncation }
+                    : objectPart7999_0;
+                  return objectPart7999_1;
+                })() satisfies BackgroundTerminalToolDetails,
               };
             }
             case "stop": {
@@ -234,6 +250,7 @@ export function registerBackgroundTerminalTool(
           .map((part) => part.text)
           .join("\n"),
       );
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       const details = result.details as BackgroundTerminalToolDetails | undefined;
       let collapsedLogFooter: string | undefined;
       if (details?.action === "logs") {

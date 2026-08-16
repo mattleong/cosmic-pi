@@ -1,3 +1,11 @@
+import {
+  hasObjectRuntimeType,
+  isBooleanValue,
+  isNumberValue,
+  isStringValue,
+  isSymbolValue,
+  runtimeTypeName,
+} from "./runtime-values.ts";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
@@ -26,15 +34,41 @@ const unsupported = (path: string, kind: string): never => {
 };
 
 const childPath = (path: string, key: string | number): string =>
-  typeof key === "number" ? `${path}[${key}]` : `${path}.${key}`;
+  isNumberValue(key) ? `${path}[${key}]` : `${path}.${key}`;
 
-const cloneAndFreeze = (value: unknown, seen: WeakMap<object, unknown>, path: string): unknown => {
-  if (value === null) return value;
-  const kind = typeof value;
+interface ProjectionRecord {
+  [key: string]: ProjectionData;
+}
+type ProjectionData =
+  | undefined
+  | null
+  | string
+  | number
+  | boolean
+  | ReadonlyArray<ProjectionData>
+  | ProjectionRecord;
+
+const ProjectionDataSchema: Schema.Codec<ProjectionData> = Schema.Tree(
+  Schema.Union([Schema.Undefined, Schema.Null, Schema.String, Schema.Number, Schema.Boolean]),
+);
+
+const cloneAndFreeze = <Value>(
+  value: Value,
+  seen: WeakMap<object, ProjectionData>,
+  path: string,
+): ProjectionData => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (isStringValue(value) || isBooleanValue(value)) return value;
+  if (isNumberValue(value)) {
+    if (!Schema.is(Schema.Number)(value)) return unsupported(path, "non-finite number");
+    return value;
+  }
+  const kind = runtimeTypeName(value);
   if (kind === "function" || kind === "symbol" || kind === "bigint") return unsupported(path, kind);
-  if (kind !== "object") return value;
+  if (!hasObjectRuntimeType(value) || value === null) return unsupported(path, kind);
 
-  const object = value as object;
+  const object = value;
   const prior = seen.get(object);
   if (prior !== undefined) return prior;
 
@@ -44,7 +78,7 @@ const cloneAndFreeze = (value: unknown, seen: WeakMap<object, unknown>, path: st
     if (ownKeys.length !== expectedKeyCount)
       return unsupported(path, "array with extra or symbol-keyed properties");
 
-    const clone: unknown[] = [];
+    const clone: ProjectionData[] = [];
     seen.set(object, clone);
     for (let index = 0; index < value.length; index++) {
       const key = String(index);
@@ -62,12 +96,12 @@ const cloneAndFreeze = (value: unknown, seen: WeakMap<object, unknown>, path: st
     return unsupported(path, prototype?.constructor?.name ?? "non-plain object");
 
   const ownKeys = Reflect.ownKeys(object);
-  if (ownKeys.some((key) => typeof key === "symbol")) unsupported(path, "symbol-keyed property");
+  if (ownKeys.some((key) => isSymbolValue(key))) unsupported(path, "symbol-keyed property");
 
-  const clone: Record<string, unknown> = {};
+  const clone: ProjectionRecord = {};
   seen.set(object, clone);
   for (const key of ownKeys) {
-    if (typeof key !== "string") return unsupported(path, "symbol-keyed property");
+    if (!isStringValue(key)) return unsupported(path, "symbol-keyed property");
     const descriptor = Object.getOwnPropertyDescriptor(object, key);
     if (!descriptor) return unsupported(childPath(path, key), "missing property descriptor");
     if (!("value" in descriptor)) return unsupported(childPath(path, key), "accessor");
@@ -82,9 +116,14 @@ const cloneAndFreeze = (value: unknown, seen: WeakMap<object, unknown>, path: st
   return Object.freeze(clone);
 };
 
-/** Clones and deeply freezes a plain-data snapshot without freezing authoritative state. */
-export const freezeSnapshot = <Snapshot>(snapshot: Snapshot): Snapshot =>
-  cloneAndFreeze(snapshot, new WeakMap(), "$") as Snapshot;
+/** Clones and deeply freezes a schema-validated plain-data snapshot. */
+export const freezeSnapshot = <Snapshot>(snapshot: Snapshot): Snapshot => {
+  const cloned = cloneAndFreeze(snapshot, new WeakMap(), "$");
+  if (!Schema.is(ProjectionDataSchema)(cloned))
+    return unsupported("$", "value outside the projection schema");
+  // SAFETY: Recursive cloning preserved the caller's plain-data structure and Schema.Tree validated it.
+  return cloned as Snapshot;
+};
 
 const projectSnapshot = <State, Snapshot>(
   state: State,

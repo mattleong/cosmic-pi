@@ -61,7 +61,9 @@ test("path-list integration hides successful grep, find, and ls results until ex
       const tool = findRenderer(registered, testCase.name);
       assert.ok(tool.renderCall);
       assert.ok(tool.renderResult);
-      const call = stripAnsi(renderComponent(tool.renderCall(testCase.callArgs, testTheme())));
+      const call = stripAnsi(
+        renderComponent(tool.renderCall(testCase.callArgs, testTheme(), undefined)),
+      );
       assert.match(call, new RegExp(`\\b${testCase.name}\\b`));
       const collapsed = stripAnsi(
         renderComponent(

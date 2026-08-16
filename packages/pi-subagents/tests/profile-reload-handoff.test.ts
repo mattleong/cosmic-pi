@@ -1,13 +1,18 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   makeProfileReloadHandoff,
   profileReloadSessionKey,
 } from "../src/application/profile-reload-handoff.ts";
+import { extensionContextFixture } from "./fixtures/pi-host.ts";
 
 const handoff = makeProfileReloadHandoff();
 const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
-const processState = globalThis as unknown as Record<PropertyKey, unknown>;
+interface TestReloadGlobalState {
+  [reloadSlot]?: object;
+}
+
+// SAFETY: The test owns and clears this process-local symbol slot.
+const processState = globalThis as typeof globalThis & TestReloadGlobalState;
 
 afterEach(() => handoff.clear());
 
@@ -77,12 +82,14 @@ describe("profile reload handoff", () => {
   });
 
   it("derives the stable reload key from Pi session identity", () => {
-    const ctx = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ctx = extensionContextFixture({
       sessionManager: { getSessionId: () => "session-42" },
-    } as unknown as ExtensionContext;
+    });
     expect(profileReloadSessionKey(ctx)).toBe("session-42");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect(
-      profileReloadSessionKey({ sessionManager: {} } as unknown as ExtensionContext),
+      profileReloadSessionKey(extensionContextFixture({ sessionManager: {} })),
     ).toBeUndefined();
   });
 });

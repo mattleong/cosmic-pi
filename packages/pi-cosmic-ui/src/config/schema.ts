@@ -55,7 +55,7 @@ export const DEFAULT_FOOTER_ORDER = [
   "extensions",
 ] as const;
 
-export const DEFAULT_CONFIG: { readonly footer: ResolvedCosmicUiConfig["footer"] } = {
+export const DEFAULT_CONFIG = {
   footer: {
     enabled: true,
     density: "auto",
@@ -63,4 +63,4 @@ export const DEFAULT_CONFIG: { readonly footer: ResolvedCosmicUiConfig["footer"]
     hidden: [],
     mediaPlacement: "inline-right",
   },
-};
+} satisfies { readonly footer: ResolvedCosmicUiConfig["footer"] };

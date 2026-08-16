@@ -6,6 +6,7 @@
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/globalConsole:off
 // @effect-diagnostics effect/globalDate:off
+import { runtimeTypeName } from "pi-cosmic-core";
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
 import { registerToolRenderers } from "../../../src/tools/renderers/registration";
@@ -35,13 +36,17 @@ test("renderer registration activates enabled preview tool overrides", () => {
   publishCodePreviewToolsEnvironment("grep,find,ls");
   const registered: Array<{ name: string }> = [];
   let activeTools = ["read", "bash"];
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerToolRenderers(
     {
       getActiveTools: () => activeTools,
       setActiveTools: (tools: string[]) => {
         activeTools = tools;
       },
-      registerTool: (tool: unknown) => registered.push(tool as { name: string }),
+      registerTool: <Tool>(tool: Tool) => {
+        // SAFETY: Registration tests inspect only the registered tool name.
+        registered.push(tool as Tool & { name: string });
+      },
     } as never,
     "/tmp/project",
     { toolOptions: {} },
@@ -68,6 +73,7 @@ test("renderer registration removes previously activated previews when disabled"
   };
 
   publishCodePreviewToolsEnvironment("grep");
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerToolRenderers(pi as never, "/tmp/project", {
     registeredTools,
     activatedTools,
@@ -77,6 +83,7 @@ test("renderer registration removes previously activated previews when disabled"
   assert.deepEqual([...activatedTools], ["grep"]);
 
   publishCodePreviewToolsEnvironment("none");
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerToolRenderers(pi as never, "/tmp/project", {
     registeredTools,
     activatedTools,
@@ -98,8 +105,10 @@ test("renderer registration does not remove tools that were already active", () 
   };
 
   publishCodePreviewToolsEnvironment("grep");
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerToolRenderers(pi as never, "/tmp/project", { activatedTools, toolOptions: {} });
   publishCodePreviewToolsEnvironment("none");
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerToolRenderers(pi as never, "/tmp/project", { activatedTools, toolOptions: {} });
   assert.deepEqual(activeTools, ["read", "bash", "grep"]);
   assert.deepEqual([...activatedTools], []);
@@ -108,6 +117,7 @@ test("renderer registration does not remove tools that were already active", () 
 test("renderer registration skips tools already owned by another extension", () => {
   publishCodePreviewToolsEnvironment("read,grep,write");
   const registered: Array<{ name: string }> = [];
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerToolRenderers(
     {
       getAllTools: () => [
@@ -145,7 +155,10 @@ test("renderer registration skips tools already owned by another extension", () 
           },
         },
       ],
-      registerTool: (tool: unknown) => registered.push(tool as { name: string }),
+      registerTool: <Tool>(tool: Tool) => {
+        // SAFETY: Registration tests inspect only the registered tool name.
+        registered.push(tool as Tool & { name: string });
+      },
     } as never,
     "/tmp/project",
   );
@@ -165,9 +178,9 @@ test("registered edit renderer preserves built-in metadata and prepareArguments 
   publishCodePreviewToolsEnvironment("edit");
   const edit = findRenderer(registerRenderers(), "edit");
   assert.equal(edit.name, "edit");
-  assert.equal(typeof edit.prepareArguments, "function");
+  assert.equal(runtimeTypeName(edit.prepareArguments), "function");
   assert.equal(edit.renderShell, "default");
-  assert.equal(typeof edit.promptSnippet, "string");
+  assert.equal(runtimeTypeName(edit.promptSnippet), "string");
   assert.ok(edit.promptGuidelines?.length);
   assert.deepEqual(edit.prepareArguments?.({ path: "a.txt", oldText: "a", newText: "b" }), {
     path: "a.txt",
@@ -248,13 +261,12 @@ test("border mode wraps tool call and result in a status-colored border-only she
     assert.ok(bash.renderResult);
 
     const state = {};
-    const coloredTheme = {
-      ...testTheme(),
+    const coloredTheme = Object.assign(testTheme(), {
       fg: (key: string, text: string) =>
         ["warning", "success", "error", "borderMuted"].includes(key)
           ? `<${key}>${text}</${key}>`
           : text,
-    };
+    });
     const context = createToolRenderContext({
       args: { command: "echo hi" },
       isPartial: false,

@@ -11,6 +11,18 @@ import type {
   CosmicFooterUpsertEvent,
 } from "./protocol.ts";
 
+interface MutableRemoveProtocolEvent {
+  _tag: "Remove";
+  owner: string;
+  id?: string;
+}
+
+interface MutableInvalidateProtocolEvent {
+  _tag: "Invalidate";
+  owner?: string;
+  id?: string;
+}
+
 export type FooterProtocolEvent =
   | {
       readonly _tag: "Upsert";
@@ -114,23 +126,29 @@ export const protocolUpsert = (event: CosmicFooterUpsertEvent): FooterProtocolEv
   owner: event.owner,
   contribution: event.contribution,
 });
-export const protocolRemove = (event: CosmicFooterRemoveEvent): FooterProtocolEvent => ({
-  _tag: "Remove",
-  owner: event.owner,
-  ...(event.id === undefined ? {} : { id: event.id }),
-});
-export const protocolInvalidate = (event: CosmicFooterInvalidateEvent): FooterProtocolEvent => ({
-  _tag: "Invalidate",
-  ...(event.owner === undefined ? {} : { owner: event.owner }),
-  ...(event.id === undefined ? {} : { id: event.id }),
-});
+export const protocolRemove = (event: CosmicFooterRemoveEvent): FooterProtocolEvent => {
+  const protocolEvent: MutableRemoveProtocolEvent = {
+    _tag: "Remove",
+    owner: event.owner,
+  };
+  if (event.id !== undefined) protocolEvent.id = event.id;
+  return protocolEvent;
+};
+export const protocolInvalidate = (event: CosmicFooterInvalidateEvent): FooterProtocolEvent => {
+  const protocolEvent: MutableInvalidateProtocolEvent = {
+    _tag: "Invalidate",
+  };
+  if (event.owner !== undefined) protocolEvent.owner = event.owner;
+  if (event.id !== undefined) protocolEvent.id = event.id;
+  return protocolEvent;
+};
 
 /** Scoped protocol ingress ownership. The host publishes through the registry, not this handle. */
-export type FooterProtocolHostShape = Readonly<Record<never, never>>;
+export type FooterProtocolHostContract = Readonly<Record<never, never>>;
 
 export class FooterProtocolHost extends Context.Service<
   FooterProtocolHost,
-  FooterProtocolHostShape
+  FooterProtocolHostContract
 >()("pi-cosmic-ui/protocol/host/FooterProtocolHost") {
   static layer(options: {
     readonly buffer: FooterProtocolBuffer;

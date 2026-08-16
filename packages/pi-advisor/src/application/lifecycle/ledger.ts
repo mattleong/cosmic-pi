@@ -1,3 +1,4 @@
+import { isFunctionValue } from "pi-cosmic-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ADVISOR_CHECKPOINT_ENTRY_TYPE, createCheckpointLedger } from "../../checkpoint/ledger.ts";
 import { exportAdvisorEmissionRecords } from "../../review/emission-guard.ts";
@@ -13,11 +14,7 @@ export const makeLedgerPersistence = (options: {
   readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
 }) => {
   const persistLedger = (anchor: ParentAnchor): void => {
-    if (
-      !anchor ||
-      anchor === UNREADABLE_PARENT_ANCHOR ||
-      typeof options.pi.appendEntry !== "function"
-    )
+    if (!anchor || anchor === UNREADABLE_PARENT_ANCHOR || !isFunctionValue(options.pi.appendEntry))
       return;
     const state = options.getState();
     const pending = state.pendingPersistentRecovery;

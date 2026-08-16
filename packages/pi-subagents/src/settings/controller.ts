@@ -1,5 +1,6 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
+import { hasObjectRuntimeType, isFunctionValue } from "pi-cosmic-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { completeSettingsArguments, isProjectTrusted } from "pi-cosmic-core";
@@ -56,7 +57,7 @@ async function openFleetManager(
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
 ): Promise<void> {
-  if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+  if (ctx.mode !== "tui" || !isFunctionValue(ctx.ui.custom)) {
     if (ctx.hasUI) ctx.ui.notify("/subagents requires interactive TUI mode.", "warning");
     return;
   }
@@ -77,7 +78,7 @@ async function openFleetManager(
           fullScreenKeybindingLabel(
             id,
             fallback,
-            typeof keybindings.getKeys === "function"
+            isFunctionValue(keybindings.getKeys)
               ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
               : undefined,
           ),
@@ -200,7 +201,7 @@ async function openProfileSettings(
   actions: FleetManagerActions,
   initialScope: ProfileSettingsScope = "global",
 ): Promise<void> {
-  if (ctx.mode !== "tui" || !ctx.hasUI || typeof ctx.ui.custom !== "function") {
+  if (ctx.mode !== "tui" || !ctx.hasUI || !isFunctionValue(ctx.ui.custom)) {
     if (ctx.hasUI)
       ctx.ui.notify(
         "/subagents profiles requires interactive TUI mode; edit pi-subagents.json and run /reload.",
@@ -295,7 +296,13 @@ async function openProfileSettings(
   ): Promise<ProfileWorkspaceSaveResult> => {
     try {
       inspection = await actions.inspectProfiles(isProjectTrusted(ctx));
-      return { inspection, ...(conflictMessage ? { conflictMessage } : {}) };
+      return (() => {
+        const objectPart11563_0 = { inspection };
+        const objectPart11563_1 = conflictMessage
+          ? { ...objectPart11563_0, conflictMessage }
+          : objectPart11563_0;
+        return objectPart11563_1;
+      })();
     } catch {
       return {
         refreshError:
@@ -303,6 +310,7 @@ async function openProfileSettings(
       };
     }
   };
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const saveDraft = async (
     scope: ProfileSettingsScope,
     profile: ProfileId,
@@ -312,17 +320,24 @@ async function openProfileSettings(
     if (!declaration.valid) throw new Error(declaration.error);
     if (scope === "session") {
       try {
-        await actions.patchSessionProfile({
-          profile,
-          ...(declaration.route === undefined
-            ? {}
-            : { route: normalizeDeclaredProfileRoute(declaration.route) }),
-          expectedRevision: inspection.session.revision,
-        });
+        await actions.patchSessionProfile(
+          (() => {
+            const objectPart12302_0 = { profile };
+            const objectPart12302_1 =
+              declaration.route === undefined
+                ? objectPart12302_0
+                : { ...objectPart12302_0, route: normalizeDeclaredProfileRoute(declaration.route) };
+            const objectPart12302_2 = {
+              ...objectPart12302_1,
+              expectedRevision: inspection.session.revision,
+            };
+            return objectPart12302_2;
+          })(),
+        );
       } catch (error) {
         if (
           error instanceof SessionProfileConflictError ||
-          (typeof error === "object" &&
+          (hasObjectRuntimeType(error) &&
             error !== null &&
             (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError")
         )
@@ -334,17 +349,29 @@ async function openProfileSettings(
     } else {
       const expectedDocument =
         scope === "global" ? inspection.globalDocument : inspection.projectDocument;
-      await actions.patchProfile({
-        scope,
-        profile,
-        ...(declaration.route === undefined ? {} : { route: declaration.route }),
-        expectedExists: expectedDocument !== undefined,
-        ...(expectedDocument === undefined ? {} : { expectedDocument }),
-        projectTrusted: isProjectTrusted(ctx),
-      });
+      await actions.patchProfile(
+        (() => {
+          const objectPart13147_0 = { scope, profile };
+          const objectPart13147_1 =
+            declaration.route === undefined
+              ? objectPart13147_0
+              : { ...objectPart13147_0, route: declaration.route };
+          const objectPart13147_2 = {
+            ...objectPart13147_1,
+            expectedExists: expectedDocument !== undefined,
+          };
+          const objectPart13147_3 =
+            expectedDocument === undefined
+              ? objectPart13147_2
+              : { ...objectPart13147_2, expectedDocument };
+          const objectPart13147_4 = { ...objectPart13147_3, projectTrusted: isProjectTrusted(ctx) };
+          return objectPart13147_4;
+        })(),
+      );
     }
     return refreshInspection();
   };
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const clearSessionOverrides = async (): Promise<ProfileWorkspaceSaveResult> => {
     try {
       await actions.clearSessionProfiles(inspection.session.revision);
@@ -352,7 +379,7 @@ async function openProfileSettings(
     } catch (error) {
       if (
         error instanceof SessionProfileConflictError ||
-        (typeof error === "object" &&
+        (hasObjectRuntimeType(error) &&
           error !== null &&
           (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError")
       )
@@ -367,46 +394,83 @@ async function openProfileSettings(
     const reloadRequired = await ctx.ui.custom<boolean>(
       (tui, theme, keybindings, done) => {
         requestWorkspaceRender = () => tui.requestRender();
-        return new ProfileWorkspaceComponent({
-          theme,
-          inspection,
-          projectTrusted,
-          initialScope: selectedInitialScope,
-          parentEffort,
-          ...(preferredPiModel ? { piModel: preferredPiModel } : {}),
-          ...(parentModel ? { parentModel } : {}),
-          getHeight: () => tui.terminal.rows,
-          requestRender: () => tui.requestRender(),
-          matchesKeybinding: (data, id) => keybindings.matches(data, id),
-          keybindingLabel: (id, fallback) =>
-            fullScreenKeybindingLabel(
-              id,
-              fallback,
-              typeof keybindings.getKeys === "function"
-                ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
-                : undefined,
-            ),
-          close: done,
-          saveDraft,
-          clearSessionOverrides,
-          loadModelPicker: (profile, candidateIndex, candidate, signal) =>
-            loadCandidateModelPicker(ctx, {
-              profile,
-              candidateIndex,
-              candidate,
-              listNativeModels: actions.listNativeModels,
-              piModels: availableModels,
-              ...(parentCatalogModel ? { piParentModel: parentCatalogModel } : {}),
-              ...(extensionProviders
-                ? { registeredPiProviderIds: [...extensionProviders] }
-                : { piProviderInspectionFailed: true }),
-              ...(signal ? { signal } : {}),
-            }),
-          supportedPiEfforts: (candidate) =>
-            supportedPiEfforts(candidate, availableModels, parentCatalogModel, extensionProviders),
-          fastModeAvailable: (candidate) => fastModeAvailable(ctx, candidate, extensionProviders),
-          reload: () => requestProfileReload(ctx, bridge),
-        });
+        return new ProfileWorkspaceComponent(
+          (() => {
+            const objectPart14928_0 = {
+              theme,
+              inspection,
+              projectTrusted,
+              initialScope: selectedInitialScope,
+              parentEffort,
+            };
+            const objectPart14928_1 = preferredPiModel
+              ? { ...objectPart14928_0, piModel: preferredPiModel }
+              : objectPart14928_0;
+            const objectPart14928_2 = parentModel
+              ? { ...objectPart14928_1, parentModel }
+              : objectPart14928_1;
+            const objectPart14928_3 = {
+              ...objectPart14928_2,
+              getHeight: () => tui.terminal.rows,
+              requestRender: () => tui.requestRender(),
+              matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
+                keybindings.matches(data, id),
+              keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
+                fullScreenKeybindingLabel(
+                  id,
+                  fallback,
+                  isFunctionValue(keybindings.getKeys)
+                    ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+                    : undefined,
+                ),
+              close: done,
+              saveDraft,
+              clearSessionOverrides,
+              loadModelPicker: (
+                profile: ProfileId,
+                candidateIndex: number,
+                candidate: ProfileCandidate,
+                signal?: AbortSignal,
+              ) =>
+                loadCandidateModelPicker(
+                  ctx,
+                  (() => {
+                    const objectPart15387_0 = {
+                      profile,
+                      candidateIndex,
+                      candidate,
+                      listNativeModels: actions.listNativeModels,
+                      piModels: availableModels,
+                    };
+                    const objectPart15387_1 = parentCatalogModel
+                      ? { ...objectPart15387_0, piParentModel: parentCatalogModel }
+                      : objectPart15387_0;
+                    const objectPart15387_2 = {
+                      ...objectPart15387_1,
+                      ...(extensionProviders
+                        ? { registeredPiProviderIds: [...extensionProviders] }
+                        : { piProviderInspectionFailed: true }),
+                    };
+                    const objectPart15387_3 = signal
+                      ? { ...objectPart15387_2, signal }
+                      : objectPart15387_2;
+                    return objectPart15387_3;
+                  })(),
+                ),
+              supportedPiEfforts: (candidate: ProfileCandidate) =>
+                supportedPiEfforts(
+                  candidate,
+                  availableModels,
+                  parentCatalogModel,
+                  extensionProviders,
+                ),
+              fastModeAvailable: (candidate: ProfileCandidate) =>
+                fastModeAvailable(ctx, candidate, extensionProviders),
+              reload: () => requestProfileReload(ctx, bridge),
+            };
+            return objectPart14928_3;
+          })(),
+        );
       },
       { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
     );

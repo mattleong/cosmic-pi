@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { escapeControlChars } from "../../../shared/terminal-text";
 import { renderHiddenPreviewExpandHint } from "../../../preview/tool-shell";
+import type { RendererState } from "./types";
 
 export function renderResultPrelude(options: {
   isPartial: boolean;
@@ -19,7 +20,7 @@ export function renderResultPrelude(options: {
 export function renderHiddenPreviewPrelude(options: {
   expanded: boolean;
   hidePreview: boolean;
-  state: Record<string, unknown>;
+  state: RendererState;
   theme: Theme;
 }): Component | undefined {
   if (!options.expanded && options.hidePreview)

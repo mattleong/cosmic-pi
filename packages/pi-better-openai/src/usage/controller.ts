@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -45,7 +46,7 @@ export class OpenAIBoundaryError extends Schema.TaggedError<OpenAIBoundaryError>
   { operation: Schema.String, message: Schema.String },
 ) {}
 export type RefreshOptions = RefreshRequest;
-export interface OpenAIUsageServiceShape {
+export interface OpenAIUsageServiceContract {
   readonly refresh: (options?: RefreshOptions) => Effect.Effect<void>;
   readonly contextChanged: (clearUsage?: boolean) => Effect.Effect<void>;
   readonly updateSetting: (
@@ -61,7 +62,7 @@ export interface OpenAIUsageServiceShape {
 }
 export class OpenAIUsageService extends Context.Service<
   OpenAIUsageService,
-  OpenAIUsageServiceShape
+  OpenAIUsageServiceContract
 >()("pi-better-openai/usage/controller/OpenAIUsageService") {
   static layer(options: {
     readonly context: MutableRef.MutableRef<ExtensionContext>;
@@ -138,7 +139,7 @@ export class OpenAIUsageService extends Context.Service<
                 return {
                   _tag: "Failure",
                   message: sanitizeDiagnosticError(
-                    typeof usage.failure.message === "string"
+                    isStringValue(usage.failure.message)
                       ? usage.failure.message
                       : "Codex usage request timed out.",
                   ),
@@ -203,6 +204,7 @@ export class OpenAIUsageService extends Context.Service<
           controller.provideDependencies(
             persistFastWithRequirements(active, desiredActive, afterCommit ?? Effect.void),
           );
+        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
         const readConfigDocument = () =>
           controller.getState.pipe(
             Effect.flatMap((current) =>

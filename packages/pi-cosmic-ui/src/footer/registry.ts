@@ -42,7 +42,7 @@ interface SurfaceResource {
   attached: boolean;
 }
 
-export interface FooterRegistryServiceShape {
+export interface FooterRegistryServiceContract {
   readonly upsert: (owner: string, contribution: CosmicFooterContribution) => Effect.Effect<void>;
   readonly remove: (owner: string, id?: string) => Effect.Effect<void>;
   readonly invalidate: (owner?: string, id?: string) => Effect.Effect<void>;
@@ -63,7 +63,7 @@ export interface FooterRegistryBridge {
 
 export class FooterRegistryService extends Context.Service<
   FooterRegistryService,
-  FooterRegistryServiceShape
+  FooterRegistryServiceContract
 >()("pi-cosmic-ui/footer/registry/FooterRegistryService") {
   static layer(options: { readonly bridge: FooterRegistryBridge }) {
     return Layer.effect(
@@ -167,7 +167,7 @@ export class FooterRegistryService extends Context.Service<
             ),
           );
 
-        const upsert: FooterRegistryServiceShape["upsert"] = (owner, contribution) =>
+        const upsert: FooterRegistryServiceContract["upsert"] = (owner, contribution) =>
           serialized(
             (current) => {
               const index = current.entries.findIndex(
@@ -202,7 +202,7 @@ export class FooterRegistryService extends Context.Service<
             },
           ).pipe(Effect.asVoid);
 
-        const remove: FooterRegistryServiceShape["remove"] = (owner, id) =>
+        const remove: FooterRegistryServiceContract["remove"] = (owner, id) =>
           serialized<{
             readonly changed: boolean;
             readonly resources: readonly SurfaceResource[];
@@ -236,7 +236,7 @@ export class FooterRegistryService extends Context.Service<
             },
           ).pipe(Effect.asVoid);
 
-        const invalidate: FooterRegistryServiceShape["invalidate"] = (owner, id) =>
+        const invalidate: FooterRegistryServiceContract["invalidate"] = (owner, id) =>
           serialized(
             (current) =>
               Effect.sync(() => {
@@ -255,7 +255,7 @@ export class FooterRegistryService extends Context.Service<
             { afterPublish: () => Effect.sync(renderNow) },
           );
 
-        const setRenderRequest: FooterRegistryServiceShape["setRenderRequest"] = (
+        const setRenderRequest: FooterRegistryServiceContract["setRenderRequest"] = (
           next,
           expectedCurrent,
         ) =>

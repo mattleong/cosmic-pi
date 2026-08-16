@@ -8,10 +8,11 @@ import {
   type SemanticOutcomeBanner,
 } from "../src/tools/render-management.ts";
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
-} as unknown as Theme;
+} as Theme;
 
 const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   id: "agent-1",
@@ -41,10 +42,7 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   ...overrides,
 });
 
-const renderedBanner = (
-  details: ReturnType<typeof makeCompactToolDetails>,
-  width = 200,
-): { readonly banner: SemanticOutcomeBanner; readonly lines: ReadonlyArray<string> } => {
+const renderedBanner = (details: ReturnType<typeof makeCompactToolDetails>, width = 200) => {
   let captured: SemanticOutcomeBanner = { color: "accent", text: "" };
   const lines = renderCompactResultComponent(details, false, theme, (_cards, _expanded, banner) => {
     captured = banner;

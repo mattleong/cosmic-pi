@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as PlatformError from "effect/PlatformError";
 import { JsonDocumentStore } from "../src/platform/json-document.ts";
 import { ProcessCoordinator } from "../src/platform/process-coordinator.ts";
@@ -100,12 +101,14 @@ it.effect("rejects non-JSON values instead of coercing persisted data", () => {
   const harness = documentLayer({});
   return Effect.gen(function* () {
     const store = yield* JsonDocumentStore;
-    const result = yield* Effect.result(
-      store.writeObject("/config.json", {
-        dropped: undefined,
-        coerced: Number.NaN,
-      }),
-    );
+    const invalidDocument = {
+      dropped: undefined,
+      coerced: Number.NaN,
+    };
+    // SAFETY: This deliberately invalid fixture exercises the store's runtime JSON validation.
+    const invalidJsonDocument = invalidDocument as typeof invalidDocument &
+      Schema.MutableJsonObject;
+    const result = yield* Effect.result(store.writeObject("/config.json", invalidJsonDocument));
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("encode");
     expect(harness.files.has("/config.json")).toBe(false);

@@ -7,10 +7,11 @@ import {
   type SearchableSelectMotion,
 } from "../src/settings/ui/searchable-select-page.ts";
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
-} as unknown as Theme;
+} as Theme;
 
 const choice = (value: string, label: string, payload: string) => ({
   value,

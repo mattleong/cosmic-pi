@@ -180,15 +180,19 @@ export class SubagentFleetComponent implements Component, Focusable {
   private openPrompt(run: SubagentRunView, kind: FleetPromptKind): void {
     const input = new Input();
     input.focused = this._focused;
-    this.prompt = {
-      kind,
-      runId: run.id,
-      runName: sanitizeTerminalLine(run.name),
-      input,
-      ...(kind === "reply" && run.question?.message
-        ? { context: sanitizeTerminalLine(run.question.message) }
-        : {}),
-    };
+    this.prompt = (() => {
+      const objectPart6000_0 = {
+        kind,
+        runId: run.id,
+        runName: sanitizeTerminalLine(run.name),
+        input,
+      };
+      const objectPart6000_1 =
+        kind === "reply" && run.question?.message
+          ? { ...objectPart6000_0, context: sanitizeTerminalLine(run.question.message) }
+          : objectPart6000_0;
+      return objectPart6000_1;
+    })();
     this.notice = undefined;
   }
 
@@ -208,7 +212,7 @@ export class SubagentFleetComponent implements Component, Focusable {
         this.notice = { kind: "success", text: success };
         this.options.requestRender();
       },
-      (error: unknown) => {
+      (error) => {
         this.busyAction = undefined;
         this.notice = {
           kind: "error",

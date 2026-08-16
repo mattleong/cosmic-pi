@@ -10,7 +10,7 @@ import {
   emptyFooterRegistrySnapshot,
   FooterRegistryService,
   type FooterRegistryBridge,
-  type FooterRegistryServiceShape,
+  type FooterRegistryServiceContract,
 } from "../src/footer/registry.ts";
 
 const baseSurface = () =>
@@ -36,7 +36,9 @@ type SurfaceFixture<Override extends SurfaceOverride> = Omit<
 function surface<Override extends SurfaceOverride = object>(
   overrides?: Override,
 ): SurfaceFixture<Override> {
-  return { ...baseSurface(), ...overrides } as unknown as SurfaceFixture<Override>;
+  const fixture = { ...baseSurface(), ...overrides };
+  // SAFETY: The merged fixture preserves the base surface and applies the declared override type.
+  return fixture as typeof fixture & SurfaceFixture<Override>;
 }
 
 function registryLayer(callbacks = makeHostCallbackBoundary()) {
@@ -53,7 +55,7 @@ function registryLayer(callbacks = makeHostCallbackBoundary()) {
 
 const withRegistry = <A>(
   layer: Layer.Layer<FooterRegistryService>,
-  use: (registry: FooterRegistryServiceShape) => Effect.Effect<A>,
+  use: (registry: FooterRegistryServiceContract) => Effect.Effect<A>,
 ) =>
   Effect.acquireUseRelease(
     Effect.gen(function* () {

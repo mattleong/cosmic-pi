@@ -32,7 +32,7 @@ export type {
 const ADVISOR_COMMAND = "advisor";
 export const ADVISOR_COMMAND_DESCRIPTION = "Advisor controls, review, and usage";
 const SUBCOMMANDS = ["on", "off", "review", "fix", "dismiss", "cancel", "setup", "usage"] as const;
-const SUBCOMMAND_DESCRIPTIONS: Readonly<Record<(typeof SUBCOMMANDS)[number], string>> = {
+const SUBCOMMAND_DESCRIPTIONS = {
   on: "Enable the advisor",
   off: "Disable the advisor",
   review: "Review the last completed response",
@@ -41,7 +41,7 @@ const SUBCOMMAND_DESCRIPTIONS: Readonly<Record<(typeof SUBCOMMANDS)[number], str
   cancel: "Cancel pending advisor work",
   setup: "Choose the advisor model",
   usage: "Show advisor usage and outcomes",
-};
+} satisfies Readonly<Record<(typeof SUBCOMMANDS)[number], string>>;
 
 export function registerAdvisorCommands(
   pi: AdvisorCommandRegistrar,

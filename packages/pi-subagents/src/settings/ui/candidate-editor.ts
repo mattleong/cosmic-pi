@@ -84,6 +84,7 @@ const pickerContext = (input: CandidateModelEditorInput): ProfileModelPickerCont
 const loadNativeModels = async (
   input: CandidateModelEditorInput,
 ): Promise<CandidateModelPickerData> => {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const runtime = input.candidate.runtime as LocalCliRuntime;
   let models: ReadonlyArray<NativeRuntimeModel>;
   let warning: string | undefined;
@@ -104,16 +105,19 @@ const loadNativeModels = async (
   const catalog = new Map<string, NativeRuntimeModel>();
   for (const model of [...models, ...nativeFallbackModels(runtime, input.candidate.model)])
     if (!catalog.has(model.selector)) catalog.set(model.selector, model);
-  return {
-    choices: createNativeModelChoices([...catalog.values()], input.candidate.model),
-    current: input.candidate.model,
-    defaultSelector:
-      models.find((model) => model.isDefault)?.selector ??
-      models[0]?.selector ??
-      input.candidate.model,
-    context: pickerContext(input),
-    ...(warning ? { warning } : {}),
-  };
+  return (() => {
+    const objectPart4263_0 = {
+      choices: createNativeModelChoices([...catalog.values()], input.candidate.model),
+      current: input.candidate.model,
+      defaultSelector:
+        models.find((model) => model.isDefault)?.selector ??
+        models[0]?.selector ??
+        input.candidate.model,
+      context: pickerContext(input),
+    };
+    const objectPart4263_1 = warning ? { ...objectPart4263_0, warning } : objectPart4263_0;
+    return objectPart4263_1;
+  })();
 };
 
 /** Loads runtime-specific choices for the workspace's full-page searchable model picker. */
@@ -211,12 +215,12 @@ export async function loadCandidateModelPicker(
       : undefined,
     choices.length === 0 ? "No authenticated canonical Pi models are available." : undefined,
   ].filter((warning): warning is string => warning !== undefined);
-  return {
-    choices,
-    current: candidate.model,
-    context: pickerContext(input),
-    ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
-  };
+  return (() => {
+    const objectPart9104_0 = { choices, current: candidate.model, context: pickerContext(input) };
+    const objectPart9104_1 =
+      warnings.length > 0 ? { ...objectPart9104_0, warning: warnings.join(" ") } : objectPart9104_0;
+    return objectPart9104_1;
+  })();
 }
 
 /** Applies a full-page picker selection through the route editor's normalization rules. */

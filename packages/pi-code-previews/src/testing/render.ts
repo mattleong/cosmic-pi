@@ -10,6 +10,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { type CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
+import type { RendererArguments, RendererState } from "../tools/renderers/shared/types";
 export { stripAnsi } from "../shared/terminal-text";
 
 export function renderComponent(component: Component, width = 100): string {
@@ -21,7 +22,7 @@ export function delay(ms: number): Promise<void> {
 }
 
 export interface TestToolRenderContext {
-  args: Record<string, unknown>;
+  args: RendererArguments;
   argsComplete: boolean;
   cwd: string;
   executionStarted: boolean;
@@ -31,7 +32,7 @@ export interface TestToolRenderContext {
   isPartial: boolean;
   lastComponent: Component | undefined;
   showImages: boolean;
-  state: Record<string, unknown>;
+  state: RendererState;
   toolCallId: string;
 }
 
@@ -60,6 +61,7 @@ export function createToolRenderContext(
 }
 
 export function testTheme(): Theme {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   return {
     bold: (text: string) => text,
     fg: (_key: string, text: string) => text,

@@ -1,7 +1,8 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
 
 const QueueErrorFields = { message: Schema.String } as const;
-const isQueueErrorTag = (tag: unknown): boolean => {
+const isQueueErrorTag = <Tag>(tag: Tag): boolean => {
   switch (tag) {
     case "AdvisorQueueError":
     case "Disposed":
@@ -61,8 +62,10 @@ export type AdvisorReviewQueueError =
   | AdvisorQueueCancelledError
   | AdvisorQueueStaleEpochError;
 
-export const isAdvisorReviewQueueError = (error: unknown): error is AdvisorReviewQueueError => {
+export const isAdvisorReviewQueueError = <ErrorInput>(
+  error: ErrorInput,
+): error is ErrorInput & AdvisorReviewQueueError => {
   return (
-    typeof error === "object" && error !== null && "_tag" in error && isQueueErrorTag(error._tag)
+    hasObjectRuntimeType(error) && error !== null && "_tag" in error && isQueueErrorTag(error._tag)
   );
 };

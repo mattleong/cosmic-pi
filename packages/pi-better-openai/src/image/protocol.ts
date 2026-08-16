@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -33,9 +34,9 @@ const ProviderErrorEventSchema = Schema.Struct({
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
 
 const EventDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
-export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent")(function* (
-  value: unknown,
-) {
+export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent")(function* <
+  Value,
+>(value: Value) {
   const discriminant = yield* Schema.decodeUnknownEffect(EventDiscriminantSchema)(value);
   const schema =
     discriminant.type === "response.output_item.done"
@@ -47,7 +48,7 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
           : discriminant.type === "error"
             ? ProviderErrorEventSchema
             : discriminant.type === undefined &&
-                typeof value === "object" &&
+                hasObjectRuntimeType(value) &&
                 value !== null &&
                 ("partial_image_b64" in value || "b64_json" in value)
               ? PartialEventSchema

@@ -17,6 +17,7 @@ const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("pi package manifest", () => {
   test("declares an importable extension entrypoint and remains private", async () => {
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const manifest = JSON.parse(
       await readFile(resolve(packageDirectory, "package.json"), "utf8"),
     ) as PackageManifest;
@@ -26,6 +27,7 @@ describe("pi package manifest", () => {
 
     for (const extension of manifest.pi?.extensions ?? []) {
       const entrypoint = resolve(packageDirectory, extension);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const module = (await import(pathToFileURL(entrypoint).href)) as {
         default?: unknown;
       };

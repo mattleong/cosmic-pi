@@ -1,8 +1,8 @@
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
-import type { SafeFileShape } from "pi-cosmic-core";
-import type { SharpAdapterShape } from "../boundary/sharp.ts";
+import type { SafeFileContract } from "pi-cosmic-core";
+import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { imageMimeType, isInside } from "./helpers.ts";
 import {
   MAX_IMAGE_INPUT_BYTES,
@@ -15,8 +15,8 @@ import {
 export const makeImageInputReader = (dependencies: {
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
-  readonly safeFile: SafeFileShape;
-  readonly sharp: SharpAdapterShape;
+  readonly safeFile: SafeFileContract;
+  readonly sharp: SharpAdapterContract;
 }) => {
   const { fs, path, safeFile, sharp } = dependencies;
   const imageError = (operation: string, message: string) => () => fail(operation, message);

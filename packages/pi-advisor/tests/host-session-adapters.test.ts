@@ -67,6 +67,13 @@ function revise(
   };
 }
 
+const extensionContextFixture = <Fixture extends object>(
+  fixture: Fixture,
+): Fixture & ExtensionContext => {
+  // SAFETY: Each host-adapter scenario exercises only the context members in its fixture.
+  return fixture as Fixture & ExtensionContext;
+};
+
 function makeHarness() {
   const registry = handlerRegistry();
   const { commands, registerCommand } = commandRegistry();
@@ -93,7 +100,7 @@ function makeHarness() {
     runtimeService: runtimeServiceLayer,
   })(pi);
 
-  const emit = async (name: string, event: unknown): Promise<void> =>
+  const emit = async <Event>(name: string, event: Event): Promise<void> =>
     registry.emitWithContext(name, event, ctx);
 
   return {
@@ -111,7 +118,7 @@ const hostileContext = (method: string, secret: string): ExtensionContext => {
   const fail = () => {
     throw new Error(secret);
   };
-  return {
+  return extensionContextFixture({
     abort: method === "abort" ? fail : () => undefined,
     hasPendingMessages: method === "hasPendingMessages" ? fail : () => false,
     isIdle: method === "isIdle" ? fail : () => true,
@@ -121,7 +128,7 @@ const hostileContext = (method: string, secret: string): ExtensionContext => {
       getLeafId: method === "getLeafId" ? fail : () => "anchor",
       getSessionId: method === "getSessionId" ? fail : () => "session",
     },
-  } as unknown as ExtensionContext;
+  });
 };
 
 const expectTypedHostFailure = (
@@ -203,12 +210,12 @@ describe("advisor host session adapters", () => {
         throw new Error("branch-proxy-secret");
       },
     });
-    const hostileBranch = {
+    const hostileBranch = extensionContextFixture({
       sessionManager: { getBranch: () => branchProxy },
-    } as unknown as ExtensionContext;
-    const malformedContext = {
+    });
+    const malformedContext = extensionContextFixture({
       sessionManager: { buildContextEntries: () => ({ 0: {}, length: 1 }) },
-    } as unknown as ExtensionContext;
+    });
 
     expectTypedHostFailure(
       readAdvisorSessionBranchAtHostBoundary(hostileBranch),

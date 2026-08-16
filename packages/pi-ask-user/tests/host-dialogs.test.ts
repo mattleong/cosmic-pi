@@ -21,6 +21,22 @@ const request: AskUserRequest = {
   ],
 };
 
+const extensionUiFixture = <
+  Fixture extends Pick<ExtensionUIContext, "select" | "input" | "notify">,
+>(
+  fixture: Fixture,
+): Fixture & ExtensionUIContext => {
+  // SAFETY: HostDialogs uses only select, input, and notify from this test fixture.
+  return fixture as Fixture & ExtensionUIContext;
+};
+
+const extensionContextFixture = <Fixture extends Pick<ExtensionContext, "mode" | "hasUI" | "ui">>(
+  fixture: Fixture,
+): Fixture & ExtensionContext => {
+  // SAFETY: HostDialogs reads only mode, hasUI, and ui from these RPC context fixtures.
+  return fixture as Fixture & ExtensionContext;
+};
+
 const run = (ctx: ExtensionContext, selectedRequest: AskUserRequest = request) => {
   const runtime = ManagedRuntime.make(HostDialogs.layer(ctx, makeAskUserDialogBridge()));
   return runtime
@@ -33,8 +49,8 @@ describe("RPC questionnaire boundary", () => {
     const select = vi.fn((_title: string, options: string[], _opts?: { signal?: AbortSignal }) =>
       Promise.resolve(options[1]),
     );
-    const ui = { select, input: vi.fn(), notify: vi.fn() } as unknown as ExtensionUIContext;
-    const ctx = { mode: "rpc", hasUI: true, ui } as ExtensionContext;
+    const ui = extensionUiFixture({ select, input: vi.fn(), notify: vi.fn() });
+    const ctx = extensionContextFixture({ mode: "rpc", hasUI: true, ui });
 
     return run(ctx).then((outcome) => {
       expect(outcome).toEqual({
@@ -46,12 +62,12 @@ describe("RPC questionnaire boundary", () => {
   });
 
   it("treats a dismissed RPC dialog as cancellation without returning drafts", () => {
-    const ui = {
+    const ui = extensionUiFixture({
       select: vi.fn(() => Promise.resolve(undefined)),
       input: vi.fn(),
       notify: vi.fn(),
-    } as unknown as ExtensionUIContext;
-    return expect(run({ mode: "rpc", hasUI: true, ui } as ExtensionContext)).resolves.toEqual({
+    });
+    return expect(run(extensionContextFixture({ mode: "rpc", hasUI: true, ui }))).resolves.toEqual({
       outcome: "cancelled",
       answers: [],
     });
@@ -63,12 +79,12 @@ describe("RPC questionnaire boundary", () => {
       .mockResolvedValueOnce("3. Write a custom answer")
       .mockResolvedValueOnce("1. A — Choose A.");
     const notify = vi.fn();
-    const ui = {
+    const ui = extensionUiFixture({
       select,
       input: vi.fn(() => Promise.resolve(undefined)),
       notify,
-    } as unknown as ExtensionUIContext;
-    return run({ mode: "rpc", hasUI: true, ui } as ExtensionContext).then((outcome) => {
+    });
+    return run(extensionContextFixture({ mode: "rpc", hasUI: true, ui })).then((outcome) => {
       expect(outcome).toMatchObject({
         outcome: "submitted",
         answers: [{ key: "library", values: ["a"] }],
@@ -84,14 +100,16 @@ describe("RPC questionnaire boundary", () => {
     };
     const input = vi.fn().mockResolvedValueOnce("5").mockResolvedValueOnce("1,2");
     const notify = vi.fn();
-    const ui = { select: vi.fn(), input, notify } as unknown as ExtensionUIContext;
-    return run({ mode: "rpc", hasUI: true, ui } as ExtensionContext, multiple).then((outcome) => {
-      expect(outcome).toMatchObject({
-        outcome: "submitted",
-        answers: [{ key: "library", values: ["a", "b"] }],
-      });
-      expect(input).toHaveBeenCalledTimes(2);
-      expect(notify).toHaveBeenCalledWith("Use choice numbers from 1 to 2.", "warning");
-    });
+    const ui = extensionUiFixture({ select: vi.fn(), input, notify });
+    return run(extensionContextFixture({ mode: "rpc", hasUI: true, ui }), multiple).then(
+      (outcome) => {
+        expect(outcome).toMatchObject({
+          outcome: "submitted",
+          answers: [{ key: "library", values: ["a", "b"] }],
+        });
+        expect(input).toHaveBeenCalledTimes(2);
+        expect(notify).toHaveBeenCalledWith("Use choice numbers from 1 to 2.", "warning");
+      },
+    );
   });
 });

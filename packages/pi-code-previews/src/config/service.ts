@@ -29,7 +29,7 @@ export interface CodePreviewSettingsState {
   readonly saveContext: SettingsSaveContext;
 }
 
-export interface CodePreviewSettingsServiceShape {
+export interface CodePreviewSettingsServiceContract {
   readonly load: (
     options?: LoadSettingsOptions,
   ) => Effect.Effect<CodePreviewSettings, ProjectionError>;
@@ -60,7 +60,7 @@ export function settingsSaveContextProjection(): SettingsSaveContext | undefined
 
 export class CodePreviewSettingsService extends Context.Service<
   CodePreviewSettingsService,
-  CodePreviewSettingsServiceShape
+  CodePreviewSettingsServiceContract
 >()("pi-code-previews/config/service/CodePreviewSettingsService") {
   static readonly layer = Layer.effect(
     this,

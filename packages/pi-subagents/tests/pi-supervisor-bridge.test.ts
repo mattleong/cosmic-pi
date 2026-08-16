@@ -11,7 +11,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import { afterEach, describe, expect, it } from "vitest";
-import { openPiSupervisorBridge } from "../src/boundary/pi-supervisor-bridge-client.ts";
+import {
+  openPiSupervisorBridge,
+  type SupervisorToolArgumentsByName,
+} from "../src/boundary/pi-supervisor-bridge-client.ts";
 import { makeSupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 
 const directories: string[] = [];
@@ -140,9 +143,12 @@ describe("packaged delegated-Pi supervisor bridge", () => {
           yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
           yield* channel.awaitReady;
           yield* channel.setAssignmentEpoch(1);
+          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
           const callHostileInput = client.call as (
             name: "supervisor_progress",
-            input: unknown,
+            input: SupervisorToolArgumentsByName["supervisor_progress"] & {
+              readonly extra: boolean;
+            },
           ) => Promise<string>;
           const error = yield* Effect.tryPromise(() =>
             callHostileInput("supervisor_progress", { message: "ok", extra: true }),

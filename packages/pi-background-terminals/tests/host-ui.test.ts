@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { normalizeCosmicUiHostQuery } from "pi-cosmic-ui/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { makeProjectionBridge } from "../src/boundary/host-ui.ts";
 import type { BackgroundTerminalProjection } from "../src/job/model.ts";
@@ -18,8 +19,11 @@ const running: BackgroundTerminalProjection = {
   ],
 };
 
-const context = (setStatus: ReturnType<typeof vi.fn>) =>
-  ({ mode: "tui", ui: { setStatus } }) as unknown as ExtensionContext;
+const context = (setStatus: ReturnType<typeof vi.fn>): ExtensionContext => {
+  const fixture = { mode: "tui" as const, ui: { setStatus } };
+  // SAFETY: The projection bridge reads only mode and ui.setStatus from this fixture.
+  return fixture as typeof fixture & ExtensionContext;
+};
 
 describe("background terminal host projection", () => {
   it("rebinds footer publication after session replacement", () => {
@@ -40,10 +44,11 @@ describe("background terminal host projection", () => {
 
   it("declares its Cosmic footer placement when a Cosmic host answers", () => {
     const emitted: Array<{ name: string; data: unknown }> = [];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const events = {
-      emit: (name: string, data: unknown) => {
+      emit: <Data>(name: string, data: Data) => {
         emitted.push({ name, data });
-        if (name === "cosmic-ui:v1:host:query") (data as { respond: () => void }).respond();
+        if (name === "cosmic-ui:v1:host:query") normalizeCosmicUiHostQuery(data)?.respond();
       },
       on: () => () => undefined,
     } as never;
@@ -73,6 +78,7 @@ describe("background terminal host projection", () => {
 
   it("stays inert without a Cosmic host and outside the TUI", () => {
     const emitted: Array<{ name: string }> = [];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const events = {
       emit: (name: string) => emitted.push({ name }),
       on: () => () => undefined,
@@ -83,6 +89,7 @@ describe("background terminal host projection", () => {
 
     const rpcBridge = makeProjectionBridge(events);
     emitted.length = 0;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     rpcBridge.setContext({ mode: "rpc", ui: { setStatus: vi.fn() } } as never);
     expect(emitted).toEqual([]);
   });

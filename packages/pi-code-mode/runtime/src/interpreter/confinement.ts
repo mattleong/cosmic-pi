@@ -38,7 +38,13 @@
  *
  * All limits are fixed constants: they are deliberately not host or user configuration.
  */
-import { type AstNode, InterpreterRuntimeError } from "./model.js";
+import {
+  hasObjectRuntimeType,
+  isBooleanValue,
+  isNumberValue,
+  isStringValue,
+} from "../runtime-values.ts";
+import { type AstNode, InterpreterRuntimeError, type InterpreterValue } from "./model.js";
 import {
   classFirst,
   type FirstSet,
@@ -731,7 +737,11 @@ export const appendBoundedLog = (logs: Array<string>, entry: string): void => {
  * native serializer never materializes an over-limit string. `divisor` shrinks the budget
  * for indented output, whose size grows by up to depth x indent width over the compact form.
  */
-export const assertBoundedJsonEstimate = (value: unknown, node?: AstNode, divisor = 1): void => {
+export const assertBoundedJsonEstimate = (
+  value: InterpreterValue,
+  node?: AstNode,
+  divisor = 1,
+): void => {
   let remaining = Math.floor(MAX_GUEST_STRING_LENGTH / divisor);
   const spend = (amount: number): void => {
     remaining -= amount;
@@ -743,16 +753,16 @@ export const assertBoundedJsonEstimate = (value: unknown, node?: AstNode, diviso
       );
     }
   };
-  const walk = (current: unknown): void => {
+  const walk = (current: InterpreterValue): void => {
     if (current === null || current === undefined) {
       spend(4);
       return;
     }
-    if (typeof current === "string") {
+    if (isStringValue(current)) {
       spend(current.length + 2);
       return;
     }
-    if (typeof current === "number" || typeof current === "boolean") {
+    if (isNumberValue(current) || isBooleanValue(current)) {
       spend(8);
       return;
     }
@@ -761,7 +771,7 @@ export const assertBoundedJsonEstimate = (value: unknown, node?: AstNode, diviso
       for (const item of current) walk(item);
       return;
     }
-    if (typeof current === "object") {
+    if (hasObjectRuntimeType(current)) {
       const entries = Object.entries(current);
       spend(2 + entries.length);
       for (const [key, item] of entries) {

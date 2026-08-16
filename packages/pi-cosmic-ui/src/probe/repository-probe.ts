@@ -4,14 +4,14 @@ import * as Layer from "effect/Layer";
 import { applyGitNumstat, parseGitStatus, type FooterGitStatus } from "../footer/git.ts";
 import { PiExec, type PiExecError } from "./pi-exec.ts";
 
-export interface RepositoryProbeShape {
+export interface RepositoryProbeContract {
   readonly git: (
     cwd: string,
     isCurrent?: () => boolean,
   ) => Effect.Effect<FooterGitStatus | undefined, PiExecError>;
   readonly pullRequest: (cwd: string) => Effect.Effect<number | undefined, PiExecError>;
 }
-export class RepositoryProbe extends Context.Service<RepositoryProbe, RepositoryProbeShape>()(
+export class RepositoryProbe extends Context.Service<RepositoryProbe, RepositoryProbeContract>()(
   "pi-cosmic-ui/probe/repository-probe/RepositoryProbe",
 ) {
   static readonly layer = Layer.effect(

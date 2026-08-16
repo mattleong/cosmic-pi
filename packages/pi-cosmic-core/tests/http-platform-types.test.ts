@@ -1,8 +1,8 @@
 import * as Schema from "effect/Schema";
 import { describe, expectTypeOf, it } from "vitest";
-import type { JsonHttpClientShape, JsonHttpRequestInput, JsonHttpResponse } from "../index.ts";
+import type { JsonHttpClientContract, JsonHttpRequestInput, JsonHttpResponse } from "../index.ts";
 
-const acceptsOnlyConcreteResponseSchemas = (http: JsonHttpClientShape) => {
+const acceptsOnlyConcreteResponseSchemas = (http: JsonHttpClientContract) => {
   const concrete = http.request({
     url: "https://example.invalid",
     responseSchema: Schema.Struct({ ok: Schema.Boolean }),
@@ -26,7 +26,7 @@ const acceptsOnlyConcreteResponseSchemas = (http: JsonHttpClientShape) => {
 };
 
 const acceptsOnlyJsonEncodedRequestSchemas = (
-  http: import("../index.ts").StreamingHttpClientShape,
+  http: import("../index.ts").StreamingHttpClientContract,
 ) => {
   const concrete = http.requestJsonRawBytes(
     { url: "https://example.invalid", method: "POST" },

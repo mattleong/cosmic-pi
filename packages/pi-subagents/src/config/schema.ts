@@ -1,6 +1,7 @@
+import type { JsonObject } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { isJsonObject } from "pi-cosmic-core";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import {
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_IDS,
@@ -52,7 +53,7 @@ const NativeModelSchema = Schema.String.check(
   Schema.isPattern(/\S/),
   hasNoTerminalControls,
 );
-const CandidateShapeSchema = Schema.Struct({
+const CandidateContractSchema = Schema.Struct({
   host: ProfileHostSchema,
   runtime: ProfileRuntimeSchema,
   model: NativeModelSchema,
@@ -63,10 +64,7 @@ const CandidateShapeSchema = Schema.Struct({
   closeOnReport: Schema.optional(Schema.Boolean),
 });
 
-const ownKeysAre = (
-  record: Readonly<Record<string, unknown>>,
-  allowed: ReadonlySet<string>,
-): boolean => {
+const ownKeysAre = (record: Readonly<JsonObject>, allowed: ReadonlySet<string>): boolean => {
   try {
     return Object.keys(record).every((key) => allowed.has(key));
   } catch {
@@ -74,15 +72,19 @@ const ownKeysAre = (
   }
 };
 
-const decodedRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-  isJsonObject(value) ? value : undefined;
+const decodedRecord = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
+  if (!hasObjectRuntimeType(value) || value === null || Array.isArray(value)) return undefined;
+  // SAFETY: This is a shallow hostile-input view used only for guarded field reads; every field
+  // is decoded into its concrete domain type before it can enter SubagentConfigFile.
+  return value as ValueInput & Readonly<JsonObject>;
+};
 
 const readField = (
-  record: Readonly<Record<string, unknown>>,
+  record: Readonly<JsonObject>,
   key: string,
   path: string,
   diagnostics: string[],
-): { readonly present: boolean; readonly value?: unknown } => {
+) => {
   try {
     if (!Object.prototype.hasOwnProperty.call(record, key)) return { present: false };
     return { present: true, value: record[key] };
@@ -109,7 +111,9 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
   );
 };
 
-export const decodeProfileCandidate = (value: unknown): ProfileCandidate | undefined => {
+export const decodeProfileCandidate = <ValueInput>(
+  value: ValueInput,
+): ProfileCandidate | undefined => {
   const record = decodedRecord(value);
   if (
     !record ||
@@ -128,7 +132,7 @@ export const decodeProfileCandidate = (value: unknown): ProfileCandidate | undef
     )
   )
     return undefined;
-  const decoded = Schema.decodeUnknownOption(CandidateShapeSchema)(record);
+  const decoded = Schema.decodeUnknownOption(CandidateContractSchema)(record);
   if (Option.isNone(decoded)) return undefined;
   const candidate = decoded.value;
   const model = candidate.model;
@@ -151,12 +155,12 @@ export const decodeProfileCandidate = (value: unknown): ProfileCandidate | undef
   return { ...candidate, model, fastMode, closeOnReport };
 };
 
-const decodeRoute = (
-  value: unknown,
+const decodeRoute = <ValueInput>(
+  value: ValueInput,
   path: string,
   diagnostics: string[],
 ): DeclaredProfileRoute | undefined => {
-  if (value === "disabled") return value;
+  if (value === "disabled") return "disabled";
   if (!Array.isArray(value)) {
     const candidate = decodeProfileCandidate(value);
     if (!candidate) diagnostics.push(path);
@@ -189,7 +193,10 @@ const decodeRoute = (
 };
 
 /** Strict version-4 unknown-boundary decode for one global or project document. */
-export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedSubagentConfig {
+export function decodeSubagentConfig<InputInput>(
+  input: InputInput,
+  scope = "config",
+): DecodedSubagentConfig {
   const diagnostics: string[] = [];
   const decodedRoot = decodedRecord(input);
   const rawRoot = decodedRoot ?? {};
@@ -220,10 +227,14 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
   if (unsupportedVersion) diagnostics.push(`${scope}.version`);
 
   return {
-    file: {
-      ...(version === SUBAGENT_CONFIG_VERSION ? { version } : {}),
-      ...(Object.keys(profiles).length > 0 ? { profiles } : {}),
-    },
+    file: (() => {
+      const objectPart8161_0 = {};
+      const objectPart8161_1 =
+        version === SUBAGENT_CONFIG_VERSION ? { ...objectPart8161_0, version } : objectPart8161_0;
+      const objectPart8161_2 =
+        Object.keys(profiles).length > 0 ? { ...objectPart8161_1, profiles } : objectPart8161_1;
+      return objectPart8161_2;
+    })(),
     diagnostics: [...new Set(diagnostics)],
     invalidProfileRoutes,
     unsupportedVersion,

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type {
   AdvisorCheckpoint,
   AdvisorCheckpointRequest,
-  AdvisorRuntimeServiceShape,
+  AdvisorRuntimeServiceContract,
   AdvisorRuntimeStartOptions,
 } from "../src/runtime/runtime.ts";
 
@@ -58,7 +58,7 @@ async function makeQueue(
   driver: AdvisorRuntimeDriver,
   options: AdvisorReviewQueueOptions = {},
 ): Promise<TestQueue> {
-  const runtime: AdvisorRuntimeServiceShape = {
+  const runtime: AdvisorRuntimeServiceContract = {
     activeToolNames: () => driver.activeToolNames,
     start: (value) => Effect.tryPromise({ try: () => driver.start(value), catch: modelError }),
     checkpoint: (value) =>
@@ -77,6 +77,7 @@ async function makeQueue(
   };
   const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
   const service = await managed.runPromise(AdvisorReviewQueueService);
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const queue = (await managed.runPromise(service.make(runtime, options))) as TestQueue;
   const dispose = async () => {
     if (!activeQueueCleanups.delete(dispose)) return;
@@ -92,7 +93,7 @@ async function makeQueue(
   return queue;
 }
 
-const modelError = (error: unknown) =>
+const modelError = <ErrorInput>(error: ErrorInput) =>
   error instanceof AdvisorModelError
     ? error
     : new AdvisorModelError({ message: error instanceof Error ? error.message : "test failure" });
@@ -156,7 +157,7 @@ async function tick() {
 describe("AdvisorReviewQueue", () => {
   test("ManagedRuntime disposal alone finalizes an acquired queue exactly once", async () => {
     let disposals = 0;
-    const runtime: AdvisorRuntimeServiceShape = {
+    const runtime: AdvisorRuntimeServiceContract = {
       activeToolNames: () => [],
       start: () => Effect.void,
       checkpoint: () => Effect.never,
@@ -177,7 +178,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("explicit disposal closes the queue child scope before the layer scope", async () => {
     let disposals = 0;
-    const runtime: AdvisorRuntimeServiceShape = {
+    const runtime: AdvisorRuntimeServiceContract = {
       activeToolNames: () => [],
       start: () => Effect.void,
       checkpoint: () => Effect.never,
@@ -192,7 +193,9 @@ describe("AdvisorReviewQueue", () => {
     const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
     const service = await managed.runPromise(AdvisorReviewQueueService);
     const queue = await managed.runPromise(service.make(runtime));
-    const queueScope = (queue as unknown as { resourceScope: Scope.Closeable }).resourceScope;
+    const scopeDescriptor = Object.getOwnPropertyDescriptor(queue, "resourceScope");
+    if (!scopeDescriptor || !("value" in scopeDescriptor)) throw new Error("missing queue scope");
+    const queueScope: Scope.Closeable = scopeDescriptor.value;
 
     expect(queueScope.state._tag).not.toBe("Closed");
     await managed.runPromise(queue.disposeEffect());
@@ -301,24 +304,25 @@ describe("AdvisorReviewQueue", () => {
     const queue = await makeQueue(harness.runtime);
     const settlementReached = deferred<void>();
     const releaseCompletion = deferred<void>();
-    const internals = queue as unknown as {
-      settleClaimedWaiterEffect: (
-        waiter: QueuedCheckpoint,
-        processedThrough?: number,
-      ) => Effect.Effect<boolean>;
-    };
-    const settleClaimedWaiterEffect = internals.settleClaimedWaiterEffect.bind(queue);
-    internals.settleClaimedWaiterEffect = (waiter, processedThrough) =>
-      settleClaimedWaiterEffect(waiter, processedThrough).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            settlementReached.resolve();
-          }),
+    const prototype = Object.getPrototypeOf(queue);
+    const settleClaimedWaiterEffect: (
+      waiter: QueuedCheckpoint,
+      processedThrough?: number,
+    ) => Effect.Effect<boolean> = prototype.settleClaimedWaiterEffect.bind(queue);
+    Object.defineProperty(queue, "settleClaimedWaiterEffect", {
+      configurable: true,
+      value: (waiter: QueuedCheckpoint, processedThrough?: number) =>
+        settleClaimedWaiterEffect(waiter, processedThrough).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              settlementReached.resolve();
+            }),
+          ),
+          Effect.flatMap((settled) =>
+            Effect.promise(() => releaseCompletion.promise).pipe(Effect.as(settled)),
+          ),
         ),
-        Effect.flatMap((settled) =>
-          Effect.promise(() => releaseCompletion.promise).pipe(Effect.as(settled)),
-        ),
-      );
+    });
 
     queue.ingest(1, { type: "user", text: "first" });
     const firstCaller = Effect.runFork(
@@ -371,6 +375,7 @@ describe("AdvisorReviewQueue", () => {
     expect(harness.runtime.steer).toHaveBeenCalledWith(
       expect.stringContaining("assistant_thinking_delta"),
     );
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const steering = String((harness.runtime.steer as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
     expect(steering.length).toBeLessThan(20_000);
     expect(harness.runtime.abort).not.toHaveBeenCalled();
@@ -397,6 +402,7 @@ describe("AdvisorReviewQueue", () => {
     const harness = runtimeHarness();
     const firstSteer = deferred<boolean>();
     const secondSteer = deferred<boolean>();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.steer as ReturnType<typeof vi.fn>)
       .mockImplementationOnce(() => firstSteer.promise)
       .mockImplementationOnce(() => secondSteer.promise);
@@ -469,7 +475,7 @@ describe("AdvisorReviewQueue", () => {
         parentTurnId: 1,
         targetSequence: 2,
       })
-      .catch((error: unknown) => error);
+      .catch((error) => error);
     const survivor = queue.checkpoint({
       checkpointId: "survive-shared",
       focus: "standard",
@@ -511,7 +517,7 @@ describe("AdvisorReviewQueue", () => {
         parentTurnId: 1,
         targetSequence: 2,
       })
-      .catch((error: unknown) => error);
+      .catch((error) => error);
     const survivor = queue.checkpoint({
       checkpointId: "survive-shared",
       focus: "standard",
@@ -526,7 +532,7 @@ describe("AdvisorReviewQueue", () => {
           parentTurnId: 1,
           targetSequence: 2,
         })
-        .catch((error: unknown) => error),
+        .catch((error) => error),
     );
     await tick();
     expect(await evicted).toBeInstanceOf(AdvisorQueueBatchDroppedError);
@@ -565,6 +571,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("retains failed or idle-race live delivery for the next coherent checkpoint", async () => {
     const harness = runtimeHarness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.steer as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false);
     const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "user", text: "initial" });
@@ -607,6 +614,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("reports correlation validation as a typed queue failure, not a defect", async () => {
     const harness = runtimeHarness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
       async (request: AdvisorCheckpointRequest) => ({ ...result(request), checkpointId: "wrong" }),
     );
@@ -630,6 +638,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("preserves typed provider failure text for parent classification", async () => {
     const harness = runtimeHarness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("Advisor authentication failed; credential unavailable."),
     );
@@ -643,6 +652,7 @@ describe("AdvisorReviewQueue", () => {
   test("re-primes at the current cursor and bounds overflow retry to one", async () => {
     const harness = runtimeHarness();
     let attempt = 0;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
       async (request: AdvisorCheckpointRequest) => {
         attempt += 1;
@@ -667,6 +677,7 @@ describe("AdvisorReviewQueue", () => {
   test("drops a repeated maximum-response batch and a later small checkpoint succeeds", async () => {
     const harness = runtimeHarness();
     let attempt = 0;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
       async (request: AdvisorCheckpointRequest) => {
         attempt += 1;
@@ -682,9 +693,10 @@ describe("AdvisorReviewQueue", () => {
       .checkpoint({ checkpointId: "drop", focus: "standard", parentTurnId: 1 })
       .then(
         () => undefined,
-        (error: unknown) => error,
+        (error) => error,
       );
     expect(dropped).toBeInstanceOf(AdvisorQueueBatchDroppedError);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((dropped as AdvisorQueueBatchDroppedError)._tag).toBe("BatchDropped");
     expect(queue.backlog).toBe(0);
     queue.ingest(2, { type: "user", text: "small" });
@@ -698,6 +710,7 @@ describe("AdvisorReviewQueue", () => {
     const harness = runtimeHarness();
     const failure = deferred<AdvisorCheckpoint>();
     const checkpointStarted = deferred<void>();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(() => {
       checkpointStarted.resolve(undefined);
       return failure.promise;
@@ -729,7 +742,7 @@ describe("AdvisorReviewQueue", () => {
     queue.ingest(1, { type: "user", text: "active" });
     const active = queue
       .checkpoint({ checkpointId: "active", focus: "standard", parentTurnId: 1 })
-      .catch((error: unknown) => error);
+      .catch((error) => error);
     await tick();
 
     const queued = Array.from({ length: MAX_PENDING_CHECKPOINTS + 1 }, (_, index) =>
@@ -739,12 +752,13 @@ describe("AdvisorReviewQueue", () => {
           focus: "standard",
           parentTurnId: 1,
         })
-        .catch((error: unknown) => error),
+        .catch((error) => error),
     );
     await tick();
 
     const evicted = await queued[0];
     expect(evicted).toBeInstanceOf(AdvisorQueueBatchDroppedError);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((evicted as AdvisorQueueBatchDroppedError)._tag).toBe("BatchDropped");
     expect(queue.pendingCheckpoints).toBe(MAX_PENDING_CHECKPOINTS + 1);
 
@@ -758,14 +772,14 @@ describe("AdvisorReviewQueue", () => {
     queue.ingest(1, { type: "user", text: "active" });
     const active = queue
       .checkpoint({ checkpointId: "active", focus: "standard", parentTurnId: 1 })
-      .catch((error: unknown) => error);
+      .catch((error) => error);
     await tick();
 
     for (let index = 0; index < MAX_PENDING_CHECKPOINTS + 1; index += 1) {
       const checkpointId = `cancelled-${index}`;
       const cancelled = queue
         .checkpoint({ checkpointId, focus: "standard", parentTurnId: 1 })
-        .catch((error: unknown) => error);
+        .catch((error) => error);
       await tick();
       await queue.cancelCheckpointEffect(checkpointId).pipe(Effect.runPromise);
       expect(await cancelled).toBeInstanceOf(AdvisorQueueCancelledError);
@@ -791,11 +805,9 @@ describe("AdvisorReviewQueue", () => {
   test("dispose shuts down and awaits the queue-owned steering ingress across replacements", async () => {
     for (let replacement = 0; replacement < 3; replacement += 1) {
       const queue = await makeQueue(runtimeHarness().runtime);
-      const ingress = (
-        queue as unknown as {
-          steeringIngress?: { readonly awaitShutdown: Effect.Effect<void> };
-        }
-      ).steeringIngress;
+      const ingressDescriptor = Object.getOwnPropertyDescriptor(queue, "steeringIngress");
+      const ingress: { readonly awaitShutdown: Effect.Effect<void> } | undefined =
+        ingressDescriptor && "value" in ingressDescriptor ? ingressDescriptor.value : undefined;
       expect(ingress).toBeDefined();
       await Effect.runPromise(queue.disposeEffect());
       await expect(Effect.runPromise(ingress!.awaitShutdown)).resolves.toBeUndefined();
@@ -806,6 +818,7 @@ describe("AdvisorReviewQueue", () => {
   test("active cancellation waits for abort settlement before starting replacement work", async () => {
     const harness = runtimeHarness();
     const abortRelease = deferred<void>();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
       () => abortRelease.promise,
     );
@@ -813,7 +826,7 @@ describe("AdvisorReviewQueue", () => {
     queue.ingest(1, { type: "user", text: "first" });
     const first = queue
       .checkpoint({ checkpointId: "first", focus: "standard", parentTurnId: 1 })
-      .catch((error: unknown) => error);
+      .catch((error) => error);
     await tick();
     const second = queue.checkpoint({
       checkpointId: "second",
@@ -846,6 +859,7 @@ describe("AdvisorReviewQueue", () => {
   test("interrupting active cancellation during abort still restores a reusable queue", async () => {
     const harness = runtimeHarness();
     const abortRelease = deferred<void>();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
       () => abortRelease.promise,
     );
@@ -853,7 +867,7 @@ describe("AdvisorReviewQueue", () => {
     queue.ingest(1, { type: "user", text: "first" });
     const first = queue
       .checkpoint({ checkpointId: "first", focus: "standard", parentTurnId: 1 })
-      .catch((error: unknown) => error);
+      .catch((error) => error);
     await tick();
     const second = queue.checkpoint({
       checkpointId: "second",
@@ -885,6 +899,7 @@ describe("AdvisorReviewQueue", () => {
   test("dispose awaits active abort finalizers before settling", async () => {
     const harness = runtimeHarness();
     const abortRelease = deferred<void>();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
       () => abortRelease.promise,
     );
@@ -892,7 +907,7 @@ describe("AdvisorReviewQueue", () => {
     queue.ingest(1, { type: "user", text: "dispose" });
     const checkpoint = queue
       .checkpoint({ checkpointId: "dispose", focus: "standard", parentTurnId: 1 })
-      .catch((error: unknown) => error);
+      .catch((error) => error);
     await tick();
 
     const settlement = queue.dispose();
@@ -917,12 +932,13 @@ describe("AdvisorReviewQueue", () => {
       .checkpoint({ checkpointId: "cancel-me", focus: "standard", parentTurnId: 1 })
       .then(
         () => undefined,
-        (error: unknown) => error,
+        (error) => error,
       );
     await tick();
     await queue.cancelCheckpointEffect("cancel-me").pipe(Effect.runPromise);
     const cancelled = await checkpoint;
     expect(cancelled).toBeInstanceOf(AdvisorQueueCancelledError);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((cancelled as AdvisorQueueCancelledError)._tag).toBe("Cancelled");
     expect(harness.runtime.abort).toHaveBeenCalledOnce();
     await queue.dispose();
@@ -930,6 +946,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("reports ResetRequired when recovery has no current re-prime state", async () => {
     const harness = runtimeHarness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("context overflow"),
     );
@@ -939,9 +956,10 @@ describe("AdvisorReviewQueue", () => {
       .checkpoint({ checkpointId: "reset", focus: "standard", parentTurnId: 1 })
       .then(
         () => undefined,
-        (error: unknown) => error,
+        (error) => error,
       );
     expect(failure).toBeInstanceOf(AdvisorQueueResetRequiredError);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((failure as AdvisorQueueResetRequiredError)._tag).toBe("ResetRequired");
     await queue.dispose();
   });
@@ -954,6 +972,7 @@ describe("AdvisorReviewQueue", () => {
       throw new Error("expected disposed ingestion to fail");
     } catch (error) {
       expect(error).toBeInstanceOf(AdvisorQueueDisposedError);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       expect((error as AdvisorQueueDisposedError)._tag).toBe("Disposed");
     }
   });

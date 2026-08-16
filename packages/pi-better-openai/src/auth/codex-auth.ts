@@ -1,3 +1,4 @@
+import { isNumberValue, isStringValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -103,7 +104,7 @@ export const readCodexAuthResult = Effect.fn("CodexAuth.readAuthResult")(functio
   );
   if (entry._tag === "Failure") return malformed(entry.failure.operation, entry.failure.message);
   const now = yield* Clock.currentTimeMillis;
-  if (typeof entry.success.expires === "number" && now >= entry.success.expires)
+  if (isNumberValue(entry.success.expires) && now >= entry.success.expires)
     return { _tag: "Missing" } as const;
   const accessToken = entry.success.access.trim();
   const accountId = (entry.success.accountId ?? entry.success.account_id)?.trim();
@@ -137,7 +138,7 @@ export const getCodexCredentialsResult = Effect.fn("CodexAuth.getCredentialsResu
   );
   if (registryRaw._tag === "Success") {
     const registry = yield* parseCodexRegistryCredentials(
-      typeof registryRaw.success === "string" ? registryRaw.success : undefined,
+      isStringValue(registryRaw.success) ? registryRaw.success : undefined,
     );
     if (registry)
       return {

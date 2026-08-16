@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "./runtime-values.ts";
 import { Effect, Schema } from "effect";
 
 /**
@@ -38,7 +39,7 @@ export type Definition<R = never> = {
   readonly description: string;
   readonly input: SchemaType;
   readonly output: SchemaType | undefined;
-  readonly run: (input: unknown) => Effect.Effect<unknown, unknown, R>;
+  readonly run: <Input>(input: Input) => Effect.Effect<unknown, unknown, R>;
 };
 
 /** The value `run` receives: the decoded type for Effect Schemas, `unknown` for JSON Schemas. */
@@ -55,8 +56,10 @@ export type Options<I extends SchemaType, O extends SchemaType | undefined, R = 
   readonly run: (input: InputType<I>) => Effect.Effect<ResultType<O>, unknown, R>;
 };
 
-export const isDefinition = <R = never>(value: unknown): value is Definition<R> =>
-  typeof value === "object" && value !== null && "_tag" in value && value._tag === "CodeModeTool";
+export const isDefinition = <R = never, Value = unknown>(
+  value: Value,
+): value is Value & Definition<R> =>
+  hasObjectRuntimeType(value) && value !== null && "_tag" in value && value._tag === "CodeModeTool";
 
 /**
  * Defines one schema-described tool available to a CodeMode program through `tools.*`.
@@ -85,6 +88,7 @@ export const isDefinition = <R = never>(value: unknown): value is Definition<R> 
  * })
  * ```
  */
+// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 export const make = <
   I extends SchemaType,
   const O extends SchemaType | undefined = undefined,
@@ -96,5 +100,8 @@ export const make = <
   description: options.description,
   input: options.input,
   output: options.output,
-  run: (input) => options.run(input as InputType<I>),
+  run: (input) => {
+    // SAFETY: ToolRuntime decodes Effect Schema inputs before invoking this stored definition.
+    return options.run(input as InputType<I>);
+  },
 });

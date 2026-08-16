@@ -1,3 +1,4 @@
+import { isFunctionValue } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -158,74 +159,41 @@ const InvalidateData = Schema.Struct({
   id: Schema.optional(NonEmpty),
 });
 
-const optionalFunction = (value: unknown) => value === undefined || typeof value === "function";
-const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>>(
+const optionalFunction = <Value>(value: Value) => value === undefined || isFunctionValue(value);
+const decode = <S extends Schema.ConstraintDecoder<unknown>, Value>(
   schema: S,
-  value: unknown,
+  value: Value,
+): S["Type"] | undefined => Option.getOrUndefined(Schema.decodeUnknownOption(schema)(value));
+
+const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>, Value>(
+  schema: S,
+  value: Value,
 ): S["Type"] | undefined => {
   try {
-    return Option.getOrUndefined(Schema.decodeUnknownOption(schema)(value));
+    return decode(schema, value);
   } catch {
     return undefined;
   }
 };
 
-const snapshotFields = (
-  value: unknown,
-  fields: readonly string[],
-): Record<string, unknown> | undefined => {
-  if ((typeof value !== "object" && typeof value !== "function") || value === null)
-    return undefined;
-  const snapshot: Record<string, unknown> = {};
-  for (const field of fields) snapshot[field] = Reflect.get(value, field);
-  return snapshot;
-};
-
-const eventFields = ["version", "owner", "id"] as const;
-const contributionFields = [
-  "kind",
-  "id",
-  "region",
-  "text",
-  "compactText",
-  "align",
-  "tone",
-  "priority",
-  "order",
-  "label",
-  "color",
-  "decorates",
-  "preferredWidth",
-  "preferredPlacement",
-  "attach",
-  "detach",
-  "render",
-  "invalidate",
-  "dispose",
-] as const;
-
 /**
  * Reads every hostile query field exactly once and returns a detached plain snapshot.
  * Callers at the event-bus boundary must invoke this through HostCallbackBoundary.
  */
-export function normalizeCosmicUiHostQuery(value: unknown): CosmicUiHostQuery | undefined {
-  const snapshot = snapshotFields(value, ["version", "respond"]);
-  const query = snapshot && decodeSafely(HostQueryData, snapshot);
-  if (!query || typeof query.respond !== "function") return undefined;
+export function normalizeCosmicUiHostQuery<ValueInput>(
+  value: ValueInput,
+): CosmicUiHostQuery | undefined {
+  const query = decodeSafely(HostQueryData, value);
+  if (!query || !isFunctionValue(query.respond)) return undefined;
   const respond = query.respond;
   return Object.freeze({ version: query.version, respond: () => respond() });
 }
 
 /** Reads every hostile upsert field exactly once into a detached plain snapshot. */
-export function normalizeCosmicFooterUpsertEvent(
-  value: unknown,
+export function normalizeCosmicFooterUpsertEvent<ValueInput>(
+  value: ValueInput,
 ): CosmicFooterUpsertEvent | undefined {
-  const snapshot = snapshotFields(value, ["version", "owner", "contribution"]);
-  if (!snapshot) return undefined;
-  const contributionSnapshot = snapshotFields(snapshot.contribution, contributionFields);
-  if (!contributionSnapshot) return undefined;
-  snapshot.contribution = contributionSnapshot;
-  const event = decodeSafely(UpsertData, snapshot);
+  const event = decodeSafely(UpsertData, value);
   if (!event) return undefined;
   const contribution = event.contribution;
   if (contribution.kind === "text" || contribution.kind === "status") {
@@ -237,13 +205,14 @@ export function normalizeCosmicFooterUpsertEvent(
   } else if (
     !Number.isFinite(contribution.preferredWidth) ||
     contribution.preferredWidth <= 0 ||
-    typeof contribution.render !== "function" ||
+    !isFunctionValue(contribution.render) ||
     !optionalFunction(contribution.attach) ||
     !optionalFunction(contribution.detach) ||
     !optionalFunction(contribution.invalidate) ||
     !optionalFunction(contribution.dispose)
   )
     return undefined;
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return Object.freeze({
     version: event.version,
     owner: event.owner,
@@ -252,35 +221,43 @@ export function normalizeCosmicFooterUpsertEvent(
 }
 
 /** Reads every hostile remove field exactly once into a detached plain snapshot. */
-export function normalizeCosmicFooterRemoveEvent(
-  value: unknown,
+export function normalizeCosmicFooterRemoveEvent<ValueInput>(
+  value: ValueInput,
 ): CosmicFooterRemoveEvent | undefined {
-  const event = decodeSafely(RemoveData, snapshotFields(value, eventFields));
+  const event = decode(RemoveData, value);
   if (!event) return undefined;
-  return Object.freeze({
-    version: event.version,
-    owner: event.owner,
-    ...(event.id === undefined ? {} : { id: event.id }),
-  });
+  return Object.freeze(
+    (() => {
+      const objectPart8792_0 = { version: event.version, owner: event.owner };
+      const objectPart8792_1 =
+        event.id === undefined ? objectPart8792_0 : { ...objectPart8792_0, id: event.id };
+      return objectPart8792_1;
+    })(),
+  );
 }
 
 /** Reads every hostile invalidation field exactly once into a detached plain snapshot. */
-export function normalizeCosmicFooterInvalidateEvent(
-  value: unknown,
+export function normalizeCosmicFooterInvalidateEvent<ValueInput>(
+  value: ValueInput,
 ): CosmicFooterInvalidateEvent | undefined {
-  const event = decodeSafely(InvalidateData, snapshotFields(value, eventFields));
+  const event = decode(InvalidateData, value);
   if (!event) return undefined;
-  return Object.freeze({
-    version: event.version,
-    ...(event.owner === undefined ? {} : { owner: event.owner }),
-    ...(event.id === undefined ? {} : { id: event.id }),
-  });
+  return Object.freeze(
+    (() => {
+      const objectPart9257_0 = { version: event.version };
+      const objectPart9257_1 =
+        event.owner === undefined ? objectPart9257_0 : { ...objectPart9257_0, owner: event.owner };
+      const objectPart9257_2 =
+        event.id === undefined ? objectPart9257_1 : { ...objectPart9257_1, id: event.id };
+      return objectPart9257_2;
+    })(),
+  );
 }
 
-const isNormalized = <A>(
-  normalize: (value: unknown) => A | undefined,
-  value: unknown,
-): value is A => {
+const isNormalized = <A, Value>(
+  normalize: <Input>(value: Input) => A | undefined,
+  value: Value,
+): value is Value & A => {
   try {
     return normalize(value) !== undefined;
   } catch {
@@ -288,17 +265,23 @@ const isNormalized = <A>(
   }
 };
 
-export function isCosmicUiHostQuery(value: unknown): value is CosmicUiHostQuery {
+export function isCosmicUiHostQuery<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & CosmicUiHostQuery {
   return isNormalized(normalizeCosmicUiHostQuery, value);
 }
-export function isCosmicFooterUpsertEvent(value: unknown): value is CosmicFooterUpsertEvent {
+export function isCosmicFooterUpsertEvent<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & CosmicFooterUpsertEvent {
   return isNormalized(normalizeCosmicFooterUpsertEvent, value);
 }
-export function isCosmicFooterRemoveEvent(value: unknown): value is CosmicFooterRemoveEvent {
+export function isCosmicFooterRemoveEvent<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & CosmicFooterRemoveEvent {
   return isNormalized(normalizeCosmicFooterRemoveEvent, value);
 }
-export function isCosmicFooterInvalidateEvent(
-  value: unknown,
-): value is CosmicFooterInvalidateEvent {
+export function isCosmicFooterInvalidateEvent<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & CosmicFooterInvalidateEvent {
   return isNormalized(normalizeCosmicFooterInvalidateEvent, value);
 }

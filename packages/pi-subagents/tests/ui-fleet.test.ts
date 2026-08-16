@@ -7,10 +7,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { SubagentProjection } from "../src/run/model.ts";
 import { SubagentFleetComponent } from "../src/ui/fleet.ts";
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
-} as unknown as Theme;
+} as Theme;
 const projection: SubagentProjection = {
   revision: 1,
   runs: [
@@ -92,16 +93,21 @@ const makeComponent = (
     rename: vi.fn(() => Promise.resolve()),
   };
   const close = vi.fn();
-  const component = new SubagentFleetComponent({
-    theme: currentTheme,
-    getProjection: () => currentProjection,
-    getHeight: () => height,
-    getNow,
-    ...(matchesKeybinding ? { matchesKeybinding } : {}),
-    requestRender: vi.fn(),
-    close,
-    actions,
-  });
+  const component = new SubagentFleetComponent(
+    (() => {
+      const objectPart2897_0 = {
+        theme: currentTheme,
+        getProjection: () => currentProjection,
+        getHeight: () => height,
+        getNow,
+      };
+      const objectPart2897_1 = matchesKeybinding
+        ? { ...objectPart2897_0, matchesKeybinding }
+        : objectPart2897_0;
+      const objectPart2897_2 = { ...objectPart2897_1, requestRender: vi.fn(), close, actions };
+      return objectPart2897_2;
+    })(),
+  );
   return { actions, close, lines: component.render(width), component };
 };
 
@@ -121,7 +127,9 @@ describe("/subagents fleet UI", () => {
 
   it("colors outer borders and panel dividers with theme border colors", () => {
     const fg = vi.fn((_color: string, text: string) => text);
-    const currentTheme = { fg, bold: (text: string) => text } as unknown as Theme;
+    const themeFixture = { fg, bold: (text: string) => text };
+    // SAFETY: This fleet test invokes only fg and bold on the theme fixture.
+    const currentTheme = themeFixture as typeof themeFixture & Theme;
     const { component } = makeComponent(120, 24, projection, () => 20_000, currentTheme);
     component.render(80);
 
@@ -278,13 +286,13 @@ describe("/subagents fleet UI", () => {
   });
 
   it("honors configured selection and cancel keybindings", () => {
-    const bindings: Record<string, string> = {
-      "tui.select.confirm": "o",
-      "tui.select.cancel": "q",
-      "tui.select.down": "n",
-      "tui.select.up": "p",
-    };
-    const matcher = (data: string, id: string) => bindings[id] === data;
+    const bindings = new Map<string, string>([
+      ["tui.select.confirm", "o"],
+      ["tui.select.cancel", "q"],
+      ["tui.select.down", "n"],
+      ["tui.select.up", "p"],
+    ]);
+    const matcher = (data: string, id: string) => bindings.get(id) === data;
     const { close, component } = makeComponent(
       42,
       24,

@@ -159,7 +159,7 @@ export class NativeModelCatalogError extends Schema.TaggedError<NativeModelCatal
   },
 ) {}
 
-export interface NativeModelCatalogShape {
+export interface NativeModelCatalogContract {
   readonly list: (
     runtime: LocalCliRuntime,
     cwd: string,
@@ -245,13 +245,17 @@ const catalogFrames = (runtime: LocalCliRuntime): ReadonlyArray<CatalogRequestFr
         },
       ];
 
-const isClaudeCatalogErrorResponse = (value: unknown): value is ClaudeCatalogErrorFrame =>
+const isClaudeCatalogErrorResponse = <ValueInput>(
+  value: ValueInput,
+): value is ValueInput & ClaudeCatalogErrorFrame =>
   Option.isSome(Schema.decodeUnknownOption(ClaudeCatalogErrorResponse)(value));
 
-const isCodexCatalogErrorResponse = (value: unknown): value is CodexCatalogErrorFrame =>
+const isCodexCatalogErrorResponse = <ValueInput>(
+  value: ValueInput,
+): value is ValueInput & CodexCatalogErrorFrame =>
   Option.isSome(Schema.decodeUnknownOption(CodexCatalogErrorResponse)(value));
 
-const isCatalogResponse = (runtime: LocalCliRuntime, value: unknown): boolean =>
+const isCatalogResponse = <ValueInput>(runtime: LocalCliRuntime, value: ValueInput): boolean =>
   Option.isSome(
     Schema.decodeUnknownOption(
       runtime === "codex" ? CodexCatalogCorrelatedFrame : ClaudeCatalogCorrelatedFrame,
@@ -267,7 +271,7 @@ const runCatalogProcess = (
   env: NodeJS.ProcessEnv,
   timeoutMillis: number,
   signal?: AbortSignal | undefined,
-): Promise<unknown> =>
+) =>
   new Promise((resolve, reject) => {
     let child: NodeChildProcess;
     let buffer = "";
@@ -280,7 +284,7 @@ const runCatalogProcess = (
         catalogError(runtime, "catalog_canceled", `${runtime} model catalog was canceled.`),
       );
 
-    const release = (value: unknown, error?: NativeModelCatalogError): void => {
+    const release = <ValueInput>(value: ValueInput, error?: NativeModelCatalogError): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
@@ -393,6 +397,7 @@ const runCatalogProcess = (
         if (!line.trim()) continue;
         let value: unknown;
         try {
+          // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
           value = JSON.parse(line) as unknown;
         } catch {
           release(
@@ -447,7 +452,7 @@ const runCatalogProcess = (
     timer.unref();
   });
 
-const decodeClaudeModels = (value: unknown) =>
+const decodeClaudeModels = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(ClaudeCatalogResponse)(value).pipe(
     Effect.map((response) =>
       response.response.response.models.map(
@@ -468,7 +473,7 @@ const decodeClaudeModels = (value: unknown) =>
     ),
   );
 
-const decodeCodexModels = (value: unknown) =>
+const decodeCodexModels = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(CodexCatalogResponse)(value).pipe(
     Effect.map((response) =>
       response.result.data.map(
@@ -494,7 +499,7 @@ const discoverCatalog = async (
   timeoutMillis: number,
   signal: AbortSignal,
   options: NativeModelCatalogLayerOptions,
-): Promise<unknown> => {
+) => {
   if (runtime !== "codex" || !options.agentDirectory)
     return runCatalogProcess(
       runtime,
@@ -548,7 +553,7 @@ interface InFlightCatalogRequest {
 
 export const makeNativeModelCatalog = (
   options: NativeModelCatalogLayerOptions = {},
-): NativeModelCatalogShape => {
+): NativeModelCatalogContract => {
   const cache = new Map<string, ReadonlyArray<NativeRuntimeModel>>();
   const inFlight = new Map<string, InFlightCatalogRequest>();
 
@@ -649,7 +654,7 @@ export const makeNativeModelCatalog = (
 
 export class NativeModelCatalog extends Context.Service<
   NativeModelCatalog,
-  NativeModelCatalogShape
+  NativeModelCatalogContract
 >()("pi-subagents/boundary/native-model-catalog/NativeModelCatalog") {
   static readonly layer = (
     options: NativeModelCatalogLayerOptions = {},

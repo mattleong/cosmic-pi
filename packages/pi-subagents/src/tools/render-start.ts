@@ -105,20 +105,26 @@ const hydrateEntry = (
     ? cards.find((candidate) => candidate.id === entry.runId)
     : cards.find((candidate) => candidate.name === entry.name);
   if (!card || card.host === undefined || card.runtime === undefined) return entry;
-  return {
-    ...entry,
-    profile: card.profile ?? entry.profile,
-    routeStatus: "selected",
-    host: card.host,
-    runtime: card.runtime,
-    model: card.model,
-    effort: card.effort,
-    ...(card.fastMode ? { fastMode: true } : {}),
-    ...(card.selection.candidateIndex === undefined
-      ? {}
-      : { candidateIndex: card.selection.candidateIndex }),
-    runId: card.id,
-  };
+  return (() => {
+    const objectPart4066_0 = {
+      ...entry,
+      profile: card.profile ?? entry.profile,
+      routeStatus: "selected" as const,
+      host: card.host,
+      runtime: card.runtime,
+      model: card.model,
+      effort: card.effort,
+    };
+    const objectPart4066_1 = card.fastMode
+      ? { ...objectPart4066_0, fastMode: true as const }
+      : objectPart4066_0;
+    const objectPart4066_2 =
+      card.selection.candidateIndex === undefined
+        ? objectPart4066_1
+        : { ...objectPart4066_1, candidateIndex: card.selection.candidateIndex };
+    const objectPart4066_3 = { ...objectPart4066_2, runId: card.id };
+    return objectPart4066_3;
+  })();
 };
 
 const legacyEntries = (
@@ -130,23 +136,34 @@ const legacyEntries = (
   const successes = cards.map((card): SubagentStartEntry => {
     while (failedIndexes.has(nextSuccessIndex)) nextSuccessIndex += 1;
     const index = nextSuccessIndex++;
-    return {
-      index,
-      name: card.name,
-      profile: card.profile ?? "generalist",
-      status: "started",
-      routeStatus:
-        card.host !== undefined && card.runtime !== undefined ? "selected" : "unavailable",
-      ...(card.host === undefined ? {} : { host: card.host }),
-      ...(card.runtime === undefined ? {} : { runtime: card.runtime }),
-      model: card.model,
-      effort: card.effort,
-      ...(card.fastMode ? { fastMode: true } : {}),
-      ...(card.selection.candidateIndex === undefined
-        ? {}
-        : { candidateIndex: card.selection.candidateIndex }),
-      runId: card.id,
-    };
+    return (() => {
+      const objectPart4919_0 = {
+        index,
+        name: card.name,
+        profile: card.profile ?? "generalist",
+        status: "started" as const,
+        routeStatus:
+          card.host !== undefined && card.runtime !== undefined
+            ? ("selected" as const)
+            : ("unavailable" as const),
+      };
+      const objectPart4919_1 =
+        card.host === undefined ? objectPart4919_0 : { ...objectPart4919_0, host: card.host };
+      const objectPart4919_2 =
+        card.runtime === undefined
+          ? objectPart4919_1
+          : { ...objectPart4919_1, runtime: card.runtime };
+      const objectPart4919_3 = { ...objectPart4919_2, model: card.model, effort: card.effort };
+      const objectPart4919_4 = card.fastMode
+        ? { ...objectPart4919_3, fastMode: true as const }
+        : objectPart4919_3;
+      const objectPart4919_5 =
+        card.selection.candidateIndex === undefined
+          ? objectPart4919_4
+          : { ...objectPart4919_4, candidateIndex: card.selection.candidateIndex };
+      const objectPart4919_6 = { ...objectPart4919_5, runId: card.id };
+      return objectPart4919_6;
+    })();
   });
   return [
     ...successes,

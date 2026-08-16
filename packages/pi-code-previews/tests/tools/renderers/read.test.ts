@@ -34,6 +34,7 @@ test("registered read renderer hides successful text content until expanded", ()
     assert.ok(read.renderCall);
     assert.ok(read.renderResult);
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const call = stripAnsi(
       renderComponent(read.renderCall({ path: "src/a.ts" }, testTheme(), {} as never)),
     );

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createJiti } from "jiti/static";
 
 const root = resolve(import.meta.dirname, "..");
+const isFunctionValue = (value) => Object(value) instanceof Function;
 
 function run(command, args, failure) {
   const result = spawnSync(command, args, { cwd: root, encoding: "utf8" });
@@ -14,5 +15,5 @@ function run(command, args, failure) {
 run("pnpm", ["prepare"], "pnpm prepare failed");
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const extension = await jiti.import(resolve(root, "packages/pi-advisor/index.ts"));
-if (typeof extension.default !== "function") throw new Error("missing advisor extension");
+if (!isFunctionValue(extension.default)) throw new Error("missing advisor extension");
 console.log("Local advisor imports directly from TypeScript source through Pi's Jiti loader.");

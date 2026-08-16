@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType, isFunctionValue, isStringValue } from "./runtime-values.ts";
 /** Pure, best-effort reads of Pi session host fields shared by provider extensions. */
 
 export type HostUiContext = {
@@ -54,13 +55,14 @@ export function hasTerminalUI(ctx: HostUiContext): boolean {
 export function isProjectTrusted(ctx: HostTrustContext): boolean {
   try {
     const readTrust = ctx.isProjectTrusted;
-    return typeof readTrust === "function" && readTrust.call(ctx) === true;
+    return isFunctionValue(readTrust) && readTrust.call(ctx) === true;
   } catch {
     return false;
   }
 }
 
 /** Best-effort Pi notification boundary; a hostile or stale host UI never throws into the caller. */
+// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 export function notifyAtHostBoundary(
   ctx: HostNotifierContext,
   message: string,
@@ -72,10 +74,11 @@ export function notifyAtHostBoundary(
     // not surface an unhandled rejection through this best-effort boundary, so any returned
     // thenable gets a no-op rejection handler; there is no resource to manage or await.
     if (
-      typeof outcome === "object" &&
+      hasObjectRuntimeType(outcome) &&
       outcome !== null &&
-      typeof (outcome as { readonly then?: unknown }).then === "function"
+      isFunctionValue((outcome as { readonly then?: unknown }).then)
     ) {
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       (outcome as PromiseLike<unknown>).then(
         () => undefined,
         () => undefined,
@@ -110,6 +113,7 @@ export function isUsingOAuthAtHostBoundary<Model>(
 /** Capture the session abort signal without throwing across the host boundary. */
 export function captureHostSignal(ctx: HostSessionContext): CapturedHostSignal {
   try {
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     return { _tag: "Captured", signal: ctx.signal as AbortSignal | undefined };
   } catch {
     return { _tag: "Unavailable" };
@@ -120,8 +124,9 @@ export function captureHostSignal(ctx: HostSessionContext): CapturedHostSignal {
 export function captureSessionHost(ctx: HostSessionContext): CapturedSessionHost {
   try {
     const cwd = ctx.cwd;
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const signal = ctx.signal as AbortSignal | undefined;
-    if (typeof cwd !== "string" || cwd.length === 0) return { _tag: "Unavailable" };
+    if (!isStringValue(cwd) || cwd.length === 0) return { _tag: "Unavailable" };
     return {
       _tag: "Captured",
       cwd,

@@ -6,6 +6,7 @@
  * outcome instead of throwing or rejecting into extension code, so a hostile host callback
  * can never hang the session or escape a command handler.
  */
+import { isFunctionValue, isStringValue } from "pi-cosmic-core";
 import type {
   ExtensionCommandContext,
   KeybindingsManager,
@@ -24,13 +25,13 @@ export type HostDialogResult =
 
 const UNAVAILABLE: HostDialogResult = { _tag: "Unavailable" };
 
-const settled = (value: unknown): HostDialogResult =>
-  typeof value === "string" ? { _tag: "Answered", value } : { _tag: "Cancelled" };
+const settled = <Value>(value: Value): HostDialogResult =>
+  isStringValue(value) ? { _tag: "Answered", value } : { _tag: "Cancelled" };
 
 /** True when the host exposes a callable custom-surface API; hostile accessors read as false. */
 export function hasCustomSurface(ctx: ExtensionCommandContext): boolean {
   try {
-    return typeof ctx.ui.custom === "function";
+    return isFunctionValue(ctx.ui.custom);
   } catch {
     return false;
   }
@@ -40,9 +41,9 @@ export function hasCustomSurface(ctx: ExtensionCommandContext): boolean {
  * One guarded Promise-shaped dialog invocation: missing APIs, synchronous throws, and
  * rejections all resolve to `Unavailable` instead of escaping into extension code.
  */
-function dialogAtHostBoundary(
+function dialogAtHostBoundary<Result>(
   ctx: ExtensionCommandContext,
-  invoke: (ui: ExtensionCommandContext["ui"]) => unknown,
+  invoke: (ui: ExtensionCommandContext["ui"]) => Result,
 ): Promise<HostDialogResult> {
   try {
     return Promise.resolve(invoke(ctx.ui)).then(settled, () => UNAVAILABLE);

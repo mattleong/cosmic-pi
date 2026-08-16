@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -31,9 +32,9 @@ export class CosmicUiConfigError extends Schema.TaggedError<CosmicUiConfigError>
 
 const mapError = makeConfigDocumentErrorFactory(CosmicUiConfigError, "Cosmic UI");
 
-const stringArray = (candidate: unknown): readonly string[] | undefined =>
+const stringArray = <Candidate>(candidate: Candidate): readonly string[] | undefined =>
   Array.isArray(candidate)
-    ? candidate.filter((entry): entry is string => typeof entry === "string")
+    ? candidate.filter((entry): entry is string => isStringValue(entry))
     : undefined;
 
 export const configPaths = Effect.fn("pi-cosmic-ui.config.paths")(function* (
@@ -46,7 +47,7 @@ export const configPaths = Effect.fn("pi-cosmic-ui.config.paths")(function* (
   });
 });
 
-function decodeConfig(value: unknown): CosmicUiConfigFile {
+function decodeConfig<ValueInput>(value: ValueInput): CosmicUiConfigFile {
   const root = decodeTolerantFields(
     value,
     { footer: Schema.Record(Schema.String, Schema.Unknown) },
@@ -64,11 +65,14 @@ function decodeConfig(value: unknown): CosmicUiConfigFile {
   const order = stringArray(root.footer?.order);
   const hidden = stringArray(root.footer?.hidden);
   return {
-    footer: {
-      ...footer,
-      ...(order !== undefined ? { order } : {}),
-      ...(hidden !== undefined ? { hidden } : {}),
-    },
+    footer: (() => {
+      const objectPart2036_0 = { ...footer };
+      const objectPart2036_1 =
+        order !== undefined ? { ...objectPart2036_0, order } : objectPart2036_0;
+      const objectPart2036_2 =
+        hidden !== undefined ? { ...objectPart2036_1, hidden } : objectPart2036_1;
+      return objectPart2036_2;
+    })(),
   };
 }
 
@@ -151,8 +155,9 @@ const modifyFooterConfig = Effect.fn("pi-cosmic-ui.config.modify-footer")(functi
   return yield* modifyObject(fresh.configPath, (raw) =>
     Effect.try({
       try: () => {
+        // SAFETY: Configuration decoding validates the persisted value before this typed access.
         const currentFooter =
-          typeof raw.footer === "object" && raw.footer !== null && !Array.isArray(raw.footer)
+          hasObjectRuntimeType(raw.footer) && raw.footer !== null && !Array.isArray(raw.footer)
             ? (raw.footer as JsonObject)
             : {};
         const committed = { ...raw, footer: update(currentFooter, fresh) };
@@ -184,7 +189,15 @@ export const updateFooterConfig = Effect.fn("pi-cosmic-ui.config.update-footer")
   return yield* modifyFooterConfig(
     cwd,
     agentDir,
-    (footer) => ({ ...footer, ...patch }),
+    (footer) => {
+      const updated: JsonObject = { ...footer };
+      if (patch.enabled !== undefined) updated.enabled = patch.enabled;
+      if (patch.density !== undefined) updated.density = patch.density;
+      if (patch.order !== undefined) updated.order = [...patch.order];
+      if (patch.hidden !== undefined) updated.hidden = [...patch.hidden];
+      if (patch.mediaPlacement !== undefined) updated.mediaPlacement = patch.mediaPlacement;
+      return updated;
+    },
     projectTrusted,
     afterCommit,
   );
@@ -212,7 +225,7 @@ export const setFooterVisibility = Effect.fn("pi-cosmic-ui.config.set-visibility
   );
 });
 
-export interface CosmicUiConfigStoreShape {
+export interface CosmicUiConfigStoreContract {
   readonly resolve: (
     cwd: string,
     projectTrusted?: boolean,
@@ -235,7 +248,7 @@ export interface CosmicUiConfigStoreShape {
 /** The single Cosmic UI configuration persistence door. */
 export class CosmicUiConfigStore extends Context.Service<
   CosmicUiConfigStore,
-  CosmicUiConfigStoreShape
+  CosmicUiConfigStoreContract
 >()("pi-cosmic-ui/config/store/CosmicUiConfigStore") {
   static readonly layer = Layer.effect(
     this,

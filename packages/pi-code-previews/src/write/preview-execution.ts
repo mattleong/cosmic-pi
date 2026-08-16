@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -32,10 +33,10 @@ export class CodePreviewWriteError extends Schema.TaggedError<CodePreviewWriteEr
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-export function getCodePreviewBeforeWrite(
+export function getCodePreviewBeforeWrite<DetailsInput>(
   toolCallId: string | undefined,
-  details: unknown,
-): unknown {
+  details: DetailsInput,
+) {
   if (toolCallId) {
     const before = lookupBeforeWrite(toolCallId);
     if (before !== undefined) return before;
@@ -120,7 +121,8 @@ export function withCodePreviewBeforeWrite<T extends { details?: unknown }>(
   toolCallId?: string,
 ): Promise<WithCodePreviewWriteDetails<T>> {
   const details: object =
-    result.details !== null && typeof result.details === "object" ? result.details : {};
+    result.details !== null && hasObjectRuntimeType(result.details) ? result.details : {};
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const enriched = {
     ...result,
     details: { ...details, [CODE_PREVIEW_BEFORE_WRITE_DETAIL]: redactedBeforeWriteDetail(before) },

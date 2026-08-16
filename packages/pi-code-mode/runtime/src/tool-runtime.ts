@@ -1,3 +1,10 @@
+import {
+  hasObjectRuntimeType,
+  isBooleanValue,
+  isFunctionValue,
+  isNumberValue,
+  isStringValue,
+} from "./runtime-values.ts";
 import { Cause, Effect, Schema } from "effect";
 import {
   MAX_GUEST_COLLECTION_ENTRIES,
@@ -5,6 +12,13 @@ import {
   queryPairsUpperBound,
 } from "./interpreter/confinement.js";
 import { ToolError, toolError } from "./tool-error.js";
+import {
+  type InterpreterObject,
+  type InterpreterValue,
+  makeInterpreterObject,
+  ToolReference,
+} from "./interpreter/model.js";
+export { ToolReference } from "./interpreter/model.js";
 import {
   decodeInput as decodeToolInput,
   decodeOutput as decodeToolOutput,
@@ -40,7 +54,7 @@ type ServicesOf<Tools, Depth extends ReadonlyArray<unknown>> = Depth["length"] e
     ? R
     : Tools extends {
           readonly _tag: "CodeModeTool";
-          readonly run: (input: unknown) => Effect.Effect<unknown, unknown, infer R>;
+          readonly run: <Input>(input: Input) => Effect.Effect<unknown, unknown, infer R>;
         }
       ? R
       : Tools extends object
@@ -116,8 +130,6 @@ export type ToolDescription = {
   readonly signature: string;
 };
 
-export type SafeObject = Record<string, unknown>;
-
 const reservedNamespace = "$codemode";
 const defaultCatalogBudget = 2_000;
 const defaultSearchLimit = 10;
@@ -147,10 +159,6 @@ const toolExpression = (path: string) =>
       identifierSegment.test(segment) ? `.${segment}` : `[${JSON.stringify(segment)}]`,
     )
     .join("");
-
-export class ToolReference {
-  constructor(readonly path: ReadonlyArray<string>) {}
-}
 
 /**
  * Maximum nesting depth for values crossing a data boundary. Fixed (not a configurable
@@ -209,16 +217,19 @@ export const isBlockedMember = (name: string): boolean => blockedMemberNames.has
  *
  * Both modes reject un-awaited promises with an await-hinting diagnostic.
  */
-export const copyIn = (value: unknown, label: string, preserveSandboxValues = false): unknown =>
-  copyBounded(value, label, 0, new Set(), preserveSandboxValues);
+export const copyIn = <Value>(
+  value: Value,
+  label: string,
+  preserveSandboxValues = false,
+): InterpreterValue => copyBounded(value, label, 0, new Set(), preserveSandboxValues);
 
-const copyBounded = (
-  value: unknown,
+const copyBounded = <Value>(
+  value: Value,
   label: string,
   depth: number,
   seen: Set<object>,
   preserveSandboxValues: boolean,
-): unknown => {
+): InterpreterValue => {
   if (depth > MAX_VALUE_DEPTH) {
     throw new ToolRuntimeError(
       "InvalidDataValue",
@@ -227,7 +238,7 @@ const copyBounded = (
   }
   // Confinement: string leaves and collection sizes are bounded at every data checkpoint,
   // so amplified intermediates are refused wherever they first cross shared machinery.
-  if (typeof value === "string") {
+  if (isStringValue(value)) {
     if (value.length > MAX_GUEST_STRING_LENGTH) {
       throw new ToolRuntimeError(
         "InvalidDataValue",
@@ -236,20 +247,16 @@ const copyBounded = (
     }
     return value;
   }
-  if (
-    value === null ||
-    value === undefined ||
-    typeof value === "boolean" ||
-    // NaN/Infinity are allowed to exist as in-sandbox intermediates (matching real JS and a real
-    // engine) so defensive guards like `Number.isNaN(x)` / `parseInt(x) || 0` can run. They are
-    // normalized to `null` when the value leaves the sandbox - see copyOut - exactly as
-    // JSON.stringify already does at any tool boundary.
-    typeof value === "number"
-  ) {
-    return value;
-  }
+  if (value === null) return null;
+  if (value === undefined) return undefined;
+  if (isBooleanValue(value)) return value;
+  // NaN/Infinity are allowed to exist as in-sandbox intermediates (matching real JS and a real
+  // engine) so defensive guards like `Number.isNaN(x)` / `parseInt(x) || 0` can run. They are
+  // normalized to `null` when the value leaves the sandbox - see copyOut - exactly as
+  // JSON.stringify already does at any tool boundary.
+  if (isNumberValue(value)) return value;
 
-  if (typeof value !== "object") {
+  if (!hasObjectRuntimeType(value)) {
     throw new ToolRuntimeError("InvalidDataValue", `${label} must contain data only.`);
   }
 
@@ -340,7 +347,7 @@ const copyBounded = (
     value instanceof Set ||
     value instanceof URLSearchParams
   ) {
-    return Object.create(null) as SafeObject;
+    return makeInterpreterObject();
   }
 
   if (seen.has(value)) {
@@ -375,7 +382,7 @@ const copyBounded = (
       `${label} contains an object with ${entries.length} entries, over the CodeMode maximum of ${MAX_GUEST_COLLECTION_ENTRIES}.`,
     );
   }
-  const copied: SafeObject = Object.create(null) as SafeObject;
+  const copied = makeInterpreterObject();
   for (const [key, item] of entries) {
     if (isBlockedMember(key)) {
       throw new ToolRuntimeError(
@@ -389,19 +396,35 @@ const copyBounded = (
   return copied;
 };
 
-export const copyOut = (value: unknown, undefinedAsNull = false): unknown => {
+export interface SerializableObject {
+  [key: string]: SerializableValue;
+}
+export interface SerializableArray extends Array<SerializableValue> {}
+export type SerializableValue =
+  | undefined
+  | null
+  | string
+  | number
+  | boolean
+  | bigint
+  | symbol
+  | SerializableObject
+  | SerializableArray;
+
+export const copyOut = (value: InterpreterValue, undefinedAsNull = false): SerializableValue => {
   if (value === undefined && undefinedAsNull) return null;
   // Normalize non-finite numbers to null as the value crosses out of the sandbox (final return
   // and tool-call arguments both funnel through here), matching JSON semantics - NaN/Infinity
   // have no JSON representation, so JSON.stringify would produce null anyway.
-  if (typeof value === "number" && !Number.isFinite(value)) {
+  if (isNumberValue(value) && !Number.isFinite(value)) {
     return null;
   }
   if (Array.isArray(value)) {
     return value.map((item) => copyOut(item, undefinedAsNull));
   }
 
-  if (value !== null && typeof value === "object" && !(value instanceof ToolReference)) {
+  if (value instanceof ToolReference) return undefined;
+  if (value !== null && hasObjectRuntimeType(value)) {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [key, copyOut(item, undefinedAsNull)]),
     );
@@ -418,7 +441,7 @@ const definitions = <R>(
   for (const [name, value] of Object.entries(tools)) {
     const next = [...path, name];
     if (isDefinition(value)) entries.push({ path: next.join("."), definition: value });
-    else if (typeof value !== "function") entries.push(...definitions(value, next));
+    else if (!isFunctionValue(value)) entries.push(...definitions(value, next));
   }
   return entries;
 };
@@ -487,6 +510,7 @@ const makeSearchTool = (searchIndex: ReadonlyArray<SearchEntry>): Definition => 
   output: SearchOutput,
   run: (input) =>
     Effect.sync(() => {
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       const request = input as typeof SearchInput.Type;
       const query = request.query ?? "";
       const offset = request.offset ?? 0;
@@ -784,7 +808,7 @@ const namespaceKeys = <R>(
   for (const segment of path) {
     if (
       isBlockedMember(segment) ||
-      typeof value === "function" ||
+      isFunctionValue(value) ||
       isDefinition(value) ||
       !Object.hasOwn(value, segment)
     ) {
@@ -792,9 +816,10 @@ const namespaceKeys = <R>(
         "Object.keys(tools) lists the available namespaces; tools.$codemode.search({ query }) finds described tools.",
       ]);
     }
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     value = value[segment] as HostTool<R> | Definition<R> | HostTools<R>;
   }
-  if (typeof value === "function" || isDefinition(value)) return [];
+  if (isFunctionValue(value) || isDefinition(value)) return [];
   return Object.keys(value);
 };
 
@@ -807,7 +832,7 @@ const resolve = <R>(
   for (const segment of path) {
     if (
       isBlockedMember(segment) ||
-      typeof value === "function" ||
+      isFunctionValue(value) ||
       isDefinition(value) ||
       !Object.hasOwn(value, segment)
     ) {
@@ -815,14 +840,16 @@ const resolve = <R>(
         "Use tools.$codemode.search({ query }) to find available described tools.",
       ]);
     }
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     value = value[segment] as HostTool<R> | Definition<R> | HostTools<R>;
   }
 
-  if (typeof value !== "function" && !isDefinition(value)) {
-    throw new ToolRuntimeError("UnknownTool", `Tool '${path.join(".")}' is not callable.`);
+  if (isDefinition(value)) return value;
+  if (isFunctionValue(value)) {
+    // SAFETY: HostTools permits callable leaves only as HostTool values.
+    return value as HostTool<R>;
   }
-
-  return value;
+  throw new ToolRuntimeError("UnknownTool", `Tool '${path.join(".")}' is not callable.`);
 };
 
 export type ToolRuntime<R = never> = {
@@ -830,9 +857,9 @@ export type ToolRuntime<R = never> = {
   readonly calls: Array<ToolCall>;
   readonly invoke: (
     path: ReadonlyArray<string>,
-    args: Array<unknown>,
+    args: ReadonlyArray<InterpreterValue>,
     lifecycleId?: number,
-  ) => Effect.Effect<unknown, unknown, R>;
+  ) => Effect.Effect<InterpreterValue, unknown, R>;
   /** Enumerable namespace/tool names at one node of the callable tool tree; see `namespaceKeys`. */
   readonly keys: (path: ReadonlyArray<string>) => ReadonlyArray<string>;
 };
@@ -876,7 +903,7 @@ export const make = <R>(
     );
   };
 
-  const decodeOutput = (value: unknown, name: string) =>
+  const decodeOutput = <Value>(value: Value, name: string) =>
     Effect.try({
       try: () => copyIn(value, `Result from tool '${name}'`),
       catch: () => new ToolRuntimeError("InvalidToolOutput", `Invalid output from tool '${name}'.`),
@@ -903,19 +930,24 @@ export const make = <R>(
           copyOut(copyIn(arg, `Arguments for tool '${name}'`)),
         );
         const call = { name };
-        const recordAndObserve = (input: unknown) =>
+        const recordAndObserve = <Input>(input: Input) =>
           Effect.sync(() => {
             recordCall(call);
             return calls.length - 1;
           }).pipe(
             Effect.tap(
               (index) =>
-                hooks?.onToolCallStart?.({
-                  index,
-                  ...(lifecycleId === undefined ? {} : { lifecycleId }),
-                  name,
-                  input,
-                }) ?? Effect.void,
+                hooks?.onToolCallStart?.(
+                  (() => {
+                    const objectPart36478_0 = { index };
+                    const objectPart36478_1 =
+                      lifecycleId === undefined
+                        ? objectPart36478_0
+                        : { ...objectPart36478_0, lifecycleId };
+                    const objectPart36478_2 = { ...objectPart36478_1, name, input };
+                    return objectPart36478_2;
+                  })(),
+                ) ?? Effect.void,
             ),
           );
         const tool = resolve(callableTools, path);
@@ -937,12 +969,13 @@ export const make = <R>(
         }
         const input = isDefinition(tool) ? describedInput : externalArgs;
         const index = yield* recordAndObserve(input);
-        const currentCall = {
-          index,
-          ...(lifecycleId === undefined ? {} : { lifecycleId }),
-          name,
-          input,
-        };
+        const currentCall = (() => {
+          const objectPart37487_0 = { index };
+          const objectPart37487_1 =
+            lifecycleId === undefined ? objectPart37487_0 : { ...objectPart37487_0, lifecycleId };
+          const objectPart37487_2 = { ...objectPart37487_1, name, input };
+          return objectPart37487_2;
+        })();
         if (isDefinition(tool)) {
           return yield* observeEnd(
             Effect.gen(function* () {

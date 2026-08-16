@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import { notifyAtHostBoundary } from "pi-cosmic-core";
 
 export type AdvisorNotificationLevel = "info" | "warning" | "error";
-export interface HostNotifierShape {
+export interface HostNotifierContract {
   /** Mandatory synchronous Pi UI boundary; hostile callbacks are isolated here. */
   readonly notify: (
     ctx: Pick<ExtensionContext, "ui">,
@@ -13,7 +13,7 @@ export interface HostNotifierShape {
   ) => void;
 }
 
-export class HostNotifier extends Context.Service<HostNotifier, HostNotifierShape>()(
+export class HostNotifier extends Context.Service<HostNotifier, HostNotifierContract>()(
   "pi-advisor/boundary/host-notifier/HostNotifier",
 ) {}
 

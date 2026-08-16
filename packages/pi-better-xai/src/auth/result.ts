@@ -6,7 +6,7 @@ export const PositiveIntegerSchema = Schema.Number.check(
   Schema.isGreaterThan(0),
 );
 
-interface XaiAuthResultCredentials {
+export interface XaiAuthResultCredentials {
   readonly accessToken: string;
   readonly refreshToken?: string | undefined;
   readonly expires?: number | undefined;

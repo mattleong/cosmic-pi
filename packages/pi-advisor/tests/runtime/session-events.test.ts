@@ -14,14 +14,16 @@ import type {
   AdvisorChildEvent,
   AdvisorFinalizationCompletion,
 } from "../../src/runtime/types.ts";
+import { agentSessionFixture } from "../support/agent-session.ts";
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const makeIngress = <A>(offered: A[]): SynchronousIngress<A> =>
   ({
     offer: (value: A) => {
       offered.push(value);
       return "accepted";
     },
-  }) as unknown as SynchronousIngress<A>;
+  }) as SynchronousIngress<A>;
 
 const makeChild = (
   epoch: number,
@@ -49,7 +51,9 @@ const makeCheckpoint = (epoch: number): ActiveCheckpointFinalization => ({
 describe("Advisor session event epoch ownership", () => {
   it("balances an accepted source event after a child rollover", () => {
     const offered: AdvisorChildEvent[] = [];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const source = makeChild(1, {} as AgentSession, offered);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const successor = makeChild(2, {} as AgentSession);
     let epoch = 1;
     let activeChild: ActiveAdvisorChild | undefined = source;
@@ -65,6 +69,7 @@ describe("Advisor session event epoch ownership", () => {
       recordUsage: vi.fn(),
     });
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     events.observeChildEvent(source, {
       type: "message_update",
       assistantMessageEvent: { type: "text_delta", delta: "queued" },
@@ -90,7 +95,7 @@ describe("Advisor session event epoch ownership", () => {
           }),
       );
       const finalizations: AdvisorFinalizationCompletion[] = [];
-      const session = { isStreaming: true, followUp } as unknown as AgentSession;
+      const session = agentSessionFixture({ isStreaming: true, followUp });
       const child = makeChild(1, session, [], finalizations);
       const originating = makeCheckpoint(1);
       const successor = makeCheckpoint(2);
@@ -107,10 +112,12 @@ describe("Advisor session event epoch ownership", () => {
         recordUsage: vi.fn(),
       });
 
-      events.observeChildEvent(child, {
-        type: "message_end",
-        message: { role: "assistant", content: [], stopReason: "stop" },
-      } as unknown as AgentSessionEvent);
+      const eventFixture = {
+        type: "message_end" as const,
+        message: { role: "assistant" as const, content: [], stopReason: "stop" as const },
+      };
+      // SAFETY: The message_end observer reads only the fields supplied by this fixture.
+      events.observeChildEvent(child, eventFixture as typeof eventFixture & AgentSessionEvent);
       expect(followUp).toHaveBeenCalledWith("finalize-1");
 
       epoch = 2;

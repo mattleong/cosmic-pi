@@ -23,11 +23,14 @@ import {
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
 import { isExactShikiCacheHit } from "../../src/syntax/render";
 
-const highlighter = (dispose: () => void) =>
-  ({
+const highlighter = (dispose: () => void) => {
+  const fixture = {
     dispose,
     codeToTokensBase: (code: string) => [[{ content: code, color: "#ffffff" }]],
-  }) as unknown as ShikiHighlighter;
+  };
+  // SAFETY: Syntax tests invoke only dispose and codeToTokensBase on this fixture.
+  return fixture as typeof fixture & ShikiHighlighter;
+};
 
 describe("session syntax service", () => {
   it.effect("treats hashes as indexes and exact source as identity", () =>

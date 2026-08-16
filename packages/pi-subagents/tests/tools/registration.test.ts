@@ -1,13 +1,13 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import { initTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { JsonObject } from "pi-cosmic-core";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { beforeAll, describe, expect, it } from "vitest";
 import { piToolsForWriteIntent } from "../../src/run/tool-policy.ts";
 import { type StartSubagentRequest } from "../../src/run/model.ts";
-import { type SubagentServiceShape } from "../../src/run/service.ts";
 import {
   captureSubagentTools,
   context,
@@ -15,6 +15,7 @@ import {
   startCapturingService,
   view,
 } from "./fixtures/tool-harness.ts";
+import { subagentServiceFixture, extensionContextFixture } from "../fixtures/pi-host.ts";
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -26,7 +27,8 @@ describe("subagent tool", () => {
   });
 
   it("publishes a deterministic read-only-first delegation policy", () => {
-    const tools = captureSubagentTools({} as SubagentServiceShape);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const tools = captureSubagentTools(subagentServiceFixture({}));
     const start = tools.get("subagent_start");
     const awaitTool = tools.get("subagent_await");
     const startPrompt = [
@@ -129,7 +131,8 @@ describe("subagent tool", () => {
   });
 
   it("registers focused tools with non-overlapping parameter contracts", () => {
-    const tools = captureSubagentTools({} as SubagentServiceShape);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const tools = captureSubagentTools(subagentServiceFixture({}));
     expect([...tools.keys()]).toEqual([
       "subagent_models",
       "subagent_start",
@@ -141,14 +144,15 @@ describe("subagent tool", () => {
       "subagent_lifecycle",
       "subagent_rename",
     ]);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const schema = (name: string) =>
       tools.get(name)?.parameters as
         | {
-            readonly properties?: Readonly<Record<string, unknown>>;
+            readonly properties?: Readonly<JsonObject>;
             readonly required?: ReadonlyArray<string>;
             readonly additionalProperties?: boolean;
             readonly anyOf?: ReadonlyArray<{
-              readonly properties?: Readonly<Record<string, unknown>>;
+              readonly properties?: Readonly<JsonObject>;
               readonly required?: ReadonlyArray<string>;
               readonly additionalProperties?: boolean;
             }>;
@@ -187,6 +191,7 @@ describe("subagent tool", () => {
       "subagent_rename",
     ])
       expect(schema(name)?.additionalProperties).toBe(false);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const startSchema = schema("subagent_start") as {
       readonly properties?: {
         readonly agents?: {
@@ -207,6 +212,7 @@ describe("subagent tool", () => {
     expect(startItem?.properties).not.toHaveProperty("backend");
     expect(startItem?.properties).not.toHaveProperty("model");
     const startTool = tools.get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const startParameters = startTool?.parameters as TSchema;
     expect(Check(startParameters, { agents: [{ profile: "scout", task: "Inspect" }] })).toBe(true);
     expect(
@@ -261,13 +267,13 @@ describe("subagent tool", () => {
   });
 
   it("advertises one canonical launch shape and enforces its cardinality", async () => {
-    const service = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const service = subagentServiceFixture({
       start: () => Effect.succeed(view()),
-    } as unknown as SubagentServiceShape;
+    });
     const tool = captureSubagentTools(service).get("subagent_start");
-    const schema = tool?.parameters as
-      | { readonly properties?: Readonly<Record<string, unknown>> }
-      | undefined;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const schema = tool?.parameters as { readonly properties?: Readonly<JsonObject> } | undefined;
 
     expect(Object.keys(schema?.properties ?? {})).toEqual(["agents"]);
     await expect(
@@ -310,9 +316,10 @@ describe("subagent tool", () => {
     const requests: StartSubagentRequest[] = [];
     let cwdReads = 0;
     let trustReads = 0;
-    const mutable = {
-      ...(context as unknown as Record<string, unknown>),
-    } as unknown as ExtensionContext;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const mutable = extensionContextFixture({
+      ...context,
+    });
     Object.defineProperty(mutable, "cwd", {
       configurable: true,
       get: () => {

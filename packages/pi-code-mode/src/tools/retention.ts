@@ -6,11 +6,18 @@ export interface FailureDetailsRetention {
   readonly consume: (toolCallId: string) => CodeModeToolDetails | undefined;
 }
 
-export const copyCodeModeToolDetails = (details: CodeModeToolDetails): CodeModeToolDetails => ({
-  ...details,
-  toolCalls: details.toolCalls.map((call) => ({ ...call })),
-  ...(details.counts === undefined ? {} : { counts: { ...details.counts } }),
-});
+export const copyCodeModeToolDetails = (details: CodeModeToolDetails): CodeModeToolDetails =>
+  (() => {
+    const objectPart445_0 = {
+      ...details,
+      toolCalls: details.toolCalls.map((call) => ({ ...call })),
+    };
+    const objectPart445_1 =
+      details.counts === undefined
+        ? objectPart445_0
+        : { ...objectPart445_0, counts: { ...details.counts } };
+    return objectPart445_1;
+  })();
 
 export const applyRetainedCodeModeFailureDetails = (
   retention: FailureDetailsRetention,
@@ -28,6 +35,7 @@ export const makeFailureDetailsRetention = (capacity = 16): FailureDetailsRetent
       retained.delete(toolCallId);
       retained.set(toolCallId, copyCodeModeToolDetails(details));
       while (retained.size > capacity) {
+        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
         const oldest = retained.keys().next().value as string | undefined;
         if (oldest === undefined) break;
         retained.delete(oldest);

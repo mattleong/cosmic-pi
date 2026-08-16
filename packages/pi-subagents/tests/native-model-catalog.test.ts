@@ -4,6 +4,7 @@
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +29,7 @@ const processExists = (pid: number): boolean => {
     return true;
   } catch (error) {
     return !(
-      typeof error === "object" &&
+      hasObjectRuntimeType(error) &&
       error !== null &&
       "code" in error &&
       error.code === "ESRCH"

@@ -66,10 +66,12 @@ describe("Code Mode progress animation", () => {
 
   it("keeps hostile partial details inside Code Mode's fail-soft renderer", () => {
     const startTicker = vi.fn(() => () => {});
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       bold: (text: string) => text,
       fg: (_key: string, text: string) => text,
     } as Theme;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const tool = buildCodeModeToolDefinition({
       catalogBudget: 500,
       execute: vi.fn() as never,
@@ -82,6 +84,7 @@ describe("Code Mode progress animation", () => {
       },
     };
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect(() =>
       tool.renderResult?.(hostile as never, { expanded: false, isPartial: true }, theme, {
         expanded: false,
@@ -98,15 +101,18 @@ describe("Code Mode progress animation", () => {
     const startTicker = vi.fn(() => stop);
     const invalidate = vi.fn();
     const state = {};
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       bold: (text: string) => text,
       fg: (_key: string, text: string) => text,
     } as Theme;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const tool = buildCodeModeToolDefinition({
       catalogBudget: 500,
       execute: vi.fn() as never,
       startUiTicker: startTicker,
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const context = { expanded: false, isError: false, state, invalidate } as never;
     const running = {
       content: [{ type: "text" as const, text: "working" }],

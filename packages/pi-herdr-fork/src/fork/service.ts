@@ -1,3 +1,4 @@
+import { isNumberValue } from "pi-cosmic-core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -60,7 +61,7 @@ export interface HerdrForkResult {
   readonly prompted: boolean;
 }
 
-export interface HerdrForkServiceShape {
+export interface HerdrForkServiceContract {
   readonly open: (prompt?: string | undefined) => Effect.Effect<HerdrForkResult, HerdrForkError>;
 }
 
@@ -120,7 +121,7 @@ const paneHasAvailableShell = (processInfo: HerdrPaneProcessInfo): boolean => {
   const foregroundProcesses = processInfo.foreground_processes ?? [];
   const foregroundProcess = foregroundProcesses[0];
   return (
-    typeof shellPid === "number" &&
+    isNumberValue(shellPid) &&
     processInfo.foreground_process_group_id === shellPid &&
     foregroundProcesses.length === 1 &&
     foregroundProcess?.pid === shellPid &&
@@ -203,12 +204,12 @@ const validateStartedAgent = (
 export const makeHerdrForkService = (
   input: HerdrForkSessionInput,
   options: HerdrForkServiceOptions = {},
-): HerdrForkServiceShape => {
+): HerdrForkServiceContract => {
   const runner = options.runner ?? makeHerdrCommandRunner(input.environment);
   const validateSessionFile = options.validateSessionFile ?? isValidParentSessionFile;
   const readinessDelay = options.readinessDelay ?? Effect.sleep;
 
-  const open: HerdrForkServiceShape["open"] = (prompt) =>
+  const open: HerdrForkServiceContract["open"] = (prompt) =>
     Effect.gen(function* () {
       const { sessionFile, sessionId } = yield* validateInput(prompt, input, validateSessionFile);
 
@@ -389,7 +390,7 @@ export const makeHerdrForkService = (
   return { open };
 };
 
-export class HerdrForkService extends Context.Service<HerdrForkService, HerdrForkServiceShape>()(
+export class HerdrForkService extends Context.Service<HerdrForkService, HerdrForkServiceContract>()(
   "pi-herdr-fork/fork/service/HerdrForkService",
 ) {
   static readonly layer = (

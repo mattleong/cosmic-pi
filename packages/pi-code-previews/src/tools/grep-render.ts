@@ -113,6 +113,7 @@ function grepMatchRanges(
 }
 
 function getToolBackground(theme: Theme): string {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const themed = theme as Theme & { getBgAnsi?: (key: string) => string };
   try {
     return themed.getBgAnsi?.("toolSuccessBg") ?? "";

@@ -22,7 +22,7 @@ import {
   type SessionProfileSnapshot,
 } from "./session-overrides.ts";
 
-export interface SubagentProfileServiceShape {
+export interface SubagentProfileServiceContract {
   readonly capture: Effect.Effect<SessionProfileSnapshot>;
   readonly definition: (profile: string) => ProfileDefinition | undefined;
   readonly resolve: (
@@ -40,10 +40,10 @@ export interface SubagentProfileServiceShape {
 
 export class SubagentProfileService extends Context.Service<
   SubagentProfileService,
-  SubagentProfileServiceShape
+  SubagentProfileServiceContract
 >()("pi-subagents/profiles/service/SubagentProfileService") {
   static override readonly use = <A, E>(
-    f: (service: SubagentProfileServiceShape) => Effect.Effect<A, E>,
+    f: (service: SubagentProfileServiceContract) => Effect.Effect<A, E>,
   ) => Effect.flatMap(this, f);
 }
 
@@ -74,7 +74,7 @@ export const makeSubagentProfileService = (
     SubagentProfileLayerOptions,
     "initialSessionOverrides" | "publishSessionOverrides"
   > = {},
-): Effect.Effect<SubagentProfileServiceShape> =>
+): Effect.Effect<SubagentProfileServiceContract> =>
   Effect.gen(function* () {
     const state = yield* SynchronizedRef.make(
       makeSessionProfileSnapshot(config, options.initialSessionOverrides),

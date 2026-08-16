@@ -28,7 +28,7 @@ export {
   SafeFile,
   SafeFileError,
   type SafeFileResult,
-  type SafeFileShape,
+  type SafeFileContract,
 } from "./src/platform/safe-file.ts";
 export {
   readSchemaDocument,
@@ -36,12 +36,13 @@ export {
   type DecodedDocument,
 } from "./src/platform/schema-document.ts";
 export {
-  type AtomicJsonDocumentStoreShape,
+  type AtomicJsonDocumentStoreContract,
   isJsonObject,
   JsonDocumentStore,
   type JsonDocumentModification,
-  type JsonDocumentStoreShape,
+  type JsonDocumentStoreContract,
   type JsonObject,
+  type JsonValue,
 } from "./src/platform/json-document.ts";
 export {
   abbreviateHomePath,
@@ -54,7 +55,7 @@ export {
 export {
   JsonHttpClient,
   type JsonHttpAcceptedResponse,
-  type JsonHttpClientShape,
+  type JsonHttpClientContract,
   type JsonHttpRejectedResponse,
   type JsonHttpRequest,
   type JsonHttpRequestInput,
@@ -63,7 +64,7 @@ export {
 } from "./src/platform/json-http.ts";
 export {
   ProcessCoordinator,
-  type ProcessCoordinatorShape,
+  type ProcessCoordinatorContract,
 } from "./src/platform/process-coordinator.ts";
 export {
   decodeTolerantFields,
@@ -146,6 +147,17 @@ export {
   type FrozenProjection,
 } from "./src/projection.ts";
 export {
+  hasObjectRuntimeType,
+  isBigIntValue,
+  isBooleanValue,
+  isFunctionValue,
+  isNumberValue,
+  isStringValue,
+  isSymbolValue,
+  runtimeTypeName,
+  type RuntimeTypeName,
+} from "./src/runtime-values.ts";
+export {
   makeSynchronousIngress,
   SynchronousIngressError,
   type SynchronousIngress,
@@ -155,7 +167,7 @@ export {
 } from "./src/coordination/synchronous-ingress.ts";
 export {
   StreamingHttpClient,
-  type StreamingHttpClientShape,
+  type StreamingHttpClientContract,
   type StreamingHttpRequest,
   type StreamingJsonBodyCodec,
   type StreamingHttpResponse,

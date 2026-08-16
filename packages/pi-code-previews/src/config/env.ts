@@ -68,6 +68,7 @@ export type CodePreviewEnvironment = Readonly<
   Record<(typeof ENVIRONMENT_KEYS)[number], string | undefined>
 >;
 
+// SAFETY: Configuration decoding validates the persisted value before this typed access.
 const description = Config.all(
   Object.fromEntries(ENVIRONMENT_KEYS.map((key) => [key, Config.option(Config.string(key))])) as {
     [K in (typeof ENVIRONMENT_KEYS)[number]]: Config.Config<Option.Option<string>>;
@@ -75,15 +76,15 @@ const description = Config.all(
 );
 
 /** Decoded exactly once by the session environment Layer. */
+// SAFETY: Configuration decoding validates the persisted value before this typed access.
 export const loadCodePreviewEnvironment = description.pipe(
-  Effect.map(
-    (values) =>
-      Object.freeze(
-        Object.fromEntries(
-          ENVIRONMENT_KEYS.map((key) => [key, Option.getOrUndefined(values[key])]),
-        ),
-      ) as CodePreviewEnvironment,
-  ),
+  Effect.map((values) => {
+    const entries = Object.fromEntries(
+      ENVIRONMENT_KEYS.map((key) => [key, Option.getOrUndefined(values[key])]),
+    );
+    // SAFETY: ENVIRONMENT_KEYS enumerates every required key and each mapped value is string | undefined.
+    return Object.freeze(entries) as CodePreviewEnvironment;
+  }),
 );
 
 export interface CodePreviewPerformanceConfig {
@@ -131,15 +132,20 @@ const PERFORMANCE_ENVIRONMENT_KEYS: Readonly<
 export function performanceConfigFromEnvironment(
   environment: CodePreviewEnvironment,
 ): CodePreviewPerformanceConfig {
-  return Object.freeze(
-    Object.fromEntries(
-      Object.entries(PERFORMANCE_ENVIRONMENT_KEYS).map(([field, key]) => [
-        field,
-        parsePositiveInteger(environment[key]) ??
-          defaultCodePreviewPerformanceConfig[field as keyof CodePreviewPerformanceConfig],
-      ]),
-    ) as unknown as CodePreviewPerformanceConfig,
-  );
+  const value = <Key extends keyof CodePreviewPerformanceConfig>(key: Key): number =>
+    parsePositiveInteger(environment[PERFORMANCE_ENVIRONMENT_KEYS[key]]) ??
+    defaultCodePreviewPerformanceConfig[key];
+  return Object.freeze({
+    asyncRenderChars: value("asyncRenderChars"),
+    maxHighlightChars: value("maxHighlightChars"),
+    cacheLimit: value("cacheLimit"),
+    cacheCharLimit: value("cacheCharLimit"),
+    contentLanguageDetectionChars: value("contentLanguageDetectionChars"),
+    diffWrapRows: value("diffWrapRows"),
+    secretScanChars: value("secretScanChars"),
+    maxWriteDiffBytes: value("maxWriteDiffBytes"),
+    maxWriteDiffChangedLineCells: value("maxWriteDiffChangedLineCells"),
+  });
 }
 
 export function publishCodePreviewEnvironmentProjection(
@@ -150,7 +156,7 @@ export function publishCodePreviewEnvironmentProjection(
   codePreviewToolsEnvironmentValue = tools;
 }
 
-export interface CodePreviewEnvironmentShape {
+export interface CodePreviewEnvironmentContract {
   readonly values: CodePreviewEnvironment;
   readonly defaults: CodePreviewSettings;
   readonly performance: CodePreviewPerformanceConfig;
@@ -158,7 +164,7 @@ export interface CodePreviewEnvironmentShape {
 
 export class CodePreviewEnvironmentService extends Context.Service<
   CodePreviewEnvironmentService,
-  CodePreviewEnvironmentShape
+  CodePreviewEnvironmentContract
 >()("pi-code-previews/config/env/CodePreviewEnvironmentService") {
   static readonly layer = Layer.effect(
     this,

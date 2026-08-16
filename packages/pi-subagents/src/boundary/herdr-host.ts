@@ -54,7 +54,7 @@ export interface HerdrHostedAgent {
   readonly close: Effect.Effect<void, SubagentProcessError>;
 }
 
-export interface HerdrHostShape {
+export interface HerdrHostContract {
   readonly preflight: (input: {
     readonly runtime: SubagentRuntime;
     readonly context: "fresh" | "fork";
@@ -825,12 +825,12 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
       }),
     );
 
-  const launch: HerdrHostShape["launch"] = (runtime, request, supervisor) =>
+  const launch: HerdrHostContract["launch"] = (runtime, request, supervisor) =>
     Effect.acquireRelease(acquire(runtime, request, supervisor), (hosted) =>
       hosted.close.pipe(Effect.orDie),
     );
 
-  const preflight: HerdrHostShape["preflight"] = (input) =>
+  const preflight: HerdrHostContract["preflight"] = (input) =>
     Effect.gen(function* () {
       if (input.context !== "fresh")
         return yield* readinessError(
@@ -868,7 +868,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   return HerdrHost.of({ preflight, launch });
 });
 
-export class HerdrHost extends Context.Service<HerdrHost, HerdrHostShape>()(
+export class HerdrHost extends Context.Service<HerdrHost, HerdrHostContract>()(
   "pi-subagents/boundary/herdr-host/HerdrHost",
 ) {
   static readonly layer = Layer.effect(this, makeHerdrHost());

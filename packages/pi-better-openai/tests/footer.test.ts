@@ -4,12 +4,15 @@
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/floatingEffect:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
+import { isFunctionValue } from "pi-cosmic-core";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   initTheme,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
@@ -20,15 +23,17 @@ import { abbreviateHomePath, createFooterController } from "../src/footer/contro
 import { textPanel } from "../src/settings/picker.ts";
 import { makeProjection } from "../src/usage/index.ts";
 import { makeResolvedConfig } from "./helpers.ts";
+import { normalizeCosmicUiHostQuery } from "pi-cosmic-ui/protocol";
 
-type EventHandler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
+type EventHandler = ExtensionHandler<any, any>;
+type BusHandler = Parameters<ExtensionAPI["events"]["on"]>[1];
 type CommandHandler = (args: string, ctx: ExtensionContext) => void | Promise<void>;
 type CommandCompletion = (
   prefix: string,
 ) => Array<{ value: string; label: string; description?: string }> | null;
 
 type Harness = {
-  ctx: ExtensionContext;
+  ctx: ExtensionCommandContext;
   handlers: Map<string, EventHandler[]>;
   commands: Map<string, CommandHandler>;
   completions: Map<string, CommandCompletion | undefined>;
@@ -80,7 +85,7 @@ function writeProjectConfig(
 
 function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Harness {
   const handlers = new Map<string, EventHandler[]>();
-  const eventHandlers = new Map<string, Set<(data: unknown) => void>>();
+  const eventHandlers = new Map<string, Set<BusHandler>>();
   const cosmicEvents: Array<{ channel: string; data: unknown }> = [];
   const commands = new Map<string, CommandHandler>();
   const completions = new Map<string, CommandCompletion | undefined>();
@@ -99,15 +104,14 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
     eventHandlers.set(
       "cosmic-ui:v1:host:query",
       new Set([
-        (data: unknown) => {
-          const query = data as { respond?: () => void };
-          query.respond?.();
+        (data) => {
+          normalizeCosmicUiHostQuery(data)?.respond();
         },
       ]),
     );
   }
 
-  const pi = {
+  const piFixture = {
     on(event: string, handler: EventHandler) {
       const currentHandlers = handlers.get(event) ?? [];
       currentHandlers.push(handler);
@@ -127,20 +131,22 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
     getFlag: vi.fn(() => false),
     getThinkingLevel,
     events: {
-      emit(channel: string, data: unknown) {
+      emit<DataInput>(channel: string, data: DataInput) {
         cosmicEvents.push({ channel, data });
         for (const handler of eventHandlers.get(channel) ?? []) handler(data);
       },
-      on(channel: string, handler: (data: unknown) => void) {
+      on(channel: string, handler: BusHandler) {
         const channelHandlers = eventHandlers.get(channel) ?? new Set();
         channelHandlers.add(handler);
         eventHandlers.set(channel, channelHandlers);
         return () => channelHandlers.delete(handler);
       },
     },
-  } as unknown as ExtensionAPI;
+  };
+  // SAFETY: Better OpenAI registration uses only the ExtensionAPI methods implemented here.
+  const pi = piFixture as typeof piFixture & ExtensionAPI;
 
-  const ctx = {
+  const contextFixture = {
     cwd,
     isProjectTrusted: () => true,
     mode: "tui",
@@ -163,7 +169,9 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
       isUsingOAuth: vi.fn(() => false),
     },
     getContextUsage,
-  } as unknown as ExtensionContext;
+  };
+  // SAFETY: This harness supplies every context member exercised by events and commands.
+  const ctx = contextFixture as typeof contextFixture & ExtensionCommandContext;
 
   betterOpenAI(pi);
 
@@ -186,10 +194,10 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
   };
 }
 
-async function emit(harness: Harness, event: string, payload: unknown = {}) {
+async function emit<PayloadInput>(harness: Harness, event: string, payload?: PayloadInput) {
   const handlers = harness.handlers.get(event) ?? [];
   for (const handler of handlers) {
-    await handler(payload, harness.ctx);
+    await handler(payload ?? {}, harness.ctx);
   }
 }
 
@@ -761,7 +769,7 @@ describe("footer mode ownership", () => {
     const requestRender = vi.fn();
     let controller: ReturnType<typeof createFooterController>;
     const setFooter = vi.fn((factory) => {
-      if (typeof factory === "function") {
+      if (isFunctionValue(factory)) {
         component = factory(
           { requestRender },
           { fg: (_color: string, value: string) => value },
@@ -775,7 +783,7 @@ describe("footer mode ownership", () => {
       mode = "replace";
       controller.update(ctx);
     });
-    const ctx = {
+    const contextFixture = {
       mode: "tui",
       hasUI: true,
       model: undefined,
@@ -788,7 +796,10 @@ describe("footer mode ownership", () => {
       },
       modelRegistry: { isUsingOAuth: () => false },
       getContextUsage: () => ({ contextWindow: 100_000, percent: 0 }),
-    } as unknown as ExtensionContext;
+    };
+    // SAFETY: Footer projection reads only the context fields implemented by this fixture.
+    const ctx = contextFixture as typeof contextFixture & ExtensionContext;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     controller = createFooterController({
       pi: { getThinkingLevel: () => "off" } as ExtensionAPI,
       config: () => makeResolvedConfig({ footer: { mode } }),

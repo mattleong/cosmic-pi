@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
@@ -96,11 +97,11 @@ export type RpcChildEnvelope =
   | Schema.Schema.Type<typeof ExtensionUiRequestSchema>
   | { readonly type: "ignored"; readonly eventType: string };
 
-export const decodeContactParentEnvelope = (value: unknown) =>
+export const decodeContactParentEnvelope = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(ContactParentSchema)(value);
 
-export function decodeRpcEnvelope(
-  value: unknown,
+export function decodeRpcEnvelope<ValueInput>(
+  value: ValueInput,
 ): Effect.Effect<RpcChildEnvelope, Schema.SchemaError> {
   return Effect.gen(function* () {
     const discriminant = yield* Schema.decodeUnknownEffect(RpcDiscriminantSchema)(value);
@@ -161,11 +162,11 @@ const RpcStateDataSchema = Schema.Struct({
 
 export type RpcStateData = Schema.Schema.Type<typeof RpcStateDataSchema>;
 
-export const decodeRpcStateData = (value: unknown) =>
+export const decodeRpcStateData = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(RpcStateDataSchema)(value);
 
 export const rpcStateModelId = (model: RpcStateData["model"]): string | undefined =>
-  typeof model === "string" ? model : model ? `${model.provider}/${model.id}` : undefined;
+  isStringValue(model) ? model : model ? `${model.provider}/${model.id}` : undefined;
 
 const UsageTokenSchema = Schema.Number.check(
   Schema.isFinite(),
@@ -186,7 +187,7 @@ const UsageSchema = Schema.Struct({
   ),
 });
 export type RpcUsage = Schema.Schema.Type<typeof UsageSchema>;
-export const decodeRpcUsageOption = (value: unknown): RpcUsage | undefined => {
+export const decodeRpcUsageOption = <ValueInput>(value: ValueInput): RpcUsage | undefined => {
   const decoded = Schema.decodeUnknownOption(UsageSchema)(value);
   return decoded._tag === "Some" ? decoded.value : undefined;
 };
@@ -200,7 +201,7 @@ const AssistantMessageSchema = Schema.Struct({
 const MessageDiscriminantSchema = Schema.Struct({ role: Schema.optional(Schema.String) });
 
 export const decodeAssistantMessage = Effect.fn("SubagentProtocol.decodeAssistantMessage")(
-  function* (value: unknown) {
+  function* <ValueInput>(value: ValueInput) {
     const discriminant = yield* Schema.decodeUnknownEffect(MessageDiscriminantSchema)(value);
     if (discriminant.role !== "assistant") return undefined;
     return yield* Schema.decodeUnknownEffect(AssistantMessageSchema)(value);

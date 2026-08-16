@@ -58,11 +58,12 @@ if (cpuBlockMs > regressionLimitMs)
 if (cpuBlockMs > 50)
   throw new Error(`Representative deferred diff blocked for ${cpuBlockMs.toFixed(3)}ms`);
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const capability = {
   token: 1,
   run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
   fork: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runFork(effect),
-} as unknown as CodePreviewSessionCapability;
+} as CodePreviewSessionCapability;
 installCodePreviewSessionCapability(capability);
 const cancellationSamplesMs: number[] = [];
 let computed = false;

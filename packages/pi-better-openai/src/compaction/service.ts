@@ -39,7 +39,7 @@ export class OpenAICompactionError extends Schema.TaggedError<OpenAICompactionEr
 const compactionError = (operation: OpenAICompactionError["operation"], message: string) =>
   new OpenAICompactionError({ operation, message });
 
-export interface OpenAICompactionServiceShape {
+export interface OpenAICompactionServiceContract {
   readonly compact: (
     event: SessionBeforeCompactEvent,
   ) => Effect.Effect<
@@ -49,12 +49,17 @@ export interface OpenAICompactionServiceShape {
   readonly filterContext: (
     messages: ContextEvent["messages"],
   ) => Effect.Effect<ContextEvent["messages"] | undefined, OpenAICompactionError>;
-  readonly inject: (payload: unknown) => Effect.Effect<unknown | undefined, OpenAICompactionError>;
+  readonly inject: <Payload>(
+    payload: Payload,
+  ) => Effect.Effect<
+    ReturnType<typeof injectOpenAICompactionCheckpoint<Payload>>,
+    OpenAICompactionError
+  >;
 }
 
 export class OpenAICompactionService extends Context.Service<
   OpenAICompactionService,
-  OpenAICompactionServiceShape
+  OpenAICompactionServiceContract
 >()("pi-better-openai/compaction/service/OpenAICompactionService") {
   static layer(options: {
     readonly context: MutableRef.MutableRef<ExtensionContext>;
@@ -79,7 +84,7 @@ export class OpenAICompactionService extends Context.Service<
               compactionError("context", "Unable to read the current Pi session context."),
           });
         });
-        const compact: OpenAICompactionServiceShape["compact"] = Effect.fn(
+        const compact: OpenAICompactionServiceContract["compact"] = Effect.fn(
           "OpenAICompaction.compact",
         )(function* (event) {
           const config = MutableRef.get(options.projection).config;
@@ -111,11 +116,15 @@ export class OpenAICompactionService extends Context.Service<
           ]
             .filter((value): value is string => Boolean(value))
             .join("\n\n");
-          const result = yield* client.compact({
-            model,
-            input,
-            ...(instructions ? { instructions } : {}),
-          });
+          const result = yield* client.compact(
+            (() => {
+              const objectPart4544_0 = { model, input };
+              const objectPart4544_1 = instructions
+                ? { ...objectPart4544_0, instructions }
+                : objectPart4544_0;
+              return objectPart4544_1;
+            })(),
+          );
           const now = yield* Clock.currentTimeMillis;
           const checkpoint: OpenAICompactionCheckpoint = {
             version: 1,
@@ -135,7 +144,7 @@ export class OpenAICompactionService extends Context.Service<
             details: { type: OPENAI_COMPACTION_DETAILS_TYPE, checkpoint },
           } satisfies CompactionResult;
         });
-        const filterContext: OpenAICompactionServiceShape["filterContext"] = Effect.fn(
+        const filterContext: OpenAICompactionServiceContract["filterContext"] = Effect.fn(
           "OpenAICompaction.filterContext",
         )(function* (messages) {
           const config = MutableRef.get(options.projection).config;
@@ -167,25 +176,23 @@ export class OpenAICompactionService extends Context.Service<
             ? undefined
             : messages.filter((_message, index) => index !== summaryIndex);
         });
-        const inject: OpenAICompactionServiceShape["inject"] = Effect.fn("OpenAICompaction.inject")(
-          function* (payload) {
-            const config = MutableRef.get(options.projection).config;
-            if (!config?.compaction.enabled) return undefined;
-            const current = yield* Effect.try({
-              try: () => {
-                const ctx = MutableRef.get(options.context);
-                return { model: ctx.model, branch: ctx.sessionManager.getBranch() };
-              },
-              catch: () =>
-                compactionError("context", "Unable to read the current Pi session branch."),
-            });
-            if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
-            const active = findActiveOpenAICompactionCheckpoint(current.branch, current.model);
-            return active
-              ? injectOpenAICompactionCheckpoint(payload, active.checkpoint)
-              : undefined;
-          },
-        );
+        const inject: OpenAICompactionServiceContract["inject"] = Effect.fn(
+          "OpenAICompaction.inject",
+        )(function* (payload) {
+          const config = MutableRef.get(options.projection).config;
+          if (!config?.compaction.enabled) return undefined;
+          const current = yield* Effect.try({
+            try: () => {
+              const ctx = MutableRef.get(options.context);
+              return { model: ctx.model, branch: ctx.sessionManager.getBranch() };
+            },
+            catch: () =>
+              compactionError("context", "Unable to read the current Pi session branch."),
+          });
+          if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
+          const active = findActiveOpenAICompactionCheckpoint(current.branch, current.model);
+          return active ? injectOpenAICompactionCheckpoint(payload, active.checkpoint) : undefined;
+        });
         return OpenAICompactionService.of({ compact, filterContext, inject });
       }),
     );

@@ -1,6 +1,6 @@
 // Pi command handlers are Promise-shaped test boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import {
   normalizeAdvisorConfig,
@@ -18,21 +18,19 @@ function harness(
   ),
 ) {
   let config = initial;
-  const commands = new Map<
-    string,
-    {
-      handler: (args: string, ctx: ExtensionCommandContext) => unknown;
-      getArgumentCompletions?: (prefix: string) => unknown;
-    }
-  >();
+  const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
   const persist = vi.fn(async (patch: AdvisorConfigPatch) => {
     const raw = patchAdvisorConfig(
-      {
-        enabled: config.enabled,
-        setupDismissed: config.setupDismissed,
-        ...(config.provider ? { provider: config.provider } : {}),
-        ...(config.model ? { model: config.model } : {}),
-      },
+      (() => {
+        const objectPart1047_0 = { enabled: config.enabled, setupDismissed: config.setupDismissed };
+        const objectPart1047_1 = config.provider
+          ? { ...objectPart1047_0, provider: config.provider }
+          : objectPart1047_0;
+        const objectPart1047_2 = config.model
+          ? { ...objectPart1047_1, model: config.model }
+          : objectPart1047_1;
+        return objectPart1047_2;
+      })(),
       patch,
     );
     config = normalizeAdvisorConfig(raw, config.configPath);
@@ -67,6 +65,7 @@ function harness(
     dismissLast: vi.fn(() => "unavailable" as const),
     reviewLast: vi.fn(() => "started" as const),
   };
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerAdvisorCommands(
     { registerCommand: (name, definition) => commands.set(name, definition as never) },
     state,
@@ -84,7 +83,7 @@ function context(
 ) {
   const selections = [...(options.selections ?? [])];
   const notify = vi.fn();
-  return {
+  const fixture = {
     mode: options.mode ?? "tui",
     hasUI: true,
     ui: {
@@ -96,13 +95,16 @@ function context(
       find: vi.fn((provider: string, model: string) => ({ provider, id: model })),
       hasConfiguredAuth: vi.fn(() => true),
     },
-  } as unknown as ExtensionCommandContext;
+  };
+  // SAFETY: Advisor command tests exercise only the command-context members implemented here.
+  return fixture as typeof fixture & ExtensionCommandContext;
 }
 
 describe("Advisor commands", () => {
   test("registers only /advisor and exposes the exact subcommands", () => {
     const value = harness();
     expect([...value.commands.keys()]).toEqual(["advisor"]);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const completions = value.commands.get("advisor")?.getArgumentCompletions?.("") as Array<{
       value: string;
     }>;

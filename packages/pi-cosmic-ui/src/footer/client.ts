@@ -6,6 +6,10 @@ import {
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_PROTOCOL_VERSION,
   type CosmicFooterContribution,
+  type CosmicFooterInvalidateEvent,
+  type CosmicFooterRemoveEvent,
+  type CosmicFooterUpsertEvent,
+  type CosmicUiHostQuery,
 } from "../protocol/protocol.ts";
 
 export interface CosmicFooterClient {
@@ -23,7 +27,14 @@ export function createCosmicFooterClient(
   owner: string,
 ): CosmicFooterClient {
   let active = false;
-  const emit = (name: string, value: unknown) => {
+  const emit = (
+    name: string,
+    value:
+      | CosmicUiHostQuery
+      | CosmicFooterUpsertEvent
+      | CosmicFooterRemoveEvent
+      | CosmicFooterInvalidateEvent,
+  ) => {
     try {
       events?.emit(name, value);
     } catch {
@@ -49,11 +60,14 @@ export function createCosmicFooterClient(
         emit(COSMIC_UI_FOOTER_UPSERT, { version: COSMIC_UI_PROTOCOL_VERSION, owner, contribution });
     },
     remove(id) {
-      if (active) emit(COSMIC_UI_FOOTER_REMOVE, { version: COSMIC_UI_PROTOCOL_VERSION, owner, id });
+      if (!active) return;
+      const event: CosmicFooterRemoveEvent = { version: COSMIC_UI_PROTOCOL_VERSION, owner };
+      emit(COSMIC_UI_FOOTER_REMOVE, id === undefined ? event : { ...event, id });
     },
     invalidate(id) {
-      if (active)
-        emit(COSMIC_UI_FOOTER_INVALIDATE, { version: COSMIC_UI_PROTOCOL_VERSION, owner, id });
+      if (!active) return;
+      const event: CosmicFooterInvalidateEvent = { version: COSMIC_UI_PROTOCOL_VERSION, owner };
+      emit(COSMIC_UI_FOOTER_INVALIDATE, id === undefined ? event : { ...event, id });
     },
     shutdown() {
       const removeOwner = active;

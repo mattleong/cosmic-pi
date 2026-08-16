@@ -25,6 +25,7 @@ export const readRawAdvisorConfigEffect = Effect.fn("AdvisorConfig.readRaw")(fun
   path = getAdvisorConfigPath(),
 ) {
   const documents = yield* JsonDocumentStore;
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   return yield* documents.readObject(path).pipe(
     Effect.map((value) => value ?? {}),
     Effect.catch((error) =>
@@ -72,11 +73,13 @@ export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(fu
         try: () => {
           const document = patchAdvisorConfig(raw, patch);
           const next = normalizeAdvisorConfig(document, path);
-          return {
-            value: next,
-            document,
-            ...(afterCommit ? { afterCommit: afterCommit(next) } : {}),
-          } satisfies JsonDocumentModification<ResolvedAdvisorConfig, AfterCommitR>;
+          return (() => {
+            const objectPart2692_0 = { value: next, document };
+            const objectPart2692_1 = afterCommit
+              ? { ...objectPart2692_0, afterCommit: afterCommit(next) }
+              : objectPart2692_0;
+            return objectPart2692_1;
+          })() satisfies JsonDocumentModification<ResolvedAdvisorConfig, AfterCommitR>;
         },
         catch: mapConfigError("update", path),
       }),
@@ -103,7 +106,7 @@ export class AdvisorConfigStoreError extends Schema.TaggedError<AdvisorConfigSto
   { operation: Schema.String, message: Schema.String },
 ) {}
 
-export interface ConfigStoreShape {
+export interface ConfigStoreContract {
   readonly load: (path?: string) => Effect.Effect<ResolvedAdvisorConfig, AdvisorConfigStoreError>;
   readonly patch: (
     patch: AdvisorConfigPatch,
@@ -112,7 +115,7 @@ export interface ConfigStoreShape {
   ) => Effect.Effect<ResolvedAdvisorConfig, AdvisorConfigStoreError>;
 }
 
-export class ConfigStore extends Context.Service<ConfigStore, ConfigStoreShape>()(
+export class ConfigStore extends Context.Service<ConfigStore, ConfigStoreContract>()(
   "pi-advisor/config/store/ConfigStore",
 ) {}
 

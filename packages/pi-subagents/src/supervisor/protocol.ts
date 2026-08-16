@@ -177,8 +177,8 @@ export type SupervisorClientMessage =
 const DiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
 const exactDecodeOptions = { onExcessProperty: "error" as const };
 
-export const decodeSupervisorClientMessage = (
-  value: unknown,
+export const decodeSupervisorClientMessage = <ValueInput>(
+  value: ValueInput,
 ): SupervisorClientMessage | undefined => {
   const discriminant = Schema.decodeUnknownOption(DiscriminantSchema)(value);
   if (Option.isNone(discriminant)) return undefined;
@@ -206,6 +206,7 @@ export const decodeSupervisorClientMessage = (
   })();
   if (!schema) return undefined;
   const decoded = Schema.decodeUnknownOption(schema, exactDecodeOptions)(value);
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return Option.isSome(decoded) ? (decoded.value as SupervisorClientMessage) : undefined;
 };
 

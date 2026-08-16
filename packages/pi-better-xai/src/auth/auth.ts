@@ -1,3 +1,4 @@
+import { isNumberValue } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -9,7 +10,11 @@ import {
   readSchemaDocument,
   type JsonObject,
 } from "pi-cosmic-core";
-import { PositiveIntegerSchema, type XaiAuthResult } from "./result.ts";
+import {
+  PositiveIntegerSchema,
+  type XaiAuthResult,
+  type XaiAuthResultCredentials,
+} from "./result.ts";
 import { ModelRegistryAuth } from "../boundary/model-registry-auth.ts";
 
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
@@ -63,7 +68,9 @@ export const extractTeamIdFromJwt = Effect.fn("XaiAuth.extractTeamIdFromJwt")(fu
   return teamId || undefined;
 });
 
-const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function* (entry: unknown) {
+const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function* <Entry>(
+  entry: Entry,
+) {
   const decoded = yield* Schema.decodeUnknownEffect(XaiAuthEntrySchema)(entry).pipe(
     Effect.mapError(
       () =>
@@ -78,12 +85,18 @@ const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function*
     });
   const refreshToken = decoded.refresh?.trim() || undefined;
   const teamId = yield* extractTeamIdFromJwt(accessToken);
-  return {
-    accessToken,
-    ...(refreshToken ? { refreshToken } : {}),
-    ...(typeof decoded.expires === "number" ? { expires: decoded.expires } : {}),
-    ...(teamId ? { teamId } : {}),
-  } satisfies XaiCredentials;
+  const credentials: XaiCredentials = (() => {
+    const objectPart2848_0 = { accessToken };
+    const objectPart2848_1 = refreshToken
+      ? { ...objectPart2848_0, refreshToken }
+      : objectPart2848_0;
+    const objectPart2848_2 = isNumberValue(decoded.expires)
+      ? { ...objectPart2848_1, expires: decoded.expires }
+      : objectPart2848_1;
+    const objectPart2848_3 = teamId ? { ...objectPart2848_2, teamId } : objectPart2848_2;
+    return objectPart2848_3;
+  })();
+  return credentials;
 });
 
 export const readXaiAuthResult = Effect.fn("XaiAuth.readXaiAuthResult")(function* (
@@ -116,7 +129,7 @@ const writeXaiAuth = Effect.fn("XaiAuth.writeXaiAuth")(function* (
   const documents = yield* JsonDocumentStore;
   yield* documents
     .updateObject(authPath, (document) => {
-      const previous = isJsonObject(document.xai) ? document.xai : {};
+      const previous: JsonObject = isJsonObject(document.xai) ? document.xai : {};
       return {
         ...document,
         xai: {
@@ -186,12 +199,12 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
   const expires = now + expiresInSeconds * 1000;
   yield* writeXaiAuth(authPath, { access: accessToken, refresh: nextRefresh, expires });
   const teamId = yield* extractTeamIdFromJwt(accessToken);
-  return {
-    accessToken,
-    refreshToken: nextRefresh,
-    expires,
-    ...(teamId ? { teamId } : {}),
-  } satisfies XaiCredentials;
+  const credentials: XaiCredentials = (() => {
+    const objectPart6431_0 = { accessToken, refreshToken: nextRefresh, expires };
+    const objectPart6431_1 = teamId ? { ...objectPart6431_0, teamId } : objectPart6431_0;
+    return objectPart6431_1;
+  })();
+  return credentials;
 });
 
 export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResult")(function* (
@@ -229,14 +242,12 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
     const registryAccess = registryToken.success?.trim();
     if (registryAccess) {
       const teamId = yield* extractTeamIdFromJwt(registryAccess);
-      return {
-        _tag: "Found",
-        credentials: {
-          accessToken: registryAccess,
-          source: "modelRegistry" as const,
-          ...(teamId ? { teamId } : {}),
-        },
-      } as const;
+      const credentials: XaiAuthResultCredentials = (() => {
+        const objectPart8008_0 = { accessToken: registryAccess, source: "modelRegistry" as const };
+        const objectPart8008_1 = teamId ? { ...objectPart8008_0, teamId } : objectPart8008_0;
+        return objectPart8008_1;
+      })();
+      return { _tag: "Found", credentials } as const satisfies XaiAuthResult;
     }
   }
   if (auth?.accessToken && (auth.expires === undefined || now < auth.expires))

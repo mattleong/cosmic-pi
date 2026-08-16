@@ -401,7 +401,7 @@ test("loadSettingsFromDisk skips invalid JSON and continues", async () => {
   assert.equal(loaded?.grepCollapsedLines, 31);
 });
 
-async function writeJson(path: string, data: unknown): Promise<void> {
+async function writeJson<DataInput>(path: string, data: DataInput): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(data)}\n`, "utf8");
 }

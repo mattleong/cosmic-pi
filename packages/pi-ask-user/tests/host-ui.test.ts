@@ -2,8 +2,9 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const context = (setStatus: (key: string, value: string | undefined) => void) =>
-  ({ mode: "tui", ui: { setStatus } }) as unknown as ExtensionContext;
+  ({ mode: "tui", ui: { setStatus } }) as ExtensionContext;
 
 describe("ask-user dialog bridge", () => {
   it("resumes the active dialog and ignores stale cleanup", () => {

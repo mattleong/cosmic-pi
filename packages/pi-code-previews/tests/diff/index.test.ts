@@ -134,13 +134,12 @@ test("diff background rows do NOT reset their own background", () => {
 });
 
 test("diff background reaches right padding even after truncateToWidth reset", () => {
+  // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
   const theme = {
     ...testTheme(),
     fg: (key: string, text: string) => {
-      const colors: Record<string, string> = {
-        toolDiffAdded: "\x1b[38;2;100;200;100m",
-      };
-      const c = colors[key] ?? "";
+      const colors = new Map<string, string>([["toolDiffAdded", "\x1b[38;2;100;200;100m"]]);
+      const c = colors.get(key) ?? "";
       return c ? `${c}${text}\x1b[39m` : text;
     },
   } as Theme;

@@ -1,10 +1,10 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import { initTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { BackendDriver } from "../../src/backend/model.ts";
-import { type SubagentBackendRegistryShape } from "../../src/backend/service.ts";
+import { type SubagentBackendRegistryContract } from "../../src/backend/service.ts";
 import { type StartSubagentRequest } from "../../src/run/model.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
@@ -16,6 +16,7 @@ import {
   testBackendDriver,
   view,
 } from "./fixtures/tool-harness.ts";
+import { extensionContextFixture } from "../fixtures/pi-host.ts";
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -104,7 +105,8 @@ describe("subagent tool", () => {
     );
     const getProviderAuthStatus = vi.fn();
     const getApiKeyAndHeaders = vi.fn();
-    const extensionContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const extensionContext = extensionContextFixture({
       ...baseContext,
       modelRegistry: {
         ...baseContext.modelRegistry,
@@ -112,7 +114,7 @@ describe("subagent tool", () => {
         getProviderAuthStatus,
         getApiKeyAndHeaders,
       },
-    } as unknown as ExtensionContext;
+    });
     const result = await captureSubagentTools(startCapturingService([]), ["read"], profiles, {
       resolve: () => Effect.succeed({ ...testBackendDriver, host: "herdr" }),
       preflight: () => Effect.die("preflight must not run"),
@@ -146,7 +148,8 @@ describe("subagent tool", () => {
         },
       },
     });
-    const unavailableContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const unavailableContext = extensionContextFixture({
       ...context,
       modelRegistry: {
         ...context.modelRegistry,
@@ -154,7 +157,7 @@ describe("subagent tool", () => {
           throw new Error("secret provenance failure");
         },
       },
-    } as unknown as ExtensionContext;
+    });
     const result = await captureSubagentTools(startCapturingService([]), ["read"], profiles, {
       resolve: () => Effect.succeed({ ...testBackendDriver, host: "herdr" }),
       preflight: () => Effect.die("preflight must not run"),
@@ -191,14 +194,15 @@ describe("subagent tool", () => {
       projection: Effect.succeed({ revision: 0, runs: [] }),
     });
     const tool = captureSubagentTools(service).get("subagent_start");
-    const runtimeContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const runtimeContext = extensionContextFixture({
       ...context,
       modelRegistry: {
         ...context.modelRegistry,
         getProviderAuthStatus: () => ({ configured: true, source: "runtime" }),
         getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const, apiKey: "runtime-key" }),
       },
-    } as unknown as ExtensionContext;
+    });
 
     await tool?.execute(
       "call",
@@ -234,7 +238,7 @@ describe("subagent tool", () => {
       host: "herdr",
     } satisfies BackendDriver;
     let preflights = 0;
-    const registry: SubagentBackendRegistryShape = {
+    const registry: SubagentBackendRegistryContract = {
       resolve: () => Effect.succeed(herdrPiDriver),
       preflight: () =>
         Effect.sync(() => {
@@ -243,14 +247,15 @@ describe("subagent tool", () => {
         }),
     };
     const environmentKey = "environment-only-private-key";
-    const environmentContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const environmentContext = extensionContextFixture({
       ...context,
       modelRegistry: {
         ...context.modelRegistry,
         getProviderAuthStatus: () => ({ configured: true, source: "environment" }),
         getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const, apiKey: environmentKey }),
       },
-    } as unknown as ExtensionContext;
+    });
 
     const result = await captureSubagentTools(
       startCapturingService(requests),
@@ -275,13 +280,14 @@ describe("subagent tool", () => {
     });
     expect(JSON.stringify(result)).not.toContain(environmentKey);
 
-    const unavailableContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const unavailableContext = extensionContextFixture({
       ...environmentContext,
       modelRegistry: {
         ...environmentContext.modelRegistry,
         getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const }),
       },
-    } as unknown as ExtensionContext;
+    });
     const skipped = await captureSubagentTools(
       startCapturingService(requests),
       ["read"],
@@ -356,14 +362,15 @@ describe("subagent tool", () => {
   });
 
   it("marks oracle routing unavailable when the parent cannot be forked", async () => {
-    const ephemeral = {
-      ...(context as unknown as Record<string, unknown>),
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ephemeral = extensionContextFixture({
+      ...context,
       sessionManager: {
         ...context.sessionManager,
         getSessionFile: () => undefined,
         getLeafEntry: () => undefined,
       },
-    } as unknown as ExtensionContext;
+    });
     const models = await captureSubagentTools(startCapturingService([]))
       .get("subagent_models")
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
@@ -379,14 +386,15 @@ describe("subagent tool", () => {
   });
 
   it("states that complete context and capability choices come from v4 candidates", async () => {
-    const ephemeral = {
-      ...(context as unknown as Record<string, unknown>),
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ephemeral = extensionContextFixture({
+      ...context,
       sessionManager: {
         ...context.sessionManager,
         getSessionFile: () => undefined,
         getLeafEntry: () => undefined,
       },
-    } as unknown as ExtensionContext;
+    });
     const models = await captureSubagentTools(startCapturingService([]))
       .get("subagent_models")
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
@@ -440,10 +448,11 @@ describe("subagent tool", () => {
   });
 
   it("renders parent_model_missing skips when no parent model is active", async () => {
-    const noParent = {
-      ...(context as unknown as Record<string, unknown>),
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const noParent = extensionContextFixture({
+      ...context,
       model: undefined,
-    } as unknown as ExtensionContext;
+    });
     const models = await captureSubagentTools(startCapturingService([]))
       .get("subagent_models")
       ?.execute("call", { profile: "generalist" }, undefined, undefined, noParent);

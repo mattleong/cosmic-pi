@@ -145,21 +145,26 @@ export const profileWorkspaceConfirmation = (input: {
           ? "This immediately disables the profile for future launches; active runs are unchanged."
           : "No candidate will launch for this profile after reload.",
     };
-  return {
-    key: "i",
-    title: `Reset ${input.profile}?`,
-    detail:
-      input.scope === "global"
-        ? input.projectOverrideActive
-          ? "The global declaration will be removed. The project override remains effective."
-          : "The global declaration will be removed. The effective route will return to the built-in profile."
-        : input.scope === "project"
-          ? "The project declaration will be removed. The effective route will come from global settings or the built-in profile."
-          : "The temporary session override will be removed. The active project, global, or built-in route will apply immediately.",
-    ...(input.currentSummary && input.afterSummary
-      ? {
-          preview: [`Current  ${input.currentSummary}`, `After    ${input.afterSummary}`],
-        }
-      : {}),
-  };
+  return (() => {
+    const objectPart5568_0 = {
+      key: "i",
+      title: `Reset ${input.profile}?`,
+      detail:
+        input.scope === "global"
+          ? input.projectOverrideActive
+            ? "The global declaration will be removed. The project override remains effective."
+            : "The global declaration will be removed. The effective route will return to the built-in profile."
+          : input.scope === "project"
+            ? "The project declaration will be removed. The effective route will come from global settings or the built-in profile."
+            : "The temporary session override will be removed. The active project, global, or built-in route will apply immediately.",
+    };
+    const objectPart5568_1 =
+      input.currentSummary && input.afterSummary
+        ? {
+            ...objectPart5568_0,
+            preview: [`Current  ${input.currentSummary}`, `After    ${input.afterSummary}`],
+          }
+        : objectPart5568_0;
+    return objectPart5568_1;
+  })();
 };

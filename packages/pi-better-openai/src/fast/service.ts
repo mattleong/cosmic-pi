@@ -10,7 +10,7 @@ import type { OpenAIConfigError, ResolvedConfig } from "../config/index.ts";
 import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
 import { OpenAIUsageService } from "../usage/index.ts";
 
-export interface FastModeServiceShape {
+export interface FastModeServiceContract {
   readonly initialize: (
     ctx: ExtensionContext,
     config: ResolvedConfig,
@@ -23,7 +23,7 @@ export interface FastModeServiceShape {
   readonly modelChanged: (ctx: ExtensionContext) => Effect.Effect<void, OpenAIConfigError>;
 }
 
-export class FastModeService extends Context.Service<FastModeService, FastModeServiceShape>()(
+export class FastModeService extends Context.Service<FastModeService, FastModeServiceContract>()(
   "pi-better-openai/fast/service/FastModeService",
 ) {
   static layer(options: {

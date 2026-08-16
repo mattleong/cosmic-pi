@@ -16,7 +16,7 @@ import type { BackendHandle, BackendLaunchRequest } from "../src/backend/model.t
 import {
   HerdrCli,
   makeHerdrCli,
-  type HerdrCliShape,
+  type HerdrCliContract,
   type HerdrCreatedWorkspace,
 } from "../src/boundary/herdr-cli.ts";
 import { captureHerdrEnvironment } from "../src/boundary/herdr-environment.ts";
@@ -101,7 +101,7 @@ const markerCommand = (marker: string): string => {
 };
 
 const closeExactShellWorkspace = async (
-  cli: HerdrCliShape,
+  cli: HerdrCliContract,
   created: HerdrCreatedWorkspace,
 ): Promise<void> => {
   const snapshot = await Effect.runPromise(cli.snapshot);

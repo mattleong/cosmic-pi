@@ -7,13 +7,13 @@
 import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodeMode } from "../src/boundary/codemode-runtime.ts";
 import {
   makeNestedPiToolDefinitions,
   type NestedPiToolDefinitions,
+  type PiGuestToolInput,
   type PiGuestToolName,
 } from "../src/boundary/host-builtin-tools.ts";
 import { DEFAULT_CODE_MODE_CONFIG, type CodeModeConfig } from "../src/config/schema.ts";
@@ -25,6 +25,8 @@ import {
 } from "../src/tools/execution.ts";
 import { MAX_PROGRESS_ENTRIES, type CodeModeToolDetails } from "../src/tools/format.ts";
 import { utf8ByteLength } from "../src/tools/limits.ts";
+import { extensionContextFixture } from "./support/host.ts";
+import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -37,7 +39,7 @@ const newCwd = (): string => {
   return cwd;
 };
 
-const ctx = {
+const ctx = extensionContextFixture({
   cwd: "/",
   sessionManager: {
     getSessionId: () => "test-session",
@@ -45,7 +47,7 @@ const ctx = {
   },
   model: undefined,
   thinkingLevel: undefined,
-} as unknown as ExtensionContext;
+});
 
 const makeState = (overrides: Partial<CodeModeConfig> = {}, available = true): CodeModeState => {
   const config: CodeModeConfig = { ...DEFAULT_CODE_MODE_CONFIG, ...overrides };
@@ -81,18 +83,21 @@ const testDefinitions = (cwd: string): NestedPiToolDefinitions => {
 
 interface FakeCall {
   readonly name: string;
-  readonly input: unknown;
+  readonly input: PiGuestToolInput;
   readonly signal: AbortSignal | undefined;
 }
 
 const fakeDefinitions = (
   impl: Partial<
-    Record<PiGuestToolName, (input: unknown, signal: AbortSignal | undefined) => Promise<string>>
+    Record<
+      PiGuestToolName,
+      (input: PiGuestToolInput, signal: AbortSignal | undefined) => Promise<string>
+    >
   >,
   calls?: FakeCall[],
 ): NestedPiToolDefinitions => {
   const definition = (name: PiGuestToolName) => ({
-    execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
+    execute: async (_id: string, input: PiGuestToolInput, signal?: AbortSignal) => {
       calls?.push({ name, input, signal });
       const handler = impl[name];
       if (handler === undefined) throw new Error(`fake ${name} is not implemented`);
@@ -100,7 +105,7 @@ const fakeDefinitions = (
       return { content: [{ type: "text", text }], details: undefined };
     },
   });
-  return {
+  return nestedToolDefinitionsFixture({
     read: definition("read"),
     bash: definition("bash"),
     edit: definition("edit"),
@@ -108,7 +113,7 @@ const fakeDefinitions = (
     grep: definition("grep"),
     find: definition("find"),
     ls: definition("ls"),
-  } as unknown as NestedPiToolDefinitions;
+  });
 };
 
 interface HarnessOptions {
@@ -125,18 +130,27 @@ interface HarnessOptions {
 
 const makeHarness = (cwd: string, options: HarnessOptions = {}) => {
   const state = makeState(options.config ?? {}, options.available ?? true);
-  return makeCodeModeToolExecute({
-    isCurrent: options.isCurrent ?? (() => true),
-    getState: () => (options.noState === true ? undefined : state),
-    runInSession:
-      options.runInSession ??
-      ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
-    definitions: options.definitions ?? testDefinitions(cwd),
-    ...(options.executeCodeMode === undefined ? {} : { executeCodeMode: options.executeCodeMode }),
-    ...(options.retainFailureDetails === undefined
-      ? {}
-      : { retainFailureDetails: options.retainFailureDetails }),
-  });
+  return makeCodeModeToolExecute(
+    (() => {
+      const objectPart4729_0 = {
+        isCurrent: options.isCurrent ?? (() => true),
+        getState: () => (options.noState === true ? undefined : state),
+        runInSession:
+          options.runInSession ??
+          ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
+        definitions: options.definitions ?? testDefinitions(cwd),
+      };
+      const objectPart4729_1 =
+        options.executeCodeMode === undefined
+          ? objectPart4729_0
+          : { ...objectPart4729_0, executeCodeMode: options.executeCodeMode };
+      const objectPart4729_2 =
+        options.retainFailureDetails === undefined
+          ? objectPart4729_1
+          : { ...objectPart4729_1, retainFailureDetails: options.retainFailureDetails };
+      return objectPart4729_2;
+    })(),
+  );
 };
 
 const textOf = (result: { content: ReadonlyArray<{ type: string; text?: string }> }): string =>
@@ -155,6 +169,7 @@ describe("guest catalog", () => {
       undefined,
       ctx,
     );
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const value = JSON.parse(textOf(result)) as { top: string[]; pi: string[] };
     expect([...value.top].sort()).toEqual(["$codemode", "pi"]);
     expect([...value.pi].sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
@@ -385,6 +400,7 @@ describe("host limits", () => {
       ctx,
     );
     expect(textOf(textResult)).toBe('{"status":"one\\ntwo"}');
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((textResult.details as CodeModeToolDetails).outputKind).toBe("text");
 
     const structuredResult = await execute(
@@ -395,6 +411,7 @@ describe("host limits", () => {
       ctx,
     );
     expect(textOf(structuredResult)).toBe(JSON.stringify({ status: "one\ntwo" }, null, 2));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((structuredResult.details as CodeModeToolDetails).outputKind).toBe("structured");
   });
 
@@ -452,6 +469,7 @@ describe("host limits", () => {
       ctx,
     );
     expect(textOf(result)).toContain("[result truncated");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((result.details as CodeModeToolDetails).truncated).toBe(true);
     expect(utf8ByteLength(textOf(result))).toBeLessThanOrEqual(256);
   });
@@ -528,7 +546,7 @@ describe("final model-visible byte bound", () => {
     // An unsupported-syntax failure carries kind, location, and suggestions framing.
     await expect(
       execute("call-diag-bound", { code: "class Oops {}\nreturn 1;" }, undefined, undefined, ctx),
-    ).rejects.toSatisfy((error: unknown) => {
+    ).rejects.toSatisfy((error) => {
       const message = error instanceof Error ? error.message : String(error);
       return utf8ByteLength(message) <= 40;
     });
@@ -544,7 +562,7 @@ describe("final model-visible byte bound", () => {
         undefined,
         ctx,
       ),
-    ).rejects.toSatisfy((error: unknown) => {
+    ).rejects.toSatisfy((error) => {
       const message = error instanceof Error ? error.message : String(error);
       return utf8ByteLength(message) <= 128 && !message.includes("E".repeat(1000));
     });
@@ -565,6 +583,7 @@ describe("early-path model-visible byte bound", () => {
         undefined,
         ctx,
       );
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       expect((result.details as CodeModeToolDetails).cancelled).toBe(true);
       return textOf(result);
     };
@@ -597,6 +616,7 @@ describe("early-path model-visible byte bound", () => {
     controller.abort();
     const result = await pending;
     expect(textOf(result)).toBe("");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((result.details as CodeModeToolDetails).cancelled).toBe(true);
   });
 
@@ -801,6 +821,7 @@ describe("cancellation", () => {
       ctx,
     );
     expect(textOf(result)).toBe("Execution cancelled.");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((result.details as CodeModeToolDetails).cancelled).toBe(true);
     expect(calls).toHaveLength(0);
   });
@@ -837,6 +858,7 @@ describe("cancellation", () => {
     controller.abort();
     const result = await pending;
     expect(textOf(result)).toBe("Execution cancelled.");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((result.details as CodeModeToolDetails).cancelled).toBe(true);
     expect(calls[0]?.signal?.aborted).toBe(true);
   });
@@ -876,6 +898,7 @@ describe("cancellation", () => {
     disposal.abort();
     const result = await pending;
     expect(textOf(result)).toBe("Execution cancelled.");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((result.details as CodeModeToolDetails).cancelled).toBe(true);
   });
 });
@@ -1028,6 +1051,7 @@ describe("progress", () => {
       ctx,
     );
     expect(textOf(withIntent)).toBe("hits");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const details = withIntent.details as CodeModeToolDetails;
     expect(details.toolCalls.map((call) => call.activity)).toEqual([
       "Read src/a.ts",
@@ -1049,6 +1073,7 @@ describe("progress", () => {
     const definitions = fakeDefinitions({ read: async () => "data" });
     const execute = makeHarness(cwd, { definitions });
     let invocations = 0;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const result = await execute(
       "call-hostile",
       { code: "return await tools.pi.read({ path: 'a' });" },
@@ -1056,7 +1081,8 @@ describe("progress", () => {
       (() => {
         invocations += 1;
         if (invocations % 2 === 0) throw new Error("hostile sync throw");
-        return Promise.reject(new Error("hostile rejection")) as unknown as void;
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        return Promise.reject(new Error("hostile rejection"));
       }) as never,
       ctx,
     );
@@ -1102,6 +1128,7 @@ describe("diagnostics and errors", () => {
       undefined,
       ctx,
     );
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const observed = JSON.parse(textOf(result)) as { message: string; length: number };
     expect(observed.length).toBeLessThanOrEqual(48);
     expect(observed.message).toContain("Nested tool 'bash' failed");

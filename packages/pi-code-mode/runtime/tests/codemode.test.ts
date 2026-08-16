@@ -1,5 +1,6 @@
+import { runtimeTypeName } from "../src/runtime-values.ts";
 import { describe, expect, test } from "vitest";
-import { Cause, Effect, Schema } from "effect";
+import { Cause, Effect, Schema, SchemaGetter } from "effect";
 import { CodeMode, Tool, toolError } from "../src/index.js";
 
 const run = (tool: Tool.Definition<never>) =>
@@ -54,12 +55,20 @@ describe("CodeMode host failure boundary", () => {
 
   test("sanitizes invalid host output", async () => {
     const secret = "invalid-output-secret";
+    const RejectingString = Schema.Number.pipe(
+      Schema.decodeTo(Schema.String, {
+        decode: SchemaGetter.transform((): string => {
+          throw new Error("intentional invalid host output");
+        }),
+        encode: SchemaGetter.transform(() => 0),
+      }),
+    );
     const result = await run(
       Tool.make({
         description: "Return invalid output",
         input: Schema.Struct({}),
-        output: Schema.Struct({ safe: Schema.String }),
-        run: () => Effect.succeed({ safe: 1, secret } as unknown as { readonly safe: string }),
+        output: Schema.Struct({ safe: RejectingString }),
+        run: () => Effect.succeed({ safe: 1, secret }),
       }),
     );
 
@@ -237,13 +246,21 @@ describe("CodeMode tool-call observation", () => {
       onToolCallEnd: (call) =>
         Effect.sync(() => {
           expect(call.durationMs).toBeGreaterThanOrEqual(0);
-          events.push({
-            phase: "end",
-            index: call.index,
-            name: call.name,
-            outcome: call.outcome,
-            ...(call.message === undefined ? {} : { message: call.message }),
-          });
+          events.push(
+            (() => {
+              const objectPart8185_0 = {
+                phase: "end",
+                index: call.index,
+                name: call.name,
+                outcome: call.outcome,
+              };
+              const objectPart8185_1 =
+                call.message === undefined
+                  ? objectPart8185_0
+                  : { ...objectPart8185_0, message: call.message };
+              return objectPart8185_1;
+            })(),
+          );
         }),
     });
 
@@ -437,9 +454,10 @@ describe("CodeMode output budget", () => {
     expect(tiny.ok).toBe(true);
     if (!tiny.ok) return;
     expect(tiny.truncated).toBe(true);
-    expect(typeof tiny.value).toBe("string");
+    expect(runtimeTypeName(tiny.value)).toBe("string");
     // The marker alone would exceed 40 bytes, so the value is bare-truncated to the budget.
     expect(tiny.value).toBe('{"data":"' + "x".repeat(31));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect(bytes(tiny.value as string)).toBe(40);
 
     const roomy = await Effect.runPromise(
@@ -454,6 +472,7 @@ describe("CodeMode output budget", () => {
     expect(roomy.value).toMatch(
       /^\{"data":"x+ \[result truncated: \d+ bytes exceeds the 256-byte output limit; return a smaller value\]$/,
     );
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect(bytes(roomy.value as string)).toBeLessThanOrEqual(256);
     expect(
       Schema.decodeUnknownSync(CodeMode.Result)(JSON.parse(JSON.stringify(roomy))),
@@ -881,9 +900,11 @@ describe("CodeMode public contract", () => {
     );
     expect(variants.ok).toBe(true);
     if (variants.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       expect((variants.value as Array<{ items: Array<{ path: string }> }>)[0]?.items[0]?.path).toBe(
         "tools.thread.uploadFile",
       );
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       expect((variants.value as Array<{ items: Array<{ path: string }> }>)[1]?.items[0]?.path).toBe(
         "tools.thread.generateImage",
       );
@@ -917,6 +938,7 @@ describe("CodeMode public contract", () => {
     );
     expect(browse.ok).toBe(true);
     if (browse.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const value = browse.value as {
         items: Array<{ path: string }>;
         remaining: number;
@@ -969,6 +991,7 @@ describe("CodeMode public contract", () => {
     );
     expect(browse.ok).toBe(true);
     if (browse.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const value = browse.value as { items: Array<{ path: string }>; remaining: number };
       expect(value.remaining).toBe(0);
       expect(value.items.map((item) => item.path)).toStrictEqual([
@@ -985,6 +1008,7 @@ describe("CodeMode public contract", () => {
     );
     expect(scoped.ok).toBe(true);
     if (scoped.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const value = scoped.value as { items: Array<{ path: string }>; remaining: number };
       expect(value.remaining).toBe(0);
       expect(value.items[0]?.path).toBe("tools.linear.list_issues");
@@ -1024,6 +1048,7 @@ describe("CodeMode public contract", () => {
     );
     expect(byParameter.ok).toBe(true);
     if (byParameter.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const value = byParameter.value as { items: Array<{ path: string }>; remaining: number };
       expect(value.remaining).toBe(0);
       expect(value.items[0]?.path).toBe("tools.files.upload");
@@ -1035,6 +1060,7 @@ describe("CodeMode public contract", () => {
     );
     expect(bySubstring.ok).toBe(true);
     if (bySubstring.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const value = bySubstring.value as { items: Array<{ path: string }>; remaining: number };
       expect(value.remaining).toBe(0);
       expect(value.items[0]?.path).toBe("tools.files.upload");
@@ -1066,6 +1092,7 @@ describe("CodeMode public contract", () => {
     );
     expect(plural.ok).toBe(true);
     if (plural.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const value = plural.value as { items: Array<{ path: string }>; remaining: number };
       expect(value.remaining).toBe(0);
       expect(value.items[0]?.path).toBe("tools.tracker.fetch_all");
@@ -1077,6 +1104,7 @@ describe("CodeMode public contract", () => {
     );
     expect(ranked.ok).toBe(true);
     if (ranked.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const value = ranked.value as { items: Array<{ path: string }>; remaining: number };
       expect(value.remaining).toBe(0);
       expect(value.items.map((item) => item.path)).toStrictEqual([
@@ -1106,6 +1134,7 @@ describe("CodeMode public contract", () => {
     );
     expect(browse.ok).toBe(true);
     if (browse.ok) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const value = browse.value as {
         items: Array<{ path: string }>;
         remaining: number;

@@ -30,6 +30,7 @@ const review = {
     },
   ],
 };
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   bold: (value: string) => value,
   fg: (_name: string, value: string) => value,
@@ -137,6 +138,7 @@ describe("Advisor local review cards", () => {
       },
       { id: "3", type: "custom", customType: ADVISOR_REVIEW_CARD_TYPE, data: second },
     ];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const ctx = { sessionManager: { getBranch: () => branch } } as never;
     expect(latestOpenAdvisorReviewCardAtHostBoundary(ctx)).toEqual(second);
     branch.push({
@@ -150,6 +152,7 @@ describe("Advisor local review cards", () => {
 
   test("registers an entry renderer, never a message renderer", () => {
     const pi = { registerEntryRenderer: vi.fn(), registerMessageRenderer: vi.fn() };
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     registerAdvisorReviewCardRendererAtHostBoundary(pi as never);
     expect(pi.registerEntryRenderer).toHaveBeenCalledWith(
       ADVISOR_REVIEW_CARD_TYPE,

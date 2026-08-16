@@ -29,7 +29,10 @@
  * (it re-instantiates extensions in the same process, exactly as the subagents reload handoff
  * relies on), so cross-process persistence is neither possible nor attempted here.
  */
+import { isStringValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 const HANDOFF_SLOT_KEY = Symbol.for("@cosmic-pi/pi-code-mode/code-mode-deactivation-handoff/v2");
 
@@ -39,36 +42,35 @@ const SESSION_KEY_TTL_MS = 60 * 60 * 1_000;
 /** The stable Pi session id used as the one handoff identity. */
 export type CodeModeSessionKey = string;
 
-interface HandoffEnvelope {
-  readonly version: 2;
-  readonly key: string;
-  readonly deactivated: boolean;
-  readonly expiresAt: number;
+const HandoffEnvelopeSchema = Schema.Struct({
+  version: Schema.Literal(2),
+  key: Schema.String.check(Schema.isNonEmpty()),
+  deactivated: Schema.Boolean,
+  expiresAt: Schema.Number,
+});
+type HandoffEnvelope = typeof HandoffEnvelopeSchema.Type;
+
+interface CodeModeHandoffGlobalState {
+  [HANDOFF_SLOT_KEY]?: unknown;
 }
 
-const processState = (): Record<PropertyKey, unknown> =>
-  globalThis as unknown as Record<PropertyKey, unknown>;
-
-const isEnvelope = (value: unknown): value is HandoffEnvelope =>
-  typeof value === "object" &&
-  value !== null &&
-  (value as HandoffEnvelope).version === 2 &&
-  typeof (value as HandoffEnvelope).key === "string" &&
-  typeof (value as HandoffEnvelope).deactivated === "boolean" &&
-  typeof (value as HandoffEnvelope).expiresAt === "number";
+// SAFETY: This process-owned symbol slot is the sole property added to globalThis by this adapter.
+const processState = (): typeof globalThis & CodeModeHandoffGlobalState =>
+  globalThis as typeof globalThis & CodeModeHandoffGlobalState;
 
 const readEnvelope = (): HandoffEnvelope | undefined => {
   const state = processState();
   const value = state[HANDOFF_SLOT_KEY];
-  if (!isEnvelope(value)) {
+  const decoded = Schema.decodeUnknownOption(HandoffEnvelopeSchema)(value);
+  if (Option.isNone(decoded)) {
     if (value !== undefined) delete state[HANDOFF_SLOT_KEY];
     return undefined;
   }
-  if (Date.now() > value.expiresAt) {
+  if (Date.now() > decoded.value.expiresAt) {
     delete state[HANDOFF_SLOT_KEY];
     return undefined;
   }
-  return value;
+  return decoded.value;
 };
 
 /**
@@ -79,7 +81,7 @@ const readEnvelope = (): HandoffEnvelope | undefined => {
 export const codeModeSessionKey = (ctx: ExtensionContext): CodeModeSessionKey | undefined => {
   try {
     const sessionId = ctx.sessionManager?.getSessionId?.();
-    if (typeof sessionId === "string" && sessionId.length > 0) {
+    if (isStringValue(sessionId) && sessionId.length > 0) {
       return sessionId;
     }
   } catch {

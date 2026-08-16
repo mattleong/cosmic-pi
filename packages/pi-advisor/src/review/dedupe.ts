@@ -39,15 +39,10 @@ export const filterAdvisorFindingsWithRollback = (
   initial: AdvisorFindingDedupeState,
   findings: readonly AdvisorFinding[],
   scope = "default",
-): {
-  readonly state: AdvisorFindingDedupeState;
-  readonly findings: AdvisorFinding[];
-  readonly suppressed: number;
-  readonly rollback: AdvisorFindingDedupeRollback;
-} => {
+) => {
   const state =
     scope === initial.scope ? initial : { ...emptyAdvisorFindingDedupe(initial.capacity), scope };
-  const seen: Record<string, AdvisorSeverity> = { ...state.seen };
+  const seen = { ...state.seen } satisfies Record<string, AdvisorSeverity>;
   const order = [...state.order];
   const accepted: AdvisorFinding[] = [];
   const entries: AdvisorFindingDedupeRollbackEntry[] = [];
@@ -63,12 +58,13 @@ export const filterAdvisorFindingsWithRollback = (
       suppressed += 1;
       continue;
     }
-    const entry: AdvisorFindingDedupeRollbackEntry = {
-      key,
-      ...(previous === undefined ? {} : { previous }),
-      wasNew: previous === undefined,
-      evicted: [],
-    };
+    const entry: AdvisorFindingDedupeRollbackEntry = (() => {
+      const objectPart2101_0 = { key };
+      const objectPart2101_1 =
+        previous === undefined ? objectPart2101_0 : { ...objectPart2101_0, previous };
+      const objectPart2101_2 = { ...objectPart2101_1, wasNew: previous === undefined, evicted: [] };
+      return objectPart2101_2;
+    })();
     if (previous === undefined) order.push(key);
     seen[key] = finding.severity;
     accepted.push(finding);
@@ -94,7 +90,7 @@ export const rollbackAdvisorFindingDedupe = (
   token: AdvisorFindingDedupeRollback,
 ): AdvisorFindingDedupeState => {
   if (token.scope !== state.scope) return state;
-  const seen: Record<string, AdvisorSeverity> = { ...state.seen };
+  const seen = { ...state.seen } satisfies Record<string, AdvisorSeverity>;
   const order = [...state.order];
   for (const entry of [...token.entries].reverse()) {
     if (entry.wasNew) {

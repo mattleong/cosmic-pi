@@ -145,6 +145,7 @@ export class VimSettingsAdapter implements Component, Focusable {
   }
 
   private syncChildFocus(): void {
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const bridge = this.child as Component & SettingsFocusableBridge;
     if ("focused" in bridge) bridge.focused = this._focused;
     if (bridge.searchInput) bridge.searchInput.focused = this._focused && this.mode === "search";
@@ -163,6 +164,7 @@ export class VimSettingsAdapter implements Component, Focusable {
         // cleared and re-applied so it cannot keep filtering the list invisibly.
         this.mode = "navigation";
         this.keymap.resetChord();
+        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
         const bridge = this.child as Component & SettingsFocusableBridge;
         bridge.searchInput?.setValue("");
         bridge.applyFilter?.("");
@@ -207,6 +209,7 @@ export class VimSettingsAdapter implements Component, Focusable {
     this.syncChildFocus();
     const lines = [...this.child.render(width)];
     const hint = this.options.renderHint?.(this.mode, this.helpExpanded);
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const bridge = this.child as Component & SettingsFocusableBridge;
     if (hint && bridge.submenuComponent === null && lines.at(-2) === "") lines.pop();
     return hint ? [...lines, truncateToWidth(hint, Math.max(0, width), "")] : lines;

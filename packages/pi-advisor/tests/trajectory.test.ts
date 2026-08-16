@@ -85,11 +85,11 @@ describe("advisor stream trajectory state", () => {
 
 describe("advisor tool trajectory state", () => {
   type ToolState = AdvisorToolTrajectoryDetectorState;
-  const end = (
+  const end = <Args, Result>(
     state: ToolState,
     id: string,
-    args: unknown,
-    result: unknown,
+    args: Args,
+    result: Result,
     isError = false,
     toolName = "read",
   ): { state: ToolState; signal?: ToolTrajectorySignal | undefined } =>

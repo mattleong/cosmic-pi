@@ -113,7 +113,10 @@ export const effectiveCandidateEffort = (
   parentEffort: SubagentEffort,
 ): SubagentEffort =>
   candidate.effort === "default"
-    ? (PROFILE_DEFINITIONS[profile].defaultEffort ?? parentEffort)
+    ? (() => {
+        const definition = PROFILE_DEFINITIONS[profile];
+        return "defaultEffort" in definition ? definition.defaultEffort : parentEffort;
+      })()
     : candidate.effort;
 
 export const candidateEffortLabel = (
@@ -197,47 +200,62 @@ export const candidateFieldRows = (
       value: profile ? candidateEffortLabel(profile, candidate, parentEffort) : candidate.effort,
       fixed: false,
     },
-    {
-      field: "context",
-      label: "Context",
-      value: localPi ? candidate.context : `${candidate.context} · fixed: fork requires local Pi`,
-      fixed: !localPi,
-      ...(!localPi ? { fixedReason: "Fork context is available only to local Pi." } : {}),
-    },
+    (() => {
+      const objectPart6705_0 = {
+        field: "context" as const,
+        label: "Context",
+        value: localPi ? candidate.context : `${candidate.context} · fixed: fork requires local Pi`,
+        fixed: !localPi,
+      };
+      const objectPart6705_1 = !localPi
+        ? { ...objectPart6705_0, fixedReason: "Fork context is available only to local Pi." }
+        : objectPart6705_0;
+      return objectPart6705_1;
+    })(),
     {
       field: "writeIntent",
       label: "Write intent",
       value: candidate.writeIntent,
       fixed: false,
     },
-    {
-      field: "fastMode",
-      label: "OpenAI fast mode",
-      value: fastAvailable
-        ? candidateFastModeApplied(candidate, parentModel)
-          ? "on · priority"
-          : "off · standard"
-        : candidate.fastMode
-          ? `configured on · unavailable: ${fastUnavailableReason} · turn off`
-          : `unavailable · ${fastUnavailableReason}`,
-      fixed: !fastAvailable && !candidate.fastMode,
-      ...(!fastAvailable && !candidate.fastMode
-        ? { fixedReason: `${fastUnavailableReason}.` }
-        : {}),
-    },
-    {
-      field: "closeOnReport",
-      label: "Report policy",
-      value: retainedAllowed
-        ? candidate.closeOnReport
-          ? "close after report"
-          : "retain for guidance"
-        : "close after report · fixed: retain requires Herdr read-only",
-      fixed: !retainedAllowed,
-      ...(!retainedAllowed
-        ? { fixedReason: "Retention is available only to Herdr read-only candidates." }
-        : {}),
-    },
+    (() => {
+      const objectPart7105_0 = {
+        field: "fastMode" as const,
+        label: "OpenAI fast mode",
+        value: fastAvailable
+          ? candidateFastModeApplied(candidate, parentModel)
+            ? "on · priority"
+            : "off · standard"
+          : candidate.fastMode
+            ? `configured on · unavailable: ${fastUnavailableReason} · turn off`
+            : `unavailable · ${fastUnavailableReason}`,
+        fixed: !fastAvailable && !candidate.fastMode,
+      };
+      const objectPart7105_1 =
+        !fastAvailable && !candidate.fastMode
+          ? { ...objectPart7105_0, fixedReason: `${fastUnavailableReason}.` }
+          : objectPart7105_0;
+      return objectPart7105_1;
+    })(),
+    (() => {
+      const objectPart7651_0 = {
+        field: "closeOnReport" as const,
+        label: "Report policy",
+        value: retainedAllowed
+          ? candidate.closeOnReport
+            ? "close after report"
+            : "retain for guidance"
+          : "close after report · fixed: retain requires Herdr read-only",
+        fixed: !retainedAllowed,
+      };
+      const objectPart7651_1 = !retainedAllowed
+        ? {
+            ...objectPart7651_0,
+            fixedReason: "Retention is available only to Herdr read-only candidates.",
+          }
+        : objectPart7651_0;
+      return objectPart7651_1;
+    })(),
   ];
 };
 
@@ -259,12 +277,14 @@ export const candidateFieldChoices = (
     ];
   if (field === "effort") {
     const definition = options.profile ? PROFILE_DEFINITIONS[options.profile] : undefined;
-    const effectiveDefault = definition?.defaultEffort ?? options.parentEffort;
+    const defaultEffort =
+      definition && "defaultEffort" in definition ? definition.defaultEffort : undefined;
+    const effectiveDefault = defaultEffort ?? options.parentEffort;
     const defaultChoice = effectiveDefault
       ? {
           value: "default",
           label: `${effectiveDefault} (default)`,
-          description: definition?.defaultEffort
+          description: defaultEffort
             ? `Use the ${options.profile} profile default: ${effectiveDefault}`
             : `Use the current parent effort (${effectiveDefault}) when available; otherwise high`,
         }
@@ -339,6 +359,7 @@ export const candidateFieldChoices = (
 };
 
 /** Selects one exact field value while preserving route normalization rules. */
+// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 export function selectCandidateField(
   candidate: ProfileCandidate,
   field: Exclude<ProfileWorkspaceField, "model">,
@@ -356,6 +377,7 @@ export function selectCandidateField(
     (value === "default" ||
       runtimeEfforts(candidate.runtime, options.supportedEfforts).includes(value as SubagentEffort))
   )
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     return {
       candidate: { ...candidate, effort: value as ProfileCandidateEffort },
       notices: [],

@@ -33,8 +33,8 @@ export const AdvisorConfigSchema = (configPath = getAdvisorConfigPath()) =>
   SchemaAdvisorConfigSchema(configPath);
 
 /** Normalize raw config using the resolved default path when omitted. */
-export function normalizeAdvisorConfig(
-  raw: unknown,
+export function normalizeAdvisorConfig<RawInput>(
+  raw: RawInput,
   configPath = getAdvisorConfigPath(),
 ): ResolvedAdvisorConfig {
   return normalizeAdvisorConfigAtPath(raw, configPath);

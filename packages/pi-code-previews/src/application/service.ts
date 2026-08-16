@@ -8,7 +8,7 @@ import { CodePreviewSettingsService } from "../config/store";
 import type { CodePreviewSettings } from "../config/schema";
 import { CodePreviewSyntaxService } from "../syntax/service";
 
-export interface CodePreviewSessionShape {
+export interface CodePreviewSessionContract {
   readonly loadSettings: (
     cwd: string,
     projectTrusted: boolean,
@@ -18,7 +18,7 @@ export interface CodePreviewSessionShape {
 
 export class CodePreviewSession extends Context.Service<
   CodePreviewSession,
-  CodePreviewSessionShape
+  CodePreviewSessionContract
 >()("pi-code-previews/application/service/CodePreviewSession") {
   static readonly layer = Layer.effect(
     this,

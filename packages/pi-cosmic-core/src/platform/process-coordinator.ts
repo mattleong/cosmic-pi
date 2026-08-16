@@ -36,7 +36,7 @@ const withProcessLock = <A, E, R>(
     );
   });
 
-export interface ProcessCoordinatorShape {
+export interface ProcessCoordinatorContract {
   readonly withLock: <A, E, R>(
     key: string,
     effect: Effect.Effect<A, E, R>,
@@ -46,7 +46,7 @@ export interface ProcessCoordinatorShape {
 /** Coordinates keyed effects across independently built Layers in this process. */
 export class ProcessCoordinator extends Context.Service<
   ProcessCoordinator,
-  ProcessCoordinatorShape
+  ProcessCoordinatorContract
 >()("pi-cosmic-core/platform/process-coordinator/ProcessCoordinator") {
   static readonly layer = Layer.succeed(
     this,

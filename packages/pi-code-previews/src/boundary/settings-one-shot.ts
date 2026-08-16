@@ -3,12 +3,24 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
+import * as Schema from "effect/Schema";
+import {
+  AgentDirectory,
+  isStringValue,
+  nodeFilePlatformLayer,
+  piHostLoggerLayer,
+} from "pi-cosmic-core";
 import { CodePreviewEnvironmentService } from "../config/env";
 import { CodePreviewSettingsService } from "../config/service";
 
 const oneShotSettingsLayer = () => {
-  const environment = Reflect.get(process, "env") as Readonly<Record<string, string>>;
+  const environment = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.String))(
+    Object.fromEntries(
+      Object.entries(process.env).flatMap(([key, value]) =>
+        isStringValue(value) ? [[key, value]] : [],
+      ),
+    ),
+  );
   return Layer.merge(
     CodePreviewSettingsService.layer.pipe(
       Layer.provideMerge(CodePreviewEnvironmentService.layerFrom(environment)),

@@ -8,11 +8,12 @@ import { dirname, join } from "node:path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Schema from "effect/Schema";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CodeModeConfigStore,
-  type CodeModeConfigStoreShape,
+  type CodeModeConfigStoreContract,
   type CodeModeSettingsError,
   type CodeModeState,
 } from "../src/config/store.ts";
@@ -38,16 +39,19 @@ function harness(projectTrusted: boolean) {
   // One long-lived runtime per harness: every operation exercises the same store authority.
   const runtime = ManagedRuntime.make(layer);
   runtimes.push(runtime);
-  const use = <A, E>(body: (store: CodeModeConfigStoreShape) => Effect.Effect<A, E>): Promise<A> =>
-    runtime.runPromise(CodeModeConfigStore.use((store) => body(store)));
+  const use = <A, E>(
+    body: (store: CodeModeConfigStoreContract) => Effect.Effect<A, E>,
+  ): Promise<A> => runtime.runPromise(CodeModeConfigStore.use((store) => body(store)));
   const globalPath = join(agentDir, "extensions", "pi-code-mode.json");
   const projectPath = join(cwd, ".pi", "extensions", "pi-code-mode.json");
-  const writeDoc = (path: string, document: unknown) => {
+  const writeDoc = (path: string, document: Schema.JsonObject) => {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify(document)}\n`);
   };
-  const readDoc = (path: string): Record<string, unknown> =>
-    JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  const readDoc = (path: string): Schema.JsonObject =>
+    Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(
+      JSON.parse(readFileSync(path, "utf8")),
+    );
   return { cwd, agentDir, published, use, globalPath, projectPath, writeDoc, readDoc };
 }
 

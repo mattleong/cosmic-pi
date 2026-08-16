@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SubagentProjection, SubagentRunState, SubagentRunView } from "../src/run/model.ts";
 import { fleetStatus } from "../src/run/projection.ts";
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const projection = (...states: ReadonlyArray<SubagentRunState>): SubagentProjection => ({
   revision: 1,
   runs: states.map((state) => ({ state }) as SubagentRunView),

@@ -7,15 +7,15 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import {
-  type AtomicJsonDocumentStoreShape,
+  type AtomicJsonDocumentStoreContract,
   JsonDocumentStore,
   type JsonDocumentModification,
-  type JsonDocumentStoreShape,
+  type JsonDocumentStoreContract,
   type JsonObject,
 } from "../platform/json-document.ts";
 import {
   JsonHttpClient,
-  type JsonHttpClientShape,
+  type JsonHttpClientContract,
   type JsonHttpRequest,
   type JsonHttpRequestInput,
 } from "../platform/json-http.ts";
@@ -23,7 +23,7 @@ import { JsonDocumentError, JsonHttpError, StreamingHttpError } from "../platfor
 import {
   encodeStreamingJsonBody,
   StreamingHttpClient,
-  type StreamingHttpClientShape,
+  type StreamingHttpClientContract,
   type StreamingHttpRequest,
   type StreamingHttpResponse,
 } from "../platform/streaming-http.ts";
@@ -31,7 +31,7 @@ import {
 export interface InMemoryDocuments {
   /** Mutable compatibility handle for simulating external document changes in tests. */
   readonly documents: Map<string, JsonObject>;
-  readonly service: AtomicJsonDocumentStoreShape;
+  readonly service: AtomicJsonDocumentStoreContract;
   readonly layer: Layer.Layer<JsonDocumentStore>;
   readonly injectBeforeNextUpdate: (update: (current: JsonObject) => JsonObject) => void;
   readonly blockNextUpdateBeforeCommit: (
@@ -51,7 +51,7 @@ interface JsonDocumentUpdateGate {
   readonly release: Deferred.Deferred<void>;
 }
 
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
 const JsonObjectFromString = Schema.fromJsonString(JsonObjectSchema);
 
 const cloneInitialDocument = (document: JsonObject): JsonObject => {
@@ -111,9 +111,9 @@ class JsonDocumentMapView implements Map<string, JsonObject> {
     return this.snapshot().values();
   }
 
-  forEach(
+  forEach<ThisArgInput>(
     callback: (value: JsonObject, key: string, map: Map<string, JsonObject>) => void,
-    thisArg?: unknown,
+    thisArg?: ThisArgInput,
   ): void {
     for (const [path, document] of this.entries()) callback.call(thisArg, document, path, this);
   }
@@ -123,7 +123,7 @@ class JsonDocumentMapView implements Map<string, JsonObject> {
   }
 }
 
-const cloneDocument = (operation: string, path: string, document: unknown) =>
+const cloneDocument = (operation: string, path: string, document: JsonObject) =>
   Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
     Effect.flatMap((source) => Schema.decodeUnknownEffect(JsonObjectFromString)(source)),
     Effect.mapError(
@@ -154,11 +154,12 @@ export function makeInMemoryDocuments(
     pathSemaphores.set(path, created);
     return created;
   };
-  const modifyObject: AtomicJsonDocumentStoreShape["modifyObject"] = (path, modify) =>
+  const modifyObject: AtomicJsonDocumentStoreContract["modifyObject"] = (path, modify) =>
     semaphoreFor(path).withPermit(
       Effect.gen(function* () {
         updateCount++;
         const current = storedDocuments.get(path);
+        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
         const isolated =
           current === undefined ? ({} as JsonObject) : yield* cloneDocument("read", path, current);
         const atomicCurrent = beforeNextUpdate ? beforeNextUpdate(isolated) : isolated;
@@ -182,7 +183,7 @@ export function makeInMemoryDocuments(
         return value;
       }),
     );
-  const updateObject: JsonDocumentStoreShape["updateObject"] = (path, update) =>
+  const updateObject: JsonDocumentStoreContract["updateObject"] = (path, update) =>
     modifyObject(path, (document) =>
       Effect.try({
         try: () => {
@@ -200,7 +201,7 @@ export function makeInMemoryDocuments(
           }),
       }),
     );
-  const service: AtomicJsonDocumentStoreShape = {
+  const service: AtomicJsonDocumentStoreContract = {
     exists: (path) => Effect.succeed(storedDocuments.has(path)),
     readObject: (path) =>
       Effect.gen(function* () {
@@ -261,8 +262,9 @@ const jsonHttpError = (operation: JsonHttpError["operation"], message: string) =
 export const jsonHttpTestLayer = (
   handle: (input: JsonHttpTestRequest) => Effect.Effect<JsonHttpTestResponse, JsonHttpError>,
 ): Layer.Layer<JsonHttpClient> => {
-  const request: JsonHttpClientShape["request"] = <A, R>(input: JsonHttpRequestInput<A, R>) =>
+  const request: JsonHttpClientContract["request"] = <A, R>(input: JsonHttpRequestInput<A, R>) =>
     Effect.gen(function* () {
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       const response = yield* handle(input as JsonHttpTestRequest);
       const accepted = (input.acceptStatus ?? ((status) => status >= 200 && status < 300))(
         response.status,
@@ -305,8 +307,8 @@ export const streamingHttpTestLayer = (
     input: StreamingHttpTestRequest,
   ) => Effect.Effect<StreamingHttpResponse, StreamingHttpError>,
 ): Layer.Layer<StreamingHttpClient> => {
-  const requestRawBytes: StreamingHttpClientShape["requestRawBytes"] = handle;
-  const requestJsonRawBytes: StreamingHttpClientShape["requestJsonRawBytes"] = (
+  const requestRawBytes: StreamingHttpClientContract["requestRawBytes"] = handle;
+  const requestJsonRawBytes: StreamingHttpClientContract["requestJsonRawBytes"] = (
     input,
     bodySchema,
     body,

@@ -62,6 +62,7 @@ export function renderWithShiki(
   }
   if (!snapshot.loadedLanguages.includes(language)) requestSyntaxLanguage(language, invalidate);
   try {
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const tokens = snapshot.highlighter.codeToTokensBase(code, {
       lang: language as never,
       theme: snapshot.theme as never,

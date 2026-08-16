@@ -7,7 +7,11 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { CodeMode, Tool, toolError, type ToolError } from "../boundary/codemode-runtime.ts";
-import type { NestedPiToolDispatch, PiGuestToolName } from "../boundary/host-builtin-tools.ts";
+import type {
+  NestedPiToolDispatch,
+  PiGuestToolInput,
+  PiGuestToolName,
+} from "../boundary/host-builtin-tools.ts";
 import type { CumulativeOutputBudget } from "./limits.ts";
 
 /** Input contracts validated by the runtime before any nested dispatch happens. */
@@ -52,7 +56,7 @@ const LsInput = Schema.Struct({
   limit: Schema.optionalKey(Schema.Number),
 });
 
-const GUEST_TOOL_DESCRIPTIONS: Readonly<Record<PiGuestToolName, string>> = {
+const GUEST_TOOL_DESCRIPTIONS = {
   read:
     "Read one text file (same behavior and filesystem authority as the top-level read tool; " +
     "absolute paths are allowed). Returns the file text; image files are refused.",
@@ -74,7 +78,7 @@ const GUEST_TOOL_DESCRIPTIONS: Readonly<Record<PiGuestToolName, string>> = {
     "Optional path, glob filter, ignoreCase, literal, context lines, and match limit.",
   find: "Find files by glob pattern (respects .gitignore). Optional search path and result limit.",
   ls: "List directory contents. Optional path (defaults to the session cwd) and entry limit.",
-};
+} satisfies Readonly<Record<PiGuestToolName, string>>;
 
 const GUEST_TOOL_INPUTS = {
   read: ReadInput,
@@ -88,7 +92,7 @@ const GUEST_TOOL_INPUTS = {
 
 export type GuestInvoke = (
   name: PiGuestToolName,
-  input: unknown,
+  input: PiGuestToolInput,
 ) => Effect.Effect<string, ToolError>;
 
 const guestTool = <Name extends PiGuestToolName>(name: Name, invoke: GuestInvoke) =>

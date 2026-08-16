@@ -8,7 +8,7 @@ import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type {
   SubagentAwaitUntil,
   SubagentRunObservation,
-  SubagentServiceShape,
+  SubagentServiceContract,
 } from "./service.ts";
 import { snapshotView } from "./state.ts";
 
@@ -62,21 +62,25 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       unresolved &&
       claimToken !== undefined &&
       completionClaimOwner(record, generation) === claimToken;
-    return {
-      run: owns ? snapshotView(record.view) : redactCompletionReport(record.view),
-      ...(owns
+    return (() => {
+      const objectPart2781_0 = {
+        run: owns ? snapshotView(record.view) : redactCompletionReport(record.view),
+      };
+      const objectPart2781_1 = owns
         ? {
+            ...objectPart2781_0,
             completionReceipt: {
               id: record.view.id,
               generation,
               claimToken,
             },
           }
-        : {}),
-    };
+        : objectPart2781_0;
+      return objectPart2781_1;
+    })();
   };
 
-  const consumeCompletions: SubagentServiceShape["consumeCompletions"] = (receipts) =>
+  const consumeCompletions: SubagentServiceContract["consumeCompletions"] = (receipts) =>
     withLock(
       Effect.sync(() => {
         for (const receipt of receipts) {
@@ -221,7 +225,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       );
     return waitLoop();
   };
-  const withAwaitTerminalObservations: SubagentServiceShape["withAwaitTerminalObservations"] = (
+  const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] = (
     ids,
     until,
     onUpdate,
@@ -240,7 +244,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       releaseCompletionClaims,
     );
   };
-  const withStatusObservations: SubagentServiceShape["withStatusObservations"] = (ids, use) =>
+  const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (ids, use) =>
     Effect.acquireUseRelease(
       acquireCompletionClaims(ids, false, true),
       (claim) =>
@@ -251,7 +255,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       releaseCompletionClaims,
     );
 
-  const awaitTerminal: SubagentServiceShape["awaitTerminal"] = (ids, until, onUpdate) =>
+  const awaitTerminal: SubagentServiceContract["awaitTerminal"] = (ids, until, onUpdate) =>
     withAwaitTerminalObservations(ids, until, onUpdate, (observations) =>
       consumeCompletions(
         observations.flatMap((observation) =>

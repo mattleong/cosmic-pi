@@ -1,3 +1,5 @@
+import type { JsonObject } from "pi-cosmic-core";
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import type { SubagentSessionEvent } from "./model.ts";
 import { MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
@@ -20,20 +22,21 @@ const bytes = (event: SubagentSessionEvent): number => {
   return size;
 };
 
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-  value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
+// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+const asRecord = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined =>
+  value !== null && hasObjectRuntimeType(value) && !Array.isArray(value)
+    ? (value as Readonly<JsonObject>)
     : undefined;
 
-const stringField = (
-  record: Readonly<Record<string, unknown>> | undefined,
-  key: string,
-): string | undefined => {
+const stringField = (record: Readonly<JsonObject> | undefined, key: string): string | undefined => {
   const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return isStringValue(value) && value.trim() ? value.trim() : undefined;
 };
 
-export function summarizeToolArguments(toolName: string, args: unknown): string | undefined {
+export function summarizeToolArguments<ArgsInput>(
+  toolName: string,
+  args: ArgsInput,
+): string | undefined {
   const input = asRecord(args);
   const path =
     stringField(input, "path") ?? stringField(input, "file_path") ?? stringField(input, "cwd");
@@ -128,14 +131,23 @@ export function startToolSessionEvent(
   },
 ): ReadonlyArray<SubagentSessionEvent> {
   const target = summarizeToolArguments(input.toolName, input.args);
-  return appendSessionEvent(current, {
-    type: "tool",
-    toolCallId: sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS),
-    toolName: sanitizeDiagnosticText(input.toolName, 200),
-    ...(target ? { target } : {}),
-    state: "running",
-    startedAt: input.startedAt,
-  });
+  return appendSessionEvent(
+    current,
+    (() => {
+      const objectPart4450_0 = {
+        type: "tool" as const,
+        toolCallId: sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS),
+        toolName: sanitizeDiagnosticText(input.toolName, 200),
+      };
+      const objectPart4450_1 = target ? { ...objectPart4450_0, target } : objectPart4450_0;
+      const objectPart4450_2 = {
+        ...objectPart4450_1,
+        state: "running" as const,
+        startedAt: input.startedAt,
+      };
+      return objectPart4450_2;
+    })(),
+  );
 }
 
 export function finishToolSessionEvent(

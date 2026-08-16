@@ -30,7 +30,7 @@ export type StreamingJsonBodyCodec<A, E, R> =
       ? never
       : Schema.ConstraintCodec<A, E, unknown, R>;
 
-export interface StreamingHttpClientShape {
+export interface StreamingHttpClientContract {
   readonly requestRawBytes: (
     request: StreamingHttpRequest,
   ) => Effect.Effect<StreamingHttpResponse, StreamingHttpError>;
@@ -60,7 +60,7 @@ export const encodeStreamingJsonBody = <A, E, R>(
 
 export class StreamingHttpClient extends Context.Service<
   StreamingHttpClient,
-  StreamingHttpClientShape
+  StreamingHttpClientContract
 >()("pi-cosmic-core/platform/streaming-http/StreamingHttpClient") {
   static readonly layer = Layer.effect(
     this,
@@ -103,9 +103,9 @@ export class StreamingHttpClient extends Context.Service<
           ),
         } satisfies StreamingHttpResponse;
       });
-      const requestRawBytes: StreamingHttpClientShape["requestRawBytes"] = (input) =>
+      const requestRawBytes: StreamingHttpClientContract["requestRawBytes"] = (input) =>
         execute(input);
-      const requestJsonRawBytes: StreamingHttpClientShape["requestJsonRawBytes"] = (
+      const requestJsonRawBytes: StreamingHttpClientContract["requestJsonRawBytes"] = (
         input,
         bodySchema,
         body,

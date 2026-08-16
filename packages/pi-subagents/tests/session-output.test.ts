@@ -12,10 +12,11 @@ import {
 import { renderSubagentSessionOutput } from "../src/ui/session-output.ts";
 import { sanitizeTerminalText } from "../src/ui/sanitize.ts";
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
-} as unknown as Theme;
+} as Theme;
 
 const runView = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   id: "agent-1",
@@ -328,10 +329,11 @@ describe("structured subagent session output", () => {
   });
 
   it("styles ordinary warning notices as warnings rather than errors", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const taggedTheme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const rendered = renderSubagentSessionOutput(
       runView({
         sessionEvents: [{ type: "notice", kind: "warning", text: "Check this", createdAt: 2_000 }],

@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import {
   defineTool,
   type ExtensionAPI,
@@ -15,6 +16,7 @@ import {
   OPENAI_IMAGE_TOOL,
   TOOL_PARAMS,
   type CodexImageResult,
+  type ToolParams,
 } from "./types.ts";
 
 export function registerOpenAIImage(
@@ -22,7 +24,7 @@ export function registerOpenAIImage(
   run: <A, E>(effect: Effect.Effect<A, E, OpenAIImageService>, signal?: AbortSignal) => Promise<A>,
   updateContext: (ctx: ExtensionContext) => void,
 ) {
-  const generate = (params: unknown, ctx: ExtensionContext, signal?: AbortSignal) => {
+  const generate = (params: ToolParams, ctx: ExtensionContext, signal?: AbortSignal) => {
     updateContext(ctx);
     return run(
       OpenAIImageService.use((service) => service.generate(params)),
@@ -31,10 +33,11 @@ export function registerOpenAIImage(
   };
   pi.registerMessageRenderer<CodexImageResult>("openai-image", (message, _options, theme) => {
     const result = message.details;
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const text =
       result && Predicate.isObject(result)
         ? resultText(result as CodexImageResult)
-        : typeof message.content === "string"
+        : isStringValue(message.content)
           ? message.content
           : message.content
               .filter((part) => part.type === "text")
@@ -44,14 +47,16 @@ export function registerOpenAIImage(
     if (
       result &&
       Predicate.isObject(result) &&
-      typeof result.data === "string" &&
-      typeof result.mimeType === "string"
+      isStringValue(result.data) &&
+      isStringValue(result.mimeType)
     )
-      image = {
-        data: result.data,
-        mimeType: result.mimeType,
-        ...(typeof result.savedPath === "string" ? { savedPath: result.savedPath } : {}),
-      };
+      image = (() => {
+        const objectPart1904_0 = { data: result.data, mimeType: result.mimeType };
+        const objectPart1904_1 = isStringValue(result.savedPath)
+          ? { ...objectPart1904_0, savedPath: result.savedPath }
+          : objectPart1904_0;
+        return objectPart1904_1;
+      })();
     else if (Array.isArray(message.content)) {
       const part = message.content.find(isImageContent);
       if (part) image = part;
@@ -65,11 +70,13 @@ export function registerOpenAIImage(
           image.data,
           image.mimeType,
           { fallbackColor: (line) => theme.fg("dim", line) },
-          {
-            maxWidthCells: 80,
-            maxHeightCells: 24,
-            ...(image.savedPath ? { filename: image.savedPath } : {}),
-          },
+          (() => {
+            const objectPart2591_0 = { maxWidthCells: 80, maxHeightCells: 24 };
+            const objectPart2591_1 = image.savedPath
+              ? { ...objectPart2591_0, filename: image.savedPath }
+              : objectPart2591_0;
+            return objectPart2591_1;
+          })(),
         ),
       );
     container.addChild(box);

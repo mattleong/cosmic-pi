@@ -19,7 +19,7 @@ export const PROFILE_IDS = [
 export type ProfileId = (typeof PROFILE_IDS)[number];
 
 export const isProfileId = (value: string): value is ProfileId =>
-  (PROFILE_IDS as ReadonlyArray<string>).includes(value);
+  PROFILE_IDS.some((profileId) => profileId === value);
 
 export const normalizeProfileId = (value: string): ProfileId | undefined =>
   isProfileId(value) ? value : undefined;

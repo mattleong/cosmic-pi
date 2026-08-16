@@ -4,7 +4,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
   JsonDocumentStore,
-  type JsonDocumentStoreShape,
+  type JsonDocumentStoreContract,
   type JsonObject,
 } from "../src/platform/json-document.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
@@ -36,6 +36,7 @@ it("preserves and decodes only own __proto__ fields without prototype mutation",
     writable: true,
   });
   const ProtoFieldSchema = Schema.Struct({ enabled: Schema.Boolean });
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const fields = Object.create(null) as { readonly __proto__: typeof ProtoFieldSchema };
   Object.defineProperty(fields, "__proto__", {
     value: ProtoFieldSchema,
@@ -99,7 +100,7 @@ testLayer(Path.layer)("scoped document paths", (it) => {
       "/project/.pi/extensions/config.json": { valid: true },
     });
     const operations: string[] = [];
-    const service: JsonDocumentStoreShape = {
+    const service: JsonDocumentStoreContract = {
       ...memory.service,
       exists: (path) => {
         operations.push(`exists:${path}`);
@@ -168,7 +169,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
         operations.push(`${operation}:${path}`);
         return method(path, ...rest);
       };
-    const service: JsonDocumentStoreShape = {
+    const service: JsonDocumentStoreContract = {
       exists: record("exists", memory.service.exists),
       readObject: record("read", memory.service.readObject),
       writeObject: record("write", memory.service.writeObject),

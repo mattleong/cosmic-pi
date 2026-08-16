@@ -1,3 +1,4 @@
+import { isBooleanValue, isStringValue } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
 
@@ -62,9 +63,11 @@ export type ToolCallBackgroundMode = typeof ToolCallBackgroundModeSchema.Type;
 export type PathIconMode = typeof PathIconModeSchema.Type;
 export type CodePreviewEditableSettingId = keyof CodePreviewSettings | "resetToDefaults";
 
-export function parseToolCallBackgroundMode(value: unknown): ToolCallBackgroundMode | undefined {
-  if (typeof value === "boolean") return value ? "on" : "off";
-  if (typeof value !== "string") return undefined;
+export function parseToolCallBackgroundMode<ValueInput>(
+  value: ValueInput,
+): ToolCallBackgroundMode | undefined {
+  if (isBooleanValue(value)) return value ? "on" : "off";
+  if (!isStringValue(value)) return undefined;
 
   const normalized = value.toLowerCase();
   if (isToolCallBackgroundMode(normalized)) return normalized;
@@ -73,8 +76,9 @@ export function parseToolCallBackgroundMode(value: unknown): ToolCallBackgroundM
   return undefined;
 }
 
-export function isToolCallBackgroundMode(value: unknown): value is ToolCallBackgroundMode {
-  return (
-    typeof value === "string" && (TOOL_CALL_BACKGROUND_MODES as readonly string[]).includes(value)
-  );
+export function isToolCallBackgroundMode<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & ToolCallBackgroundMode {
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
+  return isStringValue(value) && (TOOL_CALL_BACKGROUND_MODES as readonly string[]).includes(value);
 }

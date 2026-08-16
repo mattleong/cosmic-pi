@@ -3,10 +3,11 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/globalTimers:off
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
 
-const isNoSuchProcess = (error: unknown): boolean =>
-  typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
+const isNoSuchProcess = <ErrorInput>(error: ErrorInput): boolean =>
+  hasObjectRuntimeType(error) && error !== null && "code" in error && error.code === "ESRCH";
 
 export interface ProcessTreeRuntime {
   readonly platform?: NodeJS.Platform;

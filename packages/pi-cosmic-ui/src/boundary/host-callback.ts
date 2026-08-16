@@ -24,7 +24,7 @@ export interface HostCallbackDiagnostic {
   readonly operation: HostCallbackOperation;
 }
 
-export interface HostCallbackBoundaryShape {
+export interface HostCallbackBoundaryContract {
   /** Invokes a hostile synchronous host/extension callback without exposing its error or data. */
   readonly invoke: <A>(operation: HostCallbackOperation, callback: () => A, fallback: A) => A;
   readonly diagnostics: () => readonly HostCallbackDiagnostic[];
@@ -38,15 +38,15 @@ export interface HostAbortSignalSnapshot {
 
 export class HostCallbackBoundary extends Context.Service<
   HostCallbackBoundary,
-  HostCallbackBoundaryShape
+  HostCallbackBoundaryContract
 >()("pi-cosmic-ui/boundary/host-callback/HostCallbackBoundary") {
-  static layer(service: HostCallbackBoundaryShape) {
+  static layer(service: HostCallbackBoundaryContract) {
     return Layer.succeed(this, service);
   }
 }
 
 /** Creates the single synchronous callback boundary shared by pre-session and session code. */
-export function makeHostCallbackBoundary(maxDiagnostics = 32): HostCallbackBoundaryShape {
+export function makeHostCallbackBoundary(maxDiagnostics = 32): HostCallbackBoundaryContract {
   const capacity = Math.max(1, Math.floor(maxDiagnostics));
   const failures: HostCallbackDiagnostic[] = [];
   const record = (operation: HostCallbackOperation) => {
@@ -68,7 +68,7 @@ export function makeHostCallbackBoundary(maxDiagnostics = 32): HostCallbackBound
 
 /** Owns a native abort forwarder so capture-to-registration races cannot lose a host abort. */
 export function snapshotHostAbortSignal(
-  callbacks: HostCallbackBoundaryShape,
+  callbacks: HostCallbackBoundaryContract,
   read: () => AbortSignal | undefined,
 ): HostAbortSignalSnapshot | undefined {
   return callbacks.invoke<HostAbortSignalSnapshot | undefined>(

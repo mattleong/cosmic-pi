@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import { hasObjectRuntimeType, isBooleanValue, isNumberValue, isStringValue } from "pi-cosmic-core";
 import { constants, promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -9,8 +10,8 @@ import { isAbsolute, join, resolve } from "node:path";
 export const MAX_AUTH_BYTES = 64 * 1024;
 export const MAX_PATH_CHARS = 4_096;
 
-export const nodeErrorCode = (error: unknown): string | undefined =>
-  error && typeof error === "object" && "code" in error && typeof error.code === "string"
+export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined =>
+  error && hasObjectRuntimeType(error) && "code" in error && isStringValue(error.code)
     ? error.code
     : undefined;
 
@@ -66,13 +67,16 @@ export const safeAgentDirectory = async (agentDirectory: string): Promise<string
   return canonical;
 };
 
-export const boundedJsonValue = (value: unknown, depth = 0): boolean => {
+export const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): boolean => {
   if (depth > 16) return false;
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
+  if (value === null || isStringValue(value) || isBooleanValue(value)) return true;
+  if (isNumberValue(value)) return Number.isFinite(value);
   if (Array.isArray(value))
-    return value.length <= 1_024 && value.every((entry) => boundedJsonValue(entry, depth + 1));
-  if (typeof value !== "object") return false;
+    return (
+      value.length <= 1_024 &&
+      value.every(<EntryInput>(entry: EntryInput) => boundedJsonValue(entry, depth + 1))
+    );
+  if (!hasObjectRuntimeType(value)) return false;
   const entries = Object.entries(value);
   return (
     entries.length <= 1_024 &&
@@ -119,8 +123,9 @@ const readValidatedCodexAuthFromHome = async (sourceHome: string): Promise<strin
   }
   if (bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES) return undefined;
   try {
+    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
     const value = JSON.parse(bytes.toString("utf8")) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value) || !boundedJsonValue(value))
+    if (!value || !hasObjectRuntimeType(value) || Array.isArray(value) || !boundedJsonValue(value))
       return undefined;
     return `${JSON.stringify(value)}\n`;
   } catch {
@@ -142,7 +147,7 @@ export const harnessCleanupUnconfirmed = (
     cleanupUnconfirmed: true as const,
   });
 
-export const isHarnessCleanupUnconfirmed = (
-  error: unknown,
-): error is Error & { readonly cleanupUnconfirmed: true } =>
+export const isHarnessCleanupUnconfirmed = <ErrorInput>(
+  error: ErrorInput,
+): error is ErrorInput & Error & { readonly cleanupUnconfirmed: true } =>
   error instanceof Error && "cleanupUnconfirmed" in error && error.cleanupUnconfirmed === true;

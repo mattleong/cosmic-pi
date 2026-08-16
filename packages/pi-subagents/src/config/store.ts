@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -49,7 +50,7 @@ export interface SubagentProfilePatch {
   readonly projectTrusted: boolean;
 }
 
-export interface SubagentConfigStoreShape {
+export interface SubagentConfigStoreContract {
   readonly paths: (cwd: string, agentDirectory: string) => Effect.Effect<SubagentConfigPaths>;
   readonly load: (
     cwd: string,
@@ -70,7 +71,7 @@ export interface SubagentConfigStoreShape {
 
 export class SubagentConfigStore extends Context.Service<
   SubagentConfigStore,
-  SubagentConfigStoreShape
+  SubagentConfigStoreContract
 >()("pi-subagents/config/store/SubagentConfigStore") {}
 
 const storeError = makeConfigDocumentErrorFactory(SubagentConfigStoreError, "Subagents");
@@ -103,10 +104,11 @@ const trustError = (path: string) =>
     message: "Project profile settings require a trusted project.",
   });
 
-const stableJson = (value: unknown): string => {
+const stableJson = <ValueInput>(value: ValueInput): string => {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const record = value as Readonly<Record<string, unknown>>;
+  if (hasObjectRuntimeType(value) && value !== null) {
+    // SAFETY: Configuration decoding validates the persisted value before this typed access.
+    const record = value as Readonly<JsonObject>;
     return `{${Object.keys(record)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
@@ -117,16 +119,27 @@ const stableJson = (value: unknown): string => {
 
 const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
   if (route === "disabled") return route;
-  const candidate = (value: DeclaredProfileCandidate): JsonObject => ({
-    host: value.host,
-    runtime: value.runtime,
-    model: value.model,
-    effort: value.effort,
-    context: value.context,
-    writeIntent: value.writeIntent,
-    ...(value.fastMode === undefined ? {} : { fastMode: value.fastMode }),
-    ...(value.closeOnReport === undefined ? {} : { closeOnReport: value.closeOnReport }),
-  });
+  const candidate = (value: DeclaredProfileCandidate): JsonObject =>
+    (() => {
+      const objectPart4343_0 = {
+        host: value.host,
+        runtime: value.runtime,
+        model: value.model,
+        effort: value.effort,
+        context: value.context,
+        writeIntent: value.writeIntent,
+      };
+      const objectPart4343_1 =
+        value.fastMode === undefined
+          ? objectPart4343_0
+          : { ...objectPart4343_0, fastMode: value.fastMode };
+      const objectPart4343_2 =
+        value.closeOnReport === undefined
+          ? objectPart4343_1
+          : { ...objectPart4343_1, closeOnReport: value.closeOnReport };
+      return objectPart4343_2;
+    })();
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   return Array.isArray(route)
     ? (route as ReadonlyArray<DeclaredProfileCandidate>).map(candidate)
     : candidate(route as DeclaredProfileCandidate);
@@ -136,8 +149,9 @@ const applyProfilePatch = (
   current: JsonObject,
   patch: Pick<SubagentProfilePatch, "profile" | "route">,
 ): JsonObject => {
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   const currentProfiles =
-    typeof current.profiles === "object" &&
+    hasObjectRuntimeType(current.profiles) &&
     current.profiles !== null &&
     !Array.isArray(current.profiles)
       ? (current.profiles as JsonObject)
@@ -156,13 +170,13 @@ export const subagentConfigStoreLayer = Layer.effect(
   Effect.gen(function* () {
     const documents = yield* JsonDocumentStore;
     const path = yield* Path.Path;
-    const paths: SubagentConfigStoreShape["paths"] = (cwd, agentDirectory) =>
+    const paths: SubagentConfigStoreContract["paths"] = (cwd, agentDirectory) =>
       Effect.succeed({
         global: path.join(agentDirectory, SUBAGENT_CONFIG_BASENAME),
         project: path.join(cwd, CONFIG_DIR_NAME, SUBAGENT_CONFIG_BASENAME),
       });
 
-    const inspect: SubagentConfigStoreShape["inspect"] = (cwd, agentDirectory, projectTrusted) =>
+    const inspect: SubagentConfigStoreContract["inspect"] = (cwd, agentDirectory, projectTrusted) =>
       Effect.gen(function* () {
         const locations = yield* paths(cwd, agentDirectory);
         const globalRaw = yield* documents
@@ -193,28 +207,46 @@ export const subagentConfigStoreLayer = Layer.effect(
           return yield* unsupportedVersionError(locations.project);
         if (project?.diagnostics.some((diagnostic) => diagnostic.endsWith(".<unknown>")))
           return yield* unsupportedFieldsError(locations.project);
-        const config = resolveSubagentConfig({
-          globalConfigPath: locations.global,
-          projectConfigPath: locations.project,
-          projectTrusted,
-          globalConfigExists: globalRaw !== undefined,
-          projectConfigExists: projectRaw !== undefined,
-          global,
-          ...(project === undefined ? {} : { project }),
-        });
-        return {
-          config,
-          ...(globalRaw === undefined ? {} : { globalDocument: globalRaw }),
-          ...(projectRaw === undefined ? {} : { projectDocument: projectRaw }),
-          global,
-          ...(project === undefined ? {} : { project }),
-        };
+        const config = resolveSubagentConfig(
+          (() => {
+            const objectPart7776_0 = {
+              globalConfigPath: locations.global,
+              projectConfigPath: locations.project,
+              projectTrusted,
+              globalConfigExists: globalRaw !== undefined,
+              projectConfigExists: projectRaw !== undefined,
+              global,
+            };
+            const objectPart7776_1 =
+              project === undefined ? objectPart7776_0 : { ...objectPart7776_0, project };
+            return objectPart7776_1;
+          })(),
+        );
+        return (() => {
+          const objectPart8112_0 = { config };
+          const objectPart8112_1 =
+            globalRaw === undefined
+              ? objectPart8112_0
+              : { ...objectPart8112_0, globalDocument: globalRaw };
+          const objectPart8112_2 =
+            projectRaw === undefined
+              ? objectPart8112_1
+              : { ...objectPart8112_1, projectDocument: projectRaw };
+          const objectPart8112_3 = { ...objectPart8112_2, global };
+          const objectPart8112_4 =
+            project === undefined ? objectPart8112_3 : { ...objectPart8112_3, project };
+          return objectPart8112_4;
+        })();
       });
 
-    const load: SubagentConfigStoreShape["load"] = (cwd, agentDirectory, projectTrusted) =>
+    const load: SubagentConfigStoreContract["load"] = (cwd, agentDirectory, projectTrusted) =>
       inspect(cwd, agentDirectory, projectTrusted).pipe(Effect.map((result) => result.config));
 
-    const patchProfile: SubagentConfigStoreShape["patchProfile"] = (cwd, agentDirectory, patch) =>
+    const patchProfile: SubagentConfigStoreContract["patchProfile"] = (
+      cwd,
+      agentDirectory,
+      patch,
+    ) =>
       Effect.gen(function* () {
         const locations = yield* paths(cwd, agentDirectory);
         const target = patch.scope === "global" ? locations.global : locations.project;

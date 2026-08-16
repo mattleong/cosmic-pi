@@ -66,11 +66,12 @@ if (args.includes("--print")) {
       const success = (response) =>
         write({
           type: "control_response",
-          response: {
-            subtype: "success",
-            request_id: frame.request_id,
-            ...(response === undefined ? {} : { response }),
-          },
+          response: (() => {
+            const objectPart2323_0 = { subtype: "success", request_id: frame.request_id };
+            const objectPart2323_1 =
+              response === undefined ? objectPart2323_0 : { ...objectPart2323_0, response };
+            return objectPart2323_1;
+          })(),
         });
       if (frame.request?.subtype === "initialize") {
         if (
@@ -141,31 +142,49 @@ if (args.includes("--print")) {
       if (frame.request?.subtype === "interrupt") {
         const response = () => success();
         const marker = () =>
-          write({
-            type: "user",
-            isReplay: true,
-            session_id: "claude-fixture-session",
-            ...(model === "interrupt-foreign-marker"
-              ? { uuid: "00000000-0000-4000-8000-00000000fade" }
-              : {}),
-            message: { role: "user", content: "[Request interrupted by user]" },
-          });
+          write(
+            (() => {
+              const objectPart5161_0 = {
+                type: "user",
+                isReplay: true,
+                session_id: "claude-fixture-session",
+              };
+              const objectPart5161_1 =
+                model === "interrupt-foreign-marker"
+                  ? { ...objectPart5161_0, uuid: "00000000-0000-4000-8000-00000000fade" }
+                  : objectPart5161_0;
+              const objectPart5161_2 = {
+                ...objectPart5161_1,
+                message: { role: "user", content: "[Request interrupted by user]" },
+              };
+              return objectPart5161_2;
+            })(),
+          );
         const result = () =>
-          write({
-            type: "result",
-            subtype: "error_during_execution",
-            stop_reason:
-              model === "interrupt-genuine-error" ? "provider_error" : "aborted_streaming",
-            is_error: true,
-            errors:
-              model === "interrupt-genuine-error"
-                ? ["genuine fixture failure"]
-                : ["Request aborted."],
-            session_id: "claude-fixture-session",
-            ...(model === "interrupt-foreign-result"
-              ? { user_message_uuid: "00000000-0000-4000-8000-00000000dead" }
-              : {}),
-          });
+          write(
+            (() => {
+              const objectPart5546_0 = {
+                type: "result",
+                subtype: "error_during_execution",
+                stop_reason:
+                  model === "interrupt-genuine-error" ? "provider_error" : "aborted_streaming",
+                is_error: true,
+                errors:
+                  model === "interrupt-genuine-error"
+                    ? ["genuine fixture failure"]
+                    : ["Request aborted."],
+                session_id: "claude-fixture-session",
+              };
+              const objectPart5546_1 =
+                model === "interrupt-foreign-result"
+                  ? {
+                      ...objectPart5546_0,
+                      user_message_uuid: "00000000-0000-4000-8000-00000000dead",
+                    }
+                  : objectPart5546_0;
+              return objectPart5546_1;
+            })(),
+          );
         const terminal = () => {
           if (model === "interrupt-result-first") {
             result();
@@ -200,13 +219,20 @@ if (args.includes("--print")) {
     const text = Array.isArray(frame.message?.content)
       ? frame.message.content.map((part) => part.text ?? "").join("\n")
       : String(frame.message?.content ?? "");
-    write({
-      type: "user",
-      isReplay: true,
-      session_id: "claude-fixture-session",
-      ...(frame.uuid ? { uuid: frame.uuid } : {}),
-      message: frame.message,
-    });
+    write(
+      (() => {
+        const objectPart7177_0 = {
+          type: "user",
+          isReplay: true,
+          session_id: "claude-fixture-session",
+        };
+        const objectPart7177_1 = frame.uuid
+          ? { ...objectPart7177_0, uuid: frame.uuid }
+          : objectPart7177_0;
+        const objectPart7177_2 = { ...objectPart7177_1, message: frame.message };
+        return objectPart7177_2;
+      })(),
+    );
     if (model === "duplicate-replay" && frame.uuid)
       write({
         type: "user",
@@ -224,15 +250,22 @@ if (args.includes("--print")) {
         message: { role: "user", content: "foreign injected input" },
       });
     if (frame.shouldQuery === false) {
-      write({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        result: "",
-        stop_reason: null,
-        session_id: "claude-fixture-session",
-        ...(frame.uuid ? { user_message_uuid: frame.uuid } : {}),
-      });
+      write(
+        (() => {
+          const objectPart7938_0 = {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "",
+            stop_reason: null,
+            session_id: "claude-fixture-session",
+          };
+          const objectPart7938_1 = frame.uuid
+            ? { ...objectPart7938_0, user_message_uuid: frame.uuid }
+            : objectPart7938_0;
+          return objectPart7938_1;
+        })(),
+      );
       return;
     }
     if (model === "malformed") {
@@ -286,16 +319,26 @@ if (args.includes("--print")) {
     // their terminal result. Other models complete normally and exercise missing-report handling.
     if (model !== "claude-fixture" && !model.startsWith("interrupt")) {
       const emitResult = () =>
-        write({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          result: "raw final ignored",
-          session_id: "claude-fixture-session",
-          ...(frame.uuid ? { user_message_uuid: frame.uuid } : {}),
-          usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
-          total_cost_usd: 0.001,
-        });
+        write(
+          (() => {
+            const objectPart10086_0 = {
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              result: "raw final ignored",
+              session_id: "claude-fixture-session",
+            };
+            const objectPart10086_1 = frame.uuid
+              ? { ...objectPart10086_0, user_message_uuid: frame.uuid }
+              : objectPart10086_0;
+            const objectPart10086_2 = {
+              ...objectPart10086_1,
+              usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
+              total_cost_usd: 0.001,
+            };
+            return objectPart10086_2;
+          })(),
+        );
       // Exceeds the former two-second grace to characterize real post-tool finalization.
       if (model === "buffered-report-cost") setTimeout(emitResult, 3_000);
       else emitResult();

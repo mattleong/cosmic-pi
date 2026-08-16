@@ -6,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import type { BackendStartupState } from "../backend/model.ts";
-import type { WriterLeaseShape } from "../boundary/writer-lease.ts";
+import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { processCapacityError, writerConflictError } from "./admission.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
@@ -31,7 +31,7 @@ export interface RunResumeDependencies {
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly publish: () => void;
-  readonly writerLeases: WriterLeaseShape;
+  readonly writerLeases: WriterLeaseContract;
   readonly delivery: RunNotificationDelivery;
   readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
   readonly requireCapability: (
@@ -274,13 +274,18 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     record.resumeToken = state.resumeToken;
                     const pendingSettlement = record.pendingInitializationSettlement;
                     record.pendingInitializationSettlement = undefined;
-                    record.view = {
-                      ...record.view,
-                      model: resolvedModel,
-                      effort: state.effort,
-                      sessionId: state.sessionId,
-                      ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
-                    };
+                    record.view = (() => {
+                      const objectPart12746_0 = {
+                        ...record.view,
+                        model: resolvedModel,
+                        effort: state.effort,
+                        sessionId: state.sessionId,
+                      };
+                      const objectPart12746_1 = state.sessionFile
+                        ? { ...objectPart12746_0, sessionFile: state.sessionFile }
+                        : objectPart12746_0;
+                      return objectPart12746_1;
+                    })();
                     publish();
                     return pendingSettlement;
                   }),

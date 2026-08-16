@@ -1,5 +1,6 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
+import { isFunctionValue } from "pi-cosmic-core";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
@@ -33,7 +34,7 @@ async function openProcessManager(
           fullScreenKeybindingLabel(
             id,
             fallback,
-            typeof keybindings.getKeys === "function"
+            isFunctionValue(keybindings.getKeys)
               ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
               : undefined,
           ),

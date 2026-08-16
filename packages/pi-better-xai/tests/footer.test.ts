@@ -1,9 +1,11 @@
+import { isFunctionValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { describe, expect, test, vi } from "vitest";
 import type { FooterMode, ResolvedConfig } from "../src/config/index.ts";
 import { createFooterController } from "../src/footer/controller.ts";
 import { makeProjection } from "../src/usage/index.ts";
+import { extensionContextFixture } from "./support/host.ts";
 
 const resolvedConfig = (mode: FooterMode): ResolvedConfig => ({
   configPath: "/agent/extensions/pi-better-xai.json",
@@ -24,11 +26,11 @@ function harness(initialMode: FooterMode) {
   const state = { mode: initialMode };
   const setFooter = vi.fn();
   const setStatus = vi.fn();
-  const ctx = {
+  const ctx = extensionContextFixture({
     mode: "tui",
     hasUI: true,
     ui: { setFooter, setStatus },
-  } as unknown as ExtensionContext;
+  });
   const projection = makeProjection();
   MutableRef.set(projection, {
     ...MutableRef.get(projection),
@@ -69,9 +71,7 @@ describe("xAI footer host boundaries", () => {
 
   test("keeps theme rendering and request-render callbacks total", () => {
     const h = harness("replace");
-    let factory:
-      | ((tui: unknown, theme: unknown) => { render(width: number): string[] })
-      | undefined;
+    let factory: Parameters<ExtensionContext["ui"]["setFooter"]>[0] | undefined;
     h.setFooter.mockImplementation((next) => {
       factory = next;
     });
@@ -81,13 +81,21 @@ describe("xAI footer host boundaries", () => {
     const requestRender = vi.fn(() => {
       throw new Error("host-render-secret");
     });
-    const footer = factory?.(
-      { requestRender },
-      {
-        fg() {
-          throw new Error("host-theme-secret");
-        },
+    const tuiFixture = { requestRender };
+    // SAFETY: The Better xAI footer factory uses only requestRender from the TUI host.
+    const tui = tuiFixture as typeof tuiFixture & Parameters<NonNullable<typeof factory>>[0];
+    const themeFixture = {
+      fg() {
+        throw new Error("host-theme-secret");
       },
+    };
+    // SAFETY: The Better xAI footer factory uses only fg from the theme host.
+    const theme = themeFixture as typeof themeFixture & Parameters<NonNullable<typeof factory>>[1];
+    const footer = factory?.(
+      tui,
+      theme,
+      // SAFETY: The Better xAI footer factory does not read footer data.
+      {} as never,
     );
 
     expect(footer?.render(80)).toEqual([]);
@@ -134,7 +142,7 @@ describe("xAI footer host boundaries", () => {
     const replacementRender = vi.fn();
     let originalFooter: { dispose(): void } | undefined;
     h.setFooter.mockImplementation((next) => {
-      if (typeof next === "function") {
+      if (isFunctionValue(next)) {
         const footer = next(
           { requestRender: originalFooter ? replacementRender : vi.fn() },
           { fg: (_tone: string, text: string) => text },
@@ -161,7 +169,7 @@ describe("xAI footer host boundaries", () => {
   test("contains hostile terminal-UI getters and retries the full update", () => {
     const h = harness("replace");
     let hostile = true;
-    const ctx = {
+    const ctx = extensionContextFixture({
       get mode() {
         if (hostile) throw new Error("host-mode-secret");
         return "tui";
@@ -171,7 +179,7 @@ describe("xAI footer host boundaries", () => {
         return true;
       },
       ui: { setFooter: h.setFooter, setStatus: h.setStatus },
-    } as unknown as ExtensionContext;
+    });
     const controller = createFooterController({
       config: () => resolvedConfig("replace"),
       projection: h.projection,

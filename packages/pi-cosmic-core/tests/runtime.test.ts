@@ -1,3 +1,4 @@
+import { isFunctionValue } from "../src/runtime-values.ts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -26,8 +27,9 @@ const makeHostileSignal = (operation: "aborted" | "addEventListener") => {
           removals++;
           return target.removeEventListener(...args);
         };
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
+      // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+      const value = property in target ? target[property as keyof AbortSignal] : undefined;
+      return isFunctionValue(value) ? value.bind(target) : value;
     },
   });
   return { signal, removals: () => removals };
@@ -35,13 +37,15 @@ const makeHostileSignal = (operation: "aborted" | "addEventListener") => {
 
 it.effect("provides the pi host API through one managed runtime", () =>
   Effect.gen(function* () {
-    const pi = { marker: "pi-api" } as unknown as ExtensionAPI;
+    const fixture = { marker: "pi-api" };
+    // SAFETY: This runtime test uses identity only; no unimplemented ExtensionAPI method is invoked.
+    const pi = fixture as typeof fixture & ExtensionAPI;
     const marker = yield* Effect.acquireUseRelease(
       Effect.sync(() => makePiRuntime(pi)),
       (runtime) =>
         Effect.promise(() =>
           runtime.runPromise(
-            PiApi.use((api) => Effect.succeed((api as unknown as { marker: string }).marker)),
+            PiApi.use((api) => Effect.succeed(api === pi ? fixture.marker : "wrong-api")),
           ),
         ),
       (runtime) => runtime.disposeEffect,
@@ -53,6 +57,7 @@ it.effect("provides the pi host API through one managed runtime", () =>
 
 it.effect("keeps Effect log output off the TTY console", () =>
   Effect.gen(function* () {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const runtime = makePiManagedRuntime({} as ExtensionAPI, Layer.empty);
     const originalLog = console.log;
     const originalError = console.error;
@@ -111,6 +116,7 @@ for (const operation of ["aborted", "addEventListener"] as const) {
   it.effect(`normalizes a hostile ${operation} signal before running a fiber`, () =>
     Effect.gen(function* () {
       const host = makeHostileSignal(operation);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const runtime = makePiManagedRuntime({} as ExtensionAPI, Layer.empty);
       yield* Effect.promise(() => runtime.run(Effect.void));
       let started = false;
@@ -138,6 +144,7 @@ for (const operation of ["aborted", "addEventListener"] as const) {
 it.effect("releases an adapted host signal when a forked fiber terminates", () =>
   Effect.gen(function* () {
     const host = makeHostileSignal("addEventListener");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const runtime = makePiManagedRuntime({} as ExtensionAPI, Layer.empty);
     yield* Effect.promise(() => runtime.run(Effect.void));
     let finalized = false;

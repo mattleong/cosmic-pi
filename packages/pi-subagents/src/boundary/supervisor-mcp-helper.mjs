@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+import {
+  hasObjectRuntimeType,
+  isBooleanValue,
+  isNumberValue,
+  isStringValue,
+  runtimeTypeName,
+} from "pi-cosmic-core";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
@@ -32,24 +39,24 @@ const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 const CHANNEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
-const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const object = (value) => value !== null && hasObjectRuntimeType(value) && !Array.isArray(value);
 const exactKeys = (value, allowed, required = []) =>
   object(value) &&
   Object.keys(value).every((key) => allowed.includes(key)) &&
   required.every((key) => own(value, key));
 const boundedString = (value, maximum, nonEmpty = true) =>
-  typeof value === "string" && value.length <= maximum && (!nonEmpty || value.trim().length > 0);
+  isStringValue(value) && value.length <= maximum && (!nonEmpty || value.trim().length > 0);
 const validRpcId = (value) =>
-  (typeof value === "string" && value.length > 0 && value.length <= MAX_ID_CHARS) ||
-  (typeof value === "number" && Number.isSafeInteger(value));
-const rpcKey = (value) => `${typeof value}:${String(value)}`;
+  (isStringValue(value) && value.length > 0 && value.length <= MAX_ID_CHARS) ||
+  (isNumberValue(value) && Number.isSafeInteger(value));
+const rpcKey = (value) => `${runtimeTypeName(value)}:${String(value)}`;
 const validChannelId = (value) =>
-  typeof value === "string" && CHANNEL_ID_PATTERN.test(value) && value.length <= 128;
+  isStringValue(value) && CHANNEL_ID_PATTERN.test(value) && value.length <= 128;
 const boundedMetadata = (value, depth = 0) => {
   if (depth > 6) return false;
-  if (value === null || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value === "string") return value.length <= 4096;
+  if (value === null || isBooleanValue(value)) return true;
+  if (isNumberValue(value)) return Number.isFinite(value);
+  if (isStringValue(value)) return value.length <= 4096;
   if (Array.isArray(value))
     return value.length <= 64 && value.every((entry) => boundedMetadata(entry, depth + 1));
   if (!object(value)) return false;
@@ -109,9 +116,9 @@ const readConfig = async (path) => {
       !Number.isSafeInteger(value.port) ||
       value.port < 1 ||
       value.port > 65_535 ||
-      typeof value.runId !== "string" ||
+      !isStringValue(value.runId) ||
       !RUN_ID_PATTERN.test(value.runId) ||
-      typeof value.token !== "string" ||
+      !isStringValue(value.token) ||
       !TOKEN_PATTERN.test(value.token)
     )
       throw new Error("invalid-config");
@@ -211,7 +218,7 @@ const attachLineReader = (stream, onLine, onFailure) => {
 
 const constantToken = (expected, value) => {
   const left = Buffer.from(expected, "utf8");
-  const right = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.alloc(0);
+  const right = isStringValue(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
   if (left.length !== right.length) {
     timingSafeEqual(left, left);
     return false;
@@ -274,10 +281,11 @@ const toolResult = (id, text, isError = false) =>
   sendRpc({
     jsonrpc: "2.0",
     id,
-    result: {
-      content: [{ type: "text", text }],
-      ...(isError ? { isError: true } : {}),
-    },
+    result: (() => {
+      const objectPart9380_0 = { content: [{ type: "text", text }] };
+      const objectPart9380_1 = isError ? { ...objectPart9380_0, isError: true } : objectPart9380_0;
+      return objectPart9380_1;
+    })(),
   });
 
 const failChannel = (code = "channel_closed") => {
@@ -311,7 +319,7 @@ const authenticatedFrame = (value) =>
   value.version === VERSION &&
   value.runId === config.runId &&
   constantToken(config.token, value.token) &&
-  typeof value.type === "string";
+  isStringValue(value.type);
 
 const sendChannelFrame = (value) => {
   if (channelClosed) return Promise.reject(new Error("channel-closed"));
@@ -615,7 +623,7 @@ const decodeToolArguments = (name, value) => {
   if (name === "supervisor_submit_report") {
     if (
       !exactKeys(value, ["delivery_id", "report"], ["delivery_id", "report"]) ||
-      typeof value.delivery_id !== "string" ||
+      !isStringValue(value.delivery_id) ||
       value.delivery_id.length > MAX_DELIVERY_ID_CHARS ||
       !DELIVERY_ID_PATTERN.test(value.delivery_id) ||
       !boundedString(value.report, MAX_REPORT_CHARS)
@@ -636,7 +644,7 @@ const decodeMcpMessage = (value) => {
   if (
     !exactKeys(value, ["jsonrpc", "id", "method", "params"], ["jsonrpc", "method"]) ||
     value.jsonrpc !== "2.0" ||
-    typeof value.method !== "string" ||
+    !isStringValue(value.method) ||
     value.method.length < 1 ||
     value.method.length > 128 ||
     (own(value, "id") && !validRpcId(value.id))
@@ -689,7 +697,12 @@ const decodeMcpMessage = (value) => {
         arguments: value.params.arguments,
       };
     default:
-      return { method: value.method, ...(id === undefined ? {} : { id }) };
+      return (() => {
+        const objectPart22066_0 = { method: value.method };
+        const objectPart22066_1 =
+          id === undefined ? objectPart22066_0 : { ...objectPart22066_0, id };
+        return objectPart22066_1;
+      })();
   }
 };
 

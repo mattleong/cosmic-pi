@@ -20,24 +20,24 @@ export const managerLayoutTier = (width: number): ManagerLayoutTier =>
 
 export type ManagerNoticeKind = "info" | "success" | "warning" | "error";
 
-const MANAGER_NOTICE_GLYPHS: Readonly<Record<ManagerNoticeKind, string>> = {
+const MANAGER_NOTICE_GLYPHS = {
   info: "ℹ",
   success: "✓",
   warning: "⚠",
   error: "✗",
-};
+} satisfies Readonly<Record<ManagerNoticeKind, string>>;
 
 /** Shared status glyph vocabulary for manager notices and feedback lines. */
 export const managerNoticeGlyph = (kind: ManagerNoticeKind): string => MANAGER_NOTICE_GLYPHS[kind];
 
 export type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
 
-const MANAGER_STATE_GLYPHS: Readonly<Record<ManagerStateGlyphKind, string>> = {
+const MANAGER_STATE_GLYPHS = {
   done: "✓",
   failed: "✗",
   stopped: "⊘",
   stopping: "◒",
-};
+} satisfies Readonly<Record<ManagerStateGlyphKind, string>>;
 
 /** Shared terminal-state glyph pairs for manager rows (`/subagents`, `/ps`). */
 export const managerStateGlyph = (kind: ManagerStateGlyphKind): string =>

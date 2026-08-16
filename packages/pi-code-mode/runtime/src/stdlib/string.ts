@@ -35,9 +35,9 @@ export const stringMethods = new Set([
 
 export const stringStatics = new Set(["fromCharCode", "fromCodePoint"]);
 
-export const invokeStringStatic = (name: string, args: Array<unknown>, node: AstNode): unknown => {
+export const invokeStringStatic = (name: string, args: InterpreterArray, node: AstNode) => {
   const codes = args.map((arg) => {
-    if (typeof arg !== "number")
+    if (!isNumberValue(arg))
       throw new InterpreterRuntimeError(`String.${name} expects number arguments.`, node);
     return arg;
   });
@@ -50,4 +50,9 @@ export const invokeStringStatic = (name: string, args: Array<unknown>, node: Ast
       throw new InterpreterRuntimeError(`String.${name} is not available in CodeMode.`, node);
   }
 };
-import { type AstNode, InterpreterRuntimeError } from "../interpreter/model.js";
+import { isNumberValue } from "../runtime-values.ts";
+import {
+  type AstNode,
+  type InterpreterArray,
+  InterpreterRuntimeError,
+} from "../interpreter/model.js";

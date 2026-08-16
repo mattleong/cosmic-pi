@@ -10,7 +10,7 @@ import type {
   CosmicFooterTextContribution,
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
-import type { HostCallbackBoundaryShape } from "../boundary/host-callback.ts";
+import type { HostCallbackBoundaryContract } from "../boundary/host-callback.ts";
 import {
   applyTextDecorations,
   builtinContributions,
@@ -51,7 +51,7 @@ export function createFooterComponent(options: {
   footerData: ReadonlyFooterDataProvider;
   theme: CosmicFooterTheme;
   registry: FooterContributionView;
-  callbacks: HostCallbackBoundaryShape;
+  callbacks: HostCallbackBoundaryContract;
   config(): ResolvedCosmicUiConfig;
   totals(): FooterTotals;
   gitStatus(): FooterGitStatus | undefined;

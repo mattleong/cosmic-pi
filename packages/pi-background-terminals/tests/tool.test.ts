@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BackgroundJobSnapshot } from "../src/job/model.ts";
 import {
   BackgroundTerminalService,
-  type BackgroundTerminalServiceShape,
+  type BackgroundTerminalServiceContract,
 } from "../src/job/service.ts";
 import {
   registerBackgroundTerminalTool,
@@ -43,7 +43,7 @@ const snapshot: BackgroundJobSnapshot = {
 describe("background_terminal tool", () => {
   it("dispatches every action through one agent-facing tool", () => {
     const calls: string[] = [];
-    const service: BackgroundTerminalServiceShape = {
+    const service: BackgroundTerminalServiceContract = {
       start: (request) => Effect.sync(() => (calls.push(`start:${request.cwd}`), snapshot)),
       list: () => Effect.sync(() => (calls.push("list"), [snapshot])),
       status: () => Effect.sync(() => (calls.push("status"), snapshot)),
@@ -76,11 +76,13 @@ describe("background_terminal tool", () => {
       Layer.merge(Path.layer, Layer.succeed(BackgroundTerminalService, service)),
     );
     let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: vi.fn((definition: unknown) => {
-        tool = definition as CapturedTool;
+    const fixture = {
+      registerTool: vi.fn((definition: CapturedTool) => {
+        tool = definition;
       }),
-    } as unknown as ExtensionAPI;
+    };
+    // SAFETY: registerBackgroundTerminalTool uses only registerTool from this fixture.
+    const pi = fixture as typeof fixture & ExtensionAPI;
     registerBackgroundTerminalTool(pi, {
       run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
     });
@@ -92,6 +94,7 @@ describe("background_terminal tool", () => {
     expect(guidelines).toContain("small tailLines");
     expect(guidelines).toContain("tailLines does not apply when afterCursor is set");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const context = { cwd: "/project" } as ExtensionContext;
     const execute = (input: BackgroundTerminalToolInput) =>
       tool?.execute("call", input, undefined, undefined, context) ??

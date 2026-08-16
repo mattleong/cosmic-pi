@@ -27,7 +27,7 @@ interface ActiveCheckpoint {
   cancellationFinalized: boolean;
 }
 
-export interface CheckpointOrchestratorShape {
+export interface CheckpointOrchestratorContract {
   readonly start: <A, E>(
     effect: Effect.Effect<A, E, AdvisorPlatform>,
     hooks: AdvisorCheckpointHooks,
@@ -41,7 +41,7 @@ export interface CheckpointOrchestratorShape {
 /** Owns checkpoint fibers and their exact-once cancellation bookkeeping. */
 export const makeCheckpointOrchestrator = (
   executor: AdvisorEffectExecutor,
-): Effect.Effect<CheckpointOrchestratorShape, never, Scope.Scope | AdvisorPlatform> =>
+): Effect.Effect<CheckpointOrchestratorContract, never, Scope.Scope | AdvisorPlatform> =>
   Effect.gen(function* () {
     const platform = yield* Effect.context<AdvisorPlatform>();
     const active = new Set<ActiveCheckpoint>();
@@ -121,6 +121,7 @@ export const makeCheckpointOrchestrator = (
         } catch {
           // Admission already failed; invalidation is best-effort bookkeeping.
         }
+        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
         return {
           invalidate: hooks.invalidate,
           cancel: () => {},

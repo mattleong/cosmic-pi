@@ -1,16 +1,16 @@
 import * as Effect from "effect/Effect";
 import type { SubagentNotFoundError } from "../../../src/run/errors.ts";
-import type { SubagentRunObservation, SubagentServiceShape } from "../../../src/run/service.ts";
+import type { SubagentRunObservation, SubagentServiceContract } from "../../../src/run/service.ts";
 
 type ObservationMethods = Pick<
-  SubagentServiceShape,
+  SubagentServiceContract,
   | "startSessionOwned"
   | "withAwaitTerminalObservations"
   | "withStatusObservations"
   | "consumeCompletions"
 >;
 
-export type SubagentServiceDoubleInput = Omit<SubagentServiceShape, keyof ObservationMethods> &
+export type SubagentServiceDoubleInput = Omit<SubagentServiceContract, keyof ObservationMethods> &
   Partial<ObservationMethods> & {
     /** Optional per-run observation seed used to derive `withStatusObservations`. */
     readonly observeStatus?: (
@@ -19,20 +19,20 @@ export type SubagentServiceDoubleInput = Omit<SubagentServiceShape, keyof Observ
   };
 
 /**
- * Completes a `SubagentServiceShape` test double.
+ * Completes a `SubagentServiceContract` test double.
  *
  * The observation methods are required on the production shape. Doubles that only care about the
  * plain run methods get faithful derivations here instead of the tool re-implementing fallbacks.
  */
-export function subagentServiceDouble(base: SubagentServiceDoubleInput): SubagentServiceShape {
-  const startSessionOwned: SubagentServiceShape["startSessionOwned"] =
+export function subagentServiceDouble(base: SubagentServiceDoubleInput): SubagentServiceContract {
+  const startSessionOwned: SubagentServiceContract["startSessionOwned"] =
     base.startSessionOwned ?? base.start;
   const observeStatus =
     base.observeStatus ??
     ((id: string) => base.status(id).pipe(Effect.map((run): SubagentRunObservation => ({ run }))));
-  const consumeCompletions: SubagentServiceShape["consumeCompletions"] =
+  const consumeCompletions: SubagentServiceContract["consumeCompletions"] =
     base.consumeCompletions ?? (() => Effect.void);
-  const withStatusObservations: SubagentServiceShape["withStatusObservations"] =
+  const withStatusObservations: SubagentServiceContract["withStatusObservations"] =
     base.withStatusObservations ??
     ((ids, use) =>
       Effect.forEach(
@@ -57,7 +57,7 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
           }),
         ),
       ));
-  const withAwaitTerminalObservations: SubagentServiceShape["withAwaitTerminalObservations"] =
+  const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] =
     base.withAwaitTerminalObservations ??
     ((ids, until, onUpdate, use) =>
       base

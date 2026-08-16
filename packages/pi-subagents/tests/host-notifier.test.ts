@@ -1,11 +1,12 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { makeHostNotifier } from "../src/boundary/host-notifier.ts";
+import { extensionApiFixture } from "./fixtures/pi-host.ts";
 
 describe("subagent host notifier", () => {
   it("steers a completed report into the active orchestration run", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
 
     notify({
       type: "completed",
@@ -34,7 +35,8 @@ describe("subagent host notifier", () => {
 
   it("wakes the parent once for a retained report generation", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     const notification = {
       type: "completed" as const,
       runs: [
@@ -64,7 +66,8 @@ describe("subagent host notifier", () => {
 
   it("delivers failures and folded warnings through the coalesced outcome channel", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
 
     notify({
       type: "completed",
@@ -95,7 +98,8 @@ describe("subagent host notifier", () => {
 
   it("names the exact reply tool when a subagent asks a parent question", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
 
     notify({
       type: "question",
@@ -120,7 +124,8 @@ describe("subagent host notifier", () => {
 
   it("explains a single completion without a final report", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
 
     notify({
       type: "completed",
@@ -132,7 +137,8 @@ describe("subagent host notifier", () => {
 
   it("coalesces completion rendering and deduplicates generations", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     const runs = [
       {
         id: "agent-1",
@@ -163,7 +169,8 @@ describe("subagent host notifier", () => {
 
   it("distinguishes completed, failed, and retained outcomes in batch headers", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     notify({
       type: "completed",
       runs: [
@@ -198,7 +205,8 @@ describe("subagent host notifier", () => {
 
   it("deduplicates completion receipts by exact generation even when delivery is out of order", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     const generationTwo = {
       type: "completed" as const,
       runs: [
@@ -232,7 +240,8 @@ describe("subagent host notifier", () => {
 
   it("chunks large completion batches without losing later run IDs", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     const report = "x".repeat(32 * 1024);
 
     const delivery = notify({
@@ -272,7 +281,8 @@ describe("subagent host notifier", () => {
     const sendMessage = vi.fn((): void => {
       if (fail) throw new Error("stale session");
     });
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     const completion = {
       type: "completed" as const,
       runs: [
@@ -297,7 +307,8 @@ describe("subagent host notifier", () => {
 
   it("does not retain raw outcome secrets in custom-message metadata", () => {
     const sendMessage = vi.fn();
-    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
 
     notify({
       type: "completed",

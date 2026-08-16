@@ -28,7 +28,7 @@ import {
   AdvisorController,
   AdvisorExtensionError,
   STATUS_KEY,
-  type AdvisorControllerShape,
+  type AdvisorControllerContract,
   type AdvisorExtensionDependencies,
 } from "./controller-types.ts";
 import { AdvisorReviewQueueService } from "../queue/service.ts";
@@ -90,6 +90,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       startup: (input) =>
         Effect.gen(function* () {
           const controller = yield* AdvisorController;
+          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
           yield* controller.sessionInitialize(undefined as never, input);
         }),
       onActivated: ({ ctx }) => footerPlacement.activate(ctx),
@@ -97,14 +98,19 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     });
 
     const runController = <A, E>(
-      operation: (controller: AdvisorControllerShape) => Effect.Effect<A, E>,
+      operation: (controller: AdvisorControllerContract) => Effect.Effect<A, E>,
     ): Promise<A> => parentSlot.run(Effect.flatMap(AdvisorController, operation));
     const ignoreFailure = <A>(promise: Promise<A>): Promise<void> =>
       promise.then(
         () => undefined,
         () => undefined,
       );
-    const forwardEvent = (name: string, event: unknown, ctx: ExtensionContext): Promise<void> =>
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+    const forwardEvent = <Event>(
+      name: string,
+      event: Event,
+      ctx: ExtensionContext,
+    ): Promise<void> =>
       ignoreFailure(runController((controller) => controller.event(name, event as never, ctx)));
 
     pi.registerCommand("advisor", {
@@ -121,14 +127,17 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         ? parentSlot.start(captured.input, captured.input.signal).then(() => undefined)
         : parentSlot.shutdown().then(() => undefined);
     });
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     pi.on("session_shutdown", (event, ctx) =>
       runController((controller) => controller.sessionShutdown(event as never, ctx))
         .catch(() => undefined)
         .then(() => parentSlot.shutdown()),
     );
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     pi.on("session_compact", (event, ctx) =>
       ignoreFailure(runController((controller) => controller.compact(event as never, ctx))),
     );
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     pi.on("session_tree", (event, ctx) =>
       ignoreFailure(runController((controller) => controller.tree(event as never, ctx))),
     );

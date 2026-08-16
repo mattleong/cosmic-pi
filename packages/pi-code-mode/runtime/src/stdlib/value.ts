@@ -34,23 +34,27 @@ export const compoundOperators = new Set([
 
 const ErrorBrand: unique symbol = Symbol("codemode.error");
 
-export const createErrorValue = (name: string, message: string): SafeObject => {
-  const value = Object.assign(Object.create(null) as SafeObject, { name, message });
+export const createErrorValue = (name: string, message: string): InterpreterObject => {
+  const value = Object.assign(makeInterpreterObject(), { name, message });
   Object.defineProperty(value, ErrorBrand, { value: name });
   return value;
 };
 
-export const errorBrandName = (value: unknown): string | undefined =>
-  value !== null && typeof value === "object"
-    ? ((value as Record<PropertyKey, unknown>)[ErrorBrand] as string | undefined)
+export const errorBrandName = (value: InterpreterValue): string | undefined => {
+  if (value === null || !hasObjectRuntimeType(value)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, ErrorBrand);
+  return descriptor && "value" in descriptor && isStringValue(descriptor.value)
+    ? descriptor.value
     : undefined;
+};
 
-export const boundedData = (value: unknown, label: string): unknown => copyIn(value, label, true);
+export const boundedData = (value: InterpreterValue, label: string): InterpreterValue =>
+  copyIn(value, label, true);
 
 // Confinement: array coercion joins recursively, so string production is charged against a
 // shared budget - a self-referential-free but huge array (many references to one large
 // string) must not materialize an unbounded native string before any checkpoint sees it.
-const coerceToStringBudgeted = (value: unknown, budget: { remaining: number }): string => {
+const coerceToStringBudgeted = (value: InterpreterValue, budget: { remaining: number }): string => {
   const overflow = (): never => {
     throw new InterpreterRuntimeError(
       `String conversion would produce more than ${MAX_GUEST_STRING_LENGTH} characters in CodeMode. Convert smaller pieces and return only the data you need.`,
@@ -81,7 +85,7 @@ const coerceToStringBudgeted = (value: unknown, budget: { remaining: number }): 
     }
     return spend(value.params.toString());
   }
-  if (typeof value === "object") {
+  if (hasObjectRuntimeType(value)) {
     if (!Array.isArray(value)) return "[object Object]";
     const parts: Array<string> = [];
     for (const item of value) {
@@ -94,22 +98,18 @@ const coerceToStringBudgeted = (value: unknown, budget: { remaining: number }): 
   return spend(String(value));
 };
 
-export const coerceToString = (value: unknown): string =>
+export const coerceToString = (value: InterpreterValue): string =>
   coerceToStringBudgeted(value, { remaining: MAX_GUEST_STRING_LENGTH });
 
-export const coerceToNumber = (value: unknown): number => {
+export const coerceToNumber = (value: InterpreterValue): number => {
   if (value instanceof SandboxDate) return value.time;
   if (isSandboxValue(value)) return Number.NaN;
-  return value !== null && typeof value === "object" && !Array.isArray(value)
+  return value !== null && hasObjectRuntimeType(value) && !Array.isArray(value)
     ? Number.NaN
     : Number(value);
 };
 
-export const invokeCoercion = (
-  ref: CoercionFunction,
-  args: Array<unknown>,
-  node: AstNode,
-): unknown => {
+export const invokeCoercion = (ref: CoercionFunction, args: InterpreterArray, node: AstNode) => {
   const raw = args[0];
   if (isSandboxValue(raw)) {
     if (ref.name === "Boolean") return true;
@@ -123,7 +123,7 @@ export const invokeCoercion = (
   if (ref.name === "Boolean") return Boolean(value);
   if (ref.name === "parseInt") {
     const radix = args[1];
-    if (radix !== undefined && typeof radix !== "number") {
+    if (radix !== undefined && !isNumberValue(radix)) {
       throw new InterpreterRuntimeError("parseInt expects a numeric radix.", node);
     }
     return parseInt(coerceToString(value), radix);
@@ -131,9 +131,18 @@ export const invokeCoercion = (
   if (ref.name === "parseFloat") return parseFloat(coerceToString(value));
   return coerceToString(value);
 };
+import { hasObjectRuntimeType, isNumberValue, isStringValue } from "../runtime-values.ts";
 import { MAX_GUEST_STRING_LENGTH, uriEncodedLengthUpperBound } from "../interpreter/confinement.js";
-import { type AstNode, CoercionFunction, InterpreterRuntimeError } from "../interpreter/model.js";
-import { copyIn, type SafeObject } from "../tool-runtime.js";
+import {
+  type AstNode,
+  type InterpreterArray,
+  CoercionFunction,
+  type InterpreterObject,
+  InterpreterRuntimeError,
+  type InterpreterValue,
+  makeInterpreterObject,
+} from "../interpreter/model.js";
+import { copyIn } from "../tool-runtime.js";
 import {
   isSandboxValue,
   SandboxDate,

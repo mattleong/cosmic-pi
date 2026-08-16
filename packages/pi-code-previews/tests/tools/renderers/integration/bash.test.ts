@@ -78,11 +78,10 @@ test("registered bash renderer mutes successful output while preserving error co
   const bash = findRenderer(registerRenderers(), "bash");
   assert.ok(bash.renderResult);
 
-  const coloredTheme = {
-    ...testTheme(),
+  const coloredTheme = Object.assign(testTheme(), {
     fg: (key: string, text: string) =>
       ["muted", "error"].includes(key) ? `<${key}>${text}</${key}>` : text,
-  };
+  });
 
   const success = renderComponent(
     bash.renderResult(

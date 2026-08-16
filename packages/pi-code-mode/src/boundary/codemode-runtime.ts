@@ -6,6 +6,7 @@
  * project while this extension retains the workspace's strict compiler and Effect diagnostics.
  * This owned structural contract is intentionally limited to the surface the Pi integration uses.
  */
+import { hasObjectRuntimeType, isFunctionValue, type JsonObject } from "pi-cosmic-core";
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 
@@ -79,7 +80,7 @@ interface CodeModeExecutionLimits {
 
 interface CodeModeExecuteOptions {
   readonly code: string;
-  readonly tools?: Readonly<Record<string, unknown>>;
+  readonly tools?: CodeModeToolNamespace;
   readonly limits?: CodeModeExecutionLimits;
   readonly onToolCallLifecycle?: (
     event: CodeModeToolCallLifecycleEvent,
@@ -118,20 +119,22 @@ interface CodeModeApi {
   };
 }
 
-interface JsonSchema {
-  readonly [key: string]: unknown;
-}
+type JsonSchema = JsonObject;
 
 type ToolSchema = Schema.Decoder<unknown> | JsonSchema;
-type ToolInput<Shape> = Shape extends Schema.Decoder<unknown> ? Shape["Type"] : unknown;
-type ToolOutput<Shape> = Shape extends Schema.Decoder<unknown> ? Shape["Encoded"] : unknown;
+type ToolInput<Decoder> = Decoder extends Schema.Decoder<unknown> ? Decoder["Type"] : unknown;
+type ToolOutput<Decoder> = Decoder extends Schema.Decoder<unknown> ? Decoder["Encoded"] : unknown;
 
 interface ToolDefinition<Requirements = never> {
   readonly _tag: "CodeModeTool";
   readonly description: string;
   readonly input: ToolSchema;
   readonly output: ToolSchema | undefined;
-  readonly run: (input: unknown) => Effect.Effect<unknown, unknown, Requirements>;
+  readonly run: <Input>(input: Input) => Effect.Effect<unknown, unknown, Requirements>;
+}
+
+interface CodeModeToolNamespace {
+  readonly [key: string]: ToolDefinition | CodeModeToolNamespace;
 }
 
 interface ToolApi {
@@ -161,16 +164,17 @@ interface RuntimeModule {
 
 const runtimeSource: string = "../../runtime/src/index.ts";
 const loaded: unknown = await import(runtimeSource);
-if (typeof loaded !== "object" || loaded === null) {
+if (!hasObjectRuntimeType(loaded) || loaded === null) {
   throw new Error("Code Mode runtime source did not expose a module object.");
 }
+// SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
 const candidate = loaded as Partial<RuntimeModule>;
 if (
-  typeof candidate.CodeMode?.execute !== "function" ||
-  typeof candidate.CodeMode.make !== "function" ||
-  typeof candidate.Tool?.make !== "function" ||
-  typeof candidate.ToolError !== "function" ||
-  typeof candidate.toolError !== "function"
+  !isFunctionValue(candidate.CodeMode?.execute) ||
+  !isFunctionValue(candidate.CodeMode.make) ||
+  !isFunctionValue(candidate.Tool?.make) ||
+  !isFunctionValue(candidate.ToolError) ||
+  !isFunctionValue(candidate.toolError)
 ) {
   throw new Error("Code Mode runtime source is missing its required public API.");
 }

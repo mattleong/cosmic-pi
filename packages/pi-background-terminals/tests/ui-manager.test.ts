@@ -9,9 +9,10 @@ const ctrlU = String.fromCharCode(21);
 const ctrlD = String.fromCharCode(4);
 const pageDown = `${escapeKey}[6~`;
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   fg: (_color: string, text: string) => text,
-} as unknown as Theme;
+} as Theme;
 
 const projection: BackgroundTerminalProjection = {
   jobs: [

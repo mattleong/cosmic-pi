@@ -5,14 +5,16 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
-  ExtensionAPI,
   ExtensionCommandContext,
-  ExtensionContext,
+  ExtensionHandler,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
+import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
+
+type Handler = ExtensionHandler<any, any>;
 
 const testAgentDirectory = () => join(tmpdir(), "pi-subagents-application-tests");
 
@@ -29,12 +31,13 @@ describe("subagent Pi registration", () => {
     const tools: string[] = [];
     const commands: string[] = [];
     const events: string[] = [];
-    const pi = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const pi = extensionApiFixture({
       registerTool: vi.fn((tool: { name: string }) => tools.push(tool.name)),
       registerCommand: vi.fn((name: string) => commands.push(name)),
       on: vi.fn((name: string) => events.push(name)),
       sendMessage: vi.fn(),
-    } as unknown as ExtensionAPI;
+    });
 
     registerSubagentApplication(pi);
 
@@ -44,21 +47,22 @@ describe("subagent Pi registration", () => {
   });
 
   it("makes out-of-order session preparation latest-wins and captures cwd/trust once", async () => {
-    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const handlers = new Map<string, Handler>();
     const first = deferred<void>();
     const second = deferred<void>();
     const loads: Array<readonly [string, boolean]> = [];
     const tools: string[] = [];
-    const pi = {
+    // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+    const pi = extensionApiFixture({
       registerTool: vi.fn((tool: { name: string }) => tools.push(tool.name)),
       registerCommand: vi.fn(),
-      on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+      on: vi.fn((name: string, handler: Handler) => {
         handlers.set(name, handler);
       }),
       getActiveTools: vi.fn(() => ["read"]),
       setActiveTools: vi.fn(),
       sendMessage: vi.fn(),
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentApplication(pi, {
       getAgentDirectory: testAgentDirectory,
       loadSettings: (cwd, trust) => {
@@ -69,7 +73,8 @@ describe("subagent Pi registration", () => {
 
     let firstCwdReads = 0;
     let firstTrustReads = 0;
-    const firstContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const firstContext = extensionContextFixture({
       get cwd() {
         firstCwdReads += 1;
         return `${process.cwd()}/first`;
@@ -81,14 +86,15 @@ describe("subagent Pi registration", () => {
       },
       hasUI: false,
       mode: "rpc",
-    } as unknown as ExtensionContext;
-    const secondContext = {
+    });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const secondContext = extensionContextFixture({
       cwd: `${process.cwd()}/second`,
       signal: undefined,
       isProjectTrusted: () => false,
       hasUI: false,
       mode: "rpc",
-    } as unknown as ExtensionContext;
+    });
 
     const firstStart = Promise.resolve(handlers.get("session_start")?.({}, firstContext));
     const secondStart = Promise.resolve(handlers.get("session_tree")?.({}, secondContext));
@@ -110,30 +116,32 @@ describe("subagent Pi registration", () => {
   });
 
   it("invalidates pending preparation on shutdown before tools can register", async () => {
-    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const handlers = new Map<string, Handler>();
     const settings = deferred<void>();
     const registerTool = vi.fn();
-    const pi = {
+    // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+    const pi = extensionApiFixture({
       registerTool,
       registerCommand: vi.fn(),
-      on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+      on: vi.fn((name: string, handler: Handler) => {
         handlers.set(name, handler);
       }),
       getActiveTools: vi.fn(() => ["read"]),
       setActiveTools: vi.fn(),
       sendMessage: vi.fn(),
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentApplication(pi, {
       getAgentDirectory: testAgentDirectory,
       loadSettings: () => settings.promise,
     });
-    const ctx = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ctx = extensionContextFixture({
       cwd: process.cwd(),
       signal: undefined,
       isProjectTrusted: () => true,
       hasUI: false,
       mode: "rpc",
-    } as unknown as ExtensionContext;
+    });
 
     const starting = Promise.resolve(handlers.get("session_start")?.({}, ctx));
     await Promise.resolve(handlers.get("session_shutdown")?.({}, ctx));
@@ -143,38 +151,40 @@ describe("subagent Pi registration", () => {
   });
 
   it("accumulates partially disabled tool names across failures and clears after success", async () => {
-    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const handlers = new Map<string, Handler>();
     let active = ["read"];
     let callInActivation = 0;
     let throwAt = 2;
     const setActiveTools = vi.fn((names: ReadonlyArray<string>) => {
       active = [...names];
     });
-    const pi = {
+    // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+    const pi = extensionApiFixture({
       registerTool: vi.fn((tool: { name: string }) => {
         callInActivation += 1;
         active = [...new Set([...active, tool.name])];
         if (callInActivation === throwAt) throw new Error("partial registration");
       }),
       registerCommand: vi.fn(),
-      on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+      on: vi.fn((name: string, handler: Handler) => {
         handlers.set(name, handler);
       }),
       getActiveTools: vi.fn(() => [...active]),
       setActiveTools,
       sendMessage: vi.fn(),
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentApplication(pi, {
       getAgentDirectory: testAgentDirectory,
       loadSettings: () => Promise.resolve(),
     });
-    const ctx = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ctx = extensionContextFixture({
       cwd: process.cwd(),
       signal: undefined,
       isProjectTrusted: () => true,
       hasUI: false,
       mode: "rpc",
-    } as unknown as ExtensionContext;
+    });
     const start = handlers.get("session_start");
 
     await Promise.resolve(start?.({}, ctx));
@@ -195,16 +205,17 @@ describe("subagent Pi registration", () => {
   });
 
   it("deactivates tools during replacement/abort and restores only the prior active subset", async () => {
-    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const handlers = new Map<string, Handler>();
     let active = ["read"];
     const replacementSettings = deferred<void>();
     let settingsLoads = 0;
-    const pi = {
+    // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+    const pi = extensionApiFixture({
       registerTool: vi.fn((tool: { readonly name: string }) => {
         active = [...new Set([...active, tool.name])];
       }),
       registerCommand: vi.fn(),
-      on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+      on: vi.fn((name: string, handler: Handler) => {
         handlers.set(name, handler);
       }),
       getActiveTools: vi.fn(() => [...active]),
@@ -212,7 +223,7 @@ describe("subagent Pi registration", () => {
         active = [...names];
       }),
       sendMessage: vi.fn(),
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentApplication(pi, {
       getAgentDirectory: testAgentDirectory,
       loadSettings: () => {
@@ -220,14 +231,15 @@ describe("subagent Pi registration", () => {
         return settingsLoads === 2 ? replacementSettings.promise : Promise.resolve();
       },
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const context = (signal?: AbortSignal) =>
-      ({
+      extensionContextFixture({
         cwd: process.cwd(),
         signal,
         isProjectTrusted: () => true,
         hasUI: false,
         mode: "rpc",
-      }) as unknown as ExtensionContext;
+      });
 
     await Promise.resolve(handlers.get("session_start")?.({}, context()));
     expect(active).toContain("subagent_start");
@@ -247,8 +259,9 @@ describe("subagent Pi registration", () => {
         throw new Error("capture failed");
       },
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await Promise.resolve(
-      handlers.get("session_tree")?.({}, failedCapture as unknown as ExtensionContext),
+      handlers.get("session_tree")?.({}, extensionContextFixture(failedCapture)),
     );
     expect(active).toEqual(["read"]);
     await Promise.resolve(handlers.get("session_start")?.({}, context()));
@@ -268,10 +281,11 @@ describe("subagent Pi registration", () => {
   });
 
   it("preserves session overrides across tree and reload but clears them for a new session", async () => {
-    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const handlers = new Map<string, Handler>();
     let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
     let active = ["read"];
-    const pi = {
+    // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+    const pi = extensionApiFixture({
       registerTool: vi.fn((tool: { readonly name: string }) => {
         active = [...new Set([...active, tool.name])];
       }),
@@ -283,7 +297,7 @@ describe("subagent Pi registration", () => {
           command = definition.handler;
         },
       ),
-      on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+      on: vi.fn((name: string, handler: Handler) => {
         handlers.set(name, handler);
       }),
       getActiveTools: vi.fn(() => [...active]),
@@ -292,7 +306,7 @@ describe("subagent Pi registration", () => {
       }),
       sendMessage: vi.fn(),
       getThinkingLevel: vi.fn(() => "high"),
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentApplication(pi, {
       getAgentDirectory: testAgentDirectory,
       loadSettings: () => Promise.resolve(),
@@ -300,10 +314,11 @@ describe("subagent Pi registration", () => {
 
     let component: Component | undefined;
     let closeOverlay: ((value: boolean) => void) | undefined;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const ui = {
       notify: vi.fn(),
       confirm: vi.fn().mockResolvedValue(false),
@@ -330,7 +345,8 @@ describe("subagent Pi registration", () => {
         return result;
       }),
     };
-    const ctx = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ctx = extensionContextFixture({
       cwd: process.cwd(),
       signal: undefined,
       isProjectTrusted: () => true,
@@ -340,7 +356,7 @@ describe("subagent Pi registration", () => {
       model: undefined,
       modelRegistry: { getAvailable: () => [] },
       sessionManager: { getSessionId: () => "application-reload-session" },
-    } as unknown as ExtensionCommandContext;
+    });
 
     await Promise.resolve(handlers.get("session_start")?.({ reason: "startup" }, ctx));
     const first = command?.("profiles session", ctx) ?? Promise.resolve();
@@ -389,8 +405,9 @@ describe("subagent Pi registration", () => {
         throw new Error("tree capture failed");
       },
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await Promise.resolve(
-      handlers.get("session_tree")?.({}, failedTreeContext as unknown as ExtensionCommandContext),
+      handlers.get("session_tree")?.({}, extensionContextFixture(failedTreeContext)),
     );
     component = undefined;
     await Promise.resolve(handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
@@ -407,6 +424,7 @@ describe("subagent Pi registration", () => {
     await Promise.resolve(handlers.get("session_start")?.({ reason: "new" }, ctx));
     const afterNew = command?.("profiles session", ctx) ?? Promise.resolve();
     await vi.waitFor(() => expect(component).toBeDefined());
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     expect((component as Component | undefined)?.render(120).join("\n")).not.toContain(
       "session override · applies now",
     );
@@ -416,32 +434,37 @@ describe("subagent Pi registration", () => {
   });
 
   it("fails activation visibly when subagent tool registration throws", async () => {
-    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const handlers = new Map<string, Handler>();
     const notify = vi.fn();
-    const pi = {
+    // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+    const pi = extensionApiFixture({
       registerTool: vi.fn(() => {
         throw new Error("stale extension handle");
       }),
       registerCommand: vi.fn(),
-      on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+      on: vi.fn((name: string, handler: Handler) => {
         handlers.set(name, handler);
       }),
       getActiveTools: vi.fn(() => ["read", "subagent_start", "subagent_await"]),
       setActiveTools: vi.fn(),
       sendMessage: vi.fn(),
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentApplication(pi);
 
     const sessionStart = handlers.get("session_start");
     expect(sessionStart).toBeTypeOf("function");
-    await sessionStart?.({}, {
-      cwd: process.cwd(),
-      signal: undefined,
-      hasUI: true,
-      mode: "tui",
-      isProjectTrusted: () => true,
-      ui: { notify },
-    } as unknown as ExtensionContext);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    await sessionStart?.(
+      {},
+      extensionContextFixture({
+        cwd: process.cwd(),
+        signal: undefined,
+        hasUI: true,
+        mode: "tui",
+        isProjectTrusted: () => true,
+        ui: { notify },
+      }),
+    );
 
     expect(pi.setActiveTools).toHaveBeenCalledWith(["read"]);
     expect(notify).toHaveBeenCalledWith(

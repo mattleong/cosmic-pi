@@ -199,7 +199,12 @@ function settingsDocument(settings: CodePreviewSettings, context: SettingsSaveCo
   return { ...document, ...overrides };
 }
 
-function settingValuesEqual(left: unknown, right: unknown): boolean {
+type CodePreviewSettingValue = CodePreviewSettings[keyof CodePreviewSettings];
+
+function settingValuesEqual(
+  left: CodePreviewSettingValue,
+  right: CodePreviewSettingValue,
+): boolean {
   return Array.isArray(left)
     ? Array.isArray(right) &&
         left.length === right.length &&
@@ -217,7 +222,8 @@ export function defaultSettingsSaveContext(defaults: CodePreviewSettings): Setti
 }
 
 const RecordSchema = Schema.Record(Schema.String, Schema.Json);
-const isRecord = (value: unknown): value is JsonObject => Schema.is(RecordSchema)(value);
+const isRecord = <Value>(value: Value): value is Value & JsonObject =>
+  Schema.is(RecordSchema)(value);
 
 /** `settings.json` documents contribute settings through their nested `codePreview` object only. */
 export function nestedCodePreviewSettings(document: JsonObject): JsonObject {

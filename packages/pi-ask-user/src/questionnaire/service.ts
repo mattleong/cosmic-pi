@@ -8,7 +8,7 @@ import { AskUserRuntimeClosedError, type AskUserError } from "./errors.ts";
 import type { AskUserOutcome } from "./model.ts";
 import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
 
-export interface AskUserServiceShape {
+export interface AskUserServiceContract {
   readonly ask: (request: AskUserRequest) => Effect.Effect<AskUserOutcome, AskUserError>;
 }
 
@@ -16,7 +16,7 @@ const makeService = Effect.fn("AskUserService.make")(function* () {
   const host = yield* HostDialogs;
   const lock = yield* Semaphore.make(1);
   let closed = false;
-  const ask: AskUserServiceShape["ask"] = (request) =>
+  const ask: AskUserServiceContract["ask"] = (request) =>
     lock.withPermits(1)(
       Effect.gen(function* () {
         if (closed) {
@@ -35,14 +35,15 @@ const makeService = Effect.fn("AskUserService.make")(function* () {
       closed = true;
     }),
   );
-  return { ask } satisfies AskUserServiceShape;
+  return { ask } satisfies AskUserServiceContract;
 });
 
-export class AskUserService extends Context.Service<AskUserService, AskUserServiceShape>()(
+export class AskUserService extends Context.Service<AskUserService, AskUserServiceContract>()(
   "pi-ask-user/questionnaire/service/AskUserService",
 ) {
   static readonly layer = Layer.effect(this, makeService());
 
-  static override readonly use = <A, E>(f: (service: AskUserServiceShape) => Effect.Effect<A, E>) =>
-    Effect.flatMap(this, f);
+  static override readonly use = <A, E>(
+    f: (service: AskUserServiceContract) => Effect.Effect<A, E>,
+  ) => Effect.flatMap(this, f);
 }

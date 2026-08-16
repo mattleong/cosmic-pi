@@ -44,7 +44,7 @@ export const advisorStatusFramesEffect = (
     );
   });
 
-export interface AdvisorStatusServiceShape {
+export interface AdvisorStatusServiceContract {
   /** Synchronous Pi admission; timer execution remains Effect-owned. */
   readonly start: (options: AdvisorStatusStartOptions) => void;
   /** Cancels only the matching owner and reports whether the owner matched. */
@@ -59,7 +59,7 @@ export interface AdvisorStatusServiceShape {
  */
 export const makeAdvisorStatusService = (
   executor: AdvisorEffectExecutor,
-): Effect.Effect<AdvisorStatusServiceShape, never, Scope.Scope> =>
+): Effect.Effect<AdvisorStatusServiceContract, never, Scope.Scope> =>
   Effect.gen(function* () {
     let generation = 0;
     let owner: string | undefined;

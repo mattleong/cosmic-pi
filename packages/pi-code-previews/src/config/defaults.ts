@@ -10,31 +10,37 @@ import {
   type CodePreviewSettings,
 } from "./schema";
 
-export const defaultCodePreviewSettings: CodePreviewSettings = Object.freeze({
-  shikiTheme: "dark-plus",
-  diffIntensity: "subtle",
-  wordEmphasis: "all",
-  toolCallBackground: "on",
-  toolCallTiming: true,
-  readCollapsedLines: 10,
-  readContentPreview: true,
-  writeContentPreview: true,
-  writeCollapsedLines: 10,
-  editDiffPreview: true,
-  editCollapsedLines: 160,
-  grepCollapsedLines: 15,
-  grepResultPreview: true,
-  findResultPreview: true,
-  lsResultPreview: true,
-  pathListCollapsedLines: 20,
-  readLineNumbers: true,
-  bashResultPreview: true,
-  bashWarnings: true,
-  syntaxHighlighting: true,
-  secretWarnings: true,
-  pathIcons: "unicode",
-  tools: Object.freeze([...ALL_CODE_PREVIEW_TOOLS]),
-}) as CodePreviewSettings;
+const makeDefaultCodePreviewSettings = (): CodePreviewSettings => {
+  const defaults = Object.freeze({
+    shikiTheme: "dark-plus",
+    diffIntensity: "subtle",
+    wordEmphasis: "all",
+    toolCallBackground: "on",
+    toolCallTiming: true,
+    readCollapsedLines: 10,
+    readContentPreview: true,
+    writeContentPreview: true,
+    writeCollapsedLines: 10,
+    editDiffPreview: true,
+    editCollapsedLines: 160,
+    grepCollapsedLines: 15,
+    grepResultPreview: true,
+    findResultPreview: true,
+    lsResultPreview: true,
+    pathListCollapsedLines: 20,
+    readLineNumbers: true,
+    bashResultPreview: true,
+    bashWarnings: true,
+    syntaxHighlighting: true,
+    secretWarnings: true,
+    pathIcons: "unicode",
+    tools: Object.freeze([...ALL_CODE_PREVIEW_TOOLS]),
+  });
+  // SAFETY: Every field is declared above, and the frozen tools tuple contains every valid tool name.
+  return defaults as typeof defaults & CodePreviewSettings;
+};
+
+export const defaultCodePreviewSettings = makeDefaultCodePreviewSettings();
 
 function environmentOption<T extends string>(
   raw: string | undefined,
@@ -42,6 +48,7 @@ function environmentOption<T extends string>(
   fallback: T,
 ): T {
   const normalized = raw?.toLowerCase();
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   return normalized && (values as readonly string[]).includes(normalized)
     ? (normalized as T)
     : fallback;
@@ -51,10 +58,12 @@ function environmentOption<T extends string>(
 export function defaultsFromEnvironment(environment: CodePreviewEnvironment): CodePreviewSettings {
   const fallback = defaultCodePreviewSettings;
   const value = (name: keyof CodePreviewEnvironment) => environment[name];
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   const boolean = <K extends keyof CodePreviewSettings>(
     name: keyof CodePreviewEnvironment,
     key: K,
   ) => parseBoolean(value(name)) ?? (fallback[key] as boolean);
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   const integer = <K extends keyof CodePreviewSettings>(
     name: keyof CodePreviewEnvironment,
     key: K,

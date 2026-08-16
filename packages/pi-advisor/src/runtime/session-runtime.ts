@@ -16,7 +16,7 @@ import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core"
 import { ADVISOR_OPERATION_TIMEOUT_MS, ADVISOR_RECENT_CONTEXT_CHARS } from "../config/options.ts";
 import { emptyAdvisorTrajectoryDetector, pushAdvisorTrajectory } from "../review/trajectory.ts";
 import { AdvisorModelError } from "./client.ts";
-import type { AdvisorChildFactoryShape } from "./child-factory.ts";
+import type { AdvisorChildFactoryContract } from "./child-factory.ts";
 import { ADVISOR_TOOL_NAMES, type AdvisorToolRunner } from "./tools.ts";
 import { parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
 import {
@@ -64,7 +64,7 @@ export class AdvisorRuntime {
   private lastStopError: string | undefined;
   private pendingSeed: { seed: string; stateSummary?: string; maxContextChars: number } | undefined;
   private activeCheckpoint: ActiveCheckpointFinalization | undefined;
-  private readonly childFactory: AdvisorChildFactoryShape;
+  private readonly childFactory: AdvisorChildFactoryContract;
   private readonly toolRunner: AdvisorToolRunner;
   private readonly resourceScope: Scope.Scope;
   private readonly controlMailbox: SynchronousIngress<void>;
@@ -74,7 +74,7 @@ export class AdvisorRuntime {
   private readonly sessionSafety: ReturnType<typeof makeAdvisorSessionSafety>;
   private pendingStartCleanup: Deferred.Deferred<void> | undefined;
   constructor(
-    childFactory: AdvisorChildFactoryShape,
+    childFactory: AdvisorChildFactoryContract,
     toolRunner: AdvisorToolRunner,
     resourceScope: Scope.Scope,
     controlMailbox: SynchronousIngress<void>,
@@ -207,11 +207,18 @@ export class AdvisorRuntime {
             "Advisor child session unexpectedly has a persistent file.",
           );
         self.resetRequiredReason = undefined;
-        self.pendingSeed = {
-          seed: options.seed,
-          ...(options.stateSummary === undefined ? {} : { stateSummary: options.stateSummary }),
-          maxContextChars: ADVISOR_RECENT_CONTEXT_CHARS,
-        };
+        self.pendingSeed = (() => {
+          const objectPart9441_0 = { seed: options.seed };
+          const objectPart9441_1 =
+            options.stateSummary === undefined
+              ? objectPart9441_0
+              : { ...objectPart9441_0, stateSummary: options.stateSummary };
+          const objectPart9441_2 = {
+            ...objectPart9441_1,
+            maxContextChars: ADVISOR_RECENT_CONTEXT_CHARS,
+          };
+          return objectPart9441_2;
+        })();
       });
       yield* initialize.pipe(
         Effect.timeout(Duration.millis(ADVISOR_OPERATION_TIMEOUT_MS)),
@@ -360,11 +367,16 @@ export class AdvisorRuntime {
   reprimeEffect(seed: string, stateSummary?: string) {
     const options = this.options;
     return options
-      ? this.startEffect({
-          ...options,
-          seed,
-          ...(stateSummary === undefined ? {} : { stateSummary }),
-        }).pipe(Effect.withSpan("pi-advisor.child.reprime"))
+      ? this.startEffect(
+          (() => {
+            const objectPart15809_0 = { ...options, seed };
+            const objectPart15809_1 =
+              stateSummary === undefined
+                ? objectPart15809_0
+                : { ...objectPart15809_0, stateSummary };
+            return objectPart15809_1;
+          })(),
+        ).pipe(Effect.withSpan("pi-advisor.child.reprime"))
       : Effect.fail(new AdvisorModelError({ message: "Advisor runtime is not started." }));
   }
   private acquireChildEffect(session: AgentSession, startEpoch: number, abortTimeoutMs: number) {

@@ -3,10 +3,11 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
@@ -21,6 +22,7 @@ import {
   type CodeModeRuntimeError,
   type CodeModeSessionInput,
 } from "../src/layer.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -35,15 +37,16 @@ const newDirectory = (prefix: string): string => {
 };
 
 const piStub = (): ExtensionAPI =>
-  ({
+  extensionApiFixture({
     on: vi.fn(),
     registerCommand: vi.fn(),
     registerTool: vi.fn(),
     events: { emit: vi.fn(), on: vi.fn() },
-  }) as unknown as ExtensionAPI;
+  });
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const sessionInput = (cwd: string): CodeModeSessionInput => ({
-  ctx: { cwd } as unknown as ExtensionContext,
+  ctx: extensionContextFixture({ cwd }),
   cwd,
   projectTrusted: true,
 });
@@ -146,8 +149,8 @@ describe("code mode session runtime lifecycle", () => {
 });
 
 describe("code mode application lifecycle at the Pi boundary", () => {
-  type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
-  type CommandDefinition = { handler: (args: string, ctx: ExtensionContext) => unknown };
+  type Handler = ExtensionHandler<any, any>;
+  type CommandDefinition = Parameters<ExtensionAPI["registerCommand"]>[1];
 
   function applicationHarness() {
     const agentDir = newDirectory("pi-code-mode-lc-agent-");
@@ -156,7 +159,7 @@ describe("code mode application lifecycle at the Pi boundary", () => {
     const commands = new Map<string, CommandDefinition>();
     const notify = vi.fn();
     let activeTools: string[] = [];
-    const pi = {
+    const pi = extensionApiFixture({
       on(name: string, handler: Handler) {
         handlers.set(name, handler);
       },
@@ -169,7 +172,8 @@ describe("code mode application lifecycle at the Pi boundary", () => {
         activeTools = [...names];
       },
       events: { emit: vi.fn(), on: vi.fn() },
-    } as unknown as ExtensionAPI;
+    });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     registerCodeModeApplication(pi, {
       loadSettings: () => Promise.resolve(undefined),
       wrapTool: (tool) => tool,
@@ -177,28 +181,30 @@ describe("code mode application lifecycle at the Pi boundary", () => {
     });
 
     const makeSignal = () => {
-      const added: unknown[] = [];
-      const removed: unknown[] = [];
-      const signal = {
+      const added: EventListenerOrEventListenerObject[] = [];
+      const removed: EventListenerOrEventListenerObject[] = [];
+      const signalFixture = {
         aborted: false,
-        addEventListener: (_name: string, listener: unknown) => {
+        addEventListener: (_name: string, listener: EventListenerOrEventListenerObject) => {
           added.push(listener);
         },
-        removeEventListener: (_name: string, listener: unknown) => {
+        removeEventListener: (_name: string, listener: EventListenerOrEventListenerObject) => {
           removed.push(listener);
         },
       };
+      // SAFETY: Lifecycle tests use only aborted and abort-listener registration.
+      const signal = signalFixture as typeof signalFixture & AbortSignal;
       return { signal, added, removed, open: () => added.length - removed.length };
     };
-    const makeContext = (cwd: string, signal?: unknown): ExtensionContext =>
-      ({
+    const makeContext = (cwd: string, signal?: AbortSignal) =>
+      extensionContextFixture({
         cwd,
         mode: "rpc",
         hasUI: true,
         signal,
         ui: { notify, custom: vi.fn(), select: vi.fn(), input: vi.fn() },
         isProjectTrusted: vi.fn(() => true),
-      }) as unknown as ExtensionContext;
+      });
     return { agentDir, handlers, commands, notify, makeContext, makeSignal };
   }
 

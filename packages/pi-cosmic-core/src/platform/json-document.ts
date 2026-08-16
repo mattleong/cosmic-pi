@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "../runtime-values.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -10,11 +11,17 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import { JsonDocumentError } from "./errors.ts";
 import { ProcessCoordinator } from "./process-coordinator.ts";
 
-/** Historical public input shape; persistence validates every value against `Schema.Json`. */
-export type JsonObject = Record<string, unknown>;
+/** Mutable JSON value accepted by the document store. */
+export type JsonValue = Schema.MutableJson;
 
-export const isJsonObject = (value: unknown): value is JsonObject =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+/** Schema-backed mutable JSON object persisted by the document store. */
+export type JsonObject = Schema.MutableJsonObject;
+
+export const isJsonObject = <Value>(value: Value): value is Value & JsonObject =>
+  Schema.is(Schema.MutableJson)(value) &&
+  hasObjectRuntimeType(value) &&
+  value !== null &&
+  !Array.isArray(value);
 
 export interface JsonDocumentModification<A, AfterCommitR = never> {
   readonly value: A;
@@ -32,10 +39,10 @@ const UnknownFromPrettyJsonString = Schema.String.pipe(
     ),
   ),
 );
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
 const JsonObjectFromString = UnknownFromPrettyJsonString.pipe(Schema.decodeTo(JsonObjectSchema));
 
-export interface JsonDocumentStoreShape {
+export interface JsonDocumentStoreContract {
   readonly exists: (path: string) => Effect.Effect<boolean, JsonDocumentError>;
   readonly readObject: (path: string) => Effect.Effect<JsonObject | undefined, JsonDocumentError>;
   readonly writeObject: (
@@ -56,7 +63,7 @@ export interface JsonDocumentStoreShape {
 }
 
 /** A document store that guarantees effectful read-modify-write transactions. */
-export interface AtomicJsonDocumentStoreShape extends JsonDocumentStoreShape {
+export interface AtomicJsonDocumentStoreContract extends JsonDocumentStoreContract {
   readonly modifyObject: <A, E, R, AfterCommitR = never>(
     path: string,
     modify: (
@@ -65,9 +72,10 @@ export interface AtomicJsonDocumentStoreShape extends JsonDocumentStoreShape {
   ) => Effect.Effect<A, JsonDocumentError | E, R | AfterCommitR>;
 }
 
-export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDocumentStoreShape>()(
-  "pi-cosmic-core/platform/json-document/JsonDocumentStore",
-) {
+export class JsonDocumentStore extends Context.Service<
+  JsonDocumentStore,
+  JsonDocumentStoreContract
+>()("pi-cosmic-core/platform/json-document/JsonDocumentStore") {
   static readonly layer = Layer.effect(
     this,
     Effect.gen(function* () {
@@ -178,7 +186,7 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
           ),
       );
 
-      const modifyObject: AtomicJsonDocumentStoreShape["modifyObject"] = Effect.fn(
+      const modifyObject: AtomicJsonDocumentStoreContract["modifyObject"] = Effect.fn(
         "JsonDocumentStore.modifyObject",
       )(function* <A, E, R, AfterCommitR = never>(
         path: string,
@@ -197,7 +205,7 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
         );
       });
 
-      const updateObject: JsonDocumentStoreShape["updateObject"] = Effect.fn(
+      const updateObject: JsonDocumentStoreContract["updateObject"] = Effect.fn(
         "JsonDocumentStore.updateObject",
       )((path, update) =>
         modifyObject(path, (current) =>

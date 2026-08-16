@@ -2,10 +2,11 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI, {
@@ -13,8 +14,8 @@ import betterOpenAI, {
   type BetterOpenAIExtensionDependencies,
 } from "../src/extension.ts";
 
-type Handler = (event: any, ctx: ExtensionContext) => unknown;
-type Command = (args: string, ctx: ExtensionContext) => unknown;
+type Handler = ExtensionHandler<any, any>;
+type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
 const directories: string[] = [];
 afterEach(() => {
   for (const directory of directories.splice(0))
@@ -40,7 +41,7 @@ function harness(dependencies?: BetterOpenAIExtensionDependencies) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, Command>();
   let tool: any;
-  const pi = {
+  const piFixture = {
     on(name: string, handler: Handler) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     },
@@ -56,8 +57,10 @@ function harness(dependencies?: BetterOpenAIExtensionDependencies) {
     registerMessageRenderer: vi.fn(),
     sendMessage: vi.fn(),
     events: { emit: vi.fn(), on: vi.fn() },
-  } as unknown as ExtensionAPI;
-  const ctx = {
+  };
+  // SAFETY: Better OpenAI registration uses only the ExtensionAPI methods implemented here.
+  const pi = piFixture as typeof piFixture & ExtensionAPI;
+  const contextFixture = {
     cwd,
     mode: "rpc",
     hasUI: true,
@@ -78,7 +81,9 @@ function harness(dependencies?: BetterOpenAIExtensionDependencies) {
     getContextUsage: () => ({ contextWindow: 100, percent: 1 }),
     getSystemPrompt: () => "system",
     isProjectTrusted: vi.fn(() => true),
-  } as unknown as ExtensionContext;
+  };
+  // SAFETY: This harness supplies every context member exercised by events and commands.
+  const ctx = contextFixture as typeof contextFixture & ExtensionCommandContext;
   if (dependencies) betterOpenAIWithDependencies(pi, dependencies);
   else betterOpenAI(pi);
   const emit = async (name: string, event: any = {}, useCtx = ctx) => {
@@ -213,14 +218,15 @@ describe("Better OpenAI session boundary", () => {
       }),
     );
     await h.emit("session_start");
-    const replacement = { ...h.ctx } as ExtensionContext;
+    const replacement = { ...h.ctx };
     await h.emit("session_start", {}, replacement);
     vi.mocked(h.ctx.ui.notify).mockClear();
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const selected = {
       ...replacement,
-      model: { provider: "anthropic", id: "claude" },
-    } as ExtensionContext;
+      model: { ...replacement.model, provider: "anthropic", id: "claude" },
+    };
     await h.emit("model_select", { model: selected.model }, selected);
     await Promise.resolve(h.commands.get("openai-usage")?.("", selected));
 
@@ -322,7 +328,7 @@ describe("Better OpenAI session boundary", () => {
     const controller = new AbortController();
     let cwdReads = 0;
     let signalReads = 0;
-    const replacement = { ...h.ctx } as ExtensionContext;
+    const replacement = { ...h.ctx };
     Object.defineProperties(replacement, {
       cwd: {
         configurable: true,
@@ -358,7 +364,7 @@ describe("Better OpenAI session boundary", () => {
       const h = harness();
       await h.emit("session_start");
       vi.mocked(h.ctx.ui.notify).mockClear();
-      const replacement = { ...h.ctx } as ExtensionContext;
+      const replacement = { ...h.ctx };
       Object.defineProperty(replacement, property, {
         configurable: true,
         get() {
@@ -418,7 +424,8 @@ describe("Better OpenAI session boundary", () => {
   test("recomputes model visibility before asynchronous refresh and rejects disabled image work", async () => {
     const h = harness();
     await h.emit("session_start");
-    h.ctx.model = { provider: "anthropic", id: "claude" } as ExtensionContext["model"];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    h.ctx.model = { ...h.ctx.model, provider: "anthropic", id: "claude" };
     await h.emit("model_select", { model: h.ctx.model });
     expect(h.ctx.ui.setStatus).not.toHaveBeenCalledWith(
       expect.any(String),

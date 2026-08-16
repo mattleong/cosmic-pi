@@ -50,7 +50,10 @@ import {
 /** Host boundaries injected here so tests can control settings latency and nested tools. */
 export interface CodeModeApplicationBoundaries {
   /** Must resolve before the tool is wrapped: the preview shell captures mode at wrap time. */
-  readonly loadSettings: (cwd: string, projectTrusted: boolean) => Promise<unknown>;
+  readonly loadSettings: (
+    cwd: string,
+    projectTrusted: boolean,
+  ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
   readonly wrapTool: (tool: CodeModeToolDefinition) => CodeModeToolDefinition;
   readonly makeNestedDefinitions: (cwd: string) => NestedPiToolDefinitions;
   /**

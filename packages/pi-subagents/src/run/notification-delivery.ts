@@ -263,6 +263,7 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
     withLock(
       Effect.sync(() => {
         const generation = ++record.notificationGeneration;
+        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
         const queued = { ...notification, generation } as SubagentQuestionNotification;
         pendingActionNotifications.set(actionSlot(queued), queued);
         if (actionRetryWake) Deferred.doneUnsafe(actionRetryWake, Effect.void);

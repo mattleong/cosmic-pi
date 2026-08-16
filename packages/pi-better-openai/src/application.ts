@@ -59,7 +59,10 @@ const FAST_ID = "fast";
 
 export interface BetterOpenAIExtensionDependencies {
   readonly startupEffect: (generation: number) => Effect.Effect<void, never, OpenAIUsageService>;
-  readonly loadPreviewSettings?: (projectCwd: string, projectTrusted: boolean) => Promise<unknown>;
+  readonly loadPreviewSettings?: (
+    projectCwd: string,
+    projectTrusted: boolean,
+  ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
 }
 
 const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
@@ -401,7 +404,7 @@ export function betterOpenAIWithDependencies(
       .then((compactedPayload) => compactedPayload ?? fastPayload)
       .catch(() => fastPayload);
   });
-  const invalidateContextUsage = (_event: unknown, ctx: ExtensionContext) => {
+  const invalidateContextUsage = <Event>(_event: Event, ctx: ExtensionContext) => {
     updateContext(ctx);
     footerController.invalidateContextUsage();
   };

@@ -1,3 +1,5 @@
+import type { JsonObject } from "pi-cosmic-core";
+import { hasObjectRuntimeType, isBooleanValue, isNumberValue, isStringValue } from "pi-cosmic-core";
 import { freezeSnapshot, isJsonObject } from "pi-cosmic-core";
 import {
   SUBAGENT_EFFORTS,
@@ -46,8 +48,36 @@ import {
   type SubagentStartEntry,
 } from "./details.ts";
 
-const RUN_STATES: ReadonlySet<string> = new Set(SUBAGENT_RUN_STATES);
-const EFFORTS: ReadonlySet<string> = new Set(SUBAGENT_EFFORTS);
+type MutableSubagentRunCard = {
+  -readonly [Key in keyof SubagentRunCard]: SubagentRunCard[Key];
+};
+interface DecodedProfileCandidate {
+  order: number;
+  candidate: string;
+  status: SubagentProfileCandidateCard["status"];
+  effectiveContext?: SubagentProfileCandidateCard["effectiveContext"];
+  reason: string;
+}
+interface DecodedProfileRoute {
+  id: SubagentProfileRouteCard["id"];
+  description: string;
+  source: SubagentProfileRouteCard["source"];
+  isDefault: boolean;
+  defaultContext: SubagentProfileRouteCard["defaultContext"];
+  defaultWriteIntent: SubagentProfileRouteCard["defaultWriteIntent"];
+  defaultEffort?: SubagentProfileRouteCard["defaultEffort"];
+  candidates: ReadonlyArray<SubagentProfileCandidateCard>;
+}
+type MutableStartAwaitDetails = {
+  -readonly [Key in keyof Parameters<typeof makeStartAwaitCardDetails>[0]]: Parameters<
+    typeof makeStartAwaitCardDetails
+  >[0][Key];
+};
+
+const isRunState = <Value>(value: Value): value is Value & SubagentRunState =>
+  isStringValue(value) && SUBAGENT_RUN_STATES.some((state) => state === value);
+const isEffort = <Value>(value: Value): value is Value & SubagentEffort =>
+  isStringValue(value) && SUBAGENT_EFFORTS.some((effort) => effort === value);
 const CAPABILITIES: ReadonlySet<string> = new Set([
   "steer",
   "interrupt",
@@ -57,22 +87,25 @@ const CAPABILITIES: ReadonlySet<string> = new Set([
   "peer-notice",
   "native-fork",
 ]);
-const PROFILE_SOURCES: ReadonlySet<string> = new Set([
+const PROFILE_SOURCES = [
   "session",
   "project",
   "project-invalid",
   "global",
   "global-invalid",
   "builtin",
-]);
-const SOURCES: ReadonlySet<string> = new Set(["profile-candidate", "profile-parent-candidate"]);
+] as const satisfies ReadonlyArray<ProfileRouteSource>;
+const isProfileRouteSource = <Value>(value: Value): value is Value & ProfileRouteSource =>
+  isStringValue(value) && PROFILE_SOURCES.some((source) => source === value);
+const isSelectionSource = <Value>(value: Value): value is Value & SubagentSelectionSource =>
+  value === "profile-candidate" || value === "profile-parent-candidate";
 
-const recordOf = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
+const recordOf = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined =>
   isJsonObject(value) ? value : undefined;
-const finiteNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+const finiteNumber = <ValueInput>(value: ValueInput): number | undefined =>
+  isNumberValue(value) && Number.isFinite(value) ? value : undefined;
 
-const decodeUsage = (value: unknown): SubagentUsage | undefined => {
+const decodeUsage = <ValueInput>(value: ValueInput): SubagentUsage | undefined => {
   const record = recordOf(value);
   if (!record) return undefined;
   const fields = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const;
@@ -80,81 +113,90 @@ const decodeUsage = (value: unknown): SubagentUsage | undefined => {
   // Cost stays optional: absence means unknown and is preserved rather than becoming $0.
   if (record.cost !== undefined && finiteNumber(record.cost) === undefined) return undefined;
   const cost = finiteNumber(record.cost);
-  return boundedUsage({
-    input: finiteNumber(record.input) ?? 0,
-    output: finiteNumber(record.output) ?? 0,
-    cacheRead: finiteNumber(record.cacheRead) ?? 0,
-    cacheWrite: finiteNumber(record.cacheWrite) ?? 0,
-    totalTokens: finiteNumber(record.totalTokens) ?? 0,
-    ...(cost === undefined ? {} : { cost }),
-  });
+  return boundedUsage(
+    (() => {
+      const objectPart2664_0 = {
+        input: finiteNumber(record.input) ?? 0,
+        output: finiteNumber(record.output) ?? 0,
+        cacheRead: finiteNumber(record.cacheRead) ?? 0,
+        cacheWrite: finiteNumber(record.cacheWrite) ?? 0,
+        totalTokens: finiteNumber(record.totalTokens) ?? 0,
+      };
+      const objectPart2664_1 =
+        cost === undefined ? objectPart2664_0 : { ...objectPart2664_0, cost };
+      return objectPart2664_1;
+    })(),
+  );
 };
 
-const decodeSkipped = (value: unknown): ReadonlyArray<SkippedProfileCandidate> =>
+const decodeSkipped = <ValueInput>(value: ValueInput): ReadonlyArray<SkippedProfileCandidate> =>
   Array.isArray(value)
     ? value.slice(0, MAX_CARD_SKIPS).flatMap((entry) => {
         const record = recordOf(entry);
         if (
           !record ||
-          typeof record.candidate !== "string" ||
-          typeof record.code !== "string" ||
-          typeof record.reason !== "string"
+          !isStringValue(record.candidate) ||
+          !isStringValue(record.code) ||
+          !isStringValue(record.reason)
         )
           return [];
         const candidateIndex = finiteNumber(record.candidateIndex);
         return [
-          {
-            ...(candidateIndex === undefined ? {} : { candidateIndex }),
-            candidate: clean(record.candidate, MAX_CARD_PROVENANCE_CHARS),
-            code: clean(record.code, 128),
-            reason: clean(record.reason, MAX_CARD_PROVENANCE_CHARS),
-          },
+          (() => {
+            const objectPart3454_0 = {};
+            const objectPart3454_1 =
+              candidateIndex === undefined
+                ? objectPart3454_0
+                : { ...objectPart3454_0, candidateIndex };
+            const objectPart3454_2 = {
+              ...objectPart3454_1,
+              candidate: clean(record.candidate, MAX_CARD_PROVENANCE_CHARS),
+              code: clean(record.code, 128),
+              reason: clean(record.reason, MAX_CARD_PROVENANCE_CHARS),
+            };
+            return objectPart3454_2;
+          })(),
         ];
       })
     : [];
 
-const decodeSelection = (value: unknown): SubagentSelectionProvenance | undefined => {
+const decodeSelection = <ValueInput>(
+  value: ValueInput,
+): SubagentSelectionProvenance | undefined => {
   const record = recordOf(value);
-  if (
-    !record ||
-    typeof record.source !== "string" ||
-    !SOURCES.has(record.source) ||
-    typeof record.reason !== "string"
-  )
+  if (!record || !isSelectionSource(record.source) || !isStringValue(record.reason))
     return undefined;
   const candidateIndex = finiteNumber(record.candidateIndex);
-  return {
-    source: record.source as SubagentSelectionSource,
-    ...(typeof record.routeSource === "string" && PROFILE_SOURCES.has(record.routeSource)
-      ? { routeSource: record.routeSource as ProfileRouteSource }
-      : {}),
-    ...(record.host === "local" || record.host === "herdr" ? { host: record.host } : {}),
-    ...(record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex"
-      ? { runtime: record.runtime }
-      : {}),
-    ...(typeof record.closeOnReport === "boolean" ? { closeOnReport: record.closeOnReport } : {}),
-    ...(candidateIndex === undefined ? {} : { candidateIndex }),
+  let selection: SubagentSelectionProvenance = {
+    source: record.source,
     reason: clean(record.reason, MAX_CARD_PROVENANCE_CHARS),
     skippedCandidates: decodeSkipped(record.skippedCandidates),
-    ...(typeof record.warning === "string"
-      ? { warning: clean(record.warning, MAX_CARD_PROVENANCE_CHARS) }
-      : {}),
   };
+  if (isProfileRouteSource(record.routeSource))
+    selection = { ...selection, routeSource: record.routeSource };
+  if (record.host === "local" || record.host === "herdr")
+    selection = { ...selection, host: record.host };
+  if (record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex")
+    selection = { ...selection, runtime: record.runtime };
+  if (isBooleanValue(record.closeOnReport))
+    selection = { ...selection, closeOnReport: record.closeOnReport };
+  if (candidateIndex !== undefined) selection = { ...selection, candidateIndex };
+  if (isStringValue(record.warning))
+    selection = { ...selection, warning: clean(record.warning, MAX_CARD_PROVENANCE_CHARS) };
+  return selection;
 };
 
-const decodeCard = (value: unknown): SubagentRunCard | undefined => {
+const decodeCard = <ValueInput>(value: ValueInput): SubagentRunCard | undefined => {
   const record = recordOf(value);
   if (
     !record ||
-    typeof record.id !== "string" ||
+    !isStringValue(record.id) ||
     !record.id.trim() ||
     record.id.length > MAX_PROTOCOL_ID_CHARS ||
-    typeof record.name !== "string" ||
-    typeof record.state !== "string" ||
-    !RUN_STATES.has(record.state) ||
-    typeof record.model !== "string" ||
-    typeof record.effort !== "string" ||
-    !EFFORTS.has(record.effort)
+    !isStringValue(record.name) ||
+    !isRunState(record.state) ||
+    !isStringValue(record.model) ||
+    !isEffort(record.effort)
   )
     return undefined;
   const selection = decodeSelection(record.selection);
@@ -163,80 +205,80 @@ const decodeCard = (value: unknown): SubagentRunCard | undefined => {
   const capabilities = Array.isArray(record.capabilities)
     ? record.capabilities.filter(
         (capability): capability is SubagentCapability =>
-          typeof capability === "string" && CAPABILITIES.has(capability),
+          isStringValue(capability) && CAPABILITIES.has(capability),
       )
     : undefined;
   const usage = decodeUsage(record.usage);
-  const profile =
-    typeof record.profile === "string" ? normalizeProfileId(record.profile) : undefined;
-  return {
+  const profile = isStringValue(record.profile) ? normalizeProfileId(record.profile) : undefined;
+  const card: MutableSubagentRunCard = {
     id: clean(record.id.trim(), MAX_PROTOCOL_ID_CHARS),
     name: sanitizeName(record.name) || "subagent",
-    state: record.state as SubagentRunState,
-    ...(profile ? { profile } : {}),
-    ...(record.host === "local" || record.host === "herdr" ? { host: record.host } : {}),
-    ...(record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex"
-      ? { runtime: record.runtime }
-      : {}),
-    ...(typeof record.closeOnReport === "boolean" ? { closeOnReport: record.closeOnReport } : {}),
+    state: record.state,
     reportGeneration: Math.max(0, Math.floor(finiteNumber(record.reportGeneration) ?? 0)),
     model: clean(record.model, MAX_CARD_MODEL_CHARS),
-    effort: record.effort as SubagentEffort,
-    ...(typeof record.fastMode === "boolean" ? { fastMode: record.fastMode } : {}),
-    ...(record.context === "fresh" || record.context === "fork" ? { context: record.context } : {}),
-    ...(record.writeIntent === "read-only" || record.writeIntent === "writer"
-      ? { writeIntent: record.writeIntent }
-      : {}),
-    ...(capabilities ? { capabilities } : {}),
-    ...(finiteNumber(record.startedAt) === undefined
-      ? {}
-      : { startedAt: boundedNonNegative(finiteNumber(record.startedAt) ?? 0) }),
-    ...(finiteNumber(record.lastActivityAt) === undefined
-      ? {}
-      : { lastActivityAt: boundedNonNegative(finiteNumber(record.lastActivityAt) ?? 0) }),
-    ...(usage ? { usage } : {}),
+    effort: record.effort,
     selection,
-    ...(typeof record.currentTool === "string"
-      ? { currentTool: clean(record.currentTool, 256) }
-      : {}),
-    ...(typeof record.progress === "string" ? { progress: clean(record.progress, 512) } : {}),
-    ...(typeof record.warning === "string" ? { warning: clean(record.warning, 512) } : {}),
-    ...(finiteNumber(record.endedAt) === undefined
-      ? {}
-      : { endedAt: finiteNumber(record.endedAt) }),
-    ...(typeof record.finalText === "string"
-      ? { finalText: sanitizeOutputText(record.finalText, MAX_FINAL_TEXT_CHARS) }
-      : {}),
-    ...(typeof record.error === "string"
-      ? { error: sanitizeOutputText(record.error, MAX_ERROR_CHARS) }
-      : {}),
-    ...(record.finalTextTruncated === true ? { finalTextTruncated: true } : {}),
-    ...(record.errorTruncated === true ? { errorTruncated: true } : {}),
-    ...(questionRecord && typeof questionRecord.message === "string"
-      ? { question: { message: clean(questionRecord.message, MAX_CARD_QUESTION_CHARS) } }
-      : {}),
   };
+  if (profile) card.profile = profile;
+  if (record.host === "local" || record.host === "herdr") card.host = record.host;
+  if (record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex")
+    card.runtime = record.runtime;
+  if (isBooleanValue(record.closeOnReport)) card.closeOnReport = record.closeOnReport;
+  if (isBooleanValue(record.fastMode)) card.fastMode = record.fastMode;
+  if (record.context === "fresh" || record.context === "fork") card.context = record.context;
+  if (record.writeIntent === "read-only" || record.writeIntent === "writer")
+    card.writeIntent = record.writeIntent;
+  if (capabilities) card.capabilities = capabilities;
+  const startedAt = finiteNumber(record.startedAt);
+  if (startedAt !== undefined) card.startedAt = boundedNonNegative(startedAt);
+  const lastActivityAt = finiteNumber(record.lastActivityAt);
+  if (lastActivityAt !== undefined) card.lastActivityAt = boundedNonNegative(lastActivityAt);
+  if (usage) card.usage = usage;
+  if (isStringValue(record.currentTool)) card.currentTool = clean(record.currentTool, 256);
+  if (isStringValue(record.progress)) card.progress = clean(record.progress, 512);
+  if (isStringValue(record.warning)) card.warning = clean(record.warning, 512);
+  const endedAt = finiteNumber(record.endedAt);
+  if (endedAt !== undefined) card.endedAt = endedAt;
+  if (isStringValue(record.finalText))
+    card.finalText = sanitizeOutputText(record.finalText, MAX_FINAL_TEXT_CHARS);
+  if (isStringValue(record.error)) card.error = sanitizeOutputText(record.error, MAX_ERROR_CHARS);
+  if (record.finalTextTruncated === true) card.finalTextTruncated = true;
+  if (record.errorTruncated === true) card.errorTruncated = true;
+  if (questionRecord && isStringValue(questionRecord.message))
+    card.question = { message: clean(questionRecord.message, MAX_CARD_QUESTION_CHARS) };
+  return card;
 };
 
-const decodeFailures = (value: unknown): ReadonlyArray<SubagentCardFailure> | undefined => {
+const decodeFailures = <ValueInput>(
+  value: ValueInput,
+): ReadonlyArray<SubagentCardFailure> | undefined => {
   if (!Array.isArray(value)) return undefined;
   const failures = value.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
     const record = recordOf(entry);
-    if (record === undefined || typeof record.message !== "string") return [];
+    if (record === undefined || !isStringValue(record.message)) return [];
     const index = finiteNumber(record.index);
     return [
-      {
-        index: index === undefined ? 0 : Math.max(0, Math.floor(index)),
-        ...(typeof record.name === "string" ? { name: sanitizeName(record.name) } : {}),
-        message: clean(record.message, 512),
-        ...(typeof record.code === "string" ? { code: clean(record.code, 128) } : {}),
-      },
+      (() => {
+        const objectPart8952_0 = {
+          index: index === undefined ? 0 : Math.max(0, Math.floor(index)),
+        };
+        const objectPart8952_1 = isStringValue(record.name)
+          ? { ...objectPart8952_0, name: sanitizeName(record.name) }
+          : objectPart8952_0;
+        const objectPart8952_2 = { ...objectPart8952_1, message: clean(record.message, 512) };
+        const objectPart8952_3 = isStringValue(record.code)
+          ? { ...objectPart8952_2, code: clean(record.code, 128) }
+          : objectPart8952_2;
+        return objectPart8952_3;
+      })(),
     ];
   });
   return failures.length > 0 ? failures : undefined;
 };
 
-const decodeStartEntries = (value: unknown): ReadonlyArray<SubagentStartEntry> | undefined => {
+const decodeStartEntries = <ValueInput>(
+  value: ValueInput,
+): ReadonlyArray<SubagentStartEntry> | undefined => {
   if (!Array.isArray(value)) return undefined;
   const entries = value.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
     const record = recordOf(entry);
@@ -244,7 +286,7 @@ const decodeStartEntries = (value: unknown): ReadonlyArray<SubagentStartEntry> |
     if (
       !record ||
       index === undefined ||
-      typeof record.name !== "string" ||
+      !isStringValue(record.name) ||
       (record.status !== "pending" && record.status !== "started" && record.status !== "failed")
     )
       return [];
@@ -252,55 +294,63 @@ const decodeStartEntries = (value: unknown): ReadonlyArray<SubagentStartEntry> |
       record.routeStatus === "selected" &&
       (record.host === "local" || record.host === "herdr") &&
       (record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex") &&
-      typeof record.model === "string" &&
+      isStringValue(record.model) &&
       clean(record.model, MAX_CARD_MODEL_CHARS).length > 0 &&
-      typeof record.effort === "string" &&
-      EFFORTS.has(record.effort);
+      isStringValue(record.effort) &&
+      isEffort(record.effort);
     const routeStatus =
       record.status === "pending" ? "resolving" : selected ? "selected" : "unavailable";
     const candidateIndex = finiteNumber(record.candidateIndex);
+    const base: SubagentStartEntry = {
+      index: Math.max(0, Math.floor(index)),
+      name: clean(record.name, MAX_NAME_CHARS),
+      profile: (isStringValue(record.profile) ? clean(record.profile, 64) : "") || "generalist",
+      status: record.status,
+      routeStatus,
+    };
+    const withSelection = selected
+      ? (() => {
+          // SAFETY: The selected-route checks above validate every narrowed route field.
+          const selectionBase = {
+            host: record.host as SubagentHost,
+            runtime: record.runtime as SubagentRuntime,
+            model: clean(record.model as string, MAX_CARD_MODEL_CHARS),
+            effort: record.effort as SubagentEffort,
+          };
+          const selectionFast =
+            record.fastMode === true
+              ? { ...selectionBase, fastMode: true as const }
+              : selectionBase;
+          const selection =
+            candidateIndex === undefined
+              ? selectionFast
+              : { ...selectionFast, candidateIndex: Math.max(0, Math.floor(candidateIndex)) };
+          return { ...base, ...selection };
+        })()
+      : base;
     return [
-      {
-        index: Math.max(0, Math.floor(index)),
-        name: clean(record.name, MAX_NAME_CHARS),
-        profile:
-          (typeof record.profile === "string" ? clean(record.profile, 64) : "") || "generalist",
-        status: record.status,
-        routeStatus,
-        ...(selected
-          ? {
-              host: record.host as SubagentHost,
-              runtime: record.runtime as SubagentRuntime,
-              model: clean(record.model as string, MAX_CARD_MODEL_CHARS),
-              effort: record.effort as SubagentEffort,
-              ...(record.fastMode === true ? { fastMode: true } : {}),
-              ...(candidateIndex === undefined
-                ? {}
-                : { candidateIndex: Math.max(0, Math.floor(candidateIndex)) }),
-            }
-          : {}),
-        ...(typeof record.runId === "string"
-          ? { runId: clean(record.runId, MAX_PROTOCOL_ID_CHARS) }
-          : {}),
-      } satisfies SubagentStartEntry,
+      (isStringValue(record.runId)
+        ? { ...withSelection, runId: clean(record.runId, MAX_PROTOCOL_ID_CHARS) }
+        : withSelection) satisfies SubagentStartEntry,
     ];
   });
   return entries.length > 0 ? entries : undefined;
 };
 
-const decodeProfiles = (value: unknown): ReadonlyArray<SubagentProfileRouteCard> | undefined => {
+const decodeProfiles = <ValueInput>(
+  value: ValueInput,
+): ReadonlyArray<SubagentProfileRouteCard> | undefined => {
   if (!Array.isArray(value)) return undefined;
   const profiles = value.slice(0, 16).flatMap((entry) => {
     const record = recordOf(entry);
-    const profile =
-      record && typeof record.id === "string" ? normalizeProfileId(record.id) : undefined;
+    const profile = record && isStringValue(record.id) ? normalizeProfileId(record.id) : undefined;
     if (
       !record ||
       !profile ||
-      typeof record.description !== "string" ||
-      typeof record.source !== "string" ||
-      !PROFILE_SOURCES.has(record.source) ||
-      typeof record.isDefault !== "boolean" ||
+      !isStringValue(record.description) ||
+      !isStringValue(record.source) ||
+      !isProfileRouteSource(record.source) ||
+      !isBooleanValue(record.isDefault) ||
       (record.defaultContext !== "fresh" && record.defaultContext !== "fork") ||
       (record.defaultWriteIntent !== "read-only" && record.defaultWriteIntent !== "writer") ||
       !Array.isArray(record.candidates)
@@ -312,36 +362,39 @@ const decodeProfiles = (value: unknown): ReadonlyArray<SubagentProfileRouteCard>
       if (
         !candidate ||
         order === undefined ||
-        typeof candidate.candidate !== "string" ||
+        !isStringValue(candidate.candidate) ||
         (candidate.status !== "eligible" && candidate.status !== "skipped") ||
-        typeof candidate.reason !== "string"
+        !isStringValue(candidate.reason)
       )
         return [];
       return [
-        {
-          order: Math.max(1, Math.floor(order)),
-          candidate: clean(candidate.candidate, 1_024),
-          status: candidate.status,
-          ...(candidate.effectiveContext === "fresh" || candidate.effectiveContext === "fork"
-            ? { effectiveContext: candidate.effectiveContext }
-            : {}),
-          reason: clean(candidate.reason, 1_024),
-        } satisfies SubagentProfileCandidateCard,
+        (() => {
+          const projected: DecodedProfileCandidate = {
+            order: Math.max(1, Math.floor(order)),
+            candidate: clean(candidate.candidate, 1_024),
+            status: candidate.status,
+            reason: clean(candidate.reason, 1_024),
+          };
+          if (candidate.effectiveContext === "fresh" || candidate.effectiveContext === "fork")
+            projected.effectiveContext = candidate.effectiveContext;
+          return projected;
+        })() satisfies SubagentProfileCandidateCard,
       ];
     });
     return [
-      {
-        id: profile,
-        description: clean(record.description, 512),
-        source: record.source as ProfileRouteSource,
-        isDefault: record.isDefault,
-        defaultContext: record.defaultContext,
-        defaultWriteIntent: record.defaultWriteIntent,
-        ...(typeof record.defaultEffort === "string" && EFFORTS.has(record.defaultEffort)
-          ? { defaultEffort: record.defaultEffort as SubagentEffort }
-          : {}),
-        candidates,
-      } satisfies SubagentProfileRouteCard,
+      (() => {
+        const projected: DecodedProfileRoute = {
+          id: profile,
+          description: clean(record.description, 512),
+          source: record.source,
+          isDefault: record.isDefault,
+          defaultContext: record.defaultContext,
+          defaultWriteIntent: record.defaultWriteIntent,
+          candidates,
+        };
+        if (isEffort(record.defaultEffort)) projected.defaultEffort = record.defaultEffort;
+        return projected;
+      })() satisfies SubagentProfileRouteCard,
     ];
   });
   return profiles.length > 0 ? profiles : undefined;
@@ -353,10 +406,10 @@ const decodedStartAwaitDetails = new WeakMap<object, SubagentStartAwaitCardDetai
  * Strict current-version renderer boundary for start/await result details.
  * Details objects are immutable, so decodes are memoized per object identity.
  */
-export function decodeStartAwaitCardDetails(
-  value: unknown,
+export function decodeStartAwaitCardDetails<ValueInput>(
+  value: ValueInput,
 ): SubagentStartAwaitCardDetails | undefined {
-  if (typeof value !== "object" || value === null)
+  if (!hasObjectRuntimeType(value) || value === null)
     return decodeStartAwaitCardDetailsUncached(value);
   if (decodedStartAwaitDetails.has(value)) return decodedStartAwaitDetails.get(value);
   const decoded = decodeStartAwaitCardDetailsUncached(value);
@@ -364,8 +417,8 @@ export function decodeStartAwaitCardDetails(
   return decoded;
 }
 
-function decodeStartAwaitCardDetailsUncached(
-  value: unknown,
+function decodeStartAwaitCardDetailsUncached<ValueInput>(
+  value: ValueInput,
 ): SubagentStartAwaitCardDetails | undefined {
   const record = recordOf(value);
   if (
@@ -381,28 +434,30 @@ function decodeStartAwaitCardDetailsUncached(
     return card ? [card] : [];
   });
   if (source.length > 0 && cards.length === 0) return undefined;
-  return makeStartAwaitCardDetails({
+  const details: MutableStartAwaitDetails = {
     action: record.action,
     runs: cards,
     startEntries: decodeStartEntries(record.startEntries),
     startFailures: decodeFailures(record.startFailures),
-    ...(record.awaitUntil === "all_finished" || record.awaitUntil === "any_finished"
-      ? { awaitUntil: record.awaitUntil }
-      : {}),
-    ...(record.timedOut === true ? { timedOut: true } : {}),
-    ...(record.attentionRequired === true ? { attentionRequired: true } : {}),
-    ...(record.cancelled === true ? { cancelled: true } : {}),
-    ...(record.contentOmitted === true ? { contentOmitted: true } : {}),
-  });
+  };
+  if (record.awaitUntil === "all_finished" || record.awaitUntil === "any_finished")
+    details.awaitUntil = record.awaitUntil;
+  if (record.timedOut === true) details.timedOut = true;
+  if (record.attentionRequired === true) details.attentionRequired = true;
+  if (record.cancelled === true) details.cancelled = true;
+  if (record.contentOmitted === true) details.contentOmitted = true;
+  return makeStartAwaitCardDetails(details);
 }
 
 /** Strict current-version renderer boundary for semantic non-start/await result details. */
-export function decodeCompactToolDetails(value: unknown): CompactSubagentToolDetails | undefined {
+export function decodeCompactToolDetails<ValueInput>(
+  value: ValueInput,
+): CompactSubagentToolDetails | undefined {
   const record = recordOf(value);
   if (
     !record ||
     record.version !== SUBAGENT_CARD_DETAILS_VERSION ||
-    typeof record.action !== "string" ||
+    !isStringValue(record.action) ||
     record.action === "start" ||
     record.action === "await"
   )
@@ -415,13 +470,13 @@ export function decodeCompactToolDetails(value: unknown): CompactSubagentToolDet
   const runIds = Array.isArray(record.runIds)
     ? record.runIds
         .slice(0, MAX_TARGET_RUNS)
-        .filter((id): id is string => typeof id === "string")
+        .filter((id): id is string => isStringValue(id))
         .map((id) => clean(id, 128))
     : undefined;
   const runCount = finiteNumber(record.runCount);
   const profileIds = Array.isArray(record.profileIds)
     ? record.profileIds.slice(0, 16).flatMap((id) => {
-        const profile = typeof id === "string" ? normalizeProfileId(id) : undefined;
+        const profile = isStringValue(id) ? normalizeProfileId(id) : undefined;
         return profile ? [profile] : [];
       })
     : undefined;
@@ -429,31 +484,60 @@ export function decodeCompactToolDetails(value: unknown): CompactSubagentToolDet
   const actionFailures = Array.isArray(record.actionFailures)
     ? record.actionFailures.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
         const failure = recordOf(entry);
-        if (!failure || typeof failure.id !== "string" || typeof failure.message !== "string")
-          return [];
+        if (!failure || !isStringValue(failure.id) || !isStringValue(failure.message)) return [];
         return [
-          {
-            id: clean(failure.id, 128),
-            ...(typeof failure.code === "string" ? { code: clean(failure.code, 64) } : {}),
-            message: clean(failure.message, 256),
-          } satisfies CompactToolActionFailure,
+          (() => {
+            const objectPart17361_0 = { id: clean(failure.id, 128) };
+            const objectPart17361_1 = isStringValue(failure.code)
+              ? { ...objectPart17361_0, code: clean(failure.code, 64) }
+              : objectPart17361_0;
+            const objectPart17361_2 = {
+              ...objectPart17361_1,
+              message: clean(failure.message, 256),
+            };
+            return objectPart17361_2;
+          })() satisfies CompactToolActionFailure,
         ];
       })
     : undefined;
-  return freezeSnapshot({
-    version: SUBAGENT_CARD_DETAILS_VERSION,
-    action: clean(record.action, 32),
-    ...(cards.length > 0 ? { cards } : {}),
-    ...(runIds && runIds.length > 0 ? { runIds } : {}),
-    ...(runCount === undefined ? {} : { runCount: Math.max(0, Math.floor(runCount)) }),
-    ...(profiles ? { profiles } : {}),
-    ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
-    ...(typeof record.fallbackProfile === "string" && normalizeProfileId(record.fallbackProfile)
-      ? { fallbackProfile: normalizeProfileId(record.fallbackProfile)! }
-      : {}),
-    ...(actionFailures && actionFailures.length > 0 ? { actionFailures } : {}),
-    ...(record.timedOut === true ? { timedOut: true } : {}),
-    ...(record.attentionRequired === true ? { attentionRequired: true } : {}),
-    ...(record.contentOmitted === true ? { contentOmitted: true } : {}),
-  });
+  return freezeSnapshot(
+    (() => {
+      const objectPart17649_0: CompactSubagentToolDetails = {
+        version: SUBAGENT_CARD_DETAILS_VERSION,
+        action: clean(record.action, 32),
+      };
+      const objectPart17649_1 =
+        cards.length > 0 ? { ...objectPart17649_0, cards } : objectPart17649_0;
+      const objectPart17649_2 =
+        runIds && runIds.length > 0 ? { ...objectPart17649_1, runIds } : objectPart17649_1;
+      const objectPart17649_3 =
+        runCount === undefined
+          ? objectPart17649_2
+          : { ...objectPart17649_2, runCount: Math.max(0, Math.floor(runCount)) };
+      const objectPart17649_4 = profiles ? { ...objectPart17649_3, profiles } : objectPart17649_3;
+      const objectPart17649_5 =
+        profileIds && profileIds.length > 0
+          ? { ...objectPart17649_4, profileIds }
+          : objectPart17649_4;
+      const objectPart17649_6 =
+        isStringValue(record.fallbackProfile) && normalizeProfileId(record.fallbackProfile)
+          ? { ...objectPart17649_5, fallbackProfile: normalizeProfileId(record.fallbackProfile)! }
+          : objectPart17649_5;
+      const objectPart17649_7 =
+        actionFailures && actionFailures.length > 0
+          ? { ...objectPart17649_6, actionFailures }
+          : objectPart17649_6;
+      const objectPart17649_8 =
+        record.timedOut === true ? { ...objectPart17649_7, timedOut: true } : objectPart17649_7;
+      const objectPart17649_9 =
+        record.attentionRequired === true
+          ? { ...objectPart17649_8, attentionRequired: true }
+          : objectPart17649_8;
+      const objectPart17649_10 =
+        record.contentOmitted === true
+          ? { ...objectPart17649_9, contentOmitted: true }
+          : objectPart17649_9;
+      return objectPart17649_10;
+    })(),
+  );
 }

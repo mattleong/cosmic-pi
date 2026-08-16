@@ -8,7 +8,7 @@ import {
   AdvisorRuntimeService,
   type AdvisorCheckpoint,
   type AdvisorCheckpointRequest,
-  type AdvisorRuntimeServiceShape,
+  type AdvisorRuntimeServiceContract,
   type AdvisorRuntimeStartOptions,
 } from "../../src/runtime/runtime.ts";
 import { deferred } from "./async.ts";
@@ -43,7 +43,7 @@ export interface ControllableRuntimeHarness {
   readonly layer: Layer.Layer<AdvisorRuntimeService>;
 }
 
-const toModelError = (error: unknown): AdvisorModelError =>
+const toModelError = <ErrorInput>(error: ErrorInput): AdvisorModelError =>
   error instanceof AdvisorModelError
     ? error
     : new AdvisorModelError({
@@ -99,12 +99,14 @@ export function controllableRuntimeService(
       if (!instance) return Effect.succeed(fallback);
       return Effect.tryPromise({ try: () => operation(instance), catch: toModelError });
     });
-  const service: AdvisorRuntimeServiceShape = {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+  const service: AdvisorRuntimeServiceContract = {
     activeToolNames: () => options.activeToolNames ?? ["read", "grep", "find", "ls"],
     start: (startOptions) =>
       Effect.suspend(() => {
         const instance = newInstance();
         current = instance;
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         return Effect.tryPromise({
           try: () => instance.driver.start(startOptions) as Promise<void>,
           catch: toModelError,

@@ -26,7 +26,7 @@ import {
   updateCandidateFromModelChoice,
   type CandidateModelPickerData,
 } from "./candidate-editor.ts";
-import { ProfileModelPickerPage } from "./model-picker.ts";
+import { ProfileModelPickerPage, type ProfileModelChoice } from "./model-picker.ts";
 import {
   PROFILE_WORKSPACE_FIELDS,
   PROFILE_WORKSPACE_SHORTCUTS,
@@ -322,7 +322,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         }
         this.renderSoon();
       })
-      .catch((error: unknown) => {
+      .catch((error) => {
         this.optimisticDraft = undefined;
         this.optimisticProfile = undefined;
         this.optimisticScope = undefined;
@@ -359,7 +359,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         }
         this.renderSoon();
       })
-      .catch((error: unknown) => {
+      .catch((error) => {
         this.busy = false;
         this.refreshBlocked = true;
         const message =
@@ -434,43 +434,56 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     notice?: string | undefined,
   ): void {
     const candidateIndex = this.candidateIndex;
-    this.selectPage = makeCandidateFieldSelector({
-      theme: this.options.theme,
-      profile: this.profile(),
-      candidateIndex,
-      candidate,
-      field,
-      fieldIndex: this.fieldIndex,
-      piModel: this.options.piModel,
-      parentModel: this.options.parentModel,
-      parentEffort: this.options.parentEffort,
-      supportedEfforts,
-      fastModeAvailable,
-      ...(notice ? { notice } : {}),
-      getHeight: this.options.getHeight,
-      requestRender: this.options.requestRender,
-      matchesKeybinding: this.options.matchesKeybinding,
-      keybindingLabel: this.options.keybindingLabel,
-      select: (update, description) => {
-        this.selectPage = undefined;
-        this.candidateIndex = candidateIndex;
-        if (
-          field === "runtime" &&
-          update.candidate &&
-          update.candidate.runtime !== candidate.runtime &&
-          update.candidate.runtime !== "pi"
-        ) {
-          this.openModelPicker(update.candidate, true, "Runtime and model updated", update.notices);
-          return;
-        }
-        this.applyCandidateUpdate(update, description);
-      },
-      cancel: (label) => {
-        this.selectPage = undefined;
-        this.setMessage("info", `${label} selection canceled.`);
-        this.renderSoon();
-      },
-    });
+    this.selectPage = makeCandidateFieldSelector(
+      (() => {
+        const objectPart15278_0 = {
+          theme: this.options.theme,
+          profile: this.profile(),
+          candidateIndex,
+          candidate,
+          field,
+          fieldIndex: this.fieldIndex,
+          piModel: this.options.piModel,
+          parentModel: this.options.parentModel,
+          parentEffort: this.options.parentEffort,
+          supportedEfforts,
+          fastModeAvailable,
+        };
+        const objectPart15278_1 = notice ? { ...objectPart15278_0, notice } : objectPart15278_0;
+        const objectPart15278_2 = {
+          ...objectPart15278_1,
+          getHeight: this.options.getHeight,
+          requestRender: this.options.requestRender,
+          matchesKeybinding: this.options.matchesKeybinding,
+          keybindingLabel: this.options.keybindingLabel,
+          select: (update: CandidateUpdate, description: string) => {
+            this.selectPage = undefined;
+            this.candidateIndex = candidateIndex;
+            if (
+              field === "runtime" &&
+              update.candidate &&
+              update.candidate.runtime !== candidate.runtime &&
+              update.candidate.runtime !== "pi"
+            ) {
+              this.openModelPicker(
+                update.candidate,
+                true,
+                "Runtime and model updated",
+                update.notices,
+              );
+              return;
+            }
+            this.applyCandidateUpdate(update, description);
+          },
+          cancel: (label: string) => {
+            this.selectPage = undefined;
+            this.setMessage("info", `${label} selection canceled.`);
+            this.renderSoon();
+          },
+        };
+        return objectPart15278_2;
+      })(),
+    );
     this.selectPage.focused = this._focused;
     this.renderSoon();
   }
@@ -522,7 +535,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           picker.warning,
         );
       })
-      .catch((error: unknown) => {
+      .catch((error) => {
         if (!this.finishCatalogLoad(controller)) return;
         this.setMessage(
           "error",
@@ -551,7 +564,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           picker.warning,
         );
       })
-      .catch((error: unknown) => {
+      .catch((error) => {
         if (!this.finishCatalogLoad(controller)) return;
         this.setMessage(
           "error",
@@ -578,44 +591,54 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           this.renderSoon();
           return;
         }
-        this.modelPicker = new ProfileModelPickerPage({
-          theme: this.options.theme,
-          choices: picker.choices,
-          current: preferAdvertisedDefault
-            ? (picker.defaultSelector ?? picker.current)
-            : picker.current,
-          context: picker.context,
-          getHeight: this.options.getHeight,
-          requestRender: this.options.requestRender,
-          matchesKeybinding: this.options.matchesKeybinding,
-          keybindingLabel: this.options.keybindingLabel,
-          ...(picker.warning ? { notice: picker.warning } : {}),
-          select: (choice) => {
-            this.modelPicker = undefined;
-            this.candidateIndex = candidateIndex;
-            const update = updateCandidateFromModelChoice(candidate, picker, choice);
-            this.applyCandidateUpdate(
-              update.candidate
-                ? { ...update, notices: [...priorNotices, ...update.notices] }
-                : update,
-              description,
-            );
-          },
-          cancel: () => {
-            this.modelPicker = undefined;
-            this.setMessage(
-              "info",
-              preferAdvertisedDefault
-                ? "Runtime change canceled because no model was selected."
-                : "Model selection canceled.",
-            );
-            this.renderSoon();
-          },
-        });
+        this.modelPicker = new ProfileModelPickerPage(
+          (() => {
+            const objectPart20279_0 = {
+              theme: this.options.theme,
+              choices: picker.choices,
+              current: preferAdvertisedDefault
+                ? (picker.defaultSelector ?? picker.current)
+                : picker.current,
+              context: picker.context,
+              getHeight: this.options.getHeight,
+              requestRender: this.options.requestRender,
+              matchesKeybinding: this.options.matchesKeybinding,
+              keybindingLabel: this.options.keybindingLabel,
+            };
+            const objectPart20279_1 = picker.warning
+              ? { ...objectPart20279_0, notice: picker.warning }
+              : objectPart20279_0;
+            const objectPart20279_2 = {
+              ...objectPart20279_1,
+              select: (choice: ProfileModelChoice) => {
+                this.modelPicker = undefined;
+                this.candidateIndex = candidateIndex;
+                const update = updateCandidateFromModelChoice(candidate, picker, choice);
+                this.applyCandidateUpdate(
+                  update.candidate
+                    ? { ...update, notices: [...priorNotices, ...update.notices] }
+                    : update,
+                  description,
+                );
+              },
+              cancel: () => {
+                this.modelPicker = undefined;
+                this.setMessage(
+                  "info",
+                  preferAdvertisedDefault
+                    ? "Runtime change canceled because no model was selected."
+                    : "Model selection canceled.",
+                );
+                this.renderSoon();
+              },
+            };
+            return objectPart20279_2;
+          })(),
+        );
         this.modelPicker.focused = this._focused;
         this.renderSoon();
       })
-      .catch((error: unknown) => {
+      .catch((error) => {
         if (!this.finishCatalogLoad(controller)) return;
         this.setMessage("error", error instanceof Error ? error.message : "Model picker failed.");
         this.renderSoon();
@@ -623,32 +646,42 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   }
 
   private openProfileSearch(initialQuery = ""): void {
-    this.selectPage = makeProfileSearchSelector({
-      theme: this.options.theme,
-      inspection: this.inspection,
-      current: this.profile(),
-      parentEffort: this.options.parentEffort,
-      parentModel: this.options.parentModel,
-      ...(initialQuery ? { initialQuery } : {}),
-      getHeight: this.options.getHeight,
-      requestRender: this.options.requestRender,
-      matchesKeybinding: this.options.matchesKeybinding,
-      keybindingLabel: this.options.keybindingLabel,
-      select: (profile) => {
-        this.selectPage = undefined;
-        this.profileIndex = PROFILE_IDS.indexOf(profile);
-        this.candidateIndex = 0;
-        this.fieldIndex = 0;
-        this.pane = "candidates";
-        this.setMessage("info", `Opened ${profile} route.`);
-        this.renderSoon();
-      },
-      cancel: () => {
-        this.selectPage = undefined;
-        this.setMessage("info", "Profile search canceled.");
-        this.renderSoon();
-      },
-    });
+    this.selectPage = makeProfileSearchSelector(
+      (() => {
+        const objectPart22002_0 = {
+          theme: this.options.theme,
+          inspection: this.inspection,
+          current: this.profile(),
+          parentEffort: this.options.parentEffort,
+          parentModel: this.options.parentModel,
+        };
+        const objectPart22002_1 = initialQuery
+          ? { ...objectPart22002_0, initialQuery }
+          : objectPart22002_0;
+        const objectPart22002_2 = {
+          ...objectPart22002_1,
+          getHeight: this.options.getHeight,
+          requestRender: this.options.requestRender,
+          matchesKeybinding: this.options.matchesKeybinding,
+          keybindingLabel: this.options.keybindingLabel,
+          select: (profile: ProfileId) => {
+            this.selectPage = undefined;
+            this.profileIndex = PROFILE_IDS.indexOf(profile);
+            this.candidateIndex = 0;
+            this.fieldIndex = 0;
+            this.pane = "candidates";
+            this.setMessage("info", `Opened ${profile} route.`);
+            this.renderSoon();
+          },
+          cancel: () => {
+            this.selectPage = undefined;
+            this.setMessage("info", "Profile search canceled.");
+            this.renderSoon();
+          },
+        };
+        return objectPart22002_2;
+      })(),
+    );
     this.selectPage.focused = this._focused;
     this.renderSoon();
   }
@@ -721,7 +754,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         this.setMessage("info", "Reload canceled; saved changes remain pending.");
         this.renderSoon();
       })
-      .catch((error: unknown) => {
+      .catch((error) => {
         this.busy = false;
         this.setMessage("error", error instanceof Error ? error.message : "Reload failed.");
         this.renderSoon();
@@ -954,17 +987,28 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
                   "Every temporary route will be removed. Active project, global, or built-in routes will apply immediately to new launches.",
               }
             : this.pendingAction
-              ? profileWorkspaceConfirmation({
-                  action: this.pendingAction,
-                  profile,
-                  candidateIndex: this.candidateIndex,
-                  candidateCount: draft.candidates.length,
-                  scope: this.scope,
-                  projectOverrideActive: this.scope === "global" && this.projectOverrideActive(),
-                  ...(this.pendingAction === "reset"
-                    ? { currentSummary: resetCurrent, afterSummary: resetAfter }
-                    : {}),
-                })
+              ? profileWorkspaceConfirmation(
+                  (() => {
+                    const objectPart33514_0 = {
+                      action: this.pendingAction,
+                      profile,
+                      candidateIndex: this.candidateIndex,
+                      candidateCount: draft.candidates.length,
+                      scope: this.scope,
+                      projectOverrideActive:
+                        this.scope === "global" && this.projectOverrideActive(),
+                    };
+                    const objectPart33514_1 =
+                      this.pendingAction === "reset"
+                        ? {
+                            ...objectPart33514_0,
+                            currentSummary: resetCurrent,
+                            afterSummary: resetAfter,
+                          }
+                        : objectPart33514_0;
+                    return objectPart33514_1;
+                  })(),
+                )
               : undefined,
       },
       {

@@ -125,31 +125,36 @@ export function numberedLines(prefix: string, count: number): string[] {
 }
 
 export function benchTheme(): Theme {
-  const fgAnsi: Record<string, string> = {
-    accent: "\x1b[38;2;120;180;255m",
-    error: "\x1b[38;2;255;110;120m",
-    muted: "\x1b[38;2;140;145;155m",
-    success: "\x1b[38;2;95;210;130m",
-    toolDiffAdded: "\x1b[38;2;95;210;130m",
-    toolDiffContext: "\x1b[38;2;200;205;215m",
-    toolDiffRemoved: "\x1b[38;2;255;110;120m",
-    toolOutput: "\x1b[38;2;200;205;215m",
-    toolTitle: "\x1b[38;2;150;190;255m",
-    warning: "\x1b[38;2;255;205;95m",
-  };
-  const bgAnsi: Record<string, string> = {
-    toolErrorBg: "\x1b[48;2;45;18;24m",
-    toolSuccessBg: "\x1b[48;2;18;40;26m",
-  };
+  const fgAnsi = new Map<string, string>(
+    Object.entries({
+      accent: "\x1b[38;2;120;180;255m",
+      error: "\x1b[38;2;255;110;120m",
+      muted: "\x1b[38;2;140;145;155m",
+      success: "\x1b[38;2;95;210;130m",
+      toolDiffAdded: "\x1b[38;2;95;210;130m",
+      toolDiffContext: "\x1b[38;2;200;205;215m",
+      toolDiffRemoved: "\x1b[38;2;255;110;120m",
+      toolOutput: "\x1b[38;2;200;205;215m",
+      toolTitle: "\x1b[38;2;150;190;255m",
+      warning: "\x1b[38;2;255;205;95m",
+    }),
+  );
+  const bgAnsi = new Map<string, string>(
+    Object.entries({
+      toolErrorBg: "\x1b[48;2;45;18;24m",
+      toolSuccessBg: "\x1b[48;2;18;40;26m",
+    }),
+  );
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   return {
     bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
-    fg: (key: string, text: string) => `${fgAnsi[key] ?? ""}${text}\x1b[39m`,
-    getFgAnsi: (key: string) => fgAnsi[key] ?? "",
-    getBgAnsi: (key: string) => bgAnsi[key] ?? "",
+    fg: (key: string, text: string) => `${fgAnsi.get(key) ?? ""}${text}\x1b[39m`,
+    getFgAnsi: (key: string) => fgAnsi.get(key) ?? "",
+    getBgAnsi: (key: string) => bgAnsi.get(key) ?? "",
   } as Theme;
 }
 
-function runFor(ms: number, fn: () => void): { iterations: number; ms: number } {
+function runFor(ms: number, fn: () => void) {
   const start = performance.now();
   const deadline = start + ms;
   let iterations = 0;

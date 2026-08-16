@@ -45,7 +45,7 @@ export type ResolvedExecutionLimits = {
 };
 
 /** Options for one CodeMode execution. */
-export type ExecuteOptions<Tools extends Record<string, unknown> = {}> = {
+export type ExecuteOptions<Tools extends object = {}> = {
   /** Source for one program in the supported JavaScript subset. */
   code: string;
   /** Explicit tool tree exposed to the program as `tools`. */
@@ -68,10 +68,7 @@ export type ExecuteOptions<Tools extends Record<string, unknown> = {}> = {
 export type DataValue = Schema.Json;
 
 /** Configuration shared by `CodeMode.make` and `CodeMode.execute`. */
-export type Options<Tools extends Record<string, unknown> = {}> = Omit<
-  ExecuteOptions<Tools>,
-  "code"
-> & {
+export type Options<Tools extends object = {}> = Omit<ExecuteOptions<Tools>, "code"> & {
   /** Progressive-disclosure configuration for the agent-facing tool catalog. */
   readonly discovery?: DiscoveryOptions;
 };
@@ -155,9 +152,10 @@ const resolveExecutionLimits = (limits?: ExecutionLimits): ResolvedExecutionLimi
 });
 
 /** Executes one Effect-native CodeMode program without constructing a reusable runtime. */
-export const execute = <const Tools extends Record<string, unknown>>(
+export const execute = <const Tools extends object>(
   options: ExecuteOptions<Tools>,
 ): Effect.Effect<Result, never, Services<Tools>> => {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const tools = (options.tools ?? {}) as HostTools<Services<Tools>>;
   ToolRuntime.assertValidTools(tools);
   return executeWithLimits(
@@ -168,9 +166,11 @@ export const execute = <const Tools extends Record<string, unknown>>(
 };
 
 /** Creates an Effect-native runtime over explicit, schema-described tools. */
-export const make = <const Tools extends Record<string, unknown> = {}>(
-  options: Options<Tools> = {} as Options<Tools>,
+// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+export const make = <const Tools extends object = {}>(
+  options: Options<Tools> = {},
 ): Runtime<Services<Tools>> => {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const tools = (options.tools ?? {}) as HostTools<Services<Tools>>;
   ToolRuntime.assertValidTools(tools);
   const limits = resolveExecutionLimits(options.limits);

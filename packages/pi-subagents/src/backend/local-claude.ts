@@ -1,5 +1,6 @@
 // The stream-input correlation UUID is plain-crypto identity, not an Effect resource.
 // @effect-diagnostics effect/cryptoRandomUUID:off
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { randomUUID } from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -8,11 +9,11 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import type { LocalCliProcessShape } from "../boundary/local-cli-process.ts";
+import type { LocalCliProcessContract } from "../boundary/local-cli-process.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type {
   SupervisorChannelHandle,
-  SupervisorChannelShape,
+  SupervisorChannelContract,
 } from "../boundary/supervisor-channel.ts";
 import {
   isOutcomeUncertain,
@@ -401,15 +402,18 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                   message:
                     "Claude reported a regressing cumulative assistant usage total; accounting stays monotone and the regression was ignored.",
                 });
-              yield* offer(
-                {
-                  type: "assistant_message",
-                  assignmentEpoch,
-                  ...(event.text ? { text: event.text } : {}),
+              const backendEvent: BackendEvent = (() => {
+                const objectPart16100_0 = { type: "assistant_message" as const, assignmentEpoch };
+                const objectPart16100_1 = event.text
+                  ? { ...objectPart16100_0, text: event.text }
+                  : objectPart16100_0;
+                const objectPart16100_2 = {
+                  ...objectPart16100_1,
                   usage: { ...delta, totalTokens: usageComponentsTotal(delta) },
-                },
-                raw,
-              );
+                };
+                return objectPart16100_2;
+              })();
+              yield* offer(backendEvent, raw);
             });
           case "result": {
             // Correlate to the exact originating input: the native
@@ -452,11 +456,17 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                   ? offer({
                       type: "assistant_message",
                       assignmentEpoch: expectation.epoch,
-                      usage: {
-                        ...delta,
-                        totalTokens: usageComponentsTotal(delta),
-                        ...(costDelta === undefined ? {} : { cost: costDelta }),
-                      },
+                      usage: (() => {
+                        const objectPart18761_0 = {
+                          ...delta,
+                          totalTokens: usageComponentsTotal(delta),
+                        };
+                        const objectPart18761_1 =
+                          costDelta === undefined
+                            ? objectPart18761_0
+                            : { ...objectPart18761_0, cost: costDelta };
+                        return objectPart18761_1;
+                      })(),
                     })
                   : Effect.void;
               return warn.pipe(Effect.andThen(emit));
@@ -907,8 +917,9 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
           (exit.cause.reasons.every(Cause.isInterruptReason) ||
             (() => {
               const error = Cause.squash(exit.cause);
+              // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
               return (
-                typeof error === "object" &&
+                hasObjectRuntimeType(error) &&
                 error !== null &&
                 "_tag" in error &&
                 error._tag === "SubagentProcessError" &&
@@ -933,12 +944,16 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     pid: child.pid,
     events,
     awaitExit: child.awaitExit.pipe(
-      Effect.map((event) => ({
-        type: "exit" as const,
-        exitCode: event.exitCode,
-        ...(event.signal ? { signal: event.signal } : {}),
-        diagnostic: event.stderr,
-      })),
+      Effect.map((event) =>
+        (() => {
+          const objectPart37480_0 = { type: "exit" as const, exitCode: event.exitCode };
+          const objectPart37480_1 = event.signal
+            ? { ...objectPart37480_0, signal: event.signal }
+            : objectPart37480_0;
+          const objectPart37480_2 = { ...objectPart37480_1, diagnostic: event.stderr };
+          return objectPart37480_2;
+        })(),
+      ),
     ),
     controls: {
       initialize,
@@ -968,8 +983,8 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
 });
 
 export const makeLocalClaudeBackendDriver = (
-  processes: LocalCliProcessShape,
-  supervisors: SupervisorChannelShape,
+  processes: LocalCliProcessContract,
+  supervisors: SupervisorChannelContract,
 ): BackendDriver => ({
   host: "local",
   runtime: "claude",

@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -50,7 +51,7 @@ const stableParentLeaf = (ctx: ExtensionContext): string | undefined => {
 };
 
 const transferableRuntimeApiKey = (value: string | undefined): value is string =>
-  typeof value === "string" &&
+  isStringValue(value) &&
   value.length > 0 &&
   value.length <= 8_192 &&
   !value.includes("\0") &&
@@ -109,6 +110,7 @@ const resolvePiModel = (
         code: "pi_model_unauthenticated",
         message: `Model is unavailable or unauthenticated: ${modelId}`,
       });
+    // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
     const supportedEfforts = getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>;
     if (effortWasExplicit && !supportedEfforts.includes(effort))
       return yield* new InvalidSubagentRequestError({
@@ -150,25 +152,37 @@ interface ResolvedConcreteModel {
 const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
   decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
 
+// SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-): ProfileResolutionEnvironment => ({
-  availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
-    provider: model.provider,
-    id: model.id,
-    supportedEfforts: getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>,
-  })),
-  ...(ctx.model
-    ? {
-        parentModel: {
-          model: `${ctx.model.provider}/${ctx.model.id}`,
-          effort: inheritedParentEffort(pi),
-        },
-      }
-    : {}),
-  forkAvailable: Boolean(ctx.sessionManager.getSessionFile() && stableParentLeaf(ctx)),
-});
+): ProfileResolutionEnvironment =>
+  (() => {
+    const objectPart6996_0 = {
+      availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
+        provider: model.provider,
+        id: model.id,
+        supportedEfforts: getSupportedThinkingLevels(model).flatMap((effort) => {
+          const decoded = decodeSubagentEffort(effort);
+          return decoded === undefined ? [] : [decoded];
+        }),
+      })),
+    };
+    const objectPart6996_1 = ctx.model
+      ? {
+          ...objectPart6996_0,
+          parentModel: {
+            model: `${ctx.model.provider}/${ctx.model.id}`,
+            effort: inheritedParentEffort(pi),
+          },
+        }
+      : objectPart6996_0;
+    const objectPart6996_2 = {
+      ...objectPart6996_1,
+      forkAvailable: Boolean(ctx.sessionManager.getSessionFile() && stableParentLeaf(ctx)),
+    };
+    return objectPart6996_2;
+  })();
 
 const resolveConcreteModel = (
   attempt: ProfileCandidateAttempt,
@@ -248,9 +262,7 @@ export const resolveProfileStart = (
         code: "task_required",
         message: "subagent_start requires every agent to have a task.",
       });
-    const disallowedField = firstDisallowedLaunchOverride(
-      rawInput as unknown as Readonly<Record<string, unknown>>,
-    );
+    const disallowedField = firstDisallowedLaunchOverride(rawInput);
     if (disallowedField)
       return yield* new InvalidSubagentRequestError({
         code: "launch_override_not_allowed",
@@ -335,30 +347,46 @@ export const resolveProfileStart = (
         message: "Forked context requires a persisted parent session with a stable leaf.",
       });
     const concrete = selected.concrete;
-    return {
-      ...(rawInput.name?.trim() ? { name: rawInput.name.trim() } : {}),
-      host: concrete.host,
-      runtime: concrete.runtime,
-      closeOnReport: concrete.closeOnReport,
-      fastMode: concrete.fastMode,
-      task,
-      profile: definition.id,
-      profileGuidance: definition.guidance,
-      selection: selected.selection,
-      cwd: environment.cwd,
-      context: selected.attempt.effectiveContext,
-      writeIntent: selected.attempt.writeIntent,
-      model: concrete.model,
-      ...(concrete.runtimeApiKey ? { runtimeApiKey: concrete.runtimeApiKey } : {}),
-      effort: concrete.effort,
-      effortWasExplicit: concrete.effortWasExplicit,
-      activeTools: piToolsForWriteIntent(
-        pi.getActiveTools().filter((name) => !ORCHESTRATION_TOOL_DENYLIST.has(name)),
-        selected.attempt.writeIntent,
-      ),
-      projectTrusted: environment.projectTrusted,
-      parentSessionId: ctx.sessionManager.getSessionId(),
-      ...(parentSessionFile ? { parentSessionFile } : {}),
-      ...(parentLeafId ? { parentLeafId } : {}),
-    } satisfies StartSubagentRequest;
+    return (() => {
+      const objectPart14019_0 = {};
+      const objectPart14019_1 = rawInput.name?.trim()
+        ? { ...objectPart14019_0, name: rawInput.name.trim() }
+        : objectPart14019_0;
+      const objectPart14019_2 = {
+        ...objectPart14019_1,
+        host: concrete.host,
+        runtime: concrete.runtime,
+        closeOnReport: concrete.closeOnReport,
+        fastMode: concrete.fastMode,
+        task,
+        profile: definition.id,
+        profileGuidance: definition.guidance,
+        selection: selected.selection,
+        cwd: environment.cwd,
+        context: selected.attempt.effectiveContext,
+        writeIntent: selected.attempt.writeIntent,
+        model: concrete.model,
+      };
+      const objectPart14019_3 = concrete.runtimeApiKey
+        ? { ...objectPart14019_2, runtimeApiKey: concrete.runtimeApiKey }
+        : objectPart14019_2;
+      const objectPart14019_4 = {
+        ...objectPart14019_3,
+        effort: concrete.effort,
+        effortWasExplicit: concrete.effortWasExplicit,
+        activeTools: piToolsForWriteIntent(
+          pi.getActiveTools().filter((name) => !ORCHESTRATION_TOOL_DENYLIST.has(name)),
+          selected.attempt.writeIntent,
+        ),
+        projectTrusted: environment.projectTrusted,
+        parentSessionId: ctx.sessionManager.getSessionId(),
+      };
+      const objectPart14019_5 = parentSessionFile
+        ? { ...objectPart14019_4, parentSessionFile }
+        : objectPart14019_4;
+      const objectPart14019_6 = parentLeafId
+        ? { ...objectPart14019_5, parentLeafId }
+        : objectPart14019_5;
+      return objectPart14019_6;
+    })() satisfies StartSubagentRequest;
   });

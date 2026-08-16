@@ -15,7 +15,7 @@ export class ModelRegistryAuthError extends Schema.TaggedError<ModelRegistryAuth
 type Registry = Pick<ExtensionContext, "modelRegistry">["modelRegistry"];
 type Model = NonNullable<ExtensionContext["model"]>;
 
-export interface ModelRegistryAuthShape {
+export interface ModelRegistryAuthContract {
   readonly getApiKey: Effect.Effect<string | undefined, ModelRegistryAuthError>;
   readonly isUsingOAuth: (model: Model) => Effect.Effect<boolean, ModelRegistryAuthError>;
 }
@@ -24,10 +24,11 @@ export interface ModelRegistryAuthShape {
 export { isUsingOAuthAtHostBoundary } from "pi-cosmic-core";
 
 /** Named Pi boundary for the model registry's Promise-returning credential lookup. */
-export class ModelRegistryAuth extends Context.Service<ModelRegistryAuth, ModelRegistryAuthShape>()(
-  "pi-better-xai/boundary/model-registry-auth/ModelRegistryAuth",
-) {
-  static make(getRegistry: () => Registry): ModelRegistryAuthShape {
+export class ModelRegistryAuth extends Context.Service<
+  ModelRegistryAuth,
+  ModelRegistryAuthContract
+>()("pi-better-xai/boundary/model-registry-auth/ModelRegistryAuth") {
+  static make(getRegistry: () => Registry): ModelRegistryAuthContract {
     return this.of({
       getApiKey: Effect.tryPromise({
         try: () => getRegistry().getApiKeyForProvider("xai"),

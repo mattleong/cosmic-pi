@@ -1,7 +1,12 @@
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
 /** Small shared helpers used across preview rendering paths. */
 
-export function getObjectValue(value: unknown, key: string): unknown {
-  return value && typeof value === "object" ? Reflect.get(value, key) : undefined;
+export function getObjectValue<ValueInput>(value: ValueInput, key: string) {
+  const FieldSchema = Schema.Struct({ [key]: Schema.optional(Schema.Unknown) });
+  const decoded = Schema.decodeUnknownOption(FieldSchema)(value);
+  return Option.isSome(decoded) ? decoded.value[key] : undefined;
 }
 
 export function isToolOutputNoticeLine(line: string): boolean {

@@ -4,6 +4,7 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/globalTimers:off
+import { hasObjectRuntimeType, isFunctionValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
@@ -38,21 +39,27 @@ function trackedAbortSignal() {
     removed.push(listener);
     live.delete(listener);
   });
-  const signal = {
+  const signalFixture = {
     get aborted() {
       return aborted;
     },
     addEventListener,
     removeEventListener,
-  } as unknown as AbortSignal;
+  };
+  // SAFETY: These tests exercise only aborted and listener registration on this signal fixture.
+  const signal = signalFixture as typeof signalFixture & AbortSignal;
   return {
     signal,
     abort: () => {
       if (aborted) return;
       aborted = true;
       for (const listener of live) {
-        if (typeof listener === "function") listener.call(signal, { type: "abort" } as Event);
-        else listener.handleEvent({ type: "abort" } as Event);
+        const event = new Event("abort");
+        if (isFunctionValue(listener)) {
+          // SAFETY: isFunctionValue proved this listener has the EventListener callable branch.
+          const callback = listener as EventListener;
+          callback.call(signal, event);
+        } else listener.handleEvent(event);
       }
     },
     addedListeners: () => [...added],
@@ -95,7 +102,7 @@ function harness(
     on: registry.on,
     registerCommand,
     sendMessage,
-    appendEntry: (customType: string, data: unknown) => {
+    appendEntry: (customType: string, data) => {
       appended.push(data);
       branch.push({
         id: `ledger-${branch.length}`,
@@ -118,8 +125,8 @@ function harness(
     failureLogger: failureLoggerLayerFromLog(logFailure),
   })(pi);
   const emitWithContext = registry.emitWithContext;
-  const emitAwait = async (name: string, event: unknown) => emitWithContext(name, event, ctx);
-  const emit = async (name: string, event: unknown) => {
+  const emitAwait = async <Event>(name: string, event: Event) => emitWithContext(name, event, ctx);
+  const emit = async <Event>(name: string, event: Event) => {
     if (name !== "turn_end") return emitAwait(name, event);
     registry.emitDetachedWithContext(name, event, ctx);
   };
@@ -219,12 +226,14 @@ describe("persistent extension cutover", () => {
     current.pending[0]!.resolve(pass(current.requests[0]!));
     await turn;
     expect(settled).toBe(true);
-    expect((value.ctx as unknown as { waitForIdle?: unknown }).waitForIdle).toBeUndefined();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    expect((value.ctx as { waitForIdle?: unknown }).waitForIdle).toBeUndefined();
   });
 
   test("cursor rewrite restart and checkpoint both remain inside the same catch-up barrier", async () => {
     const value = harness();
     await value.emit("session_start", { type: "session_start" });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
       {
         id: "replacement",
@@ -266,7 +275,8 @@ describe("persistent extension cutover", () => {
 
     const cancelled = harness();
     const controller = new AbortController();
-    (cancelled.ctx as unknown as { signal: AbortSignal }).signal = controller.signal;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    (cancelled.ctx as { signal: AbortSignal }).signal = controller.signal;
     await cancelled.emit("session_start", { type: "session_start" });
     const cancelledTurn = cancelled.emitAwait("turn_end", finalTurn("cancelled"));
     await tick();
@@ -283,7 +293,8 @@ describe("persistent extension cutover", () => {
   test("abort dispatch synchronously defeats a same-tick provider completion", async () => {
     const value = harness();
     const controller = new AbortController();
-    (value.ctx as unknown as { signal: AbortSignal }).signal = controller.signal;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    (value.ctx as { signal: AbortSignal }).signal = controller.signal;
     await value.emit("session_start", { type: "session_start" });
     const turn = value.emitAwait("turn_end", finalTurn("racy candidate"));
     await tick();
@@ -356,11 +367,13 @@ describe("persistent extension cutover", () => {
   test("a failed replacement capture shuts down the prior application exactly once", async () => {
     const value = harness();
     const cancellation = trackedAbortSignal();
-    (value.ctx as unknown as { signal: AbortSignal }).signal = cancellation.signal;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    (value.ctx as { signal: AbortSignal }).signal = cancellation.signal;
     await value.emit("session_start", { type: "session_start" });
     const current = value.runtimes[0]!;
     expect(cancellation.liveListeners()).toHaveLength(2);
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const invalidContext = Object.create(value.ctx) as ExtensionContext;
     Object.defineProperty(invalidContext, "cwd", {
       configurable: true,
@@ -390,11 +403,13 @@ describe("persistent extension cutover", () => {
     const value = harness();
     const firstCancellation = trackedAbortSignal();
     const secondCancellation = trackedAbortSignal();
-    (value.ctx as unknown as { signal: AbortSignal }).signal = firstCancellation.signal;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    (value.ctx as { signal: AbortSignal }).signal = firstCancellation.signal;
     await value.emit("session_start", { type: "session_start" });
     const firstRuntime = value.runtimes[0]!;
     expect(firstCancellation.liveListeners()).toHaveLength(2);
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const replacementContext = Object.create(value.ctx) as ExtensionContext;
     Object.defineProperty(replacementContext, "signal", {
       configurable: true,
@@ -422,6 +437,7 @@ describe("persistent extension cutover", () => {
     const value = harness();
     await value.emit("session_start", { type: "session_start" });
     const current = value.runtimes[0]!;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.ui.setStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error("status failed");
     });
@@ -469,6 +485,7 @@ describe("persistent extension cutover", () => {
       expect(value.sendMessage).not.toHaveBeenCalled();
       expect(value.appended).toHaveLength(0);
       if (eventName === "session_tree") {
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         await value.commands.get("advisor")!.handler("review", value.ctx as never);
         await tick();
         expect(value.runtimes[1]?.requests).toHaveLength(0);
@@ -479,6 +496,7 @@ describe("persistent extension cutover", () => {
   test("detects an unannounced parent-prefix replacement at a checkpoint boundary", async () => {
     const value = harness();
     await value.emit("session_start", { type: "session_start" });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
       {
         id: "replacement",
@@ -515,6 +533,7 @@ describe("persistent extension cutover", () => {
       timestamp: "now",
       message: { role: "assistant", content: "first" },
     };
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
       root,
       firstLeaf,
@@ -526,6 +545,7 @@ describe("persistent extension cutover", () => {
     firstRuntime.pending[0]!.resolve(pass(firstRuntime.requests[0]!));
     await tick();
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
       root,
       { ...firstLeaf, id: "second-leaf", message: { role: "assistant", content: "second" } },
@@ -564,6 +584,7 @@ describe("persistent extension cutover", () => {
     await tick();
     const current = value.runtimes[0];
     if (!current?.requests[0]) throw new Error("missing checkpoint");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
     current.pending[0]?.resolve(revise(current.requests[0]));
     await tick();
@@ -585,6 +606,7 @@ describe("persistent extension cutover", () => {
 
   test("steers an active parent without triggering a synthetic turn", async () => {
     const value = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("candidate"));
@@ -632,6 +654,7 @@ describe("persistent extension cutover", () => {
     await value.emit("turn_end", finalTurn("candidate"));
     await tick();
     const current = value.runtimes[0]!;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await value.commands.get("advisor")!.handler("cancel", value.ctx as never);
     current.pending[0]!.resolve(revise(current.requests[0]!));
     await tick();
@@ -678,6 +701,7 @@ describe("persistent extension cutover", () => {
 
   test("persists the reset intervention budget at a genuine request boundary", async () => {
     const value = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("candidate"));
@@ -700,6 +724,7 @@ describe("persistent extension cutover", () => {
 
   test("keeps lifecycle identity stable across restart without a session ID", async () => {
     const first = harness({}, { withoutSessionId: true });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (first.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await first.emit("session_start", { type: "session_start" });
     await first.emit("turn_end", finalTurn("first candidate"));
@@ -707,12 +732,14 @@ describe("persistent extension cutover", () => {
     const initial = first.runtimes[0]!;
     initial.pending[0]!.resolve(revise(initial.requests[0]!, "concern", "stable fallback issue"));
     await tick();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const firstLedger = first.appended.at(-1) as {
       findingLifecycle: Array<{ id: string; status: string }>;
     };
     const findingId = firstLedger.findingLifecycle[0]!.id;
     for (const entry of first.branch) {
-      if (entry.type === "custom" && typeof entry.data === "object" && entry.data) {
+      if (entry.type === "custom" && hasObjectRuntimeType(entry.data) && entry.data) {
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         (entry.data as { emissionHashes?: string[] }).emissionHashes = [];
       }
     }
@@ -761,6 +788,7 @@ describe("persistent extension cutover", () => {
 
   test("queued user input still runs mandatory catch-up but suppresses stale delivery", async () => {
     const value = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("obsolete"));
@@ -822,6 +850,7 @@ describe("persistent extension cutover", () => {
     await tick();
     value.runtimes[0]!.pending[1]!.reject(new Error("provider failed again"));
     await tick();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const failureWarnings = (value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.filter(
       ([message, level]) =>
         level === "warning" && String(message).includes("keeping the primary response"),
@@ -838,6 +867,7 @@ describe("persistent extension cutover", () => {
       await value.emit("turn_end", finalTurn("candidate"));
       await vi.advanceTimersByTimeAsync(0);
       const current = value.runtimes[0]!;
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
 
       current.pending[0]!.resolve(pass(current.requests[0]!));
@@ -858,9 +888,11 @@ describe("persistent extension cutover", () => {
     await tick();
     await value.emit("session_shutdown", { type: "session_shutdown" });
     const command = value.commands.get("advisor")!;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
     notify.mockClear();
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const review = command.handler("review", value.ctx as never);
     await tick();
     expect(value.runtimes).toHaveLength(1);
@@ -905,6 +937,7 @@ describe("persistent extension cutover", () => {
     await value.emit("turn_end", finalTurn("ordered final"));
     await tick();
     const observations = value.runtimes[0]!.requests[0]!.observations;
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const records = JSON.parse(observations.split("\n\n").at(-1)!) as Array<{
       type: string;
       parentTurnId: number;

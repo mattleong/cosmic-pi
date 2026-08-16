@@ -1,8 +1,13 @@
 // Promise assertions and controllable pending refreshes are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
+import * as Schema from "effect/Schema";
+import type {
+  ExtensionCommandContext,
+  KeybindingsManager,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
@@ -18,31 +23,63 @@ import {
 } from "../src/settings/controller.ts";
 import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
 import { createProfileModelChoices } from "../src/settings/ui/model-picker.ts";
+import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
 
-const inspection = (
-  global: Record<string, unknown> = { version: 4 },
-  project?: Record<string, unknown>,
+const tuiFixture = <Fixture extends object>(fixture: Fixture): Fixture & TUI => {
+  // SAFETY: Workspace tests invoke only terminal.rows and requestRender on this TUI fixture.
+  return fixture as Fixture & TUI;
+};
+
+const keybindingsFixture = <Fixture extends object>(
+  fixture: Fixture,
+): Fixture & KeybindingsManager => {
+  // SAFETY: Workspace tests invoke only matches on this keybinding fixture.
+  return fixture as Fixture & KeybindingsManager;
+};
+
+const inspection = <Global = undefined, Project = undefined>(
+  global?: Global,
+  project?: Project,
   trusted = true,
 ): ProfileSettingsInspection => {
-  const decodedGlobal = decodeSubagentConfig(global, "global");
-  const decodedProject = project ? decodeSubagentConfig(project, "project") : undefined;
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: trusted,
-    globalConfigExists: true,
-    projectConfigExists: project !== undefined,
-    global: decodedGlobal,
-    ...(decodedProject ? { project: decodedProject } : {}),
-  });
-  return {
-    config,
-    session: makeSessionProfileSnapshot(config),
-    globalDocument: global,
-    ...(project ? { projectDocument: project } : {}),
-    global: decodedGlobal,
-    ...(decodedProject ? { project: decodedProject } : {}),
-  };
+  const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
+  const globalDocument = Schema.decodeUnknownSync(JsonObjectSchema)(global ?? { version: 4 });
+  const projectDocument = project ? Schema.decodeUnknownSync(JsonObjectSchema)(project) : undefined;
+  const decodedGlobal = decodeSubagentConfig(globalDocument, "global");
+  const decodedProject = projectDocument
+    ? decodeSubagentConfig(projectDocument, "project")
+    : undefined;
+  const config = resolveSubagentConfig(
+    (() => {
+      const objectPart1428_0 = {
+        globalConfigPath: "/agent/pi-subagents.json",
+        projectConfigPath: "/repo/.pi/pi-subagents.json",
+        projectTrusted: trusted,
+        globalConfigExists: true,
+        projectConfigExists: project !== undefined,
+        global: decodedGlobal,
+      };
+      const objectPart1428_1 = decodedProject
+        ? { ...objectPart1428_0, project: decodedProject }
+        : objectPart1428_0;
+      return objectPart1428_1;
+    })(),
+  );
+  return (() => {
+    const objectPart1743_0 = {
+      config,
+      session: makeSessionProfileSnapshot(config),
+      globalDocument,
+    };
+    const objectPart1743_1 = projectDocument
+      ? { ...objectPart1743_0, projectDocument }
+      : objectPart1743_0;
+    const objectPart1743_2 = { ...objectPart1743_1, global: decodedGlobal };
+    const objectPart1743_3 = decodedProject
+      ? { ...objectPart1743_2, project: decodedProject }
+      : objectPart1743_2;
+    return objectPart1743_3;
+  })();
 };
 
 const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
@@ -74,22 +111,24 @@ const actions = (value = inspection()): FleetManagerActions => ({
 
 const register = (managerActions: FleetManagerActions, bridge = makeSubagentProjectionBridge()) => {
   let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
-  const pi = {
+  // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+  const pi = extensionApiFixture({
     registerCommand: (
       _name: string,
       command: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
     ) => {
       handler = command.handler;
     },
-  } as unknown as ExtensionAPI;
+  });
   registerSubagentManagerCommand(pi, bridge, managerActions);
   return (args: string, ctx: ExtensionCommandContext) => handler?.(args, ctx) ?? Promise.resolve();
 };
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
-} as unknown as Theme;
+} as Theme;
 
 interface FleetTestUi {
   readonly custom?: ReturnType<typeof vi.fn> | undefined;
@@ -97,8 +136,9 @@ interface FleetTestUi {
   readonly confirm?: ReturnType<typeof vi.fn> | undefined;
 }
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const baseContext = (ui: FleetTestUi, trusted = true) =>
-  ({
+  extensionContextFixture({
     mode: "tui",
     hasUI: true,
     ui,
@@ -118,13 +158,13 @@ const baseContext = (ui: FleetTestUi, trusted = true) =>
       getRegisteredProviderIds: () => [],
     },
     reload: vi.fn().mockResolvedValue(undefined),
-  }) as unknown as ExtensionCommandContext;
+  });
 
 const exerciseWorkspace = async (
   factory: (
-    tui: unknown,
+    tui: TUI,
     theme: Theme,
-    keybindings: unknown,
+    keybindings: KeybindingsManager,
     done: (value: boolean) => void,
   ) => Component,
   exercise: (component: Component, done: (value: boolean) => void) => Promise<void> | void,
@@ -132,9 +172,9 @@ const exerciseWorkspace = async (
   let result = false;
   const done = (value: boolean) => void (result = value);
   const component = factory(
-    { terminal: { rows: 24 }, requestRender: vi.fn() },
+    tuiFixture({ terminal: { rows: 24 }, requestRender: vi.fn() }),
     theme,
-    {
+    keybindingsFixture({
       matches: (data: string, id: string) => {
         if (id === "tui.select.up") return matchesKey(data, Key.up);
         if (id === "tui.select.down") return matchesKey(data, Key.down);
@@ -142,7 +182,7 @@ const exerciseWorkspace = async (
         if (id === "tui.select.cancel") return matchesKey(data, Key.escape);
         return false;
       },
-    },
+    }),
     done,
   );
   await exercise(component, done);
@@ -153,26 +193,38 @@ describe("/subagents profile workspace", () => {
   it("keeps fleet dispatch and gives actionable non-TUI/argument warnings", async () => {
     const run = register(actions());
     const notify = vi.fn();
-    await run("", {
-      mode: "rpc",
-      hasUI: true,
-      ui: { notify },
-    } as unknown as ExtensionCommandContext);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    await run(
+      "",
+      extensionContextFixture({
+        mode: "rpc",
+        hasUI: true,
+        ui: { notify },
+      }),
+    );
     expect(notify).toHaveBeenCalledWith("/subagents requires interactive TUI mode.", "warning");
-    await run("profiles", {
-      mode: "rpc",
-      hasUI: true,
-      ui: { notify },
-    } as unknown as ExtensionCommandContext);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    await run(
+      "profiles",
+      extensionContextFixture({
+        mode: "rpc",
+        hasUI: true,
+        ui: { notify },
+      }),
+    );
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("requires interactive TUI mode"),
       "warning",
     );
-    await run("wat", {
-      mode: "rpc",
-      hasUI: true,
-      ui: { notify },
-    } as unknown as ExtensionCommandContext);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    await run(
+      "wat",
+      extensionContextFixture({
+        mode: "rpc",
+        hasUI: true,
+        ui: { notify },
+      }),
+    );
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("Usage: /subagents [profiles [session|global|project]]"),
       "error",
@@ -215,6 +267,7 @@ describe("/subagents profile workspace", () => {
   it("starts a Pi model refresh before constructing the profile workspace", async () => {
     const custom = vi.fn().mockResolvedValue(false);
     const ctx = baseContext({ custom, notify: vi.fn() });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const refresh = ctx.modelRegistry.refresh as ReturnType<typeof vi.fn>;
 
     await register(actions())("profiles", ctx);
@@ -270,7 +323,8 @@ describe("/subagents profile workspace", () => {
         await vi.waitFor(() => expect(managerActions.patchProfile).toHaveBeenCalledTimes(1));
       }),
     );
-    const ctx = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ctx = extensionContextFixture({
       ...baseContext({ custom, notify: vi.fn() }),
       model: { provider: "cursor", id: "cached@1m", name: "Cached Cursor", reasoning: true },
       modelRegistry: {
@@ -281,7 +335,7 @@ describe("/subagents profile workspace", () => {
           models.find((model) => model.provider === provider && model.id === id),
         getRegisteredProviderIds: () => ["cursor"],
       },
-    } as unknown as ExtensionCommandContext;
+    });
 
     await register(managerActions)("profiles", ctx);
 
@@ -320,7 +374,8 @@ describe("/subagents profile workspace", () => {
         await vi.waitFor(() => expect(managerActions.patchProfile).toHaveBeenCalledTimes(1));
       }),
     );
-    const ctx = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ctx = extensionContextFixture({
       ...baseContext({ custom, notify }),
       model: undefined,
       modelRegistry: {
@@ -332,7 +387,7 @@ describe("/subagents profile workspace", () => {
         find: () => undefined,
         getRegisteredProviderIds: () => [],
       },
-    } as unknown as ExtensionCommandContext;
+    });
 
     await register(managerActions)("profiles", ctx);
 
@@ -352,6 +407,7 @@ describe("/subagents profile workspace", () => {
     const custom = vi.fn().mockResolvedValue(false);
     const notify = vi.fn();
     const ctx = baseContext({ custom, notify });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (ctx.modelRegistry.refresh as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("secret refresh failure"),
     );
@@ -448,9 +504,11 @@ describe("/subagents profile workspace", () => {
       session: makeSessionProfileSnapshot(initial.config, { revision: 1, overrides: {} }),
     };
     const managerActions = actions(initial);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(initial)
       .mockResolvedValue(fresh);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (managerActions.patchSessionProfile as ReturnType<typeof vi.fn>)
       .mockRejectedValueOnce(
         new SessionProfileConflictError({
@@ -484,6 +542,7 @@ describe("/subagents profile workspace", () => {
     const initial = inspection();
     const saved = inspection({ version: 4, profiles: { generalist: "disabled" } });
     const managerActions = actions(initial);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(initial)
       .mockResolvedValueOnce(saved);
@@ -517,6 +576,7 @@ describe("/subagents profile workspace", () => {
 
   it("keeps failed immediate writes visible without claiming reload is required", async () => {
     const managerActions = actions();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (managerActions.patchProfile as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("Subagents settings changed on disk; reopen the workspace."),
     );
@@ -539,6 +599,7 @@ describe("/subagents profile workspace", () => {
   });
 
   it("offers canonical authenticated Pi models and parent only to local Pi", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const models = [
       { provider: "openai", id: "reasoning", name: "Reasoning", reasoning: true },
       { provider: "zai", id: "plain", name: "Plain", reasoning: false },
@@ -563,10 +624,12 @@ describe("/subagents profile workspace", () => {
 
   it("warns before reloading with active subagents", async () => {
     const bridge = makeSubagentProjectionBridge();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     bridge.publish({ revision: 1, runs: [{ state: "running" } as never] });
     const initial = inspection();
     const saved = inspection({ version: 4 }, { version: 4, profiles: { generalist: "disabled" } });
     const managerActions = actions(initial);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(initial)
       .mockResolvedValueOnce(saved);

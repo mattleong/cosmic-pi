@@ -65,6 +65,7 @@ it.effect("isolates hostile host notification callbacks in the service Layer", (
     Effect.gen(function* () {
       const context = yield* Layer.build(hostNotifierLayer);
       const notifier = Context.get(context, HostNotifier);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       expect(() =>
         notifier.notify(
           {

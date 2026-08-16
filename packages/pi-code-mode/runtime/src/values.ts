@@ -1,11 +1,12 @@
 import type { Effect, Fiber } from "effect";
 import { assertBoundedQueryPairs } from "./interpreter/confinement.js";
+import type { InterpreterValue } from "./interpreter/model.js";
 
 export class SandboxPromise {
   interrupted = false;
   constructor(
-    readonly fiber: Fiber.Fiber<unknown, unknown> | undefined,
-    readonly immediate?: Effect.Effect<unknown, unknown>,
+    readonly fiber: Fiber.Fiber<InterpreterValue, unknown> | undefined,
+    readonly immediate?: Effect.Effect<InterpreterValue, unknown>,
   ) {}
 }
 
@@ -21,11 +22,11 @@ export class SandboxRegExp {
 }
 
 export class SandboxMap {
-  readonly map = new Map<unknown, unknown>();
+  readonly map = new Map<InterpreterValue, InterpreterValue>();
 }
 
 export class SandboxSet {
-  readonly set = new Set<unknown>();
+  readonly set = new Set<InterpreterValue>();
 }
 
 export class SandboxURLSearchParams {
@@ -43,15 +44,18 @@ export class SandboxURL {
   }
 }
 
-export const isSandboxValue = (
-  value: unknown,
-): value is
+export type SandboxValue =
+  | SandboxPromise
   | SandboxDate
   | SandboxRegExp
   | SandboxMap
   | SandboxSet
   | SandboxURL
-  | SandboxURLSearchParams =>
+  | SandboxURLSearchParams;
+
+export const isSandboxValue = <Value>(
+  value: Value,
+): value is Value & Exclude<SandboxValue, SandboxPromise> =>
   value instanceof SandboxDate ||
   value instanceof SandboxRegExp ||
   value instanceof SandboxMap ||

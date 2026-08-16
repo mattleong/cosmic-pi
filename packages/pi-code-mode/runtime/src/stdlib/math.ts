@@ -9,6 +9,29 @@ export const mathConstants = new Set([
   "SQRT1_2",
 ]);
 
+export const mathConstant = (name: string): number | undefined => {
+  switch (name) {
+    case "PI":
+      return Math.PI;
+    case "E":
+      return Math.E;
+    case "LN2":
+      return Math.LN2;
+    case "LN10":
+      return Math.LN10;
+    case "LOG2E":
+      return Math.LOG2E;
+    case "LOG10E":
+      return Math.LOG10E;
+    case "SQRT2":
+      return Math.SQRT2;
+    case "SQRT1_2":
+      return Math.SQRT1_2;
+    default:
+      return undefined;
+  }
+};
+
 export const mathMethods = new Set([
   "max",
   "min",
@@ -28,11 +51,11 @@ export const mathMethods = new Set([
   "exp",
 ]);
 
-export const invokeMathMethod = (name: string, args: Array<unknown>, node: AstNode): number => {
+export const invokeMathMethod = (name: string, args: InterpreterArray, node: AstNode): number => {
   if (!mathMethods.has(name))
     throw new InterpreterRuntimeError(`Math.${name} is not available in CodeMode.`, node);
   const nums = args.map((arg) => {
-    if (typeof arg !== "number")
+    if (!isNumberValue(arg))
       throw new InterpreterRuntimeError(`Math.${name} expects number arguments.`, node);
     return arg;
   });
@@ -73,4 +96,9 @@ export const invokeMathMethod = (name: string, args: Array<unknown>, node: AstNo
   }
   throw new InterpreterRuntimeError(`Math.${name} is not available in CodeMode.`, node);
 };
-import { type AstNode, InterpreterRuntimeError } from "../interpreter/model.js";
+import { isNumberValue } from "../runtime-values.ts";
+import {
+  type AstNode,
+  type InterpreterArray,
+  InterpreterRuntimeError,
+} from "../interpreter/model.js";

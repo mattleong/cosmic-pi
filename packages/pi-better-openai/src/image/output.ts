@@ -7,14 +7,14 @@ import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
-import type { SharpAdapterShape } from "../boundary/sharp.ts";
+import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { decodeBase64, extensionForFormat, imageMimeType, isInside } from "./helpers.ts";
 import { fail, type ExtractedImageResult, type ImageOutputFormat } from "./types.ts";
 
 export const makeImageOutput = (dependencies: {
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
-  readonly sharp: SharpAdapterShape;
+  readonly sharp: SharpAdapterContract;
 }) => {
   const { fs, path, sharp } = dependencies;
   const imageError = (operation: string, message: string) => () => fail(operation, message);

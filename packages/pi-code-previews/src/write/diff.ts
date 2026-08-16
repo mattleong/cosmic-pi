@@ -88,7 +88,10 @@ export function readExistingFileForPreview(
   return runCodePreviewSessionEffect(readExistingFileForPreviewEffect(path, cwd, nextContent));
 }
 
-export function getWriteDiffSkipReason(before: unknown, nextContent: string): string | undefined {
+export function getWriteDiffSkipReason<BeforeInput>(
+  before: BeforeInput,
+  nextContent: string,
+): string | undefined {
   const decoded = Schema.decodeUnknownOption(SkippedExistingFilePreview, {
     onExcessProperty: "error",
   })(before);
@@ -137,13 +140,8 @@ function skippedExistingFile(
   sizeExceeded = false,
   maxBytes = currentMaxWriteDiffBytes(),
 ): ExistingFilePreview {
-  return {
-    kind: "skipped",
-    reason,
-    ...(byteLength === undefined ? {} : { byteLength }),
-    maxBytes,
-    sizeExceeded,
-  };
+  const skipped: ExistingFilePreview = { kind: "skipped", reason, maxBytes, sizeExceeded };
+  return byteLength === undefined ? skipped : { ...skipped, byteLength };
 }
 
 function formatSkipReason(

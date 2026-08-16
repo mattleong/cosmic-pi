@@ -13,9 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { afterEach, describe, expect, test } from "vitest";
 import { standaloneAdvisorExecutor } from "./support/executor.ts";
 import {
+  AdvisorFailureRecordSchema,
   getAdvisorFailureLogPath,
   logAdvisorFailureEffect,
   type AdvisorFailureDetails,
@@ -49,7 +51,9 @@ describe("advisor failure log", () => {
     });
 
     expect(logPath).toBe(join(agentDir, "logs", "pi-advisor.jsonl"));
-    const entry = JSON.parse(readFileSync(logPath!, "utf8")) as Record<string, unknown>;
+    const entry = Schema.decodeUnknownSync(AdvisorFailureRecordSchema)(
+      JSON.parse(readFileSync(logPath!, "utf8")),
+    );
     expect(entry).toMatchObject({
       provider: "review-provider",
       model: "review-model",
@@ -101,6 +105,7 @@ describe("advisor failure log", () => {
       timeoutMs: 3,
     });
     const persisted = readFileSync(logPath!, "utf8");
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const entry = JSON.parse(persisted) as { provider: string; model: string };
 
     expect(persisted).not.toMatch(/secret-value|sk-abcdefghijklmnop/);

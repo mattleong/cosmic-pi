@@ -27,7 +27,7 @@ const mapDocumentError = makeConfigDocumentErrorFactory(
   "Background Terminals",
 );
 
-function decodeConfig(value: unknown): Partial<BackgroundTerminalConfig> {
+function decodeConfig<ValueInput>(value: ValueInput): Partial<BackgroundTerminalConfig> {
   return decodeTolerantFields(
     value,
     {

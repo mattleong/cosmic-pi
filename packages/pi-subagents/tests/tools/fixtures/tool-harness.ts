@@ -1,11 +1,15 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import type { BackendDriver } from "../../../src/backend/model.ts";
 import {
   SubagentBackendRegistry,
-  type SubagentBackendRegistryShape,
+  type SubagentBackendRegistryContract,
 } from "../../../src/backend/service.ts";
 import { resolveSubagentConfig } from "../../../src/config/options.ts";
 import { decodeSubagentConfig } from "../../../src/config/schema.ts";
@@ -16,36 +20,42 @@ import {
 import type { SessionProfileOverrideSeed } from "../../../src/profiles/session-overrides.ts";
 import { InvalidSubagentRequestError } from "../../../src/run/errors.ts";
 import { type StartSubagentRequest, type SubagentRunView } from "../../../src/run/model.ts";
-import { SubagentService, type SubagentServiceShape } from "../../../src/run/service.ts";
+import { SubagentService, type SubagentServiceContract } from "../../../src/run/service.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
 import { registerSubagentTools, type SubagentToolRuntime } from "../../../src/tools/subagent.ts";
 
-export interface CapturedTool {
-  readonly name: string;
-  readonly description?: string;
-  readonly renderShell?: "default" | "self";
-  readonly renderCall?: (...args: ReadonlyArray<unknown>) => unknown;
-  readonly renderResult?: (...args: ReadonlyArray<unknown>) => unknown;
-  readonly promptSnippet?: string;
-  readonly promptGuidelines?: ReadonlyArray<string>;
-  readonly parameters?: unknown;
-  readonly prepareArguments?: (args: unknown) => unknown;
-  readonly execute: (
-    id: string,
-    input: unknown,
-    signal: AbortSignal | undefined,
-    update:
-      | ((result: {
-          readonly content: ReadonlyArray<{ readonly type: string; readonly text: string }>;
-          readonly details?: unknown;
-        }) => void)
-      | undefined,
-    ctx: ExtensionContext,
-  ) => Promise<{
-    readonly content: ReadonlyArray<{ readonly type: string; readonly text: string }>;
-    readonly details?: unknown;
+type NativeCapturedTool = ToolDefinition<any, any, any>;
+type NativeExecute = NativeCapturedTool["execute"];
+type NativeRenderResult = NonNullable<NativeCapturedTool["renderResult"]>;
+type CapturedToolResult = Omit<Awaited<ReturnType<NativeExecute>>, "content"> & {
+  readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
+};
+
+type CapturedRenderResult = {
+  readonly content: ReadonlyArray<{
+    readonly type: string;
+    readonly text?: string;
+    readonly data?: string;
+    readonly mimeType?: string;
   }>;
-}
+  readonly details?: unknown;
+};
+
+export type CapturedTool = Omit<NativeCapturedTool, "execute" | "renderResult"> & {
+  readonly execute: (
+    id: Parameters<NativeExecute>[0],
+    params: Parameters<NativeExecute>[1],
+    signal?: Parameters<NativeExecute>[2],
+    onUpdate?: Parameters<NativeExecute>[3],
+    ctx?: Parameters<NativeExecute>[4],
+  ) => Promise<CapturedToolResult>;
+  readonly renderResult?: (
+    result: CapturedRenderResult,
+    options: Parameters<NativeRenderResult>[1],
+    theme: Parameters<NativeRenderResult>[2],
+    context?: Parameters<NativeRenderResult>[3],
+  ) => ReturnType<NativeRenderResult>;
+};
 
 export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   id: "agent-1",
@@ -83,24 +93,30 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   ...overrides,
 });
 
-export const profileServiceFor = (
-  global: unknown,
-  project?: unknown,
+export const profileServiceFor = <Global extends object = never, Project extends object = never>(
+  global: Global | undefined,
+  project?: Project,
   initialSessionOverrides?: SessionProfileOverrideSeed,
 ) =>
   Effect.runSync(
     makeSubagentProfileService(
-      resolveSubagentConfig({
-        globalConfigPath: "/agent/pi-subagents.json",
-        projectConfigPath: "/project/.pi/pi-subagents.json",
-        projectTrusted: true,
-        globalConfigExists: global !== undefined,
-        projectConfigExists: project !== undefined,
-        global: decodeSubagentConfig({ version: 4, ...((global ?? {}) as object) }),
-        ...(project === undefined
-          ? {}
-          : { project: decodeSubagentConfig({ version: 4, ...(project as object) }) }),
-      }),
+      resolveSubagentConfig(
+        (() => {
+          const objectPart3242_0 = {
+            globalConfigPath: "/agent/pi-subagents.json",
+            projectConfigPath: "/project/.pi/pi-subagents.json",
+            projectTrusted: true,
+            globalConfigExists: global !== undefined,
+            projectConfigExists: project !== undefined,
+            global: decodeSubagentConfig({ version: 4, ...global }),
+          };
+          const objectPart3242_1 =
+            project === undefined
+              ? objectPart3242_0
+              : { ...objectPart3242_0, project: decodeSubagentConfig({ version: 4, ...project }) };
+          return objectPart3242_1;
+        })(),
+      ),
       { initialSessionOverrides },
     ),
   );
@@ -136,41 +152,48 @@ export const testBackendRegistry = {
 };
 
 export const captureSubagentTools = (
-  service: SubagentServiceShape,
+  service: SubagentServiceContract,
   activeTools: ReadonlyArray<string> = ["read"],
   profileService = fallbackProfileService,
-  backendRegistry: SubagentBackendRegistryShape | undefined = undefined,
+  backendRegistry: SubagentBackendRegistryContract | undefined = undefined,
   environment = { cwd: "/project", projectTrusted: true },
-  thinkingLevel: unknown = "high",
+  thinkingLevel: string | number = "high",
   startUiTicker?: SubagentToolRuntime["startUiTicker"],
 ): ReadonlyMap<string, CapturedTool> => {
   const tools = new Map<string, CapturedTool>();
-  const pi = {
-    registerTool: (definition: unknown) => {
-      const tool = definition as CapturedTool;
-      tools.set(tool.name, tool);
-    },
+  const piFixture = {
+    registerTool: (tool: CapturedTool) => tools.set(tool.name, tool),
     getThinkingLevel: () => thinkingLevel,
     getActiveTools: () => [...activeTools],
-  } as unknown as ExtensionAPI;
-  registerSubagentTools(pi, {
-    ...(startUiTicker ? { startUiTicker } : {}),
-    environment,
-    run: (effect, signal) =>
-      Effect.runPromise(
-        effect.pipe(
-          Effect.provideService(SubagentService, service),
-          Effect.provideService(SubagentProfileService, profileService),
-          Effect.provideService(SubagentBackendRegistry, backendRegistry ?? testBackendRegistry),
-        ),
-        signal ? { signal } : undefined,
+  };
+  // SAFETY: registerSubagentTools uses only the three ExtensionAPI methods implemented by this fixture.
+  const pi = piFixture as typeof piFixture & ExtensionAPI;
+  const run: SubagentToolRuntime["run"] = (effect, signal) =>
+    Effect.runPromise(
+      effect.pipe(
+        Effect.provideService(SubagentService, service),
+        Effect.provideService(SubagentProfileService, profileService),
+        Effect.provideService(SubagentBackendRegistry, backendRegistry ?? testBackendRegistry),
       ),
-  });
+      signal ? { signal } : undefined,
+    );
+  registerSubagentTools(
+    pi,
+    (() => {
+      const objectPart5889_0 = {};
+      const objectPart5889_1 = startUiTicker
+        ? { ...objectPart5889_0, startUiTicker }
+        : objectPart5889_0;
+      const objectPart5889_2 = { ...objectPart5889_1, environment, run };
+      return objectPart5889_2;
+    })(),
+  );
   return tools;
 };
 
-export const context = {
+const contextFixture = {
   cwd: "/project",
+  mode: "tui" as const,
   hasUI: true,
   ui: {
     confirm: () => Promise.resolve(true),
@@ -214,8 +237,23 @@ export const context = {
       message: { role: "assistant" },
     }),
   },
+  scopedModels: [],
+  thinkingLevel: "high" as const,
+  isIdle: () => true,
   isProjectTrusted: () => true,
-} as unknown as ExtensionContext;
+  signal: undefined,
+  abort: () => undefined,
+  hasPendingMessages: () => false,
+  shutdown: () => undefined,
+  getContextUsage: () => undefined,
+  compact: () => undefined,
+  getSystemPrompt: () => "",
+};
+const makeContextFixture = (): ExtensionContext => {
+  // SAFETY: The fixture implements every ExtensionContext member used by subagent tool registration and execution.
+  return contextFixture as typeof contextFixture & ExtensionContext;
+};
+export const context = makeContextFixture();
 
 export const registryContext = (
   available: ReadonlyArray<{
@@ -226,9 +264,9 @@ export const registryContext = (
     readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
   }>,
   registeredProviderIds: ReadonlyArray<string> = [],
-): ExtensionContext =>
-  ({
-    ...(context as unknown as Record<string, unknown>),
+): ExtensionContext => {
+  const fixture = {
+    ...context,
     modelRegistry: {
       getAvailable: () => [...available],
       find: (provider: string, id: string) =>
@@ -238,19 +276,29 @@ export const registryContext = (
       getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "stored-key" }),
       getRegisteredProviderIds: () => [...registeredProviderIds],
     },
-  }) as unknown as ExtensionContext;
+  };
+  // SAFETY: This variant changes only modelRegistry methods consumed by profile resolution.
+  return fixture as typeof fixture & ExtensionContext;
+};
 
 export const startCapturingService = (requests: StartSubagentRequest[]) =>
   subagentServiceDouble({
     start: (input) =>
       Effect.sync(() => {
         requests.push(input);
-        return view({
-          id: `agent-${requests.length}`,
-          model: input.model,
-          selection: input.selection ?? view().selection,
-          ...(input.profile ? { profile: input.profile } : {}),
-        });
+        return view(
+          (() => {
+            const objectPart8909_0 = {
+              id: `agent-${requests.length}`,
+              model: input.model,
+              selection: input.selection ?? view().selection,
+            };
+            const objectPart8909_1 = input.profile
+              ? { ...objectPart8909_0, profile: input.profile }
+              : objectPart8909_0;
+            return objectPart8909_1;
+          })(),
+        );
       }),
     awaitTerminal: () => Effect.succeed([]),
     list: Effect.succeed([]),

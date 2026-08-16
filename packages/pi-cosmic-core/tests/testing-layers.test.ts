@@ -1,3 +1,4 @@
+import { isNumberValue } from "../src/runtime-values.ts";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -6,6 +7,7 @@ import { type JsonObject } from "../index.ts";
 import { makeInMemoryDocuments } from "../testing.ts";
 
 const setNestedValue = (document: JsonObject, value: number): void => {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   (document.nested as { value: number }).value = value;
 };
 
@@ -61,7 +63,7 @@ it.effect("serializes gated concurrent modifications on the same path", () =>
     const increment = (gate: boolean) =>
       memory.service.modifyObject("/counter.json", (document) =>
         Effect.gen(function* () {
-          const count = typeof document.count === "number" ? document.count : 0;
+          const count = isNumberValue(document.count) ? document.count : 0;
           if (gate) {
             yield* Deferred.succeed(firstEntered, undefined);
             yield* Deferred.await(releaseFirst);

@@ -114,10 +114,11 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           )
             return { transitioned: false as const, view: snapshotView(record.view) };
           if (record.initializationPending && state !== "stopped") {
-            record.pendingInitializationSettlement = {
-              state,
-              ...(error ? { error } : {}),
-            };
+            record.pendingInitializationSettlement = (() => {
+              const objectPart4903_0 = { state };
+              const objectPart4903_1 = error ? { ...objectPart4903_0, error } : objectPart4903_0;
+              return objectPart4903_1;
+            })();
             return {
               transitioned: false as const,
               deferredInitialization: true as const,
@@ -138,35 +139,49 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
             : record.completionGeneration;
           const completionWarning = foldRunWarnings(record.warningSlots);
           if (hasDeliverableOutcome)
-            record.completionGenerations.set(completionGeneration, {
-              generation: completionGeneration,
-              outcome: state,
-              ...(state === "completed" && record.latestAssistantText
-                ? { finalText: record.latestAssistantText }
-                : {}),
-              ...(state === "failed" ? { error: error ?? "Run failed." } : {}),
-              ...(completionWarning ? { warning: completionWarning } : {}),
-              retained: false,
-            });
+            record.completionGenerations.set(
+              completionGeneration,
+              (() => {
+                const objectPart5996_0 = { generation: completionGeneration, outcome: state };
+                const objectPart5996_1 =
+                  state === "completed" && record.latestAssistantText
+                    ? { ...objectPart5996_0, finalText: record.latestAssistantText }
+                    : objectPart5996_0;
+                const objectPart5996_2 =
+                  state === "failed"
+                    ? { ...objectPart5996_1, error: error ?? "Run failed." }
+                    : objectPart5996_1;
+                const objectPart5996_3 = completionWarning
+                  ? { ...objectPart5996_2, warning: completionWarning }
+                  : objectPart5996_2;
+                const objectPart5996_4 = { ...objectPart5996_3, retained: false };
+                return objectPart5996_4;
+              })(),
+            );
           record.notificationGeneration += 1;
           delivery.discardQuestionLocked(record.view.id);
           record.replyPendingRequestId = undefined;
           if (state === "completed") record.assignment.phase = "reported";
-          record.view = {
+          const viewBase = {
             ...record.view,
             state,
             endedAt: now,
             lastActivityAt: now,
             currentTool: undefined,
             question: undefined,
-            ...(state === "completed"
-              ? {
-                  reportGeneration: completionGeneration,
-                  ...(record.latestAssistantText ? { finalText: record.latestAssistantText } : {}),
-                }
-              : {}),
-            ...(state === "failed" ? { error: error ?? "Run failed." } : error ? { error } : {}),
           };
+          const reportBase = { reportGeneration: completionGeneration };
+          const reportDetails = record.latestAssistantText
+            ? { ...reportBase, finalText: record.latestAssistantText }
+            : reportBase;
+          const completedView =
+            state === "completed" ? { ...viewBase, ...reportDetails } : viewBase;
+          record.view =
+            state === "failed"
+              ? { ...completedView, error: error ?? "Run failed." }
+              : error
+                ? { ...completedView, error }
+                : completedView;
           publish();
           const view = snapshotView(record.view);
           const completionQueued = hasDeliverableOutcome;

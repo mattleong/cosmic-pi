@@ -14,7 +14,7 @@ const MAX_BEFORE_WRITE_CACHE_ENTRIES = 64;
 type PathLock = { readonly semaphore: Semaphore.Semaphore; users: number };
 type WriteState = CodePreviewWriteSnapshot;
 
-export interface CodePreviewWriteServiceShape {
+export interface CodePreviewWriteServiceContract {
   readonly rememberBeforeWrite: (
     toolCallId: string,
     before: CodePreviewBeforeWrite,
@@ -31,7 +31,7 @@ export interface CodePreviewWriteServiceShape {
 
 export class CodePreviewWriteService extends Context.Service<
   CodePreviewWriteService,
-  CodePreviewWriteServiceShape
+  CodePreviewWriteServiceContract
 >()("pi-code-previews/write/service/CodePreviewWriteService") {
   static readonly layer = Layer.effect(
     this,

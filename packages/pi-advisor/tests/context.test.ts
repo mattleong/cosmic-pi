@@ -6,7 +6,7 @@ import {
   DEFAULT_MAX_CONTEXT_CHARS,
 } from "../src/review/context.ts";
 
-function text(value: string): { type: "text"; text: string } {
+function text(value: string) {
   return { type: "text", text: value };
 }
 

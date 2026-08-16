@@ -1,6 +1,7 @@
 // The LocalCliProcess service door: local CLI request/service contracts plus environment,
 // preflight, and probe orchestration over the private harness and wire-transport boundaries.
 // @effect-diagnostics effect/processEnv:off
+import { isStringValue } from "pi-cosmic-core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -52,7 +53,7 @@ export interface LocalCliPreflightRequest {
   readonly cwd?: string | undefined;
 }
 
-export interface LocalCliProcessShape {
+export interface LocalCliProcessContract {
   readonly preflight: (
     request: LocalCliPreflightRequest,
   ) => Effect.Effect<void, InvalidSubagentRequestError>;
@@ -66,17 +67,22 @@ export interface LocalCliProcessLayerOptions extends LocalCliHarnessOptions {
   readonly platform?: NodeJS.Platform | undefined;
 }
 
-const processError = (operation: string, error?: unknown, code?: string) =>
-  new SubagentProcessError({
-    operation,
-    message:
-      error instanceof Error
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : `Unable to ${operation} local CLI process.`,
-    ...(code ? { code } : {}),
-  });
+const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
+  new SubagentProcessError(
+    (() => {
+      const objectPart2592_0 = {
+        operation,
+        message:
+          error instanceof Error
+            ? error.message
+            : isStringValue(error)
+              ? error
+              : `Unable to ${operation} local CLI process.`,
+      };
+      const objectPart2592_1 = code ? { ...objectPart2592_0, code } : objectPart2592_0;
+      return objectPart2592_1;
+    })(),
+  );
 
 const preflightError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
@@ -123,9 +129,10 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   );
 });
 
+// SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
 export const makeLocalCliProcess = (
   options: LocalCliProcessLayerOptions,
-): LocalCliProcessShape => ({
+): LocalCliProcessContract => ({
   preflight: (request) =>
     Effect.gen(function* () {
       if (request.context !== "fresh")
@@ -143,11 +150,10 @@ export const makeLocalCliProcess = (
           "unsupported_safe_writer_ownership",
           "Local CLI writers are unavailable on Windows until native Job Object cleanup is implemented.",
         );
+      const claudeSandboxPlatforms: ReadonlyArray<NodeJS.Platform> = ["darwin", "linux"];
       if (
         request.runtime === "claude" &&
-        !(["darwin", "linux"] as ReadonlyArray<NodeJS.Platform>).includes(
-          options.platform ?? process.platform,
-        )
+        !claudeSandboxPlatforms.includes(options.platform ?? process.platform)
       )
         return yield* preflightError(
           "claude_shell_confinement_unsupported",
@@ -255,7 +261,7 @@ export const makeLocalCliProcess = (
     ).pipe(Effect.map(({ release: _release, ...handle }) => handle)),
 });
 
-export class LocalCliProcess extends Context.Service<LocalCliProcess, LocalCliProcessShape>()(
+export class LocalCliProcess extends Context.Service<LocalCliProcess, LocalCliProcessContract>()(
   "pi-subagents/boundary/local-cli-process/LocalCliProcess",
 ) {
   static readonly layer = (options: LocalCliProcessLayerOptions): Layer.Layer<LocalCliProcess> =>

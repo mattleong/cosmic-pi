@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { notifyHerdrFork } from "../boundary/host-notifier.ts";
 import type { HerdrForkResult } from "../fork/service.ts";
@@ -27,9 +28,10 @@ export const registerHerdrForkCommand = (
             "info",
           );
         },
-        (failure: unknown) => {
+        (failure) => {
+          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
           const message =
-            failure && typeof failure === "object" && "message" in failure
+            failure && hasObjectRuntimeType(failure) && "message" in failure
               ? String((failure as { message: unknown }).message)
               : "Unable to open a Herdr fork.";
           notifyHerdrFork(ctx, message.slice(0, 2_000), "error");

@@ -8,6 +8,23 @@ export const numberConstants = new Set([
   "EPSILON",
 ]);
 
+export const numberConstant = (name: string): number | undefined => {
+  switch (name) {
+    case "MAX_SAFE_INTEGER":
+      return Number.MAX_SAFE_INTEGER;
+    case "MIN_SAFE_INTEGER":
+      return Number.MIN_SAFE_INTEGER;
+    case "MAX_VALUE":
+      return Number.MAX_VALUE;
+    case "MIN_VALUE":
+      return Number.MIN_VALUE;
+    case "EPSILON":
+      return Number.EPSILON;
+    default:
+      return undefined;
+  }
+};
+
 export const numberStatics = new Set([
   "isInteger",
   "isFinite",
@@ -20,17 +37,17 @@ export const numberStatics = new Set([
 export const invokeNumberMethod = (
   value: number,
   name: string,
-  args: Array<unknown>,
+  args: InterpreterArray,
   node: AstNode,
-): unknown => {
+) => {
   const optNum = (index: number): number | undefined => {
     const arg = args[index];
     if (arg === undefined) return undefined;
-    if (typeof arg !== "number")
+    if (!isNumberValue(arg))
       throw new InterpreterRuntimeError(`Number.${name} expects a number argument.`, node);
     return arg;
   };
-  let result: unknown;
+  let result: string;
   switch (name) {
     case "toFixed":
       result = value.toFixed(optNum(0));
@@ -60,7 +77,7 @@ export const invokeNumberMethod = (
   return boundedData(result, `Number.${name} result`);
 };
 
-export const invokeNumberStatic = (name: string, args: Array<unknown>, node: AstNode): unknown => {
+export const invokeNumberStatic = (name: string, args: InterpreterArray, node: AstNode) => {
   const value = args[0];
   switch (name) {
     case "isInteger":
@@ -73,7 +90,7 @@ export const invokeNumberStatic = (name: string, args: Array<unknown>, node: Ast
       return Number.isSafeInteger(value);
     case "parseInt": {
       const radix = args[1];
-      if (radix !== undefined && typeof radix !== "number") {
+      if (radix !== undefined && !isNumberValue(radix)) {
         throw new InterpreterRuntimeError("Number.parseInt expects a numeric radix.", node);
       }
       return parseInt(coerceToString(value), radix);
@@ -84,5 +101,10 @@ export const invokeNumberStatic = (name: string, args: Array<unknown>, node: Ast
       throw new InterpreterRuntimeError(`Number.${name} is not available in CodeMode.`, node);
   }
 };
-import { type AstNode, InterpreterRuntimeError } from "../interpreter/model.js";
+import { isNumberValue } from "../runtime-values.ts";
+import {
+  type AstNode,
+  type InterpreterArray,
+  InterpreterRuntimeError,
+} from "../interpreter/model.js";
 import { boundedData, coerceToString } from "./value.js";

@@ -19,11 +19,13 @@ export const herdrForkError = (
   paneId?: string,
   herdrCode?: string,
 ): HerdrForkError =>
-  new HerdrForkError({
-    operation,
-    code,
-    message,
-    outcome,
-    ...(paneId === undefined ? {} : { paneId }),
-    ...(herdrCode === undefined ? {} : { herdrCode }),
-  });
+  new HerdrForkError(
+    (() => {
+      const objectPart654_0 = { operation, code, message, outcome };
+      const objectPart654_1 =
+        paneId === undefined ? objectPart654_0 : { ...objectPart654_0, paneId };
+      const objectPart654_2 =
+        herdrCode === undefined ? objectPart654_1 : { ...objectPart654_1, herdrCode };
+      return objectPart654_2;
+    })(),
+  );

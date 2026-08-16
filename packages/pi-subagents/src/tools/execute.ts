@@ -1,5 +1,6 @@
 // Pi tool execution is a Promise-shaped host boundary.
 // @effect-diagnostics effect/asyncFunction:off
+import type { JsonObject } from "pi-cosmic-core";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -13,7 +14,10 @@ import {
 } from "../boundary/host-profile-resolution.ts";
 import { normalizeProfileId, PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { profileCandidateLabel } from "../profiles/resolve.ts";
-import { SubagentProfileService, type SubagentProfileServiceShape } from "../profiles/service.ts";
+import {
+  SubagentProfileService,
+  type SubagentProfileServiceContract,
+} from "../profiles/service.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import {
   InvalidSubagentRequestError,
@@ -136,9 +140,8 @@ const startSpecs = (
         message: `subagent_start requires between 1 and ${MAX_TARGET_RUNS} agents.`,
       });
     for (const agent of agents) {
-      const disallowedField = firstDisallowedLaunchOverride(
-        agent as Readonly<Record<string, unknown>>,
-      );
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+      const disallowedField = firstDisallowedLaunchOverride(agent as Readonly<JsonObject>);
       if (disallowedField)
         return yield* new InvalidSubagentRequestError({
           code: "launch_override_not_allowed",
@@ -168,7 +171,7 @@ const profileDiscovery = (
   input: SubagentModelsInput,
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  profiles: SubagentProfileServiceShape,
+  profiles: SubagentProfileServiceContract,
   snapshot: SessionProfileSnapshot,
 ): ReadonlyArray<SubagentProfileView> => {
   const requestedProfile = input.profile ? normalizeProfileId(input.profile) : undefined;
@@ -184,27 +187,41 @@ const profileDiscovery = (
     const candidates: ProfileCandidateDiscovery[] = route.candidates.map((candidate, index) => {
       const attempt = attempts.find((value) => value.candidateIndex === index);
       const omitted = skipped.find((value) => value.candidateIndex === index);
-      return {
-        order: index + 1,
-        candidate: profileCandidateLabel(candidate),
-        status: attempt ? "eligible" : "skipped",
-        ...(attempt ? { effectiveContext: attempt.effectiveContext } : {}),
-        reason: attempt
-          ? "Candidate adapter is statically eligible before native authentication/integration/harness readiness."
-          : (omitted?.reason ?? "Candidate was not eligible."),
-      };
+      return (() => {
+        const objectPart6742_0: Pick<ProfileCandidateDiscovery, "order" | "candidate" | "status"> =
+          {
+            order: index + 1,
+            candidate: profileCandidateLabel(candidate),
+            status: attempt ? "eligible" : "skipped",
+          };
+        const objectPart6742_1 = attempt
+          ? { ...objectPart6742_0, effectiveContext: attempt.effectiveContext }
+          : objectPart6742_0;
+        const objectPart6742_2 = {
+          ...objectPart6742_1,
+          reason: attempt
+            ? "Candidate adapter is statically eligible before native authentication/integration/harness readiness."
+            : (omitted?.reason ?? "Candidate was not eligible."),
+        };
+        return objectPart6742_2;
+      })();
     });
     return [
-      {
-        id: definition.id,
-        description: definition.description,
-        source: snapshot.effectiveConfig.profileSources[definition.id],
-        isDefault: definition.id === "generalist",
-        defaultContext: definition.defaultContext,
-        defaultWriteIntent: definition.defaultWriteIntent,
-        ...(definition.defaultEffort ? { defaultEffort: definition.defaultEffort } : {}),
-        candidates,
-      },
+      (() => {
+        const objectPart7188_0 = {
+          id: definition.id,
+          description: definition.description,
+          source: snapshot.effectiveConfig.profileSources[definition.id],
+          isDefault: definition.id === "generalist",
+          defaultContext: definition.defaultContext,
+          defaultWriteIntent: definition.defaultWriteIntent,
+        };
+        const objectPart7188_1 = definition.defaultEffort
+          ? { ...objectPart7188_0, defaultEffort: definition.defaultEffort }
+          : objectPart7188_0;
+        const objectPart7188_2 = { ...objectPart7188_1, candidates };
+        return objectPart7188_2;
+      })(),
     ];
   });
 };
@@ -373,21 +390,26 @@ export const executeSubagentAction = async (
         const partialOutcomes = new Map<number, SubagentStartOutcome>();
         const requestedProfileFor = (spec: SubagentStartSpec): string =>
           sanitizeTerminalLine(spec.profile?.trim() || "generalist");
-        const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRoute => ({
-          profile: request.profile ?? "generalist",
-          host: request.host,
-          runtime: request.runtime,
-          model: request.model,
-          effort: request.effort,
-          fastMode: request.fastMode,
-          ...(request.selection?.candidateIndex === undefined
-            ? {}
-            : { candidateIndex: request.selection.candidateIndex }),
-        });
+        const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRoute =>
+          (() => {
+            const objectPart14752_0 = {
+              profile: request.profile ?? "generalist",
+              host: request.host,
+              runtime: request.runtime,
+              model: request.model,
+              effort: request.effort,
+              fastMode: request.fastMode,
+            };
+            const objectPart14752_1 =
+              request.selection?.candidateIndex === undefined
+                ? objectPart14752_0
+                : { ...objectPart14752_0, candidateIndex: request.selection.candidateIndex };
+            return objectPart14752_1;
+          })();
         const startEntriesFor = (
           outcomes: ReadonlyMap<number, SubagentStartOutcome>,
         ): ReadonlyArray<SubagentStartEntry> =>
-          specs.map((spec, index) => {
+          specs.map((spec, index): SubagentStartEntry => {
             const outcome = outcomes.get(index);
             const base = {
               index,
@@ -396,25 +418,32 @@ export const executeSubagentAction = async (
             } as const;
             if (!outcome) return { ...base, status: "pending", routeStatus: "resolving" };
             if ("run" in outcome)
-              return {
-                ...base,
-                profile: outcome.run.profile ?? base.profile,
-                status: "started",
-                routeStatus: "selected",
-                host: outcome.run.host,
-                runtime: outcome.run.runtime,
-                model: outcome.run.model,
-                effort: outcome.run.effort,
-                fastMode: outcome.run.fastMode,
-                ...(outcome.run.selection.candidateIndex === undefined
-                  ? {}
-                  : { candidateIndex: outcome.run.selection.candidateIndex }),
-                runId: outcome.run.id,
-              };
+              return (() => {
+                const objectPart15723_0 = {
+                  ...base,
+                  profile: outcome.run.profile ?? base.profile,
+                  status: "started" as const,
+                  routeStatus: "selected" as const,
+                  host: outcome.run.host,
+                  runtime: outcome.run.runtime,
+                  model: outcome.run.model,
+                  effort: outcome.run.effort,
+                  fastMode: outcome.run.fastMode,
+                };
+                const objectPart15723_1 =
+                  outcome.run.selection.candidateIndex === undefined
+                    ? objectPart15723_0
+                    : {
+                        ...objectPart15723_0,
+                        candidateIndex: outcome.run.selection.candidateIndex,
+                      };
+                const objectPart15723_2 = { ...objectPart15723_1, runId: outcome.run.id };
+                return objectPart15723_2;
+              })();
             return {
               ...base,
-              status: "failed",
-              routeStatus: outcome.resolvedRoute ? "selected" : "unavailable",
+              status: "failed" as const,
+              routeStatus: outcome.resolvedRoute ? ("selected" as const) : ("unavailable" as const),
               ...outcome.resolvedRoute,
             };
           });
@@ -423,16 +452,28 @@ export const executeSubagentAction = async (
           index: number,
           error: SubagentError,
           resolvedRoute?: SubagentStartResolvedRoute,
-        ): SubagentStartOutcome => ({
-          index,
-          failure: {
-            index,
-            ...(spec.name?.trim() ? { name: spec.name.trim() } : {}),
-            message: error.message,
-            code: subagentErrorCode(error),
-          },
-          ...(resolvedRoute ? { resolvedRoute } : {}),
-        });
+        ): SubagentStartOutcome =>
+          (() => {
+            const objectPart16966_0 = {
+              index,
+              failure: (() => {
+                const objectPart16810_0 = { index };
+                const objectPart16810_1 = spec.name?.trim()
+                  ? { ...objectPart16810_0, name: spec.name.trim() }
+                  : objectPart16810_0;
+                const objectPart16810_2 = {
+                  ...objectPart16810_1,
+                  message: error.message,
+                  code: subagentErrorCode(error),
+                };
+                return objectPart16810_2;
+              })(),
+            };
+            const objectPart16966_1 = resolvedRoute
+              ? { ...objectPart16966_0, resolvedRoute }
+              : objectPart16966_0;
+            return objectPart16966_1;
+          })();
         const publishOutcome = (outcome: SubagentStartOutcome): Effect.Effect<void> => {
           partialOutcomes.set(outcome.index, outcome);
           const ordered = [...partialOutcomes.values()].sort(
@@ -452,12 +493,20 @@ export const executeSubagentAction = async (
           return Effect.sync(() =>
             onUpdate?.({
               content: [{ type: "text", text: summary }],
-              details: makeStartAwaitCardDetails({
-                action: "start",
-                runs: launched,
-                startEntries: startEntriesFor(partialOutcomes),
-                ...(failures.length > 0 ? { startFailures: failures } : {}),
-              }),
+              details: makeStartAwaitCardDetails(
+                (() => {
+                  const objectPart18237_0 = {
+                    action: "start" as const,
+                    runs: launched,
+                    startEntries: startEntriesFor(partialOutcomes),
+                  };
+                  const objectPart18237_1 =
+                    failures.length > 0
+                      ? { ...objectPart18237_0, startFailures: failures }
+                      : objectPart18237_0;
+                  return objectPart18237_1;
+                })(),
+              ),
             }),
           ).pipe(
             Effect.catchDefect(() => Effect.void),
@@ -652,26 +701,46 @@ export const executeSubagentAction = async (
   const actionFailures = executionResult.actionFailures ?? [];
   const details: unknown =
     input.action === "start"
-      ? makeStartAwaitCardDetails({
-          action: "start",
-          runs,
-          ...(startEntries ? { startEntries } : {}),
-          ...(startFailures.length > 0 ? { startFailures } : {}),
-        })
+      ? makeStartAwaitCardDetails(
+          (() => {
+            const objectPart25937_0 = { action: "start" as const, runs };
+            const objectPart25937_1 = startEntries
+              ? { ...objectPart25937_0, startEntries }
+              : objectPart25937_0;
+            const objectPart25937_2 =
+              startFailures.length > 0
+                ? { ...objectPart25937_1, startFailures }
+                : objectPart25937_1;
+            return objectPart25937_2;
+          })(),
+        )
       : input.action === "await"
-        ? makeStartAwaitCardDetails({
-            action: input.action,
-            runs,
-            awaitUntil: input.until,
-            ...(attentionRequired ? { attentionRequired: true } : {}),
-          })
-        : makeCompactToolDetails({
-            action: input.action,
-            runs,
-            includeReports: input.action === "status",
-            ...(actionFailures.length > 0 ? { actionFailures } : {}),
-            ...(attentionRequired ? { attentionRequired: true } : {}),
-          });
+        ? makeStartAwaitCardDetails(
+            (() => {
+              const objectPart26181_0 = { action: "await" as const, runs, awaitUntil: input.until };
+              const objectPart26181_1 = attentionRequired
+                ? { ...objectPart26181_0, attentionRequired: true }
+                : objectPart26181_0;
+              return objectPart26181_1;
+            })(),
+          )
+        : makeCompactToolDetails(
+            (() => {
+              const objectPart26389_0 = {
+                action: input.action,
+                runs,
+                includeReports: input.action === "status",
+              };
+              const objectPart26389_1 =
+                actionFailures.length > 0
+                  ? { ...objectPart26389_0, actionFailures }
+                  : objectPart26389_0;
+              const objectPart26389_2 = attentionRequired
+                ? { ...objectPart26389_1, attentionRequired: true }
+                : objectPart26389_1;
+              return objectPart26389_2;
+            })(),
+          );
   const text =
     input.action === "start"
       ? (formattedText ?? formatStartResult(runs, startFailures))

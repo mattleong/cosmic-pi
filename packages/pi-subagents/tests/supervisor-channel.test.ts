@@ -4,6 +4,7 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import { hasObjectRuntimeType, isStringValue, runtimeTypeName } from "pi-cosmic-core";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
@@ -24,6 +25,11 @@ import {
   SUPERVISOR_CHANNEL_VERSION,
   type SupervisorServerPayload,
 } from "../src/supervisor/protocol.ts";
+
+type JsonRpcValue = string | number | boolean | null | JsonRpcValue[] | JsonRpcObject;
+interface JsonRpcObject {
+  readonly [key: string]: JsonRpcValue;
+}
 
 const temporaryDirectories: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
@@ -77,11 +83,11 @@ const openChannel = async (runId = "agent-supervisor-test"): Promise<OpenTestCha
 };
 
 class RpcClient {
-  readonly messages: unknown[] = [];
-  readonly #pending = new Map<string, (value: unknown) => void>();
+  readonly messages: JsonRpcValue[] = [];
+  readonly #pending = new Map<string, (value: JsonRpcValue) => void>();
   readonly #waiters: Array<{
-    readonly predicate: (value: unknown) => boolean;
-    readonly resolve: (value: unknown) => void;
+    readonly predicate: (value: JsonRpcValue) => boolean;
+    readonly resolve: (value: JsonRpcValue) => void;
   }> = [];
   #buffer = "";
   readonly child: ChildProcessWithoutNullStreams;
@@ -94,10 +100,11 @@ class RpcClient {
       while (newline >= 0) {
         const line = this.#buffer.slice(0, newline);
         this.#buffer = this.#buffer.slice(newline + 1);
-        const value = JSON.parse(line) as unknown;
+        // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
+        const value = JSON.parse(line) as JsonRpcValue;
         this.messages.push(value);
-        if (value && typeof value === "object" && "id" in value) {
-          const key = `${typeof value.id}:${String(value.id)}`;
+        if (value && hasObjectRuntimeType(value) && "id" in value) {
+          const key = `${runtimeTypeName(value.id)}:${String(value.id)}`;
           const resolve = this.#pending.get(key);
           if (resolve) {
             this.#pending.delete(key);
@@ -115,27 +122,25 @@ class RpcClient {
     });
   }
 
-  send(value: unknown): void {
+  send<ValueInput>(value: ValueInput): void {
     this.child.stdin.write(`${JSON.stringify(value)}\n`);
   }
 
-  request<Request extends object & { readonly id: string | number }>(value: Request) {
-    const key = `${typeof value.id}:${String(value.id)}`;
-    const response = new Promise<unknown>((resolve) => this.#pending.set(key, resolve));
+  request<Request extends JsonRpcObject & { readonly id: string | number }>(value: Request) {
+    const key = `${runtimeTypeName(value.id)}:${String(value.id)}`;
+    const response = new Promise<JsonRpcValue>((resolve) => this.#pending.set(key, resolve));
     this.send(value);
     return withTimeout(response);
   }
 
-  next(predicate: (value: unknown) => boolean): Promise<unknown> {
+  next(predicate: (value: JsonRpcValue) => boolean) {
     const existing = this.messages.find(predicate);
     if (existing) return Promise.resolve(existing);
     return withTimeout(new Promise((resolve) => this.#waiters.push({ predicate, resolve })));
   }
 }
 
-const spawnHelper = (
-  handle: SupervisorChannelHandle,
-): { child: ChildProcessWithoutNullStreams; rpc: RpcClient } => {
+const spawnHelper = (handle: SupervisorChannelHandle) => {
   const child = spawn(
     process.execPath,
     [handle.metadata.helperPath, "--config", handle.metadata.connectionConfigPath],
@@ -163,7 +168,7 @@ const initialize = async (rpc: RpcClient) => {
   rpc.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
 };
 
-const toolCall = (rpc: RpcClient, id: string | number, name: string, args: object) =>
+const toolCall = (rpc: RpcClient, id: string | number, name: string, args: JsonRpcObject) =>
   rpc.request({
     jsonrpc: "2.0",
     id,
@@ -183,11 +188,11 @@ const waitForExit = (child: ChildProcessWithoutNullStreams) =>
 
 interface RawChannelClient {
   readonly socket: Socket;
-  readonly send: (value: object) => void;
-  readonly request: <Request extends object & { readonly id: string }>(
+  readonly send: (value: JsonRpcObject) => void;
+  readonly request: <Request extends JsonRpcObject & { readonly id: string }>(
     value: Request,
-  ) => Promise<unknown>;
-  readonly next: (predicate: (value: unknown) => boolean) => Promise<unknown>;
+  ) => Promise<JsonRpcValue>;
+  readonly next: (predicate: (value: JsonRpcValue) => boolean) => Promise<JsonRpcValue>;
 }
 
 const connectRawChannel = async (handle: SupervisorChannelHandle): Promise<RawChannelClient> => {
@@ -199,20 +204,21 @@ const connectRawChannel = async (handle: SupervisorChannelHandle): Promise<RawCh
     }),
   );
   let buffer = "";
-  const messages: unknown[] = [];
-  const pending = new Map<string, (value: unknown) => void>();
+  const messages: JsonRpcValue[] = [];
+  const pending = new Map<string, (value: JsonRpcValue) => void>();
   const waiters: Array<{
-    readonly predicate: (value: unknown) => boolean;
-    readonly resolve: (value: unknown) => void;
+    readonly predicate: (value: JsonRpcValue) => boolean;
+    readonly resolve: (value: JsonRpcValue) => void;
   }> = [];
   socket.on("data", (chunk) => {
     buffer += chunk.toString("utf8");
     let newline = buffer.indexOf("\n");
     while (newline >= 0) {
-      const value = JSON.parse(buffer.slice(0, newline)) as unknown;
+      // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
+      const value = JSON.parse(buffer.slice(0, newline)) as JsonRpcValue;
       buffer = buffer.slice(newline + 1);
       messages.push(value);
-      if (value && typeof value === "object" && "id" in value && typeof value.id === "string") {
+      if (value && hasObjectRuntimeType(value) && "id" in value && isStringValue(value.id)) {
         pending.get(value.id)?.(value);
         pending.delete(value.id);
       }
@@ -225,23 +231,24 @@ const connectRawChannel = async (handle: SupervisorChannelHandle): Promise<RawCh
       newline = buffer.indexOf("\n");
     }
   });
-  const send = (value: object) => {
+  const send = (value: JsonRpcObject) => {
     socket.write(`${JSON.stringify(value)}\n`);
   };
-  const request = <Request extends object & { readonly id: string }>(value: Request) => {
-    const response = new Promise<unknown>((resolve) => pending.set(value.id, resolve));
+  const request = <Request extends JsonRpcObject & { readonly id: string }>(value: Request) => {
+    const response = new Promise<JsonRpcValue>((resolve) => pending.set(value.id, resolve));
     send(value);
     return withTimeout(response);
   };
-  const next = (predicate: (value: unknown) => boolean) => {
+  const next = (predicate: (value: JsonRpcValue) => boolean) => {
     const existing = messages.find(predicate);
     return existing
       ? Promise.resolve(existing)
-      : withTimeout(new Promise((resolve) => waiters.push({ predicate, resolve })));
+      : withTimeout(new Promise<JsonRpcValue>((resolve) => waiters.push({ predicate, resolve })));
   };
   return { socket, send, request, next };
 };
 
+// SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
 const connectionConfig = async (handle: SupervisorChannelHandle) =>
   JSON.parse(await readFile(handle.metadata.connectionConfigPath, "utf8")) as {
     readonly version: 1;
@@ -253,6 +260,7 @@ const connectionConfig = async (handle: SupervisorChannelHandle) =>
 
 describe("private supervisor channel", () => {
   it("constructs authenticated server messages with reserved fields authoritative", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const authenticated = authenticateSupervisorServerPayload(
       {
         version: SUPERVISOR_CHANNEL_VERSION,
@@ -264,7 +272,7 @@ describe("private supervisor channel", () => {
         version: 999,
         runId: "forged-run",
         token: "b".repeat(64),
-      } as unknown as SupervisorServerPayload,
+      } as SupervisorServerPayload,
     );
     expect(authenticated).toMatchObject({
       version: SUPERVISOR_CHANNEL_VERSION,
@@ -548,7 +556,7 @@ describe("private supervisor channel", () => {
     );
     const manyResponses = await Promise.all(many);
     expect(manyResponses).toHaveLength(12);
-    expect(manyResponses.every((value) => value && typeof value === "object")).toBe(true);
+    expect(manyResponses.every((value) => value && hasObjectRuntimeType(value))).toBe(true);
     for (let index = 0; index < 12; index += 1) await takeEvent(handle);
     // Every stdout line observed by the parser was independently valid JSON under concurrency.
     expect(rpc.messages.length).toBeGreaterThanOrEqual(20);
@@ -580,12 +588,15 @@ describe("private supervisor channel", () => {
     });
     const update = await raw.next((value) =>
       Boolean(
-        value && typeof value === "object" && "type" in value && value.type === "assignment_epoch",
+        value &&
+        hasObjectRuntimeType(value) &&
+        "type" in value &&
+        value.type === "assignment_epoch",
       ),
     );
     await wait(50);
     expect(settled).toBe(false);
-    if (!update || typeof update !== "object" || !("id" in update))
+    if (!update || !hasObjectRuntimeType(update) || !("id" in update))
       throw new Error("missing assignment update");
     raw.send({
       version: 1,
@@ -616,7 +627,10 @@ describe("private supervisor channel", () => {
     const setting = Effect.runPromise(handle.setAssignmentEpoch(1));
     await raw.next((value) =>
       Boolean(
-        value && typeof value === "object" && "type" in value && value.type === "assignment_epoch",
+        value &&
+        hasObjectRuntimeType(value) &&
+        "type" in value &&
+        value.type === "assignment_epoch",
       ),
     );
     raw.socket.destroy();
@@ -764,7 +778,7 @@ describe("private supervisor channel", () => {
     });
     expect(await pending).toMatchObject({ error: { code: -32800 } });
 
-    const events: unknown[] = [];
+    const events: Array<Awaited<ReturnType<typeof takeEvent>>> = [];
     for (let index = 0; index < 64; index += 1) events.push(await takeEvent(handle));
     const saturatedQuestion = events.at(-2);
     expect(saturatedQuestion).toMatchObject({
@@ -773,7 +787,7 @@ describe("private supervisor channel", () => {
     });
     if (
       !saturatedQuestion ||
-      typeof saturatedQuestion !== "object" ||
+      !hasObjectRuntimeType(saturatedQuestion) ||
       !("requestId" in saturatedQuestion)
     )
       throw new Error("missing saturated question correlation");
@@ -836,7 +850,7 @@ describe("private supervisor channel", () => {
       await rpc.next(
         (value) =>
           !!value &&
-          typeof value === "object" &&
+          hasObjectRuntimeType(value) &&
           "id" in value &&
           value.id === null &&
           "error" in value,

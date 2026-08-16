@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -34,12 +35,12 @@ import {
   type CodexImageResult,
 } from "./types.ts";
 
-export interface OpenAIImageServiceShape {
-  readonly generate: (params: unknown) => Effect.Effect<CodexImageResult, OpenAIImageError>;
+export interface OpenAIImageServiceContract {
+  readonly generate: <Params>(params: Params) => Effect.Effect<CodexImageResult, OpenAIImageError>;
 }
 export class OpenAIImageService extends Context.Service<
   OpenAIImageService,
-  OpenAIImageServiceShape
+  OpenAIImageServiceContract
 >()("pi-better-openai/image/service/OpenAIImageService") {
   static layer(options: {
     readonly context: MutableRef.MutableRef<ExtensionContext>;
@@ -67,7 +68,9 @@ export class OpenAIImageService extends Context.Service<
         const imageError = (operation: string, message: string) => () => fail(operation, message);
         const readInputs = makeImageInputReader({ fs, path, safeFile, sharp });
         const { validatedGeneratedImage, persistImage } = makeImageOutput({ fs, path, sharp });
-        const generate = Effect.fn("OpenAIImage.generate")(function* (rawParams: unknown) {
+        const generate = Effect.fn("OpenAIImage.generate")(function* <RawParams>(
+          rawParams: RawParams,
+        ) {
           const parameterKeys = yield* Effect.try({
             try: () => (Predicate.isObject(rawParams) ? Object.keys(rawParams) : undefined),
             catch: imageError("params", "Invalid OpenAI image parameters."),
@@ -166,17 +169,17 @@ export class OpenAIImageService extends Context.Service<
             ).pipe(Effect.withSpan("pi-better-openai.image.write"));
           }
           const { bytes: _bytes, ...image } = validated;
-          const result: CodexImageResult = {
-            ...image,
-            prompt: params.prompt,
-            ...(savedPath ? { savedPath } : {}),
-            model,
-            action,
-            outputFormat,
-          };
+          const result: CodexImageResult = (() => {
+            const objectPart7866_0 = { ...image, prompt: params.prompt };
+            const objectPart7866_1 = savedPath
+              ? { ...objectPart7866_0, savedPath }
+              : objectPart7866_0;
+            const objectPart7866_2 = { ...objectPart7866_1, model, action, outputFormat };
+            return objectPart7866_2;
+          })();
           return result;
         });
-        const safeGenerate = (params: unknown) =>
+        const safeGenerate = <Params>(params: Params) =>
           Effect.suspend(() =>
             generate(params).pipe(
               Effect.timeout(
@@ -186,12 +189,12 @@ export class OpenAIImageService extends Context.Service<
           ).pipe(
             Effect.mapError((error) => {
               const message = sanitizeDiagnosticError(
-                "message" in error && typeof error.message === "string"
+                "message" in error && isStringValue(error.message)
                   ? error.message
                   : "OpenAI image request timed out.",
               );
               return fail(
-                "operation" in error && typeof error.operation === "string"
+                "operation" in error && isStringValue(error.operation)
                   ? error.operation
                   : "timeout",
                 message,

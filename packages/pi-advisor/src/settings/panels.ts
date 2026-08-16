@@ -97,7 +97,7 @@ export function updateConfig(
   const path = state.get().configPath;
   return state.persist(patch, path).then(
     () => true,
-    (error: unknown) => {
+    (error) => {
       ctx.ui.notify(
         `Could not save advisor settings: ${error instanceof Error ? error.message : String(error)}`,
         "error",

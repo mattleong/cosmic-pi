@@ -12,7 +12,29 @@ import {
   normalizeCosmicUiHostQuery,
 } from "../src/protocol/protocol.ts";
 
-function event(contribution: Record<string, unknown>) {
+interface ProtocolContributionFixture {
+  readonly kind?: string;
+  readonly id?: string;
+  readonly region?: string;
+  readonly text?: string;
+  readonly compactText?: string;
+  readonly tone?: string;
+  readonly align?: string;
+  readonly priority?: number;
+  readonly order?: number;
+  readonly label?: string | number;
+  readonly color?: string;
+  readonly decorates?: string;
+  readonly preferredWidth?: number;
+  readonly preferredPlacement?: string;
+  readonly attach?: string | (() => void);
+  readonly detach?: () => void;
+  readonly render?: () => never[];
+  readonly invalidate?: () => void;
+  readonly dispose?: () => void;
+}
+
+function event(contribution: ProtocolContributionFixture) {
   return { version: COSMIC_UI_PROTOCOL_VERSION, owner: "test-owner", contribution };
 }
 

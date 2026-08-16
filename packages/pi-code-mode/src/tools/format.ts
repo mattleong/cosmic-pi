@@ -2,8 +2,11 @@
  * Pure formatting for Code Mode execution results, bounded progress, and the bounded
  * nested-call activity labels persisted alongside them.
  */
+import { isStringValue } from "pi-cosmic-core";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
 import { utf8ByteLength } from "./limits.ts";
 
@@ -20,11 +23,20 @@ export const truncateDisplay = (text: string, maxCodePoints: number): string => 
   return `${points.slice(0, Math.max(0, maxCodePoints - 1)).join("")}…`;
 };
 
-/** One sanitized bounded field read from a decoded nested-call input, if present. */
-const activityField = (input: unknown, key: string): string | undefined => {
-  if (typeof input !== "object" || input === null) return undefined;
-  const value = (input as Record<string, unknown>)[key];
-  if (typeof value !== "string") return undefined;
+const ActivityInputSchema = Schema.Struct({
+  path: Schema.optional(Schema.Unknown),
+  command: Schema.optional(Schema.Unknown),
+  pattern: Schema.optional(Schema.Unknown),
+  query: Schema.optional(Schema.Unknown),
+});
+type ActivityField = keyof typeof ActivityInputSchema.Type;
+
+/** One sanitized bounded field read from a schema-decoded nested-call input, if present. */
+const activityField = <Input>(input: Input, key: ActivityField): string | undefined => {
+  const decoded = Schema.decodeUnknownOption(ActivityInputSchema)(input);
+  if (Option.isNone(decoded)) return undefined;
+  const value = decoded.value[key];
+  if (!isStringValue(value)) return undefined;
   const sanitized = sanitizeTerminalLine(value);
   return sanitized.length === 0 ? undefined : truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH);
 };
@@ -34,8 +46,8 @@ const activityField = (input: unknown, key: string): string | undefined => {
  * runtime-decoded input at call start (never from nested output). Unknown names and
  * hostile inputs collapse to a safe bounded fallback; raw objects are never stringified.
  */
-export const describeNestedActivity = (name: unknown, input: unknown): string => {
-  const toolName = typeof name === "string" ? name : "";
+export const describeNestedActivity = <Name, Input>(name: Name, input: Input): string => {
+  const toolName = isStringValue(name) ? name : "";
   const at = (fallback: string) => activityField(input, "path") ?? fallback;
   switch (toolName) {
     case "pi.read":
@@ -142,11 +154,14 @@ export const callEntryDetails = (
   exactCounts: CodeModeCallCounts = countCallEntries(calls),
 ): Pick<CodeModeToolDetails, "toolCalls" | "totalToolCalls" | "counts"> => {
   const toolCalls = boundedCallEntries(calls);
-  return {
-    toolCalls,
-    counts: { ...exactCounts },
-    ...(exactCounts.total > toolCalls.length ? { totalToolCalls: exactCounts.total } : {}),
-  };
+  return (() => {
+    const objectPart6331_0 = { toolCalls, counts: { ...exactCounts } };
+    const objectPart6331_1 =
+      exactCounts.total > toolCalls.length
+        ? { ...objectPart6331_0, totalToolCalls: exactCounts.total }
+        : objectPart6331_0;
+    return objectPart6331_1;
+  })();
 };
 
 const withLogs = (text: string, logs: ReadonlyArray<string> | undefined): string => {
@@ -208,12 +223,13 @@ export const progressResult = (
 export const formatCodeModeSuccess = (result: CodeModeSuccess, maxOutputBytes: number): string => {
   // The runtime validates returned values as plain JSON data, so stringify cannot throw; it
   // yields undefined only for a program that returns undefined (serialized as null upstream).
-  const output =
-    typeof result.value === "string" ? result.value : renderJson(result.value, maxOutputBytes);
+  const output = isStringValue(result.value)
+    ? result.value
+    : renderJson(result.value, maxOutputBytes);
   return withLogs(output, result.logs);
 };
 
-const renderJson = (value: unknown, maxOutputBytes: number): string => {
+const renderJson = (value: Schema.Json, maxOutputBytes: number): string => {
   const pretty = JSON.stringify(value, null, 2) ?? String(value);
   if (utf8ByteLength(pretty) <= maxOutputBytes) return pretty;
   return JSON.stringify(value) ?? String(value);

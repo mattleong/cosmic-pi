@@ -11,6 +11,7 @@ import { escapeControlChars } from "../../../shared/terminal-text";
 import { renderSelectedOutputLines } from "./preview-text";
 import { renderHiddenPreviewPrelude, renderResultPrelude } from "./result-prelude";
 import type { PathIconMode } from "../../../config/schema";
+import type { RendererState } from "./types";
 
 export interface PathListResultConfig {
   cwd: string;
@@ -26,7 +27,7 @@ export interface PathListResultConfig {
 
 interface PathListRenderContext {
   isError: boolean;
-  state: Record<string, unknown>;
+  state: RendererState;
 }
 
 export function renderPathListResult(

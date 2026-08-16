@@ -1,4 +1,6 @@
 /** Pure, presentation-only projection of successful structured Code Mode output. */
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import { truncateDisplay } from "../tools/format.ts";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
@@ -53,15 +55,16 @@ export function projectStructuredCodeModeOutput(
 ): ReadonlyArray<CodeModeOutputField> | undefined {
   const split = splitStructuredOutput(text);
   if (split === undefined) return undefined;
-  const value: unknown = JSON.parse(split.json);
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
+  const decoded = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.String))(
+    JSON.parse(split.json),
+  );
+  if (Option.isNone(decoded)) return undefined;
+  const record = decoded.value;
   const entries = Object.entries(record);
   if (
     entries.length === 0 ||
     entries.length > MAX_STRUCTURED_OUTPUT_FIELDS ||
-    entries.some(([, field]) => typeof field !== "string") ||
-    !entries.some(([, field]) => (field as string).includes("\n"))
+    !entries.some(([, field]) => field.includes("\n"))
   )
     return undefined;
   // Extension-produced structured output is exactly one of these two serializations. Reject
@@ -78,7 +81,7 @@ export function projectStructuredCodeModeOutput(
       sanitized.length === 0 ? "field" : truncateDisplay(sanitized, MAX_OUTPUT_FIELD_LABEL_LENGTH);
     if (labels.has(label) || (split.logs !== undefined && label === "Logs")) return undefined;
     labels.add(label);
-    fields.push({ label, body: stripTerminalControls(field as string) });
+    fields.push({ label, body: stripTerminalControls(field) });
   }
   if (split.logs !== undefined)
     fields.push({ label: "Logs", body: boundedTerminalText(split.logs) });

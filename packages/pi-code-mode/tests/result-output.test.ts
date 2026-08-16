@@ -1,4 +1,5 @@
 // Pure presentation-only projection of structured Code Mode output.
+import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import {
   codeModeOutputText,
@@ -36,7 +37,7 @@ describe("projectStructuredCodeModeOutput", () => {
   });
 
   it("rejects mixed or noncanonical JSON instead of amplifying or omitting content", () => {
-    let deep: unknown = "leaf";
+    let deep: Schema.Json = "leaf";
     for (let index = 0; index < 30; index += 1) deep = [deep];
     expect(
       projectStructuredCodeModeOutput(JSON.stringify({ multiline: "one\ntwo", deep })),

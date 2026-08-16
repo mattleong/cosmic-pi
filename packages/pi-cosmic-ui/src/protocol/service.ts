@@ -53,7 +53,7 @@ export class CosmicProbeError extends Schema.TaggedError<CosmicProbeError>()("Co
   operation: Schema.String,
   message: Schema.String,
 }) {}
-export interface CosmicUiServiceShape {
+export interface CosmicUiServiceContract {
   readonly refreshGit: (force?: boolean) => Effect.Effect<void>;
   readonly refreshPullRequest: (force?: boolean) => Effect.Effect<void>;
   readonly refreshAll: (force?: boolean) => Effect.Effect<void>;
@@ -77,7 +77,7 @@ const mergeRequest = (current: ProbeRequest | undefined, next: ProbeRequest): Pr
   force: current?.force === true || next.force === true,
 });
 
-export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiServiceShape>()(
+export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiServiceContract>()(
   "pi-cosmic-ui/protocol/service/CosmicUiService",
 ) {
   static layer(options: {

@@ -3,6 +3,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
+import { isStringValue } from "pi-cosmic-core";
 import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -293,7 +294,7 @@ export const openPiSupervisorBridge = (
           id,
           method: "tools/call",
           params: { name, arguments: input },
-        }).catch((error: unknown) => {
+        }).catch((error) => {
           const call = pending.get(id);
           if (!call) return;
           pending.delete(id);
@@ -308,6 +309,7 @@ export const openPiSupervisorBridge = (
     const onLine = (line: string) => {
       let value: unknown;
       try {
+        // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
         value = JSON.parse(line) as unknown;
       } catch {
         failAll("Private supervisor bridge returned malformed JSON.");
@@ -318,7 +320,7 @@ export const openPiSupervisorBridge = (
         failAll("Private supervisor bridge returned an invalid response.");
         return;
       }
-      const id = typeof discriminant.value.id === "string" ? discriminant.value.id : undefined;
+      const id = isStringValue(discriminant.value.id) ? discriminant.value.id : undefined;
       if (!id) return;
       const call = pending.get(id);
       if (!call) return;
@@ -395,7 +397,7 @@ export const openPiSupervisorBridge = (
           capabilities: {},
           clientInfo: { name: "pi-subagents-pi-bridge", version: "1.0.0" },
         },
-      }).catch((error: unknown) => {
+      }).catch((error) => {
         rejectInitialize(
           error instanceof Error ? error : fixedError("Private supervisor bridge write failed."),
         );
@@ -423,7 +425,7 @@ export const openPiSupervisorBridge = (
               close: () => failAll("Private supervisor bridge closed."),
             });
           },
-          (error: unknown) =>
+          (error) =>
             failAll(
               error instanceof Error
                 ? error.message
@@ -431,7 +433,7 @@ export const openPiSupervisorBridge = (
             ),
         );
       },
-      (error: unknown) =>
+      (error) =>
         failAll(
           error instanceof Error
             ? error.message

@@ -1,10 +1,11 @@
+import { hasObjectRuntimeType, isNumberValue, isStringValue } from "./runtime-values.ts";
 import { JsonPointer, Schema } from "effect";
 import type { Definition, JsonSchema, SchemaType } from "./tool.js";
 
 const isEffectSchema = (schema: SchemaType): schema is Schema.Decoder<unknown> & Schema.Top =>
   Schema.isSchema(schema);
 
-const renderLiteral = (value: unknown): string => JSON.stringify(value) ?? "unknown";
+const renderLiteral = <Value>(value: Value): string => JSON.stringify(value) ?? "unknown";
 
 /**
  * Bare TypeScript identifier - usable unquoted as an object key (and, in the tool runtime,
@@ -22,7 +23,7 @@ const effectNumberSentinel = (schema: JsonSchema) =>
   schema.type === "string" &&
   Array.isArray(schema.enum) &&
   schema.enum.length > 0 &&
-  schema.enum.every((value) => typeof value === "string" && effectNumberSentinelValues.has(value));
+  schema.enum.every((value) => isStringValue(value) && effectNumberSentinelValues.has(value));
 
 const isEffectNumberAlternatives = (alternatives: ReadonlyArray<JsonSchema>): boolean => {
   const numberBranches = alternatives.filter((item) => item.type === "number");
@@ -77,7 +78,7 @@ const hasUnresolvedRef = (
     ...(schema.allOf ?? []),
     ...Object.values(schema.properties ?? {}),
     ...(schema.items === undefined ? [] : [schema.items]),
-    ...(typeof schema.additionalProperties === "object" ? [schema.additionalProperties] : []),
+    ...(hasObjectRuntimeType(schema.additionalProperties) ? [schema.additionalProperties] : []),
   ].some((item) => hasUnresolvedRef(item, definitions, seen, nextVisited));
 };
 
@@ -96,9 +97,9 @@ const docTags = (schema: JsonSchema): Array<string> => {
       // unserializable default: skip rather than emit a broken tag
     }
   }
-  if (typeof schema.format === "string") tags.push(`@format ${schema.format}`);
-  if (typeof schema.minItems === "number") tags.push(`@minItems ${schema.minItems}`);
-  if (typeof schema.maxItems === "number") tags.push(`@maxItems ${schema.maxItems}`);
+  if (isStringValue(schema.format)) tags.push(`@format ${schema.format}`);
+  if (isNumberValue(schema.minItems)) tags.push(`@minItems ${schema.minItems}`);
+  if (isNumberValue(schema.maxItems)) tags.push(`@maxItems ${schema.maxItems}`);
   return tags;
 };
 
@@ -203,7 +204,7 @@ const renderSchema = (
     const properties = Object.entries(schema.properties ?? {});
     const additional = schema.additionalProperties;
     const indexType =
-      additional && typeof additional === "object"
+      additional && hasObjectRuntimeType(additional)
         ? renderSchema(additional, nested, depth + 1, seen)
         : undefined;
     const field = ([name, value]: readonly [string, JsonSchema]) =>
@@ -230,6 +231,7 @@ const renderSchema = (
 export const toTypeScript = (schema: Schema.Top, decoded = false, pretty = false): string => {
   try {
     const visible = decoded ? Schema.toType(schema) : schema;
+    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
     const document = Schema.toJsonSchemaDocument(visible) as {
       readonly schema: JsonSchema;
       readonly definitions?: Readonly<Record<string, JsonSchema>>;
@@ -268,6 +270,7 @@ export type InputProperty = {
  */
 export const inputProperties = <R>(definition: Definition<R>): Array<InputProperty> => {
   try {
+    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
     const document = isEffectSchema(definition.input)
       ? (Schema.toJsonSchemaDocument(definition.input) as {
           readonly schema: JsonSchema;
@@ -292,7 +295,7 @@ export const inputProperties = <R>(definition: Definition<R>): Array<InputProper
     const required = new Set(schema.required ?? []);
     return Object.entries(schema.properties ?? {}).map(([name, value]) => ({
       name,
-      description: typeof value.description === "string" ? value.description : undefined,
+      description: isStringValue(value.description) ? value.description : undefined,
       required: required.has(name),
     }));
   } catch {
@@ -325,7 +328,7 @@ export const outputTypeScript = <R>(definition: Definition<R>, pretty = false): 
  * Decodes tool input before `run` is invoked. Effect Schemas validate (throwing on failure);
  * JSON-Schema-described inputs pass through unvalidated (render-only).
  */
-export const decodeInput = <R>(definition: Definition<R>, value: unknown): unknown =>
+export const decodeInput = <R, Value>(definition: Definition<R>, value: Value) =>
   isEffectSchema(definition.input) ? Schema.decodeUnknownSync(definition.input)(value) : value;
 
 /**
@@ -333,7 +336,7 @@ export const decodeInput = <R>(definition: Definition<R>, value: unknown): unkno
  * transform (throwing on failure); JSON Schema outputs and tools without an output schema pass
  * the host value through unchanged.
  */
-export const decodeOutput = <R>(definition: Definition<R>, value: unknown): unknown =>
+export const decodeOutput = <R, Value>(definition: Definition<R>, value: Value) =>
   definition.output !== undefined && isEffectSchema(definition.output)
     ? Schema.decodeUnknownSync(definition.output)(value)
     : value;

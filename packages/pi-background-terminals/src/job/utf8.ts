@@ -7,10 +7,7 @@ export function utf8ByteLength(text: string): number {
 const codePointByteLength = (code: number): number =>
   code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
 
-export function utf8Tail(
-  text: string,
-  maxBytes: number,
-): { readonly text: string; readonly bytes: number } {
+export function utf8Tail(text: string, maxBytes: number) {
   if (maxBytes <= 0) return { text: "", bytes: 0 };
   const totalBytes = utf8ByteLength(text);
   if (totalBytes <= maxBytes) return { text, bytes: totalBytes };

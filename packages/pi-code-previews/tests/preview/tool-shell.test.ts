@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { type Component } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createCodePreviewToolShell } from "../../src/preview/tool-shell";
+import type { RendererState } from "../../src/tools/renderers/shared/types";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import {
   cloneCodePreviewSettingsForTest,
@@ -290,7 +291,7 @@ function textComponent(text: string): Component {
 }
 
 function baseRenderContext(
-  state: Record<string, unknown>,
+  state: RendererState,
   overrides: Parameters<typeof createToolRenderContext>[0] = {},
 ) {
   return createToolRenderContext({ state, ...overrides });

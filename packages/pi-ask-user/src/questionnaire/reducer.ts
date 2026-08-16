@@ -65,7 +65,13 @@ export function reduceQuestionnaire(
         const values = selectedChoices.map((candidate) => candidate.value);
         const labels = selectedChoices.map((candidate) => candidate.label);
         if (values.length > 0) return { ...draft, answer: { kind: "choices", values, labels } };
-        return { cursor: draft.cursor, ...(draft.note ? { note: draft.note } : {}) };
+        return (() => {
+          const objectPart2593_0 = { cursor: draft.cursor };
+          const objectPart2593_1 = draft.note
+            ? { ...objectPart2593_0, note: draft.note }
+            : objectPart2593_0;
+          return objectPart2593_1;
+        })();
       });
     }
     case "set-custom":
@@ -77,7 +83,13 @@ export function reduceQuestionnaire(
       return updateDraft(state, action.question, (draft) => {
         const note = action.note.trim();
         if (note) return { ...draft, note };
-        return { cursor: draft.cursor, ...(draft.answer ? { answer: draft.answer } : {}) };
+        return (() => {
+          const objectPart3034_0 = { cursor: draft.cursor };
+          const objectPart3034_1 = draft.answer
+            ? { ...objectPart3034_0, answer: draft.answer }
+            : objectPart3034_0;
+          return objectPart3034_1;
+        })();
       });
     case "set-review-cursor":
       return { ...state, reviewCursor: action.cursor };
@@ -95,21 +107,17 @@ export function submitQuestionnaire(state: QuestionnaireState): AskUserOutcome |
     const question = state.request.questions[index];
     if (!answer || !question) return;
     if (answer.kind === "custom") {
-      answers.push({
-        key: question.key,
-        kind: "custom",
-        text: answer.text,
-        ...(draft.note ? { note: draft.note } : {}),
-      });
+      const submitted: AskUserAnswer = { key: question.key, kind: "custom", text: answer.text };
+      answers.push(draft.note ? { ...submitted, note: draft.note } : submitted);
       return;
     }
-    answers.push({
+    const submitted: AskUserAnswer = {
       key: question.key,
       kind: "choices",
       values: answer.values,
       labels: answer.labels,
-      ...(draft.note ? { note: draft.note } : {}),
-    });
+    };
+    answers.push(draft.note ? { ...submitted, note: draft.note } : submitted);
   });
   return { outcome: "submitted", answers };
 }

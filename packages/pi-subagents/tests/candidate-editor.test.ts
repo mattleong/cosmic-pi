@@ -1,6 +1,5 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { NativeRuntimeModel } from "../src/boundary/native-model-catalog.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
@@ -8,6 +7,7 @@ import {
   loadCandidateModelPicker,
   updateCandidateFromModelChoice,
 } from "../src/settings/ui/candidate-editor.ts";
+import { extensionContextFixture } from "./fixtures/pi-host.ts";
 
 const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
   host: "local",
@@ -48,14 +48,15 @@ const claudeModels: ReadonlyArray<NativeRuntimeModel> = [
   },
 ];
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const context = () =>
-  ({
+  extensionContextFixture({
     modelRegistry: {
       getAvailable: () => [],
       find: () => undefined,
       getRegisteredProviderIds: () => [],
     },
-  }) as unknown as ExtensionCommandContext;
+  });
 
 describe("inline candidate model editor", () => {
   it("loads Claude's advertised catalog for the workspace picker page", async () => {
@@ -169,13 +170,14 @@ describe("inline candidate model editor", () => {
   });
 
   it("omits authenticated Pi models with unsafe canonical selectors", async () => {
-    const unsafeContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const unsafeContext = extensionContextFixture({
       modelRegistry: {
         getAvailable: () => [{ provider: "unsafe provider", id: "model" }],
         find: () => undefined,
         getRegisteredProviderIds: () => [],
       },
-    } as unknown as ExtensionCommandContext;
+    });
     const picker = await loadCandidateModelPicker(unsafeContext, {
       profile: "reviewer",
       candidateIndex: 0,
@@ -189,7 +191,8 @@ describe("inline candidate model editor", () => {
   });
 
   it("keeps authenticated Cursor context variants with @ in Pi choices", async () => {
-    const cursorContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const cursorContext = extensionContextFixture({
       modelRegistry: {
         getAvailable: () => [
           {
@@ -202,7 +205,7 @@ describe("inline candidate model editor", () => {
         find: () => undefined,
         getRegisteredProviderIds: () => ["cursor"],
       },
-    } as unknown as ExtensionCommandContext;
+    });
     const picker = await loadCandidateModelPicker(cursorContext, {
       profile: "reviewer",
       candidateIndex: 0,
@@ -224,13 +227,14 @@ describe("inline candidate model editor", () => {
         reasoning: true,
       },
     ];
-    const providerContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const providerContext = extensionContextFixture({
       modelRegistry: {
         getAvailable: () => registryModels,
         find: () => undefined,
         getRegisteredProviderIds: () => ["cursor"],
       },
-    } as unknown as ExtensionCommandContext;
+    });
     const base = {
       profile: "reviewer" as const,
       candidateIndex: 0,
@@ -251,7 +255,8 @@ describe("inline candidate model editor", () => {
   });
 
   it("does not offer fast mode for a current Herdr model from an extension override", async () => {
-    const overrideContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const overrideContext = extensionContextFixture({
       modelRegistry: {
         getAvailable: () => [
           {
@@ -264,7 +269,7 @@ describe("inline candidate model editor", () => {
         find: () => undefined,
         getRegisteredProviderIds: () => ["openai-codex"],
       },
-    } as unknown as ExtensionCommandContext;
+    });
     const picker = await loadCandidateModelPicker(overrideContext, {
       profile: "reviewer",
       candidateIndex: 0,
@@ -283,7 +288,8 @@ describe("inline candidate model editor", () => {
   });
 
   it("fails Herdr Pi choices closed when provider provenance is unavailable", async () => {
-    const unavailableContext = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const unavailableContext = extensionContextFixture({
       modelRegistry: {
         getAvailable: () => [{ provider: "openai", id: "gpt-safe", name: "Safe", reasoning: true }],
         find: () => undefined,
@@ -291,7 +297,7 @@ describe("inline candidate model editor", () => {
           throw new Error("secret registry failure");
         },
       },
-    } as unknown as ExtensionCommandContext;
+    });
     const picker = await loadCandidateModelPicker(unavailableContext, {
       profile: "reviewer",
       candidateIndex: 0,

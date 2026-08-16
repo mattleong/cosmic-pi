@@ -129,7 +129,7 @@ export interface CodeModeConfigStoreOptions {
   readonly publish?: (state: CodeModeState) => void;
 }
 
-export interface CodeModeConfigStoreShape {
+export interface CodeModeConfigStoreContract {
   readonly state: Effect.Effect<CodeModeState>;
   readonly snapshot: () => CodeModeState;
   readonly setSetting: (
@@ -178,7 +178,7 @@ const ABSENT_OTHER_SCOPE: OtherScopeDocument = { exists: false, raw: undefined }
 
 export class CodeModeConfigStore extends Context.Service<
   CodeModeConfigStore,
-  CodeModeConfigStoreShape
+  CodeModeConfigStoreContract
 >()("pi-code-mode/config/store/CodeModeConfigStore") {
   static readonly layer = (options: CodeModeConfigStoreOptions) =>
     Layer.effect(
@@ -318,7 +318,7 @@ export class CodeModeConfigStore extends Context.Service<
             }),
           );
 
-        const setSetting: CodeModeConfigStoreShape["setSetting"] = (scope, id, rawValue) =>
+        const setSetting: CodeModeConfigStoreContract["setSetting"] = (scope, id, rawValue) =>
           Effect.gen(function* () {
             yield* guardScope(scope);
             const descriptor = yield* requireDescriptor(id);
@@ -329,7 +329,7 @@ export class CodeModeConfigStore extends Context.Service<
             }));
           });
 
-        const clearSetting: CodeModeConfigStoreShape["clearSetting"] = (scope, id) =>
+        const clearSetting: CodeModeConfigStoreContract["clearSetting"] = (scope, id) =>
           Effect.gen(function* () {
             yield* guardScope(scope);
             const descriptor = yield* requireDescriptor(id);

@@ -1,6 +1,7 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
+import * as Schema from "effect/Schema";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
@@ -21,30 +22,52 @@ import {
 } from "../src/settings/ui/profile-workspace.ts";
 import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
 
-const inspection = (
-  global: Record<string, unknown> = { version: 4 },
-  project?: Record<string, unknown>,
+const inspection = <Global = undefined, Project = undefined>(
+  global?: Global,
+  project?: Project,
   trusted = true,
 ): ProfileSettingsInspection => {
-  const decodedGlobal = decodeSubagentConfig(global, "global");
-  const decodedProject = project ? decodeSubagentConfig(project, "project") : undefined;
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: trusted,
-    globalConfigExists: true,
-    projectConfigExists: project !== undefined,
-    global: decodedGlobal,
-    ...(decodedProject ? { project: decodedProject } : {}),
-  });
-  return {
-    config,
-    session: makeSessionProfileSnapshot(config),
-    globalDocument: global,
-    ...(project ? { projectDocument: project } : {}),
-    global: decodedGlobal,
-    ...(decodedProject ? { project: decodedProject } : {}),
-  };
+  const globalDocument = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.MutableJson))(
+    global ?? { version: 4 },
+  );
+  const projectDocument = project
+    ? Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.MutableJson))(project)
+    : undefined;
+  const decodedGlobal = decodeSubagentConfig(globalDocument, "global");
+  const decodedProject = projectDocument
+    ? decodeSubagentConfig(projectDocument, "project")
+    : undefined;
+  const config = resolveSubagentConfig(
+    (() => {
+      const objectPart1439_0 = {
+        globalConfigPath: "/agent/pi-subagents.json",
+        projectConfigPath: "/repo/.pi/pi-subagents.json",
+        projectTrusted: trusted,
+        globalConfigExists: true,
+        projectConfigExists: project !== undefined,
+        global: decodedGlobal,
+      };
+      const objectPart1439_1 = decodedProject
+        ? { ...objectPart1439_0, project: decodedProject }
+        : objectPart1439_0;
+      return objectPart1439_1;
+    })(),
+  );
+  return (() => {
+    const objectPart1754_0 = {
+      config,
+      session: makeSessionProfileSnapshot(config),
+      globalDocument,
+    };
+    const objectPart1754_1 = projectDocument
+      ? { ...objectPart1754_0, projectDocument }
+      : objectPart1754_0;
+    const objectPart1754_2 = { ...objectPart1754_1, global: decodedGlobal };
+    const objectPart1754_3 = decodedProject
+      ? { ...objectPart1754_2, project: decodedProject }
+      : objectPart1754_2;
+    return objectPart1754_3;
+  })();
 };
 
 const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
@@ -95,10 +118,11 @@ const selectScope = (
   for (let index = 0; index < presses; index += 1) component.handleInput("s");
 };
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
-} as unknown as Theme;
+} as Theme;
 
 const modelPicker = (
   current = "parent",
@@ -522,16 +546,14 @@ describe("profile settings workspace", () => {
   });
 
   it("renders configured selection keys in workspace help", () => {
+    const labels = new Map([
+      ["tui.select.up", "P"],
+      ["tui.select.down", "N"],
+      ["tui.select.confirm", "Y"],
+      ["tui.select.cancel", "Q"],
+    ]);
     const { component } = makeComponent(undefined, {
-      keybindingLabel: (id, fallback) =>
-        (
-          ({
-            "tui.select.up": "P",
-            "tui.select.down": "N",
-            "tui.select.confirm": "Y",
-            "tui.select.cancel": "Q",
-          }) as Readonly<Record<string, string>>
-        )[id] ?? fallback,
+      keybindingLabel: (id, fallback) => labels.get(id) ?? fallback,
     });
     expect(component.render(120).at(-1)).toContain("j/k · P/N Select");
     expect(component.render(120).at(-1)).toContain("Y/l Route");
@@ -545,14 +567,12 @@ describe("profile settings workspace", () => {
   });
 
   it("filters configured key labels that collide with workspace shortcuts from help", () => {
+    const labels = new Map([
+      ["tui.select.up", "⇧K/↑"],
+      ["tui.select.down", "s/↓"],
+    ]);
     const { component } = makeComponent(undefined, {
-      keybindingLabel: (id, fallback) =>
-        (
-          ({
-            "tui.select.up": "⇧K/↑",
-            "tui.select.down": "s/↓",
-          }) as Readonly<Record<string, string>>
-        )[id] ?? fallback,
+      keybindingLabel: (id, fallback) => labels.get(id) ?? fallback,
     });
     const footer = component.render(140).at(-1) ?? "";
     expect(footer).toContain("j/k · ↑/↓ Select");

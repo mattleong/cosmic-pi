@@ -51,16 +51,27 @@ export function collectPendingCompletionNotifications(
       return [];
     }
     return [
-      {
-        id: record.view.id,
-        name: record.view.name,
-        generation: receipt.generation,
-        outcome: completion.outcome,
-        ...(completion.finalText ? { finalText: completion.finalText } : {}),
-        ...(completion.error ? { error: completion.error } : {}),
-        ...(completion.warning ? { warning: completion.warning } : {}),
-        ...(completion.retained ? { retained: true } : {}),
-      },
+      (() => {
+        const objectPart2006_0 = {
+          id: record.view.id,
+          name: record.view.name,
+          generation: receipt.generation,
+          outcome: completion.outcome,
+        };
+        const objectPart2006_1 = completion.finalText
+          ? { ...objectPart2006_0, finalText: completion.finalText }
+          : objectPart2006_0;
+        const objectPart2006_2 = completion.error
+          ? { ...objectPart2006_1, error: completion.error }
+          : objectPart2006_1;
+        const objectPart2006_3 = completion.warning
+          ? { ...objectPart2006_2, warning: completion.warning }
+          : objectPart2006_2;
+        const objectPart2006_4 = completion.retained
+          ? { ...objectPart2006_3, retained: true }
+          : objectPart2006_3;
+        return objectPart2006_4;
+      })(),
     ];
   });
   return completed.sort((left, right) => {

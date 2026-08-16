@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import type { HostCallbackBoundaryShape } from "../boundary/host-callback.ts";
+import type { HostCallbackBoundaryContract } from "../boundary/host-callback.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { createFooterComponent } from "./component.ts";
 import type { FooterRegistryBridge } from "./registry.ts";
@@ -8,7 +8,7 @@ import type { CosmicUiProjection } from "../protocol/service.ts";
 
 interface FooterInstallationOptions {
   readonly pi: ExtensionAPI;
-  readonly callbacks: HostCallbackBoundaryShape;
+  readonly callbacks: HostCallbackBoundaryContract;
   readonly bridge: FooterRegistryBridge;
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly config: () => ResolvedCosmicUiConfig;

@@ -4,6 +4,7 @@
  */
 // Pi tool execution is a Promise-shaped host boundary.
 // @effect-diagnostics effect/asyncFunction:off
+import { isStringValue } from "pi-cosmic-core";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -71,12 +72,14 @@ interface MutableCallEntry {
 }
 
 const snapshotCalls = (calls: ReadonlyArray<MutableCallEntry>): ReadonlyArray<CodeModeCallEntry> =>
-  calls.map(({ tool, status, activity, durationMs }) => ({
-    tool,
-    status,
-    activity,
-    ...(durationMs === undefined ? {} : { durationMs }),
-  }));
+  calls.map(({ tool, status, activity, durationMs }) =>
+    (() => {
+      const objectPart3391_0 = { tool, status, activity };
+      const objectPart3391_1 =
+        durationMs === undefined ? objectPart3391_0 : { ...objectPart3391_0, durationMs };
+      return objectPart3391_1;
+    })(),
+  );
 
 const emptyCounts = (): MutableCallCounts => ({
   total: 0,
@@ -324,17 +327,19 @@ export const makeCodeModeToolExecute =
       };
     }
 
-    const baseDetails: CodeModeToolDetails = {
-      ...callEntryDetails(snapshotCalls(calls), counts),
-      ...(result.truncated === true ? { truncated: true } : {}),
-    };
+    const baseDetails: CodeModeToolDetails = (() => {
+      const objectPart13458_0 = { ...callEntryDetails(snapshotCalls(calls), counts) };
+      const objectPart13458_1 =
+        result.truncated === true ? { ...objectPart13458_0, truncated: true } : objectPart13458_0;
+      return objectPart13458_1;
+    })();
     if (!result.ok) {
       environment.retainFailureDetails?.(toolCallId, baseDetails);
       throw new Error(clampModelVisibleText(formatCodeModeFailure(result), config.maxOutputBytes));
     }
     const details: CodeModeToolDetails = {
       ...baseDetails,
-      outputKind: typeof result.value === "string" ? "text" : "structured",
+      outputKind: isStringValue(result.value) ? "text" : "structured",
     };
     return {
       content: [

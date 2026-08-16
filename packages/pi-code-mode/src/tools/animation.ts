@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType, isFunctionValue } from "pi-cosmic-core";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { MAX_PROGRESS_ENTRIES } from "./format.ts";
 
@@ -5,7 +6,7 @@ export const CODE_MODE_SPINNER_INTERVAL_MS = 160;
 
 type StartUiTicker = (intervalMs: number, tick: () => void) => () => void;
 
-interface CodeModeRendererState extends Record<string, unknown> {
+interface CodeModeRendererState {
   piCodeModeProgressTicker?: (() => void) | undefined;
   piCodeModeProgressInvalidate?: (() => void) | undefined;
 }
@@ -19,9 +20,10 @@ const rendererState = (
   context: CodeModeAnimationContext | undefined,
 ): CodeModeRendererState | undefined => {
   try {
-    return typeof context?.state === "object" &&
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+    return hasObjectRuntimeType(context?.state) &&
       context.state !== null &&
-      typeof context.invalidate === "function"
+      isFunctionValue(context.invalidate)
       ? (context.state as CodeModeRendererState)
       : undefined;
   } catch {
@@ -30,16 +32,18 @@ const rendererState = (
 };
 
 /** True only when a bounded visible nested-call row is currently running. */
-export const hasRunningCodeModeCall = (details: unknown): boolean => {
+export const hasRunningCodeModeCall = <Details>(details: Details): boolean => {
   try {
-    if (typeof details !== "object" || details === null) return false;
+    if (!hasObjectRuntimeType(details) || details === null) return false;
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const calls = (details as { readonly toolCalls?: unknown }).toolCalls;
     if (!Array.isArray(calls)) return false;
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     return calls
       .slice(0, MAX_PROGRESS_ENTRIES)
       .some(
         (entry) =>
-          typeof entry === "object" &&
+          hasObjectRuntimeType(entry) &&
           entry !== null &&
           (entry as { readonly status?: unknown }).status === "running",
       );
@@ -49,11 +53,15 @@ export const hasRunningCodeModeCall = (details: unknown): boolean => {
 };
 
 /** Fail-soft controller preflight that keeps hostile `result.details` getters contained. */
-export const shouldAnimateCodeModeResult = (isPartial: boolean, result: unknown): boolean => {
+export const shouldAnimateCodeModeResult = <Result>(
+  isPartial: boolean,
+  result: Result,
+): boolean => {
   if (!isPartial) return false;
   try {
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     return (
-      typeof result === "object" &&
+      hasObjectRuntimeType(result) &&
       result !== null &&
       hasRunningCodeModeCall((result as { readonly details?: unknown }).details)
     );

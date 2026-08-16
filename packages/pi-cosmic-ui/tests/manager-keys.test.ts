@@ -51,12 +51,12 @@ describe("shared full-screen keymap", () => {
   });
 
   it("resolves configured selection page bindings to full-page actions", () => {
-    const bindings: Partial<Record<FullScreenSelectionKeybindingId, string>> = {
-      "tui.select.pageUp": "\u001b[5;5~",
-      "tui.select.pageDown": "\u001b[6;5~",
-    };
+    const bindings = new Map<FullScreenSelectionKeybindingId, string>([
+      ["tui.select.pageUp", "\u001b[5;5~"],
+      ["tui.select.pageDown", "\u001b[6;5~"],
+    ]);
     const matchesKeybinding = (data: string, id: FullScreenSelectionKeybindingId) =>
-      bindings[id] === data;
+      bindings.get(id) === data;
     const keymap = new FullScreenKeymap();
     expect(
       resolvedAction(keymap.resolve("\u001b[5;5~", { mode: "navigation", matchesKeybinding })),
@@ -100,13 +100,13 @@ describe("shared full-screen keymap", () => {
   });
 
   it("honors configured selection keys and protects reserved commands", () => {
-    const bindings: Partial<Record<FullScreenSelectionKeybindingId, string>> = {
-      "tui.select.down": "s",
-      "tui.select.confirm": "o",
-      "tui.select.cancel": "x",
-    };
+    const bindings = new Map<FullScreenSelectionKeybindingId, string>([
+      ["tui.select.down", "s"],
+      ["tui.select.confirm", "o"],
+      ["tui.select.cancel", "x"],
+    ]);
     const matchesKeybinding = (data: string, id: FullScreenSelectionKeybindingId) =>
-      bindings[id] === data;
+      bindings.get(id) === data;
     const keymap = new FullScreenKeymap();
 
     expect(resolvedAction(keymap.resolve("o", { mode: "navigation", matchesKeybinding }))).toBe(

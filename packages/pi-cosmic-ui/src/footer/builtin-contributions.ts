@@ -27,6 +27,16 @@ const DEFAULT_STATUS_ORDER = 1020;
 
 export type FooterStatusPlacements = ReadonlyMap<string, CosmicFooterStatusContribution>;
 
+interface MutableBuiltinTextContribution {
+  kind: "text";
+  id: string;
+  region: CosmicFooterTextContribution["region"];
+  text: string;
+  align?: "left" | "right";
+  priority: number;
+  order: number;
+}
+
 export function builtinContributions(
   host: FooterHostProjection,
   totals: FooterTotals,
@@ -182,15 +192,16 @@ export function builtinContributions(
     });
   for (const status of host.extensionStatuses) {
     const placement = statusPlacements.get(status.id);
-    result.push({
+    const contribution: MutableBuiltinTextContribution = {
       kind: "text",
       id: `extension.${status.id}`,
       region: placement?.region ?? DEFAULT_STATUS_REGION,
       text: status.text,
-      ...(placement?.align ? { align: placement.align } : {}),
       priority: placement?.priority ?? DEFAULT_STATUS_PRIORITY,
       order: placement?.order ?? DEFAULT_STATUS_ORDER,
-    });
+    };
+    if (placement?.align) contribution.align = placement.align;
+    result.push(contribution);
   }
   return result;
 }
@@ -217,11 +228,13 @@ export function applyTextDecorations(
     .map((entry) => {
       const prefix = prefixes.get(entry.id);
       if (prefix === undefined) return entry;
-      return {
-        ...entry,
-        text: `${prefix}${entry.text}`,
-        ...(entry.compactText ? { compactText: `${prefix}${entry.compactText}` } : {}),
-      };
+      return (() => {
+        const objectPart6835_0 = { ...entry, text: `${prefix}${entry.text}` };
+        const objectPart6835_1 = entry.compactText
+          ? { ...objectPart6835_0, compactText: `${prefix}${entry.compactText}` }
+          : objectPart6835_0;
+        return objectPart6835_1;
+      })();
     });
 }
 

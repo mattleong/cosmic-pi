@@ -60,11 +60,18 @@ const run = (
 ): Promise<CodeMode.Result> => {
   const trace = options.trace ?? makeTrace();
   return Effect.runPromise(
-    CodeMode.execute({
-      tools: { host: { sleepy: sleepyTool(trace), fail: failingTool } },
-      code,
-      ...(options.limits ? { limits: options.limits } : {}),
-    }),
+    CodeMode.execute(
+      (() => {
+        const objectPart1866_0 = {
+          tools: { host: { sleepy: sleepyTool(trace), fail: failingTool } },
+          code,
+        };
+        const objectPart1866_1 = options.limits
+          ? { ...objectPart1866_0, limits: options.limits }
+          : objectPart1866_0;
+        return objectPart1866_1;
+      })(),
+    ),
   );
 };
 

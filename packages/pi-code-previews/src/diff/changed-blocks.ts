@@ -3,7 +3,7 @@ import { isChangedDiffLine, type ParsedDiffLine } from "./parse";
 export function collectChangedDiffBlock(
   parsedLines: readonly (ParsedDiffLine | null | undefined)[],
   start: number,
-): { block: ParsedDiffLine[]; end: number } {
+) {
   const block: ParsedDiffLine[] = [];
   let end = start;
   while (end < parsedLines.length) {

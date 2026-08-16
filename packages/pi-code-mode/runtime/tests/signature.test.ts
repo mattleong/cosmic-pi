@@ -194,7 +194,11 @@ describe("pretty signature rendering", () => {
     expect(jsonSchemaToTypeScript(cyclic)).toBe("{ child?: unknown; name?: string }");
     expect(jsonSchemaToTypeScript(cyclic, true)).toContain("child?: unknown");
 
-    let deep: Record<string, unknown> = { type: "string" };
+    interface DeepSchemaFixture {
+      readonly type: "string" | "object";
+      readonly properties?: { readonly next: DeepSchemaFixture };
+    }
+    let deep: DeepSchemaFixture = { type: "string" };
     for (let level = 0; level < 12; level += 1)
       deep = { type: "object", properties: { next: deep } };
     for (const pretty of [false, true]) {
@@ -390,6 +394,7 @@ describe("JSDoc signatures in catalogs and search results", () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("search failed");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     return result.value as { items: Array<{ path: string; signature: string }>; remaining: number };
   };
 
@@ -487,6 +492,7 @@ describe("non-identifier tool paths", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("search failed");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const value = result.value as { items: Array<{ path: string; signature: string }> };
     expect(value.items[0]?.path).toBe('tools.context7["resolve-library-id"]');
     expect(value.items[0]?.signature).toContain('tools.context7["resolve-library-id"](input: {');

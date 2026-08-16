@@ -3,6 +3,7 @@
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/asyncFunction:off
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -55,7 +56,9 @@ const ContactParentParameters = Type.Object(
   { additionalProperties: false },
 );
 
-function sendIpc(message: object): Promise<void> {
+type IpcMessage = Parameters<NonNullable<typeof process.send>>[0];
+
+function sendIpc(message: IpcMessage): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!process.send || !process.connected) {
       reject(new Error("The parent subagent supervisor is unavailable."));
@@ -85,7 +88,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
   const pending = new Map<string, PendingReply>();
   let listening = false;
 
-  const onMessage = (raw: unknown) => {
+  const onMessage = <RawInput>(raw: RawInput) => {
     const message = Option.getOrUndefined(Schema.decodeUnknownOption(ParentControlSchema)(raw));
     if (!message) return;
     if (message.type === "parent_reply") {
@@ -125,7 +128,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
       !ctx.model ||
       !supportsFastModel(ctx.model.provider, ctx.model.id) ||
       !event.payload ||
-      typeof event.payload !== "object" ||
+      !hasObjectRuntimeType(event.payload) ||
       Array.isArray(event.payload)
     )
       return undefined;
@@ -195,7 +198,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
           abort();
           return;
         }
-        void sendIpc(envelope).catch((error: unknown) => {
+        void sendIpc(envelope).catch((error) => {
           pending.delete(requestId);
           signal?.removeEventListener("abort", abort);
           reject(error instanceof Error ? error : new Error("Unable to contact parent."));

@@ -1,6 +1,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import {
   existsSync,
   mkdirSync,
@@ -30,10 +31,11 @@ afterEach(() => {
   delete process.env.PI_CODING_AGENT_DIR;
 });
 
-type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+type Handler = ExtensionHandler<any, any>;
 type Model = NonNullable<ExtensionContext["model"]>;
 
 function model(provider: string, id: string): Model {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   return { provider, id, reasoning: true } as Model;
 }
 
@@ -47,6 +49,7 @@ function preferencePath(agentDirectory: string, cwd: string): string {
 }
 
 function readPreference(agentDirectory: string, cwd: string): DirectoryModelPreference {
+  // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
   return JSON.parse(
     readFileSync(preferencePath(agentDirectory, cwd), "utf8"),
   ) as DirectoryModelPreference;
@@ -107,15 +110,17 @@ function harness(
     if (options.delayThinkingEvents) delayedThinkingEvents.push(event);
     else void handlers.get("thinking_level_select")?.(event, ctx);
   });
-  const pi = {
+  const piFixture = {
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
     },
     setModel,
     getThinkingLevel: () => thinkingLevel,
     setThinkingLevel,
-  } as unknown as ExtensionAPI;
-  ctx = {
+  };
+  // SAFETY: Tests invoke only the ExtensionAPI members implemented by this fixture.
+  const pi = piFixture as typeof piFixture & ExtensionAPI;
+  const contextFixture = {
     cwd,
     get model() {
       return activeModel;
@@ -129,13 +134,15 @@ function harness(
       buildContextEntries: () => [...(options.entries ?? [])],
     },
     ui: { notify },
-  } as unknown as ExtensionContext;
+  };
+  // SAFETY: Tests invoke only the ExtensionContext members implemented by this fixture.
+  ctx = contextFixture as typeof contextFixture & ExtensionContext;
   const dependencies: DirectoryModelsApplicationDependencies = {
     hasExplicitModel: () => options.explicitModel ?? false,
   };
   registerDirectoryModelsWithDependencies(pi, dependencies);
 
-  const emit = async (name: string, event: unknown) => {
+  const emit = async <Event>(name: string, event: Event) => {
     await handlers.get(name)?.(event, ctx);
   };
   const start = (reason: "startup" | "new" | "resume" | "fork" | "reload" = "startup") =>

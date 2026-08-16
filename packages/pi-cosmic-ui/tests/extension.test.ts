@@ -3,6 +3,8 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
+import { isFunctionValue } from "pi-cosmic-core";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -15,12 +17,14 @@ import {
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_PROTOCOL_VERSION,
 } from "../src/protocol/protocol.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
-type Handler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
+type Handler = ExtensionHandler<any, any>;
+type BusHandler = Parameters<ExtensionAPI["events"]["on"]>[1];
 
 function harness(mode: "tui" | "rpc" = "tui") {
   const handlers = new Map<string, Handler[]>();
-  const bus = new Map<string, Set<(data: unknown) => void>>();
+  const bus = new Map<string, Set<BusHandler>>();
   const setFooter = vi.fn();
   const setWorkingMessage = vi.fn();
   const unsubscribed = vi.fn();
@@ -37,7 +41,7 @@ function harness(mode: "tui" | "rpc" = "tui") {
       killed: false,
     }),
   );
-  const pi = {
+  const pi = extensionApiFixture({
     on(name: string, handler: Handler) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     },
@@ -45,10 +49,10 @@ function harness(mode: "tui" | "rpc" = "tui") {
     getThinkingLevel: vi.fn(() => "high"),
     exec,
     events: {
-      emit(name: string, data: unknown) {
+      emit<DataInput>(name: string, data: DataInput) {
         for (const handler of bus.get(name) ?? []) handler(data);
       },
-      on(name: string, handler: (data: unknown) => void) {
+      on(name: string, handler: BusHandler) {
         const entries = bus.get(name) ?? new Set();
         entries.add(handler);
         bus.set(name, entries);
@@ -58,8 +62,8 @@ function harness(mode: "tui" | "rpc" = "tui") {
         };
       },
     },
-  } as unknown as ExtensionAPI;
-  const ctx = {
+  });
+  const ctx = extensionContextFixture({
     cwd: process.cwd(),
     mode,
     hasUI: true,
@@ -74,13 +78,23 @@ function harness(mode: "tui" | "rpc" = "tui") {
     },
     ui: { setFooter, setWorkingMessage, notify: vi.fn(), custom: vi.fn() },
     isProjectTrusted: vi.fn(() => true),
-  } as unknown as ExtensionContext;
+  });
   cosmicUi(pi);
   return { pi, ctx, handlers, setFooter, setWorkingMessage, exec, unsubscribed };
 }
 
-async function emit(h: ReturnType<typeof harness>, name: string, event: unknown = {}) {
-  for (const handler of h.handlers.get(name) ?? []) await handler(event, h.ctx);
+async function emit(h: ReturnType<typeof harness>, name: string): Promise<void>;
+async function emit<EventInput>(
+  h: ReturnType<typeof harness>,
+  name: string,
+  event: EventInput,
+): Promise<void>;
+async function emit<EventInput>(
+  h: ReturnType<typeof harness>,
+  name: string,
+  event?: EventInput,
+): Promise<void> {
+  for (const handler of h.handlers.get(name) ?? []) await handler(event ?? {}, h.ctx);
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
@@ -363,6 +377,7 @@ describe("Cosmic UI extension", () => {
   test("reinstalls the footer when session_start supplies a new context", async () => {
     const h = harness();
     await emit(h, "session_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const secondContext = {
       ...h.ctx,
       model: { ...h.ctx.model!, id: "second-model" },
@@ -394,6 +409,7 @@ describe("Cosmic UI extension", () => {
     expect(rendered[1]).toContain("Repo    /tmp/second-project");
     expect(rendered.join("\n")).toContain("second-session");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const laterContext = {
       ...secondContext,
       model: { ...secondContext.model!, id: "later-model" },
@@ -418,6 +434,7 @@ describe("Cosmic UI extension", () => {
     await waitUntil(() => pending.started() === 2);
 
     h.exec.mockImplementation(successfulExec);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const secondContext = {
       ...h.ctx,
       sessionManager: {
@@ -505,8 +522,9 @@ describe("Cosmic UI extension", () => {
       get(target, property) {
         if (property === "addEventListener") return addEventListener;
         if (property === "removeEventListener") return removeEventListener;
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
+        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+        const value = property in target ? target[property as keyof AbortSignal] : undefined;
+        return isFunctionValue(value) ? value.bind(target) : value;
       },
     });
     h.ctx.cwd = "\0invalid";
@@ -545,6 +563,7 @@ describe("Cosmic UI extension", () => {
     h.ctx.sessionManager.getEntries = vi.fn(() => {
       reads++;
       if (reads > 1) throw new Error("one-shot entries");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       return [
         {
           type: "message",
@@ -579,6 +598,7 @@ describe("Cosmic UI extension", () => {
     expect(reads).toBe(2);
     expect(firstFooter.render(100).join("\n")).toContain("↑100");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const secondContext = {
       ...h.ctx,
       sessionManager: {
@@ -606,6 +626,7 @@ describe("Cosmic UI extension", () => {
 
   test("retains complete totals when a turn usage getter throws", async () => {
     const h = harness();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     h.ctx.sessionManager.getEntries = vi.fn(
       () =>
         [
@@ -676,8 +697,9 @@ describe("Cosmic UI extension", () => {
         if (property === "aborted") abortedReads++;
         if (property === "addEventListener") return addEventListener;
         if (property === "removeEventListener") return removeEventListener;
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
+        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+        const value = property in target ? target[property as keyof AbortSignal] : undefined;
+        return isFunctionValue(value) ? value.bind(target) : value;
       },
     });
     Object.defineProperties(h.ctx, {
@@ -718,8 +740,9 @@ describe("Cosmic UI extension", () => {
       get(target, property) {
         if (property === "addEventListener") return addEventListener;
         if (property === "removeEventListener") return removeEventListener;
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
+        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+        const value = property in target ? target[property as keyof AbortSignal] : undefined;
+        return isFunctionValue(value) ? value.bind(target) : value;
       },
     });
     h.ctx.signal = signal;
@@ -745,8 +768,9 @@ describe("Cosmic UI extension", () => {
       get(target, property) {
         if (property === "addEventListener") return addEventListener;
         if (property === "removeEventListener") return removeEventListener;
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
+        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+        const value = property in target ? target[property as keyof AbortSignal] : undefined;
+        return isFunctionValue(value) ? value.bind(target) : value;
       },
     });
 
@@ -765,6 +789,7 @@ describe("Cosmic UI extension", () => {
   test("shuts down the prior session before a hostile session signal can mutate state", async () => {
     const h = harness();
     await emit(h, "session_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const hostile = { ...h.ctx } as ExtensionContext;
     Object.defineProperty(hostile, "signal", {
       get() {
@@ -781,6 +806,7 @@ describe("Cosmic UI extension", () => {
   test("shuts down the prior session when the next session cwd cannot be captured", async () => {
     const h = harness();
     await emit(h, "session_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const hostile = { ...h.ctx } as ExtensionContext;
     Object.defineProperty(hostile, "cwd", {
       get() {

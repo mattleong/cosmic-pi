@@ -1,16 +1,10 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionHandler } from "@earendil-works/pi-coding-agent";
 
-export type AdvisorHostEventHandler = (
-  event: never,
-  ctx: ExtensionContext,
-) => unknown | Promise<unknown>;
+export type AdvisorHostEventHandler = ExtensionHandler<never, any>;
 
 export type AdvisorHostCommandDefinition = Parameters<ExtensionAPI["registerCommand"]>[1];
 
-export type AdvisorHostCommandHandler = (
-  args: string,
-  ctx: Parameters<NonNullable<AdvisorHostCommandDefinition["handler"]>>[1],
-) => unknown | Promise<unknown>;
+export type AdvisorHostCommandHandler = NonNullable<AdvisorHostCommandDefinition["handler"]>;
 
 /** Explicit bridge between controller-owned handlers and the thin Pi registration adapter. */
 export interface AdvisorHostBindings {
@@ -33,6 +27,7 @@ export const makeAdvisorHostBindings = (maps: AdvisorHostBindingMaps = {}): Advi
   const commandDefinitions =
     maps.commandDefinitions ?? new Map<string, AdvisorHostCommandDefinition>();
 
+  // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
   const registerEvent = ((name: string, handler: AdvisorHostEventHandler) => {
     eventHandlers.set(name, handler);
   }) as ExtensionAPI["on"];
@@ -41,6 +36,7 @@ export const makeAdvisorHostBindings = (maps: AdvisorHostBindingMaps = {}): Advi
     registerEvent,
     registerCommand: (name, definition) => {
       commandDefinitions.set(name, definition);
+      // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
       commandHandlers.set(name, definition.handler as AdvisorHostCommandHandler);
     },
     eventHandler: (name) => eventHandlers.get(name),

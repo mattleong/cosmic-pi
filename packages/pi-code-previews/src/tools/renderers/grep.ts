@@ -1,3 +1,4 @@
+import { isNumberValue, isStringValue } from "pi-cosmic-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -28,10 +29,10 @@ export function registerGrep(pi: ExtensionAPI, cwd: string) {
 
     renderCall(args, theme, context) {
       return previewShell.renderCall(context, theme, () => {
-        const pattern = typeof args.pattern === "string" ? args.pattern : "";
-        const path = typeof args.path === "string" && args.path ? args.path : ".";
-        const glob = typeof args.glob === "string" && args.glob ? args.glob : undefined;
-        const limit = typeof args.limit === "number" ? args.limit : undefined;
+        const pattern = isStringValue(args.pattern) ? args.pattern : "";
+        const path = isStringValue(args.path) && args.path ? args.path : ".";
+        const glob = isStringValue(args.glob) && args.glob ? args.glob : undefined;
+        const limit = isNumberValue(args.limit) ? args.limit : undefined;
         let text = `${renderCodePreviewToolTitle("grep", theme)} ${theme.fg("accent", `/${escapeControlChars(pattern)}/`)} ${theme.fg("muted", "in")} ${renderDisplayPath(path, cwd, theme)}`;
         text += metadata(theme, [
           glob ? escapeControlChars(glob) : undefined,
@@ -62,8 +63,9 @@ export function registerGrep(pi: ExtensionAPI, cwd: string) {
         if (!output || output === "No matches found")
           return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
 
-        const pattern =
-          typeof renderContext.args?.pattern === "string" ? renderContext.args.pattern : "";
+        const pattern = isStringValue(renderContext.args?.pattern)
+          ? renderContext.args.pattern
+          : "";
         const rawLines = output.split("\n");
         const limit = expanded ? rawLines.length : codePreviewSettings.grepCollapsedLines;
         const skipHighlight = shouldSkipHighlight(output);

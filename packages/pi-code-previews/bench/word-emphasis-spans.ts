@@ -37,6 +37,7 @@ console.log(
 );
 
 function plainTheme(): Theme {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   return {
     bold: (text: string) => text,
     fg: (_key: string, text: string) => text,

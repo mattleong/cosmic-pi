@@ -59,6 +59,7 @@ const startLeaseChild = async (
   });
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   lines.on("line", (line) => {
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const message = JSON.parse(line) as LeaseChildMessage;
     const waiter = waiters.shift();
     if (waiter) waiter(message);
@@ -514,6 +515,7 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
         releaseSecond();
         expect(Exit.isFailure(await delayedDuplicate)).toBe(true);
 
+        // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
         const evidence = JSON.parse(
           await fs.readFile(join(replacement.leasePath, "owner.json"), "utf8"),
         ) as { ownershipToken?: string };

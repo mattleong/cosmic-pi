@@ -3,12 +3,13 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionHandler,
   ResolvedCommand,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { vi } from "vitest";
 
-export type HostHandler = (event: never, ctx: ExtensionContext) => unknown | Promise<unknown>;
+export type HostHandler = ExtensionHandler<any, any>;
 export type AdvisorHostEntry = SessionEntry & {
   readonly customType?: string | undefined;
   readonly data?: unknown;
@@ -22,12 +23,16 @@ export function handlerRegistry() {
   const handlers = new Map<string, HostHandler[]>();
   const on = (name: string, handler: HostHandler) =>
     handlers.set(name, [...(handlers.get(name) ?? []), handler]);
-  const emitWithContext = async (name: string, event: unknown, context: ExtensionContext) => {
-    for (const handler of handlers.get(name) ?? []) await handler(event as never, context);
+  const emitWithContext = async <Event>(name: string, event: Event, context: ExtensionContext) => {
+    for (const handler of handlers.get(name) ?? []) await handler(event, context);
   };
-  const emitDetachedWithContext = (name: string, event: unknown, context: ExtensionContext) => {
+  const emitDetachedWithContext = <Event>(
+    name: string,
+    event: Event,
+    context: ExtensionContext,
+  ) => {
     for (const handler of handlers.get(name) ?? []) {
-      Promise.resolve(handler(event as never, context)).catch(() => undefined);
+      Promise.resolve(handler(event, context)).catch(() => undefined);
     }
   };
   return { emitDetachedWithContext, emitWithContext, handlers, on };
@@ -56,34 +61,36 @@ export function anchorUserBranch(): AdvisorHostEntry[] {
 export interface AdvisorExtensionApiOptions {
   on: (name: string, handler: HostHandler) => void;
   registerCommand: (name: string, command: never) => void;
-  appendEntry?: ((customType: string, data: unknown) => void) | undefined;
-  sendMessage?: ((...args: never[]) => unknown) | undefined;
+  appendEntry?: ExtensionAPI["appendEntry"] | undefined;
+  sendMessage?: ExtensionAPI["sendMessage"] | undefined;
 }
 
 /** Composes an ExtensionAPI double from the harness's own capture pieces. */
 export function advisorExtensionApi(options: AdvisorExtensionApiOptions): ExtensionAPI {
-  return {
+  const fixture = {
     on: options.on,
     registerCommand: options.registerCommand,
     registerMessageRenderer: vi.fn(),
     registerEntryRenderer: vi.fn(),
     sendMessage: options.sendMessage ?? vi.fn(),
     appendEntry: vi.fn(options.appendEntry ?? (() => undefined)),
-  } as unknown as ExtensionAPI;
+  };
+  // SAFETY: Advisor extension tests exercise only the ExtensionAPI methods implemented here.
+  return fixture as typeof fixture & ExtensionAPI;
 }
 
 export interface AdvisorExtensionContextOptions {
   getBranch: () => AdvisorHostEntry[];
   isProjectTrusted?: boolean | undefined;
   modelRegistry?: Partial<ExtensionContext["modelRegistry"]> | undefined;
-  select?: ((...args: never[]) => unknown) | undefined;
+  select?: ExtensionContext["ui"]["select"] | undefined;
   withoutSessionId?: boolean | undefined;
 }
 
 /** Composes the shared ExtensionContext double with call-site override slots. */
 export function advisorExtensionContext(options: AdvisorExtensionContextOptions): ExtensionContext {
   const trusted = options.isProjectTrusted ?? true;
-  return {
+  const fixture = {
     cwd: "/project",
     mode: "tui",
     hasUI: true,
@@ -98,11 +105,18 @@ export function advisorExtensionContext(options: AdvisorExtensionContextOptions)
       find: vi.fn(),
       hasConfiguredAuth: vi.fn(),
     },
-    sessionManager: {
-      buildContextEntries: vi.fn(() => []),
-      getBranch: vi.fn(options.getBranch),
-      getLeafId: vi.fn(() => "anchor"),
-      ...(options.withoutSessionId ? {} : { getSessionId: vi.fn(() => "session") }),
-    },
-  } as unknown as ExtensionContext;
+    sessionManager: (() => {
+      const objectPart4226_0 = {
+        buildContextEntries: vi.fn(() => []),
+        getBranch: vi.fn(options.getBranch),
+        getLeafId: vi.fn(() => "anchor"),
+      };
+      const objectPart4226_1 = options.withoutSessionId
+        ? objectPart4226_0
+        : { ...objectPart4226_0, getSessionId: vi.fn(() => "session") };
+      return objectPart4226_1;
+    })(),
+  };
+  // SAFETY: Advisor extension tests exercise only the ExtensionContext members implemented here.
+  return fixture as typeof fixture & ExtensionContext;
 }

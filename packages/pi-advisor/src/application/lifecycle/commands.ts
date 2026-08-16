@@ -8,7 +8,7 @@ import {
   sendCompactAdvisorGuidanceAtHostBoundary,
 } from "../../boundary/host-review-cards.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
-import type { CheckpointOrchestratorShape } from "../../checkpoint/orchestrator.ts";
+import type { CheckpointOrchestratorContract } from "../../checkpoint/orchestrator.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
 import type { AdvisorCommandActions } from "../../settings/controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
@@ -29,7 +29,7 @@ export interface CommandWorkflowDeps {
   readonly resetRequestDomain: (resetLifecycle?: boolean) => void;
   readonly advanceDomainCounter: EventsDeps["advanceDomainCounter"];
   readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
-  readonly checkpointOrchestrator: CheckpointOrchestratorShape;
+  readonly checkpointOrchestrator: CheckpointOrchestratorContract;
   readonly startRuntimeEffect: EventsDeps["startRuntimeEffect"];
   readonly runSessionEffect: <A, E>(
     effect: Effect.Effect<A, E, AdvisorPlatform | PiCommandAdapter>,

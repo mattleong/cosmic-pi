@@ -7,10 +7,10 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCodeModeApplication } from "../src/application.ts";
 import type { NestedPiToolDefinitions } from "../src/boundary/host-builtin-tools.ts";
@@ -19,10 +19,11 @@ import {
   makeCodeModeDeactivationHandoff,
 } from "../src/boundary/host-deactivation-handoff.ts";
 import { CODE_MODE_TOOL_NAME } from "../src/tools/controller.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 const HANDOFF_SLOT = Symbol.for("@cosmic-pi/pi-code-mode/code-mode-deactivation-handoff/v2");
 const clearSlot = () => {
-  delete (globalThis as Record<PropertyKey, unknown>)[HANDOFF_SLOT];
+  Reflect.deleteProperty(globalThis, HANDOFF_SLOT);
 };
 
 beforeEach(clearSlot);
@@ -30,37 +31,37 @@ afterEach(clearSlot);
 
 describe("codeModeSessionKey", () => {
   it("uses the stable Pi session id", () => {
-    const ctx = {
+    const ctx = extensionContextFixture({
       cwd: "/project",
       sessionManager: { getSessionId: () => "session-123" },
-    } as unknown as ExtensionContext;
+    });
     expect(codeModeSessionKey(ctx)).toBe("session-123");
   });
 
   it("never falls back to the cwd when no usable session id is exposed", () => {
     // A cwd key would let a genuinely different session in the same project inherit another
     // session's intent, so the only fallback is no identity at all.
-    expect(codeModeSessionKey({ cwd: "/project" } as unknown as ExtensionContext)).toBeUndefined();
+    expect(codeModeSessionKey(extensionContextFixture({ cwd: "/project" }))).toBeUndefined();
 
-    const throwing = {
+    const throwing = extensionContextFixture({
       cwd: "/project",
       sessionManager: {
         getSessionId: () => {
           throw new Error("no session");
         },
       },
-    } as unknown as ExtensionContext;
+    });
     expect(codeModeSessionKey(throwing)).toBeUndefined();
 
-    const empty = {
+    const empty = extensionContextFixture({
       cwd: "/project",
       sessionManager: { getSessionId: () => "" },
-    } as unknown as ExtensionContext;
+    });
     expect(codeModeSessionKey(empty)).toBeUndefined();
   });
 
   it("returns undefined when no identity is available", () => {
-    expect(codeModeSessionKey({} as unknown as ExtensionContext)).toBeUndefined();
+    expect(codeModeSessionKey(extensionContextFixture({}))).toBeUndefined();
   });
 });
 
@@ -107,7 +108,7 @@ describe("makeCodeModeDeactivationHandoff", () => {
   });
 });
 
-type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+type Handler = ExtensionHandler<any, any>;
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -123,7 +124,7 @@ const instance = (activeTools: string[], sessionId: string | undefined, sharedCw
 
   const handlers = new Map<string, Handler>();
   const registerTool = vi.fn();
-  const pi = {
+  const pi = extensionApiFixture({
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     registerCommand: () => undefined,
     registerTool,
@@ -133,8 +134,9 @@ const instance = (activeTools: string[], sessionId: string | undefined, sharedCw
       activeTools.push(...names);
     },
     events: { emit: vi.fn(), on: vi.fn() },
-  } as unknown as ExtensionAPI;
+  });
 
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerCodeModeApplication(pi, {
     loadSettings: () => Promise.resolve(undefined),
     wrapTool: (tool) => tool,
@@ -146,14 +148,22 @@ const instance = (activeTools: string[], sessionId: string | undefined, sharedCw
     cwd = mkdtempSync(join(tmpdir(), "pi-code-mode-handoff-cwd-"));
     tempDirectories.push(cwd);
   }
-  const ctx = {
-    cwd,
-    mode: "rpc",
-    hasUI: true,
-    ui: { notify: vi.fn(), custom: vi.fn(), select: vi.fn() },
-    isProjectTrusted: () => true,
-    ...(sessionId === undefined ? {} : { sessionManager: { getSessionId: () => sessionId } }),
-  } as unknown as ExtensionContext;
+  const ctx = extensionContextFixture(
+    (() => {
+      const objectPart6668_0 = {
+        cwd,
+        mode: "rpc",
+        hasUI: true,
+        ui: { notify: vi.fn(), custom: vi.fn(), select: vi.fn() },
+        isProjectTrusted: () => true,
+      };
+      const objectPart6668_1 =
+        sessionId === undefined
+          ? objectPart6668_0
+          : { ...objectPart6668_0, sessionManager: { getSessionId: () => sessionId } };
+      return objectPart6668_1;
+    })(),
+  );
 
   return { handlers, registerTool, ctx };
 };

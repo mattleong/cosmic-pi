@@ -18,7 +18,7 @@ export interface SafeFileResult {
   readonly bytes: Uint8Array;
 }
 
-export interface SafeFileShape {
+export interface SafeFileContract {
   readonly readContainedRegularFile: (
     path: string,
     containmentRoot: string,
@@ -43,7 +43,7 @@ export const closeSafeFileHandle = (
   });
 
 /** Node-specific stable file acquisition for security-sensitive image inputs. */
-export class SafeFile extends Context.Service<SafeFile, SafeFileShape>()(
+export class SafeFile extends Context.Service<SafeFile, SafeFileContract>()(
   "pi-cosmic-core/platform/safe-file/SafeFile",
 ) {
   static readonly layer = Layer.effect(

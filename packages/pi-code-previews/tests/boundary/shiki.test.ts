@@ -21,29 +21,41 @@ import { getShikiStatus } from "../../src/syntax/render";
 import { disposeShikiEffect, initializeShikiEffect } from "../../src/syntax/shiki";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
 
+const abortSignalFixture = <Fixture extends object>(fixture: Fixture): Fixture & AbortSignal => {
+  // SAFETY: Each scenario invokes only the AbortSignal members implemented by its fixture.
+  return fixture as Fixture & AbortSignal;
+};
+
+const highlighterFixture = <Fixture extends object>(
+  fixture: Fixture,
+): Fixture & ShikiHighlighter => {
+  // SAFETY: Each scenario invokes only the Shiki members implemented by its fixture.
+  return fixture as Fixture & ShikiHighlighter;
+};
+
 describe("Shiki adapter lifecycle", () => {
   it.effect("contains hostile AbortSignal listener setup and removal", () =>
     Effect.sync(() => {
-      const addThrows = {
+      const addThrows = abortSignalFixture({
         addEventListener: () => {
           throw new Error("host add failed");
         },
         removeEventListener: () => undefined,
-      } as unknown as AbortSignal;
+      });
       assert.equal(
         shikiBoundaryTest.registerAbortListener(addThrows, () => undefined),
         undefined,
       );
 
       let removeAttempts = 0;
-      const removeThrows = {
+      const removeThrows = abortSignalFixture({
         aborted: false,
         addEventListener: () => undefined,
         removeEventListener: () => {
           removeAttempts++;
           throw new Error("host remove failed");
         },
-      } as unknown as AbortSignal;
+      });
       const registration = shikiBoundaryTest.registerAbortListener(removeThrows, () => undefined);
       assert.ok(registration);
       assert.doesNotThrow(registration.remove);
@@ -51,13 +63,13 @@ describe("Shiki adapter lifecycle", () => {
       assert.equal(removeAttempts, 1);
 
       let getterCleanup = 0;
-      const getterThrows = {
+      const getterThrows = abortSignalFixture({
         get aborted() {
           throw new Error("host getter failed");
         },
         addEventListener: () => undefined,
         removeEventListener: () => getterCleanup++,
-      } as unknown as AbortSignal;
+      });
       assert.equal(
         shikiBoundaryTest.registerAbortListener(getterThrows, () => undefined),
         undefined,
@@ -74,7 +86,7 @@ describe("Shiki adapter lifecycle", () => {
     let loadStarted = false;
     let disposeAttempts = 0;
     const captured = makeCapturedLogger();
-    const highlighter = {
+    const highlighter = highlighterFixture({
       loadLanguage: () => {
         loadStarted = true;
         return pending;
@@ -83,7 +95,7 @@ describe("Shiki adapter lifecycle", () => {
         disposeAttempts++;
         throw new Error("deferred third-party disposal failed");
       },
-    } as unknown as ShikiHighlighter;
+    });
     return Effect.gen(function* () {
       const load = yield* ShikiAdapter.live
         .loadLanguage(highlighter, "rust")
@@ -105,11 +117,11 @@ describe("Shiki adapter lifecycle", () => {
 
   it.effect("late cancellation disposal cannot throw into a Promise continuation", () =>
     Effect.sync(() => {
-      const highlighter = {
+      const highlighter = highlighterFixture({
         dispose: () => {
           throw new Error("third-party disposal failed");
         },
-      } as unknown as ShikiHighlighter;
+      });
       assert.equal(disposeShikiHighlighterSafely(highlighter), false);
     }),
   );

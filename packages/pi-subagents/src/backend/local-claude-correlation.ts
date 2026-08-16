@@ -41,6 +41,11 @@ export const addUsageComponents = (
   cacheWrite: left.cacheWrite + right.cacheWrite,
 });
 
+export interface CumulativeUsageDelta {
+  readonly delta: UsageComponents;
+  readonly inconsistent: boolean;
+}
+
 /**
  * Nonnegative componentwise delta between cumulative native usage snapshots.
  * A regressing native total is reported as inconsistent and never subtracted.
@@ -48,7 +53,7 @@ export const addUsageComponents = (
 export const cumulativeUsageDelta = (
   previous: UsageComponents,
   next: UsageComponents,
-): { readonly delta: UsageComponents; readonly inconsistent: boolean } => ({
+): CumulativeUsageDelta => ({
   delta: {
     input: Math.max(0, next.input - previous.input),
     output: Math.max(0, next.output - previous.output),

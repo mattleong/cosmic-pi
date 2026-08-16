@@ -4,8 +4,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import type { BackendLaunchRequest, BackendStartupState } from "../backend/model.ts";
-import type { SubagentBackendRegistryShape } from "../backend/service.ts";
-import type { WriterLeaseShape } from "../boundary/writer-lease.ts";
+import type { SubagentBackendRegistryContract } from "../backend/service.ts";
+import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { processCapacityError, writerConflictError } from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
 import { childSystemPrompt, taskPrompt } from "./tool-policy.ts";
@@ -36,8 +36,8 @@ import { emptyRunWarningSlots } from "./warnings.ts";
 
 export interface RunLaunchDependencies {
   readonly ownerScope: Scope.Scope;
-  readonly backendRegistry: SubagentBackendRegistryShape;
-  readonly writerLeases: WriterLeaseShape;
+  readonly backendRegistry: SubagentBackendRegistryContract;
+  readonly writerLeases: WriterLeaseContract;
   /** The service-owned run registry; launch admission inserts and evicts under the lock. */
   readonly records: Map<string, RunRecord>;
   /** The shared service lock guarding every RunRecord mutation. */
@@ -233,91 +233,117 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const settlement = yield* Deferred.make<SubagentRunView>();
             const { id, name } = allocateRunIdentity(requestedName);
             const assignmentAttemptToken = allocateAssignmentAttemptToken();
-            const view: SubagentRunView = {
-              id,
-              name,
-              task: request.task.trim(),
-              ...(request.profile ? { profile: request.profile } : {}),
-              selection: request.selection ?? {
-                source: "profile-candidate",
+            const view: SubagentRunView = (() => {
+              const objectPart10771_0 = { id, name, task: request.task.trim() };
+              const objectPart10771_1 = request.profile
+                ? { ...objectPart10771_0, profile: request.profile }
+                : objectPart10771_0;
+              const objectPart10771_2 = {
+                ...objectPart10771_1,
+                selection: request.selection ?? {
+                  source: "profile-candidate",
+                  host: request.host,
+                  runtime: request.runtime,
+                  closeOnReport: request.closeOnReport,
+                  reason: "Profile route selection.",
+                  skippedCandidates: [],
+                },
+                cwd: canonicalWriterCwd?.path ?? request.cwd,
+                state: "starting" as const,
+                context: request.context,
+                writeIntent: request.writeIntent,
+                fastMode: request.fastMode,
                 host: request.host,
                 runtime: request.runtime,
                 closeOnReport: request.closeOnReport,
-                reason: "Profile route selection.",
-                skippedCandidates: [],
-              },
-              cwd: canonicalWriterCwd?.path ?? request.cwd,
-              state: "starting",
-              context: request.context,
-              writeIntent: request.writeIntent,
-              fastMode: request.fastMode,
-              host: request.host,
-              runtime: request.runtime,
-              closeOnReport: request.closeOnReport,
-              reportGeneration: 0,
-              capabilities: driver.capabilities,
-              model: request.model,
-              effort: request.effort,
-              startedAt: now,
-              lastActivityAt: now,
-              sessionEvents: [],
-              usage: emptyUsage(),
-            };
-            const launch: BackendLaunchRequest = {
-              runId: id,
-              name,
-              closeOnReport: request.closeOnReport,
-              cwd: canonicalWriterCwd?.path ?? request.cwd,
-              context: request.context,
-              writeIntent: request.writeIntent,
-              fastMode: request.fastMode,
-              model: request.model,
-              effort: request.effort,
-              ...(request.runtimeApiKey ? { runtimeApiKey: request.runtimeApiKey } : {}),
-              activeTools: request.activeTools,
-              projectTrusted: request.projectTrusted,
-              parentSessionId: request.parentSessionId,
-              ...(request.parentSessionFile
-                ? { parentSessionFile: request.parentSessionFile }
-                : {}),
-              ...(request.parentLeafId ? { parentLeafId: request.parentLeafId } : {}),
-              systemPrompt: childSystemPrompt(request),
-            };
-            const record: RunRecord = {
-              view,
-              scope,
-              driver,
-              launch,
-              activeTools: new Map(),
-              settlement,
-              pauseRequested: false,
-              stoppedByParent: false,
-              cleanupPending: false,
-              runStateReclaimState: "pending",
-              ...(canonicalWriterCwd ? { canonicalWriterCwd } : {}),
-              ...(writerLeaseScope
+                reportGeneration: 0,
+                capabilities: driver.capabilities,
+                model: request.model,
+                effort: request.effort,
+                startedAt: now,
+                lastActivityAt: now,
+                sessionEvents: [],
+                usage: emptyUsage(),
+              };
+              return objectPart10771_2;
+            })();
+            const launch: BackendLaunchRequest = (() => {
+              const objectPart11961_0 = {
+                runId: id,
+                name,
+                closeOnReport: request.closeOnReport,
+                cwd: canonicalWriterCwd?.path ?? request.cwd,
+                context: request.context,
+                writeIntent: request.writeIntent,
+                fastMode: request.fastMode,
+                model: request.model,
+                effort: request.effort,
+              };
+              const objectPart11961_1 = request.runtimeApiKey
+                ? { ...objectPart11961_0, runtimeApiKey: request.runtimeApiKey }
+                : objectPart11961_0;
+              const objectPart11961_2 = {
+                ...objectPart11961_1,
+                activeTools: request.activeTools,
+                projectTrusted: request.projectTrusted,
+                parentSessionId: request.parentSessionId,
+              };
+              const objectPart11961_3 = request.parentSessionFile
+                ? { ...objectPart11961_2, parentSessionFile: request.parentSessionFile }
+                : objectPart11961_2;
+              const objectPart11961_4 = request.parentLeafId
+                ? { ...objectPart11961_3, parentLeafId: request.parentLeafId }
+                : objectPart11961_3;
+              const objectPart11961_5 = {
+                ...objectPart11961_4,
+                systemPrompt: childSystemPrompt(request),
+              };
+              return objectPart11961_5;
+            })();
+            const record: RunRecord = (() => {
+              const objectPart12902_0 = {
+                view,
+                scope,
+                driver,
+                launch,
+                activeTools: new Map(),
+                settlement,
+                pauseRequested: false,
+                stoppedByParent: false,
+                cleanupPending: false,
+                runStateReclaimState: "pending" as const,
+              };
+              const objectPart12902_1 = canonicalWriterCwd
+                ? { ...objectPart12902_0, canonicalWriterCwd }
+                : objectPart12902_0;
+              const objectPart12902_2 = writerLeaseScope
                 ? {
+                    ...objectPart12902_1,
                     writerLeaseScope,
                     writerLeasePreparationState: "pending" as const,
                     writerLeaseReleaseState,
                   }
-                : {}),
-              initializationPending: true,
-              notificationGeneration: 0,
-              completionGeneration: 0,
-              warningSlots: emptyRunWarningSlots(),
-              completionGenerations: new Map(),
-              completionClaims: new Map(),
-              assignment: {
-                epoch: 1,
-                phase: "preparing",
-                attemptToken: assignmentAttemptToken,
-                startedObserved: false,
-                outcomeUncertain: false,
-                pendingRunSettled: false,
-              },
-              nextAssignmentEpoch: 2,
-            };
+                : objectPart12902_1;
+              const objectPart12902_3 = {
+                ...objectPart12902_2,
+                initializationPending: true,
+                notificationGeneration: 0,
+                completionGeneration: 0,
+                warningSlots: emptyRunWarningSlots(),
+                completionGenerations: new Map(),
+                completionClaims: new Map(),
+                assignment: {
+                  epoch: 1,
+                  phase: "preparing" as const,
+                  attemptToken: assignmentAttemptToken,
+                  startedObserved: false,
+                  outcomeUncertain: false,
+                  pendingRunSettled: false,
+                },
+                nextAssignmentEpoch: 2,
+              };
+              return objectPart12902_3;
+            })();
             records.set(id, record);
             publish();
             return record;
@@ -436,14 +462,19 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               reserved.resumeToken = state.resumeToken;
               const pendingSettlement = reserved.pendingInitializationSettlement;
               reserved.pendingInitializationSettlement = undefined;
-              reserved.view = {
-                ...reserved.view,
-                effort: state.effort,
-                model: resolvedModel,
-                lastActivityAt: startedAt,
-                sessionId: state.sessionId,
-                ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
-              };
+              reserved.view = (() => {
+                const objectPart20085_0 = {
+                  ...reserved.view,
+                  effort: state.effort,
+                  model: resolvedModel,
+                  lastActivityAt: startedAt,
+                  sessionId: state.sessionId,
+                };
+                const objectPart20085_1 = state.sessionFile
+                  ? { ...objectPart20085_0, sessionFile: state.sessionFile }
+                  : objectPart20085_0;
+                return objectPart20085_1;
+              })();
               publish();
               return {
                 view: snapshotView(reserved.view),

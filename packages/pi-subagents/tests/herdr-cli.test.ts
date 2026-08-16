@@ -58,6 +58,7 @@ describe("bounded Herdr CLI boundary", () => {
     await Effect.runPromise(test.cli.preflight("pi"));
     const created = await Effect.runPromise(test.cli.createWorkspace("/project", "owned label"));
     expect(created).toMatchObject({ workspaceId: "w-owned", tabId: "w-owned:t1" });
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const calls = (await fs.readFile(test.log, "utf8"))
       .trim()
       .split("\n")
@@ -145,6 +146,7 @@ describe("bounded Herdr CLI boundary", () => {
     await Effect.runPromise(
       test.cli.waitPaneOutput("w-owned:p1", "pi-subagents-env-abc", "confirm pane environment"),
     );
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const calls = (await fs.readFile(test.log, "utf8"))
       .trim()
       .split("\n")
@@ -172,6 +174,7 @@ describe("bounded Herdr CLI boundary", () => {
       foregroundProcessGroupId: 4242,
       foregroundProcesses: [{ pid: 4242, name: "zsh" }],
     });
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const calls = (await fs.readFile(test.log, "utf8"))
       .trim()
       .split("\n")
@@ -191,6 +194,7 @@ describe("bounded Herdr CLI boundary", () => {
       if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
       else process.env.HERDR_SOCKET_PATH = previousSocket;
     }
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const calls = (await fs.readFile(test.log, "utf8"))
       .trim()
       .split("\n")
@@ -214,6 +218,7 @@ describe("bounded Herdr CLI boundary", () => {
       _tag: "InvalidSubagentRequestError",
       code: "herdr_protocol_unsupported",
     });
+    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
     const calls = (await fs.readFile(test.log, "utf8"))
       .trim()
       .split("\n")

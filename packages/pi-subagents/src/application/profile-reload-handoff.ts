@@ -21,8 +21,13 @@ export interface ProfileReloadHandoff {
   readonly clear: (sessionKey?: string) => void;
 }
 
-const processState = (): Record<PropertyKey, unknown> =>
-  globalThis as unknown as Record<PropertyKey, unknown>;
+interface ProfileReloadGlobalState {
+  [PROFILE_RELOAD_HANDOFF_KEY]?: unknown;
+}
+
+// SAFETY: This process-owned symbol slot is the sole property added to globalThis by this adapter.
+const processState = (): typeof globalThis & ProfileReloadGlobalState =>
+  globalThis as typeof globalThis & ProfileReloadGlobalState;
 
 const ProfileReloadEnvelopeInputSchema = Schema.Struct({
   version: Schema.Literal(1),

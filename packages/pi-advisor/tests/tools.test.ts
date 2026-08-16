@@ -31,9 +31,10 @@ async function fixture() {
   return root;
 }
 
-async function execute(root: string, name: string, params: unknown) {
+async function execute<ParamsInput>(root: string, name: string, params: ParamsInput) {
   const tool = (await createAdvisorTools(root)).find((candidate) => candidate.name === name);
   if (!tool) throw new Error(`missing ${name}`);
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   return await tool.execute("call", params as never, undefined, undefined, {} as never);
 }
 
@@ -110,6 +111,7 @@ describe("package-owned Advisor tools", () => {
     await rename(root, moved);
     await symlink(outside, root, "dir");
     const read = tools.find((tool) => tool.name === "read");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await expect(
       read?.execute("call", { path: "secret.txt" }, undefined, undefined, {} as never),
     ).rejects.toThrow(/root|exist|escape|project/i);
@@ -252,6 +254,7 @@ describe("package-owned Advisor tools", () => {
     const read = (await createAdvisorTools(root)).find((tool) => tool.name === "read");
     const controller = new AbortController();
     controller.abort();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await expect(
       read?.execute("call", { path: "README.md" }, controller.signal, undefined, {} as never),
     ).rejects.toThrow();

@@ -1,7 +1,7 @@
 // Stateful Herdr topology fixture shared by host integration suites.
 import * as Effect from "effect/Effect";
-import type { HerdrAgent, HerdrCliShape, HerdrSnapshot } from "../../src/boundary/herdr-cli.ts";
-import type { HerdrHarnessShape } from "../../src/boundary/herdr-harness.ts";
+import type { HerdrAgent, HerdrCliContract, HerdrSnapshot } from "../../src/boundary/herdr-cli.ts";
+import type { HerdrHarnessContract } from "../../src/boundary/herdr-harness.ts";
 import type { SupervisorConnectionMetadata } from "../../src/boundary/supervisor-channel.ts";
 import type { BackendLaunchRequest } from "../../src/backend/model.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
@@ -162,17 +162,27 @@ export const fakeTopology = () => {
         },
       ],
       panes: [
-        ...[...panes].map(([paneId, pane]) => ({
-          paneId,
-          terminalId: showTerminalMismatch ? `${pane.terminalId}-replacement` : pane.terminalId,
-          workspaceId: "w",
-          tabId: "w:t",
-          cwd: "/project",
-          foregroundCwd: "/project",
-          ...(pane.label ? { label: pane.label } : {}),
-          focused: false,
-          agentStatus: agents.get(paneId)?.agentStatus ?? "unknown",
-        })),
+        ...[...panes].map(([paneId, pane]) =>
+          (() => {
+            const objectPart5927_0 = {
+              paneId,
+              terminalId: showTerminalMismatch ? `${pane.terminalId}-replacement` : pane.terminalId,
+              workspaceId: "w",
+              tabId: "w:t",
+              cwd: "/project",
+              foregroundCwd: "/project",
+            };
+            const objectPart5927_1 = pane.label
+              ? { ...objectPart5927_0, label: pane.label }
+              : objectPart5927_0;
+            const objectPart5927_2 = {
+              ...objectPart5927_1,
+              focused: false,
+              agentStatus: agents.get(paneId)?.agentStatus ?? "unknown",
+            };
+            return objectPart5927_2;
+          })(),
+        ),
         ...(duplicateSelector === "terminal" && panes.size > 0
           ? [
               {
@@ -227,7 +237,7 @@ export const fakeTopology = () => {
       ],
     };
   };
-  const cli: HerdrCliShape = {
+  const cli: HerdrCliContract = {
     sessionIdentity: "inherited",
     preflight: () => Effect.void,
     snapshot: Effect.suspend(() => {
@@ -387,16 +397,19 @@ export const fakeTopology = () => {
             }),
           );
         const pane = snapshot().panes.find((candidate) => candidate.paneId === paneId)!;
-        const agent: HerdrAgent = {
-          ...pane,
-          agentStatus: "working",
-          name: agentName,
-          runtime,
-          stateChangeSequence: 1,
-          interactiveReady: true,
-          ...(omitAgentSession
-            ? {}
+        const agent: HerdrAgent = (() => {
+          const objectPart14279_0 = {
+            ...pane,
+            agentStatus: "working" as const,
+            name: agentName,
+            runtime,
+            stateChangeSequence: 1,
+            interactiveReady: true,
+          };
+          const objectPart14279_1 = omitAgentSession
+            ? objectPart14279_0
             : {
+                ...objectPart14279_0,
                 agentSession: {
                   source: "fixture",
                   agent: runtime,
@@ -404,8 +417,9 @@ export const fakeTopology = () => {
                   value: `native-${paneId}`,
                 },
                 nativeSession: `native-${paneId}`,
-              }),
-        };
+              };
+          return objectPart14279_1;
+        })();
         agents.set(paneId, agent);
         if (duplicateNameAfterStart) agentNameCollision = true;
         if (driftOnFocusRestorationSnapshot) terminalMismatchSnapshotCountdown = 2;
@@ -471,7 +485,7 @@ export const fakeTopology = () => {
     },
   };
   let cleanupAuthorizations = 0;
-  const harness: HerdrHarnessShape = {
+  const harness: HerdrHarnessContract = {
     preflight: () => Effect.void,
     prepare: (runtime, request) =>
       Effect.sync(() => {

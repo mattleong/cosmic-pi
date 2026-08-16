@@ -23,7 +23,7 @@ export class DirectoryModelStoreError extends Schema.TaggedError<DirectoryModelS
 const storeError = (operation: string, message: string) => () =>
   new DirectoryModelStoreError({ operation, message });
 
-export interface DirectoryModelStoreShape {
+export interface DirectoryModelStoreContract {
   readonly identify: (cwd: string) => Effect.Effect<DirectoryIdentity, DirectoryModelStoreError>;
   readonly read: (
     identity: DirectoryIdentity,
@@ -36,7 +36,7 @@ export interface DirectoryModelStoreShape {
 
 export class DirectoryModelStore extends Context.Service<
   DirectoryModelStore,
-  DirectoryModelStoreShape
+  DirectoryModelStoreContract
 >()("pi-directory-models/config/store/DirectoryModelStore") {
   static readonly layer = Layer.effect(
     this,

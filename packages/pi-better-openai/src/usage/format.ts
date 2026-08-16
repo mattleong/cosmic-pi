@@ -1,3 +1,4 @@
+import { isNumberValue } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -58,7 +59,7 @@ export class CodexUsageError extends Schema.TaggedError<CodexUsageError>()("Code
   message: Schema.String,
 }) {}
 
-const normalizeBucket = (value: unknown): RateLimitBucket | null =>
+const normalizeBucket = <Value>(value: Value): RateLimitBucket | null =>
   Option.getOrUndefined(Schema.decodeUnknownOption(RateLimitBucketSchema)(value)) ?? null;
 
 function sparkBucket(data: CodexUsageResponse): RateLimitBucket | null {
@@ -76,7 +77,7 @@ function sparkBucket(data: CodexUsageResponse): RateLimitBucket | null {
 }
 
 const boundedResetSeconds = (value: number | null | undefined): number | null =>
-  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_RESET_SECONDS
+  isNumberValue(value) && Number.isFinite(value) && value >= 0 && value <= MAX_RESET_SECONDS
     ? value
     : null;
 
@@ -86,7 +87,7 @@ function resetSeconds(window: UsageWindow | null | undefined, now: number): numb
 
   const resetAtValue = window?.reset_at;
   if (
-    typeof resetAtValue !== "number" ||
+    !isNumberValue(resetAtValue) ||
     !Number.isFinite(resetAtValue) ||
     resetAtValue < 0 ||
     !Number.isFinite(now)
@@ -100,8 +101,8 @@ function resetSeconds(window: UsageWindow | null | undefined, now: number): numb
 export const usageScopeForModel = (modelId: string | undefined): UsageScope =>
   modelId === SPARK_MODEL_ID ? "spark" : "default";
 
-export function parseUsageSnapshot(
-  payload: unknown,
+export function parseUsageSnapshot<PayloadInput>(
+  payload: PayloadInput,
   modelId: string | undefined,
   now: number,
 ): UsageSnapshot {

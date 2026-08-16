@@ -1,13 +1,14 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import type { HerdrAgent } from "../boundary/herdr-cli.ts";
-import type { HerdrHostShape, HerdrHostedAgent } from "../boundary/herdr-host.ts";
+import type { HerdrHostContract, HerdrHostedAgent } from "../boundary/herdr-host.ts";
 import type {
   SupervisorChannelHandle,
-  SupervisorChannelShape,
+  SupervisorChannelContract,
 } from "../boundary/supervisor-channel.ts";
 import {
   isOutcomeUncertain,
@@ -298,9 +299,10 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
             return;
           }
           const error = Cause.squash(prompt.cause);
+          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
           const processFailure =
             error &&
-            typeof error === "object" &&
+            hasObjectRuntimeType(error) &&
             "_tag" in error &&
             error._tag === "SubagentProcessError"
               ? (error as SubagentProcessError)
@@ -334,8 +336,8 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
 
 export const makeHerdrBackendDriver = (
   runtime: SubagentRuntime,
-  host: HerdrHostShape,
-  supervisors: SupervisorChannelShape,
+  host: HerdrHostContract,
+  supervisors: SupervisorChannelContract,
 ): BackendDriver => ({
   host: "herdr",
   runtime,

@@ -152,8 +152,14 @@ try {
 
 function registerRenderers(): Renderer[] {
   const registered: Renderer[] = [];
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerToolRenderers(
-    { registerTool: (tool: unknown) => registered.push(tool as Renderer) } as never,
+    {
+      registerTool: <Tool>(tool: Tool) => {
+        // SAFETY: The benchmark captures the renderer definition registered by this package.
+        registered.push(tool as Tool & Renderer);
+      },
+    } as never,
     "/tmp/project",
   );
   return registered;

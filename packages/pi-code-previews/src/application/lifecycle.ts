@@ -1,4 +1,5 @@
 /** Effect-managed Pi boundary for code previews. */
+import { isFunctionValue, isStringValue } from "pi-cosmic-core";
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -57,7 +58,7 @@ function captureSessionHost(ctx: Pick<ExtensionContext, "cwd" | "signal">): Capt
   try {
     const cwd = ctx.cwd;
     const signal = ctx.signal;
-    if (typeof cwd !== "string" || cwd.length === 0) return { kind: "Unavailable" };
+    if (!isStringValue(cwd) || cwd.length === 0) return { kind: "Unavailable" };
     return { kind: "Captured", cwd, signal, aborted: signal?.aborted === true };
   } catch {
     return { kind: "Unavailable" };
@@ -67,7 +68,7 @@ function captureSessionHost(ctx: Pick<ExtensionContext, "cwd" | "signal">): Capt
 function readProjectTrust(ctx: { readonly isProjectTrusted?: () => boolean }): boolean {
   try {
     const isProjectTrusted = ctx.isProjectTrusted;
-    return typeof isProjectTrusted !== "function" || isProjectTrusted.call(ctx) === true;
+    return !isFunctionValue(isProjectTrusted) || isProjectTrusted.call(ctx) === true;
   } catch {
     return false;
   }
@@ -177,12 +178,14 @@ export function codePreviewsWithDependencies(
     const projectTrusted = readProjectTrust(ctx);
     return slot
       .start(
-        {
-          cwd: capturedHost.cwd,
-          projectTrusted,
-          ...(capturedHost.signal ? { signal: capturedHost.signal } : {}),
-          notifyFailure,
-        },
+        (() => {
+          const objectPart5844_0 = { cwd: capturedHost.cwd, projectTrusted };
+          const objectPart5844_1 = capturedHost.signal
+            ? { ...objectPart5844_0, signal: capturedHost.signal }
+            : objectPart5844_0;
+          const objectPart5844_2 = { ...objectPart5844_1, notifyFailure };
+          return objectPart5844_2;
+        })(),
         capturedHost.signal,
       )
       .then(() => undefined);

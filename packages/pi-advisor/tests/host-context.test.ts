@@ -6,6 +6,11 @@ import {
   registerAdvisorAbortListenerAtHostBoundary,
 } from "../src/boundary/host-context.ts";
 
+const abortSignalFixture = <Fixture extends object>(fixture: Fixture): Fixture & AbortSignal => {
+  // SAFETY: Each caller exercises only the AbortSignal members implemented by its fixture.
+  return fixture as Fixture & AbortSignal;
+};
+
 interface TestAbortSignal {
   readonly signal: AbortSignal;
   readonly addCount: () => number;
@@ -21,6 +26,7 @@ const makeAbortSignal = (
 ): TestAbortSignal => {
   let addCount = 0;
   let removeCount = 0;
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const signal = {
     get aborted() {
       return options.aborted ?? false;
@@ -33,7 +39,7 @@ const makeAbortSignal = (
       removeCount += 1;
       options.onRemove?.(listener);
     },
-  } as unknown as AbortSignal;
+  } as AbortSignal;
   return {
     signal,
     addCount: () => addCount,
@@ -41,6 +47,7 @@ const makeAbortSignal = (
   };
 };
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const safeContext = (): ExtensionContext =>
   Object.defineProperties(
     {},
@@ -63,6 +70,7 @@ describe("advisor host-context boundary", () => {
       projectTrustCall: 0,
     };
     const modelRegistry = { marker: "captured-registry" };
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const signal = {
       get aborted() {
         reads.aborted += 1;
@@ -70,6 +78,7 @@ describe("advisor host-context boundary", () => {
       },
     } as AbortSignal;
     let ctx!: ExtensionContext;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     ctx = Object.defineProperties(
       {},
       {
@@ -134,6 +143,7 @@ describe("advisor host-context boundary", () => {
     });
     const second = makeAbortSignal();
     let signalReads = 0;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const ctx = Object.defineProperties(safeContext(), {
       signal: {
         configurable: true,
@@ -196,6 +206,7 @@ describe("advisor host-context boundary", () => {
 
   it("redacts failures from every hostile session-input getter", () => {
     const secret = "host-session-secret";
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const cases: ReadonlyArray<{
       readonly name: string;
       readonly make: () => ExtensionContext;
@@ -232,11 +243,11 @@ describe("advisor host-context boundary", () => {
         make: () =>
           Object.defineProperty(safeContext(), "signal", {
             get: () =>
-              ({
+              abortSignalFixture({
                 get aborted() {
                   throw new Error(secret);
                 },
-              }) as unknown as AbortSignal,
+              }),
           }),
       },
       {
@@ -314,7 +325,7 @@ describe("advisor host-context boundary", () => {
   it("closes the race when the signal aborts after capture but before registration", () => {
     let aborted = false;
     let deliveries = 0;
-    const signal = {
+    const signal = abortSignalFixture({
       get aborted() {
         return aborted;
       },
@@ -322,7 +333,7 @@ describe("advisor host-context boundary", () => {
         aborted = true;
       },
       removeEventListener() {},
-    } as unknown as AbortSignal;
+    });
 
     const result = registerAdvisorAbortListenerAtHostBoundary(
       { signal, signalAborted: false },

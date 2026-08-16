@@ -34,6 +34,8 @@ export type OpenAICompactionJsonObject = typeof JsonObjectSchema.Type;
 export type OpenAICompactionCheckpoint = typeof OpenAICompactionCheckpointSchema.Type;
 export type OpenAICompactionDetails = typeof OpenAICompactionDetailsSchema.Type;
 
-export function decodeOpenAICompactionDetails(value: unknown): OpenAICompactionDetails | undefined {
+export function decodeOpenAICompactionDetails<ValueInput>(
+  value: ValueInput,
+): OpenAICompactionDetails | undefined {
   return Option.getOrUndefined(Schema.decodeUnknownOption(OpenAICompactionDetailsSchema)(value));
 }

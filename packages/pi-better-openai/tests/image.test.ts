@@ -14,7 +14,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -87,7 +91,7 @@ function harness(
     join(agentDir, "auth.json"),
     JSON.stringify({ "openai-codex": { type: "oauth", access: "token", accountId: "acct" } }),
   );
-  const ctx = {
+  const contextFixture = {
     cwd,
     hasUI: true,
     model: { provider: "openai-codex", id: "gpt-5.5" },
@@ -96,7 +100,9 @@ function harness(
       isUsingOAuth: () => true,
     },
     ui: { notify() {} },
-  } as unknown as ExtensionContext;
+  };
+  // SAFETY: Image service tests exercise only the context fields implemented here.
+  const ctx = contextFixture as typeof contextFixture & ExtensionContext;
   const config = {
     configPath: join(cwd, ".pi/extensions/pi-better-openai.json"),
     projectConfigPath: "",
@@ -174,6 +180,7 @@ describe("Effect-native OpenAI image service", () => {
           },
         ],
       });
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const requestBody = request?.encodedJsonBody as {
         input?: Array<{ content?: Array<{ image_url?: string }> }>;
       };
@@ -261,6 +268,7 @@ describe("Effect-native OpenAI image service", () => {
     writeFileSync(outside, Buffer.from(PNG_BASE64, "base64"));
     const nodeFs = process.getBuiltinModule("node:fs")!;
     const originalLstat = nodeFs.promises.lstat.bind(nodeFs.promises);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     vi.spyOn(nodeFs.promises, "lstat").mockImplementationOnce(((path, options) =>
       originalLstat(path, options).then((stats) => {
         renameSync(input, `${input}.original`);
@@ -294,14 +302,17 @@ describe("Effect-native OpenAI image service", () => {
     const nodeFs = process.getBuiltinModule("node:fs")!;
     const originalLstat = nodeFs.promises.lstat.bind(nodeFs.promises);
     const originalOpen = nodeFs.promises.open.bind(nodeFs.promises);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     vi.spyOn(nodeFs.promises, "lstat").mockImplementationOnce(((path, options) => {
       renameSync(insideDirectory, `${insideDirectory}-original`);
       symlinkSync(outsideDirectory, insideDirectory);
       return originalLstat(path, options);
     }) as typeof nodeFs.promises.lstat);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     vi.spyOn(nodeFs.promises, "open").mockImplementation(((...args) =>
       originalOpen(...args).then((handle) => {
         const originalRead = handle.readFile.bind(handle);
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         vi.spyOn(handle, "readFile").mockImplementation(((...readArgs) => {
           readCalls++;
           return originalRead(...readArgs);
@@ -1052,25 +1063,18 @@ describe("Effect-native OpenAI image service", () => {
   });
 
   it.effect("returns the exact registered Pi tool contract and current callback context", () => {
-    type RegisteredTool = {
-      parameters: unknown;
-      execute(
-        id: string,
-        params: unknown,
-        signal: AbortSignal | undefined,
-        onUpdate: ((update: unknown) => void) | undefined,
-        ctx: ExtensionContext,
-      ): Promise<unknown>;
-    };
+    type RegisteredTool = ToolDefinition<any, CodexImageResult, any>;
     let registered: RegisteredTool | undefined;
     let currentContext: ExtensionContext | undefined;
-    const pi = {
-      registerTool(tool: unknown) {
-        registered = tool as RegisteredTool;
+    const piFixture = {
+      registerTool(tool: RegisteredTool) {
+        registered = tool;
       },
       registerCommand() {},
       registerMessageRenderer() {},
-    } as unknown as ExtensionAPI;
+    };
+    // SAFETY: Image registration uses only the three ExtensionAPI methods implemented here.
+    const pi = piFixture as typeof piFixture & ExtensionAPI;
     const result: CodexImageResult = {
       id: "ig_contract",
       status: "completed",
@@ -1081,11 +1085,13 @@ describe("Effect-native OpenAI image service", () => {
       action: "auto",
       outputFormat: "png",
     };
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const run = <A, E>(_effect: Effect.Effect<A, E, OpenAIImageService>): Promise<A> =>
-      Promise.resolve(result as unknown as A);
+      Promise.resolve(result as A);
     registerOpenAIImage(pi, run, (ctx) => {
       currentContext = ctx;
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const ctx = { model: { id: "gpt-5.5" } } as ExtensionContext;
     const onUpdate = vi.fn();
     return Effect.gen(function* () {

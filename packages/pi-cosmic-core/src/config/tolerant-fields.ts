@@ -2,7 +2,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { JsonObject } from "../platform/json-document.ts";
 
-const JsonRecordSchema = Schema.Record(Schema.String, Schema.Json);
+const JsonRecordSchema = Schema.Record(Schema.String, Schema.MutableJson);
 
 export interface TolerantFieldDiagnostic {
   readonly path: string;
@@ -33,8 +33,8 @@ export interface TolerantFieldResult<Fields extends TolerantFieldSchemas> {
  * Decodes each owned field independently. A malformed field is omitted without discarding valid
  * siblings, and diagnostics contain paths only (never values or parse details).
  */
-export const decodeTolerantFields = <const Fields extends TolerantFieldSchemas>(
-  input: unknown,
+export const decodeTolerantFields = <Input, const Fields extends TolerantFieldSchemas>(
+  input: Input,
   fields: Fields,
   options: TolerantFieldOptions = {},
 ): TolerantFieldResult<Fields> => {

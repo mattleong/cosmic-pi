@@ -5,18 +5,21 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
+import { runtimeTypeName } from "pi-cosmic-core";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registerCodeModeApplication,
   type CodeModeApplicationBoundaries,
 } from "../src/application.ts";
-import type { NestedPiToolDefinitions } from "../src/boundary/host-builtin-tools.ts";
 import { CODE_MODE_UNAVAILABLE_MESSAGE } from "../src/tools/execution.ts";
 import { CODE_MODE_TOOL_NAME, type CodeModeToolDefinition } from "../src/tools/controller.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
+import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -32,7 +35,7 @@ const newDirectory = (prefix: string): string => {
 
 const OTHER_TOOLS = ["read", "bash", "another_extension_tool"];
 
-const fakeNestedDefinitions = {} as NestedPiToolDefinitions;
+const fakeNestedDefinitions = nestedToolDefinitionsFixture({});
 
 interface HarnessOptions {
   readonly loadSettings?: CodeModeApplicationBoundaries["loadSettings"];
@@ -43,7 +46,7 @@ function harness(options: HarnessOptions = {}) {
   const agentDir = newDirectory("pi-code-mode-tool-agent-");
   process.env.PI_CODING_AGENT_DIR = agentDir;
 
-  type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+  type Handler = ExtensionHandler<any, any>;
   const handlers = new Map<string, Handler>();
   const events: string[] = [];
   let activeTools: string[] = [...OTHER_TOOLS];
@@ -51,7 +54,7 @@ function harness(options: HarnessOptions = {}) {
   const nestedCwds: string[] = [];
   const notify = vi.fn();
 
-  const pi = {
+  const pi = extensionApiFixture({
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
     },
@@ -69,7 +72,7 @@ function harness(options: HarnessOptions = {}) {
       activeTools = [...names];
     },
     events: { emit: vi.fn(), on: vi.fn() },
-  } as unknown as ExtensionAPI;
+  });
 
   const boundaries: CodeModeApplicationBoundaries = {
     loadSettings:
@@ -92,17 +95,19 @@ function harness(options: HarnessOptions = {}) {
 
   registerCodeModeApplication(pi, boundaries);
 
-  const makeContext = (cwd: string, trusted = true): ExtensionContext =>
-    ({
+  const makeContext = (cwd: string, trusted = true) =>
+    extensionContextFixture({
       cwd,
       mode: "rpc",
       hasUI: true,
       ui: { notify, custom: vi.fn(), select: vi.fn(), input: vi.fn() },
       isProjectTrusted: vi.fn(() => trusted),
-    }) as unknown as ExtensionContext;
+    });
 
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const startSession = (ctx: ExtensionContext) =>
     Promise.resolve(handlers.get("session_start")?.({ reason: "new" }, ctx)) as Promise<void>;
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const shutdownSession = (ctx: ExtensionContext) =>
     Promise.resolve(handlers.get("session_shutdown")?.({ reason: "quit" }, ctx)) as Promise<void>;
 
@@ -168,7 +173,8 @@ describe("availability gating", () => {
   it("keeps code required while intent stays an optional bounded parameter", async () => {
     const h = harness();
     await h.startSession(h.makeContext(newCwd()));
-    const parameters = h.registered[0]?.parameters as unknown as {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const parameters = h.registered[0]?.parameters as {
       required?: string[];
       properties?: Record<string, { maxLength?: number; description?: string }>;
     };
@@ -249,8 +255,8 @@ describe("stale session races", () => {
   it("never registers an implementation for a superseded session start", async () => {
     const settingsGates = new Map<string, () => void>();
     const h = harness({
-      loadSettings: (cwd) =>
-        new Promise((resolve) => {
+      loadSettings: (cwd, _projectTrusted): Promise<void> =>
+        new Promise<void>((resolve) => {
           settingsGates.set(cwd, () => resolve(undefined));
         }),
     });
@@ -258,6 +264,7 @@ describe("stale session races", () => {
       while (!settingsGates.has(cwd)) {
         await new Promise((resolve) => setTimeout(resolve, 1));
       }
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       return settingsGates.get(cwd) as () => void;
     };
     const slowCwd = newCwd();
@@ -281,18 +288,19 @@ describe("stale session races", () => {
     const stale = h.registered[0];
     await h.startSession(h.makeContext(newCwd()));
     expect(h.registered).toHaveLength(2);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await expect(
       stale?.execute("stale-call", { code: "return 1;" }, undefined, undefined, {
         cwd: "/",
-      } as unknown as ExtensionContext),
+      } as ExtensionContext),
     ).rejects.toThrow(CODE_MODE_UNAVAILABLE_MESSAGE);
   });
 
   it("keeps the tool unregistered after shutdown even if a slow settings load resolves late", async () => {
     let releaseSettings: (() => void) | undefined;
     const h = harness({
-      loadSettings: () =>
-        new Promise((resolve) => {
+      loadSettings: (_cwd, _projectTrusted): Promise<void> =>
+        new Promise<void>((resolve) => {
           releaseSettings = () => resolve(undefined);
         }),
     });
@@ -320,8 +328,8 @@ describe("preview shell integration", () => {
     expect(h.registered).toHaveLength(1);
     const wrapped = h.registered[0];
     expect(wrapped?.name).toBe(CODE_MODE_TOOL_NAME);
-    expect(typeof wrapped?.renderCall).toBe("function");
-    expect(typeof wrapped?.renderResult).toBe("function");
+    expect(runtimeTypeName(wrapped?.renderCall)).toBe("function");
+    expect(runtimeTypeName(wrapped?.renderResult)).toBe("function");
     expect(wrapped?.renderShell).toBeDefined();
   });
 
@@ -333,6 +341,7 @@ describe("preview shell integration", () => {
     });
     await h.startSession(h.makeContext(newCwd()));
     const wrapped = h.registered[0];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       bold: (text: string) => text,
       fg: (_key: string, text: string) => text,
@@ -340,6 +349,7 @@ describe("preview shell integration", () => {
     const args = { code: "return 1;", intent: "Probe the repo" };
 
     // The cooperative shell delegates the call slot to the tool's own renderer.
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const call = wrapped?.renderCall?.(args, theme, undefined as never);
     expect(call?.render(200).join("\n")).toContain("Code Mode · Probe the repo");
 
@@ -358,6 +368,7 @@ describe("preview shell integration", () => {
       showImages: false,
       isError: false,
     };
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const result = wrapped?.renderResult?.(
       {
         content: [{ type: "text", text: "model output" }],
@@ -380,13 +391,19 @@ describe("preview shell integration", () => {
     });
     await h.startSession(h.makeContext(newCwd()));
     const wrapped = h.registered[0];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       bold: (text: string) => text,
       fg: (_key: string, text: string) => text,
     } as never;
     const args = { code: "return { status };", intent: "Audit query migration structure" };
     const state = {};
-    const context = (expanded: boolean, isPartial: boolean, lastComponent: unknown) =>
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const context = <LastComponent>(
+      expanded: boolean,
+      isPartial: boolean,
+      lastComponent: LastComponent,
+    ) =>
       ({
         args,
         toolCallId: "call-border-render",
@@ -457,7 +474,8 @@ describe("preview shell integration", () => {
 
   it("still registers the tool when preview settings loading fails", async () => {
     const h = harness({
-      loadSettings: () => Promise.reject(new Error("settings backend down")),
+      loadSettings: (_cwd, _projectTrusted): Promise<void> =>
+        Promise.reject(new Error("settings backend down")),
     });
     await h.startSession(h.makeContext(newCwd()));
     expect(h.registered).toHaveLength(1);

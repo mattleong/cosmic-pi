@@ -3,16 +3,13 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  initTheme,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { stripAnsi } from "pi-cosmic-core";
+import * as Schema from "effect/Schema";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   openSettingsSurfaceAtHostBoundary,
@@ -20,6 +17,7 @@ import {
 } from "../src/boundary/host-ui.ts";
 import codeMode from "../src/extension.ts";
 import { CODE_MODE_UNTRUSTED_NOTICE } from "../src/settings/controller.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -27,15 +25,32 @@ afterEach(() => {
   delete process.env.PI_CODING_AGENT_DIR;
 });
 
-type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+type Handler = ExtensionHandler<any, any>;
 type Completion = { value: string; label: string; description?: string };
-type CommandDefinition = {
-  handler: (args: string, ctx: ExtensionContext) => unknown;
-  getArgumentCompletions?: (prefix: string) => Completion[] | null;
-};
+type CommandDefinition = Parameters<ExtensionAPI["registerCommand"]>[1];
 type SettingsComponent = {
   render(width: number): string[];
-  handleInput(data: string): void;
+  handleInput?(data: string): void;
+};
+
+type SettingsTui = Parameters<SettingsSurfaceFactory>[0];
+const settingsTui = <Fixture extends object>(fixture: Fixture): Fixture & SettingsTui => {
+  // SAFETY: Settings surfaces use only requestRender from these TUI fixtures.
+  return fixture as Fixture & SettingsTui;
+};
+
+type SettingsTheme = Parameters<SettingsSurfaceFactory>[1];
+const settingsTheme = <Fixture extends object>(fixture: Fixture): Fixture & SettingsTheme => {
+  // SAFETY: Settings surfaces use only fg and bold from these theme fixtures.
+  return fixture as Fixture & SettingsTheme;
+};
+
+type SettingsKeybindings = Parameters<SettingsSurfaceFactory>[2];
+const settingsKeybindings = <Fixture extends object>(
+  fixture: Fixture,
+): Fixture & SettingsKeybindings => {
+  // SAFETY: These scenarios do not invoke keybinding-manager methods.
+  return fixture as Fixture & SettingsKeybindings;
 };
 
 function harness(options: { trusted?: boolean } = {}) {
@@ -52,7 +67,7 @@ function harness(options: { trusted?: boolean } = {}) {
   const custom = vi.fn();
   const select = vi.fn(() => Promise.resolve<string | undefined>(undefined));
   const input = vi.fn(() => Promise.resolve<string | undefined>(undefined));
-  const pi = {
+  const pi = extensionApiFixture({
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
     },
@@ -61,22 +76,24 @@ function harness(options: { trusted?: boolean } = {}) {
     },
     registerTool,
     events: { emit: vi.fn(), on: vi.fn() },
-  } as unknown as ExtensionAPI;
-  const ctx = {
+  });
+  const ctx = extensionContextFixture({
     cwd,
     mode: "tui",
     hasUI: true,
     ui: { notify, custom, select, input },
     isProjectTrusted: vi.fn(() => trusted),
-  } as unknown as ExtensionContext;
+  });
 
   codeMode(pi);
   const command = commands.get("code-mode-settings");
   const globalPath = join(agentDir, "extensions", "pi-code-mode.json");
   const projectPath = join(cwd, ".pi", "extensions", "pi-code-mode.json");
-  const readDoc = (path: string): Record<string, unknown> =>
-    JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-  const writeDoc = (path: string, document: unknown) => {
+  const readDoc = (path: string): Schema.JsonObject =>
+    Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(
+      JSON.parse(readFileSync(path, "utf8")),
+    );
+  const writeDoc = (path: string, document: Schema.JsonObject) => {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify(document)}\n`);
   };
@@ -101,16 +118,20 @@ function harness(options: { trusted?: boolean } = {}) {
   };
 }
 
-const completionValues = (result: Completion[] | null | undefined): string[] | null =>
-  result ? result.map((completion) => completion.value) : null;
+const completionValues = async (
+  result: Completion[] | Promise<Completion[] | null> | null | undefined,
+): Promise<string[] | null> => {
+  const completions = await result;
+  return completions ? completions.map((completion) => completion.value) : null;
+};
 
 describe("/code-mode-settings", () => {
-  test("completes ids, scopes, verbs, values, and inherit", () => {
+  test("completes ids, scopes, verbs, values, and inherit", async () => {
     const h = harness();
     const complete = h.command?.getArgumentCompletions;
     expect(complete).toBeTypeOf("function");
 
-    expect(completionValues(complete?.(""))).toEqual([
+    expect(await completionValues(complete?.(""))).toEqual([
       "enabled",
       "timeoutMs",
       "maxToolCalls",
@@ -123,14 +144,14 @@ describe("/code-mode-settings", () => {
       "status",
       "help",
     ]);
-    expect(completionValues(complete?.("timeo"))).toEqual(["timeoutMs"]);
-    expect(completionValues(complete?.("enabled "))).toEqual([
+    expect(await completionValues(complete?.("timeo"))).toEqual(["timeoutMs"]);
+    expect(await completionValues(complete?.("enabled "))).toEqual([
       "enabled true",
       "enabled false",
       "enabled inherit",
     ]);
-    expect(completionValues(complete?.("project enab"))).toEqual(["project enabled"]);
-    expect(completionValues(complete?.("project enabled "))).toEqual([
+    expect(await completionValues(complete?.("project enab"))).toEqual(["project enabled"]);
+    expect(await completionValues(complete?.("project enabled "))).toEqual([
       "project enabled true",
       "project enabled false",
       "project enabled inherit",
@@ -171,6 +192,7 @@ describe("/code-mode-settings", () => {
     await h.start();
 
     await h.command?.handler("status", h.ctx);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const message = h.notify.mock.calls.at(-1)?.[0] as string;
     expect(message).toContain("enabled = true (default)");
     expect(message).toContain("timeoutMs = 60000 (global)");
@@ -268,17 +290,11 @@ describe("/code-mode-settings", () => {
     let component: SettingsComponent | undefined;
     const done = vi.fn();
     h.custom.mockImplementation((factory) => {
-      component = (
-        factory as (
-          tui: unknown,
-          theme: unknown,
-          keybindings: unknown,
-          doneFn: unknown,
-        ) => SettingsComponent
-      )(
-        { requestRender: vi.fn() },
-        { fg: (_tone: string, text: string) => text, bold: (text: string) => text },
-        {},
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      component = (factory as SettingsSurfaceFactory)(
+        settingsTui({ requestRender: vi.fn() }),
+        settingsTheme({ fg: (_tone: string, text: string) => text, bold: (text: string) => text }),
+        settingsKeybindings({}),
         done,
       );
       return Promise.resolve(undefined);
@@ -296,13 +312,13 @@ describe("/code-mode-settings", () => {
     expect(page).toMatch(/Code Mode enabled\s+inherit/);
 
     // Enter cycles the first row from `inherit` to `true` and persists it in project scope.
-    component!.handleInput("\r");
+    component!.handleInput?.("\r");
     await vi.waitFor(() => {
       expect(h.readDoc(h.projectPath)).toEqual({ enabled: true });
     });
     expect(stripAnsi(component!.render(120).join("\n"))).toMatch(/Code Mode enabled\s+true/);
 
-    component!.handleInput("q");
+    component!.handleInput?.("q");
     expect(done).toHaveBeenCalledWith(undefined);
     await h.shutdown();
   });
@@ -323,17 +339,11 @@ describe("/code-mode-settings", () => {
     let component: SettingsComponent | undefined;
     const done = vi.fn();
     h.custom.mockImplementation((factory) => {
-      component = (
-        factory as (
-          tui: unknown,
-          theme: unknown,
-          keybindings: unknown,
-          doneFn: unknown,
-        ) => SettingsComponent
-      )(
-        { requestRender: vi.fn() },
-        { fg: (_tone: string, text: string) => text, bold: (text: string) => text },
-        {},
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      component = (factory as SettingsSurfaceFactory)(
+        settingsTui({ requestRender: vi.fn() }),
+        settingsTheme({ fg: (_tone: string, text: string) => text, bold: (text: string) => text }),
+        settingsKeybindings({}),
         done,
       );
       return Promise.resolve(undefined);
@@ -343,7 +353,7 @@ describe("/code-mode-settings", () => {
     await h.command?.handler("", h.ctx);
     expect(h.custom).toHaveBeenCalledTimes(1);
     // Move to the timeoutMs row; Enter cycles its last preset (300000) onto `custom…`.
-    component!.handleInput("\x1b[B");
+    component!.handleInput?.("\x1b[B");
     return component!;
   };
 
@@ -352,7 +362,7 @@ describe("/code-mode-settings", () => {
     h.input.mockResolvedValue("25000");
     const component = await openSurfaceAtLastTimeoutPreset(h);
 
-    component.handleInput("\r");
+    component.handleInput?.("\r");
     await vi.waitFor(() => {
       expect(h.input).toHaveBeenCalledTimes(1);
     });
@@ -374,7 +384,7 @@ describe("/code-mode-settings", () => {
     h.input.mockResolvedValue("nope");
     const component = await openSurfaceAtLastTimeoutPreset(h);
 
-    component.handleInput("\r");
+    component.handleInput?.("\r");
     await vi.waitFor(() => {
       expect(h.notify).toHaveBeenCalledWith(
         expect.stringContaining("Invalid value for timeoutMs"),
@@ -395,7 +405,7 @@ describe("/code-mode-settings", () => {
     h.input.mockResolvedValue(undefined);
     const component = await openSurfaceAtLastTimeoutPreset(h);
 
-    component.handleInput("\r");
+    component.handleInput?.("\r");
     await vi.waitFor(() => {
       expect(h.input).toHaveBeenCalledTimes(1);
     });
@@ -416,7 +426,7 @@ describe("/code-mode-settings", () => {
     });
     const component = await openSurfaceAtLastTimeoutPreset(h);
 
-    component.handleInput("\r");
+    component.handleInput?.("\r");
     await vi.waitFor(() => {
       expect(h.notify).toHaveBeenCalledWith(
         "Unable to read a custom value for timeoutMs.",
@@ -437,7 +447,7 @@ describe("/code-mode-settings", () => {
     h.input.mockImplementation(() => Promise.reject(new Error("rejected input")));
     const component = await openSurfaceAtLastTimeoutPreset(h);
 
-    component.handleInput("\r");
+    component.handleInput?.("\r");
     await vi.waitFor(() => {
       expect(h.notify).toHaveBeenCalledWith(
         "Unable to read a custom value for timeoutMs.",
@@ -460,17 +470,11 @@ describe("/code-mode-settings", () => {
       throw new Error("hostile requestRender");
     });
     h.custom.mockImplementation((factory) => {
-      component = (
-        factory as (
-          tui: unknown,
-          theme: unknown,
-          keybindings: unknown,
-          doneFn: unknown,
-        ) => SettingsComponent
-      )(
-        { requestRender: hostileRender },
-        { fg: (_tone: string, text: string) => text, bold: (text: string) => text },
-        {},
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      component = (factory as SettingsSurfaceFactory)(
+        settingsTui({ requestRender: hostileRender }),
+        settingsTheme({ fg: (_tone: string, text: string) => text, bold: (text: string) => text }),
+        settingsKeybindings({}),
         vi.fn(),
       );
       return Promise.resolve(undefined);
@@ -482,7 +486,7 @@ describe("/code-mode-settings", () => {
     );
 
     // Even with a throwing requestRender, applying a value persists and does not hang.
-    component!.handleInput("\r");
+    component!.handleInput?.("\r");
     await vi.waitFor(() => {
       expect(h.readDoc(h.globalPath)).toEqual({ enabled: true });
     });
@@ -511,7 +515,7 @@ describe("/code-mode-settings", () => {
     const h = harness();
     initTheme(undefined, false);
     await h.start();
-    let component: (SettingsComponent & { invalidate(): void }) | undefined;
+    let component: ReturnType<SettingsSurfaceFactory> | undefined;
     const done = vi.fn(() => {
       throw new Error("hostile done");
     });
@@ -519,22 +523,16 @@ describe("/code-mode-settings", () => {
     // stack, with a theme whose `bold` throws during surface construction.
     h.custom.mockImplementation((factory) =>
       Promise.resolve().then(() => {
-        component = (
-          factory as (
-            tui: unknown,
-            theme: unknown,
-            keybindings: unknown,
-            doneFn: unknown,
-          ) => SettingsComponent & { invalidate(): void }
-        )(
-          { requestRender: vi.fn() },
-          {
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        component = (factory as SettingsSurfaceFactory)(
+          settingsTui({ requestRender: vi.fn() }),
+          settingsTheme({
             fg: (_tone: string, text: string) => text,
             bold: () => {
               throw new Error("hostile theme");
             },
-          },
-          {},
+          }),
+          settingsKeybindings({}),
           done,
         );
         return undefined;
@@ -549,7 +547,7 @@ describe("/code-mode-settings", () => {
     expect(done).toHaveBeenCalledWith(undefined);
     // The neutral replacement component is total for render/input/invalidate.
     expect(component!.render(120)).toEqual([]);
-    expect(() => component!.handleInput("\r")).not.toThrow();
+    expect(() => component!.handleInput?.("\r")).not.toThrow();
     expect(() => component!.invalidate()).not.toThrow();
     await h.shutdown();
   });
@@ -562,17 +560,11 @@ describe("/code-mode-settings", () => {
       throw new Error("hostile done");
     });
     h.custom.mockImplementation((factory) => {
-      component = (
-        factory as (
-          tui: unknown,
-          theme: unknown,
-          keybindings: unknown,
-          doneFn: unknown,
-        ) => SettingsComponent
-      )(
-        { requestRender: vi.fn() },
-        { fg: (_tone: string, text: string) => text, bold: (text: string) => text },
-        {},
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      component = (factory as SettingsSurfaceFactory)(
+        settingsTui({ requestRender: vi.fn() }),
+        settingsTheme({ fg: (_tone: string, text: string) => text, bold: (text: string) => text }),
+        settingsKeybindings({}),
         done,
       );
       return Promise.resolve(undefined);
@@ -582,7 +574,7 @@ describe("/code-mode-settings", () => {
     await h.command?.handler("", h.ctx);
     expect(component).toBeDefined();
     // Cancelling delegates to the host `done`; its throw stays behind the guard.
-    expect(() => component!.handleInput("q")).not.toThrow();
+    expect(() => component!.handleInput?.("q")).not.toThrow();
     expect(done).toHaveBeenCalledWith(undefined);
     await h.shutdown();
   });
@@ -593,17 +585,11 @@ describe("/code-mode-settings", () => {
     initTheme(undefined, false);
     let component: SettingsComponent | undefined;
     h.custom.mockImplementation((factory) => {
-      component = (
-        factory as (
-          tui: unknown,
-          theme: unknown,
-          keybindings: unknown,
-          doneFn: unknown,
-        ) => SettingsComponent
-      )(
-        { requestRender: vi.fn() },
-        { fg: (_tone: string, text: string) => text, bold: (text: string) => text },
-        {},
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      component = (factory as SettingsSurfaceFactory)(
+        settingsTui({ requestRender: vi.fn() }),
+        settingsTheme({ fg: (_tone: string, text: string) => text, bold: (text: string) => text }),
+        settingsKeybindings({}),
         vi.fn(),
       );
       return Promise.resolve(undefined);
@@ -613,7 +599,8 @@ describe("/code-mode-settings", () => {
     await h.command?.handler("", h.ctx);
     // A hostile host may deliver non-string input data; delegation resolves to the bridge
     // fallback instead of throwing into the host, and the surface keeps working afterwards.
-    expect(() => component!.handleInput(undefined as unknown as string)).not.toThrow();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    expect(() => component!.handleInput?.(undefined as undefined & string)).not.toThrow();
     expect(stripAnsi(component!.render(120).join("\n"))).toContain(
       "Code Mode Settings — global scope",
     );
@@ -623,7 +610,7 @@ describe("/code-mode-settings", () => {
 
 describe("openSettingsSurfaceAtHostBoundary", () => {
   const fakeCtx = (custom: (factory: SettingsSurfaceFactory) => Promise<undefined>) =>
-    ({ ui: { custom } }) as unknown as ExtensionCommandContext;
+    extensionContextFixture({ ui: { custom } });
 
   test("a stale post-settlement factory invocation stays contained", async () => {
     let captured: SettingsSurfaceFactory | undefined;
@@ -644,6 +631,7 @@ describe("openSettingsSurfaceAtHostBoundary", () => {
     });
     let component: ReturnType<SettingsSurfaceFactory> | undefined;
     expect(() => {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       component = captured!(undefined as never, undefined as never, undefined as never, done);
     }).not.toThrow();
     expect(done).toHaveBeenCalledWith(undefined);
@@ -673,6 +661,7 @@ describe("openSettingsSurfaceAtHostBoundary", () => {
     const hostileDone = vi.fn(() => {
       throw new Error("hostile done");
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     captured!(undefined as never, undefined as never, undefined as never, hostileDone);
     // The caller's cancel path invokes the guarded done without observing the host throw.
     expect(() => receivedDone!(undefined)).not.toThrow();

@@ -16,7 +16,7 @@ import { safeText } from "../ui/render.ts";
 import { captureExternalEditorCommand, editWithExternalEditor } from "./host-external-editor.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
-export interface HostDialogsShape {
+export interface HostDialogsContract {
   readonly ask: (request: AskUserRequest) => Effect.Effect<AskUserOutcome, AskUserHostError>;
 }
 
@@ -186,7 +186,7 @@ async function runTui(
   }
 }
 
-export class HostDialogs extends Context.Service<HostDialogs, HostDialogsShape>()(
+export class HostDialogs extends Context.Service<HostDialogs, HostDialogsContract>()(
   "pi-ask-user/boundary/host-dialogs/HostDialogs",
 ) {
   static layer(ctx: ExtensionContext, bridge: AskUserDialogBridge): Layer.Layer<HostDialogs> {

@@ -64,38 +64,48 @@ export const makeCandidateFieldSelector = (
     profile: options.profile,
     parentEffort: options.parentEffort,
   };
-  return new SearchableSelectPage<string>({
-    theme: options.theme,
-    breadcrumb: `/subagents profiles › ${options.profile} › candidate ${options.candidateIndex + 1} › ${label}`,
-    title: `Choose ${label.toLowerCase()}`,
-    subtitle: `${options.profile} · candidate ${options.candidateIndex + 1} · current: ${row?.value ?? current}`,
-    ...(options.notice ? { notice: options.notice } : {}),
-    choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map(
-      (choice) => ({
-        value: choice.value,
-        item: {
-          value: choice.value,
-          label: `${choice.label}${choice.value === current ? " (current)" : ""}`,
-          description: choice.description,
-        },
-        searchText: `${choice.value} ${choice.label} ${choice.description}`,
-        payload: choice.value,
-      }),
-    ),
-    current,
-    emptyText: "No matching values",
-    getHeight: options.getHeight,
-    requestRender: options.requestRender,
-    matchesKeybinding: options.matchesKeybinding,
-    keybindingLabel: options.keybindingLabel,
-    select: (value) =>
-      options.select(
-        selectCandidateField(options.candidate, options.field, value, changeOptions),
-        `${label} updated`,
-        value,
-      ),
-    cancel: () => options.cancel(label),
-  });
+  return new SearchableSelectPage<string>(
+    (() => {
+      const objectPart2615_0 = {
+        theme: options.theme,
+        breadcrumb: `/subagents profiles › ${options.profile} › candidate ${options.candidateIndex + 1} › ${label}`,
+        title: `Choose ${label.toLowerCase()}`,
+        subtitle: `${options.profile} · candidate ${options.candidateIndex + 1} · current: ${row?.value ?? current}`,
+      };
+      const objectPart2615_1 = options.notice
+        ? { ...objectPart2615_0, notice: options.notice }
+        : objectPart2615_0;
+      const objectPart2615_2 = {
+        ...objectPart2615_1,
+        choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map(
+          (choice) => ({
+            value: choice.value,
+            item: {
+              value: choice.value,
+              label: `${choice.label}${choice.value === current ? " (current)" : ""}`,
+              description: choice.description,
+            },
+            searchText: `${choice.value} ${choice.label} ${choice.description}`,
+            payload: choice.value,
+          }),
+        ),
+        current,
+        emptyText: "No matching values",
+        getHeight: options.getHeight,
+        requestRender: options.requestRender,
+        matchesKeybinding: options.matchesKeybinding,
+        keybindingLabel: options.keybindingLabel,
+        select: (value: string) =>
+          options.select(
+            selectCandidateField(options.candidate, options.field, value, changeOptions),
+            `${label} updated`,
+            value,
+          ),
+        cancel: () => options.cancel(label),
+      };
+      return objectPart2615_2;
+    })(),
+  );
 };
 
 export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
@@ -111,37 +121,47 @@ export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
 export const makeProfileSearchSelector = (
   options: ProfileSearchSelectorOptions,
 ): SearchableSelectPage<string> =>
-  new SearchableSelectPage<string>({
-    theme: options.theme,
-    breadcrumb: "/subagents profiles › search",
-    title: "Search profiles",
-    subtitle: "Choose a profile to open its effective ordered route",
-    choices: PROFILE_IDS.map((profile) => ({
-      value: profile,
-      item: {
-        value: profile,
-        label: `${profile}${profile === "generalist" ? " · when omitted" : ""}`,
-        description: effectiveProfileSummary(
-          options.inspection,
-          profile,
-          options.parentEffort,
-          options.parentModel,
-        ),
-      },
-      searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${effectiveProfileSummary(options.inspection, profile, options.parentEffort, options.parentModel)}`,
-      payload: profile,
-    })),
-    current: options.current,
-    initialSearchMode: true,
-    ...(options.initialQuery ? { initialQuery: options.initialQuery } : {}),
-    emptyText: "No matching profiles",
-    getHeight: options.getHeight,
-    requestRender: options.requestRender,
-    matchesKeybinding: options.matchesKeybinding,
-    keybindingLabel: options.keybindingLabel,
-    select: (value) => {
-      const profile = PROFILE_IDS.find((entry) => entry === value);
-      if (profile) options.select(profile);
-    },
-    cancel: options.cancel,
-  });
+  new SearchableSelectPage<string>(
+    (() => {
+      const objectPart4405_0 = {
+        theme: options.theme,
+        breadcrumb: "/subagents profiles › search",
+        title: "Search profiles",
+        subtitle: "Choose a profile to open its effective ordered route",
+        choices: PROFILE_IDS.map((profile) => ({
+          value: profile,
+          item: {
+            value: profile,
+            label: `${profile}${profile === "generalist" ? " · when omitted" : ""}`,
+            description: effectiveProfileSummary(
+              options.inspection,
+              profile,
+              options.parentEffort,
+              options.parentModel,
+            ),
+          },
+          searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${effectiveProfileSummary(options.inspection, profile, options.parentEffort, options.parentModel)}`,
+          payload: profile,
+        })),
+        current: options.current,
+        initialSearchMode: true,
+      };
+      const objectPart4405_1 = options.initialQuery
+        ? { ...objectPart4405_0, initialQuery: options.initialQuery }
+        : objectPart4405_0;
+      const objectPart4405_2 = {
+        ...objectPart4405_1,
+        emptyText: "No matching profiles",
+        getHeight: options.getHeight,
+        requestRender: options.requestRender,
+        matchesKeybinding: options.matchesKeybinding,
+        keybindingLabel: options.keybindingLabel,
+        select: (value: string) => {
+          const profile = PROFILE_IDS.find((entry) => entry === value);
+          if (profile) options.select(profile);
+        },
+        cancel: options.cancel,
+      };
+      return objectPart4405_2;
+    })(),
+  );

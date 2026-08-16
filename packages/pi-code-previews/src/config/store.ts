@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import {
@@ -16,7 +17,7 @@ export type { LoadSettingsOptions } from "./document-store";
 export {
   CodePreviewSettingsService,
   settingsSaveContextProjection,
-  type CodePreviewSettingsServiceShape,
+  type CodePreviewSettingsServiceContract,
   type CodePreviewSettingsState,
 } from "./service";
 
@@ -57,12 +58,12 @@ export function flushSettingsSaveQueue(): Promise<void> {
   return runSettingsEffect(CodePreviewSettingsService.use((service) => service.flush));
 }
 
-export function formatSettingsSaveError(error: unknown): string {
+export function formatSettingsSaveError<ErrorInput>(error: ErrorInput): string {
   const message =
-    typeof error === "object" &&
+    hasObjectRuntimeType(error) &&
     error !== null &&
     "message" in error &&
-    typeof error.message === "string"
+    isStringValue(error.message)
       ? error.message
       : "Unknown error.";
   return `Failed to save code preview settings: ${message}`;

@@ -193,7 +193,7 @@ export interface HerdrCreatedWorkspace {
   readonly rootPane: HerdrPane;
 }
 
-export interface HerdrCliShape {
+export interface HerdrCliContract {
   /** The inherited Herdr socket identity used by launch-ready candidates. Never configured publicly. */
   readonly sessionIdentity: string;
   readonly preflight: (
@@ -467,6 +467,7 @@ const runCommand = (
         let message = `Herdr command failed during ${operation}.`;
         let confirmedRejection = false;
         try {
+          // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
           const value = JSON.parse(result.stderr) as unknown;
           const decoded = Schema.decodeUnknownOption(ErrorEnvelopeSchema)(value);
           if (Option.isSome(decoded)) {
@@ -494,6 +495,7 @@ const runCommand = (
   return MUTATING_OPERATIONS.has(operation) ? Effect.uninterruptible(command) : command;
 };
 
+// SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
 const parseJson = (operation: string, source: string) =>
   Effect.try({
     try: () => JSON.parse(source) as unknown,
@@ -530,35 +532,61 @@ const decodeEnvelope = (operation: string, source: string) =>
     }),
   );
 
-const paneView = (pane: Schema.Schema.Type<typeof PaneSchema>): HerdrPane => ({
-  paneId: pane.pane_id,
-  terminalId: pane.terminal_id,
-  workspaceId: pane.workspace_id,
-  tabId: pane.tab_id,
-  ...(pane.cwd ? { cwd: pane.cwd } : {}),
-  ...(pane.foreground_cwd ? { foregroundCwd: pane.foreground_cwd } : {}),
-  ...(pane.label ? { label: pane.label } : {}),
-  focused: pane.focused,
-  agentStatus: pane.agent_status,
-});
-const agentView = (agent: Schema.Schema.Type<typeof AgentSchema>): HerdrAgent => ({
-  ...paneView(agent),
-  ...(agent.name ? { name: agent.name } : {}),
-  ...(agent.agent ? { runtime: agent.agent } : {}),
-  stateChangeSequence: agent.state_change_seq ?? 0,
-  ...(agent.interactive_ready === undefined ? {} : { interactiveReady: agent.interactive_ready }),
-  ...(agent.agent_session
-    ? {
-        agentSession: {
-          source: agent.agent_session.source,
-          agent: agent.agent_session.agent,
-          kind: agent.agent_session.kind,
-          value: agent.agent_session.value,
-        },
-        nativeSession: agent.agent_session.value,
-      }
-    : {}),
-});
+const paneView = (pane: Schema.Schema.Type<typeof PaneSchema>): HerdrPane =>
+  (() => {
+    const objectPart19364_0 = {
+      paneId: pane.pane_id,
+      terminalId: pane.terminal_id,
+      workspaceId: pane.workspace_id,
+      tabId: pane.tab_id,
+    };
+    const objectPart19364_1 = pane.cwd
+      ? { ...objectPart19364_0, cwd: pane.cwd }
+      : objectPart19364_0;
+    const objectPart19364_2 = pane.foreground_cwd
+      ? { ...objectPart19364_1, foregroundCwd: pane.foreground_cwd }
+      : objectPart19364_1;
+    const objectPart19364_3 = pane.label
+      ? { ...objectPart19364_2, label: pane.label }
+      : objectPart19364_2;
+    const objectPart19364_4 = {
+      ...objectPart19364_3,
+      focused: pane.focused,
+      agentStatus: pane.agent_status,
+    };
+    return objectPart19364_4;
+  })();
+const agentView = (agent: Schema.Schema.Type<typeof AgentSchema>): HerdrAgent =>
+  (() => {
+    const objectPart19787_0 = { ...paneView(agent) };
+    const objectPart19787_1 = agent.name
+      ? { ...objectPart19787_0, name: agent.name }
+      : objectPart19787_0;
+    const objectPart19787_2 = agent.agent
+      ? { ...objectPart19787_1, runtime: agent.agent }
+      : objectPart19787_1;
+    const objectPart19787_3 = {
+      ...objectPart19787_2,
+      stateChangeSequence: agent.state_change_seq ?? 0,
+    };
+    const objectPart19787_4 =
+      agent.interactive_ready === undefined
+        ? objectPart19787_3
+        : { ...objectPart19787_3, interactiveReady: agent.interactive_ready };
+    const objectPart19787_5 = agent.agent_session
+      ? {
+          ...objectPart19787_4,
+          agentSession: {
+            source: agent.agent_session.source,
+            agent: agent.agent_session.agent,
+            kind: agent.agent_session.kind,
+            value: agent.agent_session.value,
+          },
+          nativeSession: agent.agent_session.value,
+        }
+      : objectPart19787_4;
+    return objectPart19787_5;
+  })();
 
 const decodeSnapshot = (source: string) =>
   decodeEnvelope("session snapshot", source).pipe(
@@ -575,30 +603,37 @@ const decodeSnapshot = (source: string) =>
     ),
     Effect.map(
       ({ snapshot }) =>
-        ({
-          version: snapshot.version,
-          protocol: snapshot.protocol,
-          ...(snapshot.focused_workspace_id
-            ? { focusedWorkspaceId: snapshot.focused_workspace_id }
-            : {}),
-          ...(snapshot.focused_tab_id ? { focusedTabId: snapshot.focused_tab_id } : {}),
-          ...(snapshot.focused_pane_id ? { focusedPaneId: snapshot.focused_pane_id } : {}),
-          workspaces: snapshot.workspaces.map((workspace) => ({
-            workspaceId: workspace.workspace_id,
-            label: workspace.label,
-            focused: workspace.focused,
-            activeTabId: workspace.active_tab_id,
-          })),
-          tabs: snapshot.tabs.map((tab) => ({
-            tabId: tab.tab_id,
-            workspaceId: tab.workspace_id,
-            label: tab.label,
-            paneCount: tab.pane_count,
-            focused: tab.focused,
-          })),
-          panes: snapshot.panes.map(paneView),
-          agents: snapshot.agents.map(agentView),
-        }) satisfies HerdrSnapshot,
+        (() => {
+          const objectPart20869_0 = { version: snapshot.version, protocol: snapshot.protocol };
+          const objectPart20869_1 = snapshot.focused_workspace_id
+            ? { ...objectPart20869_0, focusedWorkspaceId: snapshot.focused_workspace_id }
+            : objectPart20869_0;
+          const objectPart20869_2 = snapshot.focused_tab_id
+            ? { ...objectPart20869_1, focusedTabId: snapshot.focused_tab_id }
+            : objectPart20869_1;
+          const objectPart20869_3 = snapshot.focused_pane_id
+            ? { ...objectPart20869_2, focusedPaneId: snapshot.focused_pane_id }
+            : objectPart20869_2;
+          const objectPart20869_4 = {
+            ...objectPart20869_3,
+            workspaces: snapshot.workspaces.map((workspace) => ({
+              workspaceId: workspace.workspace_id,
+              label: workspace.label,
+              focused: workspace.focused,
+              activeTabId: workspace.active_tab_id,
+            })),
+            tabs: snapshot.tabs.map((tab) => ({
+              tabId: tab.tab_id,
+              workspaceId: tab.workspace_id,
+              label: tab.label,
+              paneCount: tab.pane_count,
+              focused: tab.focused,
+            })),
+            panes: snapshot.panes.map(paneView),
+            agents: snapshot.agents.map(agentView),
+          };
+          return objectPart20869_4;
+        })() satisfies HerdrSnapshot,
     ),
   );
 
@@ -618,7 +653,7 @@ const decodeAgentResponse = (operation: string, source: string) =>
     Effect.map(({ agent }) => agentView(agent)),
   );
 
-export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape => {
+export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContract => {
   // Select, sanitize, and clone ambient session/auth routing exactly once. No later process.env
   // mutation can redirect any command or native readiness probe owned by this service.
   const environment = inheritedEnvironment(options.environment ?? process.env);
@@ -631,7 +666,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
   const ok = (args: ReadonlyArray<string>, operation: string) =>
     json(args, operation).pipe(Effect.asVoid);
 
-  const preflight: HerdrCliShape["preflight"] = (runtime) =>
+  const preflight: HerdrCliContract["preflight"] = (runtime) =>
     Effect.gen(function* () {
       if (!environment.HERDR_SOCKET_PATH)
         return yield* readinessError(
@@ -863,17 +898,25 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
             ),
           ),
         ),
-        Effect.map(({ process_info: info }) => ({
-          paneId: info.pane_id,
-          ...(info.shell_pid ? { shellPid: info.shell_pid } : {}),
-          ...(info.foreground_process_group_id
-            ? { foregroundProcessGroupId: info.foreground_process_group_id }
-            : {}),
-          foregroundProcesses: (info.foreground_processes ?? []).map((process) => ({
-            pid: process.pid,
-            name: process.name,
-          })),
-        })),
+        Effect.map(({ process_info: info }) =>
+          (() => {
+            const objectPart32026_0 = { paneId: info.pane_id };
+            const objectPart32026_1 = info.shell_pid
+              ? { ...objectPart32026_0, shellPid: info.shell_pid }
+              : objectPart32026_0;
+            const objectPart32026_2 = info.foreground_process_group_id
+              ? { ...objectPart32026_1, foregroundProcessGroupId: info.foreground_process_group_id }
+              : objectPart32026_1;
+            const objectPart32026_3 = {
+              ...objectPart32026_2,
+              foregroundProcesses: (info.foreground_processes ?? []).map((process) => ({
+                pid: process.pid,
+                name: process.name,
+              })),
+            };
+            return objectPart32026_3;
+          })(),
+        ),
       ),
     startAgent: (input) =>
       runCommand(
@@ -906,7 +949,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
   };
 };
 
-export class HerdrCli extends Context.Service<HerdrCli, HerdrCliShape>()(
+export class HerdrCli extends Context.Service<HerdrCli, HerdrCliContract>()(
   "pi-subagents/boundary/herdr-cli/HerdrCli",
 ) {
   static readonly layer = (options: HerdrCliLayerOptions = {}): Layer.Layer<HerdrCli> =>

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { describe, expect, it, vi } from "vitest";
-import type { AskUserServiceShape } from "../src/questionnaire/service.ts";
+import type { AskUserServiceContract } from "../src/questionnaire/service.ts";
 import { AskUserService } from "../src/questionnaire/service.ts";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import type { AskUserRequest } from "../src/tools/schema.ts";
@@ -39,7 +39,7 @@ interface CapturedTool {
 
 describe("ask_user tool", () => {
   it("is sequential, cooperatively rendered, and returns structured answers", () => {
-    const service: AskUserServiceShape = {
+    const service: AskUserServiceContract = {
       ask: () =>
         Effect.succeed({
           outcome: "submitted" as const,
@@ -56,11 +56,13 @@ describe("ask_user tool", () => {
     };
     const runtime = ManagedRuntime.make(Layer.succeed(AskUserService, service));
     let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: vi.fn((definition: unknown) => {
-        tool = definition as CapturedTool;
+    const fixture = {
+      registerTool: vi.fn((definition: CapturedTool) => {
+        tool = definition;
       }),
-    } as unknown as ExtensionAPI;
+    };
+    // SAFETY: registerAskUserTool uses only registerTool from this fixture.
+    const pi = fixture as typeof fixture & ExtensionAPI;
 
     registerAskUserTool(pi, {
       run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
@@ -72,6 +74,7 @@ describe("ask_user tool", () => {
     const guidelines = tool?.promptGuidelines?.join(" ") ?? "";
     expect(guidelines).toContain("Never ask users to enter passwords");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     return tool!
       .execute("call", request, undefined, undefined, {} as ExtensionContext)
       .then((result) => {

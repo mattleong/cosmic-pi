@@ -1,3 +1,4 @@
+import { isBooleanValue } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
@@ -32,18 +33,22 @@ export function formatSettingValue(
   if (id === "resetToDefaults") return "keep current";
   if (id === "tools") return formatToolsSettingValue(settings.tools);
   const value = settings[id];
-  if (typeof value === "boolean") return formatOnOff(value);
+  if (isBooleanValue(value)) return formatOnOff(value);
   return String(value);
 }
 
-export function normalizeSettings(
-  data: unknown,
+const SettingsRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
+type SettingsRecord = typeof SettingsRecordSchema.Type;
+
+export function normalizeSettings<DataInput>(
+  data: DataInput,
   fallback: CodePreviewSettings = codePreviewSettings,
 ): CodePreviewSettings {
   const decoded = Option.getOrElse(
-    Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown))(data),
+    Schema.decodeUnknownOption(SettingsRecordSchema)(data),
     () => ({}),
   );
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
   const next = {} as CodePreviewSettings;
   for (const key of CODE_PREVIEW_SETTING_KEYS) normalizeSetting(next, decoded, fallback, key);
   return withRequiredToolRenderers(next);
@@ -51,13 +56,12 @@ export function normalizeSettings(
 
 function normalizeSetting<K extends keyof CodePreviewSettings>(
   next: CodePreviewSettings,
-  data: Readonly<Record<string, unknown>>,
+  data: Readonly<SettingsRecord>,
   fallback: CodePreviewSettings,
   key: K,
 ): void {
-  const definition = CODE_PREVIEW_SETTING_DEFINITIONS[
-    key
-  ] as unknown as CodePreviewSettingDescriptor<K>;
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
+  const definition = CODE_PREVIEW_SETTING_DEFINITIONS[key] as CodePreviewSettingDescriptor<K>;
   const decoded = Schema.decodeUnknownOption(definition.schema)(data[key]);
   next[key] = Option.isSome(decoded)
     ? definition.normalize(decoded.value, fallback[key])

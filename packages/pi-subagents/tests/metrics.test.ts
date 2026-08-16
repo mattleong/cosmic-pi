@@ -3,16 +3,20 @@ import { formatCost, formatUsage } from "../src/ui/metrics.ts";
 import { aggregateRunUsage } from "../src/tools/render-run-rows.ts";
 import type { SubagentRunCard } from "../src/tools/details.ts";
 
-const card = (usage?: SubagentRunCard["usage"]): SubagentRunCard => ({
-  id: "agent-1",
-  name: "worker",
-  state: "completed",
-  reportGeneration: 1,
-  model: "provider/model",
-  effort: "high",
-  selection: { source: "profile-candidate", reason: "Route.", skippedCandidates: [] },
-  ...(usage ? { usage } : {}),
-});
+const card = (usage?: SubagentRunCard["usage"]): SubagentRunCard =>
+  (() => {
+    const objectPart314_0 = {
+      id: "agent-1",
+      name: "worker",
+      state: "completed" as const,
+      reportGeneration: 1,
+      model: "provider/model",
+      effort: "high" as const,
+      selection: { source: "profile-candidate" as const, reason: "Route.", skippedCandidates: [] },
+    };
+    const objectPart314_1 = usage ? { ...objectPart314_0, usage } : objectPart314_0;
+    return objectPart314_1;
+  })();
 
 describe("usage metrics formatting", () => {
   it("trims trailing zeros from sub-cent prices", () => {

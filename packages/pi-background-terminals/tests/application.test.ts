@@ -7,7 +7,7 @@ describe("background terminal Pi registration", () => {
     const tools: string[] = [];
     const commands: string[] = [];
     const events: string[] = [];
-    const pi = {
+    const fixture = {
       registerTool: vi.fn((tool: { name: string }) => {
         tools.push(tool.name);
       }),
@@ -17,7 +17,9 @@ describe("background terminal Pi registration", () => {
       on: vi.fn((name: string) => {
         events.push(name);
       }),
-    } as unknown as ExtensionAPI;
+    };
+    // SAFETY: Registration uses only the three ExtensionAPI methods implemented here.
+    const pi = fixture as typeof fixture & ExtensionAPI;
 
     registerBackgroundTerminalsApplication(pi);
 

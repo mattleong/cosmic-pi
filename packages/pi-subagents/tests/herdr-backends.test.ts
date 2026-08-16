@@ -4,11 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
-import type { HerdrHostShape, HerdrHostedAgent } from "../src/boundary/herdr-host.ts";
+import type { HerdrHostContract, HerdrHostedAgent } from "../src/boundary/herdr-host.ts";
 import type { HerdrAgent } from "../src/boundary/herdr-cli.ts";
 import type {
   SupervisorChannelHandle,
-  SupervisorChannelShape,
+  SupervisorChannelContract,
 } from "../src/boundary/supervisor-channel.ts";
 import { makeHerdrBackendDriver } from "../src/backend/herdr.ts";
 import type { BackendEvent, BackendLaunchRequest } from "../src/backend/model.ts";
@@ -151,12 +151,12 @@ const fixture = Effect.gen(function* () {
       closed += 1;
     }),
   });
-  const host: HerdrHostShape = {
+  const host: HerdrHostContract = {
     preflight: () => Effect.void,
     launch: (runtime) => Effect.succeed(hosted(runtime)),
   };
   let currentHandle: SupervisorChannelHandle | undefined;
-  const supervisors: SupervisorChannelShape = {
+  const supervisors: SupervisorChannelContract = {
     open: (request) => {
       currentHandle = {
         runId: request.runId,

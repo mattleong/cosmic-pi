@@ -2,7 +2,10 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import { AgentDirectory, nodePlatformLayer } from "pi-cosmic-core";
-import { HostCallbackBoundary, type HostCallbackBoundaryShape } from "./boundary/host-callback.ts";
+import {
+  HostCallbackBoundary,
+  type HostCallbackBoundaryContract,
+} from "./boundary/host-callback.ts";
 import { WorkingMessageHost } from "./boundary/host-working-message.ts";
 import { CosmicUiConfigStore } from "./config/store.ts";
 import type { FooterTotals } from "./footer/component.ts";
@@ -25,7 +28,7 @@ export interface CosmicUiSessionInput {
 }
 
 export interface CosmicUiApplicationLayerOptions {
-  readonly callbacks: HostCallbackBoundaryShape;
+  readonly callbacks: HostCallbackBoundaryContract;
   readonly bridge: FooterRegistryBridge;
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly protocolBuffer: FooterProtocolBuffer;

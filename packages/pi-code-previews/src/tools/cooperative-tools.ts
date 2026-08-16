@@ -46,12 +46,14 @@ export function withCodePreviewShell<TTool extends AnyToolDefinition>(
   const originalRenderCall = tool.renderCall;
   const originalRenderResult = tool.renderResult;
 
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   return {
     ...tool,
     renderShell: previewShell.renderShell,
     renderCall(args, theme, context) {
       return previewShell.renderCall(context, theme, (renderContext) => {
         if (originalRenderCall)
+          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
           return originalRenderCall.call(tool, args, theme, renderContext as never);
         return renderFallbackToolCall(tool, theme);
       });
@@ -59,6 +61,7 @@ export function withCodePreviewShell<TTool extends AnyToolDefinition>(
     renderResult(result, resultOptions, theme, context) {
       return previewShell.renderResult(context, theme, (renderContext) => {
         if (originalRenderResult)
+          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
           return originalRenderResult.call(
             tool,
             result,

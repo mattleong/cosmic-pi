@@ -16,7 +16,7 @@ import {
 } from "../../checkpoint/ledger.ts";
 import { createAdvisorEmissionGuardState } from "../../review/emission-guard.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
-import type { AdvisorReviewQueueServiceShape } from "../../queue/service.ts";
+import type { AdvisorReviewQueueServiceContract } from "../../queue/service.ts";
 import {
   emptyAdvisorFindingLifecycle,
   restoreAdvisorFindingLifecycle,
@@ -27,7 +27,7 @@ import {
 } from "../../review/intervention-budget.ts";
 import { emptyAdvisorRoutingState, sanitizeAdvisorRoutingState } from "../../review/routing.ts";
 import type { AdvisorUsageTelemetry } from "../../runtime/client.ts";
-import type { AdvisorRuntimeServiceShape } from "../../runtime/runtime.ts";
+import type { AdvisorRuntimeServiceContract } from "../../runtime/runtime.ts";
 import { PiCommandAdapter } from "../../boundary/host-commands.ts";
 import { classifyFailure, incrementBounded, makeCancellationLatch } from "../controller-helpers.ts";
 import { AdvisorExtensionError, extensionError, type ParentAnchor } from "../controller-types.ts";
@@ -65,8 +65,8 @@ export interface RuntimeDeps {
     ) => Effect.Effect<A, E, R>;
     readonly stopChild: () => Effect.Effect<void>;
   };
-  readonly productionRuntimeService: AdvisorRuntimeServiceShape;
-  readonly productionQueueService: AdvisorReviewQueueServiceShape;
+  readonly productionRuntimeService: AdvisorRuntimeServiceContract;
+  readonly productionQueueService: AdvisorReviewQueueServiceContract;
   readonly notifyBestEffort: (
     ctx: Pick<ExtensionContext, "ui">,
     message: string,
@@ -129,7 +129,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
   ): Effect.Effect<number | undefined> =>
     Effect.suspend(() => {
       const startEpoch = d.advanceDomainCounter("epoch");
-      let nextRuntime: AdvisorRuntimeServiceShape | undefined;
+      let nextRuntime: AdvisorRuntimeServiceContract | undefined;
       const acquire = Effect.gen(function* () {
         yield* stopRuntimeUnlockedEffect();
         if (
@@ -180,31 +180,39 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
         const runtimeConfig = { ...d.currentConfig() };
         const startCancellation = makeCancellationLatch();
         refs.activeChildStart = startCancellation;
-        const startOptions = {
-          ctx: {
-            cwd: sessionInput.cwd,
-            modelRegistry: sessionInput.modelRegistry,
-          },
-          config: runtimeConfig,
-          seed: startSeed,
-          stateSummary: refs.latestStateSummary,
-          ...(refs.instructions.content ? { instructions: refs.instructions.content } : {}),
-          onUsage: (usage: AdvisorUsageTelemetry) => {
-            if (startEpoch !== d.getState().epoch) return;
-            d.updateApplicationState((state) => ({
-              ...state,
-              metrics: d.recordUsage(state.metrics, usage, runtimeConfig),
-            }));
-          },
-          onDiagnostic: (message: string) => {
-            if (d.getState().reportedDiagnostics.includes(message)) return;
-            d.updateApplicationState((state) => ({
-              ...state,
-              reportedDiagnostics: [...state.reportedDiagnostics, message],
-            }));
-            d.notifyBestEffort(ctx, message, "warning");
-          },
-        };
+        const startOptions = (() => {
+          const objectPart8185_0 = {
+            ctx: {
+              cwd: sessionInput.cwd,
+              modelRegistry: sessionInput.modelRegistry,
+            },
+            config: runtimeConfig,
+            seed: startSeed,
+            stateSummary: refs.latestStateSummary,
+          };
+          const objectPart8185_1 = refs.instructions.content
+            ? { ...objectPart8185_0, instructions: refs.instructions.content }
+            : objectPart8185_0;
+          const objectPart8185_2 = {
+            ...objectPart8185_1,
+            onUsage: (usage: AdvisorUsageTelemetry) => {
+              if (startEpoch !== d.getState().epoch) return;
+              d.updateApplicationState((state) => ({
+                ...state,
+                metrics: d.recordUsage(state.metrics, usage, runtimeConfig),
+              }));
+            },
+            onDiagnostic: (message: string) => {
+              if (d.getState().reportedDiagnostics.includes(message)) return;
+              d.updateApplicationState((state) => ({
+                ...state,
+                reportedDiagnostics: [...state.reportedDiagnostics, message],
+              }));
+              d.notifyBestEffort(ctx, message, "warning");
+            },
+          };
+          return objectPart8185_2;
+        })();
         yield* nextRuntime.start(startOptions).pipe(
           Effect.mapError(
             (error) =>

@@ -13,12 +13,12 @@ export interface SharpMetadata {
   readonly format?: string;
 }
 
-export interface SharpAdapterShape {
+export interface SharpAdapterContract {
   /** Fully decode the exact bytes that will be uploaded or persisted. */
   readonly decode: (bytes: Uint8Array) => Effect.Effect<SharpMetadata, SharpError>;
 }
 
-export class SharpAdapter extends Context.Service<SharpAdapter, SharpAdapterShape>()(
+export class SharpAdapter extends Context.Service<SharpAdapter, SharpAdapterContract>()(
   "pi-better-openai/boundary/sharp/SharpAdapter",
 ) {
   static readonly layer = Layer.succeed(

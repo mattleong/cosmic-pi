@@ -4,14 +4,14 @@ import * as Layer from "effect/Layer";
 import type { AdvisorPlatform } from "../boundary/executor.ts";
 import { logAdvisorFailureEffect, type AdvisorFailureDetails } from "./log.ts";
 
-export interface FailureLoggerShape {
+export interface FailureLoggerContract {
   readonly log: (
     configPath: string,
     details: AdvisorFailureDetails,
   ) => Effect.Effect<string | undefined>;
 }
 
-export class FailureLogger extends Context.Service<FailureLogger, FailureLoggerShape>()(
+export class FailureLogger extends Context.Service<FailureLogger, FailureLoggerContract>()(
   "pi-advisor/logging/logger/FailureLogger",
 ) {}
 

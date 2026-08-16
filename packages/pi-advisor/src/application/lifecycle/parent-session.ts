@@ -1,4 +1,5 @@
 /** Pure-ish parent session reads used by lifecycle delivery and checkpoints. */
+import { isStringValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   readAdvisorParentIdleAtHostBoundary,
@@ -35,7 +36,7 @@ export const readLifecycleScope = (ctx: ExtensionContext): string => {
   const branch = branchResult.ok ? branchResult.value : [];
   const root = branch.find((entry) => !isAdvisorMetadataEntry(entry));
   const fallback = readParentAnchor(ctx);
-  return `branch:${root?.id ?? (typeof fallback === "string" ? fallback : "root")}`;
+  return `branch:${root?.id ?? (isStringValue(fallback) ? fallback : "root")}`;
 };
 
 export const branchContainsAnchor = (ctx: ExtensionContext, anchor: ParentAnchor): boolean => {

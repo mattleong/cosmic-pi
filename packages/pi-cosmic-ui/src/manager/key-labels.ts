@@ -1,32 +1,36 @@
 import type { FullScreenSelectionKeybindingId } from "./keymap.ts";
 
-const SPECIAL_KEY_LABELS: Readonly<Record<string, string>> = {
-  up: "↑",
-  down: "↓",
-  left: "←",
-  right: "→",
-  enter: "Enter",
-  escape: "Esc",
-  pageUp: "PgUp",
-  pageDown: "PgDn",
-  home: "Home",
-  end: "End",
-  tab: "Tab",
-  space: "Space",
-};
+const SPECIAL_KEY_LABELS = new Map(
+  Object.entries({
+    up: "↑",
+    down: "↓",
+    left: "←",
+    right: "→",
+    enter: "Enter",
+    escape: "Esc",
+    pageUp: "PgUp",
+    pageDown: "PgDn",
+    home: "Home",
+    end: "End",
+    tab: "Tab",
+    space: "Space",
+  }),
+);
 
-const MODIFIER_LABELS: Readonly<Record<string, string>> = {
-  ctrl: "C-",
-  shift: "⇧",
-  alt: "A-",
-  super: "⌘",
-};
+const MODIFIER_LABELS = new Map(
+  Object.entries({
+    ctrl: "C-",
+    shift: "⇧",
+    alt: "A-",
+    super: "⌘",
+  }),
+);
 
 export const formatFullScreenKeyId = (value: string): string => {
   const parts = value.split("+");
   const base = parts.pop() ?? value;
-  const modifiers = parts.map((part) => MODIFIER_LABELS[part] ?? `${part}-`).join("");
-  const label = SPECIAL_KEY_LABELS[base] ?? base;
+  const modifiers = parts.map((part) => MODIFIER_LABELS.get(part) ?? `${part}-`).join("");
+  const label = SPECIAL_KEY_LABELS.get(base) ?? base;
   return `${modifiers}${parts.includes("shift") && base.length === 1 ? label.toUpperCase() : label}`;
 };
 

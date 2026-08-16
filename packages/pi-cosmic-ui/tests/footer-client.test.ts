@@ -1,15 +1,16 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
 import { createCosmicFooterClient } from "../src/footer/client.ts";
+import { normalizeCosmicUiHostQuery } from "../src/protocol/protocol.ts";
+import { eventBusFixture } from "./support/host.ts";
 
 it("queries, publishes plain contributions, invalidates, and removes ownership", () => {
   const emitted: Array<{ name: string; value: unknown }> = [];
-  const events = {
-    emit(name: string, value: unknown) {
+  const events = eventBusFixture({
+    emit<ValueInput>(name: string, value: ValueInput) {
       emitted.push({ name, value });
-      if (name.endsWith("host:query")) (value as { respond(): void }).respond();
+      if (name.endsWith("host:query")) normalizeCosmicUiHostQuery(value)?.respond();
     },
-  } as ExtensionAPI["events"];
+  });
   const client = createCosmicFooterClient(events, "owner");
   expect(client.query()).toBe(true);
   client.upsert({ kind: "text", id: "usage", region: "details", text: "ok" });
@@ -26,14 +27,14 @@ it("queries, publishes plain contributions, invalidates, and removes ownership",
 
 it("contains hostile event emitters and deactivates before shutdown removal", () => {
   let hostile = false;
-  const emit = vi.fn((name: string, value: unknown) => {
+  const emit = vi.fn(<Value>(name: string, value: Value) => {
     if (name.endsWith("host:query")) {
-      (value as { respond(): void }).respond();
+      normalizeCosmicUiHostQuery(value)?.respond();
       return;
     }
     if (hostile) throw new Error("event bus failure");
   });
-  const client = createCosmicFooterClient({ emit } as unknown as ExtensionAPI["events"], "owner");
+  const client = createCosmicFooterClient(eventBusFixture({ emit }), "owner");
   expect(client.query()).toBe(true);
   hostile = true;
 
@@ -46,11 +47,11 @@ it("contains hostile event emitters and deactivates before shutdown removal", ()
   expect(client.active).toBe(false);
 
   const unavailable = createCosmicFooterClient(
-    {
+    eventBusFixture({
       emit() {
         throw new Error("query failure");
       },
-    } as unknown as ExtensionAPI["events"],
+    }),
     "unavailable",
   );
   expect(unavailable.query()).toBe(false);

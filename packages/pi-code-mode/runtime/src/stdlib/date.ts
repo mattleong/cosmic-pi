@@ -25,20 +25,21 @@ export const dateMethods = new Set([
 
 export const dateStatics = new Set(["now", "parse", "UTC"]);
 
-export const invokeDateStatic = (name: string, args: Array<unknown>, node: AstNode): number => {
+export const invokeDateStatic = (name: string, args: InterpreterArray, node: AstNode): number => {
   switch (name) {
     case "now":
       return Date.now();
     case "parse":
       return Date.parse(coerceToString(args[0]));
     case "UTC":
+      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
       return Date.UTC(...(args.map((arg) => coerceToNumber(arg)) as Parameters<typeof Date.UTC>));
     default:
       throw new InterpreterRuntimeError(`Date.${name} is not available in CodeMode.`, node);
   }
 };
 
-export const invokeDateMethod = (value: SandboxDate, name: string, node: AstNode): unknown => {
+export const invokeDateMethod = (value: SandboxDate, name: string, node: AstNode) => {
   const hosted = new Date(value.time);
   switch (name) {
     case "getTime":
@@ -93,6 +94,10 @@ export const invokeDateMethod = (value: SandboxDate, name: string, node: AstNode
       );
   }
 };
-import { type AstNode, InterpreterRuntimeError } from "../interpreter/model.js";
+import {
+  type AstNode,
+  type InterpreterArray,
+  InterpreterRuntimeError,
+} from "../interpreter/model.js";
 import { SandboxDate } from "../values.js";
 import { coerceToNumber, coerceToString } from "./value.js";

@@ -70,5 +70,6 @@ export const loadAdvisorInstructionsEffect = Effect.fn("AdvisorInstructions.load
     paths.push(candidate.path);
     blocks.push(`Advisor guidance from ${candidate.path}:\n\n${bounded}`);
   }
-  return { ...(blocks.length > 0 ? { content: blocks.join("\n\n---\n\n") } : {}), paths };
+  const loaded: LoadedAdvisorInstructions = { paths };
+  return blocks.length > 0 ? { ...loaded, content: blocks.join("\n\n---\n\n") } : loaded;
 });

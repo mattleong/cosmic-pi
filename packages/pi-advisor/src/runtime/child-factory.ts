@@ -26,7 +26,7 @@ import {
  * and the child AgentSession. `createSession` is the Pi host boundary and stays
  * Promise-shaped because `createAgentSession` is.
  */
-export interface AdvisorChildFactoryShape {
+export interface AdvisorChildFactoryContract {
   readonly createChildModel: (
     ctx: Pick<ExtensionContext, "modelRegistry">,
     config: ResolvedAdvisorConfig,
@@ -40,7 +40,7 @@ export interface AdvisorChildFactoryShape {
 
 export class AdvisorChildFactory extends Context.Service<
   AdvisorChildFactory,
-  AdvisorChildFactoryShape
+  AdvisorChildFactoryContract
 >()("pi-advisor/runtime/child-factory/AdvisorChildFactory") {}
 
 /** Production child construction; tests provide Effect-shaped layers under tests/support. */

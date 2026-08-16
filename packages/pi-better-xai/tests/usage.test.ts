@@ -18,7 +18,7 @@ import {
   JsonHttpClient,
   JsonHttpError,
   makePiRuntime,
-  type JsonDocumentStoreShape,
+  type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
@@ -44,6 +44,7 @@ import {
 } from "../src/usage/index.ts";
 import type { ResolvedConfig } from "../src/config/index.ts";
 import { isXaiSubscriptionModel } from "../src/usage/projection.ts";
+import { extensionContextFixture } from "./support/host.ts";
 import {
   formatUsageSnapshot,
   parseMonthlyBilling,
@@ -76,8 +77,8 @@ function httpLayer(request: Parameters<typeof jsonHttpTestLayer>[0]) {
   return jsonHttpTestLayer(request);
 }
 
-function registryContext(token = "registry-token") {
-  return {
+function registryContext(token = "registry-token"): ExtensionContext {
+  return extensionContextFixture({
     modelRegistry: {
       getApiKeyForProvider: () => globalThis.Promise.resolve(token),
       isUsingOAuth: () => true,
@@ -87,7 +88,7 @@ function registryContext(token = "registry-token") {
     mode: "tui",
     cwd: "/project",
     ui: { notify() {} },
-  } as unknown as ExtensionContext;
+  });
 }
 
 function providers(
@@ -392,7 +393,7 @@ describe("xAI credentials", () => {
       otherProvider: { access: "keep" },
       xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 1 },
     };
-    const service: JsonDocumentStoreShape = {
+    const service: JsonDocumentStoreContract = {
       exists: () => Effect.succeed(true),
       readObject: () => Effect.succeed(original),
       writeObject: () => Effect.die("unexpected direct write"),
@@ -491,6 +492,7 @@ describe("xAI credentials", () => {
         xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 1 },
       },
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const http = httpLayer(() => Effect.fail({ _tag: "test" } as never));
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
@@ -508,10 +510,15 @@ describe("xAI credentials", () => {
     });
     const requests: Array<{ readonly url: string; readonly authorization?: string }> = [];
     const http = httpLayer((request) => {
-      requests.push({
-        url: request.url,
-        ...(request.headers?.Authorization ? { authorization: request.headers.Authorization } : {}),
-      });
+      requests.push(
+        (() => {
+          const objectPart17774_0 = { url: request.url };
+          const objectPart17774_1 = request.headers?.Authorization
+            ? { ...objectPart17774_0, authorization: request.headers.Authorization }
+            : objectPart17774_0;
+          return objectPart17774_1;
+        })(),
+      );
       return Effect.fail(new JsonHttpError({ operation: "request", message: "refresh failed" }));
     });
     return Effect.gen(function* () {
@@ -554,7 +561,8 @@ describe("xAI credentials", () => {
     });
     const authorizations: string[] = [];
     const http = httpLayer((request) => {
-      if (!request.headers?.Authorization) return Effect.fail({ _tag: "refresh-failed" } as never);
+      if (!request.headers?.Authorization)
+        return Effect.fail(new JsonHttpError({ operation: "request", message: "refresh failed" }));
       return Effect.sync(() => {
         authorizations.push(request.headers?.Authorization ?? "");
         return {
@@ -605,10 +613,10 @@ describe("xAI visibility", () => {
     expect(isXaiSubscriptionModel(apiKeyContext, config)).toBe(true);
     expect(visibleStatusLine(projection)).toBe("Usage: 7d: 82%");
 
-    const otherModel = {
+    const otherModel = extensionContextFixture({
       ...apiKeyContext,
       model: { provider: "openai", id: "gpt" },
-    } as ExtensionContext;
+    });
     synchronizeProjectionContext(projection, otherModel, { clearUsage: true });
     expect(visibleStatusLine(projection)).toBeUndefined();
     expect(MutableRef.get(projection).snapshot).toBeUndefined();
@@ -1158,6 +1166,7 @@ describe("xAI refresh lifecycle", () => {
     const captured = makeCapturedTracer();
     const harness = documentHarness();
     const initial = registryContext();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     initial.model = { provider: "openai", id: "gpt" } as typeof initial.model;
     const context = MutableRef.make(initial);
     const projection = makeProjection();
@@ -1210,6 +1219,7 @@ describe("xAI refresh lifecycle", () => {
       onChange() {},
       agentDir: "/agent",
     }).pipe(Layer.provide(providers(harness.layer, http)));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const runtime = makePiRuntime({} as ExtensionAPI, serviceLayer);
 
     return runtime
@@ -1246,10 +1256,13 @@ describe("xAI refresh lifecycle", () => {
       const service = yield* XaiUsageService;
       const old = yield* service.refresh({ force: true, notify: true }).pipe(Effect.forkScoped);
       while (calls < 2) yield* Effect.yieldNow;
-      MutableRef.set(contextRef, {
-        ...MutableRef.get(contextRef),
-        model: { provider: "openai", id: "gpt" },
-      } as ExtensionContext);
+      MutableRef.set(
+        contextRef,
+        extensionContextFixture({
+          ...MutableRef.get(contextRef),
+          model: { provider: "openai", id: "gpt" },
+        }),
+      );
       yield* service.contextChanged(true);
       yield* Deferred.succeed(monthlyResponse, { status: 200, body: monthlyFixture });
       yield* Deferred.succeed(weeklyResponse, { status: 200, body: weeklyFixture });

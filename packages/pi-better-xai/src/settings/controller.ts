@@ -1,3 +1,4 @@
+import { isFunctionValue } from "pi-cosmic-core";
 import {
   getSettingsListTheme,
   type ExtensionAPI,
@@ -132,10 +133,9 @@ export function registerSettingsController(
               });
             },
             onCancel: () => done(undefined),
-            matchesKeybinding:
-              typeof keybindings?.matches === "function"
-                ? (data, id) => keybindings.matches(data, id)
-                : undefined,
+            matchesKeybinding: isFunctionValue(keybindings?.matches)
+              ? (data, id) => keybindings.matches(data, id)
+              : undefined,
             requestRender: () => tui.requestRender(),
             dim: (text) => theme.fg("dim", text),
           }).surface,
@@ -186,7 +186,7 @@ export function registerSettingsController(
       };
       switch (dispatch._tag) {
         case "OpenInteractive":
-          return ctx.mode === "tui" && typeof ctx.ui.custom === "function"
+          return ctx.mode === "tui" && isFunctionValue(ctx.ui.custom)
             ? openInteractiveSettings(ctx)
             : showHelp();
         case "Help":

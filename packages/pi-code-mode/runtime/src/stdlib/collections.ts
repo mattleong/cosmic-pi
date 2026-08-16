@@ -62,9 +62,9 @@ export const setMethods = new Set([
 // Confinement preflight (local; see PROVENANCE.md deviation 8): the projected entry count is
 // charged before the native materialization allocates it, so a long admitted string or a
 // URLSearchParams parsed from a large URL query cannot materialize an over-cap array here.
-export const spreadItems = (value: unknown): Array<unknown> | undefined => {
+export const spreadItems = (value: InterpreterValue): InterpreterArray | undefined => {
   if (Array.isArray(value)) return value;
-  if (typeof value === "string") {
+  if (isStringValue(value)) {
     assertBoundedCollectionSize(value.length, "String spread");
     return Array.from(value);
   }
@@ -82,5 +82,8 @@ export const spreadItems = (value: unknown): Array<unknown> | undefined => {
   }
   return undefined;
 };
+import { isStringValue } from "../runtime-values.ts";
 import { assertBoundedCollectionSize } from "../interpreter/confinement.js";
 import { SandboxMap, SandboxSet, SandboxURLSearchParams } from "../values.js";
+
+import type { InterpreterArray, InterpreterValue } from "../interpreter/model.js";

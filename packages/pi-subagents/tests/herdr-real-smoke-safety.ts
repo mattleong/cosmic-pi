@@ -1,11 +1,12 @@
 // Real-smoke path identity checks intentionally use Node filesystem canonicalization.
 // @effect-diagnostics effect/nodeBuiltinImport:off
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
-const nodeCode = (error: unknown): string | undefined =>
-  error && typeof error === "object" && "code" in error && typeof error.code === "string"
+const nodeCode = <ErrorInput>(error: ErrorInput): string | undefined =>
+  error && hasObjectRuntimeType(error) && "code" in error && isStringValue(error.code)
     ? error.code
     : undefined;
 
@@ -39,7 +40,7 @@ export const validateDisposableHerdrSelection = (
   socket: string,
   configPath: string,
   inheritedEnvironment: NodeJS.ProcessEnv,
-): { readonly socket: string; readonly configPath: string } => {
+) => {
   const inheritedSocket = inheritedEnvironment.HERDR_SOCKET_PATH;
   if (!inheritedSocket)
     throw new Error(

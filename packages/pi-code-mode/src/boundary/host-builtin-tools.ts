@@ -29,9 +29,18 @@ export type PiGuestToolName = (typeof PI_GUEST_TOOL_NAMES)[number];
 
 // oxlint-disable-next-line no-explicit-any -- Pi's own AnyToolDefinition shape.
 type AnyToolDefinition = ToolDefinition<any, any, any>;
+export type PiGuestToolInput = Parameters<AnyToolDefinition["execute"]>[1];
 
 /** The seven built-in definitions one Code Mode session dispatches against. */
-export type NestedPiToolDefinitions = Readonly<Record<PiGuestToolName, AnyToolDefinition>>;
+export interface NestedPiToolDefinitions {
+  readonly read: AnyToolDefinition;
+  readonly bash: AnyToolDefinition;
+  readonly edit: AnyToolDefinition;
+  readonly write: AnyToolDefinition;
+  readonly grep: AnyToolDefinition;
+  readonly find: AnyToolDefinition;
+  readonly ls: AnyToolDefinition;
+}
 
 /** Live factory: current built-in definitions bound to the session working directory. */
 export const makeNestedPiToolDefinitions = (cwd: string): NestedPiToolDefinitions => ({
@@ -96,7 +105,7 @@ export interface NestedDispatchOptions {
 
 export type NestedPiToolDispatch = (
   name: PiGuestToolName,
-  input: unknown,
+  input: PiGuestToolInput,
 ) => Effect.Effect<string, ToolError>;
 
 /**

@@ -7,11 +7,13 @@ describe("ask-user Pi registration", () => {
     const tools: string[] = [];
     const commands: string[] = [];
     const events: string[] = [];
-    const pi = {
+    const fixture = {
       registerTool: vi.fn((tool: { name: string }) => tools.push(tool.name)),
       registerCommand: vi.fn((name: string) => commands.push(name)),
       on: vi.fn((name: string) => events.push(name)),
-    } as unknown as ExtensionAPI;
+    };
+    // SAFETY: Registration uses only the three ExtensionAPI methods implemented by this fixture.
+    const pi = fixture as typeof fixture & ExtensionAPI;
 
     registerAskUserApplication(pi);
 

@@ -120,6 +120,7 @@ export function registerDirectoryModelsWithDependencies(
     }
     const selected = captureContextModel(ctx);
     if (!selected) return;
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     return run(
       DirectoryModelPreferenceService.use((service) =>
         service.rememberThinking(selected, event.level as ThinkingLevel),

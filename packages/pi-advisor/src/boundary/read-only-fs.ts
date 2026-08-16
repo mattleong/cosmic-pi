@@ -30,7 +30,7 @@ export interface ReadOnlyEntry {
   readonly name: string;
   readonly type: ReadOnlyInfo["type"];
 }
-export interface ReadOnlyFileSystemShape {
+export interface ReadOnlyFileSystemContract {
   readonly pinRoot: (path: string) => Effect.Effect<AdvisorProjectRoot, AdvisorFileError>;
   readonly realPath: (path: string) => Effect.Effect<string, AdvisorFileError>;
   readonly lstat: (path: string) => Effect.Effect<ReadOnlyInfo, AdvisorFileError>;
@@ -119,7 +119,7 @@ const verifyPinnedRoot = (root: AdvisorProjectRoot) =>
 
 export class ReadOnlyFileSystem extends Context.Service<
   ReadOnlyFileSystem,
-  ReadOnlyFileSystemShape
+  ReadOnlyFileSystemContract
 >()("pi-advisor/boundary/read-only-fs/ReadOnlyFileSystem") {
   static readonly layer = Layer.succeed(
     this,

@@ -8,12 +8,12 @@ export class PiCommandError extends Schema.TaggedError<PiCommandError>()("PiComm
   message: Schema.String,
 }) {}
 
-export interface PiCommandAdapterShape {
+export interface PiCommandAdapterContract {
   readonly fromPromise: <A>(operation: () => Promise<A>) => Effect.Effect<A, PiCommandError>;
 }
 
 /** The sole adapter for Pi's Promise-returning command UI. */
-export class PiCommandAdapter extends Context.Service<PiCommandAdapter, PiCommandAdapterShape>()(
+export class PiCommandAdapter extends Context.Service<PiCommandAdapter, PiCommandAdapterContract>()(
   "pi-advisor/boundary/host-commands/PiCommandAdapter",
 ) {
   static readonly layer = Layer.succeed(

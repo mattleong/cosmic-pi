@@ -229,10 +229,9 @@ it.effect("rejects streaming request bodies that fail schema encoding before tra
 
 it.effect("rejects undefined JSON encodings before production or test transport", () =>
   Effect.gen(function* () {
-    const undefinedAsJson = Schema.Undefined as unknown as Schema.ConstraintCodec<
-      undefined,
-      Schema.Json
-    >;
+    // SAFETY: This deliberately invalid codec exercises rejection of a non-JSON encoded value.
+    const undefinedAsJson = Schema.Undefined as typeof Schema.Undefined &
+      Schema.ConstraintCodec<undefined, Schema.Json, never, never>;
     let productionExecutions = 0;
     const client = HttpClient.make((request) => {
       productionExecutions++;
@@ -240,7 +239,7 @@ it.effect("rejects undefined JSON encodings before production or test transport"
     });
     const productionResult = yield* StreamingHttpClient.use((http) =>
       Effect.result(
-        http.requestJsonRawBytes(
+        http.requestJsonRawBytes<undefined, Schema.Json, never>(
           { url: "https://example.invalid", method: "POST" },
           undefinedAsJson,
           undefined,
@@ -255,7 +254,7 @@ it.effect("rejects undefined JSON encodings before production or test transport"
     let testExecutions = 0;
     const testResult = yield* StreamingHttpClient.use((http) =>
       Effect.result(
-        http.requestJsonRawBytes(
+        http.requestJsonRawBytes<undefined, Schema.Json, never>(
           { url: "https://example.invalid", method: "POST" },
           undefinedAsJson,
           undefined,

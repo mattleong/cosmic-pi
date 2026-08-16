@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import type { AdvisorRuntimeServiceShape } from "../runtime/runtime.ts";
+import type { AdvisorRuntimeServiceContract } from "../runtime/runtime.ts";
 import { initialReviewQueueState } from "./state.ts";
 import {
   AdvisorReviewQueue,
@@ -21,15 +21,15 @@ export {
   type AdvisorReprimeState,
   type AdvisorReviewQueueOptions,
 } from "./review-queue.ts";
-export interface AdvisorReviewQueueServiceShape {
+export interface AdvisorReviewQueueServiceContract {
   readonly make: (
-    runtime: AdvisorRuntimeServiceShape,
+    runtime: AdvisorRuntimeServiceContract,
     options?: AdvisorReviewQueueOptions,
   ) => Effect.Effect<AdvisorReviewQueue>;
 }
 export class AdvisorReviewQueueService extends Context.Service<
   AdvisorReviewQueueService,
-  AdvisorReviewQueueServiceShape
+  AdvisorReviewQueueServiceContract
 >()("pi-advisor/queue/service/AdvisorReviewQueueService") {}
 
 export const advisorReviewQueueServiceLayer = Layer.effect(

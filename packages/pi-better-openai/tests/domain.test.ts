@@ -59,17 +59,20 @@ import {
 
 const NOW = 1_752_883_200_000;
 const documents = makeInMemoryDocuments;
-const context = (token?: string, oauth = true) =>
-  ({
+const context = (token?: string, oauth = true): ExtensionContext => {
+  const fixture = {
     cwd: "/project",
-    hasUI: true,
+    hasUI: true as const,
     model: { provider: "openai", id: "gpt-5.5" },
     modelRegistry: {
       getApiKeyForProvider: () => globalThis.Promise.resolve(token),
       isUsingOAuth: () => oauth,
     },
     ui: { notify() {} },
-  }) as unknown as ExtensionContext;
+  };
+  // SAFETY: Domain tests exercise only the context fields implemented by this fixture.
+  return fixture as typeof fixture & ExtensionContext;
+};
 const jwt = (accountId: string) => {
   const body = Buffer.from(
     `{"https://api.openai.com/auth":{"chatgpt_account_id":"${accountId}"}}`,
@@ -1023,6 +1026,7 @@ describe("usage payloads, visibility, and fast mode", () => {
       const service = yield* OpenAIUsageService;
       const old = yield* service.refresh({ force: true, notify: true }).pipe(Effect.forkScoped);
       while (!started) yield* Effect.yieldNow;
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       MutableRef.set(contextRef, {
         ...MutableRef.get(contextRef),
         model: { provider: "anthropic", id: "claude" },
@@ -1083,6 +1087,7 @@ describe("usage payloads, visibility, and fast mode", () => {
           () => undefined,
         ),
       ).toMatchObject({ service_tier: "priority" });
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       ctx.model = { provider: "openai", id: "gpt-4.1" } as ExtensionContext["model"];
       expect(
         injectProviderPayload({ payload: {} }, ctx, fast, "priority", () => undefined),

@@ -44,6 +44,7 @@ it.effect("deeply freezes snapshots and preserves publication on projection fail
     expect(before.metrics.outcomes.findings).toBe(0);
 
     const invalid = { ...initial, config: { ...initial.config, capability: () => 42 } };
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const result = yield* projection.replace(invalid as typeof initial).pipe(Effect.result);
     expect(result._tag).toBe("Failure");
     expect(projection.getSnapshot()).toBe(after);

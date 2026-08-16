@@ -248,7 +248,7 @@ function pairingDiff(
   count: number,
   before: (index: number) => string,
   after: (index: number) => string,
-): { diff: string; lines: number } {
+) {
   const lines = [
     ...Array.from({ length: count }, (_, index) => `- ${index + 1} ${before(index)}`),
     ...Array.from({ length: count }, (_, index) => `+ ${index + 1} ${after(index)}`),
@@ -275,7 +275,7 @@ function mediumReorderedPairingDiff(count: number): { diff: string; lines: numbe
   );
 }
 
-function shiftedPairingDiff(count: number): { diff: string; lines: number } {
+function shiftedPairingDiff(count: number) {
   const lines = [
     ...Array.from(
       { length: count },

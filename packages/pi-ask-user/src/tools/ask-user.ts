@@ -57,6 +57,7 @@ export function registerAskUserTool(pi: ExtensionAPI, runner: AskUserToolRunner)
       );
     },
     renderResult(result, _options, theme) {
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       const details = result.details as AskUserOutcome | undefined;
       if (details?.outcome === "cancelled")
         return new Text(theme.fg("warning", "Questionnaire cancelled"), 0, 0);

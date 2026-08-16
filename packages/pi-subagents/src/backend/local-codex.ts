@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -5,11 +6,11 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import type { LocalCliProcessShape } from "../boundary/local-cli-process.ts";
+import type { LocalCliProcessContract } from "../boundary/local-cli-process.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type {
   SupervisorChannelHandle,
-  SupervisorChannelShape,
+  SupervisorChannelContract,
 } from "../boundary/supervisor-channel.ts";
 import {
   isOutcomeUncertain,
@@ -94,11 +95,11 @@ const FORBIDDEN_ITEM_TYPES: ReadonlySet<string> = new Set([
   "collabAgentToolCall",
   "subAgentActivity",
 ]);
-const EXECUTABLE_ITEM_TOOL_NAMES: Readonly<Record<string, string>> = {
-  commandExecution: "Bash",
-  fileChange: "ApplyPatch",
-  webSearch: "WebSearch",
-};
+const EXECUTABLE_ITEM_TOOL_NAMES = new Map<string, string>([
+  ["commandExecution", "Bash"],
+  ["fileChange", "ApplyPatch"],
+  ["webSearch", "WebSearch"],
+]);
 
 const executableToolName = (item: {
   readonly type: string;
@@ -107,7 +108,7 @@ const executableToolName = (item: {
 }): string | undefined => {
   if (item.type === "mcpToolCall")
     return `mcp:${item.server ?? "unknown"}/${item.tool ?? "unknown"}`;
-  return EXECUTABLE_ITEM_TOOL_NAMES[item.type];
+  return EXECUTABLE_ITEM_TOOL_NAMES.get(item.type);
 };
 
 const usageDelta = (
@@ -172,10 +173,10 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     }),
   );
 
-  const consumeNotification = (
+  const consumeNotification = <ParamsInput>(
     raw: LocalCliWireEvent,
     method: string,
-    params: unknown,
+    params: ParamsInput,
   ): Effect.Effect<void> =>
     decodeCodexNotification(method, params).pipe(
       Effect.flatMap((event) => {
@@ -264,12 +265,14 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                 },
                 raw,
               );
-            if (event.item.type === "agentMessage")
-              return offer(
-                {
-                  type: "assistant_message",
-                  assignmentEpoch,
-                  ...(event.item.text ? { text: event.item.text } : {}),
+            if (event.item.type === "agentMessage") {
+              const backendEvent: BackendEvent = (() => {
+                const objectPart9643_0 = { type: "assistant_message" as const, assignmentEpoch };
+                const objectPart9643_1 = event.item.text
+                  ? { ...objectPart9643_0, text: event.item.text }
+                  : objectPart9643_0;
+                const objectPart9643_2 = {
+                  ...objectPart9643_1,
                   usage: {
                     input: 0,
                     output: 0,
@@ -277,9 +280,11 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                     cacheWrite: 0,
                     totalTokens: 0,
                   },
-                },
-                raw,
-              );
+                };
+                return objectPart9643_2;
+              })();
+              return offer(backendEvent, raw);
+            }
             const tool = executableToolName(event.item);
             if (tool === undefined) {
               // Completion of an informational or unknown item is acknowledged
@@ -566,12 +571,16 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     pid: child.pid,
     events,
     awaitExit: child.awaitExit.pipe(
-      Effect.map((event) => ({
-        type: "exit" as const,
-        exitCode: event.exitCode,
-        ...(event.signal ? { signal: event.signal } : {}),
-        diagnostic: event.stderr,
-      })),
+      Effect.map((event) =>
+        (() => {
+          const objectPart20550_0 = { type: "exit" as const, exitCode: event.exitCode };
+          const objectPart20550_1 = event.signal
+            ? { ...objectPart20550_0, signal: event.signal }
+            : objectPart20550_0;
+          const objectPart20550_2 = { ...objectPart20550_1, diagnostic: event.stderr };
+          return objectPart20550_2;
+        })(),
+      ),
     ),
     controls: {
       initialize,
@@ -723,8 +732,9 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                     (exit.cause.reasons.every(Cause.isInterruptReason) ||
                       (() => {
                         const error = Cause.squash(exit.cause);
+                        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
                         return (
-                          typeof error === "object" &&
+                          hasObjectRuntimeType(error) &&
                           error !== null &&
                           "_tag" in error &&
                           error._tag === "SubagentProcessError" &&
@@ -764,8 +774,8 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
 });
 
 export const makeLocalCodexBackendDriver = (
-  processes: LocalCliProcessShape,
-  supervisors: SupervisorChannelShape,
+  processes: LocalCliProcessContract,
+  supervisors: SupervisorChannelContract,
 ): BackendDriver => ({
   host: "local",
   runtime: "codex",

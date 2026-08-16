@@ -23,14 +23,14 @@ export const tryHostUi = Effect.fn("OpenAIHostUi.try")(function* <A>(
   });
 });
 
-export const ignoreHostUi = (operation: string, callback: () => unknown) =>
+export const ignoreHostUi = <Result>(operation: string, callback: () => Result) =>
   tryHostUi(operation, callback).pipe(
     Effect.catchTag("OpenAIHostUiError", () => Effect.void),
     Effect.asVoid,
   );
 
 /** Best-effort adapter for Pi callbacks that cannot enter the session runtime. */
-export function safeHostUi(callback: () => unknown): void {
+export function safeHostUi<Result>(callback: () => Result): void {
   invokeHostCallback(callback, undefined);
 }
 

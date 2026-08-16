@@ -1,3 +1,4 @@
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
@@ -48,35 +49,47 @@ export type CodexEnvelope =
   | { readonly type: "notification"; readonly method: string; readonly params?: unknown }
   | { readonly type: "server_request"; readonly id: string | number; readonly method: string };
 
-export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope")(function* (
-  value: unknown,
-) {
+export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope")(function* <
+  ValueInput,
+>(value: ValueInput) {
   const discriminant = yield* Schema.decodeUnknownEffect(EnvelopeDiscriminant)(value);
   if (discriminant.method !== undefined && discriminant.id !== undefined) {
     const request = yield* Schema.decodeUnknownEffect(ServerRequest)(value);
-    return {
-      type: "server_request" as const,
+    const envelope: CodexEnvelope = {
+      type: "server_request",
       id: request.id,
       method: request.method,
     };
+    return envelope;
   }
   if (discriminant.method !== undefined) {
     const notification = yield* Schema.decodeUnknownEffect(Notification)(value);
-    return {
-      type: "notification" as const,
-      method: notification.method,
-      ...(notification.params === undefined ? {} : { params: notification.params }),
-    };
+    const envelope: CodexEnvelope = (() => {
+      const objectPart2419_0 = { type: "notification" as const, method: notification.method };
+      const objectPart2419_1 =
+        notification.params === undefined
+          ? objectPart2419_0
+          : { ...objectPart2419_0, params: notification.params };
+      return objectPart2419_1;
+    })();
+    return envelope;
   }
   const response = yield* Schema.decodeUnknownEffect(Response)(value);
   if (response.result === undefined && response.error === undefined)
     yield* Schema.decodeUnknownEffect(Schema.Struct({ result: Schema.Unknown }))(value);
-  return {
-    type: "response" as const,
-    id: response.id,
-    ...(response.result === undefined ? {} : { result: response.result }),
-    ...(response.error === undefined ? {} : { error: response.error }),
-  };
+  const envelope: CodexEnvelope = (() => {
+    const objectPart2827_0 = { type: "response" as const, id: response.id };
+    const objectPart2827_1 =
+      response.result === undefined
+        ? objectPart2827_0
+        : { ...objectPart2827_0, result: response.result };
+    const objectPart2827_2 =
+      response.error === undefined
+        ? objectPart2827_1
+        : { ...objectPart2827_1, error: response.error };
+    return objectPart2827_2;
+  })();
+  return envelope;
 });
 
 const InitializeResult = Schema.Struct({
@@ -97,15 +110,16 @@ const TurnStartResult = Schema.Struct({
 const TurnSteerResult = Schema.Struct({ turnId: Id });
 const EmptyObject = Schema.Record(Schema.String, Schema.Unknown);
 
-export const decodeInitializeResult = (value: unknown) =>
+export const decodeInitializeResult = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(InitializeResult)(value);
-export const decodeThreadStartResult = (value: unknown) =>
+export const decodeThreadStartResult = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(ThreadStartResult)(value);
-export const decodeTurnStartResult = (value: unknown) =>
+export const decodeTurnStartResult = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(TurnStartResult)(value);
-export const decodeTurnSteerResult = (value: unknown) =>
+export const decodeTurnSteerResult = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(TurnSteerResult)(value);
-export const decodeEmptyResult = (value: unknown) => Schema.decodeUnknownEffect(EmptyObject)(value);
+export const decodeEmptyResult = <ValueInput>(value: ValueInput) =>
+  Schema.decodeUnknownEffect(EmptyObject)(value);
 
 const TurnStarted = Schema.Struct({
   threadId: Id,
@@ -201,7 +215,7 @@ const normalizedWarning = (summary: string, details?: string | null): string => 
 };
 
 export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotification")(
-  function* (method: string, params: unknown) {
+  function* <ParamsInput>(method: string, params: ParamsInput) {
     switch (method) {
       case "turn/started": {
         const value = yield* Schema.decodeUnknownEffect(TurnStarted)(params);
@@ -237,15 +251,20 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
       }
       case "turn/completed": {
         const value = yield* Schema.decodeUnknownEffect(TurnCompleted)(params);
-        return {
-          type: "turn_completed" as const,
-          threadId: value.threadId,
-          turnId: value.turn.id,
-          status: value.turn.status,
-          ...(value.turn.error && typeof value.turn.error === "object"
-            ? { diagnostic: value.turn.error.message }
-            : {}),
-        };
+        const notification: CodexNotification = (() => {
+          const objectPart8544_0 = {
+            type: "turn_completed" as const,
+            threadId: value.threadId,
+            turnId: value.turn.id,
+            status: value.turn.status,
+          };
+          const objectPart8544_1 =
+            value.turn.error && hasObjectRuntimeType(value.turn.error)
+              ? { ...objectPart8544_0, diagnostic: value.turn.error.message }
+              : objectPart8544_0;
+          return objectPart8544_1;
+        })();
+        return notification;
       }
       case "warning": {
         const value = yield* Schema.decodeUnknownEffect(Warning)(params);
@@ -387,10 +406,8 @@ export const threadStartRequest = (
     readonly writeIntent: "read-only" | "writer";
     readonly fastMode: boolean;
   },
-): CodexThreadStartRequest => ({
-  id,
-  method: "thread/start",
-  params: {
+): CodexThreadStartRequest => {
+  const base: CodexThreadStartRequest["params"] = {
     allowProviderModelFallback: false,
     approvalPolicy: "never",
     baseInstructions: request.systemPrompt,
@@ -400,11 +417,14 @@ export const threadStartRequest = (
     ephemeral: true,
     experimentalRawEvents: false,
     model: request.model,
-    ...(request.fastMode ? { serviceTier: SUBAGENT_FAST_SERVICE_TIER } : {}),
     multiAgentMode: "explicitRequestOnly",
     sandbox: request.writeIntent === "writer" ? "workspace-write" : "read-only",
-  },
-});
+  };
+  const params: CodexThreadStartRequest["params"] = request.fastMode
+    ? { ...base, serviceTier: SUBAGENT_FAST_SERVICE_TIER }
+    : base;
+  return { id, method: "thread/start", params };
+};
 
 const input = (text: string): ReadonlyArray<CodexTextInput> => [
   { type: "text", text, text_elements: [] },
@@ -418,10 +438,8 @@ export const turnStartRequest = (
   effort: string,
   writeIntent: "read-only" | "writer",
   fastMode: boolean,
-): CodexTurnStartRequest => ({
-  id,
-  method: "turn/start",
-  params: {
+): CodexTurnStartRequest => {
+  const base: CodexTurnStartRequest["params"] = {
     threadId,
     input: input(text),
     approvalPolicy: "never",
@@ -429,14 +447,17 @@ export const turnStartRequest = (
     effort,
     environments: [],
     model,
-    ...(fastMode ? { serviceTier: SUBAGENT_FAST_SERVICE_TIER } : {}),
     multiAgentMode: "explicitRequestOnly",
     sandboxPolicy:
       writeIntent === "writer"
         ? { type: "workspaceWrite", writableRoots: [], networkAccess: false }
         : { type: "readOnly", networkAccess: false },
-  },
-});
+  };
+  const params: CodexTurnStartRequest["params"] = fastMode
+    ? { ...base, serviceTier: SUBAGENT_FAST_SERVICE_TIER }
+    : base;
+  return { id, method: "turn/start", params };
+};
 
 export const turnSteerRequest = (
   id: string,

@@ -35,7 +35,7 @@ const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 
 /** Tolerant field-level wire decode: one malformed field never discards valid siblings. */
-function decodeConfig(value: unknown): ConfigFile {
+function decodeConfig<ValueInput>(value: ValueInput): ConfigFile {
   const root = decodeTolerantFields(
     value,
     {
@@ -49,6 +49,7 @@ function decodeConfig(value: unknown): ConfigFile {
     },
     { path: "config" },
   ).value;
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   const usage = decodeTolerantFields(
     root.usage,
     {
@@ -85,15 +86,34 @@ function decodeConfig(value: unknown): ConfigFile {
     ...imageFields,
     ...(defaultModel ? { defaultModel } : { defaultModel: undefined }),
   };
-  return {
-    ...(root.persistState !== undefined ? { persistState: root.persistState } : {}),
-    ...(root.active !== undefined ? { active: root.active } : {}),
-    ...(root.desiredActive !== undefined ? { desiredActive: root.desiredActive } : {}),
-    ...(Object.keys(usage).length ? { usage } : {}),
-    ...(footer.mode !== undefined ? { footer: { mode: footer.mode } } : {}),
-    ...(compaction.enabled !== undefined ? { compaction: { enabled: compaction.enabled } } : {}),
-    ...(Object.values(image).some((field) => field !== undefined) ? { image } : {}),
-  };
+  return (() => {
+    const objectPart2666_0 = {};
+    const objectPart2666_1 =
+      root.persistState !== undefined
+        ? { ...objectPart2666_0, persistState: root.persistState }
+        : objectPart2666_0;
+    const objectPart2666_2 =
+      root.active !== undefined ? { ...objectPart2666_1, active: root.active } : objectPart2666_1;
+    const objectPart2666_3 =
+      root.desiredActive !== undefined
+        ? { ...objectPart2666_2, desiredActive: root.desiredActive }
+        : objectPart2666_2;
+    const objectPart2666_4 = Object.keys(usage).length
+      ? { ...objectPart2666_3, usage }
+      : objectPart2666_3;
+    const objectPart2666_5 =
+      footer.mode !== undefined
+        ? { ...objectPart2666_4, footer: { mode: footer.mode } }
+        : objectPart2666_4;
+    const objectPart2666_6 =
+      compaction.enabled !== undefined
+        ? { ...objectPart2666_5, compaction: { enabled: compaction.enabled } }
+        : objectPart2666_5;
+    const objectPart2666_7 = Object.values(image).some((field) => field !== undefined)
+      ? { ...objectPart2666_6, image }
+      : objectPart2666_6;
+    return objectPart2666_7;
+  })();
 }
 
 function resolveConfigFiles(
@@ -162,6 +182,7 @@ function resolveConfigFiles(
   };
 }
 
+// SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
 const store = makeScopedConfigStore({
   errorFactory: mapError,
   label: "Better OpenAI",

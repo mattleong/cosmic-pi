@@ -1,6 +1,6 @@
 import type { ProfileDefinition, ProfileId, ProfileRoute } from "./model.ts";
 
-export const PROFILE_DEFINITIONS: Readonly<Record<ProfileId, ProfileDefinition>> = {
+export const PROFILE_DEFINITIONS = {
   scout: {
     id: "scout",
     description: "Fast local codebase reconnaissance and compressed handoff context.",
@@ -63,7 +63,7 @@ export const PROFILE_DEFINITIONS: Readonly<Record<ProfileId, ProfileDefinition>>
     guidance:
       "Act as a generalist. Execute the assigned task directly and efficiently, stay within its scope and your declared write intent, validate material claims, and return a concise self-contained handoff.",
   },
-};
+} satisfies Readonly<Record<ProfileId, ProfileDefinition>>;
 
 /** Every built-in is an explicit local Pi parent candidate using the profile's defaults. */
 const builtinRoute = (id: ProfileId): ProfileRoute => {
@@ -83,7 +83,7 @@ const builtinRoute = (id: ProfileId): ProfileRoute => {
     ],
   };
 };
-export const BUILTIN_PROFILE_ROUTES: Readonly<Record<ProfileId, ProfileRoute>> = {
+export const BUILTIN_PROFILE_ROUTES = {
   scout: builtinRoute("scout"),
   researcher: builtinRoute("researcher"),
   planner: builtinRoute("planner"),
@@ -91,6 +91,6 @@ export const BUILTIN_PROFILE_ROUTES: Readonly<Record<ProfileId, ProfileRoute>> =
   reviewer: builtinRoute("reviewer"),
   oracle: builtinRoute("oracle"),
   generalist: builtinRoute("generalist"),
-};
+} satisfies Readonly<Record<ProfileId, ProfileRoute>>;
 
 export const profileDefinition = (id: ProfileId): ProfileDefinition => PROFILE_DEFINITIONS[id];

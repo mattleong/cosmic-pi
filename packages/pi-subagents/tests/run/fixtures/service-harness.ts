@@ -41,6 +41,9 @@ import { SubagentProcessError } from "../../../src/run/errors.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "../../../src/run/service.ts";
 
+type RpcWireValue = Extract<ChildWireEvent, { readonly type: "rpc_message" }>["value"];
+type IpcWireValue = Extract<ChildWireEvent, { readonly type: "ipc_message" }>["value"];
+
 export interface FakeChildControl {
   readonly launch: ChildLaunchRequest;
   readonly commands: RpcCommand[];
@@ -54,9 +57,9 @@ export interface FakeChildControl {
   readonly gateNextSend: (type: RpcCommand["type"], gate: Deferred.Deferred<void, never>) => void;
   readonly gateNextIpc: (gate: Deferred.Deferred<void, never>) => void;
   readonly gateRelease: (gate: Deferred.Deferred<void, never>) => void;
-  readonly beforeNextResponse: (type: RpcCommand["type"], value: unknown) => void;
-  readonly offer: (value: unknown) => void;
-  readonly offerIpc: (value: unknown) => void;
+  readonly beforeNextResponse: (type: RpcCommand["type"], value: RpcWireValue) => void;
+  readonly offer: (value: RpcWireValue) => void;
+  readonly offerIpc: (value: IpcWireValue) => void;
   readonly exit: (exitCode?: number | null) => void;
   readonly failExit: (message: string) => void;
 }
@@ -158,12 +161,12 @@ export function fakeChildLayer(
           const gateRelease = (gate: Deferred.Deferred<void, never>) => {
             releaseGate = gate;
           };
-          const beforeNextResponse = (type: RpcCommand["type"], value: unknown) => {
+          const beforeNextResponse = (type: RpcCommand["type"], value: RpcWireValue) => {
             beforeResponses.push({ type, value });
           };
-          const offer = (value: unknown) =>
+          const offer = (value: RpcWireValue) =>
             Queue.offerUnsafe(events, { type: "rpc_message", value });
-          const offerIpc = (value: unknown) =>
+          const offerIpc = (value: IpcWireValue) =>
             Queue.offerUnsafe(events, { type: "ipc_message", value });
           const exit = (exitCode: number | null = 0) => {
             Queue.endUnsafe(events);
@@ -230,26 +233,33 @@ export function fakeChildLayer(
                         success: true,
                         data:
                           command.type === "get_state"
-                            ? {
-                                sessionId: "child-session",
-                                ...(options.omitSessionFile
-                                  ? {}
-                                  : { sessionFile: "/tmp/child-session.jsonl" }),
-                                thinkingLevel: options.stateThinkingLevel ?? "high",
-                                model: {
-                                  provider: "openai-codex",
-                                  id: "gpt-5.6-sol",
-                                  name: "GPT 5.6 Sol",
-                                  reasoning: true,
-                                },
-                                isStreaming: false,
-                                isCompacting: false,
-                                steeringMode: "all",
-                                followUpMode: "all",
-                                autoCompactionEnabled: true,
-                                messageCount: 0,
-                                pendingMessageCount: 0,
-                              }
+                            ? (() => {
+                                const objectPart10288_0 = { sessionId: "child-session" };
+                                const objectPart10288_1 = options.omitSessionFile
+                                  ? objectPart10288_0
+                                  : {
+                                      ...objectPart10288_0,
+                                      sessionFile: "/tmp/child-session.jsonl",
+                                    };
+                                const objectPart10288_2 = {
+                                  ...objectPart10288_1,
+                                  thinkingLevel: options.stateThinkingLevel ?? "high",
+                                  model: {
+                                    provider: "openai-codex",
+                                    id: "gpt-5.6-sol",
+                                    name: "GPT 5.6 Sol",
+                                    reasoning: true,
+                                  },
+                                  isStreaming: false,
+                                  isCompacting: false,
+                                  steeringMode: "all",
+                                  followUpMode: "all",
+                                  autoCompactionEnabled: true,
+                                  messageCount: 0,
+                                  pendingMessageCount: 0,
+                                };
+                                return objectPart10288_2;
+                              })()
                             : undefined,
                       },
                 );
@@ -307,7 +317,7 @@ export function fakeChildLayer(
   return { controls, reclaimedRunIds, layer };
 }
 
-export const profileLayerFor = (global: unknown) =>
+export const profileLayerFor = <Global>(global: Global) =>
   Layer.effect(
     SubagentProfileService,
     makeSubagentProfileService(
@@ -491,6 +501,7 @@ export function fakeRetainedBackendLayer(
             gateNextStart: (gate) => void startGates.push(gate),
             failNextStart: (code) => void startFailures.push(code),
             offer: (event) => {
+              // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
               const normalized: BackendEvent =
                 event.type === "report" && !("assignmentEpoch" in event)
                   ? { ...event, assignmentEpoch }
@@ -520,11 +531,19 @@ export function fakeRetainedBackendLayer(
                     if (gate) yield* Deferred.await(gate);
                     if (startFailures.length > 0) {
                       const code = startFailures.shift();
-                      return yield* new SubagentProcessError({
-                        operation: "start assignment in",
-                        ...(code ? { code } : {}),
-                        message: "Fixture retained start failure.",
-                      });
+                      return yield* new SubagentProcessError(
+                        (() => {
+                          const objectPart21490_0 = { operation: "start assignment in" };
+                          const objectPart21490_1 = code
+                            ? { ...objectPart21490_0, code }
+                            : objectPart21490_0;
+                          const objectPart21490_2 = {
+                            ...objectPart21490_1,
+                            message: "Fixture retained start failure.",
+                          };
+                          return objectPart21490_2;
+                        })(),
+                      );
                     }
                   }),
                 steer: (message: string) =>

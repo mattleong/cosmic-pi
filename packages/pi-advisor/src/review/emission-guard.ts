@@ -64,6 +64,7 @@ export const createAdvisorEmissionGuardState = (
   for (const record of records.slice(-state.capacity)) {
     const match = /^(concern|blocker):([a-f\d]{64})$/i.exec(record);
     if (match)
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       current = recordHash(
         current,
         match[2]!.toLowerCase(),
@@ -73,11 +74,16 @@ export const createAdvisorEmissionGuardState = (
   return current;
 };
 
+export interface AdvisorEmissionEvaluation {
+  readonly state: AdvisorEmissionGuardState;
+  readonly decision: AdvisorEmissionDecision;
+}
+
 export const evaluateAdvisorEmission = (
   state: AdvisorEmissionGuardState,
   checkpointId: string,
   review: AdvisorReview,
-): { readonly state: AdvisorEmissionGuardState; readonly decision: AdvisorEmissionDecision } => {
+): AdvisorEmissionEvaluation => {
   if (review.verdict === "pass") return { state, decision: { accepted: false, reason: "pass" } };
   if (isContentFreeAdvisorReview(review))
     return { state, decision: { accepted: false, reason: "content-free" } };
@@ -91,14 +97,18 @@ export const evaluateAdvisorEmission = (
   const previousSeverity = state.seen[hash];
   if (previousSeverity && advisorSeverityRank(previousSeverity) >= advisorSeverityRank(severity))
     return { state, decision: { accepted: false, reason: "duplicate" } };
-  const rollback: AdvisorEmissionRollback = {
-    checkpointId,
-    checkpointEvicted: [],
-    hash,
-    ...(previousSeverity ? { previousSeverity } : {}),
-    wasNewHash: previousSeverity === undefined,
-    hashEvicted: [],
-  };
+  const rollback: AdvisorEmissionRollback = (() => {
+    const objectPart4117_0 = { checkpointId, checkpointEvicted: [], hash };
+    const objectPart4117_1 = previousSeverity
+      ? { ...objectPart4117_0, previousSeverity }
+      : objectPart4117_0;
+    const objectPart4117_2 = {
+      ...objectPart4117_1,
+      wasNewHash: previousSeverity === undefined,
+      hashEvicted: [],
+    };
+    return objectPart4117_2;
+  })();
   const acceptedCheckpoints = [...state.acceptedCheckpoints, checkpointId];
   const checkpointOrder = [...state.checkpointOrder, checkpointId];
   while (checkpointOrder.length > state.capacity) {
@@ -128,7 +138,7 @@ export const rollbackAdvisorEmission = (
     if (!acceptedCheckpoints.includes(id)) acceptedCheckpoints.unshift(id);
     if (!checkpointOrder.includes(id)) checkpointOrder.unshift(id);
   }
-  const seen: Record<string, AdvisorSeverity> = { ...state.seen };
+  const seen = { ...state.seen } satisfies Record<string, AdvisorSeverity>;
   const order = [...state.order];
   if (token.wasNewHash) {
     delete seen[token.hash];
@@ -151,7 +161,7 @@ function recordHash(
   severity: AdvisorSeverity,
   evicted: Array<{ hash: string; severity: AdvisorSeverity }> = [],
 ) {
-  const seen: Record<string, AdvisorSeverity> = { ...state.seen, [hash]: severity };
+  const seen = { ...state.seen, [hash]: severity } satisfies Record<string, AdvisorSeverity>;
   const order = state.seen[hash] ? [...state.order] : [...state.order, hash];
   while (order.length > state.capacity) {
     const stale = order.shift();

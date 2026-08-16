@@ -13,14 +13,14 @@ export interface PiExecResult {
   readonly stderr: string;
   readonly code: number;
 }
-export interface PiExecShape {
+export interface PiExecContract {
   readonly exec: (
     command: "git" | "gh",
     args: readonly string[],
     options: { readonly cwd: string; readonly timeout: number },
   ) => Effect.Effect<PiExecResult, PiExecError>;
 }
-export class PiExec extends Context.Service<PiExec, PiExecShape>()(
+export class PiExec extends Context.Service<PiExec, PiExecContract>()(
   "pi-cosmic-ui/probe/pi-exec/PiExec",
 ) {
   static readonly layer = Layer.effect(

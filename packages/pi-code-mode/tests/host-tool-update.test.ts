@@ -126,6 +126,7 @@ describe("guarded Code Mode progress publisher", () => {
 
   it("contains hostile callbacks and stops when the owning session is no longer current", async () => {
     let current = true;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const callback = vi.fn(() => Promise.reject(new Error("hostile rejection")) as never);
     const publisher = makeGuardedToolUpdatePublisher(callback, () => current, {
       now: () => 0,

@@ -3,6 +3,7 @@
 // @effect-diagnostics effect/strictEffectProvide:off
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { resolveSubagentConfig } from "../src/config/options.ts";
@@ -17,7 +18,16 @@ import { PROFILE_IDS, type DeclaredProfileCandidate } from "../src/profiles/mode
 import { resolveProfilePlan } from "../src/profiles/resolve.ts";
 import { SubagentProfileService, subagentProfileServiceLayer } from "../src/profiles/service.ts";
 
-const document = (value: Record<string, unknown> = {}) => ({ version: 4, ...value });
+const document = <Value extends object>(value?: Value): Schema.MutableJsonObject =>
+  Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.MutableJson))({
+    version: 4,
+    ...value,
+  });
+
+const hostileDocument = <Value extends object>(value: Value): Value & Schema.MutableJsonObject => {
+  // SAFETY: This fixture deliberately exercises the config decoder with non-JSON hostile input.
+  return value as Value & Schema.MutableJsonObject;
+};
 const candidate = (value: Partial<DeclaredProfileCandidate> = {}): DeclaredProfileCandidate => ({
   host: "local",
   runtime: "pi",
@@ -28,16 +38,24 @@ const candidate = (value: Partial<DeclaredProfileCandidate> = {}): DeclaredProfi
   fastMode: false,
   ...value,
 });
-const resolved = (global: unknown = document(), project?: unknown, projectTrusted = true) =>
-  resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted,
-    globalConfigExists: true,
-    projectConfigExists: project !== undefined,
-    global: decodeSubagentConfig(global, "global"),
-    ...(project === undefined ? {} : { project: decodeSubagentConfig(project, "project") }),
-  });
+const resolved = <Project>(global = document(), project?: Project, projectTrusted = true) =>
+  resolveSubagentConfig(
+    (() => {
+      const objectPart1355_0 = {
+        globalConfigPath: "/agent/pi-subagents.json",
+        projectConfigPath: "/repo/.pi/pi-subagents.json",
+        projectTrusted,
+        globalConfigExists: true,
+        projectConfigExists: project !== undefined,
+        global: decodeSubagentConfig(global, "global"),
+      };
+      const objectPart1355_1 =
+        project === undefined
+          ? objectPart1355_0
+          : { ...objectPart1355_0, project: decodeSubagentConfig(project, "project") };
+      return objectPart1355_1;
+    })(),
+  );
 
 const environment = {
   availablePiModels: [
@@ -300,7 +318,10 @@ describe("subagent v4 profile configuration and resolution", () => {
         return candidate();
       },
     });
-    const decoded = decodeSubagentConfig(document({ profiles: { worker: candidates } }), "global");
+    const decoded = decodeSubagentConfig(
+      hostileDocument({ version: 4, profiles: { worker: candidates } }),
+      "global",
+    );
     expect(accesses).toBe(0);
     expect(decoded.invalidProfileRoutes).toEqual(["worker"]);
     expect(decoded.diagnostics).toContain("global.profiles.worker[32+]");

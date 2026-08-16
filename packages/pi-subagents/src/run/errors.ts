@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
 
 export class InvalidSubagentRequestError extends Schema.TaggedError<InvalidSubagentRequestError>()(
@@ -41,8 +42,7 @@ export class SubagentProcessError extends Schema.TaggedError<SubagentProcessErro
 
 /** Machine-actionable failure code: an explicit `code` when present, else the error tag. */
 export const subagentErrorCode = (error: SubagentError): string =>
-  ("code" in error && typeof error.code === "string" && error.code !== "" && error.code) ||
-  error._tag;
+  ("code" in error && isStringValue(error.code) && error.code !== "" && error.code) || error._tag;
 
 /**
  * By convention, `code` values ending in `_outcome_uncertain` mark failures whose side effects may

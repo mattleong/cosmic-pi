@@ -3,9 +3,9 @@ import type * as Effect from "effect/Effect";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../../../boundary/executor.ts";
 import type { AdvisorHostBindings } from "../../../boundary/host-bindings.ts";
 import type { PiCommandAdapter } from "../../../boundary/host-commands.ts";
-import type { CheckpointOrchestratorShape } from "../../../checkpoint/orchestrator.ts";
+import type { CheckpointOrchestratorContract } from "../../../checkpoint/orchestrator.ts";
 import type { ResolvedAdvisorConfig } from "../../../config/options.ts";
-import type { ConfigStoreShape } from "../../../config/store.ts";
+import type { ConfigStoreContract } from "../../../config/store.ts";
 import type { AdvisorReviewQueue } from "../../../queue/service.ts";
 import type { AdvisorReviewFocus } from "../../../review/index.ts";
 import type {
@@ -85,6 +85,6 @@ export interface EventsDeps {
   readonly awaitCatchUp: (handle: AdvisorCheckpointHandle, ctx: ExtensionContext) => Promise<void>;
   readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
   readonly publishControllerSnapshot: () => Effect.Effect<void>;
-  readonly checkpointOrchestrator: CheckpointOrchestratorShape;
-  readonly configStore: ConfigStoreShape;
+  readonly checkpointOrchestrator: CheckpointOrchestratorContract;
+  readonly configStore: ConfigStoreContract;
 }

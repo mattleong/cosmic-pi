@@ -1,3 +1,10 @@
+import {
+  hasObjectRuntimeType,
+  isBooleanValue,
+  isNumberValue,
+  isStringValue,
+} from "./runtime-values.ts";
+import * as Schema from "effect/Schema";
 const ANSI_ESCAPE_PATTERN = String.raw`\u001B\[[0-?]*[ -/]*[@-~]`;
 const ANSI_ESCAPE_REGEXP = new RegExp(ANSI_ESCAPE_PATTERN, "g");
 const DIAGNOSTIC_MAX_LENGTH = 500;
@@ -167,14 +174,17 @@ const isSensitiveKey = (key: string): boolean => {
   );
 };
 
-export function redactDiagnosticValue(
-  value: unknown,
+export function redactDiagnosticValue<ValueInput>(
+  value: ValueInput,
   options: DiagnosticSanitizerOptions = {},
-): unknown {
+): Schema.Json {
   const seen = new WeakSet<object>();
-  const redact = (current: unknown, depth: number): unknown => {
-    if (typeof current === "string") return sanitizeDiagnosticError(current, options);
-    if (typeof current !== "object" || current === null) return current;
+  const redact = <Current>(current: Current, depth: number): Schema.Json => {
+    if (isStringValue(current)) return sanitizeDiagnosticError(current, options);
+    if (current === null) return null;
+    if (isBooleanValue(current)) return current;
+    if (isNumberValue(current)) return Number.isFinite(current) ? current : null;
+    if (!hasObjectRuntimeType(current)) return null;
     if (depth >= 16 || seen.has(current)) return "[TRUNCATED]";
     seen.add(current);
     if (Array.isArray(current)) return current.map((entry) => redact(entry, depth + 1));
@@ -189,5 +199,5 @@ export function redactDiagnosticValue(
       return "[UNREADABLE]";
     }
   };
-  return redact(value, 0);
+  return Schema.decodeUnknownSync(Schema.Json)(redact(value, 0));
 }

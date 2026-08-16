@@ -1,10 +1,6 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import {
-  initTheme,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -13,14 +9,14 @@ import {
 } from "../../src/boundary/host-profile-resolution.ts";
 import {
   SubagentBackendRegistry,
-  type SubagentBackendRegistryShape,
+  type SubagentBackendRegistryContract,
 } from "../../src/backend/service.ts";
 import { PROFILE_IDS } from "../../src/profiles/model.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../../src/run/errors.ts";
 import { decodeSubagentEffort } from "../../src/domain/routing.ts";
 import { type StartSubagentRequest, type SubagentRunView } from "../../src/run/model.ts";
-import { type SubagentServiceShape } from "../../src/run/service.ts";
+import { type SubagentServiceContract } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
@@ -32,6 +28,11 @@ import {
   testBackendRegistry,
   view,
 } from "./fixtures/tool-harness.ts";
+import {
+  extensionContextFixture,
+  subagentServiceFixture,
+  extensionApiFixture,
+} from "../fixtures/pi-host.ts";
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -97,15 +98,16 @@ describe("subagent tool", () => {
     const requests: StartSubagentRequest[] = [];
     const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await tool?.execute(
       "call",
       { agents: [{ task: "Inspect auth", profile: "scout" }] },
       undefined,
       undefined,
-      {
-        ...(context as unknown as Record<string, unknown>),
+      extensionContextFixture({
+        ...context,
         ui: { confirm },
-      } as unknown as ExtensionContext,
+      }),
     );
 
     expect(confirm).not.toHaveBeenCalled();
@@ -261,14 +263,15 @@ describe("subagent tool", () => {
       ["oracle", "fork"],
     ]);
 
-    const ephemeral = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ephemeral = extensionContextFixture({
       ...context,
       sessionManager: {
         ...context.sessionManager,
         getSessionFile: () => undefined,
         getLeafEntry: () => undefined,
       },
-    } as unknown as ExtensionContext;
+    });
     const failed = await tool?.execute(
       "call",
       {
@@ -364,7 +367,7 @@ describe("subagent tool", () => {
         ],
       },
     });
-    const registry: SubagentBackendRegistryShape = {
+    const registry: SubagentBackendRegistryContract = {
       resolve: () => Effect.succeed(testBackendDriver),
       preflight: (selection) =>
         selection.runtime === "claude"
@@ -430,7 +433,7 @@ describe("subagent tool", () => {
         ],
       },
     });
-    const registry: SubagentBackendRegistryShape = {
+    const registry: SubagentBackendRegistryContract = {
       resolve: () => Effect.succeed(testBackendDriver),
       preflight: (selection) =>
         selection.runtime === "claude"
@@ -517,7 +520,7 @@ describe("subagent tool", () => {
     });
     let starts = 0;
     const base = startCapturingService([]);
-    const failStart: SubagentServiceShape["start"] = () => {
+    const failStart: SubagentServiceContract["start"] = () => {
       starts += 1;
       return Effect.fail(
         new SubagentProcessError({
@@ -556,7 +559,7 @@ describe("subagent tool", () => {
     expect(decodeSubagentEffort(42)).toBeUndefined();
     expect(decodeSubagentEffort(undefined)).toBeUndefined();
 
-    const startWithLevel = async (thinkingLevel: unknown) => {
+    const startWithLevel = async (thinkingLevel: string | number) => {
       const requests: StartSubagentRequest[] = [];
       const tools = captureSubagentTools(
         startCapturingService(requests),
@@ -778,14 +781,15 @@ describe("subagent tool", () => {
 
   it("launches through the cancellation-safe session owner", async () => {
     let sessionOwnedStarts = 0;
-    const service = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const service = subagentServiceFixture({
       start: () => Effect.die("interruptible start must not be used by the public tool"),
       startSessionOwned: (input: StartSubagentRequest) =>
         Effect.sync(() => {
           sessionOwnedStarts += 1;
           return view({ task: input.task });
         }),
-    } as unknown as SubagentServiceShape;
+    });
     const tool = captureSubagentTools(service).get("subagent_start");
 
     const result = await tool?.execute(
@@ -838,10 +842,11 @@ describe("subagent tool", () => {
         requests.push(input);
         return view({ id: `agent-${requests.length}`, task: input.task });
       });
-    const service = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const service = subagentServiceFixture({
       start,
       startSessionOwned: start,
-    } as unknown as SubagentServiceShape;
+    });
     const tool = captureSubagentTools(service).get("subagent_start");
 
     const result = await tool?.execute(
@@ -857,6 +862,7 @@ describe("subagent tool", () => {
     );
 
     expect(requests).toHaveLength(12);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const details = result?.details as
       | { readonly cards?: ReadonlyArray<SubagentRunView> }
       | undefined;
@@ -864,10 +870,11 @@ describe("subagent tool", () => {
   });
 
   it("rejects forged routing fields again at the host profile boundary", async () => {
-    const pi = {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const pi = extensionApiFixture({
       getThinkingLevel: () => "high",
       getActiveTools: () => ["read"],
-    } as unknown as ExtensionAPI;
+    });
     const reject = (input: SubagentProfileStartSpec) =>
       Effect.runPromise(
         resolveProfileStart(pi, input, context, {
@@ -879,9 +886,11 @@ describe("subagent tool", () => {
         ),
       );
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await expect(
       reject({ task: "Probe", model: "pi/openai/other" } as SubagentProfileStartSpec),
     ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await expect(
       reject({ task: "Probe", backend: "claude-cli" } as SubagentProfileStartSpec),
     ).rejects.toMatchObject({ code: "launch_override_not_allowed" });

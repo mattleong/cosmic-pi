@@ -6,7 +6,7 @@
 /** A plain Promise deferred for Promise-shaped test driver boundaries. */
 export function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
+  let reject!: (cause?: Error) => void;
   const promise = new Promise<T>((next, fail) => {
     resolve = next;
     reject = fail;

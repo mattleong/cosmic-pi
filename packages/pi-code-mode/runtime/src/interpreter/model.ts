@@ -1,5 +1,5 @@
-import type { SafeObject } from "../tool-runtime.js";
-import type { SandboxURL } from "../values.js";
+import { hasObjectRuntimeType, isBooleanValue, isStringValue } from "../runtime-values.ts";
+import type { SandboxURL, SandboxValue } from "../values.js";
 
 export type SourcePosition = {
   line: number;
@@ -11,10 +11,28 @@ export type SourceLocation = {
   end: SourcePosition;
 };
 
+export interface AstPropertyRecord {
+  [key: string]: AstPropertyValue;
+}
+
+/** Recursive data fields emitted by the pinned Acorn parser. */
+export type AstPropertyValue =
+  | undefined
+  | null
+  | string
+  | number
+  | bigint
+  | boolean
+  | RegExp
+  | SourceLocation
+  | AstPropertyRecord
+  | AstNode
+  | Array<AstPropertyValue>;
+
 export type AstNode = {
   type: string;
   loc?: SourceLocation;
-  [key: string]: unknown;
+  [key: string]: AstPropertyValue;
 };
 
 export type ProgramNode = AstNode & {
@@ -24,19 +42,19 @@ export type ProgramNode = AstNode & {
 
 export type Binding = {
   mutable: boolean;
-  value: unknown;
+  value: InterpreterValue;
   initialized?: boolean;
 };
 
 export type StatementResult =
   | { kind: "none" }
-  | { kind: "value"; value: unknown }
-  | { kind: "return"; value: unknown }
+  | { kind: "value"; value: InterpreterValue }
+  | { kind: "return"; value: InterpreterValue }
   | { kind: "break" }
   | { kind: "continue" };
 
 export type MemberReference = {
-  target: SafeObject | Array<unknown> | SandboxURL;
+  target: InterpreterObject | InterpreterArray | SandboxURL;
   key: string | number;
 };
 
@@ -50,13 +68,13 @@ export class CodeModeFunction {
 
 export class IntrinsicReference {
   constructor(
-    readonly receiver: unknown,
+    readonly receiver: InterpreterValue,
     readonly name: string,
   ) {}
 }
 
 export class ComputedValue {
-  constructor(readonly value: unknown) {}
+  constructor(readonly value: InterpreterValue) {}
 }
 
 export class PromiseNamespace {}
@@ -102,12 +120,52 @@ export class UriFunction {
 }
 
 export class ProgramThrow {
-  constructor(readonly value: unknown) {}
+  constructor(readonly value: InterpreterValue) {}
 }
 
 export class ErrorConstructorReference {
   constructor(readonly name: string) {}
 }
+
+export class ToolReference {
+  constructor(readonly path: ReadonlyArray<string>) {}
+}
+
+export type InterpreterPrimitive = undefined | null | string | number | boolean | bigint | symbol;
+
+export interface InterpreterObject {
+  [key: string]: InterpreterValue;
+}
+
+export interface InterpreterArray extends Array<InterpreterValue> {
+  index?: number;
+  groups?: InterpreterObject;
+}
+
+export const makeInterpreterObject = (): InterpreterObject => {
+  // SAFETY: A new null-prototype object is empty; only InterpreterValue writes populate it.
+  return Object.create(null) as InterpreterObject;
+};
+
+/** Closed value domain owned by the confined JavaScript interpreter. */
+export type InterpreterValue =
+  | InterpreterPrimitive
+  | InterpreterObject
+  | InterpreterArray
+  | CodeModeFunction
+  | IntrinsicReference
+  | ComputedValue
+  | PromiseNamespace
+  | PromiseMethodReference
+  | GlobalNamespace
+  | GlobalMethodReference
+  | CoercionFunction
+  | UriFunction
+  | ProgramThrow
+  | ErrorConstructorReference
+  | ToolReference
+  | SandboxValue
+  | typeof OptionalShortCircuit;
 
 export type DiagnosticKind =
   | "ParseError"
@@ -155,17 +213,21 @@ export const unsupportedSyntax = (kind: string, node: AstNode): InterpreterRunti
     [supportedSyntaxMessage],
   );
 
-export const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
+export const isRecord = (value: AstPropertyValue): value is AstPropertyRecord =>
+  hasObjectRuntimeType(value) && value !== null;
 
-export const asNode = (value: unknown, context: string): AstNode => {
-  if (!isRecord(value) || typeof value.type !== "string") {
+export const astProperty = (record: AstPropertyRecord, key: string): AstPropertyValue =>
+  record[key];
+
+export const asNode = (value: AstPropertyValue, context: string): AstNode => {
+  if (!isRecord(value) || !isStringValue(astProperty(value, "type"))) {
     throw new InterpreterRuntimeError(`Invalid AST node while reading ${context}.`);
   }
+  // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
   return value as AstNode;
 };
 
-export const getArray = (node: AstNode, key: string): Array<unknown> => {
+export const getArray = (node: AstNode, key: string): Array<AstPropertyValue> => {
   const value = node[key];
   if (!Array.isArray(value))
     throw new InterpreterRuntimeError(`Expected '${key}' to be an array.`, node);
@@ -174,14 +236,14 @@ export const getArray = (node: AstNode, key: string): Array<unknown> => {
 
 export const getString = (node: AstNode, key: string): string => {
   const value = node[key];
-  if (typeof value !== "string")
+  if (!isStringValue(value))
     throw new InterpreterRuntimeError(`Expected '${key}' to be a string.`, node);
   return value;
 };
 
 export const getBoolean = (node: AstNode, key: string): boolean => {
   const value = node[key];
-  if (typeof value !== "boolean")
+  if (!isBooleanValue(value))
     throw new InterpreterRuntimeError(`Expected '${key}' to be a boolean.`, node);
   return value;
 };
@@ -194,9 +256,7 @@ export const getOptionalNode = (node: AstNode, key: string): AstNode | undefined
 
 export const getNode = (node: AstNode, key: string): AstNode => asNode(node[key], key);
 
-export const sourceLocation = (
-  node: AstNode,
-): { readonly line: number; readonly column: number } => ({
+export const sourceLocation = (node: AstNode): SourcePosition => ({
   line: Math.max(1, (node.loc?.start.line ?? 2) - 1),
   column: Math.max(1, (node.loc?.start.column ?? 4) - 3),
 });

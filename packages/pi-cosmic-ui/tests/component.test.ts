@@ -1,13 +1,13 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ReadonlyFooterDataProvider,
-} from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { DEFAULT_CONFIG, type ResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterComponent } from "../src/footer/component.ts";
 import { emptyFooterRegistrySnapshot } from "../src/footer/registry.ts";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  footerDataProviderFixture,
+} from "./support/host.ts";
 
 const config: ResolvedCosmicUiConfig = {
   configPath: "/config.json",
@@ -42,7 +42,7 @@ describe("footer component host boundary", () => {
     const getExtensionStatuses = vi.fn(() => ({
       entries: () => hostile<IterableIterator<[string, string]>>(),
     }));
-    const ctx = {
+    const ctx = extensionContextFixture({
       model: {
         id: "model",
         provider: "provider",
@@ -52,13 +52,13 @@ describe("footer component host boundary", () => {
       modelRegistry: { isUsingOAuth },
       getContextUsage,
       sessionManager: { getLeafId, getCwd, getSessionName },
-    } as unknown as ExtensionContext;
-    const pi = { getThinkingLevel } as unknown as ExtensionAPI;
-    const footerData = {
+    });
+    const pi = extensionApiFixture({ getThinkingLevel });
+    const footerData = footerDataProviderFixture({
       getGitBranch,
       getAvailableProviderCount,
       getExtensionStatuses,
-    } as unknown as ReadonlyFooterDataProvider;
+    });
     const callbacks = makeHostCallbackBoundary(4);
     const component = createFooterComponent({
       pi,
@@ -99,10 +99,11 @@ describe("footer component host boundary", () => {
 
   test("returns a stable empty render when a hostile theme callback throws", () => {
     const callbacks = makeHostCallbackBoundary();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const component = createFooterComponent({
-      pi: { getThinkingLevel: () => "off" } as unknown as ExtensionAPI,
+      pi: extensionApiFixture({ getThinkingLevel: () => "off" }),
       ctx: () =>
-        ({
+        extensionContextFixture({
           model: undefined,
           modelRegistry: { isUsingOAuth: () => false },
           getContextUsage: () => undefined,
@@ -111,12 +112,12 @@ describe("footer component host boundary", () => {
             getCwd: () => "/project",
             getSessionName: () => undefined,
           },
-        }) as unknown as ExtensionContext,
-      footerData: {
+        }),
+      footerData: footerDataProviderFixture({
         getGitBranch: () => null,
         getAvailableProviderCount: () => 1,
         getExtensionStatuses: () => new Map(),
-      } as unknown as ReadonlyFooterDataProvider,
+      }),
       theme: {
         fg: () => {
           throw new Error("theme failure");

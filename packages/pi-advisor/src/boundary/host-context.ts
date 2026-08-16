@@ -1,3 +1,10 @@
+import {
+  hasObjectRuntimeType,
+  isBooleanValue,
+  isFunctionValue,
+  isNumberValue,
+  isStringValue,
+} from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -63,13 +70,13 @@ const readHostContext = <A>(
   }
 };
 
-const materializeHostArray = <A>(value: unknown): A[] => {
+const materializeHostArray = <A, Value = unknown>(value: Value): A[] => {
   if (!Array.isArray(value)) throw new TypeError("Host session value is not an array.");
   const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
   if (
     !lengthDescriptor ||
     !("value" in lengthDescriptor) ||
-    typeof lengthDescriptor.value !== "number" ||
+    !isNumberValue(lengthDescriptor.value) ||
     !Number.isSafeInteger(lengthDescriptor.value) ||
     lengthDescriptor.value < 0
   )
@@ -80,8 +87,9 @@ const materializeHostArray = <A>(value: unknown): A[] => {
     if (!descriptor || !("value" in descriptor))
       throw new TypeError("Host session array entry is invalid.");
     const snapshot = snapshotData(descriptor.value);
-    if (snapshot === undefined || snapshot === null || typeof snapshot !== "object")
+    if (snapshot === undefined || snapshot === null || !hasObjectRuntimeType(snapshot))
       throw new TypeError("Host session array entry is not data.");
+    // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
     output.push(snapshot as A);
   }
   return output;
@@ -152,17 +160,16 @@ export function captureAdvisorSessionInputAtHostBoundary(
 ): AdvisorSessionInputResult {
   try {
     const cwd = ctx.cwd;
-    if (typeof cwd !== "string") throw new TypeError("Host CWD is invalid.");
+    if (!isStringValue(cwd)) throw new TypeError("Host CWD is invalid.");
     const modelRegistry = ctx.modelRegistry;
-    if (modelRegistry === null || typeof modelRegistry !== "object")
+    if (modelRegistry === null || !hasObjectRuntimeType(modelRegistry))
       throw new TypeError("Host model registry is invalid.");
     const signal = ctx.signal;
-    if (signal !== undefined && (signal === null || typeof signal !== "object"))
+    if (signal !== undefined && (signal === null || !hasObjectRuntimeType(signal)))
       throw new TypeError("Host signal is invalid.");
     const signalAborted = signal?.aborted === true;
     const isProjectTrusted = ctx.isProjectTrusted;
-    const projectTrusted =
-      typeof isProjectTrusted === "function" && isProjectTrusted.call(ctx) === true;
+    const projectTrusted = isFunctionValue(isProjectTrusted) && isProjectTrusted.call(ctx) === true;
     return {
       ok: true,
       input: { ctx, cwd, modelRegistry, projectTrusted, signal, signalAborted },
@@ -192,7 +199,7 @@ export function captureAdvisorAbortInputAtHostBoundary(
 ): AdvisorAbortInputResult {
   try {
     const signal = ctx.signal;
-    if (signal !== undefined && (signal === null || typeof signal !== "object"))
+    if (signal !== undefined && (signal === null || !hasObjectRuntimeType(signal)))
       throw new TypeError("Host signal is invalid.");
     return {
       ok: true,
@@ -222,7 +229,7 @@ export const readAdvisorSessionBranchAtHostBoundary = (
       );
       if (
         !branch.every(
-          (entry) => entry !== null && typeof entry === "object" && typeof entry.id === "string",
+          (entry) => entry !== null && hasObjectRuntimeType(entry) && isStringValue(entry.id),
         )
       )
         throw new TypeError("Host session branch entry is invalid.");
@@ -243,7 +250,7 @@ export const readAdvisorSessionLeafIdAtHostBoundary = (
 ): AdvisorHostReadResult<string | null> =>
   readHostContext("session-leaf", "Advisor could not read the active session leaf safely.", () => {
     const leafId = ctx.sessionManager.getLeafId?.() ?? null;
-    if (leafId !== null && typeof leafId !== "string")
+    if (leafId !== null && !isStringValue(leafId))
       throw new TypeError("Host session leaf is invalid.");
     return leafId;
   });
@@ -256,7 +263,7 @@ export const readAdvisorSessionIdAtHostBoundary = (
     "Advisor could not read the active session identifier safely.",
     () => {
       const sessionId = ctx.sessionManager.getSessionId?.();
-      if (sessionId !== undefined && typeof sessionId !== "string")
+      if (sessionId !== undefined && !isStringValue(sessionId))
         throw new TypeError("Host session identifier is invalid.");
       return sessionId;
     },
@@ -285,7 +292,7 @@ export const readAdvisorParentIdleAtHostBoundary = (
 ): AdvisorHostReadResult<boolean> =>
   readHostContext("parent-idle", "Advisor could not read parent activity safely.", () => {
     const idle = ctx.isIdle();
-    if (typeof idle !== "boolean") throw new TypeError("Host activity state is invalid.");
+    if (!isBooleanValue(idle)) throw new TypeError("Host activity state is invalid.");
     return idle;
   });
 
@@ -297,7 +304,7 @@ export const readAdvisorPendingMessagesAtHostBoundary = (
     "Advisor could not read pending parent messages safely.",
     () => {
       const pending = ctx.hasPendingMessages();
-      if (typeof pending !== "boolean") throw new TypeError("Host pending state is invalid.");
+      if (!isBooleanValue(pending)) throw new TypeError("Host pending state is invalid.");
       return pending;
     },
   );

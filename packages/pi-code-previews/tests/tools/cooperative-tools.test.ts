@@ -23,6 +23,7 @@ test("withCodePreviewShell preserves execution and wraps existing renderers", as
     content: [{ type: "text" as const, text: "ok" }],
     details: {},
   }));
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const tool: ToolDefinition = {
     name: "demo_tool",
     label: "Demo Tool",
@@ -30,6 +31,7 @@ test("withCodePreviewShell preserves execution and wraps existing renderers", as
     parameters: {} as never,
     execute,
     renderCall(args, _theme, _context) {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       return textComponent(`call ${(args as { value?: string }).value ?? ""}`);
     },
     renderResult(result, _options, _theme, _context) {
@@ -42,6 +44,7 @@ test("withCodePreviewShell preserves execution and wraps existing renderers", as
   assert.equal(wrapped.parameters, tool.parameters);
   assert.equal(wrapped.renderShell, "self");
 
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   await wrapped.execute("tool-1", {}, undefined, undefined, {} as never);
   assert.equal(execute.mock.calls.length, 1);
 
@@ -65,6 +68,7 @@ test("withCodePreviewShell preserves execution and wraps existing renderers", as
 });
 
 test("withCodePreviewShell supplies fallback renderers for cooperating tools", () => {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const tool: ToolDefinition = {
     name: "demo_tool",
     label: "Demo Tool",
@@ -94,6 +98,7 @@ test("withCodePreviewShell supplies fallback renderers for cooperating tools", (
 });
 
 test("withCodePreviewShell leaves self-shell tools untouched by default", () => {
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const tool: ToolDefinition = {
     name: "self_tool",
     label: "Self Tool",

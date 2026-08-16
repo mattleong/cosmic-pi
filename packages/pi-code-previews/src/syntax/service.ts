@@ -59,7 +59,7 @@ type LanguageDecision =
   | { readonly kind: "Notify"; readonly callbacks: readonly (() => void)[] }
   | undefined;
 
-export interface CodePreviewSyntaxServiceShape {
+export interface CodePreviewSyntaxServiceContract {
   readonly initialize: (theme: string) => Effect.Effect<void>;
   readonly status: Effect.Effect<Omit<ShikiStatus, "cacheSize">>;
   readonly dispose: Effect.Effect<void>;
@@ -88,7 +88,7 @@ const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
 
 export class CodePreviewSyntaxService extends Context.Service<
   CodePreviewSyntaxService,
-  CodePreviewSyntaxServiceShape
+  CodePreviewSyntaxServiceContract
 >()("pi-code-previews/syntax/service/CodePreviewSyntaxService") {
   static readonly layer = Layer.effect(
     this,
@@ -206,6 +206,7 @@ export class CodePreviewSyntaxService extends Context.Service<
                 highlighterLifecycle.withPermits(1)(
                   modify((current) => {
                     if (current.initVersion !== flight.version)
+                      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
                       return disposeShikiHighlighter(next).pipe(
                         Effect.as([[] as readonly (() => void)[], current] as const),
                       );
@@ -305,6 +306,7 @@ export class CodePreviewSyntaxService extends Context.Service<
             onSuccess: () =>
               modify((current) => {
                 if (current.generation !== decision.generation)
+                  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
                   return Effect.succeed([[] as readonly (() => void)[], current] as const);
                 const pending = new Set(current.pendingLanguages);
                 pending.delete(language);

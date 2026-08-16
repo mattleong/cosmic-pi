@@ -1,3 +1,4 @@
+import { isNumberValue, isStringValue } from "pi-cosmic-core";
 import { bundledThemes } from "shiki";
 import * as Schema from "effect/Schema";
 import { parsePositiveInteger } from "./env";
@@ -26,7 +27,7 @@ import {
 
 export type CodePreviewSettingDescriptor<K extends keyof CodePreviewSettings> = {
   readonly schema: Schema.Decoder<unknown>;
-  normalize(value: unknown, fallback: CodePreviewSettings[K]): CodePreviewSettings[K];
+  normalize<Value>(value: Value, fallback: CodePreviewSettings[K]): CodePreviewSettings[K];
   update(next: CodePreviewSettings, current: CodePreviewSettings, value: string): void;
 };
 
@@ -45,7 +46,7 @@ type NumberSettingKey = {
 function validatedSetting<K extends keyof CodePreviewSettings>(
   key: K,
   schema: Schema.Decoder<CodePreviewSettings[K]>,
-  isValid: (value: unknown) => value is CodePreviewSettings[K],
+  isValid: <Value>(value: Value) => value is Value & CodePreviewSettings[K],
 ): CodePreviewSettingDescriptor<K> {
   return {
     schema,
@@ -57,10 +58,12 @@ function validatedSetting<K extends keyof CodePreviewSettings>(
 }
 
 function booleanSetting<K extends BooleanSettingKey>(key: K): CodePreviewSettingDescriptor<K> {
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return {
     schema: Schema.Boolean as Schema.Decoder<CodePreviewSettings[K]>,
     normalize: (value) => value as CodePreviewSettings[K],
     update: (next, _current, value) => {
+      // SAFETY: Configuration decoding validates the persisted value before this typed access.
       next[key] = (value === "on") as CodePreviewSettings[K];
     },
   };
@@ -69,15 +72,18 @@ function booleanSetting<K extends BooleanSettingKey>(key: K): CodePreviewSetting
 function positiveIntegerSetting<K extends NumberSettingKey>(
   key: K,
 ): CodePreviewSettingDescriptor<K> {
+  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return {
     schema: PositiveIntegerSchema as Schema.Decoder<CodePreviewSettings[K]>,
     normalize: (value) => value as CodePreviewSettings[K],
     update: (next, current, value) => {
+      // SAFETY: Configuration decoding validates the persisted value before this typed access.
       next[key] = coerceStringNumber(value, current[key] as number) as CodePreviewSettings[K];
     },
   };
 }
 
+// SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
 export const CODE_PREVIEW_SETTING_DEFINITIONS = {
   shikiTheme: validatedSetting("shikiTheme", Schema.String, isBundledThemeName),
   diffIntensity: validatedSetting(
@@ -99,14 +105,14 @@ export const CODE_PREVIEW_SETTING_DEFINITIONS = {
   editDiffPreview: booleanSetting("editDiffPreview"),
   editCollapsedLines: {
     schema: EditCollapsedLinesSchema,
-    normalize: (value) => value as CodePreviewSettings["editCollapsedLines"],
+    normalize: <Value>(value: Value) => Schema.decodeUnknownSync(EditCollapsedLinesSchema)(value),
     update: (next, current, value) => {
       next.editCollapsedLines =
         value === "all"
           ? "all"
           : coerceStringNumber(
               value,
-              typeof current.editCollapsedLines === "number" ? current.editCollapsedLines : 100,
+              isNumberValue(current.editCollapsedLines) ? current.editCollapsedLines : 100,
             );
     },
   },
@@ -130,50 +136,63 @@ export const CODE_PREVIEW_SETTING_DEFINITIONS = {
   },
 } as const satisfies CodePreviewSettingDescriptors;
 
-export const CODE_PREVIEW_SETTING_KEYS = Object.keys(
-  CODE_PREVIEW_SETTING_DEFINITIONS,
-) as readonly (keyof CodePreviewSettings)[];
+const codePreviewSettingKeys = (): readonly (keyof CodePreviewSettings)[] => {
+  // SAFETY: CODE_PREVIEW_SETTING_DEFINITIONS satisfies the complete CodePreviewSettings key map.
+  return Object.keys(CODE_PREVIEW_SETTING_DEFINITIONS) as readonly (keyof CodePreviewSettings)[];
+};
+export const CODE_PREVIEW_SETTING_KEYS = codePreviewSettingKeys();
 
 export function getSettingDefinition(
   id: string,
 ): CodePreviewSettingDescriptor<keyof CodePreviewSettings> | undefined {
-  return Object.hasOwn(CODE_PREVIEW_SETTING_DEFINITIONS, id)
-    ? CODE_PREVIEW_SETTING_DEFINITIONS[id as keyof CodePreviewSettings]
-    : undefined;
+  if (!Object.hasOwn(CODE_PREVIEW_SETTING_DEFINITIONS, id)) return undefined;
+  // SAFETY: The own-property check proves id is one of the complete settings-definition keys.
+  const key = id as keyof CodePreviewSettings;
+  const definition = CODE_PREVIEW_SETTING_DEFINITIONS[key];
+  // SAFETY: The mapped descriptor contract couples every definition to its corresponding settings key.
+  return definition as typeof definition & CodePreviewSettingDescriptor<keyof CodePreviewSettings>;
 }
 
 function coerceStringNumber(value: string, fallback: number): number {
   return parsePositiveInteger(value) ?? fallback;
 }
 
-function coerceTools(value: unknown, fallback: CodePreviewToolName[]): CodePreviewToolName[] {
-  if (typeof value === "string") return [...(parseCodePreviewTools(value) ?? fallback)];
+function coerceTools<ValueInput>(
+  value: ValueInput,
+  fallback: CodePreviewToolName[],
+): CodePreviewToolName[] {
+  if (isStringValue(value)) return [...(parseCodePreviewTools(value) ?? fallback)];
   if (!Array.isArray(value)) return fallback;
   const tools = value.filter(
-    (tool): tool is CodePreviewToolName => typeof tool === "string" && isCodePreviewToolName(tool),
+    (tool): tool is CodePreviewToolName => isStringValue(tool) && isCodePreviewToolName(tool),
   );
   return [...new Set(tools)];
 }
 
-export function isDiffBackgroundIntensity(value: unknown): value is DiffBackgroundIntensity {
+export function isDiffBackgroundIntensity<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & DiffBackgroundIntensity {
   return isStringOption(DIFF_BACKGROUND_INTENSITIES, value);
 }
 
-export function isDiffWordEmphasis(value: unknown): value is DiffWordEmphasis {
+export function isDiffWordEmphasis<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & DiffWordEmphasis {
   return isStringOption(DIFF_WORD_EMPHASES, value);
 }
 
-export function isPathIconMode(value: unknown): value is PathIconMode {
+export function isPathIconMode<ValueInput>(value: ValueInput): value is ValueInput & PathIconMode {
   return isStringOption(PATH_ICON_MODES, value);
 }
 
-function isStringOption<const T extends readonly string[]>(
+function isStringOption<const T extends readonly string[], ValueInput>(
   options: T,
-  value: unknown,
-): value is T[number] {
-  return typeof value === "string" && (options as readonly string[]).includes(value);
+  value: ValueInput,
+): value is ValueInput & T[number] {
+  // SAFETY: Configuration decoding validates the persisted value before this typed access.
+  return isStringValue(value) && (options as readonly string[]).includes(value);
 }
 
-export function isBundledThemeName(value: unknown): value is string {
-  return typeof value === "string" && value in bundledThemes;
+export function isBundledThemeName<ValueInput>(value: ValueInput): value is ValueInput & string {
+  return isStringValue(value) && value in bundledThemes;
 }

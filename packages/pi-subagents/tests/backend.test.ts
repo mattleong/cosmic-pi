@@ -6,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import type {
   ChildProcessHandle,
-  ChildProcessShape,
+  ChildProcessContract,
   ChildWireEvent,
 } from "../src/boundary/child-process.ts";
 import { withHerdrSupervisorInstructions } from "../src/backend/herdr.ts";
@@ -121,7 +121,7 @@ describe("subagent backend contract", () => {
       const commands: RpcCommand[] = [];
       const ipc: unknown[] = [];
       const acknowledged: ChildWireEvent[] = [];
-      let capturedLaunch: Parameters<ChildProcessShape["spawn"]>[0] | undefined;
+      let capturedLaunch: Parameters<ChildProcessContract["spawn"]>[0] | undefined;
 
       const handle: ChildProcessHandle = {
         pid: 4242,
@@ -154,7 +154,7 @@ describe("subagent backend contract", () => {
         sendIpc: (message) => Effect.sync(() => void ipc.push(message)),
         terminate: () => Effect.void,
       };
-      const childProcesses: ChildProcessShape = {
+      const childProcesses: ChildProcessContract = {
         reclaimRunState: () => Effect.void,
         spawn: (request) => {
           capturedLaunch = request;

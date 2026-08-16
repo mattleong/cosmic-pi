@@ -1,10 +1,10 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
-import { type SubagentServiceShape } from "../../src/run/service.ts";
+import { type SubagentServiceContract } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
@@ -12,6 +12,9 @@ import {
   startCapturingService,
   view,
 } from "./fixtures/tool-harness.ts";
+
+const resultText = (result: AgentToolResult<unknown>): string =>
+  result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -105,6 +108,7 @@ describe("subagent tool", () => {
       runCount: 1,
       cards: [{ id: "agent-1" }],
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const listDetails = listed?.details as
       | { cards?: ReadonlyArray<{ finalText?: string }> }
       | undefined;
@@ -152,7 +156,7 @@ describe("subagent tool", () => {
       "call",
       { runIds: ["agent-1", "agent-2"], until: "all_finished" },
       undefined,
-      (result) => updates.push(result.content[0]?.text ?? ""),
+      (result) => updates.push(resultText(result)),
       context,
     );
     expect(updates).toEqual([
@@ -195,7 +199,7 @@ describe("subagent tool", () => {
       withAwaitTerminalObservations: (_ids, _until, onUpdate) =>
         Effect.sync(() => onUpdate?.([waiting])).pipe(Effect.andThen(Effect.never)),
     });
-    const updates: Array<{ readonly content: ReadonlyArray<{ readonly text: string }> }> = [];
+    const updates: string[] = [];
     const controller = new AbortController();
     const executing = captureSubagentTools(cancelService)
       .get("subagent_await")
@@ -203,20 +207,19 @@ describe("subagent tool", () => {
         "call",
         { runIds: [waiting.id], until: "all_finished" },
         controller.signal,
-        (result) => updates.push(result),
+        (result) => updates.push(resultText(result)),
         context,
       );
     await Promise.resolve();
     await Promise.resolve();
     controller.abort();
     await expect(executing).rejects.toBeDefined();
-    const cancelled = updates.at(-1)?.content[0]?.text ?? "";
+    const cancelled = updates.at(-1) ?? "";
     expect(cancelled).toContain("Await canceled; 1 subagent is unfinished.");
     expect(cancelled).toContain("Question from auth-review: Which fixture?");
     expect(cancelled).toContain('subagent_reply({ runId: "agent-question", message: "..." })');
 
-    const immediateUpdates: Array<{ readonly content: ReadonlyArray<{ readonly text: string }> }> =
-      [];
+    const immediateUpdates: string[] = [];
     const immediateController = new AbortController();
     immediateController.abort();
     const immediate = captureSubagentTools(noProgressService)
@@ -225,13 +228,11 @@ describe("subagent tool", () => {
         "call",
         { runIds: [waiting.id], until: "all_finished" },
         immediateController.signal,
-        (result) => immediateUpdates.push(result),
+        (result) => immediateUpdates.push(resultText(result)),
         context,
       );
     await expect(immediate).rejects.toBeDefined();
-    expect(immediateUpdates.at(-1)?.content[0]?.text).toContain(
-      "Await canceled before progress was observed",
-    );
+    expect(immediateUpdates.at(-1)).toContain("Await canceled before progress was observed");
   });
 
   it("reports per-target management outcomes without hiding successful side effects", async () => {
@@ -516,7 +517,7 @@ describe("subagent tool", () => {
 
   it("returns status for found IDs and model-visible failures for stale IDs", async () => {
     const completed = view({ state: "completed", finalText: "Done." });
-    const withStatusObservations: SubagentServiceShape["withStatusObservations"] = (ids, use) =>
+    const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (ids, use) =>
       use({
         observations: ids.includes("agent-1") ? [{ run: completed }] : [],
         missingIds: ids.filter((id) => id !== "agent-1"),
@@ -554,12 +555,8 @@ describe("subagent tool", () => {
         createdAt: 2,
       },
     });
-    const withAwaitTerminalObservations: SubagentServiceShape["withAwaitTerminalObservations"] = (
-      _ids,
-      _until,
-      _onUpdate,
-      use,
-    ) => use([{ run: waiting }]);
+    const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] =
+      (_ids, _until, _onUpdate, use) => use([{ run: waiting }]);
     const service = {
       ...startCapturingService([]),
       withAwaitTerminalObservations,
@@ -657,7 +654,7 @@ describe("subagent tool", () => {
       }),
     );
     const base = startCapturingService([]);
-    const failStart: SubagentServiceShape["start"] = () =>
+    const failStart: SubagentServiceContract["start"] = () =>
       Effect.fail(
         new InvalidSubagentRequestError({
           code: "all_failed",

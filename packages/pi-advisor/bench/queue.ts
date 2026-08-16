@@ -6,11 +6,11 @@ import * as Effect from "effect/Effect";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type {
   AdvisorCheckpointRequest,
-  AdvisorRuntimeServiceShape,
+  AdvisorRuntimeServiceContract,
 } from "../src/runtime/runtime.ts";
 import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "../src/queue/service.ts";
 
-const runtime: AdvisorRuntimeServiceShape = {
+const runtime: AdvisorRuntimeServiceContract = {
   activeToolNames: () => [],
   start: () => Effect.void,
   checkpoint: (request: AdvisorCheckpointRequest) =>

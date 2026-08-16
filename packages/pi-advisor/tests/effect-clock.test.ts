@@ -15,6 +15,7 @@ import { advisorDelayEffect, advisorIntervalEffect } from "../src/boundary/clock
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import { makeTestChildFactory, type TestChildFactoryOverrides } from "./support/child-factory.ts";
 import { standaloneAdvisorExecutor } from "./support/executor.ts";
+import { agentSessionFixture } from "./support/agent-session.ts";
 import { ADVISOR_CATCH_UP_TIMEOUT_MS, awaitAdvisorCatchUpEffect } from "../src/extension.ts";
 import { LONG_TURN_REVIEW_MS } from "../src/review/trajectory.ts";
 import {
@@ -27,10 +28,11 @@ import { initialReviewQueueState } from "../src/queue/state.ts";
 import {
   AdvisorRuntime,
   AdvisorRuntimeResetRequiredError,
-  type AdvisorRuntimeServiceShape,
+  type AdvisorRuntimeServiceContract,
 } from "../src/runtime/runtime.ts";
 import { ADVISOR_OPERATION_TIMEOUT_MS } from "../src/config/options.ts";
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const runtimeOptions = () => ({
   ctx: { cwd: process.cwd(), modelRegistry: {} as never },
   config: {
@@ -49,6 +51,7 @@ const makeRuntime = (
 ): Effect.Effect<AdvisorRuntime, never, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     return new AdvisorRuntime(
       makeTestChildFactory(overrides),
       standaloneAdvisorExecutor,
@@ -60,7 +63,7 @@ const makeRuntime = (
   });
 
 const lateSession = (dispose: () => void): AgentSession =>
-  ({
+  agentSessionFixture({
     sessionFile: undefined,
     messages: [],
     isStreaming: false,
@@ -72,8 +75,9 @@ const lateSession = (dispose: () => void): AgentSession =>
     followUp: () => Promise.resolve(),
     abort: vi.fn(() => Promise.resolve()),
     dispose: vi.fn(dispose),
-  }) as unknown as AgentSession;
+  });
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const childModel = () =>
   Promise.resolve({
     modelRuntime: {} as never,
@@ -126,7 +130,7 @@ describe("advisor Effect clock boundaries", () => {
       const scope = yield* Scope.fork(parentScope);
       let attempts = 0;
       let interrupted = false;
-      const effects: AdvisorRuntimeServiceShape = {
+      const effects: AdvisorRuntimeServiceContract = {
         activeToolNames: () => [],
         start: () => Effect.void,
         checkpoint: (request) => {
@@ -242,6 +246,7 @@ describe("advisor Effect clock boundaries", () => {
             Deferred.doneUnsafe(createStarted, Effect.void);
             return runPromise(Deferred.await(lateCreate));
           }
+          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
           return Promise.resolve({ session: replacement, extensionsResult: {} as never });
         },
       });
@@ -261,6 +266,7 @@ describe("advisor Effect clock boundaries", () => {
       expect(runtime.childSession).toBe(replacement);
       expect(first.dispose).not.toHaveBeenCalled();
 
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       yield* Deferred.succeed(lateCreate, { session: first, extensionsResult: {} as never });
       yield* Deferred.await(lateDisposed);
       expect(first.dispose).toHaveBeenCalledOnce();
@@ -305,6 +311,7 @@ describe("advisor Effect clock boundaries", () => {
       yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
       expect(session.dispose).not.toHaveBeenCalled();
 
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       yield* Deferred.succeed(lateCreate, { session, extensionsResult: {} as never });
       yield* Deferred.await(lateDisposed);
       expect(session.abort).not.toHaveBeenCalled();
@@ -347,6 +354,7 @@ describe("advisor Effect clock boundaries", () => {
       expect((yield* Fiber.join(startup)).message).toContain("startup timed out");
       yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
 
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       yield* Deferred.succeed(lateCreate, { session, extensionsResult: {} as never });
       yield* Deferred.await(lateDisposed);
       expect(session.abort).not.toHaveBeenCalled();
@@ -359,7 +367,7 @@ describe("advisor Effect clock boundaries", () => {
       const scope = yield* Effect.scope;
       const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
       const abortGate = yield* Deferred.make<void>();
-      const session = {
+      const session = agentSessionFixture({
         sessionFile: undefined,
         messages: [],
         isStreaming: false,
@@ -371,7 +379,8 @@ describe("advisor Effect clock boundaries", () => {
         followUp: () => Promise.resolve(),
         abort: vi.fn(() => runPromise(Deferred.await(abortGate))),
         dispose: vi.fn(),
-      } as unknown as AgentSession;
+      });
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const runtime = new AdvisorRuntime(
         makeTestChildFactory({
           createChildModel: () =>
@@ -389,6 +398,7 @@ describe("advisor Effect clock boundaries", () => {
         (yield* SynchronizedRef.make(undefined)) as never,
         yield* Semaphore.make(1),
       );
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       yield* runtime
         .startEffect({
           ctx: { cwd: process.cwd(), modelRegistry: {} as never },
@@ -428,7 +438,7 @@ describe("advisor Effect clock boundaries", () => {
       const scope = yield* Effect.scope;
       const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
       const makeSession = (abort: () => Promise<void>) =>
-        ({
+        agentSessionFixture({
           sessionFile: undefined,
           messages: [],
           isStreaming: false,
@@ -440,11 +450,12 @@ describe("advisor Effect clock boundaries", () => {
           followUp: () => Promise.resolve(),
           abort: vi.fn(abort),
           dispose: vi.fn(),
-        }) as unknown as AgentSession;
+        });
       const stuckAbort = yield* Deferred.make<void>();
       const stuck = makeSession(() => runPromise(Deferred.await(stuckAbort)));
       const fresh = makeSession(() => Promise.resolve());
       const sessions = [stuck, fresh];
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const runtime = new AdvisorRuntime(
         makeTestChildFactory({
           createChildModel: () =>
@@ -466,6 +477,7 @@ describe("advisor Effect clock boundaries", () => {
         (yield* SynchronizedRef.make(undefined)) as never,
         yield* Semaphore.make(1),
       );
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const options = {
         ctx: { cwd: process.cwd(), modelRegistry: {} as never },
         config: {
@@ -512,6 +524,7 @@ describe("advisor Effect clock boundaries", () => {
       yield* runtime.reprimeEffect("fresh").pipe(Effect.provide(advisorPlatformLayer));
       expect(runtime.childSession).toBe(fresh);
       const interruptedFreshAbort = yield* Deferred.make<void>();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       (fresh.abort as ReturnType<typeof vi.fn>).mockImplementationOnce(() =>
         runPromise(Deferred.await(interruptedFreshAbort)),
       );
@@ -535,7 +548,7 @@ describe("advisor Effect clock boundaries", () => {
       const scope = yield* Scope.fork(parentScope);
       const abortGate = yield* Deferred.make<void>();
       let disposed = 0;
-      const effects: AdvisorRuntimeServiceShape = {
+      const effects: AdvisorRuntimeServiceContract = {
         activeToolNames: () => [],
         start: () => Effect.void,
         checkpoint: () => Effect.never,

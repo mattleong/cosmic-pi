@@ -2,17 +2,15 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  initTheme,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { stripAnsi } from "pi-cosmic-core";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterXai from "../src/extension.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 const tempDirectories: string[] = [];
 afterEach(() => {
@@ -20,12 +18,9 @@ afterEach(() => {
   delete process.env.PI_CODING_AGENT_DIR;
 });
 
-type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+type Handler = ExtensionHandler<any, any>;
 type Completion = { value: string; label: string; description?: string };
-type CommandDefinition = {
-  handler: (args: string, ctx: ExtensionContext) => unknown;
-  getArgumentCompletions?: (prefix: string) => Completion[] | null;
-};
+type CommandDefinition = Parameters<ExtensionAPI["registerCommand"]>[1];
 type SettingsComponent = {
   render(width: number): string[];
   handleInput(data: string): void;
@@ -47,7 +42,7 @@ function harness() {
   const commands = new Map<string, CommandDefinition>();
   const notify = vi.fn();
   const custom = vi.fn();
-  const pi = {
+  const pi = extensionApiFixture({
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
     },
@@ -55,8 +50,8 @@ function harness() {
       commands.set(name, definition);
     },
     events: { emit: vi.fn(), on: vi.fn() },
-  } as unknown as ExtensionAPI;
-  const ctx = {
+  });
+  const ctx = extensionContextFixture({
     cwd,
     mode: "tui",
     hasUI: true,
@@ -67,27 +62,32 @@ function harness() {
     },
     ui: { notify, custom, setStatus: vi.fn(), setFooter: vi.fn() },
     isProjectTrusted: vi.fn(() => true),
-  } as unknown as ExtensionContext;
+  });
 
   betterXai(pi);
   return { handlers, commands, ctx, cwd, notify, custom };
 }
 
-const completionValues = (result: Completion[] | null | undefined): string[] | null =>
-  result ? result.map((completion) => completion.value) : null;
+const completionValues = async (
+  result: Completion[] | Promise<Completion[] | null> | null | undefined,
+): Promise<string[] | null> => {
+  const completions = await result;
+  return completions ? completions.map((completion) => completion.value) : null;
+};
 
+// SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
 const readConfig = (cwd: string): { usage?: { showResetTimes?: boolean } } =>
   JSON.parse(readFileSync(join(cwd, ".pi", "extensions", "pi-better-xai.json"), "utf8")) as {
     usage?: { showResetTimes?: boolean };
   };
 
 describe("Better xAI settings surface", () => {
-  test("completes setting ids, help/diagnostics, and finite values", () => {
+  test("completes setting ids, help/diagnostics, and finite values", async () => {
     const h = harness();
     const complete = h.commands.get("xai-settings")?.getArgumentCompletions;
     expect(complete).toBeTypeOf("function");
 
-    expect(completionValues(complete?.(""))).toEqual([
+    expect(await completionValues(complete?.(""))).toEqual([
       "usage.enabled",
       "usage.refreshIntervalMs",
       "usage.showOnlyOnSubscriptionModels",
@@ -96,18 +96,18 @@ describe("Better xAI settings surface", () => {
       "help",
       "diagnostics",
     ]);
-    expect(completionValues(complete?.("usage.s"))).toEqual([
+    expect(await completionValues(complete?.("usage.s"))).toEqual([
       "usage.showOnlyOnSubscriptionModels",
       "usage.showResetTimes",
     ]);
-    expect(completionValues(complete?.("FOOTER"))).toEqual(["footer.mode"]);
-    expect(completionValues(complete?.("footer.mode "))).toEqual([
+    expect(await completionValues(complete?.("FOOTER"))).toEqual(["footer.mode"]);
+    expect(await completionValues(complete?.("footer.mode "))).toEqual([
       "footer.mode replace",
       "footer.mode status",
       "footer.mode off",
     ]);
-    expect(completionValues(complete?.("footer.mode re"))).toEqual(["footer.mode replace"]);
-    expect(completionValues(complete?.("usage.enabled t"))).toEqual(["usage.enabled true"]);
+    expect(await completionValues(complete?.("footer.mode re"))).toEqual(["footer.mode replace"]);
+    expect(await completionValues(complete?.("usage.enabled t"))).toEqual(["usage.enabled true"]);
     expect(complete?.("zzz")).toBeNull();
     expect(complete?.("unknown ")).toBeNull();
     expect(complete?.("help ")).toBeNull();
@@ -129,6 +129,7 @@ describe("Better xAI settings surface", () => {
     let component: SettingsComponent | undefined;
     const done = vi.fn();
     h.custom.mockImplementation((factory) => {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       component = factory(
         { requestRender: vi.fn() },
         { fg: (_tone: string, text: string) => text, bold: (text: string) => text },
@@ -169,6 +170,7 @@ describe("Better xAI settings surface", () => {
     initTheme(undefined, false);
     let component: SettingsComponent | undefined;
     h.custom.mockImplementation((factory) => {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       component = factory(
         { requestRender: vi.fn() },
         { fg: (_tone: string, text: string) => text, bold: (text: string) => text },
@@ -206,6 +208,7 @@ describe("Better xAI settings surface", () => {
     initTheme(undefined, false);
     let component: SettingsComponent | undefined;
     h.custom.mockImplementation((factory) => {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       component = factory(
         { requestRender: vi.fn() },
         { fg: (_tone: string, text: string) => text, bold: (text: string) => text },
@@ -251,6 +254,7 @@ describe("Better xAI settings surface", () => {
 
     h.notify.mockClear();
     Object.assign(h.ctx, { mode: "tui" });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     delete (h.ctx as { ui: { custom?: unknown } }).ui.custom;
     await h.commands.get("xai-settings")?.handler("", h.ctx);
     expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("Better xAI settings"), "info");

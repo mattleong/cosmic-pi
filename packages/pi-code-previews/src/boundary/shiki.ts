@@ -141,7 +141,7 @@ function registerAbortListener(
 
 export const shikiBoundaryTest = { registerAbortListener };
 
-export interface ShikiAdapterShape {
+export interface ShikiAdapterContract {
   readonly create: (
     theme: string,
     languages: readonly string[],
@@ -153,7 +153,7 @@ export interface ShikiAdapterShape {
   ) => Effect.Effect<void, ShikiBoundaryError>;
 }
 
-export class ShikiAdapter extends Context.Service<ShikiAdapter, ShikiAdapterShape>()(
+export class ShikiAdapter extends Context.Service<ShikiAdapter, ShikiAdapterContract>()(
   "pi-code-previews/boundary/shiki/ShikiAdapter",
 ) {
   static readonly live = this.of({
@@ -199,6 +199,7 @@ function createShikiHighlighter(
         );
     };
     try {
+      // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
       void createHighlighter({ themes: [theme], langs: [...languages] as never[] })
         .then((highlighter) => {
           try {
@@ -246,6 +247,7 @@ function loadShikiLanguage(
       endHighlighterLoad(highlighter);
     };
     try {
+      // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
       void Promise.resolve(highlighter.loadLanguage(language as never))
         .then(
           () => {

@@ -26,7 +26,12 @@ const mapDocumentError = makeConfigDocumentErrorFactory(XaiConfigError, "Better 
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 
-function decodeConfig(value: unknown) {
+type DecodedConfig = {
+  usage?: Partial<ResolvedConfig["usage"]>;
+  footer?: Partial<ResolvedConfig["footer"]>;
+};
+
+function decodeConfig<ValueInput>(value: ValueInput): DecodedConfig {
   const root = decodeTolerantFields(
     value,
     { usage: UnknownRecordSchema, footer: UnknownRecordSchema },
@@ -47,14 +52,13 @@ function decodeConfig(value: unknown) {
     { mode: FooterModeSchema },
     { path: "footer" },
   ).value;
-  return {
-    ...(Object.keys(usage).length > 0 ? { usage } : {}),
-    ...(footer.mode !== undefined ? { footer: { mode: footer.mode } } : {}),
-  };
+  const decoded: DecodedConfig = {};
+  if (Object.keys(usage).length > 0) decoded.usage = usage;
+  if (footer.mode !== undefined) decoded.footer = { mode: footer.mode };
+  return decoded;
 }
 
 type ResolvedConfigValues = Pick<ResolvedConfig, "usage" | "footer">;
-type DecodedConfig = ReturnType<typeof decodeConfig>;
 
 const defaultConfigValues = (): ResolvedConfigValues => ({
   usage: { ...DEFAULT_USAGE_CONFIG },

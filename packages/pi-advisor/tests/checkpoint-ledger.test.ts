@@ -15,7 +15,7 @@ import {
   summarizeAdvisorReview,
 } from "../src/checkpoint/ledger.ts";
 
-function entry(id: string, parentId: string | null, data?: unknown): SessionEntry {
+function entry<DataInput>(id: string, parentId: string | null, data?: DataInput): SessionEntry {
   return data
     ? {
         type: "custom",

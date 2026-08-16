@@ -396,21 +396,21 @@ function numberedWords(prefix: string, count: number): string[] {
   return Array.from({ length: count }, (_, index) => `${prefix}${index}`);
 }
 
-function unrelatedTokenPair(index: number, tokenCount: number): { before: string; after: string } {
+function unrelatedTokenPair(index: number, tokenCount: number) {
   return {
     before: numberedWords(`before${index}_`, tokenCount).join(" "),
     after: numberedWords(`after${index}_`, tokenCount).join(" "),
   };
 }
 
-function codeLikePair(index: number): { before: string; after: string } {
+function codeLikePair(index: number) {
   return {
     before: `const value${index} = source.${index % 2 ? "oldName" : "oldValue"} ?? fallback${index};`,
     after: `const value${index} = target.${index % 2 ? "newName" : "newValue"} ?? fallback${index};`,
   };
 }
 
-function veryLongSharedPair(index: number): { before: string; after: string } {
+function veryLongSharedPair(index: number) {
   const shared = numberedWords(`shared${index}_`, 600).join(" ");
   return {
     before: `${shared} oldValue ${shared}`,

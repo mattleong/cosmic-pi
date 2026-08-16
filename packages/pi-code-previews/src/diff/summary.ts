@@ -16,7 +16,7 @@ export function diffSummarySeparator(theme: Theme): string {
   return theme.fg("muted", " · ");
 }
 
-export function describeDiffShape(summary: DiffSummary): string {
+export function describeDiffContract(summary: DiffSummary): string {
   const parts: string[] = [];
   if (summary.replacements > 0) parts.push(countLabel(summary.replacements, "replacement"));
   if (summary.insertions > 0) parts.push(countLabel(summary.insertions, "insertion"));

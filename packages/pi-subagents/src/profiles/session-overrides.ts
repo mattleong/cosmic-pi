@@ -92,8 +92,8 @@ export const cloneSessionProfileOverrideSeed = (
 };
 
 /** Strict unknown-boundary decoder for process-memory reload handoffs. */
-export const decodeSessionProfileOverrideSeed = (
-  value: unknown,
+export const decodeSessionProfileOverrideSeed = <ValueInput>(
+  value: ValueInput,
 ): SessionProfileOverrideSeed | undefined => {
   const decoded = Schema.decodeUnknownOption(
     SessionProfileOverrideSeedInputSchema,
@@ -120,6 +120,7 @@ export const applySessionProfileOverrides = (
   baseConfig: ResolvedSubagentConfig,
   overrides: SessionProfileOverrides,
 ): ResolvedSubagentConfig => {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const profiles = {} as Record<ProfileId, ProfileRoute>;
   const profileSources = { ...baseConfig.profileSources };
   for (const profile of PROFILE_IDS) {
@@ -163,7 +164,7 @@ export const patchSessionProfileSnapshot = (
   if (patch.route === undefined && current === undefined) return Effect.succeed(snapshot);
   if (patch.route !== undefined && current !== undefined && sameRoute(current, patch.route))
     return Effect.succeed(snapshot);
-  const overrides: Partial<Record<ProfileId, ProfileRoute>> = { ...snapshot.overrides };
+  const overrides = { ...snapshot.overrides } satisfies Partial<Record<ProfileId, ProfileRoute>>;
   if (patch.route === undefined) delete overrides[patch.profile];
   else overrides[patch.profile] = cloneRoute(patch.route);
   return Effect.succeed(

@@ -1,9 +1,10 @@
+import { isStringValue } from "pi-cosmic-core";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { createWriteToolDefinition, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
   createSimpleDiff,
-  describeDiffShape,
+  describeDiffContract,
   diffSummarySeparator,
   FullWidthDiffText,
   summarizeDiff,
@@ -51,7 +52,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
     execute(toolCallId, params, signal, onUpdate, ctx) {
       const path = getPathArg(params);
       const content = getObjectValue(params, "content");
-      if (!path || typeof content !== "string") {
+      if (!path || !isStringValue(content)) {
         const before = path
           ? readExistingFileForPreview(path, cwd, "")
           : Promise.resolve(undefined);
@@ -68,7 +69,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
       return previewShell.renderCall(context, theme, (renderContext) => {
         if (!renderContext) throw new TypeError("Code preview render context is required.");
         const path = getPathArg(args);
-        const content = typeof args.content === "string" ? args.content : "";
+        const content = isStringValue(args.content) ? args.content : "";
         const lang = resolvePreviewLanguage({
           path,
           content,
@@ -116,8 +117,9 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
           return new Text(theme.fg("error", escapeControlChars(firstText || "Write failed")), 0, 0);
 
         const path = getPathArg(renderContext.args);
-        const content =
-          typeof renderContext.args?.content === "string" ? renderContext.args.content : "";
+        const content = isStringValue(renderContext.args?.content)
+          ? renderContext.args.content
+          : "";
         const stateKey = "codePreviewWriteBeforeSnapshot";
         const before = Object.hasOwn(renderContext.state, stateKey)
           ? renderContext.state[stateKey]
@@ -133,7 +135,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
             0,
             0,
           );
-        if (typeof beforeContent === "string" && beforeContent !== content) {
+        if (isStringValue(beforeContent) && beforeContent !== content) {
           if (!expanded && !codePreviewSettings.writeContentPreview)
             return new Text(
               `${theme.fg("success", "✓ Write applied")}${formatOptionalHiddenHint(
@@ -185,7 +187,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
             renderContext.invalidate,
           );
         }
-        if (typeof beforeContent === "string")
+        if (isStringValue(beforeContent))
           return new Text(theme.fg("muted", "✓ Write applied · no changes"), 0, 0);
         if (beforeKind === "content")
           return new Text(
@@ -266,7 +268,7 @@ function renderWriteDiffPreview(
     expanded,
     codePreviewSettings.writeCollapsedLines,
   );
-  const header = `${theme.fg("success", "✓ Write applied")} ${theme.fg("muted", describeDiffShape(summary))}${diffSummarySeparator(theme)}${theme.fg("success", `+${summary.additions}`)} ${theme.fg("error", `-${summary.removals}`)}\n`;
+  const header = `${theme.fg("success", "✓ Write applied")} ${theme.fg("muted", describeDiffContract(summary))}${diffSummarySeparator(theme)}${theme.fg("success", `+${summary.additions}`)} ${theme.fg("error", `-${summary.removals}`)}\n`;
   return createDiffPreviewText(diff, lang, theme, limit, {
     totalLines: summary.totalLines,
     hiddenLineNoun: "diff lines",

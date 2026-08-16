@@ -56,7 +56,7 @@ interface JobRecord {
 
 export type BackgroundJobFilter = "active" | "completed" | "all";
 
-export interface BackgroundTerminalServiceShape {
+export interface BackgroundTerminalServiceContract {
   readonly start: (
     request: StartBackgroundJob,
   ) => Effect.Effect<BackgroundJobSnapshot, BackgroundTerminalError>;
@@ -174,16 +174,21 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       : exit.error || exit.exitCode !== 0
         ? "failed"
         : "exited";
-    record.snapshot = {
-      ...record.snapshot,
-      state,
-      endedAt,
-      exitCode: exit.exitCode,
-      ...(exit.signal ? { signal: exit.signal } : {}),
-      ...(exit.error ? { error: exit.error } : {}),
-      logCursor: record.logs.nextCursor - 1,
-      droppedLogBytes: record.logs.droppedBytes,
-    };
+    record.snapshot = (() => {
+      const objectPart6200_0 = { ...record.snapshot, state, endedAt, exitCode: exit.exitCode };
+      const objectPart6200_1 = exit.signal
+        ? { ...objectPart6200_0, signal: exit.signal }
+        : objectPart6200_0;
+      const objectPart6200_2 = exit.error
+        ? { ...objectPart6200_1, error: exit.error }
+        : objectPart6200_1;
+      const objectPart6200_3 = {
+        ...objectPart6200_2,
+        logCursor: record.logs.nextCursor - 1,
+        droppedLogBytes: record.logs.droppedBytes,
+      };
+      return objectPart6200_3;
+    })();
     wake(record);
     Deferred.doneUnsafe(record.completion, Effect.succeed(record.snapshot));
     trimRetention();
@@ -242,15 +247,25 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   const monitor = (id: string, ownerRecord: JobRecord, request: StartBackgroundJob) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const handle = yield* processes.spawn({
-          command: request.command,
-          cwd: request.cwd,
-          ingressBufferBytes: Math.max(
-            1,
-            Math.min(config.logBufferBytesPerJob, Math.floor(ingressLogBudget / config.maxRunning)),
-          ),
-          ...(config.shellPath ? { shellPath: config.shellPath } : {}),
-        });
+        const handle = yield* processes.spawn(
+          (() => {
+            const objectPart8477_0 = {
+              command: request.command,
+              cwd: request.cwd,
+              ingressBufferBytes: Math.max(
+                1,
+                Math.min(
+                  config.logBufferBytesPerJob,
+                  Math.floor(ingressLogBudget / config.maxRunning),
+                ),
+              ),
+            };
+            const objectPart8477_1 = config.shellPath
+              ? { ...objectPart8477_0, shellPath: config.shellPath }
+              : objectPart8477_0;
+            return objectPart8477_1;
+          })(),
+        );
         const terminateLateHandle = yield* withLock(
           Effect.sync(() => {
             Deferred.doneUnsafe(ownerRecord.handleReady, Effect.succeed(handle));
@@ -327,7 +342,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       ),
     );
 
-  const start: BackgroundTerminalServiceShape["start"] = (request) =>
+  const start: BackgroundTerminalServiceContract["start"] = (request) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const command = request.command.trim();
@@ -366,17 +381,19 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
             }
             const startedAt = yield* Clock.currentTimeMillis;
             const id = `term-${nextId++}`;
+            const snapshot: BackgroundJobSnapshot = {
+              id,
+              command,
+              cwd,
+              state: "starting",
+              startedAt,
+              logCursor: 0,
+              droppedLogBytes: 0,
+            };
             const created: JobRecord = {
-              snapshot: {
-                id,
-                command,
-                cwd,
-                state: "starting",
-                startedAt,
-                logCursor: 0,
-                droppedLogBytes: 0,
-                ...(request.name?.trim() ? { name: request.name.trim() } : {}),
-              },
+              snapshot: request.name?.trim()
+                ? { ...snapshot, name: request.name.trim() }
+                : snapshot,
               logs: emptyLogBuffer(),
               wake: Deferred.makeUnsafe<void>(),
               completion: Deferred.makeUnsafe<BackgroundJobSnapshot>(),
@@ -410,7 +427,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       }),
     );
 
-  const list: BackgroundTerminalServiceShape["list"] = (filter = "all") =>
+  const list: BackgroundTerminalServiceContract["list"] = (filter = "all") =>
     withLock(
       Effect.sync(() =>
         sortJobsByActivity(
@@ -427,7 +444,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       ),
     );
 
-  const status: BackgroundTerminalServiceShape["status"] = (id) =>
+  const status: BackgroundTerminalServiceContract["status"] = (id) =>
     withLock(
       Effect.suspend(() => {
         const record = jobs.get(id);
@@ -462,7 +479,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       return yield* readLogs({ ...request, waitSeconds: 0 }, false);
     });
 
-  const logs: BackgroundTerminalServiceShape["logs"] = (request) => readLogs(request, true);
+  const logs: BackgroundTerminalServiceContract["logs"] = (request) => readLogs(request, true);
 
   type StopPreparation = {
     readonly record: JobRecord;
@@ -545,8 +562,8 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       );
     });
 
-  const stop: BackgroundTerminalServiceShape["stop"] = (id, force) => requestStop(id, force);
-  const stopAll: BackgroundTerminalServiceShape["stopAll"] = (force = false) =>
+  const stop: BackgroundTerminalServiceContract["stop"] = (id, force) => requestStop(id, force);
+  const stopAll: BackgroundTerminalServiceContract["stopAll"] = (force = false) =>
     Effect.gen(function* () {
       const ids = yield* withLock(
         Effect.sync(() =>
@@ -573,7 +590,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   );
   const projection = withLock(Effect.sync(currentProjection));
 
-  const service: BackgroundTerminalServiceShape = {
+  const service: BackgroundTerminalServiceContract = {
     start,
     list,
     status,
@@ -601,12 +618,12 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
 
 export class BackgroundTerminalService extends Context.Service<
   BackgroundTerminalService,
-  BackgroundTerminalServiceShape
+  BackgroundTerminalServiceContract
 >()("pi-background-terminals/job/service/BackgroundTerminalService") {
   static readonly layer = (options: BackgroundTerminalServiceOptions = {}) =>
     Layer.effect(this, makeService(options));
 
   static override readonly use = <A, E>(
-    f: (service: BackgroundTerminalServiceShape) => Effect.Effect<A, E>,
+    f: (service: BackgroundTerminalServiceContract) => Effect.Effect<A, E>,
   ) => Effect.flatMap(this, f);
 }

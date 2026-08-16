@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/strictEffectProvide:off
+import { isFunctionValue } from "pi-cosmic-core";
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -23,7 +24,7 @@ type Context = {
   isProjectTrusted(): boolean;
   ui: { notify(message: string, level: string): void };
 };
-type Handler = (event: unknown, ctx: Context) => unknown;
+type Handler = (event: Readonly<Record<never, never>>, ctx: Context) => void | Promise<void>;
 
 const settings = { ...defaultCodePreviewSettings, syntaxHighlighting: false, tools: [] };
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
@@ -36,9 +37,11 @@ function harness(load: (call: number, projectTrusted: boolean) => Effect.Effect<
   let acquisitions = 0;
   let releases = 0;
   let calls = 0;
-  const pi = {
+  const piFixture = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
-  } as unknown as ExtensionAPI;
+  };
+  // SAFETY: Lifecycle tests invoke only on from this ExtensionAPI fixture.
+  const pi = piFixture as typeof piFixture & ExtensionAPI;
   const dependencies: CodePreviewExtensionDependencies = {
     registerHealth: () => undefined,
     registerSettings: () => undefined,
@@ -74,12 +77,17 @@ function harness(load: (call: number, projectTrusted: boolean) => Effect.Effect<
       };
     },
   };
-  const context = (signal?: AbortSignal): Context => ({
-    cwd: "/project",
-    ...(signal ? { signal } : {}),
-    isProjectTrusted: () => true,
-    ui: { notify: (message) => notifications.push(message) },
-  });
+  const context = (signal?: AbortSignal): Context =>
+    (() => {
+      const objectPart3005_0 = { cwd: "/project" };
+      const objectPart3005_1 = signal ? { ...objectPart3005_0, signal } : objectPart3005_0;
+      const objectPart3005_2 = {
+        ...objectPart3005_1,
+        isProjectTrusted: () => true,
+        ui: { notify: (message: string) => notifications.push(message) },
+      };
+      return objectPart3005_2;
+    })();
   return {
     pi,
     handlers,
@@ -116,8 +124,10 @@ test("replacement interrupts startup and releases each session exactly once", as
       : Effect.succeed(settings),
   );
   await codePreviewsWithDependencies(h.pi, h.dependencies);
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const first = h.handlers.get("session_start")?.({}, h.context()) as Promise<void>;
   await firstStarted;
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const second = h.handlers.get("session_start")?.({}, h.context()) as Promise<void>;
   await second;
   await first;
@@ -143,6 +153,7 @@ test("abort interrupts pending startup and awaits its finalizer", async () => {
   );
   await codePreviewsWithDependencies(h.pi, h.dependencies);
   const controller = new AbortController();
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const startup = h.handlers.get("session_start")?.(
     {},
     h.context(controller.signal),
@@ -251,8 +262,9 @@ test("throwing AbortSignal.aborted getters become handled startup failures", asy
     new Proxy(new AbortController().signal, {
       get(signal, property) {
         if (property === "aborted") throw new Error("host aborted failure");
-        const value = Reflect.get(signal, property, signal);
-        return typeof value === "function" ? value.bind(signal) : value;
+        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+        const value = property in signal ? signal[property as keyof AbortSignal] : undefined;
+        return isFunctionValue(value) ? value.bind(signal) : value;
       },
     }),
   );

@@ -1,3 +1,4 @@
+import { isFunctionValue } from "../src/runtime-values.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   clampPercent,
@@ -75,7 +76,7 @@ describe("host-session helpers", () => {
     expect(isProjectTrusted({ isProjectTrusted: () => "true" })).toBe(false);
     expect(
       isProjectTrusted({
-        get isProjectTrusted(): unknown {
+        get isProjectTrusted() {
           throw new Error("hostile trust getter");
         },
       }),
@@ -113,21 +114,23 @@ describe("host-session helpers", () => {
     // Pi documents `notify` as synchronous void; a runtime that returns a rejecting thenable
     // anyway must have its rejection observed by the boundary instead of leaking unhandled.
     let rejectionObserved = false;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const rejecting = {
       ui: {
         notify: () => ({
           // oxlint-disable-next-line unicorn/no-thenable -- simulates the contract-violating runtime under test
-          then: (_onResolve?: unknown, onReject?: (reason: unknown) => unknown) => {
-            rejectionObserved = typeof onReject === "function";
+          then: (_onResolve?: () => void, onReject?: (reason: Error) => void): void => {
+            rejectionObserved = isFunctionValue(onReject);
             onReject?.(new Error("late notify failure"));
           },
         }),
       },
-    } as unknown as HostNotifierContext;
+    } as HostNotifierContext;
     expect(() => notifyAtHostBoundary(rejecting, "message", "warning")).not.toThrow();
     expect(rejectionObserved).toBe(true);
 
     // Even a hostile thenable whose `then` itself throws stays contained.
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const hostileThenable = {
       ui: {
         notify: () => ({
@@ -137,7 +140,7 @@ describe("host-session helpers", () => {
           },
         }),
       },
-    } as unknown as HostNotifierContext;
+    } as HostNotifierContext;
     expect(() => notifyAtHostBoundary(hostileThenable, "message", "error")).not.toThrow();
   });
 });

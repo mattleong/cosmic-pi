@@ -89,7 +89,8 @@ export function latestOpenAdvisorReviewCardAtHostBoundary(
   if (!result.ok) return undefined;
   const closed = new Set<string>();
   for (let index = result.value.length - 1; index >= 0; index -= 1) {
-    const entry = result.value[index] as unknown as {
+    // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
+    const entry = result.value[index] as {
       type?: unknown;
       customType?: unknown;
       data?: unknown;

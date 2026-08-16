@@ -16,6 +16,19 @@ export type CodeModeFieldProvenance = "default" | "global" | "project";
 
 export type CodeModeProvenance = Readonly<Record<CodeModeFieldId, CodeModeFieldProvenance>>;
 
+type MutableCodeModeConfig = {
+  -readonly [Field in keyof CodeModeConfig]: CodeModeConfig[Field];
+};
+interface MutableCodeModeProvenance {
+  enabled: CodeModeFieldProvenance;
+  timeoutMs: CodeModeFieldProvenance;
+  maxToolCalls: CodeModeFieldProvenance;
+  maxOutputBytes: CodeModeFieldProvenance;
+  maxSourceBytes: CodeModeFieldProvenance;
+  maxCumulativeChildOutputBytes: CodeModeFieldProvenance;
+  catalogBudget: CodeModeFieldProvenance;
+}
+
 export interface CodeModeResolution {
   readonly config: CodeModeConfig;
   readonly provenance: CodeModeProvenance;
@@ -35,25 +48,41 @@ export function resolveCodeModeConfig(
   global: Partial<CodeModeConfig> | undefined,
   project: Partial<CodeModeConfig> | undefined,
 ): CodeModeResolution {
-  const config: Record<string, boolean | number> = {};
-  const provenance: Record<string, CodeModeFieldProvenance> = {};
+  const config: MutableCodeModeConfig = {
+    ...DEFAULT_CODE_MODE_CONFIG,
+  };
+  const provenance: MutableCodeModeProvenance = {
+    enabled: "default",
+    timeoutMs: "default",
+    maxToolCalls: "default",
+    maxOutputBytes: "default",
+    maxSourceBytes: "default",
+    maxCumulativeChildOutputBytes: "default",
+    catalogBudget: "default",
+  };
+  const setConfigField = <Field extends CodeModeFieldId>(
+    field: Field,
+    value: CodeModeConfig[Field],
+  ): void => {
+    config[field] = value;
+  };
   for (const field of CODE_MODE_FIELD_IDS) {
     const projectValue = project?.[field];
     const globalValue = global?.[field];
     if (projectValue !== undefined) {
-      config[field] = projectValue;
+      setConfigField(field, projectValue);
       provenance[field] = "project";
     } else if (globalValue !== undefined) {
-      config[field] = globalValue;
+      setConfigField(field, globalValue);
       provenance[field] = "global";
     } else {
-      config[field] = DEFAULT_CODE_MODE_CONFIG[field];
+      setConfigField(field, DEFAULT_CODE_MODE_CONFIG[field]);
       provenance[field] = "default";
     }
   }
   return {
-    config: Object.freeze(config) as unknown as CodeModeConfig,
-    provenance: Object.freeze(provenance) as CodeModeProvenance,
+    config: Object.freeze(config),
+    provenance: Object.freeze(provenance),
   };
 }
 
@@ -174,8 +203,8 @@ export const CODE_MODE_SETTING_DESCRIPTORS: readonly CodeModeSettingDescriptor[]
   }),
 ];
 
-const DESCRIPTORS_BY_ID = new Map(
-  CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => [descriptor.id as string, descriptor]),
+const DESCRIPTORS_BY_ID = new Map<string, CodeModeSettingDescriptor>(
+  CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
 );
 
 export const findCodeModeSettingDescriptor = (id: string): CodeModeSettingDescriptor | undefined =>

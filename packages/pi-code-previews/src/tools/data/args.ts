@@ -1,15 +1,14 @@
+import { isNumberValue, isStringValue } from "pi-cosmic-core";
 import { getObjectValue } from "../../shared/helpers";
 
-export function getPathArg(args: unknown): string {
+export function getPathArg<ArgsInput>(args: ArgsInput): string {
   const path = getObjectValue(args, "path") ?? getObjectValue(args, "file_path");
-  return typeof path === "string" ? path : "";
+  return isStringValue(path) ? path : "";
 }
 
-export function getReadStartLine(args: unknown): number {
+export function getReadStartLine<ArgsInput>(args: ArgsInput): number {
   const offset = getObjectValue(args, "offset");
-  return typeof offset === "number" && Number.isFinite(offset) && offset > 0
-    ? Math.floor(offset)
-    : 1;
+  return isNumberValue(offset) && Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 1;
 }
 
 export interface EditPreviewOperation {
@@ -17,12 +16,12 @@ export interface EditPreviewOperation {
   newText: string;
 }
 
-export function getEditPreviewOperations(args: unknown): EditPreviewOperation[] {
+export function getEditPreviewOperations<ArgsInput>(args: ArgsInput): EditPreviewOperation[] {
   const edits = getObjectValue(args, "edits");
   return (Array.isArray(edits) ? edits : [args]).flatMap((edit) => {
     const oldText = getObjectValue(edit, "oldText") ?? getObjectValue(edit, "old_text");
     const newText = getObjectValue(edit, "newText") ?? getObjectValue(edit, "new_text");
-    return typeof oldText === "string" && typeof newText === "string" && oldText !== newText
+    return isStringValue(oldText) && isStringValue(newText) && oldText !== newText
       ? [{ oldText, newText }]
       : [];
   });

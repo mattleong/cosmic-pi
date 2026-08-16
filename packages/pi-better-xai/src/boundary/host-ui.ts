@@ -15,7 +15,7 @@ const tryHostUi = <A>(operation: string, action: () => A) =>
   });
 
 /** Best-effort Effect adapter: a failing host UI call is logged, never propagated. */
-export const recoverHostUi = (operation: string, action: () => unknown) =>
+export const recoverHostUi = <Result>(operation: string, action: () => Result) =>
   tryHostUi(operation, action).pipe(
     Effect.catchTag("XaiHostUiError", () =>
       Effect.logWarning(`Better xAI UI recovery: ${operation}_failed.`),

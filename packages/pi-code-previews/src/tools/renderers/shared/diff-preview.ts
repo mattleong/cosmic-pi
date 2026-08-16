@@ -48,7 +48,7 @@ export function renderDiffPreviewBody(
   theme: Theme,
   limit: number,
   invalidate?: () => void,
-): { body: string; syntaxHighlightSkipped: boolean } {
+) {
   const syntaxHighlightSkipped = shouldSkipHighlight(diff);
   return {
     body: syntaxHighlightSkipped

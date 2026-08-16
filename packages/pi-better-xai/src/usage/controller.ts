@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -46,7 +47,7 @@ export class XaiBoundaryError extends Schema.TaggedError<XaiBoundaryError>()("Xa
 
 export type RefreshOptions = RefreshRequest;
 
-export interface XaiUsageServiceShape {
+export interface XaiUsageServiceContract {
   readonly refresh: (options?: RefreshOptions) => Effect.Effect<void>;
   readonly contextChanged: (clearUsage?: boolean) => Effect.Effect<void>;
   readonly updateSetting: (
@@ -55,7 +56,7 @@ export interface XaiUsageServiceShape {
   ) => Effect.Effect<void, XaiConfigError | InvalidSettingError>;
 }
 
-export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageServiceShape>()(
+export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageServiceContract>()(
   "pi-better-xai/usage/controller/XaiUsageService",
 ) {
   static layer(options: {
@@ -142,7 +143,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                   return {
                     _tag: "Failure",
                     message: sanitizeDiagnosticError(
-                      typeof result.failure.message === "string"
+                      isStringValue(result.failure.message)
                         ? result.failure.message
                         : "xAI usage request timed out.",
                     ),

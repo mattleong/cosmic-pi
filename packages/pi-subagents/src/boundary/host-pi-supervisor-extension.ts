@@ -1,6 +1,7 @@
 // Sole pi-subagents bridge extension loaded into Herdr-hosted Pi children.
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/asyncFunction:off
+import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
 import { defineTool, type AgentEndEvent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
@@ -27,30 +28,32 @@ const ReportParameters = Type.Object(
   { additionalProperties: false },
 );
 
-const exactMessage = (input: unknown): input is { readonly message: string } =>
+const exactMessage = <InputInput>(
+  input: InputInput,
+): input is InputInput & { readonly message: string } =>
   Boolean(
     input &&
-    typeof input === "object" &&
+    hasObjectRuntimeType(input) &&
     !Array.isArray(input) &&
     Object.keys(input).length === 1 &&
     "message" in input &&
-    typeof input.message === "string" &&
+    isStringValue(input.message) &&
     input.message.trim() &&
     input.message.length <= MAX_MESSAGE_CHARS,
   );
-const exactReport = (
-  input: unknown,
-): input is { readonly delivery_id: string; readonly report: string } =>
+const exactReport = <InputInput>(
+  input: InputInput,
+): input is InputInput & { readonly delivery_id: string; readonly report: string } =>
   Boolean(
     input &&
-    typeof input === "object" &&
+    hasObjectRuntimeType(input) &&
     !Array.isArray(input) &&
     Object.keys(input).length === 2 &&
     "delivery_id" in input &&
-    typeof input.delivery_id === "string" &&
+    isStringValue(input.delivery_id) &&
     new RegExp(DELIVERY_PATTERN).test(input.delivery_id) &&
     "report" in input &&
-    typeof input.report === "string" &&
+    isStringValue(input.report) &&
     input.report.trim() &&
     input.report.length <= MAX_REPORT_CHARS,
   );
@@ -81,7 +84,14 @@ const finalAssistantText = (event: AgentEndEvent): string | undefined => {
   return text ? text.slice(0, MAX_REPORT_CHARS) : undefined;
 };
 
-export default function registerPiSubagentSupervisorBridge(pi: ExtensionAPI): void {
+export interface PiSupervisorBridgeExtensionDependencies {
+  readonly openBridge: typeof openPiSupervisorBridge;
+}
+
+export default function registerPiSubagentSupervisorBridge(
+  pi: ExtensionAPI,
+  dependencies: PiSupervisorBridgeExtensionDependencies = { openBridge: openPiSupervisorBridge },
+): void {
   pi.registerFlag("pi-subagents-supervisor-config", {
     description: "Private pi-subagents supervisor channel configuration",
     type: "string",
@@ -148,7 +158,7 @@ export default function registerPiSubagentSupervisorBridge(pi: ExtensionAPI): vo
       !ctx.model ||
       !supportsFastModel(ctx.model.provider, ctx.model.id) ||
       !event.payload ||
-      typeof event.payload !== "object" ||
+      !hasObjectRuntimeType(event.payload) ||
       Array.isArray(event.payload)
     )
       return undefined;
@@ -167,7 +177,7 @@ export default function registerPiSubagentSupervisorBridge(pi: ExtensionAPI): vo
     delete process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
 
     const config = pi.getFlag("pi-subagents-supervisor-config");
-    if (typeof config !== "string") {
+    if (!isStringValue(config)) {
       if (ctx.hasUI)
         ctx.ui.notify("Private subagent supervisor configuration is missing.", "error");
       return;
@@ -176,7 +186,7 @@ export default function registerPiSubagentSupervisorBridge(pi: ExtensionAPI): vo
       pi.registerProvider(runtimeApiProvider, { apiKey: runtimeApiKey });
 
     try {
-      client = await openPiSupervisorBridge(config);
+      client = await dependencies.openBridge(config);
       await loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted()).catch(() => undefined);
     } catch {
       if (ctx.hasUI)

@@ -4,7 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { AgentDirectory, JsonDocumentStore, type JsonDocumentStoreShape } from "pi-cosmic-core";
+import { AgentDirectory, JsonDocumentStore, type JsonDocumentStoreContract } from "pi-cosmic-core";
 import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
 import { normalizeConfig } from "../src/config/options.ts";
 import { DEFAULT_BACKGROUND_TERMINAL_CONFIG } from "../src/config/schema.ts";
@@ -16,7 +16,7 @@ const PROJECT_PATH = "/project/.pi/extensions/pi-background-terminals.json";
 const recordingService = (
   memory: InMemoryDocuments,
   operations: string[],
-): JsonDocumentStoreShape => ({
+): JsonDocumentStoreContract => ({
   exists: (path) => {
     operations.push(`exists:${path}`);
     return memory.service.exists(path);
@@ -39,7 +39,7 @@ const recordingService = (
   },
 });
 
-const storeLayer = (service: JsonDocumentStoreShape, projectTrusted: boolean) =>
+const storeLayer = (service: JsonDocumentStoreContract, projectTrusted: boolean) =>
   BackgroundTerminalConfigStore.layer({ cwd: "/project", projectTrusted }).pipe(
     Layer.provide(
       Layer.mergeAll(

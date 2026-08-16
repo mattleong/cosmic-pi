@@ -32,13 +32,13 @@ export {
 export {
   AdvisorChildFactory,
   advisorChildFactoryLayer,
-  type AdvisorChildFactoryShape,
+  type AdvisorChildFactoryContract,
 } from "./child-factory.ts";
 export { parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
 export { AdvisorRuntime } from "./session-runtime.ts";
 export { NoDiscoveryAdvisorResourceLoader } from "./resource-loader.ts";
 
-export interface AdvisorRuntimeServiceShape {
+export interface AdvisorRuntimeServiceContract {
   readonly activeToolNames: () => readonly string[];
   readonly start: (options: AdvisorRuntimeStartOptions) => Effect.Effect<void, AdvisorModelError>;
   readonly checkpoint: (
@@ -59,7 +59,7 @@ export const makeAdvisorControlMailbox = (handle: () => Effect.Effect<void>) =>
 
 export class AdvisorRuntimeService extends Context.Service<
   AdvisorRuntimeService,
-  AdvisorRuntimeServiceShape
+  AdvisorRuntimeServiceContract
 >()("pi-advisor/runtime/runtime/AdvisorRuntimeService") {}
 
 export const advisorRuntimeServiceLayer = (toolRunner: AdvisorToolRunner) =>

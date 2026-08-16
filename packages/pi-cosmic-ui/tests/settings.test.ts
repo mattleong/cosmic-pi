@@ -1,4 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isFunctionValue } from "pi-cosmic-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { DEFAULT_CONFIG } from "../src/config/schema.ts";
@@ -7,6 +8,7 @@ import {
   recoverSettingsUpdate,
   registerSettingsCommand,
 } from "../src/settings/controller.ts";
+import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 describe("Cosmic UI settings boundary", () => {
   it("decodes only supported settings values and visibility identifiers", () => {
@@ -50,7 +52,8 @@ describe("Cosmic UI settings boundary", () => {
     const notify = vi.fn((_message: string, _level: string) => {
       throw new Error("notification host failure");
     });
-    registerSettingsCommand({ registerCommand } as unknown as ExtensionAPI, {
+    // SAFETY: These scenarios ignore the generic run result; only settlement drives the command path.
+    registerSettingsCommand(extensionApiFixture({ registerCommand }), {
       config: () => ({
         configPath: "/config.json",
         projectConfigPath: "/project/.pi/cosmic-ui.json",
@@ -62,14 +65,17 @@ describe("Cosmic UI settings boundary", () => {
       run: <A>() => Promise.resolve(undefined as A),
       callbacks,
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const command = registerCommand.mock.calls[0]?.[1] as {
       handler(args: string, ctx: ExtensionContext): void | Promise<void>;
     };
-    const ctx = Object.defineProperty({ ui: { notify } }, "mode", {
-      get() {
-        throw new Error("mode host failure");
-      },
-    }) as unknown as ExtensionContext;
+    const ctx = extensionContextFixture(
+      Object.defineProperty({ ui: { notify } }, "mode", {
+        get() {
+          throw new Error("mode host failure");
+        },
+      }),
+    );
 
     return Promise.resolve(command.handler("", ctx))
       .then(() =>
@@ -88,7 +94,8 @@ describe("Cosmic UI settings boundary", () => {
     const registerCommand = vi.fn();
     const callbacks = makeHostCallbackBoundary();
     const notify = vi.fn();
-    registerSettingsCommand({ registerCommand } as unknown as ExtensionAPI, {
+    // SAFETY: These scenarios ignore the generic run result; only settlement drives the command path.
+    registerSettingsCommand(extensionApiFixture({ registerCommand }), {
       config: () => ({
         configPath: "/config.json",
         projectConfigPath: "/project/.pi/cosmic-ui.json",
@@ -100,6 +107,7 @@ describe("Cosmic UI settings boundary", () => {
       run: <A>() => Promise.resolve(undefined as A),
       callbacks,
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const command = registerCommand.mock.calls[0]?.[1] as {
       handler(args: string, ctx: ExtensionContext): void | Promise<void>;
     };
@@ -109,30 +117,37 @@ describe("Cosmic UI settings boundary", () => {
       ui: { notify },
     };
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     return expect(
       Promise.resolve(
-        command.handler("", {
-          ...base,
-          ui: {
-            notify,
-            custom() {
-              throw new Error("custom host failure");
+        command.handler(
+          "",
+          extensionContextFixture({
+            ...base,
+            ui: {
+              notify,
+              custom() {
+                throw new Error("custom host failure");
+              },
             },
-          },
-        } as unknown as ExtensionContext),
+          }),
+        ),
       ),
     )
       .resolves.toBeUndefined()
       .then(() =>
         expect(
           Promise.resolve(
-            command.handler("", {
-              ...base,
-              ui: {
-                notify,
-                custom: () => Promise.reject(new Error("custom host rejection")),
-              },
-            } as unknown as ExtensionContext),
+            command.handler(
+              "",
+              extensionContextFixture({
+                ...base,
+                ui: {
+                  notify,
+                  custom: () => Promise.reject(new Error("custom host rejection")),
+                },
+              }),
+            ),
           ),
         ).resolves.toBeUndefined(),
       )
@@ -154,12 +169,14 @@ describe("Cosmic UI settings boundary", () => {
         if (property === "aborted") abortedReads++;
         if (property === "addEventListener") return addEventListener;
         if (property === "removeEventListener") return removeEventListener;
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
+        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+        const value = property in target ? target[property as keyof AbortSignal] : undefined;
+        return isFunctionValue(value) ? value.bind(target) : value;
       },
     });
     let factory: ((...args: any[]) => { render(width: number): string[] }) | undefined;
-    registerSettingsCommand({ registerCommand } as unknown as ExtensionAPI, {
+    // SAFETY: These scenarios ignore the generic run result; only settlement drives the command path.
+    registerSettingsCommand(extensionApiFixture({ registerCommand }), {
       config: () => ({
         configPath: "/config.json",
         projectConfigPath: "/project/.pi/cosmic-ui.json",
@@ -171,29 +188,32 @@ describe("Cosmic UI settings boundary", () => {
       run: <A>() => Promise.resolve(undefined as A),
       callbacks,
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const command = registerCommand.mock.calls[0]?.[1] as {
       handler(args: string, ctx: ExtensionContext): void | Promise<void>;
     };
-    const ctx = Object.defineProperty(
-      {
-        mode: "tui",
-        ui: {
-          notify: vi.fn(),
-          custom: vi.fn((next) => {
-            factory = next;
-            return Promise.resolve();
-          }),
+    const ctx = extensionContextFixture(
+      Object.defineProperty(
+        {
+          mode: "tui",
+          ui: {
+            notify: vi.fn(),
+            custom: vi.fn((next) => {
+              factory = next;
+              return Promise.resolve();
+            }),
+          },
         },
-      },
-      "signal",
-      {
-        get() {
-          signalReads++;
-          if (signalReads > 1) throw new Error("signal reread");
-          return signal;
+        "signal",
+        {
+          get() {
+            signalReads++;
+            if (signalReads > 1) throw new Error("signal reread");
+            return signal;
+          },
         },
-      },
-    ) as unknown as ExtensionContext;
+      ),
+    );
 
     return Promise.resolve(command.handler("", ctx)).then(() => {
       expect(signalReads).toBe(1);

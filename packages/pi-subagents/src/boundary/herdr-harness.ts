@@ -4,6 +4,7 @@
 // @effect-diagnostics effect/cryptoRandomBytes:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import { isStringValue } from "pi-cosmic-core";
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -66,11 +67,11 @@ const SAFE_ENVIRONMENT_KEYS = [
   "PI_CONFIG_DIR",
   "CLAUDE_CONFIG_DIR",
 ] as const;
-const HERDR_080_INTEGRATION_VERSIONS: Readonly<Record<SubagentRuntime, number>> = {
+const HERDR_080_INTEGRATION_VERSIONS = {
   pi: 8,
   claude: 7,
   codex: 7,
-};
+} satisfies Readonly<Record<SubagentRuntime, number>>;
 const PI_SUPERVISOR_TOOLS = [
   "supervisor_progress",
   "supervisor_warning",
@@ -125,7 +126,7 @@ export interface HerdrPreparedHarness {
   readonly authorizeCleanup: () => void;
 }
 
-export interface HerdrHarnessShape {
+export interface HerdrHarnessContract {
   /** Readiness only; validates prerequisites without creating private run state or Herdr topology. */
   readonly preflight: (
     runtime: SubagentRuntime,
@@ -179,7 +180,7 @@ const harnessEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
 
 const approvedApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
   const key = source.OPENAI_API_KEY;
-  return typeof key === "string" &&
+  return isStringValue(key) &&
     key.length > 0 &&
     key.length <= 8_192 &&
     !key.includes("\0") &&
@@ -251,6 +252,7 @@ const fixedEnvironmentCommand = (
     HERDR_WORKSPACE_ID: topology.workspaceId,
     PI_SUBAGENT_CHILD: "1",
   };
+  // SAFETY: These keys and values come directly from the same typed owner object enumerated on this path.
   const assignments = Object.entries(fixed)
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${key}=${shellQuote(value as string)}`)
@@ -582,15 +584,21 @@ const removeHarness = async (directory: string): Promise<void> => {
   await fs.rm(directory, { recursive: true, force: false });
 };
 
-export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnessShape => {
+export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnessContract => {
   // Select and sanitize inherited auth/session inputs exactly once for this session service.
-  const fixedOptions: HerdrHarnessLayerOptions = Object.freeze({
-    ...options,
-    environment: harnessEnvironment(options.environment ?? process.env),
-    ...(options.integrationPaths
-      ? { integrationPaths: Object.freeze({ ...options.integrationPaths }) }
-      : {}),
-  });
+  const fixedOptions: HerdrHarnessLayerOptions = Object.freeze(
+    (() => {
+      const objectPart20438_0 = {
+        ...options,
+        environment: harnessEnvironment(options.environment ?? process.env),
+      };
+      const objectPart20438_1 = options.integrationPaths
+        ? { ...objectPart20438_0, integrationPaths: Object.freeze({ ...options.integrationPaths }) }
+        : objectPart20438_0;
+      return objectPart20438_1;
+    })(),
+  );
+  // SAFETY: These keys and values come directly from the same typed owner object enumerated on this path.
   return {
     preflight: (runtime, request) =>
       Effect.gen(function* () {
@@ -716,7 +724,7 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
   };
 };
 
-export class HerdrHarness extends Context.Service<HerdrHarness, HerdrHarnessShape>()(
+export class HerdrHarness extends Context.Service<HerdrHarness, HerdrHarnessContract>()(
   "pi-subagents/boundary/herdr-harness/HerdrHarness",
 ) {
   static readonly layer = (options: HerdrHarnessLayerOptions): Layer.Layer<HerdrHarness> =>

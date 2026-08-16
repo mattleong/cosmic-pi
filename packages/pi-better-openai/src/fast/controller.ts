@@ -49,7 +49,7 @@ export function injectProviderPayload(
   snapshot: FastSnapshot,
   serviceTier: string,
   recordInjection: (event: { readonly model: string; readonly tier: string }) => void,
-): unknown {
+) {
   if (!isFastActive(ctx, snapshot) || !Predicate.isObject(event.payload)) return undefined;
   recordInjection({ model: currentModelKey(ctx), tier: serviceTier });
   return { ...event.payload, service_tier: serviceTier };

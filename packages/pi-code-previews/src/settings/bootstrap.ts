@@ -12,10 +12,15 @@ export const loadCodePreviewSettingsEffect = Effect.fn("CodePreviewSettings.boot
   projectTrusted = false,
 ) {
   const service = yield* CodePreviewSettingsService;
-  return yield* service.load({
-    ...(projectCwd === undefined ? {} : { projectCwd }),
-    projectTrusted,
-  });
+  return yield* service.load(
+    (() => {
+      const objectPart585_0 = {};
+      const objectPart585_1 =
+        projectCwd === undefined ? objectPart585_0 : { ...objectPart585_0, projectCwd };
+      const objectPart585_2 = { ...objectPart585_1, projectTrusted };
+      return objectPart585_2;
+    })(),
+  );
 });
 
 const inFlightLoads = new Map<string, Promise<CodePreviewSettings>>();

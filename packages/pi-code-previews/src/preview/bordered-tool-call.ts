@@ -8,10 +8,11 @@ import {
 } from "@earendil-works/pi-tui";
 import { hiddenPreviewExpandHint, hiddenPreviewExpandLabel } from "./format";
 import { isToolCallTimingOnlyRender, type TimingState } from "./tool-timing";
+import type { RendererState } from "../tools/renderers/shared/types";
 
 export type BorderSlot = "call" | "result";
 
-export type BorderState = Record<string, unknown> & {
+export type BorderState = RendererState & {
   codePreviewBorderCallComponent?: Component;
   codePreviewBorderResultComponent?: Component;
   codePreviewBorderShell?: BorderedToolCall;
@@ -31,6 +32,7 @@ type BorderRenderContext = {
 };
 
 export function borderState(context: { state: unknown }): BorderState {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   return context.state as BorderState;
 }
 
@@ -206,10 +208,8 @@ export class BorderedToolCall implements Component {
   }
 }
 
-export function hiddenPreviewExpandHintForShell(
-  state: Record<string, unknown>,
-  theme: Theme,
-): string {
+export function hiddenPreviewExpandHintForShell(state: RendererState, theme: Theme): string {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const shellState = state as BorderState;
   const slot = shellState.codePreviewBorderCurrentSlot;
   if (slot !== "call" && slot !== "result") return hiddenPreviewExpandHint(theme);
@@ -219,10 +219,7 @@ export function hiddenPreviewExpandHintForShell(
   return "";
 }
 
-export function renderHiddenPreviewExpandHint(
-  state: Record<string, unknown>,
-  theme: Theme,
-): Component {
+export function renderHiddenPreviewExpandHint(state: RendererState, theme: Theme): Component {
   const hint = hiddenPreviewExpandHintForShell(state, theme);
   return hint ? new Text(hint, 0, 0) : new Container();
 }

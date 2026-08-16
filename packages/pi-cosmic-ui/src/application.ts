@@ -1,4 +1,5 @@
 /** Cosmic UI host with one Effect-managed runtime per Pi session. */
+import { isFunctionValue, isStringValue } from "pi-cosmic-core";
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -46,11 +47,17 @@ import {
 } from "./protocol/protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
-import { WorkingTimerService, type WorkingTimerServiceShape } from "./working/service.ts";
+import { WorkingTimerService, type WorkingTimerServiceContract } from "./working/service.ts";
+
+interface MutableInvalidateProtocolEvent {
+  _tag: "Invalidate";
+  owner?: string;
+  id?: string;
+}
 
 const isProjectTrusted = (ctx: ExtensionContext): boolean => {
   try {
-    return typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
+    return isFunctionValue(ctx.isProjectTrusted) ? ctx.isProjectTrusted() : true;
   } catch {
     return false;
   }
@@ -63,11 +70,12 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
     snapshot: emptyFooterRegistrySnapshot(),
     requestRenderNow: () => undefined,
     invalidate: (owner, id) => {
-      protocolBuffer.offer({
+      const event: MutableInvalidateProtocolEvent = {
         _tag: "Invalidate",
-        ...(owner === undefined ? {} : { owner }),
-        ...(id === undefined ? {} : { id }),
-      });
+      };
+      if (owner !== undefined) event.owner = owner;
+      if (id !== undefined) event.id = id;
+      protocolBuffer.offer(event);
     },
   };
   const projection = makeProjection();
@@ -86,8 +94,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
       "host-query",
       () => {
         const value = ctx.cwd;
-        if (typeof value !== "string" || value.length === 0)
-          throw new Error("Invalid session cwd.");
+        if (!isStringValue(value) || value.length === 0) throw new Error("Invalid session cwd.");
         return value;
       },
       undefined,
@@ -137,7 +144,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
     return read._tag === "Success" ? rememberTotals(read.totals) : lastCompleteTotals;
   };
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
-  let workingTimer: WorkingTimerServiceShape | undefined;
+  let workingTimer: WorkingTimerServiceContract | undefined;
   let subscriptions: Array<() => void> = [];
 
   const config = (): ResolvedCosmicUiConfig =>
@@ -407,7 +414,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
   };
   pi.on("session_compact", (_event, ctx) => refreshTotals(ctx));
   pi.on("session_tree", (_event, ctx) => refreshTotals(ctx));
-  const invalidateContextUsage = (_event: unknown, ctx: ExtensionContext) => {
+  const invalidateContextUsage = <Event>(_event: Event, ctx: ExtensionContext) => {
     updateContext(ctx);
     footerInstallation.invalidateContextUsage();
     requestRender();
@@ -428,7 +435,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
       ctx,
     ).catch(() => undefined);
   });
-  const renderUpdatedContext = (_event: unknown, ctx: ExtensionContext) => {
+  const renderUpdatedContext = <Event>(_event: Event, ctx: ExtensionContext) => {
     updateContext(ctx);
     requestRender();
   };

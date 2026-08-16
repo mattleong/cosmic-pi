@@ -12,7 +12,7 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   SubagentConfigStore,
-  type SubagentConfigStoreShape,
+  type SubagentConfigStoreContract,
   subagentConfigStoreLayer,
 } from "../src/config/store.ts";
 
@@ -21,7 +21,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 const layer = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
-const withStore = <A, E>(f: (store: SubagentConfigStoreShape) => Effect.Effect<A, E>) =>
+const withStore = <A, E>(f: (store: SubagentConfigStoreContract) => Effect.Effect<A, E>) =>
   Effect.runPromise(Effect.flatMap(SubagentConfigStore, f).pipe(Effect.provide(layer)));
 
 const fixture = async () => {

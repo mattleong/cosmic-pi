@@ -16,7 +16,7 @@ export function renderHighlightedPreviewText(
   theme: Theme,
   invalidate?: () => void,
   lineNumbers?: { firstLine: number; lineNumberWidth?: number },
-): { lines: string[]; shown: number; hidden: number; total: number } {
+) {
   const preview = selectPreviewTextLines(text, limit);
   const numbered = lineNumbers
     ? {
@@ -74,7 +74,7 @@ function renderChunkedPreviewEntries<T>(
   preview: { entries: Array<PreviewLineEntry<T>>; shown: number; hidden: number },
   theme: Theme,
   renderChunk: (chunk: Array<{ line: T; index: number }>) => string[],
-): { lines: string[]; shown: number; hidden: number } {
+) {
   const lines: string[] = [];
   let chunk: Array<{ line: T; index: number }> = [];
 

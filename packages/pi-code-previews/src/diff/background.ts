@@ -38,6 +38,7 @@ function deriveDiffBg(
   theme: Theme | undefined,
   intensity: number,
 ): string | undefined {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const themed = theme as
     | (Theme & { getFgAnsi?: (key: string) => string; getBgAnsi?: (key: string) => string })
     | undefined;

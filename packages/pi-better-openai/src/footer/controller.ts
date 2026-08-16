@@ -19,11 +19,16 @@ export function abbreviateHomePath(cwd: string): string {
   return cwd.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 }
 
+interface SingleEntryMemo<Ctx, K, V> {
+  readonly get: (ctx: Ctx, key: K) => V;
+  readonly invalidate: () => void;
+}
+
 /** Single-entry keyed memo: recomputes when the key changes, drops its entry on invalidate. */
 function memo<Ctx, K, V>(
   compute: (ctx: Ctx, key: K) => V,
   sameKey: (previous: K, next: K) => boolean = Object.is,
-): { get(ctx: Ctx, key: K): V; invalidate(): void } {
+): SingleEntryMemo<Ctx, K, V> {
   let cached: { key: K; value: V } | undefined;
   return {
     get(ctx, key) {

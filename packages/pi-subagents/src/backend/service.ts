@@ -10,7 +10,7 @@ export interface BackendSelection {
   readonly context: SubagentContextMode;
 }
 
-export interface SubagentBackendRegistryShape {
+export interface SubagentBackendRegistryContract {
   /** Resolve capability before a run scope or process is owned. Resolution never performs spawn fallback. */
   readonly resolve: (
     selection: BackendSelection,
@@ -26,11 +26,11 @@ const driverKey = (host: SubagentHost, runtime: SubagentRuntime): string => `${h
 
 export const makeSubagentBackendRegistry = (
   drivers: ReadonlyArray<BackendDriver>,
-): SubagentBackendRegistryShape => {
+): SubagentBackendRegistryContract => {
   const bySelection = new Map(
     drivers.map((driver) => [driverKey(driver.host, driver.runtime), driver]),
   );
-  const resolve: SubagentBackendRegistryShape["resolve"] = (selection) => {
+  const resolve: SubagentBackendRegistryContract["resolve"] = (selection) => {
     const driver = bySelection.get(driverKey(selection.host, selection.runtime));
     if (!driver)
       return Effect.fail(
@@ -59,5 +59,5 @@ export const makeSubagentBackendRegistry = (
 
 export class SubagentBackendRegistry extends Context.Service<
   SubagentBackendRegistry,
-  SubagentBackendRegistryShape
+  SubagentBackendRegistryContract
 >()("pi-subagents/backend/service/SubagentBackendRegistry") {}

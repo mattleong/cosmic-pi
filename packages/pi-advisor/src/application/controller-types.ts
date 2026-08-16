@@ -66,7 +66,7 @@ export type {
   AdvisorHostEventHandler,
 } from "../boundary/host-bindings.ts";
 
-export interface AdvisorControllerShape {
+export interface AdvisorControllerContract {
   /** Synchronous Pi/TUI boundary; returns a deeply frozen projection only. */
   readonly getSnapshot: () => AdvisorControllerSnapshot;
   readonly publish: (snapshot: AdvisorControllerSnapshot) => Effect.Effect<void>;
@@ -103,9 +103,10 @@ export interface AdvisorControllerShape {
   ) => Effect.Effect<unknown, AdvisorExtensionError>;
 }
 
-export class AdvisorController extends Context.Service<AdvisorController, AdvisorControllerShape>()(
-  "pi-advisor/advisor-controller/AdvisorController",
-) {}
+export class AdvisorController extends Context.Service<
+  AdvisorController,
+  AdvisorControllerContract
+>()("pi-advisor/advisor-controller/AdvisorController") {}
 
 export interface AdvisorExtensionDependencies {
   /** Effect-typed ConfigStore override; production composition uses `configStoreLayer`. */

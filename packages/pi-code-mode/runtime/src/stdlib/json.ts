@@ -1,6 +1,8 @@
+import { isNumberValue, isStringValue } from "../runtime-values.ts";
 import { assertBoundedJsonEstimate } from "../interpreter/confinement.js";
 import {
   type AstNode,
+  type InterpreterArray,
   CodeModeFunction,
   InterpreterRuntimeError,
   supportedSyntaxMessage,
@@ -9,7 +11,7 @@ import { copyIn, copyOut } from "../tool-runtime.js";
 
 export const jsonStatics = new Set(["stringify", "parse"]);
 
-export const invokeJsonMethod = (name: string, args: Array<unknown>, node: AstNode): unknown => {
+export const invokeJsonMethod = (name: string, args: InterpreterArray, node: AstNode) => {
   if (!jsonStatics.has(name))
     throw new InterpreterRuntimeError(`JSON.${name} is not available in CodeMode.`, node);
   switch (name) {
@@ -24,7 +26,7 @@ export const invokeJsonMethod = (name: string, args: Array<unknown>, node: AstNo
         );
       }
       const space = args[2];
-      const indent = typeof space === "number" || typeof space === "string" ? space : undefined;
+      const indent = isNumberValue(space) || isStringValue(space) ? space : undefined;
       const data = copyOut(copyIn(args[0], "JSON.stringify value"));
       // Confinement preflight: refuse before the native serializer materializes an
       // over-limit string. Indented output multiplies size by up to depth x indent width,
@@ -34,7 +36,7 @@ export const invokeJsonMethod = (name: string, args: Array<unknown>, node: AstNo
     }
     case "parse": {
       const text = args[0];
-      if (typeof text !== "string")
+      if (!isStringValue(text))
         throw new InterpreterRuntimeError("JSON.parse expects a string.", node);
       try {
         return copyIn(JSON.parse(text), "JSON.parse result");

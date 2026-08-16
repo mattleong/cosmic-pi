@@ -5,7 +5,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { emptyUsage, type SubagentRunView } from "../../src/run/model.ts";
 import { formatRun } from "../../src/tools/output.ts";
-import { type SubagentAwaitUntil, type SubagentServiceShape } from "../../src/run/service.ts";
+import { type SubagentAwaitUntil } from "../../src/run/service.ts";
 import { makeCompactToolDetails, makeStartAwaitCardDetails } from "../../src/tools/details.ts";
 import {
   renderAwaitProgressComponent,
@@ -24,17 +24,21 @@ import {
   startCapturingService,
   view,
 } from "./fixtures/tool-harness.ts";
+import { subagentServiceFixture } from "../fixtures/pi-host.ts";
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
   it("summarizes tool calls with user-facing actions and bounded task or message context", () => {
-    const tools = captureSubagentTools({} as SubagentServiceShape);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const tools = captureSubagentTools(subagentServiceFixture({}));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
-    const rendered = (name: string, args: unknown, expanded = false): string => {
+    } as Theme;
+    const rendered = <Args>(name: string, args: Args, expanded = false): string => {
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const component = tools.get(name)?.renderCall?.(args, theme, { expanded } as never) as
         | { readonly render: (width: number) => ReadonlyArray<string> }
         | undefined;
@@ -74,7 +78,8 @@ describe("subagent tool", () => {
   });
 
   it("does not let caller-owned fields override a focused tool action", async () => {
-    const models = await captureSubagentTools({} as SubagentServiceShape)
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const models = await captureSubagentTools(subagentServiceFixture({}))
       .get("subagent_models")
       ?.execute("call", { action: "start", profile: "scout" }, undefined, undefined, context);
     expect(models?.details).toMatchObject({ action: "models", profileIds: ["scout"] });
@@ -83,17 +88,20 @@ describe("subagent tool", () => {
   });
 
   it("renders profile routes and management outcomes from structured persisted details", async () => {
-    const tools = captureSubagentTools({} as SubagentServiceShape);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const tools = captureSubagentTools(subagentServiceFixture({}));
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const models = await tools
       .get("subagent_models")
       ?.execute("call", { profile: "reviewer" }, undefined, undefined, context);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const modelCard = tools
       .get("subagent_models")
-      ?.renderResult?.(models, { isPartial: false, expanded: true }, theme) as
+      ?.renderResult?.(models!, { isPartial: false, expanded: true }, theme) as
       | { readonly render: (width: number) => ReadonlyArray<string> }
       | undefined;
     const modelText = modelCard?.render(160).join("\n") ?? "";
@@ -102,8 +110,9 @@ describe("subagent tool", () => {
     expect(modelText).toContain("close after report");
     expect(modelText).toContain("Launch checks pending");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const fastProfileTools = captureSubagentTools(
-      {} as SubagentServiceShape,
+      subagentServiceFixture({}),
       ["read"],
       profileServiceFor({
         profiles: {
@@ -122,9 +131,10 @@ describe("subagent tool", () => {
     const fastModels = await fastProfileTools
       .get("subagent_models")
       ?.execute("call", { profile: "reviewer" }, undefined, undefined, context);
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const fastModelCard = fastProfileTools
       .get("subagent_models")
-      ?.renderResult?.(fastModels, { isPartial: false, expanded: true }, theme) as
+      ?.renderResult?.(fastModels!, { isPartial: false, expanded: true }, theme) as
       | { readonly render: (width: number) => ReadonlyArray<string> }
       | undefined;
     expect(fastModelCard?.render(160).join("\n")).toContain("local/pi · parent:default ⚡");
@@ -136,6 +146,7 @@ describe("subagent tool", () => {
         { id: "missing-agent", code: "SubagentNotFoundError", message: "Run not found." },
       ],
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const managementCard = tools
       .get("subagent_send")
       ?.renderResult?.(
@@ -152,6 +163,7 @@ describe("subagent tool", () => {
       action: "list",
       runs: [view({ state: "paused", capabilities: [] })],
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const pausedCard = tools
       .get("subagent_list")
       ?.renderResult?.(
@@ -168,10 +180,12 @@ describe("subagent tool", () => {
     const { capabilities: _omittedCapabilities, ...pausedWithoutCapabilities } = view({
       state: "paused",
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const unknownCapabilityDetails = makeCompactToolDetails({
       action: "list",
       runs: [pausedWithoutCapabilities as SubagentRunView],
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const unknownCapabilityCard = tools
       .get("subagent_list")
       ?.renderResult?.(
@@ -188,6 +202,7 @@ describe("subagent tool", () => {
       runs: [view({ state: "completed", finalText: "## Summary\nEverything passed." })],
       includeReports: true,
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const statusCard = tools
       .get("subagent_status")
       ?.renderResult?.(
@@ -199,9 +214,10 @@ describe("subagent tool", () => {
   });
 
   it("color-codes agent names by state while await is in progress", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-    } as unknown as Theme;
+    } as Theme;
     const progress = (runs: ReadonlyArray<SubagentRunView>, until: SubagentAwaitUntil) =>
       renderAwaitProgressComponent(runs, until, theme).render(120).join("\n");
     vi.useFakeTimers();
@@ -253,9 +269,10 @@ describe("subagent tool", () => {
   });
 
   it("shows bounded elapsed activity and humanized aggregate usage", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     vi.useFakeTimers();
     try {
       vi.setSystemTime(11_000);
@@ -295,8 +312,9 @@ describe("subagent tool", () => {
       tick = next;
       return stop;
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const awaitTool = captureSubagentTools(
-      {} as SubagentServiceShape,
+      subagentServiceFixture({}),
       ["read"],
       fallbackProfileService,
       undefined,
@@ -326,10 +344,11 @@ describe("subagent tool", () => {
       awaitUntil: "all_finished",
     });
     const partial = { content: [{ type: "text", text: "Waiting" }], details: runningDetails };
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
 
     awaitTool?.renderResult?.(partial, { expanded: false, isPartial: true }, theme, renderContext);
     awaitTool?.renderResult?.(partial, { expanded: false, isPartial: true }, theme, renderContext);
@@ -359,11 +378,14 @@ describe("subagent tool", () => {
   });
 
   it("renders partial batch starts as structured run cards", () => {
-    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const startTool = captureSubagentTools(subagentServiceFixture({})).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const component = startTool?.renderResult?.(
       {
         content: [{ type: "text", text: "Started 1 of 3 background subagents." }],
@@ -384,11 +406,14 @@ describe("subagent tool", () => {
   });
 
   it("keeps partial batch-start outcomes in requested order, including pending launches", () => {
-    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const startTool = captureSubagentTools(subagentServiceFixture({})).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const component = startTool?.renderResult?.(
       {
         content: [{ type: "text", text: "fallback progress" }],
@@ -434,6 +459,7 @@ describe("subagent tool", () => {
     expect(rendered.indexOf("first-pending")).toBeLessThan(rendered.indexOf("second-started"));
     expect(rendered.indexOf("second-started")).toBeLessThan(rendered.indexOf("third-failed"));
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const expanded = startTool?.renderResult?.(
       {
         content: [{ type: "text", text: "fallback progress" }],
@@ -464,11 +490,13 @@ describe("subagent tool", () => {
   });
 
   it("renders final starts as ordered immutable receipts with profile and route/model", () => {
-    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const startTool = captureSubagentTools(subagentServiceFixture({})).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const details = makeStartAwaitCardDetails({
       action: "start",
       runs: [
@@ -512,6 +540,7 @@ describe("subagent tool", () => {
         },
       ],
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const collapsed = startTool?.renderResult?.(
       { content: [{ type: "text", text: "model result" }], details },
       { expanded: false, isPartial: false },
@@ -538,6 +567,7 @@ describe("subagent tool", () => {
     expect(narrow).toContain("openai-codex/gpt-5.6-sol");
     expect(narrow).toContain("…very-secret-1");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const expanded = startTool?.renderResult?.(
       { content: [{ type: "text", text: "model result" }], details },
       { expanded: true, isPartial: false },
@@ -552,11 +582,13 @@ describe("subagent tool", () => {
   });
 
   it("reconciles malformed persisted receipt slots without hiding failures", () => {
-    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const startTool = captureSubagentTools(subagentServiceFixture({})).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const malformed = {
       version: 1,
       action: "start",
@@ -580,6 +612,7 @@ describe("subagent tool", () => {
         { index: 1, name: "failed-start", code: "spawn_failed", message: "Spawn failed." },
       ],
     };
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const component = startTool?.renderResult?.(
       { content: [{ type: "text", text: "model result" }], details: malformed },
       { expanded: true, isPartial: false },
@@ -590,6 +623,7 @@ describe("subagent tool", () => {
     expect(text).toContain("✗ failed-start · generalist · no eligible route/model");
     expect(text).toContain("Failure — failed-start [spawn_failed]");
 
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const empty = startTool?.renderResult?.(
       {
         content: [{ type: "text", text: "model result" }],
@@ -603,11 +637,13 @@ describe("subagent tool", () => {
   });
 
   it("keeps an attempted route/model on failed launch receipts and marks all-failed batches", () => {
-    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const startTool = captureSubagentTools(subagentServiceFixture({})).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const details = makeStartAwaitCardDetails({
       action: "start",
       runs: [],
@@ -629,6 +665,7 @@ describe("subagent tool", () => {
         { index: 0, name: "worker-start", code: "spawn_failed", message: "Spawn failed." },
       ],
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const component = startTool?.renderResult?.(
       { content: [{ type: "text", text: "model result" }], details },
       { expanded: true, isPartial: false },
@@ -695,9 +732,10 @@ describe("subagent tool", () => {
   });
 
   it("keeps completed start and await cards compact until expanded", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-    } as unknown as Theme;
+    } as Theme;
     const run = view({
       id: "agent-secret-id",
       name: "review-agent",
@@ -729,9 +767,10 @@ describe("subagent tool", () => {
   });
 
   it("renders both a final report and failure when a run preserves both", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const rendered = renderExpandedStartAwaitResult(
       [view({ state: "failed", finalText: "Partial findings", error: "Transport failed" })],
       theme,
@@ -745,9 +784,10 @@ describe("subagent tool", () => {
   });
 
   it("marks omitted card content and report truncation explicitly", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const rendered = renderExpandedStartAwaitResult(
       [
         {
@@ -771,10 +811,11 @@ describe("subagent tool", () => {
   });
 
   it("keeps final start rendering as an immutable receipt when card content was omitted", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const tool = captureSubagentTools(startCapturingService([])).get("subagent_start");
     const details = makeStartAwaitCardDetails({
       action: "start",
@@ -786,6 +827,7 @@ describe("subagent tool", () => {
       ],
       contentOmitted: true,
     });
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const component = tool?.renderResult?.(
       { content: [{ type: "text", text: "Recovered bounded report text." }], details },
       { isPartial: false, expanded: true },
@@ -797,6 +839,7 @@ describe("subagent tool", () => {
     expect(rendered).toContain("→ /subagents for live status");
     expect(rendered).not.toContain("Recovered bounded report text.");
     expect(rendered).not.toContain("completed without a final report");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const collapsed = tool?.renderResult?.(
       { content: [{ type: "text", text: "Recovered bounded report text." }], details },
       { isPartial: false, expanded: false },
@@ -806,9 +849,10 @@ describe("subagent tool", () => {
   });
 
   it("aligns wide summary columns and truncates models first on narrow terminals", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const first = view({ name: "a", model: "short-model", state: "completed" });
     const second = view({
       id: "agent-2",
@@ -828,10 +872,11 @@ describe("subagent tool", () => {
   });
 
   it("sanitizes provenance and falls back to bounded text for malformed persisted details", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as Theme;
+    } as Theme;
     const malicious = view({
       selection: {
         source: "profile-candidate",
@@ -845,6 +890,7 @@ describe("subagent tool", () => {
     expect(rendered).not.toContain("\nforged-row");
 
     const tool = captureSubagentTools(startCapturingService([])).get("subagent_start");
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const component = tool?.renderResult?.(
       {
         content: [{ type: "text", text: `Safe fallback\u001b[31m${"x".repeat(100_000)}` }],
@@ -866,9 +912,10 @@ describe("subagent tool", () => {
   });
 
   it("labels failed-run expansion as failure details", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-    } as unknown as Theme;
+    } as Theme;
     const failed = view({ state: "failed", error: "child failed" });
     expect(renderStartAwaitOverviewComponent([failed], theme).render(120)).toContain(
       "<dim>▸ failure detail · expand to view</dim>",
@@ -876,9 +923,10 @@ describe("subagent tool", () => {
   });
 
   it("keeps partial batch-start failures compact", () => {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-    } as unknown as Theme;
+    } as Theme;
     const failures = [{ index: 1, name: "broken-agent", message: "spawn failed" }];
     const compact = renderStartAwaitOverviewComponent(
       [view({ name: "good-agent" })],

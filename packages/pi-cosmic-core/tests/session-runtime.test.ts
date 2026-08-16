@@ -6,6 +6,7 @@
 // @effect-diagnostics effect/anyUnknownInErrorContext:off
 // @effect-diagnostics effect/unsafeEffectTypeAssertion:off
 // @effect-diagnostics effect/strictEffectProvide:off
+import { isFunctionValue } from "../src/runtime-values.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -82,7 +83,10 @@ function makeAbortDisposalHarness() {
     makeRuntime: (input): PiManagedRuntime<never, never> => ({
       run: (_effect, signal) => {
         events.push(`run:${input}`);
-        if (input !== 1) return Promise.resolve(undefined as never);
+        if (input !== 1) {
+          // SAFETY: This harness invokes run only with Effect<void>; its resolved value is therefore undefined.
+          return Promise.resolve(undefined as never);
+        }
         markStarted();
         return new Promise<never>((_resolve, reject) => {
           signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
@@ -109,8 +113,9 @@ function makeHostileSignal(operation: "addEventListener" | "aborted"): AbortSign
   return new Proxy(target, {
     get(signal, property) {
       if (property === operation) throw new Error(`hostile ${operation}`);
-      const value = Reflect.get(signal, property, signal);
-      return typeof value === "function" ? value.bind(signal) : value;
+      // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+      const value = property in signal ? signal[property as keyof AbortSignal] : undefined;
+      return isFunctionValue(value) ? value.bind(signal) : value;
     },
   });
 }
@@ -123,6 +128,7 @@ function makeSignalSetupHarness(signal: AbortSignal) {
     makeRuntime: (): PiManagedRuntime<never, never> => ({
       run: () => {
         runs++;
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         return Promise.resolve(undefined as never);
       },
       fork: () => {
@@ -148,6 +154,7 @@ it.effect("replaces a stalled runtime and releases every acquired layer exactly 
   Effect.gen(function* () {
     const events: string[] = [];
     const firstStarted = yield* Deferred.make<void>();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const pi = {} as ExtensionAPI;
     const slot = makePiSessionRuntimeSlot<number, never, never, never>({
       makeRuntime: (input) =>
@@ -186,6 +193,7 @@ it.effect("replaces a stalled runtime and releases every acquired layer exactly 
 it.effect("captures a stable runtime startup span without session input", () =>
   Effect.gen(function* () {
     const captured = makeCapturedTracer();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const runtime: PiManagedRuntime<never, never> = {
       run: (effect) =>
         Effect.runPromise(
@@ -210,6 +218,7 @@ it.effect("releases acquired resources after startup failure", () =>
   Effect.gen(function* () {
     const events: string[] = [];
     const failures: number[] = [];
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const slot = makePiSessionRuntimeSlot<void, never, "startup", never>({
       makeRuntime: () =>
         makePiManagedRuntime(
@@ -258,6 +267,7 @@ for (const operation of ["startup", "run"] as const) {
         run: () => {
           runs++;
           if (operation === "run") throw new Error("hostile runtime.run");
+          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
           return Promise.resolve(undefined as never);
         },
         fork: () => {
@@ -298,6 +308,7 @@ it.effect("disposes an already-aborted start and leaves the slot unavailable", (
     const events: string[] = [];
     const controller = new AbortController();
     controller.abort();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const slot = makePiSessionRuntimeSlot<void, never, never, never>({
       makeRuntime: () =>
         makePiManagedRuntime(

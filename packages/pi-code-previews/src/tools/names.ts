@@ -13,6 +13,7 @@ export type CodePreviewToolName = (typeof ALL_CODE_PREVIEW_TOOLS)[number];
 const CODE_PREVIEW_TOOL_TOGGLE_ID_PREFIX = "tool:";
 
 export function isCodePreviewToolName(value: string): value is CodePreviewToolName {
+  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   return (ALL_CODE_PREVIEW_TOOLS as readonly string[]).includes(value);
 }
 

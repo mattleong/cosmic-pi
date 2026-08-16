@@ -103,16 +103,16 @@ export function activeContextMessages(ctx: ExtensionContext): unknown[] {
   return result.ok ? result.value.flatMap(sessionEntryToContextMessages) : [];
 }
 
-const MODEL_ERROR_KIND_CLASSIFICATION: Record<AdvisorModelErrorKind, string> = {
+const MODEL_ERROR_KIND_CLASSIFICATION = {
   authentication: "authentication",
   configuration: "model",
   timeout: "timeout",
   unavailable: "model",
   aborted: "cancelled",
   unknown: "provider",
-};
+} satisfies Record<AdvisorModelErrorKind, string>;
 
-export function classifyFailure(error: unknown): string {
+export function classifyFailure<ErrorInput>(error: ErrorInput): string {
   if (error instanceof AdvisorReviewParseError) return "response-format";
   if (error instanceof AdvisorModelError && error.kind)
     return MODEL_ERROR_KIND_CLASSIFICATION[error.kind];

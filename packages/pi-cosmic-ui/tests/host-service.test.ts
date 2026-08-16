@@ -13,11 +13,12 @@ import {
   AgentDirectory,
   JsonDocumentStore,
   PiApi,
-  type AtomicJsonDocumentStoreShape,
+  type AtomicJsonDocumentStoreContract,
   type JsonObject,
 } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
+import { extensionContextFixture } from "./support/host.ts";
 import { CosmicUiConfigStore } from "../src/config/store.ts";
 import { CosmicUiService, makeProjection } from "../src/protocol/service.ts";
 import { PiExec } from "../src/probe/pi-exec.ts";
@@ -28,12 +29,13 @@ function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
   return { values: memory.documents, layer: memory.layer };
 }
 
+// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const context = (cwd = "/project") =>
   ({
     cwd,
     mode: "tui",
     sessionManager: { getCwd: () => cwd },
-  }) as unknown as ExtensionContext;
+  }) as ExtensionContext;
 
 function serviceLayer(
   exec: ExtensionAPI["exec"],
@@ -50,9 +52,10 @@ function serviceLayer(
   const store = options.store ?? documents(options.documents);
   const platform = Layer.mergeAll(store.layer, Path.layer, AgentDirectory.layer("/agent"));
   const repository = CosmicUiConfigStore.layer.pipe(Layer.provide(platform));
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const probe = RepositoryProbe.layer.pipe(
     Layer.provide(PiExec.layer),
-    Layer.provide(PiApi.layer({ exec } as unknown as ExtensionAPI)),
+    Layer.provide(PiApi.layer({ exec } as ExtensionAPI)),
   );
   const layer = CosmicUiService.layer({
     context: contextRef,
@@ -140,21 +143,23 @@ describe("Cosmic UI host service", () => {
 
   it.effect("keeps polling after hostile live context getters recover", () => {
     const contextRef = MutableRef.make(
-      Object.defineProperty(
-        {
-          sessionManager: {
-            getCwd() {
-              throw new Error("cwd host failure");
+      extensionContextFixture(
+        Object.defineProperty(
+          {
+            sessionManager: {
+              getCwd() {
+                throw new Error("cwd host failure");
+              },
             },
           },
-        },
-        "mode",
-        {
-          get() {
-            throw new Error("mode host failure");
+          "mode",
+          {
+            get() {
+              throw new Error("mode host failure");
+            },
           },
-        },
-      ) as unknown as ExtensionContext,
+        ),
+      ),
     );
     const cwds: string[] = [];
     const { layer, callbacks } = serviceLayer(
@@ -276,6 +281,7 @@ describe("Cosmic UI host service", () => {
         "metrics",
         "session",
       ]);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const saved = values.get(configPath)?.footer as { hidden?: string[] } | undefined;
       expect([...(saved?.hidden ?? [])].sort()).toEqual(["metrics", "session"]);
     }).pipe(Effect.provide(layer));
@@ -289,7 +295,7 @@ describe("Cosmic UI host service", () => {
       const memory = makeInMemoryDocuments({
         [configPath]: { footer: { density: "comfortable" } },
       });
-      const modifyObject: AtomicJsonDocumentStoreShape["modifyObject"] = (path, modify) =>
+      const modifyObject: AtomicJsonDocumentStoreContract["modifyObject"] = (path, modify) =>
         memory.service.modifyObject(path, (document) =>
           modify(document).pipe(
             Effect.map((modification) => ({
@@ -301,7 +307,7 @@ describe("Cosmic UI host service", () => {
             })),
           ),
         );
-      const gated = { ...memory.service, modifyObject } satisfies AtomicJsonDocumentStoreShape;
+      const gated = { ...memory.service, modifyObject } satisfies AtomicJsonDocumentStoreContract;
       const store = {
         values: memory.documents,
         layer: Layer.succeed(JsonDocumentStore, gated),
@@ -317,6 +323,7 @@ describe("Cosmic UI host service", () => {
           .updateFooterConfig({ density: "compact" })
           .pipe(Effect.forkScoped);
         yield* Deferred.await(commitStarted);
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         const saved = memory.documents.get(configPath)?.footer as { density?: string } | undefined;
         expect(saved?.density).toBe("compact");
         expect(MutableRef.get(projection).config?.footer.density).toBe("comfortable");

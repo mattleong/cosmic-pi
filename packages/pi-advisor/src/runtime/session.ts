@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import { createAgentSession, type AgentSession } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -182,24 +183,28 @@ function observeLateChildSession(pending: ReturnType<typeof createAgentSession>)
     /* hostile thenables cannot escape the late-cleanup adapter */
   }
 }
-export const toModelError = (message: string) => (error: unknown) =>
-  error instanceof AdvisorModelError ? error : new AdvisorModelError({ message: message });
+export const toModelError =
+  (message: string) =>
+  <ErrorInput>(error: ErrorInput) =>
+    error instanceof AdvisorModelError ? error : new AdvisorModelError({ message: message });
 
 export function projectActiveToolNamesAtHostBoundary(session: AgentSession): readonly string[] {
   try {
     const names = [...session.getActiveToolNames()];
-    return names.every((name): name is string => typeof name === "string") ? names : [];
+    return names.every((name): name is string => isStringValue(name)) ? names : [];
   } catch {
     // Synchronous status projection is diagnostic-only and cannot defect the parent runtime.
     return [];
   }
 }
 
-export function isToolCallDelta(value: unknown): value is { delta: string } {
+export function isToolCallDelta<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & { delta: string } {
   return (
     isRecord(value) &&
     (value.type === "toolcall_delta" || value.type === "tool_call_delta") &&
-    typeof value.delta === "string"
+    isStringValue(value.delta)
   );
 }
 

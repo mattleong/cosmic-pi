@@ -28,6 +28,7 @@ behavior for diffability:
 - `src/tool-runtime.ts`
 - `src/tool-schema.ts`
 - `src/values.ts`
+- `src/runtime-values.ts` (local type-narrowing support; see deviation 10)
 - `src/interpreter/model.ts`
 - `src/interpreter/runtime.ts`
 - `src/stdlib/*.ts` (all twelve modules)
@@ -46,8 +47,8 @@ behavior for diffability:
 
 ## Intentional local deviations
 
-Deviations 1-7 are mechanical (behavioral semantics unchanged). Deviations 8-9 are
-deliberate local behavior layered on top of the vendored interpreter; they are
+Deviations 1-7 and 10 are mechanical (behavioral semantics unchanged). Deviations 8-9
+are deliberate local behavior layered on top of the vendored interpreter; they are
 confined to the additions listed there and do not alter upstream execution results.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
@@ -171,6 +172,19 @@ confined to the additions listed there and do not alter upstream execution resul
    new callback is absent. This powers live Pi UI status only and never changes a
    guest-visible result. Covered by local lifecycle tests in
    `tests/codemode.test.ts` and `tests/promise.test.ts`.
+10. **Closed interpreter value domain (mechanical typing deviation).** The local
+    source now models guest values with the explicit recursive `InterpreterValue`,
+    `InterpreterObject`, and `InterpreterArray` domain, plus typed sandbox
+    functions, promises, and tool references. AST nodes remain a separate recursive
+    domain rather than being laundered through guest values. Null-prototype object
+    creation is centralized, and evaluator/member mutation, `copyIn`/`copyOut`,
+    sandbox containers, and standard-library argument paths carry the closed value
+    types end to end. `src/runtime-values.ts` supplies runtime predicates used at
+    hostile boundaries. This replaces upstream-style open `unknown` dictionaries
+    and assertions only; guest-visible values, wire formats, execution order, and
+    interpreter behavior are unchanged. A resync must preserve the AST/value
+    separation and reapply the closed-domain annotations after reviewing upstream
+    model changes.
 
 ## Resync policy
 
@@ -181,8 +195,9 @@ Upstream updates are pulled by pinned manual review only:
    review every hunk (security posture: this code interprets model-generated
    programs).
 3. Re-apply the mechanical deviations above, **the deviation-8 confinement**
-   (`confinement.ts` and its call-site guards), and **the deviation-9 lifecycle
-   hook**; do not adopt upstream OpenAPI or host-adapter code. Re-run the
-   confinement and lifecycle tests.
+   (`confinement.ts` and its call-site guards), **the deviation-9 lifecycle
+   hook**, and **the deviation-10 closed interpreter value domain**; do not adopt
+   upstream OpenAPI or host-adapter code. Re-run the confinement and lifecycle
+   tests.
 4. Update the pinned commit here and in `docs/adr/0003-code-mode-runtime.md`,
    then run the full package and workspace validation gates.

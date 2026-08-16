@@ -7,16 +7,19 @@ import { registerHerdrForkCommand } from "../src/settings/controller.ts";
 const setup = (mode: ExtensionCommandContext["mode"] = "tui") => {
   let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
   const notify = vi.fn();
+  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const pi = {
     registerCommand: (_name: string, options: { handler: typeof handler }) => {
       handler = options.handler;
     },
-  } as unknown as ExtensionAPI;
-  const ctx = {
+  } as ExtensionAPI;
+  const contextFixture = {
     mode,
     hasUI: true,
     ui: { notify },
-  } as unknown as ExtensionCommandContext;
+  };
+  // SAFETY: Command tests invoke only the context members implemented by this fixture.
+  const ctx = contextFixture as typeof contextFixture & ExtensionCommandContext;
   return {
     ctx,
     notify,

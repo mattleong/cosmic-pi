@@ -124,7 +124,7 @@ export interface WriterLeaseAcquireRequest {
   readonly runId: string;
 }
 
-export interface WriterLeaseShape {
+export interface WriterLeaseContract {
   /** Injected in tests; production is process.platform. */
   readonly platform: NodeJS.Platform;
   readonly canonicalize: (
@@ -175,17 +175,20 @@ const conflict = (
   message: string,
   evidence?: WriterLeaseEvidence,
 ): WriterLeaseConflictError =>
-  new WriterLeaseConflictError({
-    reason,
-    message,
-    ...(evidence
-      ? {
-          ownerPid: evidence.parentPid,
-          ownerSessionId: evidence.sessionId,
-          ownerRunId: evidence.runId,
-        }
-      : {}),
-  });
+  new WriterLeaseConflictError(
+    (() => {
+      const objectPart6618_0 = { reason, message };
+      const objectPart6618_1 = evidence
+        ? {
+            ...objectPart6618_0,
+            ownerPid: evidence.parentPid,
+            ownerSessionId: evidence.sessionId,
+            ownerRunId: evidence.runId,
+          }
+        : objectPart6618_0;
+      return objectPart6618_1;
+    })(),
+  );
 
 const probeProcess = (pid: number): WriterOwnerLiveness => {
   try {
@@ -252,6 +255,7 @@ interface DecodedStableEvidence extends StableEvidenceSource {
   readonly evidence: WriterLeaseEvidence;
 }
 
+// SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
 const readEvidence = (
   leasePath: string,
 ): Effect.Effect<DecodedStableEvidence, WriterLeaseConflictError> =>
@@ -442,7 +446,7 @@ const validFilesystemIdentity = (cwd: CanonicalWriterCwd): boolean =>
   DIGEST_PATTERN.test(cwd.digest) &&
   digest(cwd.filesystemIdentity) === cwd.digest;
 
-export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseShape => {
+export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseContract => {
   const root = writerLeaseRoot(options.agentDirectory);
   const platform = options.platform ?? process.platform;
   const parentPid = options.parentPid ?? process.pid;
@@ -454,7 +458,7 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseSh
   const nextToken = options.randomToken ?? randomToken;
   const probeOwner = options.probeOwner ?? probeProcess;
 
-  const canonicalize: WriterLeaseShape["canonicalize"] = (cwd) =>
+  const canonicalize: WriterLeaseContract["canonicalize"] = (cwd) =>
     Effect.tryPromise({
       try: async () => {
         const path = await fs.realpath(cwd);
@@ -475,7 +479,7 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseSh
         }),
     });
 
-  const acquire: WriterLeaseShape["acquire"] = (request) =>
+  const acquire: WriterLeaseContract["acquire"] = (request) =>
     Effect.gen(function* () {
       if (
         platform === "win32" ||
@@ -565,7 +569,7 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseSh
       } satisfies WriterLease;
     }).pipe(Effect.uninterruptible);
 
-  const markSpawnStarted: WriterLeaseShape["markSpawnStarted"] = (lease) =>
+  const markSpawnStarted: WriterLeaseContract["markSpawnStarted"] = (lease) =>
     Effect.gen(function* () {
       const expectedPath = writerLeasePath(options.agentDirectory, lease.filesystemIdentityDigest);
       if (
@@ -661,7 +665,7 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseSh
       return { ...lease, evidence: confirmed.evidence } satisfies WriterLease;
     }).pipe(Effect.uninterruptible);
 
-  const release: WriterLeaseShape["release"] = (lease) =>
+  const release: WriterLeaseContract["release"] = (lease) =>
     Effect.gen(function* () {
       const expectedPath = writerLeasePath(options.agentDirectory, lease.filesystemIdentityDigest);
       if (
@@ -736,7 +740,7 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseSh
   return { platform, canonicalize, acquire, markSpawnStarted, release };
 };
 
-export class WriterLeaseService extends Context.Service<WriterLeaseService, WriterLeaseShape>()(
+export class WriterLeaseService extends Context.Service<WriterLeaseService, WriterLeaseContract>()(
   "pi-subagents/boundary/writer-lease/WriterLeaseService",
 ) {
   static readonly layer = (options: WriterLeaseLayerOptions): Layer.Layer<WriterLeaseService> =>

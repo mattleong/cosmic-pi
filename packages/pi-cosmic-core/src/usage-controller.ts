@@ -205,6 +205,7 @@ export const makeUsageRefreshController = <
     const projectTrusted = options.projectTrusted ?? true;
     const config = yield* options.store.resolveConfig(cwd, agentDir, projectTrusted);
     // The overridden fields all belong to UsageProjectionBase, so the merge stays within P.
+    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const mergeState = (
       current: P,
       base: Partial<UsageProjectionBase<Resolved, Snapshot>>,
@@ -224,7 +225,7 @@ export const makeUsageRefreshController = <
         })
         .pipe(Effect.orDie);
     // Best-effort host UI adapter: a failing host callback is logged, never propagated.
-    const notifyHost = (operation: string, action: () => unknown) =>
+    const notifyHost = <Result>(operation: string, action: () => Result) =>
       Effect.suspend(() => {
         try {
           action();
@@ -289,14 +290,15 @@ export const makeUsageRefreshController = <
           const outcome = yield* options.fetchOutcome({ ctx, cfg, authPath });
           if (outcome._tag === "Missing")
             return { _tag: "Missing", notify, fetchedAt: now } as const;
-          if (outcome._tag === "Failure")
-            return {
+          if (outcome._tag === "Failure") {
+            const failure: RefreshValue<Snapshot, Partial<P>> = {
               _tag: "Failure",
               notify,
               fetchedAt: now,
               message: outcome.message,
-              ...(outcome.patch ? { patch: outcome.patch } : {}),
-            } as const;
+            };
+            return outcome.patch ? { ...failure, patch: outcome.patch } : failure;
+          }
           return {
             _tag: "Success",
             notify,

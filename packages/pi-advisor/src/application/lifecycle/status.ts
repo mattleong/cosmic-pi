@@ -4,7 +4,7 @@ import {
   setAdvisorStatusAtHostBoundary,
 } from "../../boundary/host-status.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
-import type { AdvisorStatusServiceShape } from "../../status/service.ts";
+import type { AdvisorStatusServiceContract } from "../../status/service.ts";
 import {
   STATUS_KEY,
   STATUS_SPINNER_DELAY_MS,
@@ -14,7 +14,7 @@ import {
 import { setAdvisorSpinnerOwner, type AdvisorApplicationState } from "../state.ts";
 
 export const makeLifecycleStatusControls = (options: {
-  readonly statusService: AdvisorStatusServiceShape;
+  readonly statusService: AdvisorStatusServiceContract;
   readonly currentConfig: () => ResolvedAdvisorConfig;
   readonly updateApplicationState: (
     update: (state: AdvisorApplicationState) => AdvisorApplicationState,

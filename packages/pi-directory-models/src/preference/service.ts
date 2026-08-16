@@ -22,7 +22,7 @@ export interface DirectoryModelSessionInput {
   readonly explicitModel: boolean;
 }
 
-export interface DirectoryModelPreferenceServiceShape {
+export interface DirectoryModelPreferenceServiceContract {
   readonly initialize: Effect.Effect<void>;
   readonly rememberModel: (selected: SelectedModel) => Effect.Effect<void>;
   readonly rememberThinking: (selected: SelectedModel, level: ThinkingLevel) => Effect.Effect<void>;
@@ -51,7 +51,7 @@ const WRITE_WARNING = "Unable to save the directory model preference.";
 
 export class DirectoryModelPreferenceService extends Context.Service<
   DirectoryModelPreferenceService,
-  DirectoryModelPreferenceServiceShape
+  DirectoryModelPreferenceServiceContract
 >()("pi-directory-models/preference/service/DirectoryModelPreferenceService") {
   static readonly layer = (
     input: DirectoryModelSessionInput,
@@ -108,6 +108,7 @@ export class DirectoryModelPreferenceService extends Context.Service<
                 ),
               );
               if (!identified) return;
+              // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
               const preference = yield* preferenceFromSelectedModel(
                 pi as ExtensionAPI,
                 identified.canonicalCwd,
@@ -142,6 +143,7 @@ export class DirectoryModelPreferenceService extends Context.Service<
             if (loaded._tag === "Failed") return;
             const loadedPreference = loaded.preference;
             if (!loadedPreference) {
+              // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
               const current = yield* captureCurrentPreference(
                 pi as ExtensionAPI,
                 input.ctx,
@@ -156,6 +158,7 @@ export class DirectoryModelPreferenceService extends Context.Service<
               if (current) yield* write(identified, current);
               return;
             }
+            // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
             const restored = yield* Effect.acquireUseRelease(
               Effect.sync(() =>
                 MutableRef.set(options.restoreEvents, {

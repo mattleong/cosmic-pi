@@ -37,6 +37,7 @@ const setup = async () => {
   } as const;
   const integrationVersions = { pi: 8, claude: 7, codex: 7 } as const;
   for (const [runtime, path] of Object.entries(integrations))
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await fs.writeFile(
       path,
       `# installed by herdr\nHERDR_INTEGRATION_ID=${runtime}\nHERDR_INTEGRATION_VERSION=${integrationVersions[runtime as keyof typeof integrationVersions]}\n`,

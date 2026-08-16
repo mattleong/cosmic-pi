@@ -1,3 +1,4 @@
+import { isNumberValue, isStringValue } from "pi-cosmic-core";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { createEditToolDefinition, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
@@ -22,6 +23,7 @@ import { getEditPreviewOperations, getPathArg } from "../data/args";
 import { getEditDiff, getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { cachedDeferredPreview } from "./shared/cache";
+import type { RendererArguments, RendererState } from "./shared/types";
 import { diffPreviewCacheKey, previewArgsKey } from "./shared/preview-cache-key";
 import {
   appendDiffPreviewFooters,
@@ -220,7 +222,7 @@ function renderEditCallPreview(
       ? Math.max(
           8,
           Math.floor(
-            (typeof codePreviewSettings.editCollapsedLines === "number"
+            (isNumberValue(codePreviewSettings.editCollapsedLines)
               ? codePreviewSettings.editCollapsedLines
               : 160) / maxOperations,
           ),
@@ -268,15 +270,20 @@ function renderEditCallPreview(
   return new FullWidthDiffText(text, theme);
 }
 
-function formatEditHeader(path: string, cwd: string, theme: Theme, summaryText: unknown): string {
+function formatEditHeader<SummaryTextInput>(
+  path: string,
+  cwd: string,
+  theme: Theme,
+  summaryText: SummaryTextInput,
+): string {
   const base = `${renderCodePreviewToolTitle("edit", theme)} ${renderDisplayPath(path, cwd, theme)}`;
-  return typeof summaryText === "string" && summaryText
+  return isStringValue(summaryText) && summaryText
     ? `${base}${diffSummarySeparator(theme)}${summaryText}`
     : base;
 }
 
 function updateEditHeader(
-  context: { args: unknown; state: Record<string, unknown> },
+  context: { args: RendererArguments; state: RendererState },
   cwd: string,
   theme: Theme,
 ): void {

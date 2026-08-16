@@ -1,3 +1,4 @@
+import { isStringValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
@@ -46,10 +47,7 @@ export const extensionForFormat = (format: ImageOutputFormat) =>
   format === "jpeg" ? "jpg" : format;
 export const isInside = (path: Path.Path, root: string, child: string) =>
   isStrictlyInsidePathWith(path, path.resolve(root), path.resolve(child));
-export function dataUrlParts(
-  value: string,
-  expectedMimeType: string,
-): { data: string; mimeType: string } {
+export function dataUrlParts(value: string, expectedMimeType: string) {
   const match = /^data:[^;,]+;base64,(.*)$/s.exec(value);
   return { data: (match?.[1] ?? value).trim(), mimeType: expectedMimeType };
 }
@@ -64,16 +62,16 @@ export function decodeBase64(value: string): Uint8Array | undefined {
   const bytes = Buffer.from(value, "base64");
   return bytes.length <= MAX_GENERATED_IMAGE_BYTES ? bytes : undefined;
 }
-function asImageResultItem(
-  value: unknown,
+function asImageResultItem<ValueInput>(
+  value: ValueInput,
 ):
   | { id?: string; status?: string; revised_prompt?: string; result?: string; b64_json?: string }
   | undefined {
   if (!Predicate.isObject(value) || value.type !== "image_generation_call") return undefined;
   return value;
 }
-export function extractImageFromEvent(
-  event: unknown,
+export function extractImageFromEvent<EventInput>(
+  event: EventInput,
   fallbackMimeType: string,
   fallbackId: string,
 ): ExtractedImageResult | undefined {
@@ -81,26 +79,30 @@ export function extractImageFromEvent(
   const item = asImageResultItem(event.item) ?? asImageResultItem(event);
   if (item) {
     const raw =
-      typeof item.result === "string" && item.result.trim()
+      isStringValue(item.result) && item.result.trim()
         ? item.result
-        : typeof item.b64_json === "string"
+        : isStringValue(item.b64_json)
           ? item.b64_json
           : undefined;
     if (!raw) return undefined;
     const parts = dataUrlParts(raw, fallbackMimeType);
-    return {
-      id: typeof item.id === "string" ? item.id : fallbackId,
-      status: typeof item.status === "string" ? item.status : "completed",
-      ...(typeof item.revised_prompt === "string" ? { revisedPrompt: item.revised_prompt } : {}),
-      ...parts,
-    };
+    return (() => {
+      const objectPart3492_0 = {
+        id: isStringValue(item.id) ? item.id : fallbackId,
+        status: isStringValue(item.status) ? item.status : "completed",
+      };
+      const objectPart3492_1 = isStringValue(item.revised_prompt)
+        ? { ...objectPart3492_0, revisedPrompt: item.revised_prompt }
+        : objectPart3492_0;
+      const objectPart3492_2 = { ...objectPart3492_1, ...parts };
+      return objectPart3492_2;
+    })();
   }
-  const partial =
-    typeof event.partial_image_b64 === "string"
-      ? event.partial_image_b64
-      : typeof event.b64_json === "string"
-        ? event.b64_json
-        : undefined;
+  const partial = isStringValue(event.partial_image_b64)
+    ? event.partial_image_b64
+    : isStringValue(event.b64_json)
+      ? event.b64_json
+      : undefined;
   if (partial?.trim())
     return { id: fallbackId, status: "partial", ...dataUrlParts(partial, fallbackMimeType) };
   return undefined;
@@ -155,10 +157,10 @@ export function resultText(result: CodexImageResult): string {
   return parts.join("\n");
 }
 
-export const isImageContent = (
-  value: unknown,
-): value is { type: "image"; data: string; mimeType: string } =>
+export const isImageContent = <Value>(
+  value: Value,
+): value is Value & { type: "image"; data: string; mimeType: string } =>
   Predicate.isObject(value) &&
   value.type === "image" &&
-  typeof value.data === "string" &&
-  typeof value.mimeType === "string";
+  isStringValue(value.data) &&
+  isStringValue(value.mimeType);

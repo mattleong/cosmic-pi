@@ -163,9 +163,7 @@ it.effect("scope closure interrupts an active handler with no surviving worker",
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
     const interrupted = yield* Deferred.make<void>();
-    let escaped:
-      | { readonly offer: (value: number) => unknown; readonly awaitShutdown: Effect.Effect<void> }
-      | undefined;
+    let escaped: Pick<SynchronousIngress<number>, "offer" | "awaitShutdown"> | undefined;
     yield* Effect.scoped(
       Effect.gen(function* () {
         const ingress = yield* makeSynchronousIngress<number, never, never>({
