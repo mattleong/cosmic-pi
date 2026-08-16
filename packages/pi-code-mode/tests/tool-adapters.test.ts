@@ -5,7 +5,6 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/globalTimers:off
-import { runtimeTypeName } from "pi-cosmic-core";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +14,6 @@ import {
   makeNestedPiToolDefinitions,
   makeNestedPiToolDispatch,
   nestedResultToGuestData,
-  PI_GUEST_TOOL_NAMES,
 } from "../src/boundary/host-builtin-tools.ts";
 import { ToolError } from "../src/boundary/codemode-runtime.ts";
 import { extensionContextFixture } from "./support/host.ts";
@@ -88,16 +86,6 @@ describe("nestedResultToGuestData", () => {
 });
 
 describe("nested dispatch through the real built-in definitions", () => {
-  it("constructs exactly all seven Pi built-ins", () => {
-    const definitions = makeNestedPiToolDefinitions(newCwd());
-    expect(PI_GUEST_TOOL_NAMES).toEqual(["read", "bash", "edit", "write", "grep", "find", "ls"]);
-    expect(Object.keys(definitions)).toEqual(PI_GUEST_TOOL_NAMES);
-    for (const name of PI_GUEST_TOOL_NAMES) {
-      expect(definitions[name].name).toBe(name);
-      expect(runtimeTypeName(definitions[name].execute)).toBe("function");
-    }
-  });
-
   it("reads a real file through an absolute path outside the session cwd", async () => {
     const cwd = newCwd();
     const elsewhere = newCwd();

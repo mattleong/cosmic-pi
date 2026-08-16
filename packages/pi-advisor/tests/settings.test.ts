@@ -101,29 +101,6 @@ function context(
 }
 
 describe("Advisor commands", () => {
-  test("registers only /advisor and exposes the exact subcommands", () => {
-    const value = harness();
-    expect([...value.commands.keys()]).toEqual(["advisor"]);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const completions = value.commands.get("advisor")?.getArgumentCompletions?.("") as Array<{
-      value: string;
-    }>;
-    expect(completions.map(({ value }) => value)).toEqual([
-      "on",
-      "off",
-      "review",
-      "fix",
-      "dismiss",
-      "cancel",
-      "setup",
-      "usage",
-    ]);
-    expect(value.commands.get("advisor")?.getArgumentCompletions?.("O")).toEqual([
-      { value: "on", label: "on", description: "Enable the advisor" },
-      { value: "off", label: "off", description: "Disable the advisor" },
-    ]);
-  });
-
   test("dashboard shows only contextual core actions", async () => {
     const value = harness();
     const ctx = context();

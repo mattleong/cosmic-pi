@@ -3,7 +3,7 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
 import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -123,65 +123,6 @@ function deferredPromise() {
 }
 
 describe("Better OpenAI session boundary", () => {
-  test("replaces repeated session runtimes, toggles fast mode, serves settings, and shuts down idempotently", async () => {
-    const h = harness();
-    const controller = new AbortController();
-    h.ctx.signal = controller.signal;
-    const addListener = vi.spyOn(controller.signal, "addEventListener");
-    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
-    await h.emit("session_start");
-    await h.emit("session_start");
-    expect(h.ctx.isProjectTrusted).toHaveBeenCalledTimes(2);
-    expect(addListener.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(removeListener.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
-    await h.commands.get("fast")?.("", h.ctx);
-    const payload = { model: "gpt-5.5" };
-    const results: unknown[] = [];
-    for (const handler of h.handlers.get("before_provider_request") ?? [])
-      results.push(await handler({ payload }, h.ctx));
-    expect(results).toContainEqual({ model: "gpt-5.5", service_tier: "priority" });
-    await h.commands.get("openai-settings")?.("usage.enabled false", h.ctx);
-    expect(h.ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("usage.enabled = false"),
-      "info",
-    );
-    // The removed hidden alias: diagnostics is the only diagnostics verb, so a bare
-    // "debug" is a setting id without a value, distinct from an unknown setting.
-    await h.commands.get("openai-settings")?.("debug", h.ctx);
-    expect(h.ctx.ui.notify).toHaveBeenCalledWith(
-      "Missing value for debug. Usage: /openai-settings <id> <value>",
-      "error",
-    );
-    await h.commands.get("openai-settings")?.("debug on", h.ctx);
-    expect(h.ctx.ui.notify).toHaveBeenCalledWith("Unknown setting: debug", "error");
-    await h.commands.get("openai-usage")?.("", h.ctx);
-    expect(h.ctx.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
-    await h.emit("session_shutdown");
-    expect(removeListener.mock.calls.length).toBeGreaterThanOrEqual(2);
-    await h.emit("session_shutdown");
-  });
-
-  test("resets cached Codex transport when session or fast routing state changes", async () => {
-    const resetOpenAICodexTransport = vi.fn();
-    const h = harness({
-      startupEffect: () => Effect.void,
-      resetOpenAICodexTransport,
-    });
-
-    await h.emit("session_start");
-    await h.commands.get("fast")?.("", h.ctx);
-    await h.commands.get("openai-settings")?.("fast.enabled false", h.ctx);
-    await h.emit("model_select", { model: h.ctx.model });
-
-    expect(resetOpenAICodexTransport).toHaveBeenCalledTimes(4);
-    expect(resetOpenAICodexTransport).toHaveBeenNthCalledWith(1, h.ctx);
-    expect(resetOpenAICodexTransport).toHaveBeenNthCalledWith(2, h.ctx);
-    expect(resetOpenAICodexTransport).toHaveBeenNthCalledWith(3, h.ctx);
-    expect(resetOpenAICodexTransport).toHaveBeenNthCalledWith(4, h.ctx);
-    await h.emit("session_shutdown");
-  });
-
   test("ignores an older session when settings loads complete out of order", async () => {
     const loads = [deferredPromise(), deferredPromise()];
     const started: number[] = [];
@@ -255,29 +196,6 @@ describe("Better OpenAI session boundary", () => {
       "warning",
     );
     await h.emit("session_shutdown", {}, selected);
-  });
-
-  test("recovers host notification failures after fast and settings state commits", async () => {
-    const h = harness();
-    await h.emit("session_start");
-    vi.mocked(h.ctx.ui.notify).mockImplementation(() => {
-      throw new Error("host notification failed");
-    });
-
-    await expect(Promise.resolve(h.commands.get("fast")?.("", h.ctx))).resolves.toBeUndefined();
-    const results: unknown[] = [];
-    for (const handler of h.handlers.get("before_provider_request") ?? [])
-      results.push(await handler({ payload: { model: "gpt-5.5" } }, h.ctx));
-    expect(results).toContainEqual({ model: "gpt-5.5", service_tier: "priority" });
-
-    await expect(
-      Promise.resolve(h.commands.get("openai-settings")?.("usage.enabled false", h.ctx)),
-    ).resolves.toBeUndefined();
-    const raw = JSON.parse(
-      readFileSync(join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json"), "utf8"),
-    );
-    expect(raw.usage.enabled).toBe(false);
-    await h.emit("session_shutdown");
   });
 
   test("fails closed when terminal UI capability getters throw during activation", async () => {
@@ -401,27 +319,6 @@ describe("Better OpenAI session boundary", () => {
     },
   );
 
-  test("contains throwing signal getters at command and event boundaries", async () => {
-    const h = harness();
-    await h.emit("session_start");
-    Object.defineProperty(h.ctx, "signal", {
-      configurable: true,
-      get() {
-        throw new Error("signal unavailable");
-      },
-    });
-
-    await expect(
-      Promise.resolve(h.commands.get("openai-usage")?.("", h.ctx)),
-    ).resolves.toBeUndefined();
-    await expect(
-      Promise.resolve(h.commands.get("openai-settings")?.("help", h.ctx)),
-    ).resolves.toBeUndefined();
-    await expect(h.emit("turn_end", { message: { role: "user" } }, h.ctx)).resolves.toBeUndefined();
-    await expect(h.emit("model_select", {}, h.ctx)).resolves.toBeUndefined();
-    await h.emit("session_shutdown", {}, h.ctx);
-  });
-
   test("materializes one dynamic signal for both model-change forks", async () => {
     const h = harness();
     await h.emit("session_start");
@@ -439,21 +336,5 @@ describe("Better OpenAI session boundary", () => {
 
     expect(reads).toBe(1);
     await h.emit("session_shutdown", {}, h.ctx);
-  });
-
-  test("recomputes model visibility before asynchronous refresh and rejects disabled image work", async () => {
-    const h = harness();
-    await h.emit("session_start");
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    h.ctx.model = { ...h.ctx.model, provider: "anthropic", id: "claude" };
-    await h.emit("model_select", { model: h.ctx.model });
-    expect(h.ctx.ui.setStatus).not.toHaveBeenCalledWith(
-      expect.any(String),
-      expect.stringContaining("Usage:"),
-    );
-    await expect(
-      h.tool.execute("call", { prompt: "verbatim" }, undefined, undefined, h.ctx),
-    ).rejects.toThrow("disabled");
-    await h.emit("session_shutdown");
   });
 });

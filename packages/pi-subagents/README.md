@@ -171,73 +171,11 @@ All native harnesses replace the pane shell with a fixed `env -i` environment be
 
 A successful Herdr 0.8 `agent prompt` response proves only ownership-checked text queueing and delayed-Enter scheduling—not submission or execution. Initial and retained follow-up assignments emit `run_started` only after a causal accepted epoch report or bounded post-response lifecycle/state change; absent evidence fails closed. Because active-turn guidance has no equally confirmable application outcome, Herdr drivers advertise only `parent-contact`; `subagent_send` on an already `reported` retained run still begins a new assignment through the separately reconciled start path. Stop and await remain parent service operations. A missing/mismatched agent or native idle/done without an accepted supervisor report fails the run. Pi read-only remains a behavioral capability policy with unsandboxed Bash; Claude and Codex constrain Bash with their native strict read-only sandboxes. None is a confidentiality/offline boundary, and adapter hooks/helpers remain outside model subprocess sandboxes.
 
-## Installed CLI smoke tests
+## Native preflight safety
 
 Preflight validates bounded native model-selector syntax and a deliberately static current effort vocabulary. Claude Code's zero-inference initialize response is used to resolve aliases at selected startup, but account entitlement can still fail after selection; that failure does not fall through. Codex 0.145's generated `ReasoningEffort` schema remains an open string, so the adapter documents and permits only `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; delegation-enabling/unknown values remain excluded. Codex disables provider fallback and verifies the exact model returned by `thread/start` before issuing a turn.
 
 Harness preparation is failure-atomic after its unique private directory is created: write/sync/chmod/auth/config failures remove partial state. Unconfirmable removal returns `harness_cleanup_unconfirmed` and leaves the already-private state fail-closed for inspection rather than claiming deletion.
-
-Normal tests use fixture processes and never spend model tokens. The optional installed-CLI smoke runs executable/auth/harness, official Claude initialize/native-init/MCP inventory checks for both read-only and strict writer policy, and Codex thread initialization. Its Claude initialization input sets `shouldQuery:false`; no model inference or turn occurs:
-
-```bash
-PI_SUBAGENTS_REAL_CLI_SMOKE=1 pnpm --filter pi-subagents exec vitest run tests/local-cli-smoke.test.ts
-```
-
-Every real Herdr smoke requires inherited socket evidence, canonicalizes filesystem aliases, and refuses the inherited socket, Herdr's normal config path (including `XDG_CONFIG_HOME`), and any server whose initial snapshot is non-empty. Provision a separate protocol-19 server with isolated `XDG_CONFIG_HOME` and `XDG_STATE_HOME` (a custom `HERDR_CONFIG_PATH` alone does **not** isolate `session.json`), then pass its socket/config paths explicitly. For example, generate the config and run `herdr server` in a separate terminal with all four environment values pointed under one disposable directory:
-
-```bash
-root=/tmp/disposable-herdr
-mkdir -p "$root/xdg-config/herdr" "$root/xdg-state"
-XDG_CONFIG_HOME="$root/xdg-config" XDG_STATE_HOME="$root/xdg-state" \
-HERDR_CONFIG_PATH="$root/xdg-config/herdr/config.toml" \
-HERDR_SOCKET_PATH="$root/server.sock" herdr --default-config > "$root/xdg-config/herdr/config.toml"
-XDG_CONFIG_HOME="$root/xdg-config" XDG_STATE_HOME="$root/xdg-state" \
-HERDR_CONFIG_PATH="$root/xdg-config/herdr/config.toml" \
-HERDR_SOCKET_PATH="$root/server.sock" herdr server
-```
-
-The no-inference smoke creates session-owned topology, starts each native interactive runtime, waits only for private helper readiness, then immediately closes it **without submitting a prompt**; it can still trigger native startup network/auth activity:
-
-```bash
-PI_SUBAGENTS_REAL_HERDR_SMOKE=1 \
-PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH=/tmp/disposable-herdr/server.sock \
-PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH=/tmp/disposable-herdr/xdg-config/herdr/config.toml \
-PI_SUBAGENTS_HERDR_PI_MODEL=openai-codex/gpt-5.6-sol \
-PI_SUBAGENTS_HERDR_CLAUDE_MODEL=claude-opus-5 \
-PI_SUBAGENTS_HERDR_CODEX_MODEL=gpt-5.6-codex \
-pnpm --filter pi-subagents exec vitest run tests/herdr-real-smoke.test.ts
-```
-
-The same file has a no-inference real-shell gate that compares `recent` and `recent-unwrapped` with the same long marker on independent disposable workspaces and revalidates exact empty workspace/tab/pane/terminal ownership before cleanup. Both sources passed on an isolated Herdr 0.8 server, so production retains Herdr's default `recent` source rather than treating the stateful #2449 observations as a source-selection result:
-
-```bash
-PI_SUBAGENTS_REAL_HERDR_SHELL_SMOKE=1 \
-PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH=/tmp/disposable-herdr/server.sock \
-PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH=/tmp/disposable-herdr/xdg-config/herdr/config.toml \
-pnpm --filter pi-subagents exec vitest run tests/herdr-real-smoke.test.ts
-```
-
-A separate paid Herdr assignment gate submits one immediate-report task through Pi, Claude, and Codex, requires an exact cost/destructive acknowledgement, and verifies both `run_started` and a supervisor-owned epoch report before terminating each runtime:
-
-```bash
-PI_SUBAGENTS_REAL_HERDR_ASSIGNMENT_SMOKE=1 \
-PI_SUBAGENTS_REAL_HERDR_ASSIGNMENT_ACK=paid-and-destructive \
-PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH=/tmp/disposable-herdr/server.sock \
-PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH=/tmp/disposable-herdr/xdg-config/herdr/config.toml \
-PI_SUBAGENTS_HERDR_PI_MODEL=openai-codex/gpt-5.6-sol \
-PI_SUBAGENTS_HERDR_CLAUDE_MODEL=claude-opus-5 \
-PI_SUBAGENTS_HERDR_CODEX_MODEL=gpt-5.6-codex \
-pnpm --filter pi-subagents exec vitest run tests/herdr-real-smoke.test.ts
-```
-
-Herdr v0.8 can accept pane input without executing it in a fresh no-focus workspace after session restore. Production now focuses the owned tab and causally attests a harmless random probe before environment or secret input; when the first probe is dropped, it refocuses and tries one distinct harmless probe. If both probes fail, launch stops before private bootstrap or agent start rather than reverting to sleeps or retrying a consequential mutation. Track [herdrdev/herdr#2449](https://github.com/herdrdev/herdr/issues/2449).
-
-Paid six-adapter inference is a separate manual design gate and is never part of normal CI. Assertions must remain backend-specific: Herdr and local Claude/Codex use supervisor-owned reports, while local Pi retains its native settled/final-assistant completion contract. It requires explicit cost acknowledgement and disposable project/Herdr state:
-
-```bash
-PI_SUBAGENTS_REAL_INFERENCE_SMOKE=1 PI_SUBAGENTS_REAL_INFERENCE_ACK=paid-and-destructive \
-pnpm --filter pi-subagents exec vitest run tests/six-adapter-inference-smoke.test.ts
-```
 
 ## Cross-process writer safety
 

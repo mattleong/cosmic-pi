@@ -32,15 +32,17 @@ behavior for diffability:
 - `src/interpreter/model.ts`
 - `src/interpreter/runtime.ts`
 - `src/stdlib/*.ts` (all twelve modules)
-- `test/codemode.test.ts`, `test/enumeration.test.ts`, `test/parity.test.ts`,
-  `test/promise.test.ts`, `test/signature.test.ts`, `test/stdlib.test.ts`
-  (relocated to `tests/` per this repository's layout rules)
+- Behavioral portions of `test/codemode.test.ts`, plus `test/parity.test.ts`,
+  `test/promise.test.ts`, and `test/stdlib.test.ts` (relocated to `tests/` per this
+  repository's layout rules)
 
 ## Excluded paths
 
 - `src/openapi/**` and `test/openapi.test.ts` (OpenAPI adapter is out of scope
   for the planned Pi integration; excluding it removes the HTTP client surface)
 - `test/fixtures/**` (only used by the excluded OpenAPI suite)
+- Catalog enumeration, signature-rendering, and public-contract-only cases from
+  `test/codemode.test.ts`, `test/enumeration.test.ts`, and `test/signature.test.ts`
 - Upstream `package.json`, `tsconfig.json`, `AGENTS.md`, `README.md`,
   `codemode.md`, `sst-env.d.ts` (replaced by workspace-native equivalents)
 - All OpenCode host adapter/integration code outside `packages/codemode`
@@ -156,7 +158,7 @@ confined to the additions listed there and do not alter upstream execution resul
      hostile thrown string is bounded too), so the runtime's model-facing content
      never exceeds the byte budget.
 
-   The upstream behavioral suites are unchanged and still pass (their patterns
+   The retained upstream behavioral suites are unchanged and still pass (their patterns
    and sizes are within the confinement envelope); the new behavior is covered by
    `tests/confinement.test.ts` and updated `tests/codemode.test.ts` output-budget
    cases (both marked as local, non-upstream). A resync (below) must re-apply

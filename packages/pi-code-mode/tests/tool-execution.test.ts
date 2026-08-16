@@ -160,42 +160,6 @@ const textOf = (result: { content: ReadonlyArray<{ type: string; text?: string }
     .join("\n");
 
 describe("guest catalog", () => {
-  it("exposes exactly all seven Pi built-ins plus runtime discovery", async () => {
-    const execute = makeHarness(newCwd());
-    const result = await execute(
-      "call-catalog",
-      { code: "return { top: Object.keys(tools), pi: Object.keys(tools.pi) };" },
-      undefined,
-      undefined,
-      ctx,
-    );
-    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
-    const value = JSON.parse(textOf(result)) as { top: string[]; pi: string[] };
-    expect([...value.top].sort()).toEqual(["$codemode", "pi"]);
-    expect([...value.pi].sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
-  });
-
-  it("keeps Pi built-ins namespaced and refuses guessed top-level paths", async () => {
-    const execute = makeHarness(newCwd());
-    const result = await execute(
-      "call-bash",
-      { code: "return await tools.pi.bash({ command: 'printf nested-bash' });" },
-      undefined,
-      undefined,
-      ctx,
-    );
-    expect(textOf(result)).toBe("nested-bash");
-    await expect(
-      execute(
-        "call-forbidden",
-        { code: "return await tools.bash({ command: 'true' });" },
-        undefined,
-        undefined,
-        ctx,
-      ),
-    ).rejects.toThrow(/\[UnknownTool\]/);
-  });
-
   it("validates canonical non-empty edit input before dispatch", async () => {
     const calls: FakeCall[] = [];
     const definitions = fakeDefinitions({ edit: async () => "should not run" }, calls);

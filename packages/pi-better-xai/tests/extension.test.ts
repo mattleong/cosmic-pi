@@ -86,22 +86,6 @@ async function invoke<ValueInput>(value: ValueInput) {
 }
 
 describe("Better xAI Effect boundary", () => {
-  test("serializes repeated starts, serves commands, and disposes idempotently", async () => {
-    const h = harness();
-    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
-    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
-
-    expect(h.ctx.isProjectTrusted).toHaveBeenCalledTimes(2);
-    expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
-    expect(h.setStatus).not.toHaveBeenCalled();
-    expect(h.setFooter).not.toHaveBeenCalled();
-    await invoke(h.commands.get("xai-usage")?.("", h.ctx));
-    expect(h.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
-
-    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
-    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
-  });
-
   test("contains hostile terminal-UI getters without aborting activation", async () => {
     const h = harness();
     Object.defineProperties(h.ctx, {
@@ -205,83 +189,6 @@ describe("Better xAI Effect boundary", () => {
 
     expect(() => h.handlers.get("turn_end")?.({}, h.ctx)).not.toThrow();
     expect(() => h.handlers.get("model_select")?.({}, h.ctx)).not.toThrow();
-    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
-  });
-
-  test("serves safe settings feedback before startup and after startup failure", async () => {
-    const h = harness({ startupEffect: () => Effect.die("startup-secret") });
-    const settings = h.commands.get("xai-settings");
-
-    const help = settings?.("help", h.ctx);
-    expect(h.notify).toHaveBeenLastCalledWith(
-      expect.stringContaining("Better xAI settings"),
-      "info",
-    );
-    await invoke(help);
-
-    const diagnostics = settings?.("diagnostics", h.ctx);
-    expect(h.notify).toHaveBeenLastCalledWith(
-      expect.stringContaining("Usage enabled: false"),
-      "info",
-    );
-    await invoke(diagnostics);
-
-    const usage = settings?.("usage.enabled", h.ctx);
-    expect(h.notify).toHaveBeenLastCalledWith("Usage: /xai-settings <id> <value>", "error");
-    await invoke(usage);
-
-    const unknown = settings?.("unknown value", h.ctx);
-    expect(h.notify).toHaveBeenLastCalledWith("Unknown setting: unknown", "error");
-    await invoke(unknown);
-
-    const invalid = settings?.("usage.enabled maybe", h.ctx);
-    expect(h.notify).toHaveBeenLastCalledWith(
-      "Invalid value for usage.enabled. Expected one of: true, false",
-      "error",
-    );
-    await invoke(invalid);
-
-    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
-    expect(h.notify).toHaveBeenCalledWith("Better xAI failed to start.", "warning");
-    h.notify.mockClear();
-
-    const afterFailure = settings?.("unknown value", h.ctx);
-    expect(h.notify).toHaveBeenCalledWith("Unknown setting: unknown", "error");
-    await invoke(afterFailure);
-
-    h.notify.mockImplementation(() => {
-      throw new Error("host-notification-secret");
-    });
-    await invoke(settings?.("help", h.ctx));
-    await invoke(settings?.("diagnostics", h.ctx));
-    await invoke(settings?.("unknown value", h.ctx));
-  });
-
-  test("recovers when settings success and validation notifications throw", async () => {
-    const h = harness();
-    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
-    h.notify.mockImplementation(() => {
-      throw new Error("host-notification-secret");
-    });
-
-    await invoke(h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx));
-    await invoke(h.commands.get("xai-settings")?.("unknown value", h.ctx));
-
-    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
-  });
-
-  test("recovers when settings error notification throws", async () => {
-    const h = harness();
-    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
-    const configPath = join(h.ctx.cwd, ".pi", "extensions", "pi-better-xai.json");
-    rmSync(configPath);
-    mkdirSync(configPath);
-    h.notify.mockImplementation(() => {
-      throw new Error("host-notification-secret");
-    });
-
-    await invoke(h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx));
-
     await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
   });
 

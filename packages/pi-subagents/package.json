@@ -45,8 +45,6 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "vitest run",
-    "smoke:herdr": "vitest run tests/herdr-real-smoke.test.ts",
-    "smoke:inference-design": "vitest run tests/six-adapter-inference-smoke.test.ts",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },

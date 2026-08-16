@@ -371,17 +371,11 @@ packages/pi-background-terminals/
       manager.ts
       sanitize.ts
   tests/
-    application.test.ts
     config.test.ts
-    host-ui.test.ts
     job-service.test.ts
     local-process.test.ts
     log-buffer.test.ts
-    projection.test.ts
     sanitize.test.ts
-    settings-controller.test.ts
-    tool.test.ts
-    ui-manager.test.ts
 ```
 
 This follows the repository's small-extension conventions while nesting the multi-file job feature. `ui/` remains pure; Effect resources stay in `job/`; Node and Pi adapters stay in `boundary/`. Shared process utilities should move to `pi-cosmic-core` only if a second package needs the same abstraction.

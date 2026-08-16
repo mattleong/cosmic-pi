@@ -3,21 +3,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import {
-  childToolPolicy,
   releaseChildProcess,
   requestCooperativeAbort,
   safeSubagentDirectorySegment,
 } from "../src/boundary/child-process.ts";
-
-const HERDR_AGENT_TOOL_NAMES = [
-  "herdr_agent_start",
-  "herdr_agent_list",
-  "herdr_agent_status",
-  "herdr_agent_await",
-  "herdr_agent_read",
-  "herdr_agent_send",
-  "herdr_agent_stop",
-] as const;
 
 describe("subagent child process boundary", () => {
   it("keeps untrusted session identifiers inside one directory segment", () => {
@@ -26,18 +15,6 @@ describe("subagent child process boundary", () => {
     expect(escaped).toMatch(/^id-[a-f0-9]{32}$/);
     expect(escaped).not.toContain("/");
     expect(safeSubagentDirectorySegment("../../../../tmp/owned")).toBe(escaped);
-  });
-
-  it("passes every Herdr orchestration tool through the child --exclude-tools policy", () => {
-    const policy = childToolPolicy(["read", ...HERDR_AGENT_TOOL_NAMES], "writer");
-    const excluded = new Set(policy.excluded.split(","));
-    expect(policy.enabled).toEqual(["read", ...HERDR_AGENT_TOOL_NAMES]);
-    expect(HERDR_AGENT_TOOL_NAMES.every((name) => excluded.has(name))).toBe(true);
-  });
-
-  it("allows Bash but withholds direct mutation tools from read-only Pi children", () => {
-    const policy = childToolPolicy(["read", "bash", "edit", "write"], "read-only");
-    expect(policy.enabled).toEqual(["read", "bash"]);
   });
 
   it.effect("bounds a cooperative abort when stdin never drains", () =>

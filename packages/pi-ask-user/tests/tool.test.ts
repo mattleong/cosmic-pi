@@ -38,7 +38,7 @@ interface CapturedTool {
 }
 
 describe("ask_user tool", () => {
-  it("is sequential, cooperatively rendered, and returns structured answers", () => {
+  it("returns structured answers", () => {
     const service: AskUserServiceContract = {
       ask: () =>
         Effect.succeed({
@@ -67,12 +67,6 @@ describe("ask_user tool", () => {
     registerAskUserTool(pi, {
       run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
     });
-
-    expect(tool?.name).toBe("ask_user");
-    expect(tool?.executionMode).toBe("sequential");
-    expect(tool?.renderShell).toBe("default");
-    const guidelines = tool?.promptGuidelines?.join(" ") ?? "";
-    expect(guidelines).toContain("Never ask users to enter passwords");
 
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     return tool!

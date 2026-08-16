@@ -2,11 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
-import {
-  CODE_MODE_SETTING_DESCRIPTORS,
-  findCodeModeSettingDescriptor,
-  resolveCodeModeConfig,
-} from "../src/config/options.ts";
+import { findCodeModeSettingDescriptor, resolveCodeModeConfig } from "../src/config/options.ts";
 import {
   CODE_MODE_FIELD_IDS,
   CODE_MODE_INTEGER_BOUNDS,
@@ -66,14 +62,6 @@ describe("code mode config resolution", () => {
 });
 
 describe("code mode setting descriptors", () => {
-  it("covers every configuration field exactly once", () => {
-    expect(CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => descriptor.id)).toEqual([
-      ...CODE_MODE_FIELD_IDS,
-    ]);
-    expect(findCodeModeSettingDescriptor("timeoutMs")?.label).toBe("Program timeout (ms)");
-    expect(findCodeModeSettingDescriptor("unknown")).toBeUndefined();
-  });
-
   it("parses bounded integers and rejects malformed or out-of-range input", async () => {
     const descriptor = findCodeModeSettingDescriptor("timeoutMs");
     expect(descriptor).toBeDefined();

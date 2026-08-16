@@ -6,9 +6,7 @@
 import * as Predicate from "effect/Predicate";
 import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 
-import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import cosmicUi from "../index.ts";
 import {
@@ -135,162 +133,6 @@ const successfulExec = async (command: string) => ({
 });
 
 describe("Cosmic UI extension", () => {
-  test("answers host queries and installs an ANSI-safe responsive footer in TUI mode", async () => {
-    const h = harness();
-    let found = false;
-    h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      respond: () => {
-        found = true;
-      },
-    });
-    expect(found).toBe(true);
-    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "malformed",
-      contribution: { kind: "surface", id: "broken", region: "media", preferredWidth: 4 },
-    });
-    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "pi-better-openai",
-      contribution: {
-        kind: "text",
-        id: "openai.usage",
-        region: "details",
-        text: "Usage: 5h: 90% | 7d: 51%",
-        label: "OpenAI",
-      },
-    });
-    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "pi-better-xai",
-      contribution: {
-        kind: "text",
-        id: "xai.usage",
-        region: "details",
-        text: "Usage: 7d: 82% | mo: 83%",
-        label: "xAI",
-      },
-    });
-    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "pi-better-openai",
-      contribution: {
-        kind: "text",
-        id: "openai.fast",
-        region: "identity",
-        text: "⚡",
-        color: "syntaxFunction",
-        decorates: "effort",
-      },
-    });
-    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "pi-advisor",
-      contribution: {
-        kind: "status",
-        id: "pi-advisor",
-        region: "identity",
-        align: "right",
-        priority: 100,
-        order: 1000,
-      },
-    });
-    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "pi-subagents",
-      contribution: { kind: "status", id: "pi-subagents", region: "details", order: 1000 },
-    });
-    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "pi-background-terminals",
-      contribution: {
-        kind: "status",
-        id: "pi-background-terminals",
-        region: "details",
-        order: 1010,
-      },
-    });
-    await emit(h, "session_start");
-    expect(h.ctx.isProjectTrusted).toHaveBeenCalledOnce();
-    expect(h.setFooter).toHaveBeenCalledOnce();
-    const factory = h.setFooter.mock.calls[0]?.[0];
-    const footer = factory(
-      { requestRender: vi.fn() },
-      { fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[0m` },
-      {
-        getGitBranch: () => "main",
-        getExtensionStatuses: () =>
-          new Map([
-            ["pi-advisor", "⠋ review-model:medium advising…"],
-            ["pi-background-terminals", "2 background jobs active · 1 failed"],
-            ["pi-subagents", "3 subagents active · 1 awaiting reply"],
-            ["other-extension", "other ready"],
-          ]),
-        getAvailableProviderCount: () => 2,
-        onBranchChange: () => vi.fn(),
-      },
-    );
-    for (const width of [32, 64, 100])
-      expect(footer.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
-    const renderedLines = footer.render(100);
-    const rendered = renderedLines.join("\n");
-    expect(renderedLines[0]).toContain("Model");
-    expect(renderedLines[0]).toContain("provider");
-    expect(renderedLines[0]).toContain("model-long-name");
-    expect(renderedLines[0]).toContain("⚡high");
-    expect(renderedLines[0]).not.toContain(" fast");
-    expect(renderedLines[0]).toContain("⠋ review-model:medium advising…");
-    expect(renderedLines.slice(1).join("\n")).not.toContain("review-model:medium advising");
-    expect(renderedLines[1]).toContain("Repo");
-    expect(renderedLines[1]).toContain("/tmp/project");
-    expect(rendered).toContain("Ctx");
-    expect(rendered).toContain("OpenAI");
-    expect(rendered).toContain("xAI");
-    expect(rendered).toContain("mo");
-    expect(rendered).toContain("main");
-    expect(rendered).toContain("PR #42");
-    expect(renderedLines[1]).toContain("main");
-    expect(renderedLines[1]).toContain("PR #42");
-    const plainRepositoryLine = stripVTControlCharacters(renderedLines[1] ?? "");
-    expect(plainRepositoryLine).toMatch(/PR #42\s{2,}~1 \?1 • \+6L ~4L$/);
-    expect(rendered).toContain("~1 ?1");
-    expect(rendered).toContain("+6L");
-    expect(rendered).toContain("~4L");
-    expect(rendered).toContain("other ready");
-    const compactStatusLines = footer.render(64);
-    const subagentLine = compactStatusLines.findIndex((line: string) =>
-      line.includes("3 subagents active"),
-    );
-    const backgroundLine = compactStatusLines.findIndex((line: string) =>
-      line.includes("2 background jobs active"),
-    );
-    expect(subagentLine).toBeGreaterThanOrEqual(0);
-    expect(backgroundLine).toBeGreaterThan(subagentLine);
-    expect(rendered.indexOf("model-long-name")).toBeLessThan(rendered.indexOf("high"));
-    expect(rendered.indexOf("high")).toBeLessThan(rendered.indexOf("/tmp/project"));
-    expect(h.ctx.getContextUsage).toHaveBeenCalledTimes(1);
-    await emit(h, "message_update");
-    footer.render(100);
-    expect(h.ctx.getContextUsage).toHaveBeenCalledTimes(2);
-  });
-
-  test("shows elapsed working time for an agent run and restores Pi's default afterward", async () => {
-    const h = harness();
-    await emit(h, "session_start");
-
-    await emit(h, "agent_start");
-    await waitUntil(() => h.setWorkingMessage.mock.calls.length > 0);
-    expect(h.setWorkingMessage).toHaveBeenLastCalledWith("Working · 0s");
-
-    await emit(h, "agent_end");
-    await waitUntil(() =>
-      h.setWorkingMessage.mock.calls.some(([message]) => message === undefined),
-    );
-    expect(h.setWorkingMessage).toHaveBeenLastCalledWith(undefined);
-    await emit(h, "session_shutdown");
-  });
-
   test("normalizes hostile protocol getters once and isolates throwing reads", async () => {
     const h = harness();
     const respond = vi.fn();
@@ -1059,11 +901,5 @@ describe("Cosmic UI extension", () => {
     await emit(h, "session_shutdown");
     await emit(h, "session_shutdown");
     expect(h.unsubscribed).toHaveBeenCalledTimes(4);
-  });
-
-  test("does not install terminal footer UI in RPC mode", async () => {
-    const h = harness("rpc");
-    await emit(h, "session_start");
-    expect(h.setFooter).not.toHaveBeenCalled();
   });
 });

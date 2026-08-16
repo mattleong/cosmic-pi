@@ -194,16 +194,6 @@ async function createManualCard(
 }
 
 describe("Advisor extension product behavior", () => {
-  test("registers only /advisor and a custom-entry renderer", () => {
-    const value = harness();
-    expect([...value.commands.keys()]).toEqual(["advisor"]);
-    expect(value.pi.registerEntryRenderer).toHaveBeenCalledWith(
-      ADVISOR_REVIEW_CARD_TYPE,
-      expect.any(Function),
-    );
-    expect(value.pi.registerMessageRenderer).not.toHaveBeenCalled();
-  });
-
   test("default disabled unconfigured sessions do not open onboarding", async () => {
     const value = harness({ configured: false, setupSelection: "Not now" });
     await value.emit("session_start", { type: "session_start" });

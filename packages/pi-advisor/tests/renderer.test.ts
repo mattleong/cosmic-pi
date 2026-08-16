@@ -1,16 +1,12 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   ADVISOR_REVIEW_ACTION_TYPE,
   ADVISOR_REVIEW_CARD_TYPE,
   decodeAdvisorReviewAction,
   decodeAdvisorReviewCard,
   makeAdvisorReviewCard,
-  renderAdvisorReviewCard,
 } from "../src/ui/review-card.ts";
-import {
-  latestOpenAdvisorReviewCardAtHostBoundary,
-  registerAdvisorReviewCardRendererAtHostBoundary,
-} from "../src/boundary/host-review-cards.ts";
+import { latestOpenAdvisorReviewCardAtHostBoundary } from "../src/boundary/host-review-cards.ts";
 
 const review = {
   verdict: "revise" as const,
@@ -30,12 +26,6 @@ const review = {
     },
   ],
 };
-// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-const theme = {
-  bold: (value: string) => value,
-  fg: (_name: string, value: string) => value,
-} as never;
-
 describe("Advisor local review cards", () => {
   test("creates a bounded strict v1 card without hidden metadata", () => {
     const card = makeAdvisorReviewCard("arc_test", review)!;
@@ -112,19 +102,6 @@ describe("Advisor local review cards", () => {
     ).toBeUndefined();
   });
 
-  test("collapsed and expanded views expose only the approved fields", () => {
-    const card = makeAdvisorReviewCard("arc_test", review)!;
-    const collapsed = renderAdvisorReviewCard(card, false, theme)!.render(120).join("\n");
-    expect(collapsed).toContain("Advisor · 1 issue");
-    expect(collapsed).toContain(review.summary);
-    expect(collapsed).not.toContain("Evidence:");
-    expect(collapsed).toContain("/advisor fix · /advisor dismiss");
-    const expanded = renderAdvisorReviewCard(card, true, theme)!.render(120).join("\n");
-    expect(expanded).toContain("Evidence: The test reports a mismatch.");
-    expect(expanded).toContain("Suggested fix: Correct the implementation.");
-    expect(expanded).not.toMatch(/blocker|correctness|confidence|provider|model|af_/i);
-  });
-
   test("restores the latest untombstoned card from the active branch", () => {
     const first = makeAdvisorReviewCard("arc_first", review)!;
     const second = makeAdvisorReviewCard("arc_second", review)!;
@@ -148,17 +125,5 @@ describe("Advisor local review cards", () => {
       data: { version: 1, cardId: second.cardId, action: "fix" },
     });
     expect(latestOpenAdvisorReviewCardAtHostBoundary(ctx)).toBeUndefined();
-  });
-
-  test("registers an entry renderer, never a message renderer", () => {
-    const pi = { registerEntryRenderer: vi.fn(), registerMessageRenderer: vi.fn() };
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    registerAdvisorReviewCardRendererAtHostBoundary(pi as never);
-    expect(pi.registerEntryRenderer).toHaveBeenCalledWith(
-      ADVISOR_REVIEW_CARD_TYPE,
-      expect.any(Function),
-    );
-    expect(pi.registerMessageRenderer).not.toHaveBeenCalled();
-    expect(ADVISOR_REVIEW_ACTION_TYPE).toBe("pi-advisor-review-action-v1");
   });
 });

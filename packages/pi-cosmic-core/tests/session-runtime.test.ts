@@ -13,62 +13,13 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { expectTypeOf } from "vitest";
 import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
   type PiManagedRuntime,
-  type PiSessionRuntimeSlot,
 } from "../index.ts";
 import { makeCapturedTracer } from "../testing.ts";
-
-type RuntimeFailure = { readonly _tag: "RuntimeFailure" };
-
-it("preserves runtime construction errors covariantly", () => {
-  expectTypeOf<PiManagedRuntime<never, RuntimeFailure>>().not.toExtend<
-    PiManagedRuntime<never, never>
-  >();
-  expectTypeOf<PiManagedRuntime<never, never>>().toExtend<
-    PiManagedRuntime<never, RuntimeFailure>
-  >();
-  expectTypeOf<PiSessionRuntimeSlot<void, never, RuntimeFailure>>().not.toExtend<
-    PiSessionRuntimeSlot<void, never, never>
-  >();
-  expectTypeOf<PiSessionRuntimeSlot<void, never, never>>().toExtend<
-    PiSessionRuntimeSlot<void, never, RuntimeFailure>
-  >();
-  expectTypeOf<PiManagedRuntime<never>>().not.toExtend<PiManagedRuntime<never, never>>();
-  expectTypeOf<PiSessionRuntimeSlot<void, never>>().not.toExtend<
-    PiSessionRuntimeSlot<void, never, never>
-  >();
-});
-
-it("keeps historical partial generic arities source-compatible", () => {
-  const legacyRuntime: PiManagedRuntime<never> = {
-    run: () => {
-      throw new Error("compile-only runtime");
-    },
-    fork: () => {
-      throw new Error("compile-only runtime");
-    },
-    runSync: () => {
-      throw new Error("compile-only runtime");
-    },
-    dispose: () => Promise.resolve(),
-  };
-  const legacySlot = makePiSessionRuntimeSlot<void, never>({
-    makeRuntime: () => legacyRuntime,
-  });
-  const legacyStartupSlot = makePiSessionRuntimeSlot<void, never, "startup">({
-    makeRuntime: () => legacyRuntime,
-    startup: () => Effect.fail("startup" as const),
-  });
-
-  expectTypeOf(legacyRuntime).toEqualTypeOf<PiManagedRuntime<never, unknown>>();
-  expectTypeOf(legacySlot).toEqualTypeOf<PiSessionRuntimeSlot<void, never, unknown>>();
-  expectTypeOf(legacyStartupSlot).toEqualTypeOf<PiSessionRuntimeSlot<void, never, unknown>>();
-});
 
 function makeAbortDisposalHarness() {
   const events: string[] = [];

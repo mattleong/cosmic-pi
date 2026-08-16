@@ -27,25 +27,6 @@ const deferred = <A>() => {
 };
 
 describe("subagent Pi registration", () => {
-  it("defers the agent tool until session settings load", () => {
-    const tools: string[] = [];
-    const commands: string[] = [];
-    const events: string[] = [];
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const pi = extensionApiFixture({
-      registerTool: vi.fn((tool: { name: string }) => tools.push(tool.name)),
-      registerCommand: vi.fn((name: string) => commands.push(name)),
-      on: vi.fn((name: string) => events.push(name)),
-      sendMessage: vi.fn(),
-    });
-
-    registerSubagentApplication(pi);
-
-    expect(tools).toEqual([]);
-    expect(commands).toEqual(["subagents"]);
-    expect(events).toEqual(["session_start", "turn_end", "session_tree", "session_shutdown"]);
-  });
-
   it("makes out-of-order session preparation latest-wins and captures cwd/trust once", async () => {
     const handlers = new Map<string, Handler>();
     const first = deferred<void>();

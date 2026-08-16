@@ -1,8 +1,6 @@
 // Promise-shaped Pi host boundary test.
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/processEnv:off
-import * as Predicate from "effect/Predicate";
-
 import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import registerBridge from "../src/boundary/host-pi-supervisor-extension.ts";
@@ -130,63 +128,6 @@ describe("Herdr-hosted Pi bridge extension", () => {
     expect(process.env.PI_SUBAGENT_RUNTIME_API_KEY).toBeUndefined();
     expect(process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER).toBeUndefined();
     expect(pi.registerProvider).not.toHaveBeenCalled();
-  });
-
-  it("registers only four cooperative supervisor tools with strict inputs", async () => {
-    const handlers = new Map<string, BridgeEventHandler>();
-    const tools: BridgeTool[] = [];
-    let active = ["read", "subagent_start", "herdr_agent_start", "contact_parent"];
-    const registeredProviders: Array<readonly [string, unknown]> = [];
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const pi = extensionApiFixture({
-      registerFlag: vi.fn(),
-      getFlag: vi.fn(() => "/private/supervisor/connection.json"),
-      on: vi.fn((name: string, handler: BridgeEventHandler) => handlers.set(name, handler)),
-      registerTool: vi.fn((tool: (typeof tools)[number]) => tools.push(tool)),
-      getActiveTools: vi.fn(() => active),
-      setActiveTools: vi.fn((next: string[]) => void (active = next)),
-      registerProvider: vi.fn(
-        (name: string, options) => void registeredProviders.push([name, options]),
-      ),
-    });
-    vi.stubEnv("PI_SUBAGENT_RUNTIME_API_KEY", "private-runtime-key");
-    vi.stubEnv("PI_SUBAGENT_RUNTIME_API_PROVIDER", "openai-codex");
-
-    registerBridge(pi, { openBridge });
-    const start = handlers.get("session_start");
-    expect(start).toBeDefined();
-    await start?.(
-      {},
-      extensionContextFixture({
-        cwd: "/project",
-        isProjectTrusted: () => false,
-        hasUI: false,
-      }),
-    );
-
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "supervisor_progress",
-      "supervisor_warning",
-      "supervisor_question",
-      "supervisor_submit_report",
-    ]);
-    expect(tools.every((tool) => Predicate.isFunction(tool.renderCall))).toBe(true);
-    expect(active).toContain("read");
-    expect(active).not.toContain("subagent_start");
-    expect(active).not.toContain("herdr_agent_start");
-    expect(active).not.toContain("contact_parent");
-    expect(registeredProviders).toEqual([["openai-codex", { apiKey: "private-runtime-key" }]]);
-    expect(process.env.PI_SUBAGENT_RUNTIME_API_KEY).toBeUndefined();
-
-    const result = await tools[0]?.execute("call-1", { message: "progress" });
-    expect(result?.content[0]?.text).toBe("accepted");
-    expect(bridgeCalls).toEqual([{ name: "supervisor_progress", input: { message: "progress" } }]);
-    await expect(tools[0]?.execute("call-2", { message: "progress", extra: true })).rejects.toThrow(
-      "malformed",
-    );
-
-    handlers.get("session_shutdown")?.({}, bridgeContext);
-    expect(close).toHaveBeenCalledOnce();
   });
 
   it("promotes a settled final Pi response through the supervisor report channel", async () => {

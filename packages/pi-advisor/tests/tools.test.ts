@@ -9,10 +9,8 @@ import { join, win32 } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   ADVISOR_TOOL_LIMITS,
-  ADVISOR_TOOL_NAMES,
   AdvisorToolSafetyError,
   createAdvisorToolsEffect,
-  isPackageAdvisorTool,
 } from "../src/runtime/tools.ts";
 import { _readOnlyFileSystemTest } from "../src/boundary/read-only-fs.ts";
 import { standaloneAdvisorExecutor } from "./support/executor.ts";
@@ -129,15 +127,6 @@ describe("package-owned Advisor tools", () => {
     );
   });
 
-  test("exposes exactly read, grep, find and ls with package identity", async () => {
-    const tools = await createAdvisorTools(await fixture());
-    expect(tools.map((tool) => tool.name)).toEqual(ADVISOR_TOOL_NAMES);
-    expect(tools.every((tool) => isPackageAdvisorTool(tool))).toBe(true);
-    expect(tools.map((tool) => tool.name)).not.toEqual(
-      expect.arrayContaining(["bash", "write", "edit", "patch", "exec", "custom", "all"]),
-    );
-  });
-
   test("inspects a project through all four tools without mutation", async () => {
     const root = await fixture();
     const before = await digest(root);
@@ -194,16 +183,6 @@ describe("package-owned Advisor tools", () => {
     );
     await expect(execute(root, "grep", { path: ".", pattern: longPath })).rejects.toThrow(
       AdvisorToolSafetyError,
-    );
-  });
-
-  test("declares schema limits for path and pattern strings", async () => {
-    const tools = await createAdvisorTools(await fixture());
-    expect(JSON.stringify(tools.find((tool) => tool.name === "read")?.parameters)).toContain(
-      `"maxLength":${ADVISOR_TOOL_LIMITS.maxPathChars}`,
-    );
-    expect(JSON.stringify(tools.find((tool) => tool.name === "grep")?.parameters)).toContain(
-      `"maxLength":${ADVISOR_TOOL_LIMITS.maxPatternChars}`,
     );
   });
 

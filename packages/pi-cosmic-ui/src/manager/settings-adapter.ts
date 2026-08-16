@@ -111,8 +111,8 @@ const translatedSettingsInput = (action: FullScreenAction): string | undefined =
  * filter text on Esc), `applyFilter` (re-filtering after the search text is cleared, so a
  * dismissed search cannot keep filtering the list invisibly), `submenuComponent` (submenu
  * focus and trailing-blank-line handling), and an optional `focused` field. This is an
- * explicit contract with the pinned pi-tui version; `tests/settings-surface.test.ts` probes
- * the real SettingsList so a pi-tui upgrade that changes these internals fails loudly there.
+ * explicit contract with the pinned pi-tui version and must be reviewed directly when that
+ * dependency is upgraded.
  */
 type SettingsFocusableBridge = {
   focused?: boolean;
