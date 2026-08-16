@@ -9,6 +9,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import {
@@ -374,7 +375,9 @@ describe("xAI credentials", () => {
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
       const credentials = yield* getXaiCredentials("/agent/auth.json");
-      expect(credentials?.accessToken).toBe("next-access");
+      expect(credentials && Redacted.value(credentials.accessToken)).toBe("next-access");
+      expect(JSON.stringify(credentials)).not.toContain("next-access");
+      expect(JSON.stringify(credentials)).not.toContain("next-refresh");
       const xai = yield* Schema.decodeUnknownEffect(
         Schema.Struct({
           unknown: Schema.String,
@@ -420,7 +423,7 @@ describe("xAI credentials", () => {
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
       const credentials = yield* getXaiCredentials("/agent/auth.json");
-      expect(credentials?.accessToken).toBe("registry");
+      expect(credentials && Redacted.value(credentials.accessToken)).toBe("registry");
       expect(original.otherProvider.access).toBe("keep");
     }).pipe(
       Effect.provide(
@@ -457,12 +460,12 @@ describe("xAI credentials", () => {
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW + 299_999);
       const before = yield* getXaiCredentials("/agent/auth.json");
-      expect(before?.accessToken).toBe("current-access");
+      expect(before && Redacted.value(before.accessToken)).toBe("current-access");
       expect(refreshes).toBe(0);
 
       yield* TestClock.setTime(NOW + 300_000);
       const atBoundary = yield* getXaiCredentials("/agent/auth.json");
-      expect(atBoundary?.accessToken).toBe("next-access");
+      expect(atBoundary && Redacted.value(atBoundary.accessToken)).toBe("next-access");
       expect(refreshes).toBe(1);
     }).pipe(Effect.provide(providers(harness.layer, http, registryContext(""))));
   });
@@ -498,7 +501,7 @@ describe("xAI credentials", () => {
       yield* TestClock.setTime(NOW);
       const credentials = yield* getXaiCredentials("/agent/auth.json");
       expect(credentials?.source).toBe("modelRegistry");
-      expect(credentials?.accessToken).toBe("registry");
+      expect(credentials && Redacted.value(credentials.accessToken)).toBe("registry");
     }).pipe(Effect.provide(providers(harness.layer, http, registryContext("registry"))));
   });
 

@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT } from "../run/tool-policy.ts";
@@ -498,7 +499,7 @@ const prepareHarness = async (
       const provider = request.model.slice(0, request.model.indexOf("/"));
       const secretSource = [
         request.runtimeApiKey
-          ? `export PI_SUBAGENT_RUNTIME_API_KEY=${shellQuote(request.runtimeApiKey)}`
+          ? `export PI_SUBAGENT_RUNTIME_API_KEY=${shellQuote(Redacted.value(request.runtimeApiKey))}`
           : "unset PI_SUBAGENT_RUNTIME_API_KEY",
         request.runtimeApiKey
           ? `export PI_SUBAGENT_RUNTIME_API_PROVIDER=${shellQuote(provider)}`

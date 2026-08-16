@@ -8,6 +8,7 @@ import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
@@ -126,7 +127,7 @@ export class OpenAIImageService extends Context.Service<
                 url: CODEX_RESPONSES_URL,
                 method: "POST",
                 headers: {
-                  authorization: `Bearer ${credentials.accessToken}`,
+                  authorization: `Bearer ${Redacted.value(credentials.accessToken)}`,
                   "chatgpt-account-id": credentials.accountId,
                   "OpenAI-Beta": "responses=experimental",
                   accept: "text/event-stream",

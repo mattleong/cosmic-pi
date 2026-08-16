@@ -9,6 +9,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import {
   AgentDirectory,
@@ -164,15 +165,22 @@ describe("OpenAI configuration and credentials", () => {
     });
     return Effect.gen(function* () {
       expect(yield* extractAccountIdFromJwt(jwt("acct_jwt"))).toBe("acct_jwt");
-      expect(
-        yield* parseCodexRegistryCredentials(
-          JSON.stringify({ access: "registry", accountId: "acct_registry" }),
-        ),
-      ).toEqual({ accessToken: "registry", accountId: "acct_registry" });
-      expect(yield* readCodexAuthResult(authPath)).toEqual({
-        _tag: "Found",
-        credentials: { accessToken: "file-token", accountId: "acct_file", source: "authFile" },
-      });
+      const registry = yield* parseCodexRegistryCredentials(
+        JSON.stringify({ access: "private-registry-token", accountId: "acct_registry" }),
+      );
+      expect(registry?.accountId).toBe("acct_registry");
+      if (registry) {
+        expect(Redacted.value(registry.accessToken)).toBe("private-registry-token");
+        expect(JSON.stringify(registry)).not.toContain("private-registry-token");
+      }
+      const file = yield* readCodexAuthResult(authPath);
+      expect(file._tag).toBe("Found");
+      if (file._tag === "Found") {
+        expect(file.credentials.accountId).toBe("acct_file");
+        expect(file.credentials.source).toBe("authFile");
+        expect(Redacted.value(file.credentials.accessToken)).toBe("file-token");
+        expect(JSON.stringify(file.credentials)).not.toContain("file-token");
+      }
       expect((yield* getCodexCredentials(authPath, context()))?.source).toBe("authFile");
       expect(
         (yield* getCodexCredentials(

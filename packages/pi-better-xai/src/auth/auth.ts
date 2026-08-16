@@ -2,6 +2,7 @@ import * as Predicate from "effect/Predicate";
 
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import {
   decodeJwtPayloadText,
@@ -47,8 +48,8 @@ export class XaiAuthError extends Schema.TaggedError<XaiAuthError>()("XaiAuthErr
 }) {}
 
 export interface XaiCredentials {
-  readonly accessToken: string;
-  readonly refreshToken?: string;
+  readonly accessToken: Redacted.Redacted<string>;
+  readonly refreshToken?: Redacted.Redacted<string>;
   readonly expires?: number;
   readonly teamId?: string;
 }
@@ -87,9 +88,14 @@ const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function*
   const refreshToken = decoded.refresh?.trim() || undefined;
   const teamId = yield* extractTeamIdFromJwt(accessToken);
   const credentials: XaiCredentials = (() => {
-    const objectPart2848_0 = { accessToken };
+    const objectPart2848_0 = {
+      accessToken: Redacted.make(accessToken, { label: "xAI access token" }),
+    };
     const objectPart2848_1 = refreshToken
-      ? { ...objectPart2848_0, refreshToken }
+      ? {
+          ...objectPart2848_0,
+          refreshToken: Redacted.make(refreshToken, { label: "xAI refresh token" }),
+        }
       : objectPart2848_0;
     const objectPart2848_2 = Predicate.isNumber(decoded.expires)
       ? { ...objectPart2848_1, expires: decoded.expires }
@@ -152,9 +158,10 @@ const writeXaiAuth = Effect.fn("XaiAuth.writeXaiAuth")(function* (
 
 const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
   authPath: string,
-  refreshToken: string,
+  refreshToken: Redacted.Redacted<string>,
 ) {
   const http = yield* JsonHttpClient;
+  const refreshTokenValue = Redacted.value(refreshToken);
   const response = yield* http
     .request({
       url: XAI_TOKEN_URL,
@@ -163,7 +170,7 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
       formBody: {
         grant_type: "refresh_token",
         client_id: XAI_OAUTH_CLIENT_ID,
-        refresh_token: refreshToken,
+        refresh_token: refreshTokenValue,
       },
       responseSchema: RefreshResponseSchema,
     })
@@ -194,14 +201,18 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
       message: "xAI OAuth token refresh returned an invalid payload.",
     });
   }
-  const nextRefresh = body.refresh_token?.trim() || refreshToken;
+  const nextRefresh = body.refresh_token?.trim() || refreshTokenValue;
   const expiresInSeconds = body.expires_in ?? DEFAULT_TOKEN_LIFETIME_SECONDS;
   const now = yield* Clock.currentTimeMillis;
   const expires = now + expiresInSeconds * 1000;
   yield* writeXaiAuth(authPath, { access: accessToken, refresh: nextRefresh, expires });
   const teamId = yield* extractTeamIdFromJwt(accessToken);
   const credentials: XaiCredentials = (() => {
-    const objectPart6431_0 = { accessToken, refreshToken: nextRefresh, expires };
+    const objectPart6431_0 = {
+      accessToken: Redacted.make(accessToken, { label: "xAI access token" }),
+      refreshToken: Redacted.make(nextRefresh, { label: "xAI refresh token" }),
+      expires,
+    };
     const objectPart6431_1 = teamId ? { ...objectPart6431_0, teamId } : objectPart6431_0;
     return objectPart6431_1;
   })();
@@ -244,7 +255,10 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
     if (registryAccess) {
       const teamId = yield* extractTeamIdFromJwt(registryAccess);
       const credentials: XaiAuthResultCredentials = (() => {
-        const objectPart8008_0 = { accessToken: registryAccess, source: "modelRegistry" as const };
+        const objectPart8008_0 = {
+          accessToken: Redacted.make(registryAccess, { label: "xAI access token" }),
+          source: "modelRegistry" as const,
+        };
         const objectPart8008_1 = teamId ? { ...objectPart8008_0, teamId } : objectPart8008_0;
         return objectPart8008_1;
       })();

@@ -1,3 +1,4 @@
+import type * as Redacted from "effect/Redacted";
 import type {
   SubagentContextMode,
   SubagentEffort,
@@ -6,6 +7,8 @@ import type {
   SubagentWriteIntent,
 } from "../domain/routing.ts";
 import type { ProfileId, SubagentSelectionProvenance } from "../profiles/model.ts";
+
+export type RuntimeApiKey = Redacted.Redacted<string>;
 
 export const SUBAGENT_RUN_STATES = [
   "starting",
@@ -136,7 +139,7 @@ export interface StartSubagentRequest {
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
-  readonly runtimeApiKey?: string | undefined;
+  readonly runtimeApiKey?: RuntimeApiKey | undefined;
   readonly activeTools: ReadonlyArray<string>;
   readonly projectTrusted: boolean;
   readonly parentSessionId: string;

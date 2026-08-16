@@ -10,7 +10,7 @@ import type {
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
-import type { SubagentCapability, SubagentUsage } from "../run/model.ts";
+import type { RuntimeApiKey, SubagentCapability, SubagentUsage } from "../run/model.ts";
 
 /** Backend-owned continuation evidence. Orchestration stores and returns it without inspection. */
 export type BackendResumeToken = object;
@@ -44,7 +44,7 @@ export interface BackendLaunchRequest {
   readonly fastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
-  readonly runtimeApiKey?: string | undefined;
+  readonly runtimeApiKey?: RuntimeApiKey | undefined;
   readonly activeTools: ReadonlyArray<string>;
   readonly projectTrusted: boolean;
   readonly parentSessionId: string;

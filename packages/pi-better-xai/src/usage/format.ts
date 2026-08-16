@@ -4,6 +4,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import {
   clampPercent,
@@ -211,13 +212,16 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string
 
 const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* <A, R>(
   url: string,
-  accessToken: string,
+  accessToken: Redacted.Redacted<string>,
   responseSchema: JsonHttpResponseSchema<A, R>,
 ) {
   const http = yield* JsonHttpClient;
   return yield* http.request({
     url,
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    headers: {
+      Authorization: `Bearer ${Redacted.value(accessToken)}`,
+      Accept: "application/json",
+    },
     responseSchema,
   });
 });

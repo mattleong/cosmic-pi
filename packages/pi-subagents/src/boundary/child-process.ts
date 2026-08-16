@@ -26,9 +26,11 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Redacted from "effect/Redacted";
 import type * as Scope from "effect/Scope";
 import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT, piToolsForWriteIntent } from "../run/tool-policy.ts";
 import { SubagentProcessError } from "../run/errors.ts";
+import type { RuntimeApiKey } from "../run/model.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../backend/local-pi-protocol.ts";
@@ -59,7 +61,7 @@ export interface ChildLaunchRequest {
   readonly fastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
-  readonly runtimeApiKey?: string | undefined;
+  readonly runtimeApiKey?: RuntimeApiKey | undefined;
   readonly activeTools: ReadonlyArray<string>;
   readonly projectTrusted: boolean;
   readonly parentSessionId: string;
@@ -260,7 +262,7 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
     const objectPart8692_1 = request.runtimeApiKey
       ? {
           ...objectPart8692_0,
-          [RUNTIME_API_KEY_ENV]: request.runtimeApiKey,
+          [RUNTIME_API_KEY_ENV]: Redacted.value(request.runtimeApiKey),
           [RUNTIME_API_PROVIDER_ENV]: request.model.slice(0, request.model.indexOf("/")),
         }
       : objectPart8692_0;

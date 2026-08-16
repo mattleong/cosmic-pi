@@ -4,6 +4,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import {
   formatPercent,
@@ -179,7 +180,7 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
         url: USAGE_URL,
         headers: {
           accept: "*/*",
-          authorization: `Bearer ${credentials.accessToken}`,
+          authorization: `Bearer ${Redacted.value(credentials.accessToken)}`,
           "chatgpt-account-id": credentials.accountId,
         },
         responseSchema: CodexUsageSchema,

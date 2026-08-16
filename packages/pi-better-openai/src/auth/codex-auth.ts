@@ -3,6 +3,7 @@ import * as Predicate from "effect/Predicate";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { decodeJwtPayloadText, readSchemaDocument } from "pi-cosmic-core";
 import type { CodexAuthResult } from "./result.ts";
@@ -33,7 +34,13 @@ export class CodexAuthError extends Schema.TaggedError<CodexAuthError>()("CodexA
   operation: Schema.String,
   message: Schema.String,
 }) {}
-export type CodexCredentials = { readonly accessToken: string; readonly accountId: string };
+export type CodexCredentials = {
+  readonly accessToken: Redacted.Redacted<string>;
+  readonly accountId: string;
+};
+
+const redactAccessToken = (value: string): Redacted.Redacted<string> =>
+  Redacted.make(value, { label: "OpenAI Codex access token" });
 export type CodexCredentialsWithSource = CodexCredentials & {
   readonly source: "modelRegistry" | "authFile";
 };
@@ -72,10 +79,16 @@ export const parseCodexRegistryCredentials = Effect.fn("CodexAuth.parseRegistryC
     if (parsed) {
       const accessToken = (parsed.access ?? parsed.token)?.trim();
       const accountId = (parsed.accountId ?? parsed.account_id)?.trim();
-      if (accessToken && accountId) return { accessToken, accountId } satisfies CodexCredentials;
+      if (accessToken && accountId)
+        return {
+          accessToken: redactAccessToken(accessToken),
+          accountId,
+        } satisfies CodexCredentials;
     }
     const accountId = yield* extractAccountIdFromJwt(value);
-    return accountId ? ({ accessToken: value, accountId } satisfies CodexCredentials) : undefined;
+    return accountId
+      ? ({ accessToken: redactAccessToken(value), accountId } satisfies CodexCredentials)
+      : undefined;
   },
 );
 
@@ -113,7 +126,11 @@ export const readCodexAuthResult = Effect.fn("CodexAuth.readAuthResult")(functio
     return malformed("decode", "OpenAI credential fields are malformed.");
   return {
     _tag: "Found",
-    credentials: { accessToken, accountId, source: "authFile" as const },
+    credentials: {
+      accessToken: redactAccessToken(accessToken),
+      accountId,
+      source: "authFile" as const,
+    },
   } as const;
 });
 

@@ -3,6 +3,7 @@ import * as Predicate from "effect/Predicate";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/tool-policy.ts";
 import {
@@ -22,7 +23,7 @@ import {
   type SubagentHost,
   type SubagentRuntime,
 } from "../domain/routing.ts";
-import type { StartSubagentRequest } from "../run/model.ts";
+import type { RuntimeApiKey, StartSubagentRequest } from "../run/model.ts";
 import {
   PROFILE_IDS,
   type SkippedProfileCandidate,
@@ -66,7 +67,7 @@ const resolvePiModel = (
   effortWasExplicit: boolean,
   ctx: ExtensionContext,
 ): Effect.Effect<
-  { readonly model: string; readonly runtimeApiKey?: string | undefined },
+  { readonly model: string; readonly runtimeApiKey?: RuntimeApiKey | undefined },
   InvalidSubagentRequestError
 > =>
   Effect.gen(function* () {
@@ -135,7 +136,10 @@ const resolvePiModel = (
         code: "pi_auth_unavailable",
         message: `Transferable runtime authentication is unavailable for ${modelId}.`,
       });
-    return { model: modelId, runtimeApiKey: auth.apiKey };
+    return {
+      model: modelId,
+      runtimeApiKey: Redacted.make(auth.apiKey, { label: "Subagent runtime API key" }),
+    };
   });
 
 interface ResolvedConcreteModel {
@@ -146,7 +150,7 @@ interface ResolvedConcreteModel {
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
-  readonly runtimeApiKey?: string | undefined;
+  readonly runtimeApiKey?: RuntimeApiKey | undefined;
 }
 
 /** Unknown host values clamp to the existing conservative inheritance default. */

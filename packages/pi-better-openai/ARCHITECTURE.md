@@ -15,7 +15,7 @@ Adds OpenAI subscription usage, fast-mode request injection, provider-native com
 - `src/extension.ts` is the thin Pi package entrypoint.
 - `src/application.ts` coordinates commands, host events, projections, and one session runtime.
 - `src/layer.ts` composes usage, fast-mode, image, platform, and file/Sharp Layers.
-- `src/auth/` owns Codex OAuth credential reads (`codex-auth.ts`, `result.ts`).
+- `src/auth/` owns Codex OAuth credential reads (`codex-auth.ts`, `result.ts`); decoded and registry access tokens remain `Redacted` until the usage or image HTTP transport constructs its authorization header.
 - `src/usage/index.ts`, `src/fast/service.ts`, `src/compaction/`, and `src/image/` own the major feature resources.
 - `src/usage/controller.ts` is the usage Context service door; `projection.ts` owns frozen projection policy and `debug.ts` owns deterministic diagnostics.
 - `src/image/service.ts` is the image Context service door and orchestration path; `input.ts`, `stream.ts`, and `output.ts` isolate safe input reads, SSE decoding, generated-byte validation, and atomic publication.

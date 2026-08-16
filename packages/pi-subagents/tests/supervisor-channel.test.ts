@@ -24,6 +24,7 @@ import {
 import {
   authenticateSupervisorServerPayload,
   SUPERVISOR_CHANNEL_VERSION,
+  SupervisorRunIdSchema,
   type SupervisorServerPayload,
 } from "../src/supervisor/protocol.ts";
 
@@ -265,7 +266,7 @@ describe("private supervisor channel", () => {
     const authenticated = authenticateSupervisorServerPayload(
       {
         version: SUPERVISOR_CHANNEL_VERSION,
-        runId: "authoritative-run",
+        runId: SupervisorRunIdSchema.make("authoritative-run"),
         token: "a".repeat(64),
       },
       {

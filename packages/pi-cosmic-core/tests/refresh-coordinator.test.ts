@@ -91,6 +91,49 @@ describe("RefreshCoordinator", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("replays follow-up failure to late waiters and permits immediate reuse", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* makeRefreshCoordinatorWith<number, string>(
+        (_current, next) => next,
+      );
+      const firstStarted = yield* Deferred.make<void>();
+      const releaseFirst = yield* Deferred.make<void>();
+      const followUpStarted = yield* Deferred.make<void>();
+      const releaseFollowUp = yield* Deferred.make<void>();
+      const requests: number[] = [];
+      const operation = (request: number): Effect.Effect<void, string> =>
+        Effect.gen(function* () {
+          requests.push(request);
+          if (request === 1) {
+            yield* Deferred.succeed(firstStarted, undefined);
+            yield* Deferred.await(releaseFirst);
+          } else if (request === 2) {
+            yield* Deferred.succeed(followUpStarted, undefined);
+            yield* Deferred.await(releaseFollowUp);
+            return yield* Effect.fail("follow-up-boom");
+          }
+        });
+
+      const owner = yield* coordinator.run(1, operation).pipe(Effect.exit, Effect.forkScoped);
+      yield* Deferred.await(firstStarted);
+      const queued = yield* coordinator.run(2, operation).pipe(Effect.exit, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(releaseFirst, undefined);
+      yield* Deferred.await(followUpStarted);
+      const late = yield* coordinator.run(3, operation).pipe(Effect.exit, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(releaseFollowUp, undefined);
+
+      for (const fiber of [owner, queued, late]) {
+        const exit = yield* Fiber.join(fiber);
+        expect(Exit.isFailure(exit)).toBe(true);
+      }
+      expect(requests).toEqual([1, 2]);
+      yield* coordinator.run(4, operation);
+      expect(requests).toEqual([1, 2, 4]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("replays typed owner failure to every waiter and permits retry", () =>
     Effect.gen(function* () {
       const coordinator = yield* makeRefreshCoordinatorWith<RefreshRequest, string>(

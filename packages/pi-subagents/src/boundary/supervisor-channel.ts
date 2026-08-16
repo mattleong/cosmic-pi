@@ -33,7 +33,11 @@ import {
   SUPERVISOR_CHANNEL_VERSION,
   SUPERVISOR_MCP_SERVER_NAME,
   SupervisorChannelConfigSchema,
+  SupervisorChannelIdSchema,
+  type SupervisorChannelId,
+  type SupervisorDeliveryId,
   type SupervisorEvent,
+  type SupervisorRunId,
   type SupervisorServerMessage,
   type SupervisorServerPayload,
   validSupervisorMessage,
@@ -145,7 +149,7 @@ export interface SupervisorChannelLayerOptions {
 }
 
 interface PendingQuestion {
-  readonly requestId: string;
+  readonly requestId: SupervisorChannelId;
   readonly epoch: number;
   readonly peer: AuthenticatedPeer;
   readonly acknowledgement: Deferred.Deferred<void, SupervisorChannelError>;
@@ -174,6 +178,7 @@ interface AuthenticatedPeer {
 }
 
 interface NodeChannelState {
+  readonly runId: SupervisorRunId;
   readonly server: Server;
   readonly peers: Set<AuthenticatedPeer>;
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
@@ -183,8 +188,8 @@ interface NodeChannelState {
   readonly token: string;
   readonly assignmentEpochs: Set<number>;
   readonly questionEpochs: Set<number>;
-  readonly reports: Map<string, AcceptedReport>;
-  readonly epochAcknowledgements: Map<string, PendingEpochAcknowledgement>;
+  readonly reports: Map<SupervisorDeliveryId, AcceptedReport>;
+  readonly epochAcknowledgements: Map<SupervisorChannelId, PendingEpochAcknowledgement>;
   readonly readinessWaiters: Set<Deferred.Deferred<void, SupervisorChannelError>>;
   pendingAssignmentEpoch: number | undefined;
   currentAssignmentEpoch: number;
@@ -221,7 +226,7 @@ const exactConfig = <ValueInput>(value: ValueInput) => {
 const tomlString = (value: string): string => JSON.stringify(value);
 
 const makeMetadata = (
-  runId: string,
+  runId: SupervisorRunId,
   port: number,
   stateDirectory: string,
   connectionConfigPath: string,
@@ -382,7 +387,7 @@ const authenticatedServerMessage = (
   authenticateSupervisorServerPayload(
     {
       version: SUPERVISOR_CHANNEL_VERSION,
-      runId: state.metadata.runId,
+      runId: state.runId,
       token: state.token,
     },
     payload,
@@ -822,7 +827,7 @@ const acceptSocket = (state: NodeChannelState, socket: Socket): void => {
         return;
       }
       const message = decodeSupervisorClientMessage(value);
-      if (!message || message.runId !== state.metadata.runId) {
+      if (!message || message.runId !== state.runId) {
         if (peer.authenticated)
           sendAuthenticated(state, peer, {
             type: "error",
@@ -909,7 +914,7 @@ const closeNodeChannel = (state: NodeChannelState): Promise<void> => {
 
 const acquireNodeChannel = async (
   agentDirectory: string,
-  runId: string,
+  runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
 ): Promise<NodeChannelState> => {
   let stateDirectory: string | undefined;
@@ -943,6 +948,7 @@ const acquireNodeChannel = async (
     await writePrivateConfig(connectionConfigPath, config);
     const metadata = makeMetadata(runId, port, stateDirectory, connectionConfigPath);
     state = {
+      runId,
       server,
       peers: new Set(),
       events,
@@ -983,9 +989,10 @@ export const makeSupervisorChannel = (
           "invalid_run_id",
           "Private supervisor channel run identity is invalid or exceeds its bound.",
         );
+      const runId: SupervisorRunId = request.runId;
       const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
       const state = yield* Effect.tryPromise({
-        try: () => acquireNodeChannel(options.agentDirectory, request.runId, events),
+        try: () => acquireNodeChannel(options.agentDirectory, runId, events),
         catch: () =>
           channelError(
             "open",
@@ -1059,7 +1066,7 @@ export const makeSupervisorChannel = (
           const firstAcknowledgement = Deferred.makeUnsafe<void, SupervisorChannelError>();
           state.pendingAssignmentEpoch = epoch;
           const updates = peers.map((peer) => {
-            const id = `epoch-${randomBytes(16).toString("hex")}`;
+            const id = SupervisorChannelIdSchema.make(`epoch-${randomBytes(16).toString("hex")}`);
             const deferred = Deferred.makeUnsafe<void, SupervisorChannelError>();
             state.epochAcknowledgements.set(id, {
               epoch,
@@ -1181,7 +1188,7 @@ export const makeSupervisorChannel = (
       };
 
       return {
-        runId: request.runId,
+        runId,
         metadata: state.metadata,
         events,
         awaitReady,

@@ -7,6 +7,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeHerdrHarness } from "../src/boundary/herdr-harness.ts";
 import type { SupervisorConnectionMetadata } from "../src/boundary/supervisor-channel.ts";
@@ -109,7 +110,10 @@ const launch = (
   fastMode: false,
   model: runtime === "pi" ? "openai-codex/gpt-5.6-sol" : `${runtime}-model`,
   effort: "xhigh",
-  runtimeApiKey: runtime === "pi" ? "pi-runtime-secret" : undefined,
+  runtimeApiKey:
+    runtime === "pi"
+      ? Redacted.make("pi-runtime-secret", { label: "Test runtime API key" })
+      : undefined,
   activeTools: [],
   projectTrusted: false,
   parentSessionId: "parent-session",

@@ -18,28 +18,33 @@ const CHANNEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 
-export const isSupervisorRunId = (value: string): boolean => RUN_ID_PATTERN.test(value);
-
-const RunIdSchema = Schema.String.check(
+export const SupervisorRunIdSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_SUPERVISOR_RUN_ID_CHARS),
   Schema.isPattern(RUN_ID_PATTERN),
-);
-const ChannelIdSchema = Schema.String.check(
+).pipe(Schema.brand("SupervisorRunId"));
+export type SupervisorRunId = Schema.Schema.Type<typeof SupervisorRunIdSchema>;
+
+export const SupervisorChannelIdSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_SUPERVISOR_CHANNEL_ID_CHARS),
   Schema.isPattern(CHANNEL_ID_PATTERN),
-);
+).pipe(Schema.brand("SupervisorChannelId"));
+export type SupervisorChannelId = Schema.Schema.Type<typeof SupervisorChannelIdSchema>;
+
+export const isSupervisorRunId = (value: string): value is SupervisorRunId =>
+  RUN_ID_PATTERN.test(value);
 const TokenSchema = Schema.String.check(
   Schema.isMinLength(SUPERVISOR_AUTH_TOKEN_CHARS),
   Schema.isMaxLength(SUPERVISOR_AUTH_TOKEN_CHARS),
   Schema.isPattern(TOKEN_PATTERN),
 );
-const DeliveryIdSchema = Schema.String.check(
+export const SupervisorDeliveryIdSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_BACKEND_REPORT_ID_CHARS),
   Schema.isPattern(DELIVERY_ID_PATTERN),
-);
+).pipe(Schema.brand("SupervisorDeliveryId"));
+export type SupervisorDeliveryId = Schema.Schema.Type<typeof SupervisorDeliveryIdSchema>;
 const AssignmentEpochSchema = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0));
 const MessageSchema = Schema.String.check(
   Schema.isMinLength(1),
@@ -52,12 +57,12 @@ const ReportTextSchema = Schema.String.check(
 
 const AuthenticatedFields = {
   version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
-  runId: RunIdSchema,
+  runId: SupervisorRunIdSchema,
   token: TokenSchema,
 };
 const RequestFields = {
   ...AuthenticatedFields,
-  id: ChannelIdSchema,
+  id: SupervisorChannelIdSchema,
 };
 const AssignmentFields = {
   ...RequestFields,
@@ -66,7 +71,7 @@ const AssignmentFields = {
 
 export const SupervisorChannelConfigSchema = Schema.Struct({
   version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
-  runId: RunIdSchema,
+  runId: SupervisorRunIdSchema,
   host: Schema.Literal("127.0.0.1"),
   port: Schema.Number.check(
     Schema.isInt(),
@@ -80,16 +85,24 @@ export type SupervisorChannelConfig = Schema.Schema.Type<typeof SupervisorChanne
 
 export interface SupervisorServerAuthentication {
   readonly version: typeof SUPERVISOR_CHANNEL_VERSION;
-  readonly runId: string;
+  readonly runId: SupervisorRunId;
   readonly token: string;
 }
 
 export type SupervisorServerPayload =
-  | { readonly type: "hello_ok"; readonly id: string; readonly assignmentEpoch: number }
-  | { readonly type: "assignment_epoch"; readonly id: string; readonly assignmentEpoch: number }
+  | {
+      readonly type: "hello_ok";
+      readonly id: SupervisorChannelId;
+      readonly assignmentEpoch: number;
+    }
+  | {
+      readonly type: "assignment_epoch";
+      readonly id: SupervisorChannelId;
+      readonly assignmentEpoch: number;
+    }
   | {
       readonly type: "result";
-      readonly id: string;
+      readonly id: SupervisorChannelId;
       readonly accepted: true;
       readonly duplicate?: boolean | undefined;
       readonly sequence?: number | undefined;
@@ -97,16 +110,20 @@ export type SupervisorServerPayload =
     }
   | {
       readonly type: "error";
-      readonly id: string | null;
+      readonly id: SupervisorChannelId | null;
       readonly code: string;
       readonly message: string;
     }
-  | { readonly type: "question_reply"; readonly id: string; readonly message: string }
-  | { readonly type: "cancelled"; readonly id: string }
+  | {
+      readonly type: "question_reply";
+      readonly id: SupervisorChannelId;
+      readonly message: string;
+    }
+  | { readonly type: "cancelled"; readonly id: SupervisorChannelId }
   | {
       readonly type: "cancel_result";
-      readonly id: string;
-      readonly targetRequestId: string;
+      readonly id: SupervisorChannelId;
+      readonly targetRequestId: SupervisorChannelId;
       readonly cancelled: boolean;
     }
   | { readonly type: "closed" };
@@ -145,18 +162,18 @@ const QuestionSchema = Schema.Struct({
 const ReportSchema = Schema.Struct({
   ...AssignmentFields,
   type: Schema.Literal("report"),
-  deliveryId: DeliveryIdSchema,
+  deliveryId: SupervisorDeliveryIdSchema,
   text: ReportTextSchema,
 });
 const CancelSchema = Schema.Struct({
   ...RequestFields,
   type: Schema.Literal("cancel"),
-  targetRequestId: ChannelIdSchema,
+  targetRequestId: SupervisorChannelIdSchema,
 });
 const QuestionReplyAckSchema = Schema.Struct({
   ...RequestFields,
   type: Schema.Literal("question_reply_ack"),
-  questionId: ChannelIdSchema,
+  questionId: SupervisorChannelIdSchema,
 });
 const AssignmentEpochAckSchema = Schema.Struct({
   ...RequestFields,
@@ -164,50 +181,29 @@ const AssignmentEpochAckSchema = Schema.Struct({
   assignmentEpoch: AssignmentEpochSchema,
 });
 
-export type SupervisorClientMessage =
-  | Schema.Schema.Type<typeof HelloSchema>
-  | Schema.Schema.Type<typeof ProgressSchema>
-  | Schema.Schema.Type<typeof WarningSchema>
-  | Schema.Schema.Type<typeof QuestionSchema>
-  | Schema.Schema.Type<typeof ReportSchema>
-  | Schema.Schema.Type<typeof CancelSchema>
-  | Schema.Schema.Type<typeof QuestionReplyAckSchema>
-  | Schema.Schema.Type<typeof AssignmentEpochAckSchema>;
+export const SupervisorClientMessageSchema = Schema.Union([
+  HelloSchema,
+  ProgressSchema,
+  WarningSchema,
+  QuestionSchema,
+  ReportSchema,
+  CancelSchema,
+  QuestionReplyAckSchema,
+  AssignmentEpochAckSchema,
+]);
 
-const DiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
+export type SupervisorClientMessage = Schema.Schema.Type<typeof SupervisorClientMessageSchema>;
+
 const exactDecodeOptions = { onExcessProperty: "error" as const };
 
 export const decodeSupervisorClientMessage = <ValueInput>(
   value: ValueInput,
 ): SupervisorClientMessage | undefined => {
-  const discriminant = Schema.decodeUnknownOption(DiscriminantSchema)(value);
-  if (Option.isNone(discriminant)) return undefined;
-  const schema = (() => {
-    switch (discriminant.value.type) {
-      case "hello":
-        return HelloSchema;
-      case "progress":
-        return ProgressSchema;
-      case "warning":
-        return WarningSchema;
-      case "question":
-        return QuestionSchema;
-      case "report":
-        return ReportSchema;
-      case "cancel":
-        return CancelSchema;
-      case "question_reply_ack":
-        return QuestionReplyAckSchema;
-      case "assignment_epoch_ack":
-        return AssignmentEpochAckSchema;
-      default:
-        return undefined;
-    }
-  })();
-  if (!schema) return undefined;
-  const decoded = Schema.decodeUnknownOption(schema, exactDecodeOptions)(value);
-  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-  return Option.isSome(decoded) ? (decoded.value as SupervisorClientMessage) : undefined;
+  const decoded = Schema.decodeUnknownOption(
+    SupervisorClientMessageSchema,
+    exactDecodeOptions,
+  )(value);
+  return Option.isSome(decoded) ? decoded.value : undefined;
 };
 
 export type SupervisorEvent = Extract<

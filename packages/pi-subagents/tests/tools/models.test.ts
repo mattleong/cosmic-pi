@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { BackendDriver } from "../../src/backend/model.ts";
 import { type SubagentBackendRegistryContract } from "../../src/backend/service.ts";
@@ -214,7 +215,7 @@ describe("subagent tool", () => {
       runtimeContext,
     );
 
-    expect(request?.runtimeApiKey).toBe("runtime-key");
+    expect(request?.runtimeApiKey && Redacted.value(request.runtimeApiKey)).toBe("runtime-key");
     expect(request?.model).toBe("openai-codex/gpt-5.6-sol");
   });
 
@@ -276,8 +277,11 @@ describe("subagent tool", () => {
     expect(requests[0]).toMatchObject({
       host: "herdr",
       runtime: "pi",
-      runtimeApiKey: environmentKey,
     });
+    expect(requests[0]?.runtimeApiKey && Redacted.value(requests[0].runtimeApiKey)).toBe(
+      environmentKey,
+    );
+    expect(JSON.stringify(requests[0])).not.toContain(environmentKey);
     expect(JSON.stringify(result)).not.toContain(environmentKey);
 
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.

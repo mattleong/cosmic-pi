@@ -1,8 +1,10 @@
+import type * as Redacted from "effect/Redacted";
+
 export type CodexAuthResult =
   | {
       readonly _tag: "Found";
       readonly credentials: {
-        readonly accessToken: string;
+        readonly accessToken: Redacted.Redacted<string>;
         readonly accountId: string;
         readonly source: "modelRegistry" | "authFile";
       };

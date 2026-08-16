@@ -1,3 +1,4 @@
+import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 export const PositiveIntegerSchema = Schema.Number.check(
@@ -7,8 +8,8 @@ export const PositiveIntegerSchema = Schema.Number.check(
 );
 
 export interface XaiAuthResultCredentials {
-  readonly accessToken: string;
-  readonly refreshToken?: string | undefined;
+  readonly accessToken: Redacted.Redacted<string>;
+  readonly refreshToken?: Redacted.Redacted<string> | undefined;
   readonly expires?: number | undefined;
   readonly teamId?: string | undefined;
   readonly source: "modelRegistry" | "authFile";
