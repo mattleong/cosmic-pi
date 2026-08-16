@@ -1,4 +1,3 @@
-import { isFunctionValue, isStringValue } from "pi-cosmic-core";
 import {
   getSettingsListTheme,
   type ExtensionAPI,
@@ -65,7 +64,7 @@ function formatDiagnosticValue<ValueInput>(value: ValueInput, depth = 0): string
     lines.push(`${indent}}`);
     return lines;
   }
-  const scalar = isStringValue(value)
+  const scalar = Predicate.isString(value)
     ? quoted(value)
     : value === undefined
       ? "undefined"
@@ -331,7 +330,7 @@ export function registerSettingsController(
                 safeHostUi(() => tui.requestRender());
               },
               onCancel: () => done(undefined),
-              matchesKeybinding: isFunctionValue(keyboard?.matches)
+              matchesKeybinding: Predicate.isFunction(keyboard?.matches)
                 ? (data, id) => keyboard.matches(data, id)
                 : undefined,
               requestRender: () => safeHostUi(() => tui.requestRender()),

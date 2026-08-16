@@ -1,4 +1,5 @@
-import { isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { BashToolOptions, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -21,7 +22,7 @@ import { withSecretWarning } from "./shared/secret-preview";
 function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
   const command = getObjectValue(args, "command");
   return shouldHideShellResultByCommand(
-    isStringValue(command) ? getFirstShellCommandName(command) : undefined,
+    Predicate.isString(command) ? getFirstShellCommandName(command) : undefined,
     codePreviewSettings,
   );
 }
@@ -37,8 +38,8 @@ export function registerBash(pi: ExtensionAPI, cwd: string, options?: BashToolOp
     renderCall(args, theme, context) {
       return previewShell.renderCall(context, theme, (renderContext) => {
         if (!renderContext) throw new TypeError("Code preview render context is required.");
-        const command = isStringValue(args.command) ? args.command : "";
-        const timeout = isNumberValue(args.timeout)
+        const command = Predicate.isString(args.command) ? args.command : "";
+        const timeout = Predicate.isNumber(args.timeout)
           ? theme.fg("muted", ` (timeout ${args.timeout}s)`)
           : "";
         const highlighted = renderHighlightedText(
@@ -89,7 +90,7 @@ export function registerBash(pi: ExtensionAPI, cwd: string, options?: BashToolOp
           text += showingFooter(theme, preview.shown, rawLines.length, "output lines");
         if (isTruncated(result.details)) text += previewFooter(theme, "Output truncated by bash");
         const fullOutputPath = getObjectValue(result.details, "fullOutputPath");
-        if (isStringValue(fullOutputPath))
+        if (Predicate.isString(fullOutputPath))
           text += previewFooter(theme, `Full output: ${escapeControlChars(fullOutputPath)}`);
         return new Text(text, 0, 0);
       });

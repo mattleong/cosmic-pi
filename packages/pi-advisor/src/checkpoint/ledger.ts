@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { stringifyJson } from "../boundary/json.ts";
 import { createHash } from "node:crypto";
 import * as Option from "effect/Option";
@@ -291,5 +292,5 @@ function sanitizeFindingLifecycle(values: readonly unknown[]): AdvisorFindingRec
 }
 
 function isEmissionRecord<ValueInput>(value: ValueInput): value is ValueInput & string {
-  return isStringValue(value) && /^(?:concern|blocker):[a-f\d]{64}$/i.test(value);
+  return Predicate.isString(value) && /^(?:concern|blocker):[a-f\d]{64}$/i.test(value);
 }

@@ -1,10 +1,5 @@
-import {
-  hasObjectRuntimeType,
-  isBooleanValue,
-  isFunctionValue,
-  isNumberValue,
-  isStringValue,
-} from "./runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "./runtime-values.ts";
 import { Cause, Effect, Schema } from "effect";
 import {
   MAX_GUEST_COLLECTION_ENTRIES,
@@ -238,7 +233,7 @@ const copyBounded = <Value>(
   }
   // Confinement: string leaves and collection sizes are bounded at every data checkpoint,
   // so amplified intermediates are refused wherever they first cross shared machinery.
-  if (isStringValue(value)) {
+  if (Predicate.isString(value)) {
     if (value.length > MAX_GUEST_STRING_LENGTH) {
       throw new ToolRuntimeError(
         "InvalidDataValue",
@@ -249,12 +244,12 @@ const copyBounded = <Value>(
   }
   if (value === null) return null;
   if (value === undefined) return undefined;
-  if (isBooleanValue(value)) return value;
+  if (Predicate.isBoolean(value)) return value;
   // NaN/Infinity are allowed to exist as in-sandbox intermediates (matching real JS and a real
   // engine) so defensive guards like `Number.isNaN(x)` / `parseInt(x) || 0` can run. They are
   // normalized to `null` when the value leaves the sandbox - see copyOut - exactly as
   // JSON.stringify already does at any tool boundary.
-  if (isNumberValue(value)) return value;
+  if (Predicate.isNumber(value)) return value;
 
   if (!hasObjectRuntimeType(value)) {
     throw new ToolRuntimeError("InvalidDataValue", `${label} must contain data only.`);
@@ -416,7 +411,7 @@ export const copyOut = (value: InterpreterValue, undefinedAsNull = false): Seria
   // Normalize non-finite numbers to null as the value crosses out of the sandbox (final return
   // and tool-call arguments both funnel through here), matching JSON semantics - NaN/Infinity
   // have no JSON representation, so JSON.stringify would produce null anyway.
-  if (isNumberValue(value) && !Number.isFinite(value)) {
+  if (Predicate.isNumber(value) && !Number.isFinite(value)) {
     return null;
   }
   if (Array.isArray(value)) {
@@ -441,7 +436,7 @@ const definitions = <R>(
   for (const [name, value] of Object.entries(tools)) {
     const next = [...path, name];
     if (isDefinition(value)) entries.push({ path: next.join("."), definition: value });
-    else if (!isFunctionValue(value)) entries.push(...definitions(value, next));
+    else if (!Predicate.isFunction(value)) entries.push(...definitions(value, next));
   }
   return entries;
 };
@@ -808,7 +803,7 @@ const namespaceKeys = <R>(
   for (const segment of path) {
     if (
       isBlockedMember(segment) ||
-      isFunctionValue(value) ||
+      Predicate.isFunction(value) ||
       isDefinition(value) ||
       !Object.hasOwn(value, segment)
     ) {
@@ -819,7 +814,7 @@ const namespaceKeys = <R>(
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     value = value[segment] as HostTool<R> | Definition<R> | HostTools<R>;
   }
-  if (isFunctionValue(value) || isDefinition(value)) return [];
+  if (Predicate.isFunction(value) || isDefinition(value)) return [];
   return Object.keys(value);
 };
 
@@ -832,7 +827,7 @@ const resolve = <R>(
   for (const segment of path) {
     if (
       isBlockedMember(segment) ||
-      isFunctionValue(value) ||
+      Predicate.isFunction(value) ||
       isDefinition(value) ||
       !Object.hasOwn(value, segment)
     ) {
@@ -845,7 +840,7 @@ const resolve = <R>(
   }
 
   if (isDefinition(value)) return value;
-  if (isFunctionValue(value)) {
+  if (Predicate.isFunction(value)) {
     // SAFETY: HostTools permits callable leaves only as HostTool values.
     return value as HostTool<R>;
   }

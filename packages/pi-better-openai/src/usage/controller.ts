@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -139,7 +140,7 @@ export class OpenAIUsageService extends Context.Service<
                 return {
                   _tag: "Failure",
                   message: sanitizeDiagnosticError(
-                    isStringValue(usage.failure.message)
+                    Predicate.isString(usage.failure.message)
                       ? usage.failure.message
                       : "Codex usage request timed out.",
                   ),

@@ -1,4 +1,5 @@
-import { isNumberValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -90,7 +91,7 @@ const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function*
     const objectPart2848_1 = refreshToken
       ? { ...objectPart2848_0, refreshToken }
       : objectPart2848_0;
-    const objectPart2848_2 = isNumberValue(decoded.expires)
+    const objectPart2848_2 = Predicate.isNumber(decoded.expires)
       ? { ...objectPart2848_1, expires: decoded.expires }
       : objectPart2848_1;
     const objectPart2848_3 = teamId ? { ...objectPart2848_2, teamId } : objectPart2848_2;

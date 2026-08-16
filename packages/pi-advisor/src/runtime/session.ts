@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { createAgentSession, type AgentSession } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -191,7 +192,7 @@ export const toModelError =
 export function projectActiveToolNamesAtHostBoundary(session: AgentSession): readonly string[] {
   try {
     const names = [...session.getActiveToolNames()];
-    return names.every((name): name is string => isStringValue(name)) ? names : [];
+    return names.every((name): name is string => Predicate.isString(name)) ? names : [];
   } catch {
     // Synchronous status projection is diagnostic-only and cannot defect the parent runtime.
     return [];
@@ -204,7 +205,7 @@ export function isToolCallDelta<ValueInput>(
   return (
     isRecord(value) &&
     (value.type === "toolcall_delta" || value.type === "tool_call_delta") &&
-    isStringValue(value.delta)
+    Predicate.isString(value.delta)
   );
 }
 

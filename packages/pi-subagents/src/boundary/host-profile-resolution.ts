@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -51,7 +52,7 @@ const stableParentLeaf = (ctx: ExtensionContext): string | undefined => {
 };
 
 const transferableRuntimeApiKey = (value: string | undefined): value is string =>
-  isStringValue(value) &&
+  Predicate.isString(value) &&
   value.length > 0 &&
   value.length <= 8_192 &&
   !value.includes("\0") &&

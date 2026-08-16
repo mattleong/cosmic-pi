@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -23,7 +24,7 @@ const hostError = (operation: string, message: string) => () =>
   new DirectoryModelHostError({ operation, message });
 
 function isThinkingLevel<ValueInput>(value: ValueInput): value is ValueInput & ThinkingLevel {
-  return isStringValue(value) && THINKING_LEVELS.some((level) => level === value);
+  return Predicate.isString(value) && THINKING_LEVELS.some((level) => level === value);
 }
 
 export function captureSelectedModel<ValueInput>(value: ValueInput): SelectedModel | undefined {
@@ -31,7 +32,8 @@ export function captureSelectedModel<ValueInput>(value: ValueInput): SelectedMod
     if (!value || !hasObjectRuntimeType(value)) return undefined;
     // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
     const candidate = value as { provider?: unknown; id?: unknown };
-    if (!isStringValue(candidate.provider) || !isStringValue(candidate.id)) return undefined;
+    if (!Predicate.isString(candidate.provider) || !Predicate.isString(candidate.id))
+      return undefined;
     return { provider: candidate.provider, id: candidate.id };
   } catch {
     return undefined;

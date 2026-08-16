@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { stringifyJson } from "../boundary/json.ts";
 import { snapshotData } from "./safe-data.ts";
@@ -15,11 +16,11 @@ export type CandidateClassification =
 export function contentText<MessageInput>(message: MessageInput): string {
   const snapshot = snapshotData(message);
   if (!isRecord(snapshot)) return "";
-  if (isStringValue(snapshot.content)) return snapshot.content;
+  if (Predicate.isString(snapshot.content)) return snapshot.content;
   if (!Array.isArray(snapshot.content)) return "";
   return snapshot.content
     .flatMap((part) =>
-      isRecord(part) && part.type === "text" && isStringValue(part.text) ? [part.text] : [],
+      isRecord(part) && part.type === "text" && Predicate.isString(part.text) ? [part.text] : [],
     )
     .join("\n");
 }
@@ -45,7 +46,7 @@ export function assistantToolCalls<MessageInput>(message: MessageInput): string[
   return snapshot.content.flatMap((part) =>
     isRecord(part) && part.type === "toolCall"
       ? [
-          `${isStringValue(part.name) ? part.name : "unknown"} ${safeObservationJson(part.arguments)}`,
+          `${Predicate.isString(part.name) ? part.name : "unknown"} ${safeObservationJson(part.arguments)}`,
         ]
       : [],
   );
@@ -89,11 +90,11 @@ export function assistantCheckpointText<MessageInput>(message: MessageInput): st
   }
   const parts = snapshot.content.flatMap((part) => {
     if (!isRecord(part)) return [];
-    if (part.type === "text" && isStringValue(part.text) && part.text.trim()) {
+    if (part.type === "text" && Predicate.isString(part.text) && part.text.trim()) {
       return [part.text.trim()];
     }
     if (part.type !== "toolCall") return [];
-    const name = isStringValue(part.name) && part.name ? part.name : "unknown";
+    const name = Predicate.isString(part.name) && part.name ? part.name : "unknown";
     let args = "";
     try {
       args = part.arguments === undefined ? "" : ` ${stringifyJson(part.arguments)}`;
@@ -113,7 +114,7 @@ export function assistantText<MessageInput>(message: MessageInput): string | und
   }
   const text = snapshot.content
     .flatMap((part) =>
-      isRecord(part) && part.type === "text" && isStringValue(part.text) ? [part.text] : [],
+      isRecord(part) && part.type === "text" && Predicate.isString(part.text) ? [part.text] : [],
     )
     .join("\n")
     .trim();

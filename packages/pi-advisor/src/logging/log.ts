@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isBooleanValue, isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -94,7 +95,7 @@ export const logAdvisorFailureEffect = Effect.fn("AdvisorFailureLog.append")(fun
 function serializeError<ErrorInput>(error: ErrorInput) {
   if (!hasObjectRuntimeType(error) || error === null) {
     const primitive =
-      isStringValue(error) || isNumberValue(error) || isBooleanValue(error)
+      Predicate.isString(error) || Predicate.isNumber(error) || Predicate.isBoolean(error)
         ? String(error)
         : "Unknown error.";
     return {
@@ -103,9 +104,9 @@ function serializeError<ErrorInput>(error: ErrorInput) {
     };
   }
   const snapshot = snapshotDataRecord(error);
-  const name = isStringValue(snapshot?.name) ? snapshot.name : "Error";
-  const message = isStringValue(snapshot?.message) ? snapshot.message : "Unknown error.";
-  const stack = isStringValue(snapshot?.stack) ? snapshot.stack : undefined;
+  const name = Predicate.isString(snapshot?.name) ? snapshot.name : "Error";
+  const message = Predicate.isString(snapshot?.message) ? snapshot.message : "Unknown error.";
+  const stack = Predicate.isString(snapshot?.stack) ? snapshot.stack : undefined;
   return (() => {
     const objectPart4225_0 = {
       name: clip(redactSensitiveText(name), MAX_ERROR_MESSAGE_CHARS),

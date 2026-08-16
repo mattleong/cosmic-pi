@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { MAX_PROGRESS_ENTRIES } from "./format.ts";
 
@@ -23,7 +24,7 @@ const rendererState = (
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     return hasObjectRuntimeType(context?.state) &&
       context.state !== null &&
-      isFunctionValue(context.invalidate)
+      Predicate.isFunction(context.invalidate)
       ? (context.state as CodeModeRendererState)
       : undefined;
   } catch {

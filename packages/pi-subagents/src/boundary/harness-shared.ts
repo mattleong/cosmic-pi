@@ -2,7 +2,8 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { hasObjectRuntimeType, isBooleanValue, isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { constants, promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -11,7 +12,7 @@ export const MAX_AUTH_BYTES = 64 * 1024;
 export const MAX_PATH_CHARS = 4_096;
 
 export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined =>
-  error && hasObjectRuntimeType(error) && "code" in error && isStringValue(error.code)
+  error && hasObjectRuntimeType(error) && "code" in error && Predicate.isString(error.code)
     ? error.code
     : undefined;
 
@@ -69,8 +70,8 @@ export const safeAgentDirectory = async (agentDirectory: string): Promise<string
 
 export const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): boolean => {
   if (depth > 16) return false;
-  if (value === null || isStringValue(value) || isBooleanValue(value)) return true;
-  if (isNumberValue(value)) return Number.isFinite(value);
+  if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return true;
+  if (Predicate.isNumber(value)) return Number.isFinite(value);
   if (Array.isArray(value))
     return (
       value.length <= 1_024 &&

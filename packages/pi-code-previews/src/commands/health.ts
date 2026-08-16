@@ -1,4 +1,5 @@
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { codePreviewSettings } from "../config/state";
@@ -48,7 +49,7 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
         `Path icons: ${codePreviewSettings.pathIcons}`,
         `Settings file: ${getSettingsPath()}`,
       ];
-      if (ctx.mode !== "tui" || !isFunctionValue(ctx.ui.custom)) {
+      if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
         if (ctx.hasUI) ctx.ui.notify(lines.join("\n"), "info");
         return Promise.resolve();
       }

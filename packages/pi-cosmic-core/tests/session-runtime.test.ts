@@ -6,7 +6,8 @@
 // @effect-diagnostics effect/anyUnknownInErrorContext:off
 // @effect-diagnostics effect/unsafeEffectTypeAssertion:off
 // @effect-diagnostics effect/strictEffectProvide:off
-import { isFunctionValue } from "../src/runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -115,7 +116,7 @@ function makeHostileSignal(operation: "addEventListener" | "aborted"): AbortSign
       if (property === operation) throw new Error(`hostile ${operation}`);
       // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
       const value = property in signal ? signal[property as keyof AbortSignal] : undefined;
-      return isFunctionValue(value) ? value.bind(signal) : value;
+      return Predicate.isFunction(value) ? value.bind(signal) : value;
     },
   });
 }

@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isNumberValue, isStringValue } from "./runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "./runtime-values.ts";
 import { JsonPointer, Schema } from "effect";
 import type { Definition, JsonSchema, SchemaType } from "./tool.js";
 
@@ -23,7 +24,7 @@ const effectNumberSentinel = (schema: JsonSchema) =>
   schema.type === "string" &&
   Array.isArray(schema.enum) &&
   schema.enum.length > 0 &&
-  schema.enum.every((value) => isStringValue(value) && effectNumberSentinelValues.has(value));
+  schema.enum.every((value) => Predicate.isString(value) && effectNumberSentinelValues.has(value));
 
 const isEffectNumberAlternatives = (alternatives: ReadonlyArray<JsonSchema>): boolean => {
   const numberBranches = alternatives.filter((item) => item.type === "number");
@@ -97,9 +98,9 @@ const docTags = (schema: JsonSchema): Array<string> => {
       // unserializable default: skip rather than emit a broken tag
     }
   }
-  if (isStringValue(schema.format)) tags.push(`@format ${schema.format}`);
-  if (isNumberValue(schema.minItems)) tags.push(`@minItems ${schema.minItems}`);
-  if (isNumberValue(schema.maxItems)) tags.push(`@maxItems ${schema.maxItems}`);
+  if (Predicate.isString(schema.format)) tags.push(`@format ${schema.format}`);
+  if (Predicate.isNumber(schema.minItems)) tags.push(`@minItems ${schema.minItems}`);
+  if (Predicate.isNumber(schema.maxItems)) tags.push(`@maxItems ${schema.maxItems}`);
   return tags;
 };
 
@@ -295,7 +296,7 @@ export const inputProperties = <R>(definition: Definition<R>): Array<InputProper
     const required = new Set(schema.required ?? []);
     return Object.entries(schema.properties ?? {}).map(([name, value]) => ({
       name,
-      description: isStringValue(value.description) ? value.description : undefined,
+      description: Predicate.isString(value.description) ? value.description : undefined,
       required: required.has(name),
     }));
   } catch {

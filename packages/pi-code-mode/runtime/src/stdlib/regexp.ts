@@ -53,7 +53,7 @@ export const toHostRegex = (
   extraFlags = "",
 ): RegExp => {
   if (arg instanceof SandboxRegExp) return arg.regex;
-  if (isStringValue(arg)) {
+  if (Predicate.isString(arg)) {
     let regex: RegExp;
     try {
       regex = new RegExp(arg, extraFlags);
@@ -117,7 +117,8 @@ export const invokeRegExpMethod = (
       );
   }
 };
-import { isStringValue, runtimeTypeName } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { runtimeTypeName } from "../runtime-values.ts";
 import { assertConfinedRegExp, assertConfinedRegExpOperation } from "../interpreter/confinement.js";
 import {
   type AstNode,

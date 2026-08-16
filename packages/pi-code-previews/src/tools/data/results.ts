@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { getObjectValue } from "../../shared/helpers";
 
 export function isTruncated<DetailsInput>(details: DetailsInput): boolean {
@@ -8,7 +9,7 @@ export function isTruncated<DetailsInput>(details: DetailsInput): boolean {
 
 export function getEditDiff<DetailsInput>(details: DetailsInput): string | undefined {
   const diff = getObjectValue(details, "diff");
-  return isStringValue(diff) ? diff : undefined;
+  return Predicate.isString(diff) ? diff : undefined;
 }
 
 export function getTextContent(

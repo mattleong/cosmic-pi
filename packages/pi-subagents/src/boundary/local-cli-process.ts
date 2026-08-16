@@ -1,7 +1,8 @@
 // The LocalCliProcess service door: local CLI request/service contracts plus environment,
 // preflight, and probe orchestration over the private harness and wire-transport boundaries.
 // @effect-diagnostics effect/processEnv:off
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -75,7 +76,7 @@ const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: 
         message:
           error instanceof Error
             ? error.message
-            : isStringValue(error)
+            : Predicate.isString(error)
               ? error
               : `Unable to ${operation} local CLI process.`,
       };

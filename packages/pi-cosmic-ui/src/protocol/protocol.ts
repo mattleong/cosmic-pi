@@ -1,4 +1,5 @@
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -159,7 +160,8 @@ const InvalidateData = Schema.Struct({
   id: Schema.optional(NonEmpty),
 });
 
-const optionalFunction = <Value>(value: Value) => value === undefined || isFunctionValue(value);
+const optionalFunction = <Value>(value: Value) =>
+  value === undefined || Predicate.isFunction(value);
 const decode = <S extends Schema.ConstraintDecoder<unknown>, Value>(
   schema: S,
   value: Value,
@@ -184,7 +186,7 @@ export function normalizeCosmicUiHostQuery<ValueInput>(
   value: ValueInput,
 ): CosmicUiHostQuery | undefined {
   const query = decodeSafely(HostQueryData, value);
-  if (!query || !isFunctionValue(query.respond)) return undefined;
+  if (!query || !Predicate.isFunction(query.respond)) return undefined;
   const respond = query.respond;
   return Object.freeze({ version: query.version, respond: () => respond() });
 }
@@ -205,7 +207,7 @@ export function normalizeCosmicFooterUpsertEvent<ValueInput>(
   } else if (
     !Number.isFinite(contribution.preferredWidth) ||
     contribution.preferredWidth <= 0 ||
-    !isFunctionValue(contribution.render) ||
+    !Predicate.isFunction(contribution.render) ||
     !optionalFunction(contribution.attach) ||
     !optionalFunction(contribution.detach) ||
     !optionalFunction(contribution.invalidate) ||

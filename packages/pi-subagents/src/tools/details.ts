@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { freezeSnapshot, stripTerminalControls } from "pi-cosmic-core";
 import {
   SUBAGENT_EFFORTS,
@@ -484,7 +485,7 @@ const projectStartEntries = (
       entry.routeStatus === "selected" &&
       (entry.host === "local" || entry.host === "herdr") &&
       (entry.runtime === "pi" || entry.runtime === "claude" || entry.runtime === "codex") &&
-      isStringValue(entry.model) &&
+      Predicate.isString(entry.model) &&
       clean(entry.model, MAX_CARD_MODEL_CHARS).length > 0 &&
       entry.effort !== undefined &&
       SUBAGENT_EFFORTS.includes(entry.effort);

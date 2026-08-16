@@ -179,8 +179,9 @@ confined to the additions listed there and do not alter upstream execution resul
     domain rather than being laundered through guest values. Null-prototype object
     creation is centralized, and evaluator/member mutation, `copyIn`/`copyOut`,
     sandbox containers, and standard-library argument paths carry the closed value
-    types end to end. `src/runtime-values.ts` supplies runtime predicates used at
-    hostile boundaries. This replaces upstream-style open `unknown` dictionaries
+    types end to end. Primitive refinements import `effect/Predicate` directly;
+    `src/runtime-values.ts` retains only the composite object-or-null check and exact
+    type-name classifier. This replaces upstream-style open `unknown` dictionaries
     and assertions only; guest-visible values, wire formats, execution order, and
     interpreter behavior are unchanged. A resync must preserve the AST/value
     separation and reapply the closed-domain annotations after reviewing upstream

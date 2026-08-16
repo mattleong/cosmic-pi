@@ -1,4 +1,3 @@
-import { isStringValue } from "pi-cosmic-core";
 import {
   defineTool,
   type ExtensionAPI,
@@ -37,7 +36,7 @@ export function registerOpenAIImage(
     const text =
       result && Predicate.isObject(result)
         ? resultText(result as CodexImageResult)
-        : isStringValue(message.content)
+        : Predicate.isString(message.content)
           ? message.content
           : message.content
               .filter((part) => part.type === "text")
@@ -47,12 +46,12 @@ export function registerOpenAIImage(
     if (
       result &&
       Predicate.isObject(result) &&
-      isStringValue(result.data) &&
-      isStringValue(result.mimeType)
+      Predicate.isString(result.data) &&
+      Predicate.isString(result.mimeType)
     )
       image = (() => {
         const objectPart1904_0 = { data: result.data, mimeType: result.mimeType };
-        const objectPart1904_1 = isStringValue(result.savedPath)
+        const objectPart1904_1 = Predicate.isString(result.savedPath)
           ? { ...objectPart1904_0, savedPath: result.savedPath }
           : objectPart1904_0;
         return objectPart1904_1;

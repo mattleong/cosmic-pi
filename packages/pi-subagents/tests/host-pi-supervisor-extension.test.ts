@@ -1,7 +1,8 @@
 // Promise-shaped Pi host boundary test.
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/processEnv:off
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import registerBridge from "../src/boundary/host-pi-supervisor-extension.ts";
@@ -169,7 +170,7 @@ describe("Herdr-hosted Pi bridge extension", () => {
       "supervisor_question",
       "supervisor_submit_report",
     ]);
-    expect(tools.every((tool) => isFunctionValue(tool.renderCall))).toBe(true);
+    expect(tools.every((tool) => Predicate.isFunction(tool.renderCall))).toBe(true);
     expect(active).toContain("read");
     expect(active).not.toContain("subagent_start");
     expect(active).not.toContain("herdr_agent_start");

@@ -1,4 +1,5 @@
-import { isBooleanValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
@@ -33,7 +34,7 @@ export function formatSettingValue(
   if (id === "resetToDefaults") return "keep current";
   if (id === "tools") return formatToolsSettingValue(settings.tools);
   const value = settings[id];
-  if (isBooleanValue(value)) return formatOnOff(value);
+  if (Predicate.isBoolean(value)) return formatOnOff(value);
   return String(value);
 }
 

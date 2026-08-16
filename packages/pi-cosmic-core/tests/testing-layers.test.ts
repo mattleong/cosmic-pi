@@ -1,4 +1,5 @@
-import { isNumberValue } from "../src/runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -63,7 +64,7 @@ it.effect("serializes gated concurrent modifications on the same path", () =>
     const increment = (gate: boolean) =>
       memory.service.modifyObject("/counter.json", (document) =>
         Effect.gen(function* () {
-          const count = isNumberValue(document.count) ? document.count : 0;
+          const count = Predicate.isNumber(document.count) ? document.count : 0;
           if (gate) {
             yield* Deferred.succeed(firstEntered, undefined);
             yield* Deferred.await(releaseFirst);

@@ -1,4 +1,5 @@
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { getBuiltinToolOptions, type BuiltinToolOptions } from "../builtin-options";
 import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../names";
@@ -80,7 +81,7 @@ function syncActiveCodePreviewTools(
   const getActiveTools = (pi as Partial<ExtensionAPI>).getActiveTools;
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const setActiveTools = (pi as Partial<ExtensionAPI>).setActiveTools;
-  if (!isFunctionValue(getActiveTools) || !isFunctionValue(setActiveTools)) return;
+  if (!Predicate.isFunction(getActiveTools) || !Predicate.isFunction(setActiveTools)) return;
   try {
     const current = getActiveTools.call(pi);
     const currentSet = new Set(current);
@@ -103,7 +104,7 @@ function syncActiveCodePreviewTools(
 function getExistingToolsByName(pi: ExtensionAPI): Map<string, ToolInfo> {
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const getAllTools = (pi as Partial<ExtensionAPI>).getAllTools;
-  if (!isFunctionValue(getAllTools)) return new Map();
+  if (!Predicate.isFunction(getAllTools)) return new Map();
   try {
     return new Map(getAllTools.call(pi).map((tool) => [tool.name, tool]));
   } catch {

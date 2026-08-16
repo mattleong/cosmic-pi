@@ -6,7 +6,8 @@
  * outcome instead of throwing or rejecting into extension code, so a hostile host callback
  * can never hang the session or escape a command handler.
  */
-import { isFunctionValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type {
   ExtensionCommandContext,
   KeybindingsManager,
@@ -26,12 +27,12 @@ export type HostDialogResult =
 const UNAVAILABLE: HostDialogResult = { _tag: "Unavailable" };
 
 const settled = <Value>(value: Value): HostDialogResult =>
-  isStringValue(value) ? { _tag: "Answered", value } : { _tag: "Cancelled" };
+  Predicate.isString(value) ? { _tag: "Answered", value } : { _tag: "Cancelled" };
 
 /** True when the host exposes a callable custom-surface API; hostile accessors read as false. */
 export function hasCustomSurface(ctx: ExtensionCommandContext): boolean {
   try {
-    return isFunctionValue(ctx.ui.custom);
+    return Predicate.isFunction(ctx.ui.custom);
   } catch {
     return false;
   }

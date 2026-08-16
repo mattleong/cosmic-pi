@@ -1,4 +1,3 @@
-import { isStringValue } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
@@ -79,28 +78,28 @@ export function extractImageFromEvent<EventInput>(
   const item = asImageResultItem(event.item) ?? asImageResultItem(event);
   if (item) {
     const raw =
-      isStringValue(item.result) && item.result.trim()
+      Predicate.isString(item.result) && item.result.trim()
         ? item.result
-        : isStringValue(item.b64_json)
+        : Predicate.isString(item.b64_json)
           ? item.b64_json
           : undefined;
     if (!raw) return undefined;
     const parts = dataUrlParts(raw, fallbackMimeType);
     return (() => {
       const objectPart3492_0 = {
-        id: isStringValue(item.id) ? item.id : fallbackId,
-        status: isStringValue(item.status) ? item.status : "completed",
+        id: Predicate.isString(item.id) ? item.id : fallbackId,
+        status: Predicate.isString(item.status) ? item.status : "completed",
       };
-      const objectPart3492_1 = isStringValue(item.revised_prompt)
+      const objectPart3492_1 = Predicate.isString(item.revised_prompt)
         ? { ...objectPart3492_0, revisedPrompt: item.revised_prompt }
         : objectPart3492_0;
       const objectPart3492_2 = { ...objectPart3492_1, ...parts };
       return objectPart3492_2;
     })();
   }
-  const partial = isStringValue(event.partial_image_b64)
+  const partial = Predicate.isString(event.partial_image_b64)
     ? event.partial_image_b64
-    : isStringValue(event.b64_json)
+    : Predicate.isString(event.b64_json)
       ? event.b64_json
       : undefined;
   if (partial?.trim())
@@ -162,5 +161,5 @@ export const isImageContent = <Value>(
 ): value is Value & { type: "image"; data: string; mimeType: string } =>
   Predicate.isObject(value) &&
   value.type === "image" &&
-  isStringValue(value.data) &&
-  isStringValue(value.mimeType);
+  Predicate.isString(value.data) &&
+  Predicate.isString(value.mimeType);

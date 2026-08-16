@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
@@ -166,7 +167,7 @@ export const decodeRpcStateData = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(RpcStateDataSchema)(value);
 
 export const rpcStateModelId = (model: RpcStateData["model"]): string | undefined =>
-  isStringValue(model) ? model : model ? `${model.provider}/${model.id}` : undefined;
+  Predicate.isString(model) ? model : model ? `${model.provider}/${model.id}` : undefined;
 
 const UsageTokenSchema = Schema.Number.check(
   Schema.isFinite(),

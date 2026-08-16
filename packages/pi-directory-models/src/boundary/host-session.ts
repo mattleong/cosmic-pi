@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 
 export interface CapturedDirectorySession {
@@ -14,7 +15,7 @@ export function captureDirectorySession(
   try {
     const cwd = ctx.cwd;
     const signal = ctx.signal;
-    if (!isStringValue(cwd) || cwd.length === 0) return undefined;
+    if (!Predicate.isString(cwd) || cwd.length === 0) return undefined;
     const hasConversation = ctx.sessionManager.buildContextEntries().some((entry) => {
       if (
         entry.type === "message" ||
@@ -22,7 +23,7 @@ export function captureDirectorySession(
         entry.type === "compaction"
       )
         return true;
-      return entry.type === "branch_summary" && isStringValue(entry.summary);
+      return entry.type === "branch_summary" && Predicate.isString(entry.summary);
     });
     const fresh = event.reason === "new" || (event.reason === "startup" && !hasConversation);
     return { cwd, signal, fresh };

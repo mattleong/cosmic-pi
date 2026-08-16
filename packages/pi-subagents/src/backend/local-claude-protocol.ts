@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { SubagentUsage } from "../run/model.ts";
@@ -202,7 +203,7 @@ export const CLAUDE_SUPERVISOR_TOOL_NAMES = [
 ] as const;
 
 const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
-  isStringValue(content)
+  Predicate.isString(content)
     ? content
     : content
         .flatMap((part) => {
@@ -249,7 +250,7 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
       }
       case "user": {
         const event = yield* Schema.decodeUnknownEffect(User)(value);
-        const toolResults = isStringValue(event.message.content)
+        const toolResults = Predicate.isString(event.message.content)
           ? []
           : event.message.content.flatMap((part) => {
               const decoded = Schema.decodeUnknownOption(ToolResultPart)(part);

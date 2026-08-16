@@ -4,7 +4,8 @@
 // @effect-diagnostics effect/cryptoRandomBytes:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -180,7 +181,7 @@ const harnessEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
 
 const approvedApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
   const key = source.OPENAI_API_KEY;
-  return isStringValue(key) &&
+  return Predicate.isString(key) &&
     key.length > 0 &&
     key.length <= 8_192 &&
     !key.includes("\0") &&

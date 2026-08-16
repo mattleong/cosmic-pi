@@ -1,5 +1,6 @@
 /** Cosmic UI host with one Effect-managed runtime per Pi session. */
-import { isFunctionValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -57,7 +58,7 @@ interface MutableInvalidateProtocolEvent {
 
 const isProjectTrusted = (ctx: ExtensionContext): boolean => {
   try {
-    return isFunctionValue(ctx.isProjectTrusted) ? ctx.isProjectTrusted() : true;
+    return Predicate.isFunction(ctx.isProjectTrusted) ? ctx.isProjectTrusted() : true;
   } catch {
     return false;
   }
@@ -94,7 +95,8 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
       "host-query",
       () => {
         const value = ctx.cwd;
-        if (!isStringValue(value) || value.length === 0) throw new Error("Invalid session cwd.");
+        if (!Predicate.isString(value) || value.length === 0)
+          throw new Error("Invalid session cwd.");
         return value;
       },
       undefined,

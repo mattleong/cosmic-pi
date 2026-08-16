@@ -9,7 +9,8 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -80,7 +81,7 @@ export interface LocalCliHarness {
 
 export const approvedCodexApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
   const apiKey = source.OPENAI_API_KEY;
-  return isStringValue(apiKey) &&
+  return Predicate.isString(apiKey) &&
     apiKey.length > 0 &&
     apiKey.length <= 8_192 &&
     !apiKey.includes("\0") &&

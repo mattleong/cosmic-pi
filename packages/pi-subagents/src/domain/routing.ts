@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 /**
  * Leaf routing vocabulary shared by profiles, config, run orchestration, and backends.
  *
@@ -39,7 +40,7 @@ export const subagentRuntimeSupportsEffort = (
 
 /** Decodes an untyped host-reported thinking level; unknown or malformed values are rejected. */
 export const decodeSubagentEffort = <ValueInput>(value: ValueInput): SubagentEffort | undefined => {
-  if (!isStringValue(value)) return undefined;
+  if (!Predicate.isString(value)) return undefined;
   const normalized = value.trim().toLowerCase();
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   return (SUBAGENT_EFFORTS as ReadonlyArray<string>).includes(normalized)

@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { redactSensitiveText, stringifyRedactedObservation } from "../domain/redaction.ts";
 import { isRecord } from "../shared/utils.ts";
 export const DEFAULT_MAX_CONTEXT_CHARS = 240_000;
@@ -194,7 +195,7 @@ function serializeMessage<ValueInput>(
   value: ValueInput,
   index: number,
 ): SerializedMessage | undefined {
-  if (!isRecord(value) || !isStringValue(value.role)) return undefined;
+  if (!isRecord(value) || !Predicate.isString(value.role)) return undefined;
 
   switch (value.role) {
     case "user":
@@ -222,7 +223,7 @@ function serializeMessage<ValueInput>(
     case "bashExecution": {
       if (value.excludeFromContext === true) return undefined;
       const command = nonEmptyString(value.command);
-      const output = isStringValue(value.output) ? value.output : "";
+      const output = Predicate.isString(value.output) ? value.output : "";
       const text = [command ? `$ ${command}` : undefined, output].filter(Boolean).join("\n");
       return withText(index, "shell execution", text);
     }
@@ -248,13 +249,13 @@ function serializeAssistantContent<ContentInput>(content: ContentInput): string 
   if (!Array.isArray(content)) return serializeContent(content, false);
   return content
     .flatMap((part) => {
-      if (!isRecord(part) || !isStringValue(part.type)) return [];
-      if (part.type === "text" && isStringValue(part.text)) return [part.text];
+      if (!isRecord(part) || !Predicate.isString(part.type)) return [];
+      if (part.type === "text" && Predicate.isString(part.text)) return [part.text];
       if (part.type === "thinking") {
-        if (isStringValue(part.thinking) && part.thinking) {
+        if (Predicate.isString(part.thinking) && part.thinking) {
           return [`[assistant thinking]\n${part.thinking}`];
         }
-        if (isStringValue(part.signature) && part.signature) {
+        if (Predicate.isString(part.signature) && part.signature) {
           return ["[assistant thinking was exposed only as an opaque/redacted signature]"];
         }
         return ["[assistant thinking was redacted or unavailable]"];
@@ -269,12 +270,12 @@ function serializeAssistantContent<ContentInput>(content: ContentInput): string 
 }
 
 function serializeContent<ContentInput>(content: ContentInput, includeImages: boolean): string {
-  if (isStringValue(content)) return content;
+  if (Predicate.isString(content)) return content;
   if (!Array.isArray(content)) return "";
   return content
     .flatMap((part) => {
-      if (!isRecord(part) || !isStringValue(part.type)) return [];
-      if (part.type === "text" && isStringValue(part.text)) return [part.text];
+      if (!isRecord(part) || !Predicate.isString(part.type)) return [];
+      if (part.type === "text" && Predicate.isString(part.text)) return [part.text];
       if (includeImages && part.type === "image") {
         const mimeType = nonEmptyString(part.mimeType);
         return [`[image${mimeType ? `: ${mimeType}` : ""} omitted]`];
@@ -342,7 +343,7 @@ function normalizeMaxChars(value: number | undefined): number {
 }
 
 function nonEmptyString<ValueInput>(value: ValueInput): string | undefined {
-  if (!isStringValue(value)) return undefined;
+  if (!Predicate.isString(value)) return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
 }

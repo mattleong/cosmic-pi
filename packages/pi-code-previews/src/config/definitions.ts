@@ -1,4 +1,5 @@
-import { isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { bundledThemes } from "shiki";
 import * as Schema from "effect/Schema";
 import { parsePositiveInteger } from "./env";
@@ -112,7 +113,7 @@ export const CODE_PREVIEW_SETTING_DEFINITIONS = {
           ? "all"
           : coerceStringNumber(
               value,
-              isNumberValue(current.editCollapsedLines) ? current.editCollapsedLines : 100,
+              Predicate.isNumber(current.editCollapsedLines) ? current.editCollapsedLines : 100,
             );
     },
   },
@@ -161,10 +162,10 @@ function coerceTools<ValueInput>(
   value: ValueInput,
   fallback: CodePreviewToolName[],
 ): CodePreviewToolName[] {
-  if (isStringValue(value)) return [...(parseCodePreviewTools(value) ?? fallback)];
+  if (Predicate.isString(value)) return [...(parseCodePreviewTools(value) ?? fallback)];
   if (!Array.isArray(value)) return fallback;
   const tools = value.filter(
-    (tool): tool is CodePreviewToolName => isStringValue(tool) && isCodePreviewToolName(tool),
+    (tool): tool is CodePreviewToolName => Predicate.isString(tool) && isCodePreviewToolName(tool),
   );
   return [...new Set(tools)];
 }
@@ -190,9 +191,9 @@ function isStringOption<const T extends readonly string[], ValueInput>(
   value: ValueInput,
 ): value is ValueInput & T[number] {
   // SAFETY: Configuration decoding validates the persisted value before this typed access.
-  return isStringValue(value) && (options as readonly string[]).includes(value);
+  return Predicate.isString(value) && (options as readonly string[]).includes(value);
 }
 
 export function isBundledThemeName<ValueInput>(value: ValueInput): value is ValueInput & string {
-  return isStringValue(value) && value in bundledThemes;
+  return Predicate.isString(value) && value in bundledThemes;
 }

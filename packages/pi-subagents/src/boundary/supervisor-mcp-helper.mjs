@@ -1,11 +1,6 @@
 #!/usr/bin/env node
-import {
-  hasObjectRuntimeType,
-  isBooleanValue,
-  isNumberValue,
-  isStringValue,
-  runtimeTypeName,
-} from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType, runtimeTypeName } from "pi-cosmic-core";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
@@ -45,18 +40,18 @@ const exactKeys = (value, allowed, required = []) =>
   Object.keys(value).every((key) => allowed.includes(key)) &&
   required.every((key) => own(value, key));
 const boundedString = (value, maximum, nonEmpty = true) =>
-  isStringValue(value) && value.length <= maximum && (!nonEmpty || value.trim().length > 0);
+  Predicate.isString(value) && value.length <= maximum && (!nonEmpty || value.trim().length > 0);
 const validRpcId = (value) =>
-  (isStringValue(value) && value.length > 0 && value.length <= MAX_ID_CHARS) ||
-  (isNumberValue(value) && Number.isSafeInteger(value));
+  (Predicate.isString(value) && value.length > 0 && value.length <= MAX_ID_CHARS) ||
+  (Predicate.isNumber(value) && Number.isSafeInteger(value));
 const rpcKey = (value) => `${runtimeTypeName(value)}:${String(value)}`;
 const validChannelId = (value) =>
-  isStringValue(value) && CHANNEL_ID_PATTERN.test(value) && value.length <= 128;
+  Predicate.isString(value) && CHANNEL_ID_PATTERN.test(value) && value.length <= 128;
 const boundedMetadata = (value, depth = 0) => {
   if (depth > 6) return false;
-  if (value === null || isBooleanValue(value)) return true;
-  if (isNumberValue(value)) return Number.isFinite(value);
-  if (isStringValue(value)) return value.length <= 4096;
+  if (value === null || Predicate.isBoolean(value)) return true;
+  if (Predicate.isNumber(value)) return Number.isFinite(value);
+  if (Predicate.isString(value)) return value.length <= 4096;
   if (Array.isArray(value))
     return value.length <= 64 && value.every((entry) => boundedMetadata(entry, depth + 1));
   if (!object(value)) return false;
@@ -116,9 +111,9 @@ const readConfig = async (path) => {
       !Number.isSafeInteger(value.port) ||
       value.port < 1 ||
       value.port > 65_535 ||
-      !isStringValue(value.runId) ||
+      !Predicate.isString(value.runId) ||
       !RUN_ID_PATTERN.test(value.runId) ||
-      !isStringValue(value.token) ||
+      !Predicate.isString(value.token) ||
       !TOKEN_PATTERN.test(value.token)
     )
       throw new Error("invalid-config");
@@ -218,7 +213,7 @@ const attachLineReader = (stream, onLine, onFailure) => {
 
 const constantToken = (expected, value) => {
   const left = Buffer.from(expected, "utf8");
-  const right = isStringValue(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
+  const right = Predicate.isString(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
   if (left.length !== right.length) {
     timingSafeEqual(left, left);
     return false;
@@ -319,7 +314,7 @@ const authenticatedFrame = (value) =>
   value.version === VERSION &&
   value.runId === config.runId &&
   constantToken(config.token, value.token) &&
-  isStringValue(value.type);
+  Predicate.isString(value.type);
 
 const sendChannelFrame = (value) => {
   if (channelClosed) return Promise.reject(new Error("channel-closed"));
@@ -623,7 +618,7 @@ const decodeToolArguments = (name, value) => {
   if (name === "supervisor_submit_report") {
     if (
       !exactKeys(value, ["delivery_id", "report"], ["delivery_id", "report"]) ||
-      !isStringValue(value.delivery_id) ||
+      !Predicate.isString(value.delivery_id) ||
       value.delivery_id.length > MAX_DELIVERY_ID_CHARS ||
       !DELIVERY_ID_PATTERN.test(value.delivery_id) ||
       !boundedString(value.report, MAX_REPORT_CHARS)
@@ -644,7 +639,7 @@ const decodeMcpMessage = (value) => {
   if (
     !exactKeys(value, ["jsonrpc", "id", "method", "params"], ["jsonrpc", "method"]) ||
     value.jsonrpc !== "2.0" ||
-    !isStringValue(value.method) ||
+    !Predicate.isString(value.method) ||
     value.method.length < 1 ||
     value.method.length > 128 ||
     (own(value, "id") && !validRpcId(value.id))

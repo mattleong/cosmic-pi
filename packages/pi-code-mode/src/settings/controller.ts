@@ -1,6 +1,7 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import {
   getSettingsListTheme,
   type ExtensionAPI,
@@ -298,7 +299,10 @@ export function registerCodeModeSettingsController(
             void applySetting(ctx, request, signal, show);
           },
           onCancel: () => invokeHostCallback(() => done(undefined), undefined),
-          matchesKeybinding: invokeHostCallback(() => isFunctionValue(keybindings?.matches), false)
+          matchesKeybinding: invokeHostCallback(
+            () => Predicate.isFunction(keybindings?.matches),
+            false,
+          )
             ? (data, id) => invokeHostCallback(() => keybindings.matches(data, id), false)
             : undefined,
           requestRender: () => invokeHostCallback(() => tui.requestRender(), undefined),

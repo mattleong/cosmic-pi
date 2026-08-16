@@ -1,4 +1,5 @@
-import { isFunctionValue } from "../src/runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -29,7 +30,7 @@ const makeHostileSignal = (operation: "aborted" | "addEventListener") => {
         };
       // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
       const value = property in target ? target[property as keyof AbortSignal] : undefined;
-      return isFunctionValue(value) ? value.bind(target) : value;
+      return Predicate.isFunction(value) ? value.bind(target) : value;
     },
   });
   return { signal, removals: () => removals };

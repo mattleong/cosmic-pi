@@ -1,5 +1,6 @@
+import * as Predicate from "effect/Predicate";
 import type { JsonObject } from "pi-cosmic-core";
-import { hasObjectRuntimeType, isBooleanValue, isNumberValue, isStringValue } from "pi-cosmic-core";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { freezeSnapshot, isJsonObject } from "pi-cosmic-core";
 import {
   SUBAGENT_EFFORTS,
@@ -75,9 +76,9 @@ type MutableStartAwaitDetails = {
 };
 
 const isRunState = <Value>(value: Value): value is Value & SubagentRunState =>
-  isStringValue(value) && SUBAGENT_RUN_STATES.some((state) => state === value);
+  Predicate.isString(value) && SUBAGENT_RUN_STATES.some((state) => state === value);
 const isEffort = <Value>(value: Value): value is Value & SubagentEffort =>
-  isStringValue(value) && SUBAGENT_EFFORTS.some((effort) => effort === value);
+  Predicate.isString(value) && SUBAGENT_EFFORTS.some((effort) => effort === value);
 const CAPABILITIES: ReadonlySet<string> = new Set([
   "steer",
   "interrupt",
@@ -96,14 +97,14 @@ const PROFILE_SOURCES = [
   "builtin",
 ] as const satisfies ReadonlyArray<ProfileRouteSource>;
 const isProfileRouteSource = <Value>(value: Value): value is Value & ProfileRouteSource =>
-  isStringValue(value) && PROFILE_SOURCES.some((source) => source === value);
+  Predicate.isString(value) && PROFILE_SOURCES.some((source) => source === value);
 const isSelectionSource = <Value>(value: Value): value is Value & SubagentSelectionSource =>
   value === "profile-candidate" || value === "profile-parent-candidate";
 
 const recordOf = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined =>
   isJsonObject(value) ? value : undefined;
 const finiteNumber = <ValueInput>(value: ValueInput): number | undefined =>
-  isNumberValue(value) && Number.isFinite(value) ? value : undefined;
+  Predicate.isNumber(value) && Number.isFinite(value) ? value : undefined;
 
 const decodeUsage = <ValueInput>(value: ValueInput): SubagentUsage | undefined => {
   const record = recordOf(value);
@@ -135,9 +136,9 @@ const decodeSkipped = <ValueInput>(value: ValueInput): ReadonlyArray<SkippedProf
         const record = recordOf(entry);
         if (
           !record ||
-          !isStringValue(record.candidate) ||
-          !isStringValue(record.code) ||
-          !isStringValue(record.reason)
+          !Predicate.isString(record.candidate) ||
+          !Predicate.isString(record.code) ||
+          !Predicate.isString(record.reason)
         )
           return [];
         const candidateIndex = finiteNumber(record.candidateIndex);
@@ -164,7 +165,7 @@ const decodeSelection = <ValueInput>(
   value: ValueInput,
 ): SubagentSelectionProvenance | undefined => {
   const record = recordOf(value);
-  if (!record || !isSelectionSource(record.source) || !isStringValue(record.reason))
+  if (!record || !isSelectionSource(record.source) || !Predicate.isString(record.reason))
     return undefined;
   const candidateIndex = finiteNumber(record.candidateIndex);
   let selection: SubagentSelectionProvenance = {
@@ -178,10 +179,10 @@ const decodeSelection = <ValueInput>(
     selection = { ...selection, host: record.host };
   if (record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex")
     selection = { ...selection, runtime: record.runtime };
-  if (isBooleanValue(record.closeOnReport))
+  if (Predicate.isBoolean(record.closeOnReport))
     selection = { ...selection, closeOnReport: record.closeOnReport };
   if (candidateIndex !== undefined) selection = { ...selection, candidateIndex };
-  if (isStringValue(record.warning))
+  if (Predicate.isString(record.warning))
     selection = { ...selection, warning: clean(record.warning, MAX_CARD_PROVENANCE_CHARS) };
   return selection;
 };
@@ -190,12 +191,12 @@ const decodeCard = <ValueInput>(value: ValueInput): SubagentRunCard | undefined 
   const record = recordOf(value);
   if (
     !record ||
-    !isStringValue(record.id) ||
+    !Predicate.isString(record.id) ||
     !record.id.trim() ||
     record.id.length > MAX_PROTOCOL_ID_CHARS ||
-    !isStringValue(record.name) ||
+    !Predicate.isString(record.name) ||
     !isRunState(record.state) ||
-    !isStringValue(record.model) ||
+    !Predicate.isString(record.model) ||
     !isEffort(record.effort)
   )
     return undefined;
@@ -205,11 +206,13 @@ const decodeCard = <ValueInput>(value: ValueInput): SubagentRunCard | undefined 
   const capabilities = Array.isArray(record.capabilities)
     ? record.capabilities.filter(
         (capability): capability is SubagentCapability =>
-          isStringValue(capability) && CAPABILITIES.has(capability),
+          Predicate.isString(capability) && CAPABILITIES.has(capability),
       )
     : undefined;
   const usage = decodeUsage(record.usage);
-  const profile = isStringValue(record.profile) ? normalizeProfileId(record.profile) : undefined;
+  const profile = Predicate.isString(record.profile)
+    ? normalizeProfileId(record.profile)
+    : undefined;
   const card: MutableSubagentRunCard = {
     id: clean(record.id.trim(), MAX_PROTOCOL_ID_CHARS),
     name: sanitizeName(record.name) || "subagent",
@@ -223,8 +226,8 @@ const decodeCard = <ValueInput>(value: ValueInput): SubagentRunCard | undefined 
   if (record.host === "local" || record.host === "herdr") card.host = record.host;
   if (record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex")
     card.runtime = record.runtime;
-  if (isBooleanValue(record.closeOnReport)) card.closeOnReport = record.closeOnReport;
-  if (isBooleanValue(record.fastMode)) card.fastMode = record.fastMode;
+  if (Predicate.isBoolean(record.closeOnReport)) card.closeOnReport = record.closeOnReport;
+  if (Predicate.isBoolean(record.fastMode)) card.fastMode = record.fastMode;
   if (record.context === "fresh" || record.context === "fork") card.context = record.context;
   if (record.writeIntent === "read-only" || record.writeIntent === "writer")
     card.writeIntent = record.writeIntent;
@@ -234,17 +237,18 @@ const decodeCard = <ValueInput>(value: ValueInput): SubagentRunCard | undefined 
   const lastActivityAt = finiteNumber(record.lastActivityAt);
   if (lastActivityAt !== undefined) card.lastActivityAt = boundedNonNegative(lastActivityAt);
   if (usage) card.usage = usage;
-  if (isStringValue(record.currentTool)) card.currentTool = clean(record.currentTool, 256);
-  if (isStringValue(record.progress)) card.progress = clean(record.progress, 512);
-  if (isStringValue(record.warning)) card.warning = clean(record.warning, 512);
+  if (Predicate.isString(record.currentTool)) card.currentTool = clean(record.currentTool, 256);
+  if (Predicate.isString(record.progress)) card.progress = clean(record.progress, 512);
+  if (Predicate.isString(record.warning)) card.warning = clean(record.warning, 512);
   const endedAt = finiteNumber(record.endedAt);
   if (endedAt !== undefined) card.endedAt = endedAt;
-  if (isStringValue(record.finalText))
+  if (Predicate.isString(record.finalText))
     card.finalText = sanitizeOutputText(record.finalText, MAX_FINAL_TEXT_CHARS);
-  if (isStringValue(record.error)) card.error = sanitizeOutputText(record.error, MAX_ERROR_CHARS);
+  if (Predicate.isString(record.error))
+    card.error = sanitizeOutputText(record.error, MAX_ERROR_CHARS);
   if (record.finalTextTruncated === true) card.finalTextTruncated = true;
   if (record.errorTruncated === true) card.errorTruncated = true;
-  if (questionRecord && isStringValue(questionRecord.message))
+  if (questionRecord && Predicate.isString(questionRecord.message))
     card.question = { message: clean(questionRecord.message, MAX_CARD_QUESTION_CHARS) };
   return card;
 };
@@ -255,18 +259,18 @@ const decodeFailures = <ValueInput>(
   if (!Array.isArray(value)) return undefined;
   const failures = value.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
     const record = recordOf(entry);
-    if (record === undefined || !isStringValue(record.message)) return [];
+    if (record === undefined || !Predicate.isString(record.message)) return [];
     const index = finiteNumber(record.index);
     return [
       (() => {
         const objectPart8952_0 = {
           index: index === undefined ? 0 : Math.max(0, Math.floor(index)),
         };
-        const objectPart8952_1 = isStringValue(record.name)
+        const objectPart8952_1 = Predicate.isString(record.name)
           ? { ...objectPart8952_0, name: sanitizeName(record.name) }
           : objectPart8952_0;
         const objectPart8952_2 = { ...objectPart8952_1, message: clean(record.message, 512) };
-        const objectPart8952_3 = isStringValue(record.code)
+        const objectPart8952_3 = Predicate.isString(record.code)
           ? { ...objectPart8952_2, code: clean(record.code, 128) }
           : objectPart8952_2;
         return objectPart8952_3;
@@ -286,7 +290,7 @@ const decodeStartEntries = <ValueInput>(
     if (
       !record ||
       index === undefined ||
-      !isStringValue(record.name) ||
+      !Predicate.isString(record.name) ||
       (record.status !== "pending" && record.status !== "started" && record.status !== "failed")
     )
       return [];
@@ -294,9 +298,9 @@ const decodeStartEntries = <ValueInput>(
       record.routeStatus === "selected" &&
       (record.host === "local" || record.host === "herdr") &&
       (record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex") &&
-      isStringValue(record.model) &&
+      Predicate.isString(record.model) &&
       clean(record.model, MAX_CARD_MODEL_CHARS).length > 0 &&
-      isStringValue(record.effort) &&
+      Predicate.isString(record.effort) &&
       isEffort(record.effort);
     const routeStatus =
       record.status === "pending" ? "resolving" : selected ? "selected" : "unavailable";
@@ -304,7 +308,8 @@ const decodeStartEntries = <ValueInput>(
     const base: SubagentStartEntry = {
       index: Math.max(0, Math.floor(index)),
       name: clean(record.name, MAX_NAME_CHARS),
-      profile: (isStringValue(record.profile) ? clean(record.profile, 64) : "") || "generalist",
+      profile:
+        (Predicate.isString(record.profile) ? clean(record.profile, 64) : "") || "generalist",
       status: record.status,
       routeStatus,
     };
@@ -329,7 +334,7 @@ const decodeStartEntries = <ValueInput>(
         })()
       : base;
     return [
-      (isStringValue(record.runId)
+      (Predicate.isString(record.runId)
         ? { ...withSelection, runId: clean(record.runId, MAX_PROTOCOL_ID_CHARS) }
         : withSelection) satisfies SubagentStartEntry,
     ];
@@ -343,14 +348,15 @@ const decodeProfiles = <ValueInput>(
   if (!Array.isArray(value)) return undefined;
   const profiles = value.slice(0, 16).flatMap((entry) => {
     const record = recordOf(entry);
-    const profile = record && isStringValue(record.id) ? normalizeProfileId(record.id) : undefined;
+    const profile =
+      record && Predicate.isString(record.id) ? normalizeProfileId(record.id) : undefined;
     if (
       !record ||
       !profile ||
-      !isStringValue(record.description) ||
-      !isStringValue(record.source) ||
+      !Predicate.isString(record.description) ||
+      !Predicate.isString(record.source) ||
       !isProfileRouteSource(record.source) ||
-      !isBooleanValue(record.isDefault) ||
+      !Predicate.isBoolean(record.isDefault) ||
       (record.defaultContext !== "fresh" && record.defaultContext !== "fork") ||
       (record.defaultWriteIntent !== "read-only" && record.defaultWriteIntent !== "writer") ||
       !Array.isArray(record.candidates)
@@ -362,9 +368,9 @@ const decodeProfiles = <ValueInput>(
       if (
         !candidate ||
         order === undefined ||
-        !isStringValue(candidate.candidate) ||
+        !Predicate.isString(candidate.candidate) ||
         (candidate.status !== "eligible" && candidate.status !== "skipped") ||
-        !isStringValue(candidate.reason)
+        !Predicate.isString(candidate.reason)
       )
         return [];
       return [
@@ -457,7 +463,7 @@ export function decodeCompactToolDetails<ValueInput>(
   if (
     !record ||
     record.version !== SUBAGENT_CARD_DETAILS_VERSION ||
-    !isStringValue(record.action) ||
+    !Predicate.isString(record.action) ||
     record.action === "start" ||
     record.action === "await"
   )
@@ -470,13 +476,13 @@ export function decodeCompactToolDetails<ValueInput>(
   const runIds = Array.isArray(record.runIds)
     ? record.runIds
         .slice(0, MAX_TARGET_RUNS)
-        .filter((id): id is string => isStringValue(id))
+        .filter((id): id is string => Predicate.isString(id))
         .map((id) => clean(id, 128))
     : undefined;
   const runCount = finiteNumber(record.runCount);
   const profileIds = Array.isArray(record.profileIds)
     ? record.profileIds.slice(0, 16).flatMap((id) => {
-        const profile = isStringValue(id) ? normalizeProfileId(id) : undefined;
+        const profile = Predicate.isString(id) ? normalizeProfileId(id) : undefined;
         return profile ? [profile] : [];
       })
     : undefined;
@@ -484,11 +490,12 @@ export function decodeCompactToolDetails<ValueInput>(
   const actionFailures = Array.isArray(record.actionFailures)
     ? record.actionFailures.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
         const failure = recordOf(entry);
-        if (!failure || !isStringValue(failure.id) || !isStringValue(failure.message)) return [];
+        if (!failure || !Predicate.isString(failure.id) || !Predicate.isString(failure.message))
+          return [];
         return [
           (() => {
             const objectPart17361_0 = { id: clean(failure.id, 128) };
-            const objectPart17361_1 = isStringValue(failure.code)
+            const objectPart17361_1 = Predicate.isString(failure.code)
               ? { ...objectPart17361_0, code: clean(failure.code, 64) }
               : objectPart17361_0;
             const objectPart17361_2 = {
@@ -520,7 +527,7 @@ export function decodeCompactToolDetails<ValueInput>(
           ? { ...objectPart17649_4, profileIds }
           : objectPart17649_4;
       const objectPart17649_6 =
-        isStringValue(record.fallbackProfile) && normalizeProfileId(record.fallbackProfile)
+        Predicate.isString(record.fallbackProfile) && normalizeProfileId(record.fallbackProfile)
           ? { ...objectPart17649_5, fallbackProfile: normalizeProfileId(record.fallbackProfile)! }
           : objectPart17649_5;
       const objectPart17649_7 =

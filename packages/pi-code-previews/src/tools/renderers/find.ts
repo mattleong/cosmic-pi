@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createFindToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -13,8 +14,8 @@ export function registerFind(pi: ExtensionAPI, cwd: string) {
   registerPathListTool(pi, cwd, {
     createToolDefinition: createFindToolDefinition,
     renderCall(args, theme, renderCwd) {
-      const pattern = isStringValue(args.pattern) ? args.pattern : "";
-      const path = isStringValue(args.path) && args.path ? args.path : ".";
+      const pattern = Predicate.isString(args.pattern) ? args.pattern : "";
+      const path = Predicate.isString(args.path) && args.path ? args.path : ".";
       return new Text(
         `${renderCodePreviewToolTitle("find", theme)} ${theme.fg("accent", escapeControlChars(pattern || "*"))} ${theme.fg("muted", "in")} ${renderDisplayPath(path, renderCwd, theme)}`,
         0,

@@ -1,4 +1,5 @@
-import { isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -29,10 +30,10 @@ export function registerGrep(pi: ExtensionAPI, cwd: string) {
 
     renderCall(args, theme, context) {
       return previewShell.renderCall(context, theme, () => {
-        const pattern = isStringValue(args.pattern) ? args.pattern : "";
-        const path = isStringValue(args.path) && args.path ? args.path : ".";
-        const glob = isStringValue(args.glob) && args.glob ? args.glob : undefined;
-        const limit = isNumberValue(args.limit) ? args.limit : undefined;
+        const pattern = Predicate.isString(args.pattern) ? args.pattern : "";
+        const path = Predicate.isString(args.path) && args.path ? args.path : ".";
+        const glob = Predicate.isString(args.glob) && args.glob ? args.glob : undefined;
+        const limit = Predicate.isNumber(args.limit) ? args.limit : undefined;
         let text = `${renderCodePreviewToolTitle("grep", theme)} ${theme.fg("accent", `/${escapeControlChars(pattern)}/`)} ${theme.fg("muted", "in")} ${renderDisplayPath(path, cwd, theme)}`;
         text += metadata(theme, [
           glob ? escapeControlChars(glob) : undefined,
@@ -63,7 +64,7 @@ export function registerGrep(pi: ExtensionAPI, cwd: string) {
         if (!output || output === "No matches found")
           return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
 
-        const pattern = isStringValue(renderContext.args?.pattern)
+        const pattern = Predicate.isString(renderContext.args?.pattern)
           ? renderContext.args.pattern
           : "";
         const rawLines = output.split("\n");

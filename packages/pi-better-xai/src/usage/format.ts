@@ -1,4 +1,5 @@
-import { isNumberValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -116,7 +117,7 @@ export function parseWeeklyBilling<PayloadInput>(
 > {
   const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WeeklyBillingSchema)(payload));
   const config = decoded?.config;
-  const weeklyUsedPercent = isNumberValue(config?.creditUsagePercent)
+  const weeklyUsedPercent = Predicate.isNumber(config?.creditUsagePercent)
     ? clampPercent(config.creditUsagePercent)
     : config
       ? 0

@@ -1,7 +1,8 @@
 // Sole pi-subagents bridge extension loaded into Herdr-hosted Pi children.
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/asyncFunction:off
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { defineTool, type AgentEndEvent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
@@ -37,7 +38,7 @@ const exactMessage = <InputInput>(
     !Array.isArray(input) &&
     Object.keys(input).length === 1 &&
     "message" in input &&
-    isStringValue(input.message) &&
+    Predicate.isString(input.message) &&
     input.message.trim() &&
     input.message.length <= MAX_MESSAGE_CHARS,
   );
@@ -50,10 +51,10 @@ const exactReport = <InputInput>(
     !Array.isArray(input) &&
     Object.keys(input).length === 2 &&
     "delivery_id" in input &&
-    isStringValue(input.delivery_id) &&
+    Predicate.isString(input.delivery_id) &&
     new RegExp(DELIVERY_PATTERN).test(input.delivery_id) &&
     "report" in input &&
-    isStringValue(input.report) &&
+    Predicate.isString(input.report) &&
     input.report.trim() &&
     input.report.length <= MAX_REPORT_CHARS,
   );
@@ -177,7 +178,7 @@ export default function registerPiSubagentSupervisorBridge(
     delete process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
 
     const config = pi.getFlag("pi-subagents-supervisor-config");
-    if (!isStringValue(config)) {
+    if (!Predicate.isString(config)) {
       if (ctx.hasUI)
         ctx.ui.notify("Private subagent supervisor configuration is missing.", "error");
       return;

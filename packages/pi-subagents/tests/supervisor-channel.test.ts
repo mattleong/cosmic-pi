@@ -4,7 +4,8 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { hasObjectRuntimeType, isStringValue, runtimeTypeName } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType, runtimeTypeName } from "pi-cosmic-core";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
@@ -218,7 +219,7 @@ const connectRawChannel = async (handle: SupervisorChannelHandle): Promise<RawCh
       const value = JSON.parse(buffer.slice(0, newline)) as JsonRpcValue;
       buffer = buffer.slice(newline + 1);
       messages.push(value);
-      if (value && hasObjectRuntimeType(value) && "id" in value && isStringValue(value.id)) {
+      if (value && hasObjectRuntimeType(value) && "id" in value && Predicate.isString(value.id)) {
         pending.get(value.id)?.(value);
         pending.delete(value.id);
       }

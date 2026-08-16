@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -91,7 +92,7 @@ function normalizeCheckpoint<ParsedInput>(parsed: ParsedInput): AdvisorCheckpoin
     throw new AdvisorModelError({ message: "Advisor checkpoint fields are invalid." });
   }
   if (
-    !isStringValue(parsed.checkpointId) ||
+    !Predicate.isString(parsed.checkpointId) ||
     !parsed.checkpointId ||
     parsed.checkpointId.length > MAX_ADVISOR_CHECKPOINT_ID_CHARS
   ) {
@@ -101,7 +102,7 @@ function normalizeCheckpoint<ParsedInput>(parsed: ParsedInput): AdvisorCheckpoin
     throw new AdvisorModelError({ message: "Advisor processedThrough is invalid." });
   }
   if (
-    !isStringValue(parsed.stateSummary) ||
+    !Predicate.isString(parsed.stateSummary) ||
     parsed.stateSummary.length > MAX_ADVISOR_STATE_SUMMARY_CHARS
   ) {
     throw new AdvisorModelError({ message: "Advisor state summary is invalid or too large." });

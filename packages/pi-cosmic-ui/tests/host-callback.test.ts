@@ -1,4 +1,5 @@
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { describe, expect, it, vi } from "vitest";
 import {
   makeHostCallbackBoundary,
@@ -31,8 +32,8 @@ function controlledSignal(registerThenThrow = false) {
     aborted = true;
     const event = new Event("abort");
     for (const listener of listeners) {
-      if (isFunctionValue(listener)) {
-        // SAFETY: isFunctionValue proved this listener has the EventListener callable branch.
+      if (Predicate.isFunction(listener)) {
+        // SAFETY: Predicate.isFunction proved this listener has the EventListener callable branch.
         const callback = listener as EventListener;
         callback(event);
       } else listener.handleEvent(event);

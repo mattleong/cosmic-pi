@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -195,7 +196,7 @@ const decodeLocalPiResumeToken = (
   "type" in token &&
   token.type === "local-pi-session-file" &&
   "sessionFile" in token &&
-  isStringValue(token.sessionFile) &&
+  Predicate.isString(token.sessionFile) &&
   token.sessionFile.length > 0
     ? Effect.succeed(token as LocalPiResumeToken)
     : Effect.fail(protocolError("Local Pi received an invalid backend resume token."));

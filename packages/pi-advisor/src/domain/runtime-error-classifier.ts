@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { AdvisorRuntimeResetRequiredError } from "../runtime/runtime.ts";
 
 /**
@@ -20,7 +21,7 @@ export const classifyAdvisorRuntimeFailure = <ErrorInput>(
     hasObjectRuntimeType(error) &&
     error !== null &&
     "message" in error &&
-    isStringValue(error.message)
+    Predicate.isString(error.message)
       ? error.message.toLowerCase()
       : String(error).toLowerCase();
   return /(?:context|overflow|too large|maximum response size|malformed checkpoint|compaction)/.test(

@@ -1,4 +1,5 @@
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
@@ -171,7 +172,7 @@ describe("Cosmic UI settings boundary", () => {
         if (property === "removeEventListener") return removeEventListener;
         // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
         const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return isFunctionValue(value) ? value.bind(target) : value;
+        return Predicate.isFunction(value) ? value.bind(target) : value;
       },
     });
     let factory: ((...args: any[]) => { render(width: number): string[] }) | undefined;

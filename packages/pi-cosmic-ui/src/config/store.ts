@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -34,7 +35,7 @@ const mapError = makeConfigDocumentErrorFactory(CosmicUiConfigError, "Cosmic UI"
 
 const stringArray = <Candidate>(candidate: Candidate): readonly string[] | undefined =>
   Array.isArray(candidate)
-    ? candidate.filter((entry): entry is string => isStringValue(entry))
+    ? candidate.filter((entry): entry is string => Predicate.isString(entry))
     : undefined;
 
 export const configPaths = Effect.fn("pi-cosmic-ui.config.paths")(function* (

@@ -6,7 +6,8 @@
  * permanently once the execution settles or the owning session stops being current, so no
  * stale progress ever reaches a replaced session.
  */
-import { hasObjectRuntimeType, isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -83,8 +84,8 @@ export const makeGuardedToolUpdatePublisher = (
       const outcome = onUpdate(partial) as unknown;
       if (
         outcome !== null &&
-        (hasObjectRuntimeType(outcome) || isFunctionValue(outcome)) &&
-        isFunctionValue((outcome as { then?: unknown }).then)
+        (hasObjectRuntimeType(outcome) || Predicate.isFunction(outcome)) &&
+        Predicate.isFunction((outcome as { then?: unknown }).then)
       ) {
         // A hostile thenable's rejection (or a throwing `then` getter/implementation)
         // is absorbed by promise assimilation; it never surfaces synchronously here.

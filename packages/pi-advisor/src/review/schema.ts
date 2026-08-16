@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Schema from "effect/Schema";
 
 export const ADVISOR_VERDICTS = ["pass", "suggest", "revise"] as const;
@@ -111,7 +112,7 @@ export class AdvisorReviewParseError extends Schema.TaggedError<AdvisorReviewPar
   { message: Schema.String },
 ) {}
 export const reviewError = (value: string | { readonly message: string }) =>
-  new AdvisorReviewParseError(isStringValue(value) ? { message: value } : value);
+  new AdvisorReviewParseError(Predicate.isString(value) ? { message: value } : value);
 
 export const ADVISOR_SYSTEM_PROMPT = `You are an independent advisor supervising an assistant's active work and completed responses against the user's actual request and the supplied conversation evidence.
 

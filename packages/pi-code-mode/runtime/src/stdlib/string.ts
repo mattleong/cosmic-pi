@@ -37,7 +37,7 @@ export const stringStatics = new Set(["fromCharCode", "fromCodePoint"]);
 
 export const invokeStringStatic = (name: string, args: InterpreterArray, node: AstNode) => {
   const codes = args.map((arg) => {
-    if (!isNumberValue(arg))
+    if (!Predicate.isNumber(arg))
       throw new InterpreterRuntimeError(`String.${name} expects number arguments.`, node);
     return arg;
   });
@@ -50,7 +50,8 @@ export const invokeStringStatic = (name: string, args: InterpreterArray, node: A
       throw new InterpreterRuntimeError(`String.${name} is not available in CodeMode.`, node);
   }
 };
-import { isNumberValue } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import {
   type AstNode,
   type InterpreterArray,

@@ -6,7 +6,8 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
@@ -201,7 +202,7 @@ const isLoopbackPeer = (address: string | undefined): boolean =>
 
 const authenticatedToken = <ValueInput>(expected: string, value: ValueInput): boolean => {
   const expectedBytes = Buffer.from(expected, "utf8");
-  const supplied = isStringValue(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
+  const supplied = Predicate.isString(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
   if (supplied.length !== expectedBytes.length) {
     // Keep malformed-token work on the same constant-time primitive without accepting it.
     timingSafeEqual(expectedBytes, expectedBytes);
@@ -322,7 +323,7 @@ const listen = (server: Server): Promise<number> =>
     const onListening = () => {
       server.off("error", onError);
       const address = server.address();
-      if (!address || isStringValue(address)) {
+      if (!address || Predicate.isString(address)) {
         rejectListen(new Error("invalid-listener-address"));
         return;
       }

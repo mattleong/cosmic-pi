@@ -1,4 +1,5 @@
-import { isBooleanValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
@@ -134,11 +135,11 @@ function safeDataRecord<ValueInput>(value: ValueInput): JsonObject {
   return decoded._tag === "Some" ? decoded.value : {};
 }
 function setOptionalBoolean(target: JsonObject, key: string, value: boolean | undefined) {
-  if (isBooleanValue(value)) target[key] = value;
+  if (Predicate.isBoolean(value)) target[key] = value;
   else delete target[key];
 }
 function nonEmptyString<ValueInput>(value: ValueInput): string | undefined {
-  if (!isStringValue(value)) return undefined;
+  if (!Predicate.isString(value)) return undefined;
   return value.trim() || undefined;
 }
 function patchOptionalString(target: JsonObject, key: "provider" | "model", value?: string) {

@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isBooleanValue, isStringValue } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "../runtime-values.ts";
 import type { SandboxURL, SandboxValue } from "../values.js";
 
 export type SourcePosition = {
@@ -220,7 +221,7 @@ export const astProperty = (record: AstPropertyRecord, key: string): AstProperty
   record[key];
 
 export const asNode = (value: AstPropertyValue, context: string): AstNode => {
-  if (!isRecord(value) || !isStringValue(astProperty(value, "type"))) {
+  if (!isRecord(value) || !Predicate.isString(astProperty(value, "type"))) {
     throw new InterpreterRuntimeError(`Invalid AST node while reading ${context}.`);
   }
   // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
@@ -236,14 +237,14 @@ export const getArray = (node: AstNode, key: string): Array<AstPropertyValue> =>
 
 export const getString = (node: AstNode, key: string): string => {
   const value = node[key];
-  if (!isStringValue(value))
+  if (!Predicate.isString(value))
     throw new InterpreterRuntimeError(`Expected '${key}' to be a string.`, node);
   return value;
 };
 
 export const getBoolean = (node: AstNode, key: string): boolean => {
   const value = node[key];
-  if (!isBooleanValue(value))
+  if (!Predicate.isBoolean(value))
     throw new InterpreterRuntimeError(`Expected '${key}' to be a boolean.`, node);
   return value;
 };

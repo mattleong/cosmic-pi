@@ -1,9 +1,5 @@
-import {
-  hasObjectRuntimeType,
-  isBooleanValue,
-  isNumberValue,
-  isStringValue,
-} from "./runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "./runtime-values.ts";
 import * as Schema from "effect/Schema";
 const ANSI_ESCAPE_PATTERN = String.raw`\u001B\[[0-?]*[ -/]*[@-~]`;
 const ANSI_ESCAPE_REGEXP = new RegExp(ANSI_ESCAPE_PATTERN, "g");
@@ -180,10 +176,10 @@ export function redactDiagnosticValue<ValueInput>(
 ): Schema.Json {
   const seen = new WeakSet<object>();
   const redact = <Current>(current: Current, depth: number): Schema.Json => {
-    if (isStringValue(current)) return sanitizeDiagnosticError(current, options);
+    if (Predicate.isString(current)) return sanitizeDiagnosticError(current, options);
     if (current === null) return null;
-    if (isBooleanValue(current)) return current;
-    if (isNumberValue(current)) return Number.isFinite(current) ? current : null;
+    if (Predicate.isBoolean(current)) return current;
+    if (Predicate.isNumber(current)) return Number.isFinite(current) ? current : null;
     if (!hasObjectRuntimeType(current)) return null;
     if (depth >= 16 || seen.has(current)) return "[TRUNCATED]";
     seen.add(current);

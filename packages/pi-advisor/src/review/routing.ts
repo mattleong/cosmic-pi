@@ -1,4 +1,5 @@
-import { isNumberValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { AdvisorSeverity } from "./schema.ts";
 
 export const ADVISOR_IMMUNITY_COMPLETED_TURNS = 3;
@@ -90,5 +91,5 @@ export const clearAdvisorCancellation = (
 ): AdvisorRoutingStateSnapshot => ({ ...state, cancellationLatched: false });
 
 function nonNegativeInteger<ValueInput>(value: ValueInput): number {
-  return isNumberValue(value) && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  return Predicate.isNumber(value) && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }

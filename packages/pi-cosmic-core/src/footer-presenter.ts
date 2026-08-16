@@ -1,5 +1,6 @@
 /** Shared host-footer ownership: token-based install/clear, status publication, mode dispatch. */
-import { isFunctionValue } from "./runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type SetFooter = ExtensionContext["ui"]["setFooter"];
@@ -104,7 +105,7 @@ export function createFooterPresenter(options: FooterPresenterOptions): FooterPr
           token.requestRender = safeRequestRender;
           try {
             const cleanupBranch = footerData?.onBranchChange?.(safeRequestRender);
-            if (isFunctionValue(cleanupBranch)) unsubscribe = cleanupBranch;
+            if (Predicate.isFunction(cleanupBranch)) unsubscribe = cleanupBranch;
           } catch {
             // A branch subscription failure does not invalidate an otherwise usable footer.
           }

@@ -148,12 +148,6 @@ export {
 } from "./src/projection.ts";
 export {
   hasObjectRuntimeType,
-  isBigIntValue,
-  isBooleanValue,
-  isFunctionValue,
-  isNumberValue,
-  isStringValue,
-  isSymbolValue,
   runtimeTypeName,
   type RuntimeTypeName,
 } from "./src/runtime-values.ts";

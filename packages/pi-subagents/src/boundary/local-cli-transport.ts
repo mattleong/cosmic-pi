@@ -4,7 +4,8 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { spawn } from "node:child_process";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -74,7 +75,7 @@ const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: 
         message:
           error instanceof Error
             ? error.message
-            : isStringValue(error)
+            : Predicate.isString(error)
               ? error
               : `Unable to ${operation} local CLI process.`,
       };

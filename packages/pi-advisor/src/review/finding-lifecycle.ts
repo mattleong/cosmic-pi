@@ -1,4 +1,5 @@
-import { isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { createHash } from "node:crypto";
 import {
   ADVISOR_FINDING_CATEGORIES,
@@ -144,20 +145,20 @@ export function isValidAdvisorFindingRecord<ValueInput>(
 ): value is ValueInput & AdvisorFindingRecord {
   if (!isRecord(value)) return false;
   return (
-    isStringValue(value.id) &&
+    Predicate.isString(value.id) &&
     /^af_[a-f\d]{32}$/.test(value.id) &&
-    isStringValue(value.key) &&
+    Predicate.isString(value.key) &&
     /^[a-f\d]{64}$/.test(value.key) &&
-    isNumberValue(value.generation) &&
+    Predicate.isNumber(value.generation) &&
     Number.isSafeInteger(value.generation) &&
     value.generation >= 0 &&
     isOneOf(value.category, ADVISOR_FINDING_CATEGORIES) &&
     isOneOf(value.severity, ADVISOR_SEVERITIES) &&
     isOneOf(value.status, ADVISOR_FINDING_STATUSES) &&
-    isNumberValue(value.firstSeenTurn) &&
+    Predicate.isNumber(value.firstSeenTurn) &&
     Number.isSafeInteger(value.firstSeenTurn) &&
     value.firstSeenTurn >= 0 &&
-    isNumberValue(value.lastSeenTurn) &&
+    Predicate.isNumber(value.lastSeenTurn) &&
     Number.isSafeInteger(value.lastSeenTurn) &&
     value.lastSeenTurn >= value.firstSeenTurn &&
     value.id === advisorFindingId(value.key, value.generation)

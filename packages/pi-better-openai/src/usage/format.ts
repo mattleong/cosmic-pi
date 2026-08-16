@@ -1,4 +1,5 @@
-import { isNumberValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -77,7 +78,7 @@ function sparkBucket(data: CodexUsageResponse): RateLimitBucket | null {
 }
 
 const boundedResetSeconds = (value: number | null | undefined): number | null =>
-  isNumberValue(value) && Number.isFinite(value) && value >= 0 && value <= MAX_RESET_SECONDS
+  Predicate.isNumber(value) && Number.isFinite(value) && value >= 0 && value <= MAX_RESET_SECONDS
     ? value
     : null;
 
@@ -87,7 +88,7 @@ function resetSeconds(window: UsageWindow | null | undefined, now: number): numb
 
   const resetAtValue = window?.reset_at;
   if (
-    !isNumberValue(resetAtValue) ||
+    !Predicate.isNumber(resetAtValue) ||
     !Number.isFinite(resetAtValue) ||
     resetAtValue < 0 ||
     !Number.isFinite(now)

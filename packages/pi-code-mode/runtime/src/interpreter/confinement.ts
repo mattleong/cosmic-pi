@@ -38,12 +38,8 @@
  *
  * All limits are fixed constants: they are deliberately not host or user configuration.
  */
-import {
-  hasObjectRuntimeType,
-  isBooleanValue,
-  isNumberValue,
-  isStringValue,
-} from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "../runtime-values.ts";
 import { type AstNode, InterpreterRuntimeError, type InterpreterValue } from "./model.js";
 import {
   classFirst,
@@ -758,11 +754,11 @@ export const assertBoundedJsonEstimate = (
       spend(4);
       return;
     }
-    if (isStringValue(current)) {
+    if (Predicate.isString(current)) {
       spend(current.length + 2);
       return;
     }
-    if (isNumberValue(current) || isBooleanValue(current)) {
+    if (Predicate.isNumber(current) || Predicate.isBoolean(current)) {
       spend(8);
       return;
     }

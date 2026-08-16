@@ -1,4 +1,5 @@
-import { isBooleanValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Schema from "effect/Schema";
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
 
@@ -66,8 +67,8 @@ export type CodePreviewEditableSettingId = keyof CodePreviewSettings | "resetToD
 export function parseToolCallBackgroundMode<ValueInput>(
   value: ValueInput,
 ): ToolCallBackgroundMode | undefined {
-  if (isBooleanValue(value)) return value ? "on" : "off";
-  if (!isStringValue(value)) return undefined;
+  if (Predicate.isBoolean(value)) return value ? "on" : "off";
+  if (!Predicate.isString(value)) return undefined;
 
   const normalized = value.toLowerCase();
   if (isToolCallBackgroundMode(normalized)) return normalized;
@@ -80,5 +81,7 @@ export function isToolCallBackgroundMode<ValueInput>(
   value: ValueInput,
 ): value is ValueInput & ToolCallBackgroundMode {
   // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-  return isStringValue(value) && (TOOL_CALL_BACKGROUND_MODES as readonly string[]).includes(value);
+  return (
+    Predicate.isString(value) && (TOOL_CALL_BACKGROUND_MODES as readonly string[]).includes(value)
+  );
 }

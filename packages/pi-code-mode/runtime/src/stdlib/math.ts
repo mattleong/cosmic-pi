@@ -55,7 +55,7 @@ export const invokeMathMethod = (name: string, args: InterpreterArray, node: Ast
   if (!mathMethods.has(name))
     throw new InterpreterRuntimeError(`Math.${name} is not available in CodeMode.`, node);
   const nums = args.map((arg) => {
-    if (!isNumberValue(arg))
+    if (!Predicate.isNumber(arg))
       throw new InterpreterRuntimeError(`Math.${name} expects number arguments.`, node);
     return arg;
   });
@@ -96,7 +96,8 @@ export const invokeMathMethod = (name: string, args: InterpreterArray, node: Ast
   }
   throw new InterpreterRuntimeError(`Math.${name} is not available in CodeMode.`, node);
 };
-import { isNumberValue } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import {
   type AstNode,
   type InterpreterArray,

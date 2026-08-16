@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { createWriteToolDefinition, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -52,7 +53,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
     execute(toolCallId, params, signal, onUpdate, ctx) {
       const path = getPathArg(params);
       const content = getObjectValue(params, "content");
-      if (!path || !isStringValue(content)) {
+      if (!path || !Predicate.isString(content)) {
         const before = path
           ? readExistingFileForPreview(path, cwd, "")
           : Promise.resolve(undefined);
@@ -69,7 +70,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
       return previewShell.renderCall(context, theme, (renderContext) => {
         if (!renderContext) throw new TypeError("Code preview render context is required.");
         const path = getPathArg(args);
-        const content = isStringValue(args.content) ? args.content : "";
+        const content = Predicate.isString(args.content) ? args.content : "";
         const lang = resolvePreviewLanguage({
           path,
           content,
@@ -117,7 +118,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
           return new Text(theme.fg("error", escapeControlChars(firstText || "Write failed")), 0, 0);
 
         const path = getPathArg(renderContext.args);
-        const content = isStringValue(renderContext.args?.content)
+        const content = Predicate.isString(renderContext.args?.content)
           ? renderContext.args.content
           : "";
         const stateKey = "codePreviewWriteBeforeSnapshot";
@@ -135,7 +136,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
             0,
             0,
           );
-        if (isStringValue(beforeContent) && beforeContent !== content) {
+        if (Predicate.isString(beforeContent) && beforeContent !== content) {
           if (!expanded && !codePreviewSettings.writeContentPreview)
             return new Text(
               `${theme.fg("success", "✓ Write applied")}${formatOptionalHiddenHint(
@@ -187,7 +188,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
             renderContext.invalidate,
           );
         }
-        if (isStringValue(beforeContent))
+        if (Predicate.isString(beforeContent))
           return new Text(theme.fg("muted", "✓ Write applied · no changes"), 0, 0);
         if (beforeKind === "content")
           return new Text(

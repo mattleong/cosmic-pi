@@ -1,4 +1,5 @@
-import { isFunctionValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import {
   getSettingsListTheme,
   type ExtensionAPI,
@@ -38,7 +39,7 @@ export function decodeCosmicUiSettingChange<IdInput, ValueInput>(
   id: IdInput,
   value: ValueInput,
 ): CosmicUiSettingChange | undefined {
-  if (!isStringValue(id)) return undefined;
+  if (!Predicate.isString(id)) return undefined;
   const booleanValue = Option.getOrUndefined(
     Schema.decodeUnknownOption(BooleanSettingSchema)(value),
   );
@@ -183,7 +184,7 @@ export function registerSettingsCommand(
                   );
                 },
                 onCancel: () => hostQuery(() => done(undefined), undefined),
-                matchesKeybinding: isFunctionValue(keybindings?.matches)
+                matchesKeybinding: Predicate.isFunction(keybindings?.matches)
                   ? (data, id) => keybindings.matches(data, id)
                   : undefined,
                 requestRender: () => tui.requestRender(),

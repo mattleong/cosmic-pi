@@ -43,7 +43,7 @@ export const createErrorValue = (name: string, message: string): InterpreterObje
 export const errorBrandName = (value: InterpreterValue): string | undefined => {
   if (value === null || !hasObjectRuntimeType(value)) return undefined;
   const descriptor = Object.getOwnPropertyDescriptor(value, ErrorBrand);
-  return descriptor && "value" in descriptor && isStringValue(descriptor.value)
+  return descriptor && "value" in descriptor && Predicate.isString(descriptor.value)
     ? descriptor.value
     : undefined;
 };
@@ -123,7 +123,7 @@ export const invokeCoercion = (ref: CoercionFunction, args: InterpreterArray, no
   if (ref.name === "Boolean") return Boolean(value);
   if (ref.name === "parseInt") {
     const radix = args[1];
-    if (radix !== undefined && !isNumberValue(radix)) {
+    if (radix !== undefined && !Predicate.isNumber(radix)) {
       throw new InterpreterRuntimeError("parseInt expects a numeric radix.", node);
     }
     return parseInt(coerceToString(value), radix);
@@ -131,7 +131,8 @@ export const invokeCoercion = (ref: CoercionFunction, args: InterpreterArray, no
   if (ref.name === "parseFloat") return parseFloat(coerceToString(value));
   return coerceToString(value);
 };
-import { hasObjectRuntimeType, isNumberValue, isStringValue } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "../runtime-values.ts";
 import { MAX_GUEST_STRING_LENGTH, uriEncodedLengthUpperBound } from "../interpreter/confinement.js";
 import {
   type AstNode,

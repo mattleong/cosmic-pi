@@ -1,10 +1,5 @@
-import {
-  hasObjectRuntimeType,
-  isBooleanValue,
-  isFunctionValue,
-  isNumberValue,
-  isStringValue,
-} from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -76,7 +71,7 @@ const materializeHostArray = <A, Value = unknown>(value: Value): A[] => {
   if (
     !lengthDescriptor ||
     !("value" in lengthDescriptor) ||
-    !isNumberValue(lengthDescriptor.value) ||
+    !Predicate.isNumber(lengthDescriptor.value) ||
     !Number.isSafeInteger(lengthDescriptor.value) ||
     lengthDescriptor.value < 0
   )
@@ -160,7 +155,7 @@ export function captureAdvisorSessionInputAtHostBoundary(
 ): AdvisorSessionInputResult {
   try {
     const cwd = ctx.cwd;
-    if (!isStringValue(cwd)) throw new TypeError("Host CWD is invalid.");
+    if (!Predicate.isString(cwd)) throw new TypeError("Host CWD is invalid.");
     const modelRegistry = ctx.modelRegistry;
     if (modelRegistry === null || !hasObjectRuntimeType(modelRegistry))
       throw new TypeError("Host model registry is invalid.");
@@ -169,7 +164,8 @@ export function captureAdvisorSessionInputAtHostBoundary(
       throw new TypeError("Host signal is invalid.");
     const signalAborted = signal?.aborted === true;
     const isProjectTrusted = ctx.isProjectTrusted;
-    const projectTrusted = isFunctionValue(isProjectTrusted) && isProjectTrusted.call(ctx) === true;
+    const projectTrusted =
+      Predicate.isFunction(isProjectTrusted) && isProjectTrusted.call(ctx) === true;
     return {
       ok: true,
       input: { ctx, cwd, modelRegistry, projectTrusted, signal, signalAborted },
@@ -229,7 +225,7 @@ export const readAdvisorSessionBranchAtHostBoundary = (
       );
       if (
         !branch.every(
-          (entry) => entry !== null && hasObjectRuntimeType(entry) && isStringValue(entry.id),
+          (entry) => entry !== null && hasObjectRuntimeType(entry) && Predicate.isString(entry.id),
         )
       )
         throw new TypeError("Host session branch entry is invalid.");
@@ -250,7 +246,7 @@ export const readAdvisorSessionLeafIdAtHostBoundary = (
 ): AdvisorHostReadResult<string | null> =>
   readHostContext("session-leaf", "Advisor could not read the active session leaf safely.", () => {
     const leafId = ctx.sessionManager.getLeafId?.() ?? null;
-    if (leafId !== null && !isStringValue(leafId))
+    if (leafId !== null && !Predicate.isString(leafId))
       throw new TypeError("Host session leaf is invalid.");
     return leafId;
   });
@@ -263,7 +259,7 @@ export const readAdvisorSessionIdAtHostBoundary = (
     "Advisor could not read the active session identifier safely.",
     () => {
       const sessionId = ctx.sessionManager.getSessionId?.();
-      if (sessionId !== undefined && !isStringValue(sessionId))
+      if (sessionId !== undefined && !Predicate.isString(sessionId))
         throw new TypeError("Host session identifier is invalid.");
       return sessionId;
     },
@@ -292,7 +288,7 @@ export const readAdvisorParentIdleAtHostBoundary = (
 ): AdvisorHostReadResult<boolean> =>
   readHostContext("parent-idle", "Advisor could not read parent activity safely.", () => {
     const idle = ctx.isIdle();
-    if (!isBooleanValue(idle)) throw new TypeError("Host activity state is invalid.");
+    if (!Predicate.isBoolean(idle)) throw new TypeError("Host activity state is invalid.");
     return idle;
   });
 
@@ -304,7 +300,7 @@ export const readAdvisorPendingMessagesAtHostBoundary = (
     "Advisor could not read pending parent messages safely.",
     () => {
       const pending = ctx.hasPendingMessages();
-      if (!isBooleanValue(pending)) throw new TypeError("Host pending state is invalid.");
+      if (!Predicate.isBoolean(pending)) throw new TypeError("Host pending state is invalid.");
       return pending;
     },
   );

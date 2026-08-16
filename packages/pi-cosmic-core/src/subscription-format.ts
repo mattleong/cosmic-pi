@@ -1,9 +1,10 @@
-import { isNumberValue } from "./runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
 export function formatResetCountdown(seconds: number | null): string | null {
-  if (!isNumberValue(seconds) || !Number.isFinite(seconds)) return null;
+  if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds)) return null;
   const total = Math.max(0, Math.round(seconds));
   const days = Math.floor(total / 86_400);
   const hours = Math.floor((total % 86_400) / 3_600);
@@ -20,7 +21,8 @@ export function formatResetClock(
   options: { readonly includeDate?: boolean } | undefined,
   now: number,
 ): string | null {
-  if (!isNumberValue(seconds) || !Number.isFinite(seconds) || !Number.isFinite(now)) return null;
+  if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds) || !Number.isFinite(now))
+    return null;
   const reset = DateTime.make(now + seconds * 1000);
   const current = DateTime.make(now);
   if (Option.isNone(reset) || Option.isNone(current)) return null;
@@ -59,7 +61,7 @@ export function clampPercent(value: number): number {
 
 /** Convert a finite used-percent value into the clamped remaining percent. */
 export function usedToLeftPercent(value: number | null | undefined): number | null {
-  return isNumberValue(value) && Number.isFinite(value) ? clampPercent(100 - value) : null;
+  return Predicate.isNumber(value) && Number.isFinite(value) ? clampPercent(100 - value) : null;
 }
 
 /** Format an epoch-millis timestamp for diagnostic output, or "never" when absent. */
@@ -69,7 +71,7 @@ export function formatTimestampOrNever(value: number | undefined): string {
 
 /** Format a remaining-percent value for subscription status lines. */
 export function formatPercent(value: number | null): string {
-  return isNumberValue(value) && Number.isFinite(value)
+  return Predicate.isNumber(value) && Number.isFinite(value)
     ? `${Math.round(clampPercent(value))}%`
     : "--";
 }

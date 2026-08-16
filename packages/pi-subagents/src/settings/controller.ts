@@ -1,6 +1,7 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import { hasObjectRuntimeType, isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { completeSettingsArguments, isProjectTrusted } from "pi-cosmic-core";
@@ -57,7 +58,7 @@ async function openFleetManager(
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
 ): Promise<void> {
-  if (ctx.mode !== "tui" || !isFunctionValue(ctx.ui.custom)) {
+  if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
     if (ctx.hasUI) ctx.ui.notify("/subagents requires interactive TUI mode.", "warning");
     return;
   }
@@ -78,7 +79,7 @@ async function openFleetManager(
           fullScreenKeybindingLabel(
             id,
             fallback,
-            isFunctionValue(keybindings.getKeys)
+            Predicate.isFunction(keybindings.getKeys)
               ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
               : undefined,
           ),
@@ -201,7 +202,7 @@ async function openProfileSettings(
   actions: FleetManagerActions,
   initialScope: ProfileSettingsScope = "global",
 ): Promise<void> {
-  if (ctx.mode !== "tui" || !ctx.hasUI || !isFunctionValue(ctx.ui.custom)) {
+  if (ctx.mode !== "tui" || !ctx.hasUI || !Predicate.isFunction(ctx.ui.custom)) {
     if (ctx.hasUI)
       ctx.ui.notify(
         "/subagents profiles requires interactive TUI mode; edit pi-subagents.json and run /reload.",
@@ -419,7 +420,7 @@ async function openProfileSettings(
                 fullScreenKeybindingLabel(
                   id,
                   fallback,
-                  isFunctionValue(keybindings.getKeys)
+                  Predicate.isFunction(keybindings.getKeys)
                     ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
                     : undefined,
                 ),

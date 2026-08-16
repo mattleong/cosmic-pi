@@ -4,7 +4,8 @@
  * This is domain policy, not observation-protocol structure: every value or message that can reach
  * a log, span, projection, or model prompt passes through here.
  */
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { stringifyJson } from "../boundary/json.ts";
 import * as Schema from "effect/Schema";
 import { snapshotData } from "./safe-data.ts";
@@ -17,7 +18,7 @@ export function redactObservationValue<ValueInput>(value: ValueInput) {
 
 function redactSnapshot(value: Schema.MutableJson | undefined, depth: number): Schema.MutableJson {
   if (depth > 16) return "[nested value omitted]";
-  if (isStringValue(value)) return redactSensitiveText(value);
+  if (Predicate.isString(value)) return redactSensitiveText(value);
   if (Array.isArray(value))
     return value.slice(0, 256).map((item) => redactSnapshot(item, depth + 1));
   if (!isRecord(value)) return value ?? null;

@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -143,7 +144,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                   return {
                     _tag: "Failure",
                     message: sanitizeDiagnosticError(
-                      isStringValue(result.failure.message)
+                      Predicate.isString(result.failure.message)
                         ? result.failure.message
                         : "xAI usage request timed out.",
                     ),

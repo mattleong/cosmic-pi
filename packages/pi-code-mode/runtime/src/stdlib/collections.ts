@@ -64,7 +64,7 @@ export const setMethods = new Set([
 // URLSearchParams parsed from a large URL query cannot materialize an over-cap array here.
 export const spreadItems = (value: InterpreterValue): InterpreterArray | undefined => {
   if (Array.isArray(value)) return value;
-  if (isStringValue(value)) {
+  if (Predicate.isString(value)) {
     assertBoundedCollectionSize(value.length, "String spread");
     return Array.from(value);
   }
@@ -82,7 +82,8 @@ export const spreadItems = (value: InterpreterValue): InterpreterArray | undefin
   }
   return undefined;
 };
-import { isStringValue } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import { assertBoundedCollectionSize } from "../interpreter/confinement.js";
 import { SandboxMap, SandboxSet, SandboxURLSearchParams } from "../values.js";
 

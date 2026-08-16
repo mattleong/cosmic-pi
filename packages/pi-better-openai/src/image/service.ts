@@ -1,4 +1,3 @@
-import { isStringValue } from "pi-cosmic-core";
 import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -189,12 +188,12 @@ export class OpenAIImageService extends Context.Service<
           ).pipe(
             Effect.mapError((error) => {
               const message = sanitizeDiagnosticError(
-                "message" in error && isStringValue(error.message)
+                "message" in error && Predicate.isString(error.message)
                   ? error.message
                   : "OpenAI image request timed out.",
               );
               return fail(
-                "operation" in error && isStringValue(error.operation)
+                "operation" in error && Predicate.isString(error.operation)
                   ? error.operation
                   : "timeout",
                 message,

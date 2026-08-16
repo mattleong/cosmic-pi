@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import {
@@ -63,7 +64,7 @@ export function formatSettingsSaveError<ErrorInput>(error: ErrorInput): string {
     hasObjectRuntimeType(error) &&
     error !== null &&
     "message" in error &&
-    isStringValue(error.message)
+    Predicate.isString(error.message)
       ? error.message
       : "Unknown error.";
   return `Failed to save code preview settings: ${message}`;

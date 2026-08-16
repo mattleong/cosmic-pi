@@ -3,7 +3,8 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -320,7 +321,7 @@ export const openPiSupervisorBridge = (
         failAll("Private supervisor bridge returned an invalid response.");
         return;
       }
-      const id = isStringValue(discriminant.value.id) ? discriminant.value.id : undefined;
+      const id = Predicate.isString(discriminant.value.id) ? discriminant.value.id : undefined;
       if (!id) return;
       const call = pending.get(id);
       if (!call) return;

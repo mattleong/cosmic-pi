@@ -1,4 +1,5 @@
-import { isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { createEditToolDefinition, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
@@ -222,7 +223,7 @@ function renderEditCallPreview(
       ? Math.max(
           8,
           Math.floor(
-            (isNumberValue(codePreviewSettings.editCollapsedLines)
+            (Predicate.isNumber(codePreviewSettings.editCollapsedLines)
               ? codePreviewSettings.editCollapsedLines
               : 160) / maxOperations,
           ),
@@ -277,7 +278,7 @@ function formatEditHeader<SummaryTextInput>(
   summaryText: SummaryTextInput,
 ): string {
   const base = `${renderCodePreviewToolTitle("edit", theme)} ${renderDisplayPath(path, cwd, theme)}`;
-  return isStringValue(summaryText) && summaryText
+  return Predicate.isString(summaryText) && summaryText
     ? `${base}${diffSummarySeparator(theme)}${summaryText}`
     : base;
 }

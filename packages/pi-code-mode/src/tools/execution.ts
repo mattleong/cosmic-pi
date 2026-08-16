@@ -4,7 +4,8 @@
  */
 // Pi tool execution is a Promise-shaped host boundary.
 // @effect-diagnostics effect/asyncFunction:off
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -339,7 +340,7 @@ export const makeCodeModeToolExecute =
     }
     const details: CodeModeToolDetails = {
       ...baseDetails,
-      outputKind: isStringValue(result.value) ? "text" : "structured",
+      outputKind: Predicate.isString(result.value) ? "text" : "structured",
     };
     return {
       content: [

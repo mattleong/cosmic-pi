@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const root = resolve(import.meta.dirname, "..");
-const isStringValue = (value) => String(value) === value;
 const workspace = await readFile(join(root, "pnpm-workspace.yaml"), "utf8");
 const expectedEffectVersion = /\n  effect: ([^\n]+)/.exec(workspace)?.[1];
 if (!expectedEffectVersion) throw new Error("Missing Effect version from the pnpm catalog.");
@@ -60,7 +59,7 @@ const workspaceStoreDir = run("pnpm", ["store", "path"], root).trim();
 function assertPackedProtocolsResolved(packageName, manifest) {
   for (const section of ["dependencies", "peerDependencies", "optionalDependencies"]) {
     for (const [dependency, version] of Object.entries(manifest[section] ?? {})) {
-      if (isStringValue(version) && /^(?:catalog:|workspace:)/.test(version)) {
+      if (String(version) === version && /^(?:catalog:|workspace:)/.test(version)) {
         throw new Error(
           `Packed ${packageName} retains unresolved ${section}.${dependency} = ${version}.`,
         );

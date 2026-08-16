@@ -1,15 +1,11 @@
 // Public compatibility boundary for settings access before Pi starts a session.
 // @effect-diagnostics effect/strictEffectProvide:off
+import * as Predicate from "effect/Predicate";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import {
-  AgentDirectory,
-  isStringValue,
-  nodeFilePlatformLayer,
-  piHostLoggerLayer,
-} from "pi-cosmic-core";
+import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
 import { CodePreviewEnvironmentService } from "../config/env";
 import { CodePreviewSettingsService } from "../config/service";
 
@@ -17,7 +13,7 @@ const oneShotSettingsLayer = () => {
   const environment = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.String))(
     Object.fromEntries(
       Object.entries(process.env).flatMap(([key, value]) =>
-        isStringValue(value) ? [[key, value]] : [],
+        Predicate.isString(value) ? [[key, value]] : [],
       ),
     ),
   );

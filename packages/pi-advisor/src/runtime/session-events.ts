@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -84,7 +85,7 @@ export const makeAdvisorSessionEvents = (port: AdvisorSessionEventPort) => {
       );
       if (Option.isNone(decodedMessage)) return;
       const messageSnapshot = decodedMessage.value;
-      const stopReason = isStringValue(messageSnapshot.stopReason)
+      const stopReason = Predicate.isString(messageSnapshot.stopReason)
         ? messageSnapshot.stopReason
         : undefined;
       const active = port.activeCheckpoint();
@@ -115,7 +116,7 @@ export const makeAdvisorSessionEvents = (port: AdvisorSessionEventPort) => {
       const withStopReason = stopReason === undefined ? messageEnd : { ...messageEnd, stopReason };
       offerChildEvent(
         child,
-        isStringValue(messageSnapshot.errorMessage)
+        Predicate.isString(messageSnapshot.errorMessage)
           ? { ...withStopReason, errorMessage: messageSnapshot.errorMessage }
           : withStopReason,
       );

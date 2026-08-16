@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { stringifyJson } from "../boundary/json.ts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -305,11 +306,11 @@ export function renderObservations(observations: readonly AdvisorObservation[]):
 
 function sanitizeObservation<ValueInput>(value: ValueInput): AdvisorObservation {
   const redacted = redactObservationValue(value);
-  if (!isRecord(redacted) || !isStringValue(redacted.type))
+  if (!isRecord(redacted) || !Predicate.isString(redacted.type))
     throw new AdvisorObservationError({ message: "Invalid observation." });
   const clipped: Schema.MutableJsonObject = Object.fromEntries(Object.entries(redacted));
   for (const key of ["text", "args", "update", "result", "marker", "reason", "evidence"] as const) {
-    if (isStringValue(clipped[key]))
+    if (Predicate.isString(clipped[key]))
       clipped[key] = clip(clipped[key], MAX_OBSERVATION_CHANNEL_CHARS);
   }
   if (Array.isArray(clipped.toolCalls)) {

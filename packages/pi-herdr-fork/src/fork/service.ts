@@ -1,4 +1,5 @@
-import { isNumberValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -121,7 +122,7 @@ const paneHasAvailableShell = (processInfo: HerdrPaneProcessInfo): boolean => {
   const foregroundProcesses = processInfo.foreground_processes ?? [];
   const foregroundProcess = foregroundProcesses[0];
   return (
-    isNumberValue(shellPid) &&
+    Predicate.isNumber(shellPid) &&
     processInfo.foreground_process_group_id === shellPid &&
     foregroundProcesses.length === 1 &&
     foregroundProcess?.pid === shellPid &&

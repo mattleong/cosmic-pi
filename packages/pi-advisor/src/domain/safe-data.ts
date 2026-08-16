@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isBooleanValue, isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 /**
@@ -13,9 +14,9 @@ const snapshotDataUnchecked = <ValueInput>(
   depth = 0,
 ): Schema.MutableJson | undefined => {
   if (value === null) return null;
-  if (isStringValue(value)) return value;
-  if (isNumberValue(value)) return Number.isFinite(value) ? value : undefined;
-  if (isBooleanValue(value)) return value;
+  if (Predicate.isString(value)) return value;
+  if (Predicate.isNumber(value)) return Number.isFinite(value) ? value : undefined;
+  if (Predicate.isBoolean(value)) return value;
   if (!hasObjectRuntimeType(value) || depth >= SAFE_DATA_MAX_DEPTH) return undefined;
 
   let descriptors: PropertyDescriptorMap;
@@ -29,7 +30,7 @@ const snapshotDataUnchecked = <ValueInput>(
     const output: Schema.MutableJson[] = [];
     const lengthDescriptor = descriptors.length;
     const length =
-      lengthDescriptor && "value" in lengthDescriptor && isNumberValue(lengthDescriptor.value)
+      lengthDescriptor && "value" in lengthDescriptor && Predicate.isNumber(lengthDescriptor.value)
         ? Math.min(lengthDescriptor.value, SAFE_DATA_MAX_ENTRIES)
         : 0;
     for (let index = 0; index < length; index += 1) {

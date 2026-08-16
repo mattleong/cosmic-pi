@@ -1,4 +1,5 @@
-import { isNumberValue, isStringValue } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import { assertBoundedJsonEstimate } from "../interpreter/confinement.js";
 import {
   type AstNode,
@@ -26,7 +27,7 @@ export const invokeJsonMethod = (name: string, args: InterpreterArray, node: Ast
         );
       }
       const space = args[2];
-      const indent = isNumberValue(space) || isStringValue(space) ? space : undefined;
+      const indent = Predicate.isNumber(space) || Predicate.isString(space) ? space : undefined;
       const data = copyOut(copyIn(args[0], "JSON.stringify value"));
       // Confinement preflight: refuse before the native serializer materializes an
       // over-limit string. Indented output multiplies size by up to depth x indent width,
@@ -36,7 +37,7 @@ export const invokeJsonMethod = (name: string, args: InterpreterArray, node: Ast
     }
     case "parse": {
       const text = args[0];
-      if (!isStringValue(text))
+      if (!Predicate.isString(text))
         throw new InterpreterRuntimeError("JSON.parse expects a string.", node);
       try {
         return copyIn(JSON.parse(text), "JSON.parse result");

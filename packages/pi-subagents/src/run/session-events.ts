@@ -1,5 +1,6 @@
+import * as Predicate from "effect/Predicate";
 import type { JsonObject } from "pi-cosmic-core";
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { SubagentSessionEvent } from "./model.ts";
 import { MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
@@ -30,7 +31,7 @@ const asRecord = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefin
 
 const stringField = (record: Readonly<JsonObject> | undefined, key: string): string | undefined => {
   const value = record?.[key];
-  return isStringValue(value) && value.trim() ? value.trim() : undefined;
+  return Predicate.isString(value) && value.trim() ? value.trim() : undefined;
 };
 
 export function summarizeToolArguments<ArgsInput>(

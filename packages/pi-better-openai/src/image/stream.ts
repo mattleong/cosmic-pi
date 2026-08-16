@@ -1,4 +1,3 @@
-import { isStringValue } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Random from "effect/Random";
@@ -59,7 +58,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
       providerFailure = fail(
         "response",
         sanitizeDiagnosticError(
-          isStringValue(error?.message) ? error.message : "Codex image request failed.",
+          Predicate.isString(error?.message) ? error.message : "Codex image request failed.",
         ),
       );
       return false;
@@ -67,7 +66,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
     if (Predicate.isObject(event) && event.type === "error") {
       providerFailure = fail(
         "response",
-        `Codex image error: ${sanitizeDiagnosticError(isStringValue(event.message) ? event.message : "Codex image request failed.")}`,
+        `Codex image error: ${sanitizeDiagnosticError(Predicate.isString(event.message) ? event.message : "Codex image request failed.")}`,
       );
       return false;
     }

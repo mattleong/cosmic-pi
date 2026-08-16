@@ -2,7 +2,8 @@
  * Pure formatting for Code Mode execution results, bounded progress, and the bounded
  * nested-call activity labels persisted alongside them.
  */
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import * as Option from "effect/Option";
@@ -36,7 +37,7 @@ const activityField = <Input>(input: Input, key: ActivityField): string | undefi
   const decoded = Schema.decodeUnknownOption(ActivityInputSchema)(input);
   if (Option.isNone(decoded)) return undefined;
   const value = decoded.value[key];
-  if (!isStringValue(value)) return undefined;
+  if (!Predicate.isString(value)) return undefined;
   const sanitized = sanitizeTerminalLine(value);
   return sanitized.length === 0 ? undefined : truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH);
 };
@@ -47,7 +48,7 @@ const activityField = <Input>(input: Input, key: ActivityField): string | undefi
  * hostile inputs collapse to a safe bounded fallback; raw objects are never stringified.
  */
 export const describeNestedActivity = <Name, Input>(name: Name, input: Input): string => {
-  const toolName = isStringValue(name) ? name : "";
+  const toolName = Predicate.isString(name) ? name : "";
   const at = (fallback: string) => activityField(input, "path") ?? fallback;
   switch (toolName) {
     case "pi.read":
@@ -223,7 +224,7 @@ export const progressResult = (
 export const formatCodeModeSuccess = (result: CodeModeSuccess, maxOutputBytes: number): string => {
   // The runtime validates returned values as plain JSON data, so stringify cannot throw; it
   // yields undefined only for a program that returns undefined (serialized as null upstream).
-  const output = isStringValue(result.value)
+  const output = Predicate.isString(result.value)
     ? result.value
     : renderJson(result.value, maxOutputBytes);
   return withLogs(output, result.logs);

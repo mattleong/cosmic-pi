@@ -4,7 +4,8 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/globalTimers:off
-import { hasObjectRuntimeType, isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
@@ -55,8 +56,8 @@ function trackedAbortSignal() {
       aborted = true;
       for (const listener of live) {
         const event = new Event("abort");
-        if (isFunctionValue(listener)) {
-          // SAFETY: isFunctionValue proved this listener has the EventListener callable branch.
+        if (Predicate.isFunction(listener)) {
+          // SAFETY: Predicate.isFunction proved this listener has the EventListener callable branch.
           const callback = listener as EventListener;
           callback.call(signal, event);
         } else listener.handleEvent(event);

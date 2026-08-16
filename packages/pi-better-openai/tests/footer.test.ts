@@ -4,8 +4,9 @@
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/floatingEffect:off
+import * as Predicate from "effect/Predicate";
 import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import { isFunctionValue } from "pi-cosmic-core";
+
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -769,7 +770,7 @@ describe("footer mode ownership", () => {
     const requestRender = vi.fn();
     let controller: ReturnType<typeof createFooterController>;
     const setFooter = vi.fn((factory) => {
-      if (isFunctionValue(factory)) {
+      if (Predicate.isFunction(factory)) {
         component = factory(
           { requestRender },
           { fg: (_color: string, value: string) => value },

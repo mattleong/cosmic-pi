@@ -1,4 +1,5 @@
-import { isNumberValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import { advisorSeverityRank, type AdvisorSeverity } from "./schema.ts";
 
 export const MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST = 2;
@@ -15,7 +16,7 @@ export function sanitizeInterventionBudgetSnapshot(
   return (() => {
     const objectPart563_0 = {
       delivered:
-        isNumberValue(delivered) && Number.isSafeInteger(delivered)
+        Predicate.isNumber(delivered) && Number.isSafeInteger(delivered)
           ? Math.max(0, Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, delivered))
           : 0,
     };

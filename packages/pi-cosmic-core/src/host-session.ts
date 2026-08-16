@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, isFunctionValue, isStringValue } from "./runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "./runtime-values.ts";
 /** Pure, best-effort reads of Pi session host fields shared by provider extensions. */
 
 export type HostUiContext = {
@@ -55,7 +56,7 @@ export function hasTerminalUI(ctx: HostUiContext): boolean {
 export function isProjectTrusted(ctx: HostTrustContext): boolean {
   try {
     const readTrust = ctx.isProjectTrusted;
-    return isFunctionValue(readTrust) && readTrust.call(ctx) === true;
+    return Predicate.isFunction(readTrust) && readTrust.call(ctx) === true;
   } catch {
     return false;
   }
@@ -76,7 +77,7 @@ export function notifyAtHostBoundary(
     if (
       hasObjectRuntimeType(outcome) &&
       outcome !== null &&
-      isFunctionValue((outcome as { readonly then?: unknown }).then)
+      Predicate.isFunction((outcome as { readonly then?: unknown }).then)
     ) {
       // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       (outcome as PromiseLike<unknown>).then(
@@ -126,7 +127,7 @@ export function captureSessionHost(ctx: HostSessionContext): CapturedSessionHost
     const cwd = ctx.cwd;
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const signal = ctx.signal as AbortSignal | undefined;
-    if (!isStringValue(cwd) || cwd.length === 0) return { _tag: "Unavailable" };
+    if (!Predicate.isString(cwd) || cwd.length === 0) return { _tag: "Unavailable" };
     return {
       _tag: "Captured",
       cwd,

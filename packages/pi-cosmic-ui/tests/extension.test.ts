@@ -3,8 +3,9 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
+import * as Predicate from "effect/Predicate";
 import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import { isFunctionValue } from "pi-cosmic-core";
+
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -524,7 +525,7 @@ describe("Cosmic UI extension", () => {
         if (property === "removeEventListener") return removeEventListener;
         // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
         const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return isFunctionValue(value) ? value.bind(target) : value;
+        return Predicate.isFunction(value) ? value.bind(target) : value;
       },
     });
     h.ctx.cwd = "\0invalid";
@@ -699,7 +700,7 @@ describe("Cosmic UI extension", () => {
         if (property === "removeEventListener") return removeEventListener;
         // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
         const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return isFunctionValue(value) ? value.bind(target) : value;
+        return Predicate.isFunction(value) ? value.bind(target) : value;
       },
     });
     Object.defineProperties(h.ctx, {
@@ -742,7 +743,7 @@ describe("Cosmic UI extension", () => {
         if (property === "removeEventListener") return removeEventListener;
         // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
         const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return isFunctionValue(value) ? value.bind(target) : value;
+        return Predicate.isFunction(value) ? value.bind(target) : value;
       },
     });
     h.ctx.signal = signal;
@@ -770,7 +771,7 @@ describe("Cosmic UI extension", () => {
         if (property === "removeEventListener") return removeEventListener;
         // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
         const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return isFunctionValue(value) ? value.bind(target) : value;
+        return Predicate.isFunction(value) ? value.bind(target) : value;
       },
     });
 

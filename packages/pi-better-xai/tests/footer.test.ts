@@ -1,4 +1,5 @@
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { describe, expect, test, vi } from "vitest";
@@ -142,7 +143,7 @@ describe("xAI footer host boundaries", () => {
     const replacementRender = vi.fn();
     let originalFooter: { dispose(): void } | undefined;
     h.setFooter.mockImplementation((next) => {
-      if (isFunctionValue(next)) {
+      if (Predicate.isFunction(next)) {
         const footer = next(
           { requestRender: originalFooter ? replacementRender : vi.fn() },
           { fg: (_tone: string, text: string) => text },

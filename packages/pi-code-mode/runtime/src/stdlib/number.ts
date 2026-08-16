@@ -43,7 +43,7 @@ export const invokeNumberMethod = (
   const optNum = (index: number): number | undefined => {
     const arg = args[index];
     if (arg === undefined) return undefined;
-    if (!isNumberValue(arg))
+    if (!Predicate.isNumber(arg))
       throw new InterpreterRuntimeError(`Number.${name} expects a number argument.`, node);
     return arg;
   };
@@ -90,7 +90,7 @@ export const invokeNumberStatic = (name: string, args: InterpreterArray, node: A
       return Number.isSafeInteger(value);
     case "parseInt": {
       const radix = args[1];
-      if (radix !== undefined && !isNumberValue(radix)) {
+      if (radix !== undefined && !Predicate.isNumber(radix)) {
         throw new InterpreterRuntimeError("Number.parseInt expects a numeric radix.", node);
       }
       return parseInt(coerceToString(value), radix);
@@ -101,7 +101,8 @@ export const invokeNumberStatic = (name: string, args: InterpreterArray, node: A
       throw new InterpreterRuntimeError(`Number.${name} is not available in CodeMode.`, node);
   }
 };
-import { isNumberValue } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import {
   type AstNode,
   type InterpreterArray,

@@ -1,11 +1,5 @@
-import {
-  hasObjectRuntimeType,
-  isBooleanValue,
-  isNumberValue,
-  isStringValue,
-  isSymbolValue,
-  runtimeTypeName,
-} from "./runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType, runtimeTypeName } from "./runtime-values.ts";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
@@ -34,7 +28,7 @@ const unsupported = (path: string, kind: string): never => {
 };
 
 const childPath = (path: string, key: string | number): string =>
-  isNumberValue(key) ? `${path}[${key}]` : `${path}.${key}`;
+  Predicate.isNumber(key) ? `${path}[${key}]` : `${path}.${key}`;
 
 interface ProjectionRecord {
   [key: string]: ProjectionData;
@@ -59,8 +53,8 @@ const cloneAndFreeze = <Value>(
 ): ProjectionData => {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  if (isStringValue(value) || isBooleanValue(value)) return value;
-  if (isNumberValue(value)) {
+  if (Predicate.isString(value) || Predicate.isBoolean(value)) return value;
+  if (Predicate.isNumber(value)) {
     if (!Schema.is(Schema.Number)(value)) return unsupported(path, "non-finite number");
     return value;
   }
@@ -96,12 +90,12 @@ const cloneAndFreeze = <Value>(
     return unsupported(path, prototype?.constructor?.name ?? "non-plain object");
 
   const ownKeys = Reflect.ownKeys(object);
-  if (ownKeys.some((key) => isSymbolValue(key))) unsupported(path, "symbol-keyed property");
+  if (ownKeys.some((key) => Predicate.isSymbol(key))) unsupported(path, "symbol-keyed property");
 
   const clone: ProjectionRecord = {};
   seen.set(object, clone);
   for (const key of ownKeys) {
-    if (!isStringValue(key)) return unsupported(path, "symbol-keyed property");
+    if (!Predicate.isString(key)) return unsupported(path, "symbol-keyed property");
     const descriptor = Object.getOwnPropertyDescriptor(object, key);
     if (!descriptor) return unsupported(childPath(path, key), "missing property descriptor");
     if (!("value" in descriptor)) return unsupported(childPath(path, key), "accessor");

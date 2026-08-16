@@ -1,4 +1,5 @@
-import { isJsonObject, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { isJsonObject } from "pi-cosmic-core";
 import { stringifyJson } from "../boundary/json.ts";
 import * as Schema from "effect/Schema";
 import { snapshotData } from "../domain/safe-data.ts";
@@ -243,7 +244,7 @@ function fingerprintToolEvent(input: ToolTrajectoryEndInput): ToolEventFingerpri
 function boundedStableValue<ValueInput>(value: ValueInput): string {
   const visit = (item: Schema.MutableJson, depth: number): Schema.MutableJson => {
     if (depth > 8) return "[nested]";
-    if (isStringValue(item))
+    if (Predicate.isString(item))
       return redactFingerprintText(item).slice(0, MAX_TOOL_FINGERPRINT_INPUT_CHARS);
     if (Array.isArray(item)) return item.slice(0, 64).map((entry) => visit(entry, depth + 1));
     if (!isJsonObject(item)) return item;

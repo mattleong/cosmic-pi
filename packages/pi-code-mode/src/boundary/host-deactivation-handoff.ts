@@ -29,7 +29,8 @@
  * (it re-instantiates extensions in the same process, exactly as the subagents reload handoff
  * relies on), so cross-process persistence is neither possible nor attempted here.
  */
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -81,7 +82,7 @@ const readEnvelope = (): HandoffEnvelope | undefined => {
 export const codeModeSessionKey = (ctx: ExtensionContext): CodeModeSessionKey | undefined => {
   try {
     const sessionId = ctx.sessionManager?.getSessionId?.();
-    if (isStringValue(sessionId) && sessionId.length > 0) {
+    if (Predicate.isString(sessionId) && sessionId.length > 0) {
       return sessionId;
     }
   } catch {

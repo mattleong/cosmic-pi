@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
@@ -187,7 +188,7 @@ function hasOnlyKeys(value: Schema.JsonObject, allowed: readonly string[]): bool
   return keys.length === allowed.length && keys.every((key) => allowed.includes(key));
 }
 function sanitizeId<ValueInput>(value: ValueInput): string | undefined {
-  return isStringValue(value) && CARD_ID_PATTERN.test(value) ? value : undefined;
+  return Predicate.isString(value) && CARD_ID_PATTERN.test(value) ? value : undefined;
 }
 function clip(value: string, limit: number): string {
   const trimmed = value.trim();

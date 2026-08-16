@@ -1,5 +1,6 @@
 /* oxlint-disable typescript/no-this-alias -- Effect.gen uses an explicit stable class receiver. */
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -589,7 +590,7 @@ function failureMessage<ErrorInput>(error: ErrorInput, fallback: string): string
   return hasObjectRuntimeType(error) &&
     error !== null &&
     "message" in error &&
-    isStringValue(error.message)
+    Predicate.isString(error.message)
     ? error.message
     : fallback;
 }

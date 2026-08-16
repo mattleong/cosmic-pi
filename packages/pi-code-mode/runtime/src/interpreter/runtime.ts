@@ -1,12 +1,7 @@
 // Lifecycle telemetry deliberately follows the vendored runtime's existing Date.now()-based durations.
 // @effect-diagnostics effect/globalDateInEffect:off
-import {
-  hasObjectRuntimeType,
-  isBooleanValue,
-  isNumberValue,
-  isStringValue,
-  runtimeTypeName,
-} from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType, runtimeTypeName } from "../runtime-values.ts";
 import { parse } from "acorn";
 import { Cause, Effect, Exit, Fiber, Semaphore } from "effect";
 import {
@@ -231,12 +226,12 @@ const normalizeError = <ErrorInput>(error: ErrorInput): Diagnostic => {
     if (containsRuntimeReference(value)) {
       // A thrown tool/function reference must not leak its internal structure.
       message = "a non-data value";
-    } else if (isStringValue(value)) {
+    } else if (Predicate.isString(value)) {
       message = value;
     } else if (value !== null && hasObjectRuntimeType(value)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, "message");
       message =
-        descriptor && "value" in descriptor && isStringValue(descriptor.value)
+        descriptor && "value" in descriptor && Predicate.isString(descriptor.value)
           ? descriptor.value
           : (JSON.stringify(copyOut(value)) ?? String(value));
     } else {
@@ -396,7 +391,7 @@ type StringMethodResult = string | number | boolean | Array<string> | undefined;
 const invokeStringMethod = (value: string, name: string, args: InterpreterArray, node: AstNode) => {
   const str = (index: number): string => {
     const arg = args[index];
-    if (!isStringValue(arg))
+    if (!Predicate.isString(arg))
       throw new InterpreterRuntimeError(
         `String.${name} expects argument ${index + 1} to be a string.`,
         node,
@@ -405,7 +400,7 @@ const invokeStringMethod = (value: string, name: string, args: InterpreterArray,
   };
   const num = (index: number): number => {
     const arg = args[index];
-    if (!isNumberValue(arg))
+    if (!Predicate.isNumber(arg))
       throw new InterpreterRuntimeError(
         `String.${name} expects argument ${index + 1} to be a number.`,
         node,
@@ -686,7 +681,7 @@ const invokeArrayStatic = (name: string, args: InterpreterArray, node: AstNode) 
         return Array.from(args[0].params.entries(), ([key, value]) => [key, value]);
       }
       const source = boundedData(args[0], "Array.from input");
-      if (isStringValue(source)) {
+      if (Predicate.isString(source)) {
         assertBoundedCollectionSize(source.length, "Array.from result", node);
         return Array.from(source);
       }
@@ -694,7 +689,7 @@ const invokeArrayStatic = (name: string, args: InterpreterArray, node: AstNode) 
       if (
         source !== null &&
         hasObjectRuntimeType(source) &&
-        isNumberValue((source as { length?: unknown }).length)
+        Predicate.isNumber((source as { length?: unknown }).length)
       ) {
         // Confinement preflight: an array-like's `length` is guest-controlled data, so the
         // projected allocation (ToLength semantics: NaN -> 0, negative -> 0, fractions
@@ -1362,7 +1357,8 @@ class Interpreter<R> {
       // an array, so long strings stay iterable without an entry-cap allocation); Maps
       // iterate [key, value] pairs and Sets iterate values over a snapshot (mutation during
       // iteration is safe).
-      const iterable = Array.isArray(right) || isStringValue(right) ? right : spreadItems(right);
+      const iterable =
+        Array.isArray(right) || Predicate.isString(right) ? right : spreadItems(right);
       if (iterable === undefined) {
         throw new InterpreterRuntimeError(
           "for...of requires an array, string, Map, or Set value in CodeMode.",
@@ -1742,9 +1738,9 @@ class Interpreter<R> {
         if (isRecord(regex)) {
           const pattern = astProperty(regex, "pattern");
           const flags = astProperty(regex, "flags");
-          if (isStringValue(pattern)) {
+          if (Predicate.isString(pattern)) {
             return Effect.sync(() =>
-              this.constructRegExp([pattern, isStringValue(flags) ? flags : ""], node),
+              this.constructRegExp([pattern, Predicate.isString(flags) ? flags : ""], node),
             );
           }
         }
@@ -1848,8 +1844,8 @@ class Interpreter<R> {
     if (args.length === 1) {
       const arg = args[0];
       if (arg instanceof SandboxDate) return new SandboxDate(arg.time);
-      if (isNumberValue(arg)) return new SandboxDate(new Date(arg).getTime());
-      if (isStringValue(arg)) return new SandboxDate(Date.parse(arg));
+      if (Predicate.isNumber(arg)) return new SandboxDate(new Date(arg).getTime());
+      if (Predicate.isString(arg)) return new SandboxDate(Date.parse(arg));
       return new SandboxDate(Number.NaN);
     }
     // new Date(year, month, day?, hours?, ...) - local-time component form.
@@ -1867,7 +1863,7 @@ class Interpreter<R> {
           ? ""
           : coerceToString(first);
     const flagsArg = args[1];
-    if (flagsArg !== undefined && !isStringValue(flagsArg)) {
+    if (flagsArg !== undefined && !Predicate.isString(flagsArg)) {
       throw new InterpreterRuntimeError(
         `RegExp flags must be a string of flag characters (e.g. "g", "gi"), not ${flagsArg === null ? "null" : runtimeTypeName(flagsArg)}.`,
         node,
@@ -1929,14 +1925,14 @@ class Interpreter<R> {
     // materialization (a string of N code units expands to at most N entries).
     if (init instanceof SandboxSet) {
       assertBoundedCollectionSize(init.set.size, "new Set(...)", node);
-    } else if (isStringValue(init)) {
+    } else if (Predicate.isString(init)) {
       assertBoundedCollectionSize(init.length, "new Set(...)", node);
     }
     const items = Array.isArray(init)
       ? init
       : init instanceof SandboxSet
         ? Array.from(init.set.values())
-        : isStringValue(init)
+        : Predicate.isString(init)
           ? Array.from(init)
           : undefined;
     if (items === undefined) {
@@ -1991,13 +1987,13 @@ class Interpreter<R> {
       assertBoundedCollectionSize(init.params.size, "new URLSearchParams(...)", node);
       return new SandboxURLSearchParams(new URLSearchParams(init.params));
     }
-    if (isStringValue(init)) {
+    if (Predicate.isString(init)) {
       // Confinement preflight: the projected pair count is charged before the native parser
       // materializes the entries.
       assertBoundedQueryPairs(init, "new URLSearchParams(...)", node);
       return new SandboxURLSearchParams(new URLSearchParams(init));
     }
-    if (init === null || isNumberValue(init) || isBooleanValue(init)) {
+    if (init === null || Predicate.isNumber(init) || Predicate.isBoolean(init)) {
       return new SandboxURLSearchParams(new URLSearchParams(coerceToString(init)));
     }
     if (init instanceof SandboxMap) {
@@ -2093,9 +2089,9 @@ class Interpreter<R> {
       case "+":
         // Confinement preflight: string concatenation is the canonical doubling amplifier,
         // so the combined length is charged before the native concat allocates.
-        if (isStringValue(l) || isStringValue(r)) {
+        if (Predicate.isString(l) || Predicate.isString(r)) {
           assertBoundedStringLength(
-            (isStringValue(l) ? l.length : 32) + (isStringValue(r) ? r.length : 32),
+            (Predicate.isString(l) ? l.length : 32) + (Predicate.isString(r) ? r.length : 32),
             "String concatenation",
             node,
           );
@@ -2459,7 +2455,7 @@ class Interpreter<R> {
   private formatConsoleArgument<ValueInput>(value: ValueInput): string {
     if (value === undefined) return "undefined";
     // A top-level string prints bare; nested strings are JSON-quoted (see formatConsoleValue).
-    if (isStringValue(value)) return value;
+    if (Predicate.isString(value)) return value;
     return this.formatConsoleValue(value, new Set(), 0, this.consoleBudget());
   }
 
@@ -2483,9 +2479,9 @@ class Interpreter<R> {
     };
     // Nested undefined renders as null, matching what JSON boundary output would show.
     if (value === null || value === undefined) return spend("null");
-    if (isStringValue(value)) return spend(JSON.stringify(value));
+    if (Predicate.isString(value)) return spend(JSON.stringify(value));
     // String(value) keeps NaN/Infinity/-Infinity readable; finite numbers match their JSON form.
-    if (isNumberValue(value) || isBooleanValue(value)) return spend(String(value));
+    if (Predicate.isNumber(value) || Predicate.isBoolean(value)) return spend(String(value));
     if (!hasObjectRuntimeType(value)) return spend(String(value));
     if (value instanceof SandboxPromise) return spend("[Promise (await it to get its value)]");
     if (value instanceof SandboxDate) return spend(coerceToString(value));
@@ -2625,7 +2621,7 @@ class Interpreter<R> {
 
   private formatConsoleTableCell(value: InterpreterValue): string {
     if (value === undefined) return "";
-    if (isStringValue(value)) return value;
+    if (Predicate.isString(value)) return value;
     return this.formatConsoleValue(value, new Set(), 0, this.consoleBudget());
   }
 
@@ -2844,7 +2840,7 @@ class Interpreter<R> {
     args: InterpreterArray,
     node: AstNode,
   ): Effect.Effect<InterpreterValue, unknown, R> {
-    if (isStringValue(ref.receiver)) {
+    if (Predicate.isString(ref.receiver)) {
       if (
         (ref.name === "replace" || ref.name === "replaceAll") &&
         (args[1] instanceof CodeModeFunction ||
@@ -2855,7 +2851,7 @@ class Interpreter<R> {
       }
       return Effect.succeed(invokeStringMethod(ref.receiver, ref.name, args, node));
     }
-    if (isNumberValue(ref.receiver)) {
+    if (Predicate.isNumber(ref.receiver)) {
       return Effect.succeed(invokeNumberMethod(ref.receiver, ref.name, args, node));
     }
     if (Array.isArray(ref.receiver)) {
@@ -2899,7 +2895,7 @@ class Interpreter<R> {
       const groups = callbackArgs[callbackArgs.length - 1];
       const hasGroups = groups !== null && hasObjectRuntimeType(groups);
       const offset = callbackArgs[callbackArgs.length - (hasGroups ? 3 : 2)];
-      if (!isStringValue(match) || !isNumberValue(offset)) {
+      if (!Predicate.isString(match) || !Predicate.isNumber(offset)) {
         throw new InterpreterRuntimeError(
           `String.${name} produced an invalid replacement match.`,
           node,
@@ -2929,7 +2925,7 @@ class Interpreter<R> {
       if (name === "replace") value.replace(pattern.regex, collect);
       else value.replaceAll(pattern.regex, collect);
     } else {
-      if (!isStringValue(pattern)) {
+      if (!Predicate.isString(pattern)) {
         throw new InterpreterRuntimeError(
           `String.${name} expects argument 1 to be a string.`,
           node,
@@ -3202,13 +3198,13 @@ class Interpreter<R> {
   ): Effect.Effect<InterpreterValue, unknown, R> {
     const optNumber = (value: InterpreterValue, label: string): number | undefined => {
       if (value === undefined) return undefined;
-      if (!isNumberValue(value))
+      if (!Predicate.isNumber(value))
         throw new InterpreterRuntimeError(`Array.${name} expects ${label} to be a number.`, node);
       return value;
     };
     switch (name) {
       case "join": {
-        if (args.length > 1 || (args.length === 1 && !isStringValue(args[0]))) {
+        if (args.length > 1 || (args.length === 1 && !Predicate.isString(args[0]))) {
           throw new InterpreterRuntimeError(
             "Array.join expects zero arguments or one string separator.",
             node,
@@ -3659,7 +3655,7 @@ class Interpreter<R> {
         const rawValue = quasi.value;
         const cooked = isRecord(rawValue) ? astProperty(rawValue, "cooked") : undefined;
 
-        if (!isStringValue(cooked)) {
+        if (!Predicate.isString(cooked)) {
           throw new InterpreterRuntimeError("Invalid template literal quasi.", quasi);
         }
 
@@ -3737,7 +3733,7 @@ class Interpreter<R> {
           : self.toPropertyKey(yield* self.evaluateExpression(propertyNode), propertyNode);
 
       if (objectValue instanceof ToolReference) {
-        if (!isStringValue(key) || isBlockedMember(key)) {
+        if (!Predicate.isString(key) || isBlockedMember(key)) {
           throw new InterpreterRuntimeError(
             "Tool paths must use safe string property names.",
             propertyNode,
@@ -3747,7 +3743,7 @@ class Interpreter<R> {
       }
 
       if (objectValue instanceof PromiseNamespace) {
-        if (isStringValue(key) && promiseStatics.has(key as PromiseMethodName)) {
+        if (Predicate.isString(key) && promiseStatics.has(key as PromiseMethodName)) {
           // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
           return new PromiseMethodReference(key as PromiseMethodName);
         }
@@ -3758,7 +3754,7 @@ class Interpreter<R> {
       }
 
       if (objectValue instanceof GlobalNamespace) {
-        if (!isStringValue(key) || isBlockedMember(key)) {
+        if (!Predicate.isString(key) || isBlockedMember(key)) {
           throw new InterpreterRuntimeError(
             `${objectValue.name}.${String(key)} is not available in CodeMode.`,
             propertyNode,
@@ -3770,12 +3766,12 @@ class Interpreter<R> {
         return new GlobalMethodReference(objectValue.name, key);
       }
 
-      if (isStringValue(objectValue)) {
+      if (Predicate.isString(objectValue)) {
         if (key === "length") return new ComputedValue(objectValue.length);
-        if (isNumberValue(key)) return new ComputedValue(objectValue[key]);
-        if (isStringValue(key) && /^\d+$/.test(key))
+        if (Predicate.isNumber(key)) return new ComputedValue(objectValue[key]);
+        if (Predicate.isString(key) && /^\d+$/.test(key))
           return new ComputedValue(objectValue[Number(key)]);
-        if (isStringValue(key) && stringMethods.has(key))
+        if (Predicate.isString(key) && stringMethods.has(key))
           return new IntrinsicReference(objectValue, key);
         // Unknown property on a string reads as `undefined`, matching JS (`"x".foo === undefined`),
         // instead of throwing - so defensive access like `result?.login ?? result` on a JSON-string
@@ -3784,15 +3780,19 @@ class Interpreter<R> {
         return new ComputedValue(undefined);
       }
 
-      if (isNumberValue(objectValue)) {
-        if (isStringValue(key) && numberMethods.has(key))
+      if (Predicate.isNumber(objectValue)) {
+        if (Predicate.isString(key) && numberMethods.has(key))
           return new IntrinsicReference(objectValue, key);
         // Unknown property on a number reads as `undefined`, matching JS, rather than throwing.
         return new ComputedValue(undefined);
       }
 
       // Number / String expose a small allowlist of statics; everything else stays opaque.
-      if (objectValue instanceof CoercionFunction && isStringValue(key) && !isBlockedMember(key)) {
+      if (
+        objectValue instanceof CoercionFunction &&
+        Predicate.isString(key) &&
+        !isBlockedMember(key)
+      ) {
         if (objectValue.name === "Number" && numberConstants.has(key)) {
           return new ComputedValue(numberConstant(key));
         }
@@ -3805,27 +3805,27 @@ class Interpreter<R> {
       // Sandbox value types expose their method/property allowlists; any other key reads as
       // `undefined`, consistent with unknown-property reads on strings/numbers/arrays.
       if (objectValue instanceof SandboxDate) {
-        if (isStringValue(key) && dateMethods.has(key))
+        if (Predicate.isString(key) && dateMethods.has(key))
           return new IntrinsicReference(objectValue, key);
         return new ComputedValue(undefined);
       }
       if (objectValue instanceof SandboxRegExp) {
-        if (isStringValue(key) && regexpProperties.has(key)) {
+        if (Predicate.isString(key) && regexpProperties.has(key)) {
           return new ComputedValue(regexpProperty(objectValue, key));
         }
-        if (isStringValue(key) && regexpMethods.has(key))
+        if (Predicate.isString(key) && regexpMethods.has(key))
           return new IntrinsicReference(objectValue, key);
         return new ComputedValue(undefined);
       }
       if (objectValue instanceof SandboxMap) {
         if (key === "size") return new ComputedValue(objectValue.map.size);
-        if (isStringValue(key) && mapMethods.has(key))
+        if (Predicate.isString(key) && mapMethods.has(key))
           return new IntrinsicReference(objectValue, key);
         return new ComputedValue(undefined);
       }
       if (objectValue instanceof SandboxSet) {
         if (key === "size") return new ComputedValue(objectValue.set.size);
-        if (isStringValue(key) && setMethods.has(key))
+        if (Predicate.isString(key) && setMethods.has(key))
           return new IntrinsicReference(objectValue, key);
         return new ComputedValue(undefined);
       }
@@ -3833,14 +3833,14 @@ class Interpreter<R> {
         if (key === "searchParams") {
           return new ComputedValue(objectValue.searchParams);
         }
-        if (isStringValue(key) && urlMethods.has(key))
+        if (Predicate.isString(key) && urlMethods.has(key))
           return new IntrinsicReference(objectValue, key);
-        if (isStringValue(key) && urlProperties.has(key)) return { target: objectValue, key };
+        if (Predicate.isString(key) && urlProperties.has(key)) return { target: objectValue, key };
         return new ComputedValue(undefined);
       }
       if (objectValue instanceof SandboxURLSearchParams) {
         if (key === "size") return new ComputedValue(objectValue.params.size);
-        if (isStringValue(key) && urlSearchParamsMethods.has(key)) {
+        if (Predicate.isString(key) && urlSearchParamsMethods.has(key)) {
           return new IntrinsicReference(objectValue, key);
         }
         return new ComputedValue(undefined);
@@ -3880,7 +3880,7 @@ class Interpreter<R> {
         );
       }
 
-      if (isStringValue(key) && isBlockedMember(key)) {
+      if (Predicate.isString(key) && isBlockedMember(key)) {
         throw new InterpreterRuntimeError(
           `Property '${key}' is not available in CodeMode.`,
           propertyNode,
@@ -3890,8 +3890,8 @@ class Interpreter<R> {
       if (Array.isArray(objectValue)) {
         if (
           key !== "length" &&
-          !(isStringValue(key) && arrayMethods.has(key)) &&
-          !isNumberValue(key) &&
+          !(Predicate.isString(key) && arrayMethods.has(key)) &&
+          !Predicate.isNumber(key) &&
           !/^\d+$/.test(key)
         ) {
           // Own non-index properties read through (match results carry index/groups); like JS,
@@ -3923,7 +3923,7 @@ class Interpreter<R> {
       )
         return reference;
       if (Array.isArray(reference.target)) {
-        if (isStringValue(reference.key) && arrayMethods.has(reference.key)) {
+        if (Predicate.isString(reference.key) && arrayMethods.has(reference.key)) {
           return new IntrinsicReference(reference.target, reference.key);
         }
         return reference.key === "length"
@@ -3975,7 +3975,7 @@ class Interpreter<R> {
       if (Array.isArray(reference.target)) {
         if (reference.key === "length")
           throw new InterpreterRuntimeError("Array length cannot be assigned in CodeMode.", node);
-        if (isStringValue(reference.key) && arrayMethods.has(reference.key)) {
+        if (Predicate.isString(reference.key) && arrayMethods.has(reference.key)) {
           throw new InterpreterRuntimeError("Array methods cannot be assigned in CodeMode.", node);
         }
       }
@@ -4079,7 +4079,7 @@ class Interpreter<R> {
   }
 
   private toPropertyKey(value: InterpreterValue, node: AstNode): string | number {
-    if (isStringValue(value) || isNumberValue(value)) {
+    if (Predicate.isString(value) || Predicate.isNumber(value)) {
       return value;
     }
 

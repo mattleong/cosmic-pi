@@ -1,5 +1,6 @@
 /** Effect-managed Pi boundary for code previews. */
-import { isFunctionValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -58,7 +59,7 @@ function captureSessionHost(ctx: Pick<ExtensionContext, "cwd" | "signal">): Capt
   try {
     const cwd = ctx.cwd;
     const signal = ctx.signal;
-    if (!isStringValue(cwd) || cwd.length === 0) return { kind: "Unavailable" };
+    if (!Predicate.isString(cwd) || cwd.length === 0) return { kind: "Unavailable" };
     return { kind: "Captured", cwd, signal, aborted: signal?.aborted === true };
   } catch {
     return { kind: "Unavailable" };
@@ -68,7 +69,7 @@ function captureSessionHost(ctx: Pick<ExtensionContext, "cwd" | "signal">): Capt
 function readProjectTrust(ctx: { readonly isProjectTrusted?: () => boolean }): boolean {
   try {
     const isProjectTrusted = ctx.isProjectTrusted;
-    return !isFunctionValue(isProjectTrusted) || isProjectTrusted.call(ctx) === true;
+    return !Predicate.isFunction(isProjectTrusted) || isProjectTrusted.call(ctx) === true;
   } catch {
     return false;
   }

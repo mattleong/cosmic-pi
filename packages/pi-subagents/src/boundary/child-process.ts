@@ -6,7 +6,8 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { hasObjectRuntimeType, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, rmdir, writeFile } from "node:fs/promises";
@@ -113,7 +114,7 @@ const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: 
         message:
           error instanceof Error
             ? error.message
-            : isStringValue(error)
+            : Predicate.isString(error)
               ? error
               : `Unable to ${operation} subagent process.`,
       };

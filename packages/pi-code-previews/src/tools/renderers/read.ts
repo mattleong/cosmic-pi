@@ -1,4 +1,5 @@
-import { isNumberValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI, ReadToolOptions } from "@earendil-works/pi-coding-agent";
 import { createReadToolDefinition, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -28,9 +29,9 @@ export function registerRead(pi: ExtensionAPI, cwd: string, options?: ReadToolOp
         const path = getPathArg(args);
         const lang = resolvePreviewLanguage({ path, piLanguage: getLanguageFromPath(path) });
         let text = `${renderCodePreviewToolTitle("read", theme)} ${renderDisplayPath(path, cwd, theme)}`;
-        if (isNumberValue(args.offset) || isNumberValue(args.limit)) {
-          const start = isNumberValue(args.offset) ? args.offset : 1;
-          const end = isNumberValue(args.limit) ? start + args.limit - 1 : undefined;
+        if (Predicate.isNumber(args.offset) || Predicate.isNumber(args.limit)) {
+          const start = Predicate.isNumber(args.offset) ? args.offset : 1;
+          const end = Predicate.isNumber(args.limit) ? start + args.limit - 1 : undefined;
           text += theme.fg("warning", `:${start}${end ? `-${end}` : ""}`);
         }
         text += metadata(theme, [lang ? normalizeShikiLanguage(lang) : undefined]);
@@ -72,7 +73,7 @@ export function registerRead(pi: ExtensionAPI, cwd: string, options?: ReadToolOp
 
         const truncated = isTruncated(result.details);
         const { content, notice } =
-          truncated || isNumberValue(renderContext.args?.limit)
+          truncated || Predicate.isNumber(renderContext.args?.limit)
             ? splitReadContinuationNotice(firstText)
             : { content: firstText };
 

@@ -2,7 +2,8 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/strictEffectProvide:off
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -264,7 +265,7 @@ test("throwing AbortSignal.aborted getters become handled startup failures", asy
         if (property === "aborted") throw new Error("host aborted failure");
         // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
         const value = property in signal ? signal[property as keyof AbortSignal] : undefined;
-        return isFunctionValue(value) ? value.bind(signal) : value;
+        return Predicate.isFunction(value) ? value.bind(signal) : value;
       },
     }),
   );

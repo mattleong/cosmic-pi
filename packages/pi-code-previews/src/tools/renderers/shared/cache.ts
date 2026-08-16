@@ -1,4 +1,5 @@
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { DeferredPreview, shouldRenderDeferred } from "../../../preview/deferred";
@@ -17,7 +18,7 @@ export function cachedPreview(
   const cached = state[componentName] as (Component & { cancel?: () => void }) | undefined;
   const sourceName = `${keyName}ExactSource`;
   const sourceMatches = exactSource === undefined || state[sourceName] === exactSource;
-  if (state[keyName] !== key || !sourceMatches || !cached || !isFunctionValue(cached.render)) {
+  if (state[keyName] !== key || !sourceMatches || !cached || !Predicate.isFunction(cached.render)) {
     cached?.cancel?.();
     state[keyName] = key;
     if (exactSource !== undefined) state[sourceName] = exactSource;

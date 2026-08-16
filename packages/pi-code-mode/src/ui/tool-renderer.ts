@@ -7,7 +7,8 @@
  * `pi-cosmic-core` sanitizers first, so hostile program output, hostile nested inputs, and
  * hostile persisted details can never inject terminal control sequences.
  */
-import { isFunctionValue, isNumberValue, isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type {
   AgentToolResult,
   Theme,
@@ -46,7 +47,7 @@ export const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes
  * a missing, non-string, or effectively empty intent.
  */
 export const describeCodeModeIntent = <Intent>(intent: Intent): string => {
-  if (!isStringValue(intent)) return CODE_MODE_FALLBACK_INTENT;
+  if (!Predicate.isString(intent)) return CODE_MODE_FALLBACK_INTENT;
   const sanitized = sanitizeTerminalLine(intent);
   if (sanitized.length === 0) return CODE_MODE_FALLBACK_INTENT;
   return truncateDisplay(sanitized, MAX_INTENT_LENGTH);
@@ -81,7 +82,7 @@ export interface CodeModeRenderDetails {
 }
 
 const safeInteger = <Value>(value: Value): number | undefined =>
-  isNumberValue(value) && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  Predicate.isNumber(value) && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 
 const CallEntryInputSchema = Schema.Struct({
   status: Schema.Unknown,
@@ -134,8 +135,8 @@ const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => 
     status !== "cancelled"
   )
     return undefined;
-  const tool = isStringValue(entry.tool) ? entry.tool : "";
-  const activity = isStringValue(entry.activity) ? entry.activity : undefined;
+  const tool = Predicate.isString(entry.tool) ? entry.tool : "";
+  const activity = Predicate.isString(entry.activity) ? entry.activity : undefined;
   const durationMs = safeInteger(entry.durationMs);
   const decodedEntry: DecodedCodeModeCallEntry = { tool, status };
   if (activity !== undefined) decodedEntry.activity = activity;
@@ -221,7 +222,7 @@ const textContentOf = (result: AgentToolResult<unknown>): string => {
   return content
     .flatMap((part) => {
       const record = decodeInput(TextContentPartInputSchema, part);
-      return record?.type === "text" && isStringValue(record.text) ? [record.text] : [];
+      return record?.type === "text" && Predicate.isString(record.text) ? [record.text] : [];
     })
     .join("\n");
 };
@@ -233,7 +234,7 @@ const intentHeadline = <Args>(args: Args, theme: Theme): string => {
 
 const sourceOf = <Args>(args: Args): string | undefined => {
   const code = decodeInput(CodeModeArgumentsInputSchema, args)?.code;
-  return isStringValue(code) ? code : undefined;
+  return Predicate.isString(code) ? code : undefined;
 };
 
 /**
@@ -295,11 +296,11 @@ export const nestedToolIcon = (
   tool: string,
   lookup: ToolIconLookup | null | undefined = codePreviews.getCodePreviewToolIcon,
 ): string | undefined => {
-  if (!tool.startsWith("pi.") || !isFunctionValue(lookup)) return undefined;
+  if (!tool.startsWith("pi.") || !Predicate.isFunction(lookup)) return undefined;
   try {
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const icon = (lookup as ToolIconLookup)(tool.slice("pi.".length));
-    if (!isStringValue(icon)) return undefined;
+    if (!Predicate.isString(icon)) return undefined;
     const sanitized = truncateDisplay(sanitizeTerminalLine(icon), 8);
     return sanitized.length === 0 ? undefined : sanitized;
   } catch {

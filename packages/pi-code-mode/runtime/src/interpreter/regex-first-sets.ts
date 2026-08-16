@@ -1,4 +1,5 @@
-import { isNumberValue } from "../runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 /**
  * Conservative first-character analysis for regular-expression alternation branches (local
  * confinement helper, not vendored from upstream OpenCode 2; see PROVENANCE.md deviation 8).
@@ -226,7 +227,7 @@ export const classFirst = (source: string, index: number, flags: string): ClassF
     if (source[i] === "-" && i + 1 < source.length && source[i + 1] !== "]") {
       i += 1; // consume the range dash
       const high = member();
-      if (!isNumberValue(high) || high < low) unknown = true;
+      if (!Predicate.isNumber(high) || high < low) unknown = true;
       else ranges.push([low, high]);
       continue;
     }

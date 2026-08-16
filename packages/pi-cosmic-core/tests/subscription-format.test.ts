@@ -1,4 +1,5 @@
-import { isFunctionValue } from "../src/runtime-values.ts";
+import * as Predicate from "effect/Predicate";
+
 import { describe, expect, it } from "@effect/vitest";
 import {
   clampPercent,
@@ -120,7 +121,7 @@ describe("host-session helpers", () => {
         notify: () => ({
           // oxlint-disable-next-line unicorn/no-thenable -- simulates the contract-violating runtime under test
           then: (_onResolve?: () => void, onReject?: (reason: Error) => void): void => {
-            rejectionObserved = isFunctionValue(onReject);
+            rejectionObserved = Predicate.isFunction(onReject);
             onReject?.(new Error("late notify failure"));
           },
         }),

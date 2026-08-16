@@ -6,7 +6,8 @@
  * project while this extension retains the workspace's strict compiler and Effect diagnostics.
  * This owned structural contract is intentionally limited to the surface the Pi integration uses.
  */
-import { hasObjectRuntimeType, isFunctionValue, type JsonObject } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType, type JsonObject } from "pi-cosmic-core";
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 
@@ -170,11 +171,11 @@ if (!hasObjectRuntimeType(loaded) || loaded === null) {
 // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
 const candidate = loaded as Partial<RuntimeModule>;
 if (
-  !isFunctionValue(candidate.CodeMode?.execute) ||
-  !isFunctionValue(candidate.CodeMode.make) ||
-  !isFunctionValue(candidate.Tool?.make) ||
-  !isFunctionValue(candidate.ToolError) ||
-  !isFunctionValue(candidate.toolError)
+  !Predicate.isFunction(candidate.CodeMode?.execute) ||
+  !Predicate.isFunction(candidate.CodeMode.make) ||
+  !Predicate.isFunction(candidate.Tool?.make) ||
+  !Predicate.isFunction(candidate.ToolError) ||
+  !Predicate.isFunction(candidate.toolError)
 ) {
   throw new Error("Code Mode runtime source is missing its required public API.");
 }

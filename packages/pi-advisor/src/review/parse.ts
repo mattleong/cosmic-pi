@@ -1,4 +1,5 @@
-import { isStringValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { stringifyJson } from "../boundary/json.ts";
@@ -253,7 +254,7 @@ function requireBoundedString<ValueInput>(
   field: string,
   maxChars: number,
 ): string {
-  if (!isStringValue(value) || !value.trim()) {
+  if (!Predicate.isString(value) || !value.trim()) {
     throw reviewError(`Advisor ${field} must be a non-empty string.`);
   }
   const trimmed = value.trim();

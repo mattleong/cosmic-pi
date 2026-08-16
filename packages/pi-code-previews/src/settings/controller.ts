@@ -1,4 +1,5 @@
-import { isFunctionValue } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isProjectTrusted } from "pi-cosmic-core";
 import { settingsHintRenderer, VimSettingsAdapter } from "pi-cosmic-ui/manager/settings-adapter";
@@ -8,7 +9,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("code-preview-settings", {
     description: "Configure code preview settings",
     handler: (_args, ctx) => {
-      if (ctx.mode !== "tui" || !isFunctionValue(ctx.ui.custom)) {
+      if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
         if (ctx.hasUI)
           ctx.ui.notify("Code preview settings require interactive TUI mode.", "warning");
         return Promise.resolve();
@@ -20,15 +21,15 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
           loadOptions: { projectCwd: ctx.cwd, projectTrusted: isProjectTrusted(ctx) },
         });
         return new VimSettingsAdapter(list, {
-          matchesKeybinding: isFunctionValue(keybindings?.matches)
+          matchesKeybinding: Predicate.isFunction(keybindings?.matches)
             ? (data, id) => keybindings.matches(data, id)
             : undefined,
-          requestRender: isFunctionValue(tui?.requestRender)
+          requestRender: Predicate.isFunction(tui?.requestRender)
             ? () => tui.requestRender()
             : undefined,
           // The shared renderer follows the adapter's focus/search mode instead of assuming
           // a never-searching surface.
-          renderHint: isFunctionValue(theme?.fg)
+          renderHint: Predicate.isFunction(theme?.fg)
             ? settingsHintRenderer({ dim: (text) => theme.fg("dim", text) })
             : undefined,
         });
