@@ -134,6 +134,22 @@ src/
 - [ ] `ARCHITECTURE.md` source map updated when layout changed
 - [ ] Every new extension-owned agent tool uses the `pi-code-previews` cooperative shell
 
+## Testing policy
+
+Tests must protect durable behavior, not implementation details or third-party assumptions.
+
+Keep tests for domain logic, persistence, security, lifecycle, concurrency, cancellation, cleanup, and failure recovery.
+
+Do not test:
+
+- Feature, export, command, tool, or renderer existence/registration.
+- Contracts already enforced by TypeScript or schemas.
+- Exact provider payloads, endpoints, headers, events, or model catalogs.
+- Exact UI copy, layout, colors, icons, ANSI output, or key hints.
+- Internal call order/counts without an observable behavioral consequence.
+
+Mock owned domain boundaries, not external provider protocols. Test command handlers and UI state transitions rather than their wiring or presentation. A behavior-preserving refactor should not break a test.
+
 ## Effect architecture
 
 - The workspace is being rearchitected around the exact Effect v4 prerelease versions in `pnpm-workspace.yaml`.
