@@ -46,7 +46,7 @@ export interface RunControlDependencies {
   ) => Effect.Effect<void>;
   readonly interruptBackend: (record: RunRecord) => Effect.Effect<void, SubagentError>;
   readonly renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
-  readonly publish: () => void;
+  readonly publish: Effect.Effect<void>;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
   readonly failPendingResponses: (record: RunRecord, error: SubagentError) => void;
   readonly closeRecordScope: (record: RunRecord) => Effect.Effect<void>;
@@ -81,7 +81,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       const now = yield* Clock.currentTimeMillis;
       const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
       yield* withLock(
-        Effect.sync(() => {
+        Effect.gen(function* () {
           if (isTerminalRunState(record.view.state) || record.view.state === "stopping") return;
           record.warningSlots = setRunWarning(record.warningSlots, "system", diagnostic);
           record.view = {
@@ -94,7 +94,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               now,
             ),
           };
-          publish();
+          yield* publish;
         }),
       );
     });
@@ -156,7 +156,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               error: undefined,
               lastActivityAt: yield* Clock.currentTimeMillis,
             };
-            publish();
+            yield* publish;
             return {
               record: selected,
               retained: true as const,
@@ -196,7 +196,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               if (error._tag === "SubagentProcessError" && isOutcomeUncertain(error))
                 return retainUncertainAssignment(record, selected.attemptToken, error.message);
               return withLock(
-                Effect.sync(() => {
+                Effect.gen(function* () {
                   if (record.assignment.attemptToken !== selected.attemptToken) return;
                   const sessionEvents = record.view.sessionEvents;
                   record.view = { ...selected.previous.view, sessionEvents };
@@ -210,7 +210,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   record.pauseRequested = selected.previous.pauseRequested;
                   record.pauseOutcome = selected.previous.pauseOutcome;
                   record.replyPendingRequestId = selected.previous.replyPendingRequestId;
-                  publish();
+                  yield* publish;
                 }),
               );
             }),
@@ -247,7 +247,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               now,
             ),
           };
-          publish();
+          yield* publish;
           return snapshotView(record.view);
         }),
       );
@@ -280,7 +280,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               });
             record.replyPendingRequestId = question.requestId;
             record.view = { ...record.view, state: "running", question: undefined };
-            publish();
+            yield* publish;
             return { record, process, question };
           }),
         );
@@ -297,7 +297,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           Effect.andThen(Clock.currentTimeMillis),
           Effect.flatMap((now) =>
             withLock(
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 if (claimed.record.replyPendingRequestId === claimed.question.requestId)
                   claimed.record.replyPendingRequestId = undefined;
                 claimed.record.view = {
@@ -310,7 +310,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                     now,
                   ),
                 };
-                publish();
+                yield* publish;
                 return snapshotView(claimed.record.view);
               }),
             ),
@@ -330,7 +330,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   ),
                 )
               : withLock(
-                  Effect.sync(() => {
+                  Effect.gen(function* () {
                     if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
                     claimed.record.replyPendingRequestId = undefined;
                     if (
@@ -342,7 +342,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                         state: "waiting_for_parent",
                         question: claimed.question,
                       };
-                      publish();
+                      yield* publish;
                     }
                   }),
                 ),
@@ -426,7 +426,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                 lastActivityAt: now,
               };
               const view = snapshotView(record.view);
-              publish();
+              yield* publish;
               return view;
             }),
           );
@@ -463,7 +463,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           ) {
             record.launch = { ...record.launch, name };
             record.view = { ...record.view, name };
-            publish();
+            yield* publish;
             return { record, localView: snapshotView(record.view) };
           }
           return { record };
@@ -486,7 +486,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             });
           selected.record.launch = { ...selected.record.launch, name };
           selected.record.view = { ...selected.record.view, name };
-          publish();
+          yield* publish;
           return snapshotView(selected.record.view);
         }),
       );
@@ -516,7 +516,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               currentTool: undefined,
             };
             failPendingResponses(selected, stopError);
-            publish();
+            yield* publish;
             return { record: selected, cleanupRequired: true as const };
           }),
         );

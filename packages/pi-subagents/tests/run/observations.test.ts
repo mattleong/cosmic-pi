@@ -2,10 +2,13 @@
 // @effect-diagnostics effect/strictEffectProvide:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
@@ -60,6 +63,88 @@ describe("SubagentService", () => {
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "does not miss a publication triggered between the locked check and subscription",
+    () => {
+      const fake = fakeChildLayer();
+      const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ name: "revision-race" }));
+        let triggered = false;
+        const [completed] = yield* service.awaitTerminal([run.id], "all_finished", () => {
+          if (triggered) return;
+          triggered = true;
+          fake.controls[0]?.offer({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "Completed during subscription setup." }],
+            },
+          });
+          fake.controls[0]?.offer({ type: "agent_settled" });
+        });
+        expect(triggered).toBe(true);
+        expect(completed).toMatchObject({
+          id: run.id,
+          state: "completed",
+          finalText: "Completed during subscription setup.",
+        });
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("wakes multiple subscribers across non-terminal and terminal revisions", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const first = yield* service.start(request({ name: "revision-first" }));
+      const second = yield* service.start(request({ name: "revision-second" }));
+      let firstUpdates = 0;
+      let secondUpdates = 0;
+      const firstAwait = yield* service
+        .awaitTerminal([first.id], "all_finished", () => firstUpdates++)
+        .pipe(Effect.forkScoped);
+      const secondAwait = yield* service
+        .awaitTerminal([second.id], "all_finished", () => secondUpdates++)
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => firstUpdates > 0 && secondUpdates > 0);
+
+      yield* service.rename(first.id, "revision-first-renamed");
+      yield* yieldUntil(() => firstUpdates > 1 && secondUpdates > 1);
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      expect((yield* Fiber.join(firstAwait))[0]?.state).toBe("completed");
+      expect(secondAwait.pollUnsafe()).toBeUndefined();
+
+      fake.controls[1]?.offer({ type: "agent_settled" });
+      expect((yield* Fiber.join(secondAwait))[0]?.state).toBe("completed");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("fails subscribed awaits when the service scope closes", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const serviceScope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(layer, serviceScope);
+      const service = Context.get(context, SubagentService);
+      const run = yield* service.start(request({ name: "revision-shutdown" }));
+      let updates = 0;
+      const waiting = yield* service
+        .awaitTerminal([run.id], "all_finished", () => updates++)
+        .pipe(Effect.result, Effect.forkScoped);
+      yield* yieldUntil(() => updates > 0);
+
+      yield* Scope.close(serviceScope, Exit.void);
+      const result = yield* Fiber.join(waiting);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "SubagentRuntimeClosedError" },
+      });
+    }).pipe(Effect.scoped);
   });
 
   it.effect("redacts a completed report from status while an await owns its receipt", () => {

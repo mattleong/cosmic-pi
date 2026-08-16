@@ -31,7 +31,7 @@ export type RetainedReportTransition = {
 export interface RunReportLifecycleDependencies {
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: () => void;
+  readonly publish: Effect.Effect<void>;
   readonly delivery: RunNotificationDelivery;
   readonly settle: (
     record: RunRecord,
@@ -67,7 +67,6 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
       warning,
       sessionEvents: appendNoticeSessionEvent(record.view.sessionEvents, "warning", warning, now),
     };
-    publish();
     return snapshotView(record.view);
   };
 
@@ -134,7 +133,6 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
       finalText: text,
       error: undefined,
     };
-    publish();
     return {
       transitioned: true,
       view: snapshotView(record.view),
@@ -182,52 +180,51 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
       };
       const now = yield* Clock.currentTimeMillis;
       const decision = yield* withLock(
-        Effect.sync(() => {
+        Effect.gen(function* () {
           if (record.assignment.epoch !== report.assignmentEpoch)
             return { kind: "unchanged" as const, view: snapshotView(record.view) };
           const pair = reportPairStatus(record, report);
           if (pair === "exact-retry")
             return { kind: "unchanged" as const, view: snapshotView(record.view) };
-          if (pair === "invalid")
-            return {
-              kind: "unchanged" as const,
-              view: rejectReportLocked(
-                record,
-                `sequence ${report.sequence} reused delivery identity ${report.deliveryId}.`,
-                now,
-              ),
-            };
+          if (pair === "invalid") {
+            const view = rejectReportLocked(
+              record,
+              `sequence ${report.sequence} reused delivery identity ${report.deliveryId}.`,
+              now,
+            );
+            yield* publish;
+            return { kind: "unchanged" as const, view };
+          }
           if (record.assignment.phase === "issuing") {
             const pending = record.assignment.pendingReport;
             if (
               pending &&
               (pending.sequence !== report.sequence || pending.deliveryId !== report.deliveryId)
-            )
-              return {
-                kind: "unchanged" as const,
-                view: rejectReportLocked(
-                  record,
-                  `assignment ${report.assignmentEpoch} produced more than one in-flight report.`,
-                  now,
-                ),
-              };
+            ) {
+              const view = rejectReportLocked(
+                record,
+                `assignment ${report.assignmentEpoch} produced more than one in-flight report.`,
+                now,
+              );
+              yield* publish;
+              return { kind: "unchanged" as const, view };
+            }
             if (!pending) record.assignment.pendingReport = report;
             return { kind: "buffered" as const, view: snapshotView(record.view) };
           }
-          if (record.assignment.phase !== "running")
-            return {
-              kind: "unchanged" as const,
-              view: rejectReportLocked(
-                record,
-                `sequence ${report.sequence} arrived while assignment ${report.assignmentEpoch} was ${record.assignment.phase}.`,
-                now,
-              ),
-            };
+          if (record.assignment.phase !== "running") {
+            const view = rejectReportLocked(
+              record,
+              `sequence ${report.sequence} arrived while assignment ${report.assignmentEpoch} was ${record.assignment.phase}.`,
+              now,
+            );
+            yield* publish;
+            return { kind: "unchanged" as const, view };
+          }
           if (record.view.closeOnReport !== false) return { kind: "close" as const, report };
-          return {
-            kind: "retained" as const,
-            result: commitRetainedReportLocked(record, report, now),
-          };
+          const result = commitRetainedReportLocked(record, report, now);
+          yield* publish;
+          return { kind: "retained" as const, result };
         }),
       );
       if (decision.kind === "unchanged" || decision.kind === "buffered") return decision.view;
@@ -264,7 +261,7 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const result = yield* withLock(
-        Effect.sync(() => {
+        Effect.gen(function* () {
           if (
             record.assignment.epoch !== assignmentEpoch ||
             record.assignment.phase === "preparing" ||
@@ -282,7 +279,7 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
               error: undefined,
               lastActivityAt: now,
             };
-            publish();
+            yield* publish;
             return { kind: "unchanged" as const };
           }
           const pendingReport = record.assignment.pendingReport;
@@ -290,11 +287,11 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
           record.assignment.phase = "running";
           record.assignment.pendingReport = undefined;
           record.assignment.pendingRunSettled = false;
-          if (pendingReport && record.view.closeOnReport === false)
-            return {
-              kind: "report" as const,
-              report: commitRetainedReportLocked(record, pendingReport, now),
-            };
+          if (pendingReport && record.view.closeOnReport === false) {
+            const report = commitRetainedReportLocked(record, pendingReport, now);
+            yield* publish;
+            return { kind: "report" as const, report };
+          }
           record.pausedAssignmentEpoch = undefined;
           record.view = {
             ...record.view,
@@ -303,7 +300,7 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
             error: undefined,
             lastActivityAt: now,
           };
-          publish();
+          yield* publish;
           return { kind: "running" as const, pendingRunSettled };
         }),
       );

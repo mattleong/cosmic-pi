@@ -30,7 +30,7 @@ export interface RunResumeDependencies {
   readonly records: ReadonlyMap<string, RunRecord>;
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: () => void;
+  readonly publish: Effect.Effect<void>;
   readonly writerLeases: WriterLeaseContract;
   readonly delivery: RunNotificationDelivery;
   readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
@@ -218,7 +218,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                   error: undefined,
                   lastActivityAt: now,
                 };
-                publish();
+                yield* publish;
                 return { record: selected, needsRespawn, attemptToken };
               }),
             );
@@ -268,7 +268,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 const state = yield* initializeProcess(record);
                 const resolvedModel = state.model ?? record.view.model;
                 const committed = yield* withLock(
-                  Effect.sync(() => {
+                  Effect.gen(function* () {
                     if (record.view.state !== "starting") return undefined;
                     record.initializationPending = false;
                     record.resumeToken = state.resumeToken;
@@ -286,7 +286,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                         : objectPart12746_0;
                       return objectPart12746_1;
                     })();
-                    publish();
+                    yield* publish;
                     return pendingSettlement;
                   }),
                 );
@@ -306,7 +306,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 claimed.attemptToken,
               );
               const view = yield* withLock(
-                Effect.sync(() => {
+                Effect.gen(function* () {
                   const record = claimed.record;
                   if (issued.state !== "running") return snapshotView(record.view);
                   record.view = {
@@ -318,7 +318,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                       now,
                     ),
                   };
-                  publish();
+                  yield* publish;
                   return snapshotView(record.view);
                 }),
               );

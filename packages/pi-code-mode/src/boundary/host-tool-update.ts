@@ -9,6 +9,7 @@
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { synchronousNow } from "./native-clock.ts";
@@ -40,7 +41,7 @@ export interface GuardedToolUpdatePublisher {
 
 const scheduleHostToolUpdate: HostToolUpdateScheduler = (delayMs, callback) => {
   const fiber = Effect.runFork(
-    Effect.sleep(Math.max(0, delayMs)).pipe(Effect.andThen(Effect.sync(callback))),
+    Effect.sleep(Duration.millis(Math.max(0, delayMs))).pipe(Effect.andThen(Effect.sync(callback))),
   );
   return () => {
     void Effect.runFork(Fiber.interrupt(fiber));

@@ -34,11 +34,12 @@ export type SupervisorChannelId = Schema.Schema.Type<typeof SupervisorChannelIdS
 
 export const isSupervisorRunId = (value: string): value is SupervisorRunId =>
   RUN_ID_PATTERN.test(value);
-const TokenSchema = Schema.String.check(
+export const SupervisorAuthTokenSchema = Schema.String.check(
   Schema.isMinLength(SUPERVISOR_AUTH_TOKEN_CHARS),
   Schema.isMaxLength(SUPERVISOR_AUTH_TOKEN_CHARS),
   Schema.isPattern(TOKEN_PATTERN),
-);
+).pipe(Schema.brand("SupervisorAuthToken"));
+export type SupervisorAuthToken = Schema.Schema.Type<typeof SupervisorAuthTokenSchema>;
 export const SupervisorDeliveryIdSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_BACKEND_REPORT_ID_CHARS),
@@ -58,7 +59,7 @@ const ReportTextSchema = Schema.String.check(
 const AuthenticatedFields = {
   version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
   runId: SupervisorRunIdSchema,
-  token: TokenSchema,
+  token: SupervisorAuthTokenSchema,
 };
 const RequestFields = {
   ...AuthenticatedFields,
@@ -78,7 +79,7 @@ export const SupervisorChannelConfigSchema = Schema.Struct({
     Schema.isGreaterThan(0),
     Schema.isLessThanOrEqualTo(65_535),
   ),
-  token: TokenSchema,
+  token: SupervisorAuthTokenSchema,
 });
 
 export type SupervisorChannelConfig = Schema.Schema.Type<typeof SupervisorChannelConfigSchema>;
@@ -86,7 +87,7 @@ export type SupervisorChannelConfig = Schema.Schema.Type<typeof SupervisorChanne
 export interface SupervisorServerAuthentication {
   readonly version: typeof SUPERVISOR_CHANNEL_VERSION;
   readonly runId: SupervisorRunId;
-  readonly token: string;
+  readonly token: SupervisorAuthToken;
 }
 
 export type SupervisorServerPayload =

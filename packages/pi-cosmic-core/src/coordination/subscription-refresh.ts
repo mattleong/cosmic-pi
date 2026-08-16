@@ -1,4 +1,5 @@
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Ref from "effect/Ref";
@@ -92,7 +93,10 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
         while (true) {
           const interval = yield* options.interval;
           const currentWake = yield* SynchronizedRef.get(wakeRef);
-          yield* Effect.raceFirst(Effect.sleep(interval), Deferred.await(currentWake));
+          yield* Effect.raceFirst(
+            Effect.sleep(Duration.millis(interval)),
+            Deferred.await(currentWake),
+          );
           yield* request(pollRequest);
         }
       });

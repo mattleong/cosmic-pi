@@ -12,7 +12,7 @@ import { setRunWarning } from "./warnings.ts";
 export interface RunAssignmentDependencies {
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: () => void;
+  readonly publish: Effect.Effect<void>;
   /** Late-bound process-lifecycle prompt issuer; resolved at call time. */
   readonly startPrompt: (
     record: RunRecord,
@@ -59,7 +59,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const result = yield* withLock(
-        Effect.sync(() => {
+        Effect.gen(function* () {
           if (
             record.assignment.attemptToken !== attemptToken ||
             record.assignment.phase !== "issuing" ||
@@ -72,11 +72,11 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
           record.assignment.pendingRunSettled = false;
           record.assignment.outcomeUncertain = false;
           record.assignment.phase = "running";
-          if (pendingReport && record.view.closeOnReport === false)
-            return {
-              kind: "report" as const,
-              report: commitRetainedReportLocked(record, pendingReport, now),
-            };
+          if (pendingReport && record.view.closeOnReport === false) {
+            const report = commitRetainedReportLocked(record, pendingReport, now);
+            yield* publish;
+            return { kind: "report" as const, report };
+          }
           record.view = {
             ...record.view,
             state: "running",
@@ -85,7 +85,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
             finalText: undefined,
             lastActivityAt: now,
           };
-          publish();
+          yield* publish;
           return {
             kind: "running" as const,
             view: snapshotView(record.view),
@@ -132,7 +132,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const result = yield* withLock(
-        Effect.sync(() => {
+        Effect.gen(function* () {
           if (
             record.assignment.attemptToken !== attemptToken ||
             record.assignment.phase !== "issuing"
@@ -152,7 +152,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
             ),
           };
           if (!record.assignment.startedObserved) {
-            publish();
+            yield* publish;
             return { kind: "unchanged" as const };
           }
           const pendingReport = record.assignment.pendingReport;
@@ -160,11 +160,11 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
           record.assignment.pendingReport = undefined;
           record.assignment.pendingRunSettled = false;
           record.assignment.phase = "running";
-          if (pendingReport && record.view.closeOnReport === false)
-            return {
-              kind: "report" as const,
-              report: commitRetainedReportLocked(record, pendingReport, now),
-            };
+          if (pendingReport && record.view.closeOnReport === false) {
+            const report = commitRetainedReportLocked(record, pendingReport, now);
+            yield* publish;
+            return { kind: "report" as const, report };
+          }
           record.view = {
             ...record.view,
             state: "running",
@@ -172,7 +172,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
             finalText: undefined,
             lastActivityAt: now,
           };
-          publish();
+          yield* publish;
           return { kind: "running" as const, pendingRunSettled };
         }),
       );

@@ -24,6 +24,7 @@ import {
 import {
   authenticateSupervisorServerPayload,
   SUPERVISOR_CHANNEL_VERSION,
+  SupervisorAuthTokenSchema,
   SupervisorRunIdSchema,
   type SupervisorServerPayload,
 } from "../src/supervisor/protocol.ts";
@@ -262,12 +263,14 @@ const connectionConfig = async (handle: SupervisorChannelHandle) =>
 
 describe("private supervisor channel", () => {
   it("constructs authenticated server messages with reserved fields authoritative", () => {
+    expect(Option.isSome(SupervisorAuthTokenSchema.makeOption("a".repeat(64)))).toBe(true);
+    expect(Option.isNone(SupervisorAuthTokenSchema.makeOption("short"))).toBe(true);
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const authenticated = authenticateSupervisorServerPayload(
       {
         version: SUPERVISOR_CHANNEL_VERSION,
         runId: SupervisorRunIdSchema.make("authoritative-run"),
-        token: "a".repeat(64),
+        token: SupervisorAuthTokenSchema.make("a".repeat(64)),
       },
       {
         type: "closed",

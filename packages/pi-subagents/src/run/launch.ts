@@ -42,7 +42,7 @@ export interface RunLaunchDependencies {
   readonly records: Map<string, RunRecord>;
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: () => void;
+  readonly publish: Effect.Effect<void>;
   readonly delivery: RunNotificationDelivery;
   readonly redactCompletionReport: (view: SubagentRunView) => SubagentRunView;
   /** Service-owned shutdown flag, observed under the admission lock. */
@@ -345,7 +345,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               return objectPart12902_3;
             })();
             records.set(id, record);
-            publish();
+            yield* publish;
             return record;
           });
         /**
@@ -451,7 +451,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           const resolvedModel = state.model ?? reserved.view.model;
           const startedAt = yield* Clock.currentTimeMillis;
           const activated = yield* withLock(
-            Effect.sync(() => {
+            Effect.gen(function* () {
               if (
                 reserved.stoppedByParent ||
                 reserved.view.state === "stopping" ||
@@ -475,7 +475,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                   : objectPart20085_0;
                 return objectPart20085_1;
               })();
-              publish();
+              yield* publish;
               return {
                 view: snapshotView(reserved.view),
                 pendingSettlement,

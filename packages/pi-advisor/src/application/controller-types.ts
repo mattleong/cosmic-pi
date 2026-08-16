@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/deterministicKeys:off
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -37,7 +38,7 @@ export const awaitAdvisorCatchUpEffect = (
   onTimeout: Effect.Effect<void> = Effect.void,
 ): Effect.Effect<AdvisorCatchUpOutcome> =>
   settlement.pipe(
-    Effect.raceFirst(Effect.sleep(timeoutMs).pipe(Effect.as("timeout" as const))),
+    Effect.raceFirst(Effect.sleep(Duration.millis(timeoutMs)).pipe(Effect.as("timeout" as const))),
     Effect.raceFirst(cancellation),
     Effect.flatMap((outcome) =>
       outcome === "timeout" ? onTimeout.pipe(Effect.as(outcome)) : Effect.succeed(outcome),

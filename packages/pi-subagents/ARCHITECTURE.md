@@ -24,11 +24,11 @@
 - `src/boundary/native-model-catalog.ts` — cancelable, cached no-inference Claude/Codex model discovery.
 - `src/boundary/writer-lease.ts` — canonical cwd identity plus the token-bound reserved/spawn-started lease, dead-reservation takeover, and tombstone release protocol.
 - `src/boundary/herdr-environment.ts`, `herdr-cli.ts`, `herdr-harness.ts`, `herdr-launch-safety.ts`, and `herdr-host.ts` — inherited environment, fixed protocol, private harness, mutation safety, and exact topology ownership.
-- `src/boundary/supervisor-channel.ts`, `supervisor-mcp-helper.mjs`, `host-pi-supervisor-extension.ts`, and `pi-supervisor-bridge-client.ts` — authenticated private supervisor transport and delegated-Pi bridge.
+- `src/boundary/supervisor-channel.ts`, `supervisor-mcp-helper.mjs`, `host-pi-supervisor-extension.ts`, and `pi-supervisor-bridge-client.ts` — authenticated private supervisor transport and delegated-Pi bridge; the schema-branded channel token stays `Redacted` in the parent and is unwrapped only for constant-time comparison, private config, and authenticated wire output.
 - `src/boundary/host-profile-resolution.ts`, `host-notifier.ts`, `host-ui.ts`, and `host-environment.ts` — Pi profile/auth capture, bounded delivery, repaint scheduling, and child-environment checks. Transferable runtime API keys remain `Redacted` until the child-process or Herdr private-environment transport materializes them.
 - `src/boundary/bounded-line-parser.ts` and `harness-shared.ts` — shared Node-adjacent bounded parser and private-filesystem/auth primitives; `native-clock.ts` is the named wall-clock boundary.
 - `src/run/` — `service.ts` and `internal.ts` wire the registry; `admission.ts`, `launch.ts`, `process-lifecycle.ts`, and `record-cleanup.ts` own admission/spawn/cleanup; `assignment.ts`, `events.ts`, `report-lifecycle.ts`, `settlement.ts`, `control.ts`, and `resume.ts` own live transitions; `completion.ts`, `completion-observations.ts`, and `notification-delivery.ts` own delivery; `coordination.ts` and `tool-policy.ts` separate record-aware coordination from child policy; `model.ts`, `errors.ts`, `limits.ts`, `state.ts`, `projection.ts`, `session-events.ts`, `warnings.ts`, `fast-mode.ts`, `model-catalog.ts`, `native-model-selector.ts`, and `launch-validation.ts` own bounded domain policy/projection.
-- `src/supervisor/protocol.ts` — one strict authenticated client-message union with schema-branded run, channel, and delivery identities, plus normalized supervisor events.
+- `src/supervisor/protocol.ts` — one strict authenticated client-message union with schema-branded run, channel, delivery, and auth-token identities, plus normalized supervisor events.
 - `src/tools/` — `schema.ts`, `subagent.ts`, and `execute.ts` own focused tool contracts/execution; `details*.ts`, `format.ts`, `output.ts`, and `render*.ts` own bounded persisted details and cooperative rendering.
 - `src/settings/controller.ts` and `profile-route-editor.ts` — command/persistence orchestration and pure route draft operations; `src/settings/ui/` owns the pure responsive profile workspace and selectors.
 - `src/ui/fleet.ts`, `metrics.ts`, `run-state.ts`, `sanitize.ts`, and `session-output.ts` — pure fleet/session projection and presentation.
@@ -50,7 +50,7 @@ Herdr uses only the parent-inherited session. Workspace/tab/pane/terminal/agent/
 
 ### Completion and delivery
 
-Reports are bounded in-memory assignment generations. Epoch/sequence/delivery identity are committed atomically; await claims are exclusive and cancellation-safe; unclaimed outcomes are delivered exactly once through the bounded retrying outbox; renderers consume immutable snapshots only. See [Completion and delivery](docs/completion-delivery.md).
+Reports are bounded in-memory assignment generations. Epoch/sequence/delivery identity are committed atomically; await claims are exclusive and cancellation-safe; monotonic `SubscriptionRef` revisions close the check-to-subscribe race without manual waiter registries; unclaimed outcomes are delivered exactly once through the bounded retrying outbox; renderers consume immutable snapshots only. See [Completion and delivery](docs/completion-delivery.md).
 
 ### Settings and persistence
 

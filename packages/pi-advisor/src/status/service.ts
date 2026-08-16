@@ -1,3 +1,4 @@
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
@@ -32,12 +33,12 @@ export const advisorStatusFramesEffect = (
       const nextFrame = frame % Math.max(1, options.frameCount);
       frame += 1;
       return renderFrame(nextFrame);
-    }).pipe(Effect.repeat(Schedule.fixed(options.intervalMs)), Effect.asVoid);
-    return Effect.sleep(options.delayMs).pipe(
+    }).pipe(Effect.repeat(Schedule.fixed(Duration.millis(options.intervalMs))), Effect.asVoid);
+    return Effect.sleep(Duration.millis(options.delayMs)).pipe(
       Effect.andThen(renderFrame(0)),
       Effect.andThen(
         options.animated
-          ? Effect.sleep(options.intervalMs).pipe(Effect.andThen(animation))
+          ? Effect.sleep(Duration.millis(options.intervalMs)).pipe(Effect.andThen(animation))
           : Effect.void,
       ),
       Effect.asVoid,

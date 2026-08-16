@@ -13,7 +13,7 @@ export interface RunSettlementDependencies {
   readonly ownerScope: Scope.Scope;
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: () => void;
+  readonly publish: Effect.Effect<void>;
   readonly delivery: RunNotificationDelivery;
   readonly closeRecordScope: (record: RunRecord, scope?: Scope.Closeable) => Effect.Effect<void>;
   /** Late-bound process-lifecycle peer notifier; resolved at call time. */
@@ -37,7 +37,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     update: (view: SubagentRunView) => SubagentRunView | undefined,
   ) =>
     withLock(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (isInactiveRunRecord(record)) return undefined;
         if (
           assignmentEpoch !== undefined &&
@@ -47,7 +47,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         const next = update(record.view);
         if (!next) return undefined;
         record.view = next;
-        publish();
+        yield* publish;
         return snapshotView(record.view);
       }),
     );
@@ -59,7 +59,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
    */
   const mergeLateUsage = (record: RunRecord, assignmentEpoch: number, usage: SubagentUsage) =>
     withLock(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (
           record.stoppedByParent ||
           record.assignment.epoch !== assignmentEpoch ||
@@ -69,12 +69,12 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         const merged = addUsage(record.view.usage, usage);
         if (merged === record.view.usage) return;
         record.view = { ...record.view, usage: merged };
-        publish();
+        yield* publish;
       }),
     );
   const pauseFromEvent = (record: RunRecord, now: number, assignmentEpoch: number) =>
     withLock(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (
           !record.pauseRequested ||
           isInactiveRunRecord(record) ||
@@ -95,7 +95,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         record.pauseRequested = false;
         const outcome = record.pauseOutcome;
         record.pauseOutcome = undefined;
-        publish();
+        yield* publish;
         if (outcome) Deferred.doneUnsafe(outcome, Effect.succeed(view));
         return view;
       }),
@@ -107,7 +107,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const result = yield* withLock(
-        Effect.sync(() => {
+        Effect.gen(function* () {
           if (
             isTerminalRunState(record.view.state) ||
             (state !== "stopped" && (record.stoppedByParent || record.view.state === "stopping"))
@@ -182,7 +182,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
               : error
                 ? { ...completedView, error }
                 : completedView;
-          publish();
+          yield* publish;
           const view = snapshotView(record.view);
           const completionQueued = hasDeliverableOutcome;
           if (completionQueued) delivery.queueCompletionLocked(record, completionGeneration);

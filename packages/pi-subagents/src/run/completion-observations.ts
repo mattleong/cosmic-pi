@@ -1,7 +1,6 @@
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
-import { InvalidSubagentRequestError } from "./errors.ts";
+import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { isAssignmentFinishedRunState, type SubagentRunView } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
@@ -18,8 +17,10 @@ export interface RunCompletionObservationDependencies {
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** The shared completion gate serializing claim acquisition against delivery. */
   readonly withCompletionGate: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** Revision waiters woken by every service publish. */
-  readonly revisionWaiters: Set<Deferred.Deferred<void>>;
+  /** Synchronously captured under the shared lock to prevent missed publications. */
+  readonly currentRevision: () => number;
+  /** Waits for a service publication strictly newer than the supplied revision. */
+  readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
   /** Claim-token allocation stays owned by the service. */
   readonly allocateClaimToken: () => string;
   readonly delivery: Pick<
@@ -34,8 +35,15 @@ export interface RunCompletionObservationDependencies {
  * terminal waits, and claimed-receipt consumption.
  */
 export function makeRunCompletionObservations(dependencies: RunCompletionObservationDependencies) {
-  const { records, withLock, withCompletionGate, revisionWaiters, allocateClaimToken, delivery } =
-    dependencies;
+  const {
+    records,
+    withLock,
+    withCompletionGate,
+    currentRevision,
+    waitForRevision,
+    allocateClaimToken,
+    delivery,
+  } = dependencies;
 
   const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
     const { finalText: _finalText, ...withoutReport } = view;
@@ -176,7 +184,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     claim: CompletionClaim,
     until: SubagentAwaitUntil,
     onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
-  ): Effect.Effect<ReadonlyArray<SubagentRunObservation>> => {
+  ): Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentRuntimeClosedError> => {
     const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
       Effect.sync(() => {
         try {
@@ -185,10 +193,13 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
           // Pi partial-result delivery is best effort and cannot own the waiter.
         }
       });
-    const waitLoop = (): Effect.Effect<ReadonlyArray<SubagentRunObservation>> =>
+    const waitLoop = (): Effect.Effect<
+      ReadonlyArray<SubagentRunObservation>,
+      SubagentRuntimeClosedError
+    > =>
       Effect.suspend(() =>
         withLock(
-          Effect.gen(function* () {
+          Effect.sync(() => {
             const observations = claim.selected.map((record) =>
               observeRecord(record, claim.claimToken),
             );
@@ -203,23 +214,14 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
               parentAttentionRequired ||
               (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
             if (done) return { done: true as const, runs, observations };
-            const wake = yield* Deferred.make<void>();
-            revisionWaiters.add(wake);
-            return { done: false as const, runs, wake };
+            return { done: false as const, runs, revision: currentRevision() };
           }),
         ).pipe(
           Effect.tap(({ runs }) => emitUpdate(runs)),
           Effect.flatMap((step) =>
             step.done
               ? Effect.succeed(step.observations)
-              : Deferred.await(step.wake).pipe(
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      revisionWaiters.delete(step.wake);
-                    }),
-                  ),
-                  Effect.andThen(waitLoop()),
-                ),
+              : waitForRevision(step.revision).pipe(Effect.andThen(waitLoop())),
           ),
         ),
       );

@@ -25,7 +25,7 @@ const mapWriterLeaseConflict = (error: WriterLeaseConflictError): SubagentWriter
 export interface RunRecordCleanupDependencies {
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: () => void;
+  readonly publish: Effect.Effect<void>;
   readonly writerLeases: WriterLeaseContract;
 }
 
@@ -210,7 +210,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
     );
   const clearCleanupPending = (record: RunRecord, scope: Scope.Closeable = record.scope) =>
     withLock(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (record.scope !== scope) return false;
         record.cleanupPending = false;
         record.process = undefined;
@@ -226,7 +226,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
         if (record.view.pid !== undefined) {
           const { pid: _pid, ...view } = record.view;
           record.view = view;
-          publish();
+          yield* publish;
         }
         return shouldReclaim;
       }),
@@ -239,7 +239,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       yield* withLock(
-        Effect.sync(() => {
+        Effect.gen(function* () {
           if (record.scope !== scope) return;
           const ownershipQuarantined =
             record.process !== undefined ||
@@ -260,7 +260,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
               now,
             ),
           };
-          publish();
+          yield* publish;
         }),
       );
     });

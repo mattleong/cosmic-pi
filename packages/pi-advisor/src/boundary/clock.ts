@@ -1,4 +1,5 @@
 // Synchronous Pi callback timing is confined here; fibers use Effect Clock.
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
@@ -20,11 +21,13 @@ const runClockTask = (task: () => void): Effect.Effect<void> =>
   }).pipe(Effect.catch(() => Effect.void));
 
 export const advisorDelayEffect = (milliseconds: number, task: () => void) =>
-  Effect.sleep(milliseconds).pipe(Effect.andThen(runClockTask(task)));
+  Effect.sleep(Duration.millis(milliseconds)).pipe(Effect.andThen(runClockTask(task)));
 
 export const advisorIntervalEffect = (milliseconds: number, task: () => void) =>
-  Effect.sleep(milliseconds).pipe(
-    Effect.andThen(Effect.repeat(runClockTask(task), Schedule.fixed(milliseconds))),
+  Effect.sleep(Duration.millis(milliseconds)).pipe(
+    Effect.andThen(
+      Effect.repeat(runClockTask(task), Schedule.fixed(Duration.millis(milliseconds))),
+    ),
     Effect.asVoid,
   );
 

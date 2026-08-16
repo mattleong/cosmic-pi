@@ -1,3 +1,4 @@
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { hasAvailableHerdrShell } from "../backend/herdr-shell-readiness.ts";
 import { matchingPaneIdentity } from "../backend/herdr-ownership.ts";
@@ -166,7 +167,8 @@ export const makeHerdrLaunchSafety = (
             (after.snapshot.focusedWorkspaceId === undefined ||
               after.snapshot.focusedWorkspaceId === pane.workspaceId));
         if (hasAvailableHerdrShell(processInfo) && !after.occupied && focusMatches) return;
-        if (attempt < SHELL_READINESS_ATTEMPTS) yield* Effect.sleep(SHELL_READINESS_DELAY_MILLIS);
+        if (attempt < SHELL_READINESS_ATTEMPTS)
+          yield* Effect.sleep(Duration.millis(SHELL_READINESS_DELAY_MILLIS));
       }
       return yield* processError(
         "inspect pane shell",

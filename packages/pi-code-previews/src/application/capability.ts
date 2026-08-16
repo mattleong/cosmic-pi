@@ -1,3 +1,4 @@
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
@@ -126,7 +127,9 @@ export function runCodePreviewSessionEffect<A, E>(
 
 /** Fixed cadence avoids recursive-sleep drift while remaining TestClock driven. */
 export const previewScheduleEffect = (interval: number, task: () => void) =>
-  Effect.sleep(interval).pipe(
-    Effect.andThen(Effect.repeat(invokeCodePreviewCallback(task), Schedule.fixed(interval))),
+  Effect.sleep(Duration.millis(interval)).pipe(
+    Effect.andThen(
+      Effect.repeat(invokeCodePreviewCallback(task), Schedule.fixed(Duration.millis(interval))),
+    ),
     Effect.asVoid,
   );

@@ -14,7 +14,7 @@ export interface RunProcessLifecycleDependencies {
   readonly ownerScope: Scope.Scope;
   readonly records: ReadonlyMap<string, RunRecord>;
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: () => void;
+  readonly publish: Effect.Effect<void>;
   readonly handleBackendEvent: (
     record: RunRecord,
     event: BackendEvent,
@@ -129,7 +129,7 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
         ),
       );
       const attached = yield* withLock(
-        Effect.sync(() => {
+        Effect.gen(function* () {
           if (
             record.scope !== scope ||
             record.stoppedByParent ||
@@ -146,7 +146,7 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
                 : { ...objectPart5222_0, pid: process.pid };
             return objectPart5222_1;
           })();
-          publish();
+          yield* publish;
           return true;
         }),
       );

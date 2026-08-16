@@ -1,9 +1,12 @@
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Context from "effect/Context";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { BackendStartupState } from "../backend/model.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import type {
@@ -150,7 +153,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
-  const revisionWaiters = new Set<Deferred.Deferred<void>>();
+  const revisionRef = yield* SubscriptionRef.make(0);
   const runtimeNamespace = allocateRuntimeNamespace();
   let nextRunOrdinal = 1;
   let nextClaimOrdinal = 1;
@@ -180,16 +183,33 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     const projection = currentProjection();
     return Object.freeze({ revision: projection.revision, runs: Object.freeze(projection.runs) });
   };
-  const publish = () => {
-    revision += 1;
-    for (const waiter of revisionWaiters) Deferred.doneUnsafe(waiter, Effect.void);
-    revisionWaiters.clear();
-    try {
-      options.publish?.(frozenProjection());
-    } catch {
-      // Host projection delivery cannot own the fleet lifecycle.
-    }
-  };
+  const publish = Effect.uninterruptible(
+    Effect.suspend(() => {
+      revision += 1;
+      const projection = frozenProjection();
+      return SubscriptionRef.set(revisionRef, revision).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            try {
+              options.publish?.(projection);
+            } catch {
+              // Host projection delivery cannot own the fleet lifecycle.
+            }
+          }),
+        ),
+      );
+    }),
+  );
+  const waitForRevision = (after: number): Effect.Effect<void, SubagentRuntimeClosedError> =>
+    SubscriptionRef.changes(revisionRef).pipe(
+      Stream.dropWhile((current) => current <= after),
+      Stream.runHead,
+      Effect.flatMap((next) =>
+        Option.isSome(next)
+          ? Effect.void
+          : Effect.fail(new SubagentRuntimeClosedError({ message: "Parent session shut down." })),
+      ),
+    );
   const notify = (notification: SubagentNotification): SubagentNotificationDelivery | undefined => {
     try {
       const delivery = options.notify?.(notification);
@@ -218,7 +238,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     records,
     withLock,
     withCompletionGate,
-    revisionWaiters,
+    currentRevision: () => revision,
+    waitForRevision,
     allocateClaimToken,
     delivery,
   });
@@ -437,6 +458,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         ),
       ),
       Effect.asVoid,
+      Effect.ensuring(PubSub.shutdown(revisionRef.pubsub)),
     ),
   );
 

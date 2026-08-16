@@ -1,3 +1,4 @@
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 
@@ -19,7 +20,10 @@ export interface HostUiTickerPool {
 
 const scheduleHostUiTicker: HostUiTickerScheduler = (intervalMs, tick) => {
   const fiber = Effect.runFork(
-    Effect.sleep(intervalMs).pipe(Effect.andThen(Effect.sync(tick)), Effect.forever),
+    Effect.sleep(Duration.millis(intervalMs)).pipe(
+      Effect.andThen(Effect.sync(tick)),
+      Effect.forever,
+    ),
   );
   return () => {
     void Effect.runFork(Fiber.interrupt(fiber));

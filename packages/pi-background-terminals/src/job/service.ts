@@ -1,6 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -230,7 +231,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         } else if (!outputFlushScheduled) {
           outputFlushScheduled = true;
           yield* flushOutputPublish.pipe(
-            Effect.delay(`${OUTPUT_PUBLISH_INTERVAL_MILLIS} millis`),
+            Effect.delay(Duration.millis(OUTPUT_PUBLISH_INTERVAL_MILLIS)),
             Effect.forkIn(ownerScope, { startImmediately: true }),
           );
         }
@@ -294,7 +295,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
           Effect.forkScoped({ startImmediately: true }),
         );
         if (request.timeoutSeconds !== undefined) {
-          yield* Effect.sleep(`${request.timeoutSeconds} seconds`).pipe(
+          yield* Effect.sleep(Duration.seconds(request.timeoutSeconds)).pipe(
             Effect.andThen(requestStop(id, false, "timed_out")),
             Effect.catch(() => Effect.void),
             Effect.forkScoped({ startImmediately: true }),
@@ -473,7 +474,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       if (!prepared.wake) return prepared.slice;
       yield* Deferred.await(prepared.wake).pipe(
         Effect.timeoutOption(
-          `${Math.min(request.waitSeconds ?? 0, config.maxLogWaitSeconds)} seconds`,
+          Duration.seconds(Math.min(request.waitSeconds ?? 0, config.maxLogWaitSeconds)),
         ),
       );
       return yield* readLogs({ ...request, waitSeconds: 0 }, false);
@@ -537,13 +538,13 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       } else if (prepared.owner) {
         yield* terminate("graceful");
         const settled = yield* Deferred.await(prepared.record.completion).pipe(
-          Effect.timeoutOption(`${config.stopGraceMs} millis`),
+          Effect.timeoutOption(Duration.millis(config.stopGraceMs)),
         );
         if (Option.isNone(settled)) yield* terminate("force");
       }
 
       const finalWait = yield* Deferred.await(prepared.record.completion).pipe(
-        Effect.timeoutOption(`${Math.max(5_000, config.stopGraceMs + 5_000)} millis`),
+        Effect.timeoutOption(Duration.millis(Math.max(5_000, config.stopGraceMs + 5_000))),
       );
       if (Option.isSome(finalWait)) return finalWait.value;
 

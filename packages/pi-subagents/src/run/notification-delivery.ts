@@ -1,4 +1,5 @@
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type {
@@ -52,7 +53,7 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
 
   let scheduleCompletionFlush: Effect.Effect<void> = Effect.void;
   const flushPendingCompletions = Effect.suspend(() =>
-    Effect.sleep(completionRetryDelayMillis).pipe(
+    Effect.sleep(Duration.millis(completionRetryDelayMillis)).pipe(
       Effect.andThen(
         withCompletionGate(
           withLock(
@@ -223,7 +224,7 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
         if (!state.retry) return Effect.void;
         if (state.immediate) return actionDeliveryLoop;
         return Effect.raceFirst(
-          Effect.sleep(actionRetryDelayMillis),
+          Effect.sleep(Duration.millis(actionRetryDelayMillis)),
           Deferred.await(state.wake),
         ).pipe(
           Effect.andThen(

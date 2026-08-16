@@ -1,6 +1,7 @@
 import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -183,7 +184,9 @@ export class OpenAIImageService extends Context.Service<
           Effect.suspend(() =>
             generate(params).pipe(
               Effect.timeout(
-                MutableRef.get(options.projection).config?.image.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                Duration.millis(
+                  MutableRef.get(options.projection).config?.image.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                ),
               ),
             ),
           ).pipe(

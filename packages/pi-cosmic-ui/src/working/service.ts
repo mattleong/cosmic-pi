@@ -1,5 +1,6 @@
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -120,7 +121,7 @@ export class WorkingTimerService extends Context.Service<
         });
 
       const ticker = (generation: number): Effect.Effect<void> =>
-        Effect.sleep(UPDATE_INTERVAL_MS).pipe(
+        Effect.sleep(Duration.millis(UPDATE_INTERVAL_MS)).pipe(
           Effect.andThen(drainOutputCharacters),
           Effect.andThen(tick(generation)),
           Effect.flatMap((active) => (active ? ticker(generation) : Effect.void)),

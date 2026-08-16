@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Redacted from "effect/Redacted";
 import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import { MAX_BACKEND_REPORT_EVIDENCE_CHARS, type BackendReport } from "../backend/model.ts";
@@ -29,11 +30,12 @@ import {
   isSupervisorRunId,
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
   MAX_SUPERVISOR_CONFIG_BYTES,
-  SUPERVISOR_AUTH_TOKEN_CHARS,
   SUPERVISOR_CHANNEL_VERSION,
   SUPERVISOR_MCP_SERVER_NAME,
+  SupervisorAuthTokenSchema,
   SupervisorChannelConfigSchema,
   SupervisorChannelIdSchema,
+  type SupervisorAuthToken,
   type SupervisorChannelId,
   type SupervisorDeliveryId,
   type SupervisorEvent,
@@ -64,8 +66,6 @@ const MAX_TRACKED_ASSIGNMENTS = 256;
 const MAX_REPORT_DELIVERIES = 128;
 const AUTH_TIMEOUT_MILLIS = 5_000;
 const REPLY_TIMEOUT = "10 seconds";
-
-const tokenPattern = /^[a-f0-9]{64}$/;
 
 export class SupervisorChannelError extends Schema.TaggedError<SupervisorChannelError>()(
   "SupervisorChannelError",
@@ -185,7 +185,7 @@ interface NodeChannelState {
   readonly metadata: SupervisorConnectionMetadata;
   readonly stateDirectory: string;
   readonly connectionConfigPath: string;
-  readonly token: string;
+  readonly token: Redacted.Redacted<SupervisorAuthToken>;
   readonly assignmentEpochs: Set<number>;
   readonly questionEpochs: Set<number>;
   readonly reports: Map<SupervisorDeliveryId, AcceptedReport>;
@@ -205,8 +205,11 @@ const channelError = (operation: string, code: string, message: string) =>
 const isLoopbackPeer = (address: string | undefined): boolean =>
   address === LOOPBACK_HOST || address === "::ffff:127.0.0.1";
 
-const authenticatedToken = <ValueInput>(expected: string, value: ValueInput): boolean => {
-  const expectedBytes = Buffer.from(expected, "utf8");
+const authenticatedToken = <ValueInput>(
+  expected: Redacted.Redacted<SupervisorAuthToken>,
+  value: ValueInput,
+): boolean => {
+  const expectedBytes = Buffer.from(Redacted.value(expected), "utf8");
   const supplied = Predicate.isString(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
   if (supplied.length !== expectedBytes.length) {
     // Keep malformed-token work on the same constant-time primitive without accepting it.
@@ -388,7 +391,7 @@ const authenticatedServerMessage = (
     {
       version: SUPERVISOR_CHANNEL_VERSION,
       runId: state.runId,
-      token: state.token,
+      token: Redacted.value(state.token),
     },
     payload,
   );
@@ -919,9 +922,9 @@ const acquireNodeChannel = async (
 ): Promise<NodeChannelState> => {
   let stateDirectory: string | undefined;
   let connectionConfigPath: string | undefined;
-  const token = randomBytes(32).toString("hex");
-  if (token.length !== SUPERVISOR_AUTH_TOKEN_CHARS || !tokenPattern.test(token))
-    throw new Error("token-generation");
+  const token = Redacted.make(SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")), {
+    label: "Supervisor auth token",
+  });
   const server = createServer();
   let state: NodeChannelState | undefined;
   server.on("error", () => {
@@ -942,7 +945,7 @@ const acquireNodeChannel = async (
       runId,
       host: LOOPBACK_HOST,
       port,
-      token,
+      token: Redacted.value(token),
     };
     if (!exactConfig(config)) throw new Error("invalid-generated-config");
     await writePrivateConfig(connectionConfigPath, config);
