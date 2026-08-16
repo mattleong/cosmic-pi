@@ -162,6 +162,26 @@ describe("Better OpenAI session boundary", () => {
     await h.emit("session_shutdown");
   });
 
+  test("resets cached Codex transport when session or fast routing state changes", async () => {
+    const resetOpenAICodexTransport = vi.fn();
+    const h = harness({
+      startupEffect: () => Effect.void,
+      resetOpenAICodexTransport,
+    });
+
+    await h.emit("session_start");
+    await h.commands.get("fast")?.("", h.ctx);
+    await h.commands.get("openai-settings")?.("fast.enabled false", h.ctx);
+    await h.emit("model_select", { model: h.ctx.model });
+
+    expect(resetOpenAICodexTransport).toHaveBeenCalledTimes(4);
+    expect(resetOpenAICodexTransport).toHaveBeenNthCalledWith(1, h.ctx);
+    expect(resetOpenAICodexTransport).toHaveBeenNthCalledWith(2, h.ctx);
+    expect(resetOpenAICodexTransport).toHaveBeenNthCalledWith(3, h.ctx);
+    expect(resetOpenAICodexTransport).toHaveBeenNthCalledWith(4, h.ctx);
+    await h.emit("session_shutdown");
+  });
+
   test("ignores an older session when settings loads complete out of order", async () => {
     const loads = [deferredPromise(), deferredPromise()];
     const started: number[] = [];

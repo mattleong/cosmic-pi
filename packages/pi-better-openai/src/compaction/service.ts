@@ -10,9 +10,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
+import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
+import { FAST_SERVICE_TIER } from "../fast/models.ts";
 import type { OpenAIProjection } from "../usage/index.ts";
 import {
   OpenAICompactionClient,
+  type OpenAICompactRequest,
   type OpenAICompactionBoundaryError,
 } from "../boundary/openai-compaction.ts";
 import {
@@ -64,6 +67,7 @@ export class OpenAICompactionService extends Context.Service<
   static layer(options: {
     readonly context: MutableRef.MutableRef<ExtensionContext>;
     readonly projection: MutableRef.MutableRef<OpenAIProjection>;
+    readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
   }) {
     return Layer.effect(
       this,
@@ -78,6 +82,7 @@ export class OpenAICompactionService extends Context.Service<
                 branch: ctx.sessionManager.getBranch(),
                 contextEntries: ctx.sessionManager.buildContextEntries(),
                 systemPrompt: ctx.getSystemPrompt(),
+                fastActive: isFastActive(ctx, MutableRef.get(options.fastProjection)),
               };
             },
             catch: () =>
@@ -122,7 +127,10 @@ export class OpenAICompactionService extends Context.Service<
               const objectPart4544_1 = instructions
                 ? { ...objectPart4544_0, instructions }
                 : objectPart4544_0;
-              return objectPart4544_1;
+              const objectPart4544_2: OpenAICompactRequest = current.fastActive
+                ? { ...objectPart4544_1, serviceTier: FAST_SERVICE_TIER }
+                : objectPart4544_1;
+              return objectPart4544_2;
             })(),
           );
           const now = yield* Clock.currentTimeMillis;

@@ -16,6 +16,7 @@ import type {
 import type * as Schema from "effect/Schema";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI from "../index.ts";
+import { resetOpenAICodexTransport } from "../src/boundary/host-provider-routing.ts";
 import type { ConfigFile } from "../src/config/schema.ts";
 
 type EventHandler = ExtensionHandler<any, any>;
@@ -57,9 +58,20 @@ function writeProjectConfig(cwd: string, overrides: ConfigFile = {}): void {
   );
 }
 
-function createModel(provider: string, id: string) {
+function createModel(
+  provider: string,
+  id: string,
+  overrides: Partial<NonNullable<ExtensionContext["model"]>> = {},
+) {
   // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  return { provider, id } as ExtensionContext["model"];
+  return {
+    provider,
+    id,
+    api: provider === "openai-codex" ? "openai-codex-responses" : "openai-responses",
+    baseUrl:
+      provider === "openai-codex" ? "https://chatgpt.com/backend-api" : "https://api.openai.com/v1",
+    ...overrides,
+  } as ExtensionContext["model"];
 }
 
 function createHarness(cwd: string, model = createModel("openai", "gpt-5.5")): Harness {
@@ -99,6 +111,7 @@ function createHarness(cwd: string, model = createModel("openai", "gpt-5.5")): H
     sessionManager: {
       getEntries: vi.fn(() => []),
       getCwd: vi.fn(() => cwd),
+      getSessionId: vi.fn(() => "session-fast"),
       getSessionName: vi.fn(() => undefined),
     },
     modelRegistry: {
@@ -132,6 +145,14 @@ async function beforeProviderRequest(harness: Harness, payload: Schema.JsonObjec
   return results.find((result) => result !== undefined);
 }
 
+async function beforeProviderHeaders(
+  harness: Harness,
+  headers: Record<string, string | null>,
+): Promise<Record<string, string | null>> {
+  await emit(harness, "before_provider_headers", { headers });
+  return headers;
+}
+
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     rmSync(tempDir, { recursive: true, force: true });
@@ -139,6 +160,16 @@ afterEach(() => {
 });
 
 describe("fast mode provider injection", () => {
+  test("closes the cached provider transport for the current Pi session", () => {
+    const cwd = createTempProject();
+    const harness = createHarness(cwd);
+    const closeSessions = vi.fn();
+
+    resetOpenAICodexTransport(harness.ctx, closeSessions);
+
+    expect(closeSessions).toHaveBeenCalledWith("session-fast");
+  });
+
   test("injects priority service tier when persisted fast mode is active for a supported model", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, { active: true, desiredActive: true });
@@ -174,6 +205,61 @@ describe("fast mode provider injection", () => {
 
     await expect(beforeProviderRequest(harness, payload)).resolves.toBeUndefined();
     expect(payload).toEqual({ model: "gpt-5.5" });
+  });
+
+  test("adds the fast routing hint only for the canonical Codex transport", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { active: true, desiredActive: true });
+    const harness = createHarness(cwd, createModel("openai-codex", "gpt-5.6-luna"));
+
+    await emit(harness, "session_start");
+    const headers = { "x-existing": "keep" };
+
+    await expect(beforeProviderHeaders(harness, headers)).resolves.toEqual({
+      "x-existing": "keep",
+      "x-codex-routing-hint": "model=gpt-5.6-luna;tier=priority",
+    });
+  });
+
+  test("preserves an existing canonical Codex routing hint while fast mode is disabled", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { active: false, desiredActive: false });
+    const harness = createHarness(cwd, createModel("openai-codex", "gpt-5.6-luna"));
+
+    await emit(harness, "session_start");
+
+    await expect(
+      beforeProviderHeaders(harness, {
+        "x-codex-routing-hint": "provider-owned",
+        "x-existing": "keep",
+      }),
+    ).resolves.toEqual({
+      "x-codex-routing-hint": "provider-owned",
+      "x-existing": "keep",
+    });
+  });
+
+  test("does not change routing headers for direct OpenAI or noncanonical Codex endpoints", async () => {
+    const directCwd = createTempProject();
+    writeProjectConfig(directCwd, { active: true, desiredActive: true });
+    const direct = createHarness(directCwd);
+    await emit(direct, "session_start");
+    await expect(
+      beforeProviderHeaders(direct, { "x-codex-routing-hint": "provider-owned" }),
+    ).resolves.toEqual({ "x-codex-routing-hint": "provider-owned" });
+
+    const proxyCwd = createTempProject();
+    writeProjectConfig(proxyCwd, { active: true, desiredActive: true });
+    const proxy = createHarness(
+      proxyCwd,
+      createModel("openai-codex", "gpt-5.6-luna", {
+        baseUrl: "https://proxy.example.com/backend-api",
+      }),
+    );
+    await emit(proxy, "session_start");
+    await expect(beforeProviderHeaders(proxy, { "x-existing": "keep" })).resolves.toEqual({
+      "x-existing": "keep",
+    });
   });
 
   test("/fast toggles injection on for the current supported model", async () => {

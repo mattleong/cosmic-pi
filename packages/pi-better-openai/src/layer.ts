@@ -52,6 +52,7 @@ export const makeOpenAIApplicationLayer = (
   const compaction = OpenAICompactionService.layer({
     context,
     projection: options.projection,
+    fastProjection: options.fastProjection,
   }).pipe(Layer.provide(OpenAICompactionClient.layer(() => MutableRef.get(context).modelRegistry)));
   const platform = Layer.merge(
     nodePlatformLayer,

@@ -31,6 +31,7 @@
   ],
   "type": "module",
   "imports": {
+    "#pi-ai-openai-codex-responses": "@earendil-works/pi-ai/api/openai-codex-responses",
     "#pi-ai-openai-responses-shared": "@earendil-works/pi-ai/api/openai-responses-shared"
   },
   "exports": {

@@ -1,9 +1,14 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/strictEffectProvide:off
 import type { Model } from "@earendil-works/pi-ai";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  SessionBeforeCompactEvent,
+  SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
 import * as Stream from "effect/Stream";
 import {
   streamingHttpResponse,
@@ -11,7 +16,11 @@ import {
   type StreamingHttpTestRequest,
 } from "pi-cosmic-core/testing";
 import { describe, expect, test, vi } from "vitest";
-import { OpenAICompactionClient } from "../src/boundary/openai-compaction.ts";
+import {
+  OpenAICompactionClient,
+  type OpenAICompactRequest,
+} from "../src/boundary/openai-compaction.ts";
+import { OpenAICompactionService } from "../src/compaction/service.ts";
 import {
   findActiveOpenAICompactionCheckpoint,
   injectOpenAICompactionCheckpoint,
@@ -23,6 +32,9 @@ import {
   OPENAI_COMPACTION_SUMMARY,
   type OpenAICompactionCheckpoint,
 } from "../src/compaction/protocol.ts";
+import type { ResolvedConfig } from "../src/config/schema.ts";
+import type { FastSnapshot } from "../src/fast/controller.ts";
+import { initialProjection, type OpenAIProjection } from "../src/usage/projection.ts";
 
 const model = {
   id: "gpt-5.4",
@@ -54,6 +66,32 @@ const base = (id: string, parentId: string | null) => ({
   parentId,
   timestamp: "2026-01-01T00:00:00.000Z",
 });
+
+const resolvedConfig = {
+  configPath: "config.json",
+  projectConfigPath: "project.json",
+  globalConfigPath: "global.json",
+  projectConfigExists: false,
+  globalConfigExists: false,
+  persistState: true,
+  active: true,
+  desiredActive: true,
+  usage: {
+    enabled: false,
+    refreshIntervalMs: 60_000,
+    showOnlyOnSubscriptionModels: true,
+    showResetTimes: true,
+  },
+  footer: { mode: "off" },
+  compaction: { enabled: true },
+  image: {
+    enabled: false,
+    defaultModel: "gpt-5.5",
+    defaultSave: "project",
+    outputFormat: "png",
+    timeoutMs: 180_000,
+  },
+} satisfies ResolvedConfig;
 
 describe("OpenAI compaction projection", () => {
   test("only enables native compaction for the OpenAI Responses provider", () => {
@@ -163,6 +201,7 @@ describe("OpenAI compaction projection", () => {
           model: requestModel,
           input: [{ role: "user", content: "hello" }],
           instructions: "system",
+          serviceTier: "priority",
         }),
       ).pipe(Effect.provide(layer)),
     );
@@ -176,10 +215,98 @@ describe("OpenAI compaction projection", () => {
       model: model.id,
       input: [{ role: "user", content: "hello" }],
       instructions: "system",
+      service_tier: "priority",
     });
     expect(result).toEqual({
       output: [{ type: "compaction", id: "cmp_2", encrypted_content: "opaque-2" }],
       usage: { inputTokens: 20, outputTokens: 5, totalTokens: 25 },
     });
+
+    await Effect.runPromise(
+      OpenAICompactionClient.use((client) =>
+        client.compact({
+          model: requestModel,
+          input: [{ role: "user", content: "hello" }],
+        }),
+      ).pipe(Effect.provide(layer)),
+    );
+    expect(captured?.encodedJsonBody).toEqual({
+      model: model.id,
+      input: [{ role: "user", content: "hello" }],
+    });
+  });
+
+  test("propagates fast mode to compaction and omits the tier when fast mode is inactive", async () => {
+    const contextEntry: SessionEntry = {
+      ...base("user", null),
+      type: "message",
+      message: { role: "user", content: "hello", timestamp: 1 },
+    };
+    const contextFixture = {
+      model,
+      sessionManager: {
+        getBranch: () => [contextEntry],
+        buildContextEntries: () => [contextEntry],
+      },
+      getSystemPrompt: () => "system",
+    };
+    // SAFETY: The compaction service only reads the context members supplied by this fixture.
+    const context = MutableRef.make(contextFixture as ExtensionContext);
+    const projection = MutableRef.make<OpenAIProjection>({
+      ...initialProjection(),
+      config: resolvedConfig,
+    });
+    const fastProjection = MutableRef.make<FastSnapshot>({
+      desiredActive: true,
+      active: true,
+    });
+    const requests: OpenAICompactRequest[] = [];
+    const client = Layer.succeed(
+      OpenAICompactionClient,
+      OpenAICompactionClient.of({
+        compact: (request) =>
+          Effect.sync(() => {
+            requests.push(request);
+            return {
+              output: [{ type: "compaction", id: "cmp_fast", encrypted_content: "opaque" }],
+              usage: { inputTokens: 20, outputTokens: 5, totalTokens: 25 },
+            };
+          }),
+      }),
+    );
+    const layer = OpenAICompactionService.layer({
+      context,
+      projection,
+      fastProjection,
+    }).pipe(Layer.provide(client));
+    const event: SessionBeforeCompactEvent = {
+      type: "session_before_compact",
+      branchEntries: [contextEntry],
+      preparation: {
+        firstKeptEntryId: "user",
+        messagesToSummarize: [],
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+        tokensBefore: 100,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+        settings: { enabled: true, reserveTokens: 16_000, keepRecentTokens: 20_000 },
+      },
+      reason: "manual",
+      willRetry: false,
+      signal: new AbortController().signal,
+    };
+    const runCompaction = () =>
+      Effect.runPromise(
+        OpenAICompactionService.use((service) => service.compact(event)).pipe(
+          Effect.provide(layer),
+        ),
+      );
+
+    await runCompaction();
+    expect(requests[0]).toMatchObject({ serviceTier: "priority" });
+
+    MutableRef.set(fastProjection, { desiredActive: false, active: false });
+    await runCompaction();
+    expect(requests[1]).not.toHaveProperty("serviceTier");
   });
 });

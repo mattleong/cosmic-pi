@@ -81,6 +81,7 @@ export function registerSettingsController(
     hasTerminalUI(ctx: ExtensionContext): boolean;
     formatDebugStatus(ctx: ExtensionContext): string;
     fastProjection: MutableRef.MutableRef<FastSnapshot>;
+    resetFastRoutingTransport(ctx: ExtensionContext): void;
     run<A, E>(
       effect: Effect.Effect<A, E, OpenAIUsageService | FastModeService>,
       signal?: AbortSignal,
@@ -94,6 +95,7 @@ export function registerSettingsController(
     hasTerminalUI,
     formatDebugStatus,
     fastProjection,
+    resetFastRoutingTransport,
     run,
   } = options;
   const descriptors = [
@@ -120,6 +122,7 @@ export function registerSettingsController(
     const update = Effect.gen(function* () {
       if (id === "fast.enabled") {
         yield* FastModeService.use((service) => service.setDesired(ctx, value === "true"));
+        yield* Effect.sync(() => resetFastRoutingTransport(ctx));
         return;
       }
       yield* OpenAIUsageService.use((service) => service.updateSetting(id, value));

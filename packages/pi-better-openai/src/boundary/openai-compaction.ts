@@ -23,6 +23,7 @@ const CompactRequestSchema = Schema.Struct({
   model: Schema.String,
   input: Schema.Array(JsonObjectSchema),
   instructions: Schema.optional(Schema.String),
+  service_tier: Schema.optional(Schema.Literal("priority")),
 });
 const CompactedResponseSchema = Schema.Struct({
   object: Schema.Literal("response.compaction"),
@@ -61,6 +62,7 @@ export interface OpenAICompactRequest {
   readonly model: Model<"openai-responses">;
   readonly input: readonly OpenAICompactionJsonObject[];
   readonly instructions?: string;
+  readonly serviceTier?: "priority";
 }
 
 export interface OpenAICompactResult {
@@ -150,7 +152,10 @@ export class OpenAICompactionClient extends Context.Service<
             const objectPart5275_1 = request.instructions
               ? { ...objectPart5275_0, instructions: request.instructions }
               : objectPart5275_0;
-            return objectPart5275_1;
+            const objectPart5275_2 = request.serviceTier
+              ? { ...objectPart5275_1, service_tier: request.serviceTier }
+              : objectPart5275_1;
+            return objectPart5275_2;
           })();
           const response = yield* http
             .requestJsonRawBytes(

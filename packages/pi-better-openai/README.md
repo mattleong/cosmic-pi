@@ -57,7 +57,9 @@ The extension reads JSON config from two locations:
 
 Project overrides global. Global values fill fields omitted by the project file. Known fields are decoded independently, invalid values fall back without discarding valid siblings, and numeric settings are clamped to safe ranges.
 
-When `compaction.enabled` is true, Pi's normal compaction configuration still controls when compaction runs (`compaction.enabled`, `reserveTokens`, manual `/compact`, and overflow recovery in Pi settings). Better OpenAI only replaces the compaction operation for eligible OpenAI Responses models; OpenAI's canonical output determines the retained native window, so Pi's `keepRecentTokens` does not shape that output.
+When `compaction.enabled` is true, Pi's normal compaction configuration still controls when compaction runs (`compaction.enabled`, `reserveTokens`, manual `/compact`, and overflow recovery in Pi settings). Better OpenAI only replaces the compaction operation for eligible OpenAI Responses models; OpenAI's canonical output determines the retained native window, so Pi's `keepRecentTokens` does not shape that output. Active fast mode also requests the `priority` service tier for native compaction.
+
+For canonical `openai-codex` subscription requests, active fast mode adds `x-codex-routing-hint: model=<model>;tier=priority` alongside the request body's `service_tier`. Better OpenAI does not add that Codex routing header to direct OpenAI API requests or noncanonical proxy endpoints.
 
 The extension owns one scoped Effect runtime per Pi session. Repeated `session_start` replaces and disposes the previous runtime; usage polling and image streams are interrupted during replacement or `session_shutdown`.
 

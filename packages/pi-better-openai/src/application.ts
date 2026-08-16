@@ -16,6 +16,10 @@ import {
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
+import {
+  applyFastRoutingHeaders,
+  resetOpenAICodexTransport,
+} from "./boundary/host-provider-routing.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
 import { type OpenAIConfigError, type ResolvedConfig } from "./config/index.ts";
@@ -63,6 +67,7 @@ export interface BetterOpenAIExtensionDependencies {
     projectCwd: string,
     projectTrusted: boolean,
   ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
+  readonly resetOpenAICodexTransport?: (ctx: ExtensionContext) => void;
 }
 
 const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
@@ -87,6 +92,8 @@ export function betterOpenAIWithDependencies(
 ): void {
   const projection = makeProjection();
   const fastProjection = MutableRef.make(initialFastSnapshot());
+  const resetProviderTransport =
+    dependencies.resetOpenAICodexTransport ?? resetOpenAICodexTransport;
   let recordFastInjection: (event: {
     readonly model: string;
     readonly tier: string;
@@ -205,6 +212,7 @@ export function betterOpenAIWithDependencies(
         FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
           Effect.tap(() =>
             Effect.gen(function* () {
+              yield* Effect.sync(() => resetProviderTransport(ctx));
               yield* ignoreHostUi("fast.render", () => updateFooter(ctx));
               const fast = MutableRef.get(fastProjection);
               const active = isFastActive(ctx, fast);
@@ -256,6 +264,7 @@ export function betterOpenAIWithDependencies(
     hasTerminalUI,
     formatDebugStatus,
     fastProjection,
+    resetFastRoutingTransport: resetProviderTransport,
     run,
   });
 
@@ -269,6 +278,7 @@ export function betterOpenAIWithDependencies(
     }
     const { cwd, signal } = captured;
     const projectTrusted = isProjectTrusted(ctx);
+    resetProviderTransport(ctx);
     cosmicUi.shutdown();
     resetProjection(projection);
     MutableRef.set(fastProjection, initialFastSnapshot());
@@ -346,6 +356,7 @@ export function betterOpenAIWithDependencies(
   pi.on("session_tree", (_event, ctx) => refreshFooter(ctx));
   pi.on("model_select", (_event, ctx) => {
     const signal = safeHostSignal(ctx);
+    resetProviderTransport(ctx);
     const before = MutableRef.get(fastProjection).active;
     updateContext(ctx);
     footerController.invalidateContextUsage();
@@ -386,6 +397,10 @@ export function betterOpenAIWithDependencies(
     )
       .then((messages) => (messages ? { messages } : undefined))
       .catch(() => undefined);
+  });
+  pi.on("before_provider_headers", (event, ctx) => {
+    updateContext(ctx);
+    applyFastRoutingHeaders(event.headers, ctx, MutableRef.get(fastProjection), FAST_SERVICE_TIER);
   });
   pi.on("before_provider_request", (event, ctx) => {
     updateContext(ctx);
