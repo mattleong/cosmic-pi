@@ -45,6 +45,8 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "vitest run",
+    "smoke:herdr-codex-hooks": "PI_SUBAGENTS_REAL_CODEX_HOOKS=1 vitest run tests/herdr-codex-hooks-real-smoke.test.ts",
+    "smoke:herdr-codex": "PI_SUBAGENTS_REAL_HERDR_CODEX_SMOKE=1 vitest run tests/herdr-codex-real-smoke.test.ts",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },

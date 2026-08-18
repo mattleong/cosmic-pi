@@ -6,13 +6,18 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { afterEach, describe, expect, it } from "vitest";
+import { HerdrCodexHooksError, makeHerdrCodexHooks } from "../src/boundary/herdr-codex-hooks.ts";
 import { makeHerdrHarness } from "../src/boundary/herdr-harness.ts";
 import type { SupervisorConnectionMetadata } from "../src/boundary/supervisor-channel.ts";
 import type { BackendLaunchRequest } from "../src/backend/model.ts";
 
+const codexHookFixture = fileURLToPath(
+  new URL("./fixtures/codex-hook-trust-fixture.mjs", import.meta.url),
+);
 const directories: string[] = [];
 const valueAfter = (args: ReadonlyArray<string>, flag: string): string | undefined => {
   const index = args.indexOf(flag);
@@ -93,6 +98,11 @@ const setup = async () => {
     agentDirectory,
     environment,
     integrationPaths: integrations,
+    codexHooks: makeHerdrCodexHooks({
+      executable: codexHookFixture,
+      environment,
+      timeoutMillis: 1_000,
+    }),
   });
   return { directory, agentDirectory, environment, integrations, harness, supervisor };
 };
@@ -336,10 +346,19 @@ describe("Herdr native harness security", () => {
           expect(valueAfter(prepared.argv, "--model")).toBe("codex-model");
           expect(valueAfter(prepared.argv, "--sandbox")).toBe("read-only");
           expect(valueAfter(prepared.argv, "--ask-for-approval")).toBe("never");
+          expect(prepared.argv).not.toContain("--dangerously-bypass-hook-trust");
+          expect(prepared.argv.at(-1)).toContain("lifecycle hook");
           expect(prepared.argv.join(" ")).not.toContain("must-never-appear-in-argv");
           expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
           expect(prepared.secretCommand).not.toContain("must-never-appear-in-argv");
           const codexHome = join(prepared.directory, "codex-home");
+          const hooks = JSON.parse(
+            yield* Effect.promise(() => fs.readFile(join(codexHome, "hooks.json"), "utf8")),
+          );
+          const sessionStart = hooks.hooks.SessionStart[0];
+          expect(sessionStart.matcher).toBe("startup");
+          expect(sessionStart.hooks[0]).toMatchObject({ type: "command", timeout: 10 });
+          expect(sessionStart.hooks[0].command).toContain("herdr-codex-session-hook.mjs");
           const config = yield* Effect.promise(() =>
             fs.readFile(join(codexHome, "config.toml"), "utf8"),
           );
@@ -356,6 +375,25 @@ describe("Herdr native harness security", () => {
         }),
       ),
     );
+  });
+
+  it("removes private Codex state when exact hook trust cannot be established", async () => {
+    const test = await setup();
+    const failing = makeHerdrHarness({
+      agentDirectory: test.agentDirectory,
+      environment: test.environment,
+      integrationPaths: test.integrations,
+      codexHooks: {
+        establishTrust: () =>
+          Promise.reject(new HerdrCodexHooksError({ code: "codex_herdr_hook_unavailable" })),
+      },
+    });
+    await expect(
+      Effect.runPromise(Effect.scoped(failing.prepare("codex", launch("codex"), test.supervisor))),
+    ).rejects.toMatchObject({ code: "codex_herdr_hook_unavailable" });
+    await expect(
+      fs.readdir(join(test.agentDirectory, "subagents", "herdr-host-v1")),
+    ).resolves.toEqual([]);
   });
 
   it("pins the sanitized inherited environment at harness construction", async () => {

@@ -31,6 +31,11 @@ import {
 } from "../backend/claude-policy.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
 import {
+  isHerdrCodexHooksError,
+  makeHerdrCodexHooks,
+  type HerdrCodexHooksContract,
+} from "./herdr-codex-hooks.ts";
+import {
   ensurePrivateDirectory,
   harnessCleanupUnconfirmed,
   hasControlCharacter,
@@ -80,6 +85,8 @@ const PI_SUPERVISOR_TOOLS = [
   "supervisor_question",
   "supervisor_submit_report",
 ] as const;
+const CODEX_BOOTSTRAP_PROMPT =
+  "Initialize the private Herdr lifecycle hook. This bootstrap turn must stop before inference.";
 const CODEX_DISABLED_FEATURES = [
   "apps",
   "auth_elicitation",
@@ -152,6 +159,8 @@ export interface HerdrHarnessLayerOptions {
   readonly integrationPaths?: Partial<Record<SubagentRuntime, string>> | undefined;
   readonly harnessFault?: "after-claude-settings" | "after-codex-auth" | undefined;
   readonly harnessCleanupFault?: boolean | undefined;
+  /** Test seam only. Production uses the fixed Codex hook-trust boundary. */
+  readonly codexHooks?: HerdrCodexHooksContract | undefined;
   /** Test seam only. Production uses the current Node platform. */
   readonly platform?: NodeJS.Platform | undefined;
 }
@@ -392,10 +401,10 @@ const codexArgv = (request: BackendLaunchRequest): ReadonlyArray<string> => [
   "--ask-for-approval",
   "never",
   "--no-alt-screen",
-  "--dangerously-bypass-hook-trust",
   "-c",
   `model_reasoning_effort=${tomlString(request.effort)}`,
   ...CODEX_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+  CODEX_BOOTSTRAP_PROMPT,
 ];
 
 interface PreparedHarnessResource {
@@ -535,18 +544,36 @@ const prepareHarness = async (
     if (auth) await writeExclusive(join(codexHome, "auth.json"), auth);
     else if (!apiKey) throw new Error("codex-auth-unavailable");
     if (options.harnessFault === "after-codex-auth") throw new Error("fixture-after-codex-auth");
+    const sessionHook = fileURLToPath(new URL("./herdr-codex-session-hook.mjs", import.meta.url));
+    const fallbackTranscript = join(directory, "codex-session-anchor.jsonl");
+    await writeExclusive(fallbackTranscript, "\n");
+    const hookCommand = [
+      shellQuote(process.execPath),
+      shellQuote(sessionHook),
+      shellQuote(integration),
+      shellQuote(fallbackTranscript),
+    ].join(" ");
+    const hooksPath = join(codexHome, "hooks.json");
+    const configPath = join(codexHome, "config.toml");
     const hooks = {
       hooks: {
         SessionStart: [
-          { hooks: [{ type: "command", command: `bash ${shellQuote(integration)} session` }] },
+          {
+            matcher: "startup",
+            hooks: [{ type: "command", command: hookCommand, timeout: 10 }],
+          },
         ],
       },
     };
-    await writeExclusive(join(codexHome, "hooks.json"), `${JSON.stringify(hooks)}\n`);
-    await writeExclusive(
-      join(codexHome, "config.toml"),
-      codexConfig(request, supervisor, integration),
-    );
+    await writeExclusive(hooksPath, `${JSON.stringify(hooks)}\n`);
+    await writeExclusive(configPath, codexConfig(request, supervisor, integration));
+    await options.codexHooks!.establishTrust({
+      codexHome,
+      configPath,
+      hooksPath,
+      cwd: request.cwd,
+      command: hookCommand,
+    });
     const secretPath = join(directory, "codex-environment.sh");
     await writeExclusive(
       secretPath,
@@ -568,6 +595,8 @@ const prepareHarness = async (
       secretReadyMarker,
     });
   } catch (error) {
+    if (isHerdrCodexHooksError(error) && error.code === "codex_herdr_hook_cleanup_unconfirmed")
+      throw harnessCleanupUnconfirmed(error);
     try {
       if (options.harnessCleanupFault) throw new Error("fixture-harness-cleanup-failure");
       await removeHarness(directory);
@@ -590,9 +619,11 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
   // Select and sanitize inherited auth/session inputs exactly once for this session service.
   const fixedOptions: HerdrHarnessLayerOptions = Object.freeze(
     (() => {
+      const environment = harnessEnvironment(options.environment ?? process.env);
       const objectPart20438_0 = {
         ...options,
-        environment: harnessEnvironment(options.environment ?? process.env),
+        environment,
+        codexHooks: options.codexHooks ?? makeHerdrCodexHooks({ environment }),
       };
       const objectPart20438_1 = options.integrationPaths
         ? { ...objectPart20438_0, integrationPaths: Object.freeze({ ...options.integrationPaths }) }
@@ -687,6 +718,21 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
           });
         }
         if (runtime === "codex") {
+          const sessionHook = fileURLToPath(
+            new URL("./herdr-codex-session-hook.mjs", import.meta.url),
+          );
+          yield* Effect.tryPromise({
+            try: async () => {
+              const stat = await fs.lstat(sessionHook);
+              if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1)
+                throw new Error("missing-codex-session-hook");
+            },
+            catch: () =>
+              readinessError(
+                "codex_herdr_hook_unavailable",
+                "The packaged private Codex Herdr SessionStart hook is unavailable.",
+              ),
+          });
           const auth = yield* Effect.promise(() => readValidatedCodexAuth(environment));
           if (!auth && !approvedApiKey(environment))
             return yield* readinessError(
@@ -704,10 +750,14 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
               "prepare Herdr harness",
               isHarnessCleanupUnconfirmed(error)
                 ? "herdr_harness_cleanup_unconfirmed"
-                : "herdr_harness_prepare_failed",
+                : isHerdrCodexHooksError(error)
+                  ? error.code
+                  : "herdr_harness_prepare_failed",
               isHarnessCleanupUnconfirmed(error)
                 ? `Private ${runtime} Herdr harness cleanup could not be confirmed; its state remains quarantined.`
-                : `Unable to prepare the private ${runtime} Herdr harness.`,
+                : isHerdrCodexHooksError(error)
+                  ? "Codex could not trust and verify the exact private Herdr SessionStart hook before topology creation."
+                  : `Unable to prepare the private ${runtime} Herdr harness.`,
             ),
         }),
         (resource) =>
