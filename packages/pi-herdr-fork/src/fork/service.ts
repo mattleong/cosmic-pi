@@ -57,7 +57,6 @@ const HERDR_SHELL_PROCESS_NAMES = new Set([
 export interface HerdrForkResult {
   readonly agentName: string;
   readonly paneId: string;
-  readonly childSession: string;
   readonly direction: "right" | "down";
   readonly prompted: boolean;
 }
@@ -175,7 +174,7 @@ const validateStartedAgent = (
   pane: HerdrPane,
   agentName: string,
   parentSessionFile: string,
-): Effect.Effect<string, HerdrForkError> => {
+): Effect.Effect<void, HerdrForkError> => {
   const childSession = agent.agent_session;
   if (
     agent.pane_id !== pane.pane_id ||
@@ -184,22 +183,24 @@ const validateStartedAgent = (
     agent.tab_id !== pane.tab_id ||
     agent.name !== agentName ||
     agent.agent !== "pi" ||
-    !childSession ||
-    childSession.agent !== "pi" ||
-    childSession.kind !== "path" ||
-    childSession.value === parentSessionFile
+    (childSession !== null &&
+      childSession !== undefined &&
+      (childSession.source !== "herdr:pi" ||
+        childSession.agent !== "pi" ||
+        childSession.kind !== "path" ||
+        childSession.value === parentSessionFile))
   )
     return Effect.fail(
       herdrForkError(
         "start forked Pi",
         "herdr_agent_ownership_mismatch",
-        `Herdr did not return the exact expected forked Pi identity. Pane ${pane.pane_id} was retained for manual inspection.`,
+        `Herdr returned forked Pi startup evidence that did not match this launch. Pane ${pane.pane_id} was retained for manual inspection.`,
         "uncertain",
         pane.pane_id,
       ),
     );
 
-  return Effect.succeed(childSession.value);
+  return Effect.void;
 };
 
 export const makeHerdrForkService = (
@@ -343,12 +344,7 @@ export const makeHerdrForkService = (
       const { result: startedResult } = yield* retainForkPane(
         decodeJson(AgentEnvelopeSchema, startedOutput.stdout, "start forked Pi", true),
       );
-      const childSession = yield* validateStartedAgent(
-        startedResult.agent,
-        forkPane,
-        agentName,
-        sessionFile,
-      );
+      yield* validateStartedAgent(startedResult.agent, forkPane, agentName, sessionFile);
 
       let promptFailure: HerdrForkError | undefined;
       if (prompt !== undefined) {
@@ -382,7 +378,6 @@ export const makeHerdrForkService = (
       return {
         agentName,
         paneId: forkPane.pane_id,
-        childSession,
         direction,
         prompted: prompt !== undefined,
       };

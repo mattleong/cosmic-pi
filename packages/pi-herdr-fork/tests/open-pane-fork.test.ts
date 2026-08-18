@@ -23,6 +23,8 @@ interface FixtureOptions {
   readonly splitTabId?: string;
   readonly startedSession?: string;
   readonly startedSessionKind?: "id" | "path";
+  readonly startedIdentityAvailable?: boolean;
+  readonly startedTerminalId?: string;
   readonly shellReadyAfter?: number;
   readonly shellReadiness?: ReadonlyArray<boolean>;
   readonly failOperation?: string;
@@ -54,6 +56,24 @@ const fixture = (options: FixtureOptions = {}) => {
     tab_id: options.splitTabId ?? "w1:t1",
     cwd: CWD,
     foreground_cwd: CWD,
+  };
+  const startedAgentSnapshot = (agentName: string) => {
+    const agent = {
+      ...forkPane,
+      terminal_id: options.startedTerminalId ?? forkPane.terminal_id,
+      agent: "pi",
+      name: agentName,
+    };
+    if (options.startedIdentityAvailable === false) return agent;
+    return {
+      ...agent,
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: options.startedSessionKind ?? "path",
+        value: options.startedSession ?? "/sessions/child.jsonl",
+      },
+    };
   };
 
   const runner: HerdrCommandRunner = (request) => {
@@ -116,22 +136,10 @@ const fixture = (options: FixtureOptions = {}) => {
         });
       }
       case "start forked Pi": {
-        const agentName = request.args[2];
+        const agentName = request.args[2] ?? "";
         return Effect.succeed({
           stdout: JSON.stringify({
-            result: {
-              agent: {
-                ...forkPane,
-                agent: "pi",
-                name: agentName,
-                agent_session: {
-                  source: "herdr:pi",
-                  agent: "pi",
-                  kind: options.startedSessionKind ?? "path",
-                  value: options.startedSession ?? "/sessions/child.jsonl",
-                },
-              },
-            },
+            result: { agent: startedAgentSnapshot(agentName) },
           }),
           stderr: "",
         });
@@ -246,7 +254,6 @@ describe("herdr-fork workflow", () => {
     return Effect.runPromise(test.service.open("--review the plan")).then((result) => {
       expect(result).toMatchObject({
         paneId: "w1:p2",
-        childSession: "/sessions/child.jsonl",
         direction: "right",
         prompted: true,
       });
@@ -333,6 +340,38 @@ describe("herdr-fork workflow", () => {
       for (const operation of ["split fork pane", "start forked Pi", "focus forked Pi"])
         expect(test.calls.filter((call) => call.operation === operation)).toHaveLength(1);
     });
+  });
+
+  it("accepts exact atomic startup while Pi session metadata is still pending", () => {
+    const test = fixture({ startedIdentityAvailable: false });
+    return Effect.runPromise(test.service.open("Review the fork.")).then((result) => {
+      expect(result).toMatchObject({ paneId: "w1:p2", prompted: true });
+      expect(operationNames(test.calls).slice(-3)).toEqual([
+        "start forked Pi",
+        "prompt forked Pi",
+        "focus forked Pi",
+      ]);
+      expect(operationNames(test.calls)).not.toContain("confirm forked Pi identity");
+      expect(test.calls.filter((call) => call.operation === "start forked Pi")).toHaveLength(1);
+    });
+  });
+
+  it("does not prompt or adopt mismatched atomic startup evidence", () => {
+    const test = fixture({ startedTerminalId: "term-other" });
+    return Effect.runPromise(Effect.result(test.service.open("Do not misroute this."))).then(
+      (result) => {
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure")
+          expect(result.failure).toMatchObject({
+            code: "herdr_agent_ownership_mismatch",
+            outcome: "uncertain",
+            paneId: "w1:p2",
+          });
+        expect(operationNames(test.calls)).not.toContain("prompt forked Pi");
+        expect(operationNames(test.calls)).not.toContain("focus forked Pi");
+        expect(test.calls.filter((call) => call.operation === "start forked Pi")).toHaveLength(1);
+      },
+    );
   });
 
   it("resets stability after a transient shell-owned sample", () => {

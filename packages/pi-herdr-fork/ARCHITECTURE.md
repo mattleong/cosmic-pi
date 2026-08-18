@@ -26,7 +26,7 @@ The command is TUI-only and can run without waiting for the main agent to settle
 
 The Herdr client captures and allowlists inherited routing once, invokes only the fixed `herdr` executable with argument arrays and no shell, bounds command duration/output, and decodes JSON responses with Effect Schema.
 
-The service requires protocol 17 or newer, a current Herdr Pi integration, a regular non-symlink parent session file, and inherited caller-pane identity before topology mutation. It targets `pane current --current`, verifies the split remains in the same workspace/tab, then requires sustained shell ownership across a bounded read-only `pane process-info` readiness window before dispatching `agent start`. It verifies the complete returned pane/terminal/agent/path-session evidence before reporting success.
+The service requires protocol 17 or newer, a current Herdr Pi integration, a regular non-symlink parent session file, and inherited caller-pane identity before topology mutation. It targets `pane current --current`, verifies the split remains in the same workspace/tab, then requires sustained shell ownership across a bounded read-only `pane process-info` readiness window before dispatching `agent start`. It requires the atomic startup response to match the exact pane, terminal, workspace, tab, agent name, and Pi runtime before reporting success. Native child-session metadata is also validated when present, but it is not required because the Pi integration can report it after interactive readiness; this user-owned handoff never adopts identity from a later lookup.
 
 ## Ownership
 

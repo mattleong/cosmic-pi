@@ -42,8 +42,9 @@ The command:
 2. creates a sibling pane in the same tab;
 3. waits for sustained shell readiness through bounded read-only inspection;
 4. starts a native Pi fork from the current session file;
-5. optionally submits the supplied text as an initial request; and
-6. focuses the new fork.
+5. validates Herdr's atomic pane, terminal, and agent startup evidence;
+6. optionally submits the supplied text as an initial request; and
+7. focuses the new fork.
 
 Prompt text is received directly by the Pi command and passed as one Herdr argument with a fixed non-flag prefix. No model or shell interprets it on the parent side.
 
