@@ -261,7 +261,7 @@ describe("Herdr native harness security", () => {
           expect(valueAfter(prepared.argv, "--model")).toBe("claude-model");
           expect(valueAfter(prepared.argv, "--effort")).toBe("xhigh");
           expect(prepared.argv).toContain("--strict-mcp-config");
-          expect(prepared.argv).toContain("--no-session-persistence");
+          expect(prepared.argv).not.toContain("--no-session-persistence");
           expect(valueAfter(prepared.argv, "--setting-sources")).toBe("");
           const promptPath = valueAfter(prepared.argv, "--system-prompt-file")!;
           expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
@@ -280,6 +280,7 @@ describe("Herdr native harness security", () => {
             workspaceId: "w",
           });
           expect(environmentCommand).toContain("exec /usr/bin/env -i");
+          expect(environmentCommand).toContain("CLAUDE_CODE_SKIP_PROMPT_HISTORY='1'");
           expect(environmentCommand).not.toContain(prepared.environmentReadyMarker);
           const firstActivation = prepared.activationProbe(1);
           const secondActivation = prepared.activationProbe(2);

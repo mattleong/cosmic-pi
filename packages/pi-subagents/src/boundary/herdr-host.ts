@@ -639,6 +639,10 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           yield* waitForAvailableShell(pane, invalidateProvisional);
           // The harmless marker may be retried because it has no state beyond terminal output.
           yield* activatePaneInput(before, pane, harness, invalidateProvisional);
+          // Herdr process detection can briefly publish a stale agent classification after shell
+          // startup/activation even while process-info proves the exact foreground owner is still
+          // the pane shell. Wait without sending input until both bounded evidence sources agree.
+          yield* waitForAvailableShell(pane, invalidateProvisional, true);
           yield* requireAvailableProvisionalPane(
             pane,
             "prepare pane environment",

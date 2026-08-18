@@ -79,6 +79,9 @@ export const fakeTopology = () => {
   let dropAllActivationProbes = false;
   let rejectStartAsBusy = false;
   let initialBusyShellInspections = 0;
+  let transientPostActivationOccupancySnapshots = 0;
+  let configuredPostActivationOccupancySnapshots = 0;
+  let postActivationOccupancyPaneId: string | undefined;
   let replaceTerminalDuringShellInspection = false;
   let transientTerminalMismatchSnapshots = 0;
   let terminalMismatchSnapshotCountdown = 0;
@@ -110,6 +113,11 @@ export const fakeTopology = () => {
       transientTerminalMismatchSnapshots > 0 || terminalMismatchSnapshotCountdown === 1;
     transientTerminalMismatchSnapshots = Math.max(0, transientTerminalMismatchSnapshots - 1);
     terminalMismatchSnapshotCountdown = Math.max(0, terminalMismatchSnapshotCountdown - 1);
+    const showPostActivationOccupancy = transientPostActivationOccupancySnapshots > 0;
+    transientPostActivationOccupancySnapshots = Math.max(
+      0,
+      transientPostActivationOccupancySnapshots - 1,
+    );
     return {
       version: "0.8.0",
       protocol: 19,
@@ -200,6 +208,28 @@ export const fakeTopology = () => {
       ],
       agents: [
         ...[...agents.values()].map((agent) => ({ ...agent })),
+        ...(showPostActivationOccupancy && postActivationOccupancyPaneId
+          ? (() => {
+              const pane = panes.get(postActivationOccupancyPaneId);
+              return pane
+                ? [
+                    {
+                      paneId: postActivationOccupancyPaneId,
+                      terminalId: pane.terminalId,
+                      workspaceId: "w",
+                      tabId: "w:t",
+                      cwd: "/project",
+                      foregroundCwd: "/project",
+                      focused: true,
+                      agentStatus: "unknown" as const,
+                      name: "transient-codex-detection",
+                      runtime: "codex" as const,
+                      stateChangeSequence: 1,
+                    },
+                  ]
+                : [];
+            })()
+          : []),
         ...(agentNameCollision && plannedAgentName
           ? [
               {
@@ -349,6 +379,14 @@ export const fakeTopology = () => {
               }),
             );
           }
+        }
+        if (
+          operation === "confirm pane input" &&
+          (activationConfirmations.get(paneId) ?? 0) > 1 &&
+          configuredPostActivationOccupancySnapshots > 0
+        ) {
+          postActivationOccupancyPaneId = paneId;
+          transientPostActivationOccupancySnapshots = configuredPostActivationOccupancySnapshots;
         }
         if (operation === "confirm pane environment")
           environmentMarkerInspections.set(paneId, shellProcessInspections.get(paneId) ?? 0);
@@ -534,6 +572,9 @@ export const fakeTopology = () => {
     },
     delayInitialShellReadiness: (inspections: number) => {
       initialBusyShellInspections = inspections;
+    },
+    delayPostActivationAgentClearance: (snapshots: number) => {
+      configuredPostActivationOccupancySnapshots = snapshots;
     },
     replaceTerminalOnFirstShellInspection: () => {
       replaceTerminalDuringShellInspection = true;

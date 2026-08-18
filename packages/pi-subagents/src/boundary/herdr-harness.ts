@@ -250,6 +250,7 @@ const fixedEnvironmentCommand = (
   environment: NodeJS.ProcessEnv,
   topology: { readonly paneId: string; readonly tabId: string; readonly workspaceId: string },
   readyMarker: string,
+  fixedOverrides: Readonly<Record<string, string>> = {},
 ): string => {
   const fixed = {
     ...Object.fromEntries(
@@ -257,6 +258,7 @@ const fixedEnvironmentCommand = (
         environment[key] === undefined ? [] : [[key, environment[key]]],
       ),
     ),
+    ...fixedOverrides,
     HERDR_ENV: "1",
     HERDR_PANE_ID: topology.paneId,
     HERDR_TAB_ID: topology.tabId,
@@ -292,7 +294,6 @@ const claudeArgv = (
     request.effort,
     "--no-chrome",
     "--disable-slash-commands",
-    "--no-session-persistence",
     "--setting-sources",
     "",
     "--settings",
@@ -468,8 +469,8 @@ const prepareHarness = async (
       const base = claudeSettings(request, claudeWriterCwdPolicy(request.cwd));
       const settings = {
         ...base,
-        // Herdr Claude remains authenticated through the inherited native credential boundary,
-        // while the CLI's no-session-persistence mode disables resumable transcript storage.
+        // Herdr Claude remains authenticated through the inherited native credential boundary.
+        // Its fixed process environment disables interactive transcript and prompt-history writes.
         env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
         hooks: {
           SessionStart: [
@@ -494,7 +495,10 @@ const prepareHarness = async (
         directory,
         runtime,
         argv: controlFreeArgv(claudeArgv(request, settingsPath, mcpPath, promptPath)),
-        environmentCommand,
+        environmentCommand: (topology) =>
+          fixedEnvironmentCommand(environment, topology, environmentReadyMarker, {
+            CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1",
+          }),
         environmentReadyMarker,
         activationProbe,
         shellReadinessProbe,

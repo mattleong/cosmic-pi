@@ -93,6 +93,28 @@ describe("session-owned Herdr topology", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.live("waits for stale post-activation agent detection before environment input", () => {
+    const fake = fakeTopology();
+    fake.delayPostActivationAgentClearance(4);
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const hosted = yield* host.launch("claude", launch("agent-post-activation-detection"), {
+        ...supervisor,
+        runId: "agent-post-activation-detection",
+      });
+      expect(fake.shellProcessInspections.get(hosted.paneId)).toBeGreaterThanOrEqual(4);
+      expect(fake.paneCommands).toContainEqual({
+        paneId: hosted.paneId,
+        operation: "prepare pane environment",
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.live("rolls back when both harmless pane-input activation probes are dropped", () => {
     const fake = fakeTopology();
     fake.dropEveryActivationProbe();
