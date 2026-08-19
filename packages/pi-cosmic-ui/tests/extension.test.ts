@@ -515,6 +515,52 @@ describe("Cosmic UI extension", () => {
     await emit(h, "session_shutdown");
   });
 
+  test("retains the last complete totals when numeric decoding rejects a rescan or turn", async () => {
+    const h = harness();
+    const usage = (input: number) => ({
+      input,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: { total: 0 },
+    });
+    // SAFETY: These locally constructed session entries exercise only assistant usage aggregation.
+    h.ctx.sessionManager.getEntries = vi.fn(
+      () => [{ type: "message", message: { role: "assistant", usage: usage(50) } }] as never,
+    );
+    await emit(h, "session_start");
+    const factory = h.setFooter.mock.calls[0]?.[0];
+    const footer = factory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, text: string) => text },
+      {
+        getGitBranch: () => null,
+        getExtensionStatuses: () => new Map(),
+        getAvailableProviderCount: () => 1,
+        onBranchChange: () => vi.fn(),
+      },
+    );
+    expect(footer.render(100).join("\n")).toContain("↑50");
+
+    // A partially valid rescan is discarded atomically when a later record is invalid.
+    // SAFETY: These locally constructed session entries exercise only assistant usage aggregation.
+    h.ctx.sessionManager.getEntries = vi.fn(
+      () =>
+        [
+          { type: "message", message: { role: "assistant", usage: usage(25) } },
+          { type: "message", message: { role: "assistant", usage: usage(Number.NaN) } },
+        ] as never,
+    );
+    await emit(h, "session_compact");
+    expect(footer.render(100).join("\n")).toContain("↑50");
+
+    await emit(h, "turn_end", {
+      message: { role: "assistant", usage: usage(Number.POSITIVE_INFINITY) },
+    });
+    expect(footer.render(100).join("\n")).toContain("↑50");
+    await emit(h, "session_shutdown");
+  });
+
   test("fails closed when the live context mode getter throws", async () => {
     const h = harness();
     Object.defineProperty(h.ctx, "mode", {

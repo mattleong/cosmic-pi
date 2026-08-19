@@ -324,6 +324,66 @@ describe("private supervisor channel", () => {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   });
 
+  it("closes a late successful acquisition after open is interrupted", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-subagents-supervisor-late-open-"));
+    temporaryDirectories.push(root);
+    const agentDirectory = join(root, "agent-home");
+    await mkdir(agentDirectory, { mode: 0o700 });
+    const scope = await Effect.runPromise(Scope.make());
+    let entered!: () => void;
+    const acquisitionEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let complete!: () => void;
+    const acquisitionGate = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    let metadata: SupervisorChannelHandle["metadata"] | undefined;
+    const channel = makeSupervisorChannel({
+      agentDirectory,
+      beforeAcquireComplete: (acquired) => {
+        metadata = acquired;
+        entered();
+        return acquisitionGate;
+      },
+    });
+    const abort = new AbortController();
+    const opening = Effect.runPromise(
+      channel
+        .open({ runId: "agent-supervisor-late-open" })
+        .pipe(Effect.provideService(Scope.Scope, scope)),
+      { signal: abort.signal },
+    );
+
+    await withTimeout(acquisitionEntered);
+    abort.abort();
+    await expect(withTimeout(opening)).rejects.toBeDefined();
+    const acquired = metadata;
+    if (!acquired) throw new Error("late acquisition metadata was not captured");
+    expect(await stat(acquired.connectionConfigPath)).toBeDefined();
+
+    complete();
+    let cleaned = false;
+    for (let attempt = 0; attempt < 100 && !cleaned; attempt += 1) {
+      cleaned = await stat(acquired.connectionConfigPath).then(
+        () => false,
+        (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+      );
+      if (!cleaned) await wait(10);
+    }
+    expect(cleaned).toBe(true);
+    const refused = await new Promise<boolean>((resolve) => {
+      const socket = connect({ host: acquired.host, port: acquired.port });
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.once("error", () => resolve(true));
+    });
+    expect(refused).toBe(true);
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
   it("spawns the helper and keeps blocked questions concurrent, correlated, cancellable, and epoch-safe", async () => {
     const opened = await openChannel();
     const { handle, scope, projectDirectory } = opened;

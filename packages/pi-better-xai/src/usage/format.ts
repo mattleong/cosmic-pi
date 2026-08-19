@@ -232,7 +232,7 @@ const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* <A, R>(
  * The metadata is carried out of the single credential resolution so callers never re-read the
  * auth file: registry-only credentials must not be reported as missing auth.
  */
-interface XaiUsageResult {
+export interface XaiUsageResult {
   readonly snapshot: UsageSnapshot;
   readonly teamId?: string;
 }

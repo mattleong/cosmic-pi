@@ -89,7 +89,7 @@ export class OpenAIUsageService extends Context.Service<
             Effect.provideService(JsonHttpClient, http),
             Effect.provideService(Tracer.Tracer, tracer),
           );
-        const projectTrusted = options.projectTrusted ?? true;
+        const projectTrusted = options.projectTrusted === true;
         const controller = yield* makeUsageRefreshController<
           OpenAIProjection,
           ResolvedConfig,

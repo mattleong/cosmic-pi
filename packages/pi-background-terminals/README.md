@@ -12,7 +12,7 @@ The main Pi footer uses natural status text such as `2 background jobs active ·
 
 ## Lifecycle
 
-Background jobs are non-interactive in the MVP and are always terminated when the Pi session reloads, switches, forks, or shuts down. Jobs have no default runtime timeout; the agent may provide one per start.
+Background jobs are non-interactive in the MVP and are always terminated when the Pi session reloads, switches, forks, or shuts down. Jobs have no default runtime timeout; the agent may provide one per start. A failed or unconfirmed stop remains active in `stopping` and retains capacity until the operating-system process handle confirms exit; the tool reports a typed termination failure rather than fabricating completion.
 
 ## Configuration
 

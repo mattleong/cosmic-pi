@@ -97,7 +97,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
         const callbacks = yield* HostCallbackBoundary;
         const settingsLock = yield* Semaphore.make(1);
         const home = yield* Config.option(Config.string("HOME"));
-        const projectTrusted = options.projectTrusted ?? true;
+        const projectTrusted = options.projectTrusted === true;
         const config = yield* configStore.resolve(options.cwd, projectTrusted);
         const state = yield* makeFrozenProjection<CosmicUiProjection, CosmicUiProjection>(
           {

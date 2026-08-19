@@ -17,6 +17,8 @@
 
 ## Ownership
 
-`BackgroundTerminalService` is the only job-registry owner. Each process monitor is forked into the service scope. Closing the session runtime stops every active process tree and awaits settlement. Pi callbacks only execute Effects through the managed session-runtime slot.
+`BackgroundTerminalService` is the only job-registry owner. All process monitors share one fixed child scope created before the service shutdown finalizer, so shutdown requests and confirms active process settlement before monitor interruption without accumulating one owner-scope finalizer per historical job. A stop timeout or process-tree termination failure is a typed `BackgroundTerminationError`; the job remains `stopping`, consumes active capacity, and can become `stopped` only when the process handle's `awaitExit` confirms settlement. Closing the session runtime applies the same ordering to every active process tree. Pi callbacks only execute Effects through the managed session-runtime slot.
+
+Session activation captures cwd/trust once, increments an application preparation generation, and immediately deactivates the prior runtime before asynchronously loading code-preview settings. Tool registration and runtime start both reject stale, aborted, or shutdown-invalidated generations, so out-of-order settings completion cannot reactivate an older session. The settings loader is an injectable host boundary for lifecycle tests.
 
 The UI and host footer project immutable service snapshots; neither owns subprocesses. Code-preview settings are loaded at session start before the tool definition is wrapped and registered; extensions exchange only the public plain tool-definition protocol.

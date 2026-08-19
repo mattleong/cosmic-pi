@@ -8,10 +8,13 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
 import { captureExplicitModelArgument } from "./boundary/host-cli.ts";
-import { captureContextModel, captureSelectedModel } from "./boundary/host-model.ts";
+import {
+  captureContextModel,
+  captureSelectedModel,
+  captureThinkingLevel,
+} from "./boundary/host-model.ts";
 import { notifyDirectoryModelWarning } from "./boundary/host-notifier.ts";
 import { captureDirectorySession } from "./boundary/host-session.ts";
-import type { ThinkingLevel } from "./config/schema.ts";
 import {
   makeDirectoryModelsLayer,
   type DirectoryModelsApplication,
@@ -60,7 +63,13 @@ export function registerDirectoryModelsWithDependencies(
         { agentDirectory: getAgentDir, packageName: "pi-directory-models" },
       ),
     startup: () => DirectoryModelPreferenceService.use((service) => service.initialize),
-    onDeactivated: () => MutableRef.set(restoreEvents, INITIAL_RESTORE_EVENT_STATE),
+    onDeactivated: () => {
+      // A non-cancelable setModel settlement may still be completing while runtime disposal waits.
+      // Keep its restoration marker active so the host event cannot be mistaken for a user change;
+      // the scoped restoration finalizer clears it when settlement finishes.
+      if (!MutableRef.get(restoreEvents).active)
+        MutableRef.set(restoreEvents, INITIAL_RESTORE_EVENT_STATE);
+    },
     onStartFailure: ({ ctx }) => {
       warn(ctx, "Directory model preferences failed to start.");
     },
@@ -103,6 +112,8 @@ export function registerDirectoryModelsWithDependencies(
   });
 
   pi.on("thinking_level_select", (event, ctx) => {
+    const level = captureThinkingLevel(event.level);
+    if (!level) return;
     const restore = MutableRef.get(restoreEvents);
     if (restore.active) {
       MutableRef.set(restoreEvents, {
@@ -122,9 +133,7 @@ export function registerDirectoryModelsWithDependencies(
     if (!selected) return;
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     return run(
-      DirectoryModelPreferenceService.use((service) =>
-        service.rememberThinking(selected, event.level as ThinkingLevel),
-      ),
+      DirectoryModelPreferenceService.use((service) => service.rememberThinking(selected, level)),
     ).catch(() => warn(ctx, "Unable to save the directory thinking preference."));
   });
 

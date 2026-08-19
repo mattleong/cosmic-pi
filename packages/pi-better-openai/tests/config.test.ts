@@ -84,7 +84,7 @@ describe("config helpers", () => {
     await run(
       writeConfig(paths.project, { usage: { refreshIntervalMs: 1 }, image: { timeoutMs: 1 } }),
     );
-    const resolved = await run(resolveConfig(root, join(root, "agent")));
+    const resolved = await run(resolveConfig(root, join(root, "agent"), true));
     expect(resolved.usage.refreshIntervalMs).toBe(15_000);
     expect(resolved.image.timeoutMs).toBe(30_000);
   });

@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import {
   makeWriterLease,
   writerLeasePath,
@@ -20,6 +21,14 @@ import {
 } from "../src/boundary/writer-lease.ts";
 
 const token = (character: string): string => character.repeat(64);
+
+const promiseGate = () => {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+};
 const childFixturePath = fileURLToPath(
   new URL("./fixtures/writer-lease-child.mjs", import.meta.url),
 );
@@ -161,6 +170,116 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
         expect(yield* Effect.tryPromise(() => fs.readdir(project)).pipe(Effect.orDie)).toEqual([]);
         yield* first.release(lease);
       }),
+    ),
+  );
+
+  it.effect("interrupts a pre-ownership acquisition wait without creating a lease slot", () =>
+    withFixture(({ agentDirectory, project }) =>
+      Effect.gen(function* () {
+        const entered = promiseGate();
+        const gate = promiseGate();
+        const service = makeWriterLease({
+          agentDirectory,
+          ownerNonce: token("1"),
+          randomToken: () => token("2"),
+          beforeAcquireCommit: () => {
+            entered.open();
+            return gate.promise;
+          },
+        });
+        const cwd = yield* service.canonicalize(project);
+        const acquiring = yield* acquire(service, cwd, "pre-ownership-wait").pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* Effect.promise(() => entered.promise);
+        yield* Fiber.interrupt(acquiring);
+        const exists = yield* Effect.promise(() =>
+          fs.stat(writerLeasePath(agentDirectory, cwd.digest)).then(
+            () => true,
+            () => false,
+          ),
+        );
+        expect(exists).toBe(false);
+        gate.open();
+      }).pipe(Effect.scoped),
+    ),
+  );
+
+  it.effect("finishes durable evidence when interrupted after exclusive lease creation", () =>
+    withFixture(({ agentDirectory, project }) =>
+      Effect.gen(function* () {
+        const entered = promiseGate();
+        const gate = promiseGate();
+        const owner = makeWriterLease({
+          agentDirectory,
+          ownerNonce: token("3"),
+          randomToken: () => token("4"),
+          afterAcquireDirectoryCreated: () => {
+            entered.open();
+            return gate.promise;
+          },
+        });
+        const contender = makeWriterLease({
+          agentDirectory,
+          ownerNonce: token("5"),
+          randomToken: () => token("6"),
+        });
+        const cwd = yield* owner.canonicalize(project);
+        const acquiring = yield* acquire(owner, cwd, "commit-owner").pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* Effect.promise(() => entered.promise);
+        const interrupting = yield* Fiber.interrupt(acquiring).pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* Effect.yieldNow;
+        gate.open();
+        yield* Fiber.join(interrupting);
+        const conflict = yield* acquire(contender, cwd, "after-commit-interrupt").pipe(Effect.flip);
+        expect(conflict).toMatchObject({
+          _tag: "WriterLeaseConflictError",
+          reason: "live",
+          ownerRunId: "commit-owner",
+        });
+      }).pipe(Effect.scoped),
+    ),
+  );
+
+  it.effect("interrupts release before rename and leaves the exact owner locked", () =>
+    withFixture(({ agentDirectory, project }) =>
+      Effect.gen(function* () {
+        const entered = promiseGate();
+        const gate = promiseGate();
+        const owner = makeWriterLease({
+          agentDirectory,
+          ownerNonce: token("7"),
+          randomToken: () => token("8"),
+          beforeReleaseRename: () => {
+            entered.open();
+            return gate.promise;
+          },
+        });
+        const cleanup = makeWriterLease({
+          agentDirectory,
+          ownerNonce: token("9"),
+          randomToken: () => token("a"),
+        });
+        const cwd = yield* owner.canonicalize(project);
+        const lease = yield* acquire(owner, cwd, "cleanup-owner");
+        const releasing = yield* owner
+          .release(lease)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Effect.promise(() => entered.promise);
+        yield* Fiber.interrupt(releasing);
+        const conflict = yield* acquire(cleanup, cwd, "cleanup-contender").pipe(Effect.flip);
+        expect(conflict).toMatchObject({
+          _tag: "WriterLeaseConflictError",
+          reason: "live",
+          ownerRunId: "cleanup-owner",
+        });
+        gate.open();
+        yield* cleanup.release(lease);
+      }).pipe(Effect.scoped),
     ),
   );
 

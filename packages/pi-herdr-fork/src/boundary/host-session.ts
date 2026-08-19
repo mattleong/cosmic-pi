@@ -4,6 +4,7 @@
 import { lstatSync } from "node:fs";
 import { basename, isAbsolute } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { captureSessionHost } from "pi-cosmic-core";
 import { selectHerdrEnvironment } from "./herdr-client.ts";
 
 const MAX_SESSION_PATH_CHARS = 4_096;
@@ -15,12 +16,21 @@ export interface HerdrForkSessionInput {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }
 
+export interface CapturedHerdrForkSession extends HerdrForkSessionInput {
+  readonly signal: AbortSignal | undefined;
+  readonly aborted: boolean;
+}
+
 export const captureHerdrForkSession = (
   ctx: ExtensionContext,
-): HerdrForkSessionInput | undefined => {
+): CapturedHerdrForkSession | undefined => {
+  const host = captureSessionHost(ctx);
+  if (host._tag === "Unavailable") return undefined;
   try {
     return {
-      cwd: ctx.cwd,
+      cwd: host.cwd,
+      signal: host.signal,
+      aborted: host.aborted,
       sessionFile: ctx.sessionManager.getSessionFile(),
       sessionId: ctx.sessionManager.getSessionId(),
       environment: selectHerdrEnvironment(process.env),

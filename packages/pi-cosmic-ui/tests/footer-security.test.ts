@@ -1,0 +1,92 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+import { materializeFooterHostProjection } from "../src/boundary/host-footer-projection.ts";
+import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
+import { makeSetStatusSafely } from "../src/boundary/host-status.ts";
+import { combineSurface, isTerminalImageLine } from "../src/footer/layout.ts";
+import {
+  COSMIC_UI_PROTOCOL_VERSION,
+  normalizeCosmicFooterUpsertEvent,
+} from "../src/protocol/protocol.ts";
+import { extensionContextFixture, footerDataProviderFixture } from "./support/host.ts";
+
+const kittyImage = "\x1b_Ga=T,f=100,q=2,c=2,r=1;QUJD\x1b\\";
+const itermImage = "\x1b[2A\x1b]1337;File=inline=1;size=3;width=2;height=auto:QUJD\x07";
+
+describe("footer terminal safety", () => {
+  it("sanitizes protocol text, compact text, and labels", () => {
+    const event = normalizeCosmicFooterUpsertEvent({
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "owner",
+      contribution: {
+        kind: "text",
+        id: "usage",
+        region: "details",
+        text: "\x1b[31mUsage:\n  safe\x1b[0m",
+        compactText: "\x1b]52;c;Y2xpcA==\x07compact",
+        label: "\x1b[2JProvider\tName",
+      },
+    });
+
+    expect(event?.contribution).toMatchObject({
+      text: "Usage: safe",
+      compactText: "compact",
+      label: "Provider Name",
+    });
+  });
+
+  it("sanitizes both outgoing and materialized host status text", () => {
+    const setStatus = vi.fn();
+    const context = extensionContextFixture({ mode: "tui", ui: { setStatus } });
+    makeSetStatusSafely("status")(context, "\x1b[31mready\x1b[0m\nnow");
+    expect(setStatus).toHaveBeenCalledWith("status", "ready now");
+
+    const callbacks = makeHostCallbackBoundary();
+    // SAFETY: These fixtures provide only the host methods materialized by this boundary test.
+    const pi = { getThinkingLevel: () => "off" } as ExtensionAPI;
+    const footerData = footerDataProviderFixture({
+      getExtensionStatuses: () => new Map([["hostile", "\x1b]52;c;Y2xpcA==\x07status\ntext"]]),
+      getGitBranch: () => null,
+      getAvailableProviderCount: () => 1,
+      onBranchChange: () => () => undefined,
+    });
+    const projection = materializeFooterHostProjection({
+      pi,
+      ctx: undefined,
+      footerData,
+      callbacks,
+      model: undefined,
+      contextUsage: undefined,
+    });
+    expect(projection.extensionStatuses).toEqual([{ id: "hostile", text: "status text" }]);
+  });
+
+  it("recognizes only complete anchored pi-tui image forms", () => {
+    expect(isTerminalImageLine(kittyImage)).toBe(true);
+    expect(isTerminalImageLine(itermImage)).toBe(true);
+    expect(isTerminalImageLine(`prefix${kittyImage}`)).toBe(false);
+    expect(isTerminalImageLine(`${itermImage}suffix`)).toBe(false);
+    expect(isTerminalImageLine("text \x1b_Gnot-an-image")).toBe(false);
+    expect(isTerminalImageLine("\x1b]1337;File=not-terminated")).toBe(false);
+  });
+
+  it("preserves exact images and keeps ordinary surfaces line- and style-safe", () => {
+    const styled = "plain \x1b[31mred\nnext\x1b[2J\x1b]52;c;Y2xpcA==\x07 visible";
+    const rendered = combineSurface(
+      [kittyImage, itermImage, styled, `prefix${kittyImage}suffix`],
+      [],
+      120,
+      "stacked",
+      20,
+    );
+
+    expect(rendered[0]).toBe(kittyImage);
+    expect(rendered[1]).toBe(itermImage);
+    expect(rendered[2]).toContain("\x1b[31mred next");
+    expect(rendered[2]?.endsWith("\x1b[0m")).toBe(true);
+    expect(rendered[2]).not.toContain("\n");
+    expect(rendered[2]).not.toContain("\x1b[2J");
+    expect(rendered[2]).not.toContain("52;c;");
+    expect(rendered[3]).toBe("prefixsuffix");
+  });
+});

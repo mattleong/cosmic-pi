@@ -72,6 +72,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
         }),
       );
       if (!began) return yield* cancelled();
+      let handedOff = false;
       const lease = yield* Effect.acquireRelease(
         writerLeases
           .acquire({
@@ -91,8 +92,8 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             ),
           ),
         (ownedLease) =>
-          releaseState.authorized
-            ? writerLeases.release(ownedLease).pipe(Effect.orDie)
+          !handedOff || releaseState.authorized
+            ? writerLeases.release(ownedLease).pipe(Effect.interruptible, Effect.orDie)
             : Effect.void,
       ).pipe(Effect.provideService(Scope.Scope, leaseScope));
       const attached = yield* withLock(
@@ -103,6 +104,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
           )
             return "stale" as const;
           record.writerLease = lease;
+          handedOff = true;
           return record.stoppedByParent || record.view.state === "stopping"
             ? ("cancelled" as const)
             : ("attached" as const);
@@ -153,7 +155,6 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
           }),
         ),
       ),
-      Effect.uninterruptible,
     );
   };
   const reclaimRecordRunState = (record: RunRecord) =>
@@ -355,9 +356,10 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             ),
           ),
         ),
+        Effect.onInterrupt(() => retainCleanupQuarantine(record, scope)),
         Effect.ensuring(Effect.sync(() => Deferred.doneUnsafe(closeSettled, Effect.void))),
       );
-    }).pipe(Effect.uninterruptible);
+    });
   const closeExitedScope = (record: RunRecord, scope: Scope.Closeable): Effect.Effect<void> =>
     Effect.suspend(() =>
       withLock(

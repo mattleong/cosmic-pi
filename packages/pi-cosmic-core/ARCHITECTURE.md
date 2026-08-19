@@ -15,7 +15,7 @@
 - `src/coordination/` provides scoped concurrency primitives (`refresh-coordinator.ts`, `subscription-refresh.ts`, `synchronous-ingress.ts`); the single-flight refresh coordinator serializes ownership and its one merged follow-up through `SynchronizedRef`.
 - `src/platform/` contains typed Node, HTTP, document, file, process-coordination, and agent-directory adapters. Schema-document decode failures expose only bounded, sanitized issue paths and never rejected values.
 - `src/config/` contains reusable scoped-store, document-ops, and tolerant-field configuration infrastructure.
-- `src/projection.ts` publishes immutable synchronous snapshots.
+- `src/projection.ts` publishes immutable synchronous snapshots, rejecting non-finite numbers and true object cycles with typed paths while preserving acyclic shared references.
 - Consumers use `effect/Predicate` directly for primitive runtime refinements. `src/runtime-values.ts` retains only the composite object-or-null check and exact runtime type-name classifier that have no single Predicate equivalent.
 - `src/security.ts` owns shared redaction/plain terminal sanitization; `src/security/terminal-styled.ts` owns linear per-channel parsing and bounded safe visual-SGR preservation for terminal log UIs that must strip every active control sequence.
 - `src/settings-completion.ts` owns pure `/…-settings` argument completion (`completeSettingsArguments`): descriptor-ordered id matching, caller-supplied extra verbs, case-insensitive prefixes (ids match case-insensitively in both stages), and the `null`-on-no-match host contract. It has no UI dependency.

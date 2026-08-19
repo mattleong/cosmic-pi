@@ -23,8 +23,13 @@ export class DirectoryModelHostError extends Schema.TaggedError<DirectoryModelHo
 const hostError = (operation: string, message: string) => () =>
   new DirectoryModelHostError({ operation, message });
 
-function isThinkingLevel<ValueInput>(value: ValueInput): value is ValueInput & ThinkingLevel {
-  return Predicate.isString(value) && THINKING_LEVELS.some((level) => level === value);
+export function captureThinkingLevel<ValueInput>(value: ValueInput): ThinkingLevel | undefined {
+  try {
+    if (!Predicate.isString(value)) return undefined;
+    return THINKING_LEVELS.find((level) => level === value);
+  } catch {
+    return undefined;
+  }
 }
 
 export function captureSelectedModel<ValueInput>(value: ValueInput): SelectedModel | undefined {
@@ -57,8 +62,8 @@ export const preferenceFromSelectedModel = Effect.fn("DirectoryModelHost.fromSel
   const thinkingLevel = yield* Effect.try({
     try: () => {
       if (thinkingOverride) return thinkingOverride;
-      const fromApi = pi.getThinkingLevel();
-      if (isThinkingLevel(fromApi)) return fromApi;
+      const fromApi = captureThinkingLevel(pi.getThinkingLevel());
+      if (fromApi) return fromApi;
       throw new Error("invalid thinking level");
     },
     catch: hostError("read", "Unable to read Pi's current thinking level."),
@@ -79,8 +84,8 @@ export const captureCurrentPreference = Effect.fn("DirectoryModelHost.captureCur
 const readThinkingLevel = (pi: ExtensionAPI) =>
   Effect.try({
     try: () => {
-      const level = pi.getThinkingLevel();
-      if (isThinkingLevel(level)) return level;
+      const level = captureThinkingLevel(pi.getThinkingLevel());
+      if (level) return level;
       throw new Error("invalid thinking level");
     },
     catch: hostError("thinking", "Unable to read Pi's thinking level."),
@@ -104,10 +109,15 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
     });
     if (!model)
       return yield* hostError("find", "The remembered directory model is not available.")();
-    const applied = yield* Effect.tryPromise({
-      try: () => pi.setModel(model),
-      catch: hostError("set", "Unable to select the remembered directory model."),
-    });
+    // Pi's Promise-shaped setModel cannot be cancelled. Keep only its settlement in this narrow
+    // uninterruptible ordering region so runtime replacement/disposal waits before a successor
+    // can start; registry lookup and every surrounding read remain interruptible.
+    const applied = yield* Effect.uninterruptible(
+      Effect.tryPromise({
+        try: () => pi.setModel(model),
+        catch: hostError("set", "Unable to select the remembered directory model."),
+      }),
+    );
     if (!applied)
       return yield* hostError(
         "auth",

@@ -44,6 +44,8 @@ function serviceLayer(
     context?: MutableRef.MutableRef<ExtensionContext>;
     documents?: Readonly<Record<string, JsonObject>>;
     store?: ReturnType<typeof documents>;
+    omitProjectTrust?: boolean;
+    projectTrusted?: boolean;
   } = {},
 ) {
   const projection = makeProjection();
@@ -57,17 +59,43 @@ function serviceLayer(
     Layer.provide(PiExec.layer),
     Layer.provide(PiApi.layer({ exec } as ExtensionAPI)),
   );
-  const layer = CosmicUiService.layer({
+  const baseServiceOptions = {
     context: contextRef,
     cwd: "/project",
     projection,
     onChange() {},
     startPolling: options.startPolling ?? false,
-  }).pipe(Layer.provide(Layer.mergeAll(repository, probe, HostCallbackBoundary.layer(callbacks))));
+  };
+  const serviceOptions = options.omitProjectTrust
+    ? baseServiceOptions
+    : { ...baseServiceOptions, projectTrusted: options.projectTrusted ?? true };
+  const layer = CosmicUiService.layer(serviceOptions).pipe(
+    Layer.provide(Layer.mergeAll(repository, probe, HostCallbackBoundary.layer(callbacks))),
+  );
   return { layer, projection, contextRef, callbacks, documents: store.values };
 }
 
 describe("Cosmic UI host service", () => {
+  it.effect("treats omitted project trust as untrusted", () => {
+    const projectPath = "/project/.pi/extensions/pi-cosmic-ui.json";
+    const globalPath = "/agent/extensions/pi-cosmic-ui.json";
+    const { layer, projection } = serviceLayer(
+      () => Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false }),
+      {
+        omitProjectTrust: true,
+        documents: {
+          [projectPath]: { footer: { density: "compact" } },
+          [globalPath]: { footer: { density: "comfortable" } },
+        },
+      },
+    );
+    return Effect.gen(function* () {
+      yield* CosmicUiService;
+      expect(MutableRef.get(projection).config?.configPath).toBe(globalPath);
+      expect(MutableRef.get(projection).config?.footer.density).toBe("comfortable");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("handles Git/gh nonzero results, parses diffs, and throttles pull requests", () => {
     let calls = 0;
     const { layer, projection } = serviceLayer((command, args) => {

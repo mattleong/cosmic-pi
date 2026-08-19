@@ -1,5 +1,10 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { clampPercent, formatTokens } from "pi-cosmic-core";
+import {
+  clampPercent,
+  formatTokens,
+  sanitizeTerminalLine,
+  sanitizeTerminalStyledText,
+} from "pi-cosmic-core";
 import type {
   CosmicFooterPlacement,
   CosmicFooterTextContribution,
@@ -35,7 +40,7 @@ function progressBar(
 const FOOTER_LABEL_WIDTH = 8;
 
 function footerLabel(label: string, theme: CosmicFooterTheme): string {
-  return theme.fg("mdLink", label.padEnd(FOOTER_LABEL_WIDTH));
+  return theme.fg("mdLink", sanitizeTerminalLine(label).padEnd(FOOTER_LABEL_WIDTH));
 }
 
 function alignSides(left: string, right: string, width: number): string {
@@ -93,7 +98,7 @@ export function renderProviderUsageLine(
   theme: CosmicFooterTheme,
   compact: boolean,
 ): string {
-  const body = text.replace(/^Usage:\s*/i, "");
+  const body = sanitizeTerminalLine(text).replace(/^Usage:\s*/i, "");
   const cells = compact ? 6 : 10;
   const pieces = [footerLabel(providerLabel, theme)];
   let cursor = 0;
@@ -181,7 +186,7 @@ function ranked(contributions: CosmicFooterTextContribution[]): CosmicFooterText
 }
 
 function contributionText(entry: CosmicFooterTextContribution, compact: boolean): string {
-  return compact && entry.compactText ? entry.compactText : entry.text;
+  return sanitizeTerminalLine(compact && entry.compactText ? entry.compactText : entry.text);
 }
 
 function fitContributions(
@@ -231,7 +236,8 @@ export function renderLabeledContributionLine(
   compact: boolean,
 ): string {
   if (width <= 0) return "";
-  if (width <= FOOTER_LABEL_WIDTH) return truncateToWidth(theme.fg("mdLink", label), width, "");
+  if (width <= FOOTER_LABEL_WIDTH)
+    return truncateToWidth(theme.fg("mdLink", sanitizeTerminalLine(label)), width, "");
   return truncateToWidth(
     `${footerLabel(label, theme)}${renderContributionLine(
       contributions,
@@ -285,9 +291,29 @@ function padTextToWidth(value: string, width: number): string {
   return value + spaces(width - visibleWidth(value));
 }
 
+const KITTY_IMAGE_LINE_PATTERN = new RegExp(
+  String.raw`^(?:\u001B_Ga=T(?:,[A-Za-z]=[A-Za-z0-9]+)*;[A-Za-z0-9+/]*(?:={0,2})\u001B\\)(?:\u001B_Gm=[01];[A-Za-z0-9+/]*(?:={0,2})\u001B\\)*$`,
+  "u",
+);
+const ITERM_IMAGE_LINE_PATTERN = new RegExp(
+  String.raw`^(?:\u001B\[\d+A)?\u001B\]1337;File=[A-Za-z][A-Za-z0-9]*=[A-Za-z0-9+/%=._-]+(?:;[A-Za-z][A-Za-z0-9]*=[A-Za-z0-9+/%=._-]+)*:[A-Za-z0-9+/]*(?:={0,2})\u0007$`,
+  "u",
+);
+
+/** Recognizes only complete, line-anchored image sequences emitted by pi-tui. */
 export function isTerminalImageLine(line: string): boolean {
-  return line.includes("\x1b_G") || line.includes("\x1b]1337;File=");
+  return KITTY_IMAGE_LINE_PATTERN.test(line) || ITERM_IMAGE_LINE_PATTERN.test(line);
 }
+
+const SAFE_SGR_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "u");
+
+const sanitizeSurfaceLine = (line: string): string => {
+  if (isTerminalImageLine(line)) return line;
+  const sanitized = sanitizeTerminalStyledText(line).replace(/\n+/gu, " ");
+  // A surface array element is exactly one terminal line. Close any retained visual style so it
+  // cannot bleed into adjacent inline footer text or the next rendered row.
+  return SAFE_SGR_PATTERN.test(sanitized) ? `${sanitized}\x1b[0m` : sanitized;
+};
 
 function surfaceLineCell(line: string, width: number): string {
   if (!line) return spaces(width);
@@ -324,9 +350,10 @@ export function combineSurface(
   requestedSurfaceWidth: number,
 ): string[] {
   if (surfaceLines.length === 0) return textLines.map((line) => truncateToWidth(line, width, ""));
+  const sanitizedSurfaceLines = surfaceLines.map(sanitizeSurfaceLine);
   if (placement === "stacked" || placement === "habitat") {
     const divider = placement === "habitat" ? ["─".repeat(width)] : [];
-    return [...divider, ...surfaceLines, ...textLines].map((line) =>
+    return [...divider, ...sanitizedSurfaceLines, ...textLines].map((line) =>
       isTerminalImageLine(line) ? line : truncateToWidth(line, width, ""),
     );
   }
@@ -334,10 +361,10 @@ export function combineSurface(
   const gap = 2;
   const surfaceWidth = Math.min(requestedSurfaceWidth, Math.max(1, width - 1));
   const textWidth = Math.max(1, width - surfaceWidth - gap);
-  const totalRows = Math.max(surfaceLines.length, textLines.length);
-  const hasTerminalImage = surfaceLines.some(isTerminalImageLine);
+  const totalRows = Math.max(sanitizedSurfaceLines.length, textLines.length);
+  const hasTerminalImage = sanitizedSurfaceLines.some(isTerminalImageLine);
   const leftImageLine =
-    placement === "inline-left" ? surfaceLines.find(isTerminalImageLine) : undefined;
+    placement === "inline-left" ? sanitizedSurfaceLines.find(isTerminalImageLine) : undefined;
   const renderSurfaceOnRight =
     placement === "inline-right" ||
     placement === "badge" ||
@@ -345,7 +372,7 @@ export function combineSurface(
   const lines: string[] = [];
 
   for (let row = 0; row < totalRows; row++) {
-    const surfaceLine = surfaceLines[row] ?? "";
+    const surfaceLine = sanitizedSurfaceLines[row] ?? "";
     const textLine = textLines[row] ?? "";
     const textPart = truncateToWidth(textLine, textWidth, "");
     const surfacePart = leftImageLine

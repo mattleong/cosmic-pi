@@ -2,6 +2,7 @@ import * as Predicate from "effect/Predicate";
 
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 
 export const COSMIC_UI_PROTOCOL_VERSION = 1 as const;
 export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v1:host:query";
@@ -214,6 +215,24 @@ export function normalizeCosmicFooterUpsertEvent<ValueInput>(
     !optionalFunction(contribution.dispose)
   )
     return undefined;
+  if (contribution.kind === "text") {
+    const { text, compactText, label, ...rest } = contribution;
+    const sanitizedLabel = label === undefined ? undefined : sanitizeTerminalLine(label);
+    if (sanitizedLabel === "") return undefined;
+    const detached = {
+      ...rest,
+      text: sanitizeTerminalLine(text),
+    };
+    if (compactText !== undefined)
+      Object.assign(detached, { compactText: sanitizeTerminalLine(compactText) });
+    if (sanitizedLabel !== undefined) Object.assign(detached, { label: sanitizedLabel });
+    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
+    return Object.freeze({
+      version: event.version,
+      owner: event.owner,
+      contribution: Object.freeze(detached),
+    }) as CosmicFooterUpsertEvent;
+  }
   // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return Object.freeze({
     version: event.version,

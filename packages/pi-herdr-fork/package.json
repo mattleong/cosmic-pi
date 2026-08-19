@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "catalog:",
+    "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",

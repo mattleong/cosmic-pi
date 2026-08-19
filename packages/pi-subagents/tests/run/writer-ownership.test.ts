@@ -1,7 +1,6 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
 // @effect-diagnostics effect/strictEffectProvide:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
-import { setImmediate as scheduleImmediate } from "node:timers";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -171,7 +170,7 @@ describe("SubagentService", () => {
     },
   );
 
-  it.effect("settles in-flight writer preparation when session shutdown starts at startup", () =>
+  it.effect("shuts down without waiting for pre-ownership writer acquisition", () =>
     Effect.gen(function* () {
       const acquireGate = yield* Deferred.make<void>();
       const acquireStarted = yield* Deferred.make<void>();
@@ -194,11 +193,50 @@ describe("SubagentService", () => {
           .startSessionOwned(request({ name: "shutdown-start-boundary", writeIntent: "writer" }))
           .pipe(Effect.forkScoped({ startImmediately: true }));
         yield* Deferred.await(acquireStarted);
-        scheduleImmediate(() => Deferred.doneUnsafe(acquireGate, Effect.void));
       }).pipe(Effect.scoped, Effect.provide(layer));
 
       expect(fake.controls).toHaveLength(0);
-      expect(releases).toBe(1);
+      expect(releases).toBe(0);
+    }),
+  );
+
+  it.effect("registers cleanup before interruption can cross the writer acquisition handoff", () =>
+    Effect.gen(function* () {
+      const acquireGate = yield* Deferred.make<void>();
+      const acquireStarted = yield* Deferred.make<void>();
+      const fake = fakeChildLayer();
+      const projections: SubagentProjection[] = [];
+      let releases = 0;
+      const writerLeases = fakeWriterLeaseLayer({
+        acquireGate,
+        acquireUninterruptible: true,
+        onAcquireStarted: () => Deferred.doneUnsafe(acquireStarted, Effect.void),
+        onRelease: () => {
+          releases += 1;
+        },
+      });
+      const layer = serviceLayer(
+        { publish: (projection) => projections.push(projection) },
+        profileLayerFor({}),
+        writerLeases,
+      ).pipe(Layer.provide(fake.layer));
+
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const starting = yield* service
+          .start(request({ name: "commit-interrupted-writer", writeIntent: "writer" }))
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(acquireStarted);
+        const interrupting = yield* Fiber.interrupt(starting).pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(acquireGate, undefined);
+        yield* Fiber.join(interrupting);
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
+        expect(fake.controls).toHaveLength(0);
+        expect(releases).toBe(1);
+      }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );
 

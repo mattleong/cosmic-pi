@@ -137,34 +137,40 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             message:
               "Writer subagents are disabled on Windows because descendant termination cannot yet be proven without Job Object ownership. Read-only subagents remain available.",
           });
-        const driver = yield* backendRegistry.resolve({
-          host: request.host,
-          runtime: request.runtime,
-          context: request.context,
-        });
+        const driver = yield* restore(
+          backendRegistry.resolve({
+            host: request.host,
+            runtime: request.runtime,
+            context: request.context,
+          }),
+        );
         const canonicalWriterCwd =
           request.writeIntent === "writer"
-            ? yield* writerLeases.canonicalize(request.cwd).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new InvalidSubagentRequestError({
-                      code: "writer_cwd_canonicalization_failed",
-                      message: error.message,
-                    }),
+            ? yield* restore(
+                writerLeases.canonicalize(request.cwd).pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new InvalidSubagentRequestError({
+                        code: "writer_cwd_canonicalization_failed",
+                        message: error.message,
+                      }),
+                  ),
                 ),
               )
             : undefined;
         // Public profile routing already preflights for ordered fallback. Recheck at the service
         // admission boundary with the canonical writer cwd to close readiness races and protect
         // direct internal callers; failure belongs to the selected candidate and never falls through.
-        yield* driver.preflight({
-          context: request.context,
-          writeIntent: request.writeIntent,
-          closeOnReport: request.closeOnReport,
-          model: request.model,
-          effort: request.effort,
-          cwd: canonicalWriterCwd?.path ?? request.cwd,
-        });
+        yield* restore(
+          driver.preflight({
+            context: request.context,
+            writeIntent: request.writeIntent,
+            closeOnReport: request.closeOnReport,
+            model: request.model,
+            effort: request.effort,
+            cwd: canonicalWriterCwd?.path ?? request.cwd,
+          }),
+        );
         if (request.task.length > MAX_TASK_CHARS)
           return yield* new InvalidSubagentRequestError({
             code: "task_too_large",

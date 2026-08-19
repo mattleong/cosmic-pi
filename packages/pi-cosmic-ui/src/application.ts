@@ -8,8 +8,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
-import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
+import { isProjectTrusted, makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
 import { makeHostCallbackBoundary, snapshotHostAbortSignal } from "./boundary/host-callback.ts";
+import { addAssistantUsage, decodeAssistantUsage } from "./boundary/host-usage.ts";
 import { DEFAULT_CONFIG, type ResolvedCosmicUiConfig } from "./config/schema.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import {
@@ -55,14 +56,6 @@ interface MutableInvalidateProtocolEvent {
   owner?: string;
   id?: string;
 }
-
-const isProjectTrusted = (ctx: ExtensionContext): boolean => {
-  try {
-    return Predicate.isFunction(ctx.isProjectTrusted) ? ctx.isProjectTrusted() : true;
-  } catch {
-    return false;
-  }
-};
 
 export function registerCosmicUiApplication(pi: ExtensionAPI): void {
   const callbacks = makeHostCallbackBoundary();
@@ -129,15 +122,14 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
     const read = callbacks.invoke<TotalsRead>(
       "host-query",
       () => {
-        const totals = emptyTotals();
+        let totals = emptyTotals();
         for (const entry of ctx.sessionManager.getEntries()) {
           if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-          const usage = entry.message.usage;
-          totals.input += usage.input;
-          totals.output += usage.output;
-          totals.cacheRead += usage.cacheRead;
-          totals.cacheWrite += usage.cacheWrite;
-          totals.cost += usage.cost.total;
+          const usage = decodeAssistantUsage(entry.message.usage);
+          if (usage === undefined) throw new Error("Invalid assistant usage.");
+          const next = addAssistantUsage(totals, usage);
+          if (next === undefined) throw new Error("Assistant usage totals overflowed.");
+          totals = next;
         }
         return { _tag: "Success", totals };
       },
@@ -379,13 +371,10 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
       () => {
         const message = event.message;
         if (!message || message.role !== "assistant") return { _tag: "Rescan" };
-        const totals = { ...lastCompleteTotals };
-        const usage = message.usage;
-        totals.input += usage.input;
-        totals.output += usage.output;
-        totals.cacheRead += usage.cacheRead;
-        totals.cacheWrite += usage.cacheWrite;
-        totals.cost += usage.cost.total;
+        const usage = decodeAssistantUsage(message.usage);
+        if (usage === undefined) throw new Error("Invalid assistant usage.");
+        const totals = addAssistantUsage(lastCompleteTotals, usage);
+        if (totals === undefined) throw new Error("Assistant usage totals overflowed.");
         return { _tag: "Assistant", totals };
       },
       { _tag: "Failure" },
