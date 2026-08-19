@@ -56,10 +56,10 @@ export const launch = (id: string): BackendLaunchRequest => ({
 export const fakeTopology = () => {
   let nextPane = 1;
   let splitCalls = 0;
-  let workspaceLabel = "";
-  let tabLive = false;
-  let workLive = false;
-  const panes = new Map<string, { terminalId: string; label?: string }>();
+  const splitTargets: string[] = [];
+  const panes = new Map<string, { terminalId: string; label?: string }>([
+    ["user:p0", { terminalId: "user:term0", label: "Parent Pi" }],
+  ]);
   const agents = new Map<string, HerdrAgent>();
   const activationConfirmations = new Map<string, number>();
   const shellProcessInspections = new Map<string, number>();
@@ -68,7 +68,6 @@ export const fakeTopology = () => {
   const closedPanes: string[] = [];
   const paneCommands: Array<{ readonly paneId: string; readonly operation: string }> = [];
   const focusOperations: string[] = [];
-  let closedWorkspaces = 0;
   let failStartAfterApply = false;
   let failRollbackSnapshot = false;
   let startApplied = false;
@@ -88,7 +87,7 @@ export const fakeTopology = () => {
   let driftAfterActivationFocus = false;
   let driftAfterOutput: "confirm pane input" | "confirm pane environment" | undefined;
   let validSecretBootstrap = false;
-  let moveFocusOnWorkspaceClose = false;
+  let moveFocusOnPaneClose = false;
   let moveFocusAfterFirstProbe = false;
   let duplicateSelector: "workspace" | "tab" | "terminal" | undefined;
   let splitReturnsForeignPane = false;
@@ -97,14 +96,14 @@ export const fakeTopology = () => {
   let agentNameCollision = false;
   let duplicateNameAfterStart = false;
   let driftOnFocusRestorationSnapshot = false;
-  let replaceOriginalTabOnStart = false;
   let replaceOriginalTabBeforeActivation = false;
   let plannedAgentName: string | undefined;
   let escapeAgentSelectorAfterClose = false;
   let escapedAgentName: string | undefined;
-  let failWorkspaceCloseAfterApply = false;
+  let failPaneCloseAfterApply = false;
   let replaceOriginalTabIdentity = false;
   let blockPostCloseSnapshot = false;
+  let currentPaneMismatch = false;
   let postCloseSnapshotReached = false;
   let notifyPostCloseSnapshotReached: (() => void) | undefined;
   let releasePostCloseSnapshot: (() => void) | undefined;
@@ -121,46 +120,46 @@ export const fakeTopology = () => {
     return {
       version: "0.8.0",
       protocol: 19,
+      focusedWorkspaceId: "user",
       focusedTabId,
-      workspaces: workLive
-        ? [
-            { workspaceId: "w", label: workspaceLabel, focused: false, activeTabId: "w:t" },
-            ...(duplicateSelector === "workspace"
-              ? [
-                  {
-                    workspaceId: "w",
-                    label: "replacement-workspace",
-                    focused: false,
-                    activeTabId: "w:t",
-                  },
-                ]
-              : []),
-          ]
-        : [],
-      tabs: [
-        ...(tabLive
+      focusedPaneId: focusedTabId === "user:t" ? "user:p0" : undefined,
+      workspaces: [
+        {
+          workspaceId: "user",
+          label: "user",
+          focused: true,
+          activeTabId: focusedTabId,
+        },
+        ...(duplicateSelector === "workspace"
           ? [
-              { tabId: "w:t", workspaceId: "w", label: "1", paneCount: panes.size, focused: false },
-              ...(duplicateSelector === "tab"
-                ? [
-                    {
-                      tabId: "w:t",
-                      workspaceId: "replacement-workspace",
-                      label: "replacement-tab",
-                      paneCount: 0,
-                      focused: false,
-                    },
-                  ]
-                : []),
+              {
+                workspaceId: "user",
+                label: "replacement-workspace",
+                focused: false,
+                activeTabId: "user:t",
+              },
             ]
           : []),
+      ],
+      tabs: [
         {
           tabId: "user:t",
           workspaceId: replaceOriginalTabIdentity ? "replacement-user" : "user",
           label: replaceOriginalTabIdentity ? "replacement-user" : "user",
-          paneCount: 0,
+          paneCount: panes.size,
           focused: focusedTabId === "user:t",
         },
+        ...(duplicateSelector === "tab"
+          ? [
+              {
+                tabId: "user:t",
+                workspaceId: "replacement-workspace",
+                label: "replacement-tab",
+                paneCount: 0,
+                focused: false,
+              },
+            ]
+          : []),
         {
           tabId: "user:other",
           workspaceId: "user",
@@ -172,23 +171,17 @@ export const fakeTopology = () => {
       panes: [
         ...[...panes].map(([paneId, pane]) =>
           (() => {
-            const objectPart5927_0 = {
+            const paneView = {
               paneId,
               terminalId: showTerminalMismatch ? `${pane.terminalId}-replacement` : pane.terminalId,
-              workspaceId: "w",
-              tabId: "w:t",
+              workspaceId: "user",
+              tabId: "user:t",
               cwd: "/project",
               foregroundCwd: "/project",
-            };
-            const objectPart5927_1 = pane.label
-              ? { ...objectPart5927_0, label: pane.label }
-              : objectPart5927_0;
-            const objectPart5927_2 = {
-              ...objectPart5927_1,
-              focused: false,
+              focused: paneId === "user:p0" && focusedTabId === "user:t",
               agentStatus: agents.get(paneId)?.agentStatus ?? "unknown",
             };
-            return objectPart5927_2;
+            return pane.label ? { ...paneView, label: pane.label } : paneView;
           })(),
         ),
         ...(duplicateSelector === "terminal" && panes.size > 0
@@ -216,8 +209,8 @@ export const fakeTopology = () => {
                     {
                       paneId: postActivationOccupancyPaneId,
                       terminalId: pane.terminalId,
-                      workspaceId: "w",
-                      tabId: "w:t",
+                      workspaceId: "user",
+                      tabId: "user:t",
                       cwd: "/project",
                       foregroundCwd: "/project",
                       focused: true,
@@ -269,9 +262,10 @@ export const fakeTopology = () => {
   };
   const cli: HerdrCliContract = {
     sessionIdentity: "inherited",
+    callingPaneId: "user:p0",
     preflight: () => Effect.void,
     snapshot: Effect.suspend(() => {
-      if (blockPostCloseSnapshot && closedWorkspaces > 0) {
+      if (blockPostCloseSnapshot && closedPanes.length > 0) {
         blockPostCloseSnapshot = false;
         return Effect.callback<HerdrSnapshot>((resume) => {
           postCloseSnapshotReached = true;
@@ -289,26 +283,14 @@ export const fakeTopology = () => {
           )
         : Effect.succeed(snapshot());
     }),
-    createWorkspace: (_cwd, label) =>
-      Effect.sync(() => {
-        workspaceLabel = label;
-        workLive = true;
-        tabLive = true;
-        panes.set("w:p1", { terminalId: "term-1" });
-        nextPane = 2;
-        const rootPane = snapshot().panes[0]!;
-        if (replaceOriginalTabBeforeActivation) replaceOriginalTabIdentity = true;
-        return {
-          workspaceId: "w",
-          workspaceLabel: label,
-          tabId: "w:t",
-          tabLabel: "1",
-          rootPane,
-        };
-      }),
-    splitPane: () =>
+    currentPane: Effect.sync(() => {
+      const pane = snapshot().panes.find((candidate) => candidate.paneId === "user:p0")!;
+      return currentPaneMismatch ? { ...pane, paneId: "foreign:p" } : pane;
+    }),
+    splitPane: (anchorPaneId) =>
       Effect.sync(() => {
         splitCalls += 1;
+        splitTargets.push(anchorPaneId);
         if (splitReturnsForeignPane)
           return {
             paneId: "foreign:p",
@@ -320,10 +302,14 @@ export const fakeTopology = () => {
             focused: false,
             agentStatus: "unknown" as const,
           };
-        const paneId = `w:p${nextPane}`;
-        panes.set(paneId, { terminalId: `term-${nextPane}` });
+        if (!panes.has(anchorPaneId))
+          throw new Error(`Fixture split anchor ${anchorPaneId} does not exist.`);
+        const paneId = `user:p${nextPane}`;
+        panes.set(paneId, { terminalId: `user:term${nextPane}` });
         nextPane += 1;
-        return snapshot().panes.find((pane) => pane.paneId === paneId)!;
+        const pane = snapshot().panes.find((candidate) => candidate.paneId === paneId)!;
+        if (replaceOriginalTabBeforeActivation) replaceOriginalTabIdentity = true;
+        return pane;
       }),
     renamePane: (paneId, label) =>
       Effect.sync(() => {
@@ -345,7 +331,7 @@ export const fakeTopology = () => {
             }),
           );
         paneCommands.push({ paneId, operation });
-        return focusedTabId !== "w:t"
+        return focusedTabId !== "user:t"
           ? Effect.fail(
               new SubagentProcessError({
                 operation: "prepare pane environment",
@@ -370,7 +356,7 @@ export const fakeTopology = () => {
           const attempts = (activationConfirmations.get(paneId) ?? 0) + 1;
           activationConfirmations.set(paneId, attempts);
           if (attempts === 1 || dropAllActivationProbes) {
-            if (attempts === 1 && moveFocusAfterFirstProbe) focusedTabId = "user:t";
+            if (attempts === 1 && moveFocusAfterFirstProbe) focusedTabId = "user:other";
             return Effect.fail(
               new SubagentProcessError({
                 operation,
@@ -461,9 +447,8 @@ export const fakeTopology = () => {
         agents.set(paneId, agent);
         if (duplicateNameAfterStart) agentNameCollision = true;
         if (driftOnFocusRestorationSnapshot) terminalMismatchSnapshotCountdown = 2;
-        if (replaceOriginalTabOnStart) replaceOriginalTabIdentity = true;
         startApplied = true;
-        if (failFocusRestoration) focusedTabId = "w:t";
+        if (failFocusRestoration) focusedTabId = "user:t";
         return failStartAfterApply
           ? Effect.fail(
               new SubagentProcessError({
@@ -480,27 +465,19 @@ export const fakeTopology = () => {
       }),
     prompt: (name) => Effect.sync(() => [...agents.values()].find((agent) => agent.name === name)!),
     closePane: (paneId) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
+        const closedAgentName = agents.get(paneId)?.name;
         closedPanes.push(paneId);
         agents.delete(paneId);
         panes.delete(paneId);
-      }),
-    closeWorkspace: () =>
-      Effect.suspend(() => {
-        closedWorkspaces += 1;
-        if (escapeAgentSelectorAfterClose) escapedAgentName = [...agents.values()][0]?.name;
-        agents.clear();
-        panes.clear();
-        tabLive = false;
-        workLive = false;
-        if (focusedTabId === "w:t")
-          focusedTabId = moveFocusOnWorkspaceClose ? "user:other" : "user:t";
-        return failWorkspaceCloseAfterApply
+        if (escapeAgentSelectorAfterClose) escapedAgentName = closedAgentName;
+        if (moveFocusOnPaneClose) focusedTabId = "user:other";
+        return failPaneCloseAfterApply
           ? Effect.fail(
               new SubagentProcessError({
-                operation: "close workspace",
-                code: "herdr_close_workspace_outcome_uncertain",
-                message: "Fixture applied workspace close before losing its response.",
+                operation: "close pane",
+                code: "herdr_close_pane_outcome_uncertain",
+                message: "Fixture applied pane close before losing its response.",
               }),
             )
           : Effect.void;
@@ -563,10 +540,12 @@ export const fakeTopology = () => {
     closedPanes,
     paneCommands,
     focusOperations,
-    closedWorkspaces: () => closedWorkspaces,
     splitCalls: () => splitCalls,
+    splitTargets: () => [...splitTargets],
     cleanupAuthorizations: () => cleanupAuthorizations,
     focusedTab: () => focusedTabId,
+    callerPaneId: "user:p0",
+    callerPaneLive: () => panes.has("user:p0"),
     dropEveryActivationProbe: () => {
       dropAllActivationProbes = true;
     },
@@ -588,8 +567,8 @@ export const fakeTopology = () => {
     enableSecretBootstrap: () => {
       validSecretBootstrap = true;
     },
-    moveFocusToOtherOnWorkspaceClose: () => {
-      moveFocusOnWorkspaceClose = true;
+    moveFocusToOtherOnPaneClose: () => {
+      moveFocusOnPaneClose = true;
     },
     moveFocusToOriginalAfterFirstProbe: () => {
       moveFocusAfterFirstProbe = true;
@@ -615,19 +594,16 @@ export const fakeTopology = () => {
     driftDuringFocusRestoration: () => {
       driftOnFocusRestorationSnapshot = true;
     },
-    replaceOriginalTabDuringStart: () => {
-      replaceOriginalTabOnStart = true;
-    },
     replaceOriginalTabBeforeFirstActivation: () => {
       replaceOriginalTabBeforeActivation = true;
     },
     escapeAgentNameAfterClose: () => {
       escapeAgentSelectorAfterClose = true;
     },
-    failWorkspaceCloseAfterApplying: () => {
-      failWorkspaceCloseAfterApply = true;
+    failPaneCloseAfterApplying: () => {
+      failPaneCloseAfterApply = true;
     },
-    blockSnapshotAfterWorkspaceClose: () => {
+    blockSnapshotAfterPaneClose: () => {
       blockPostCloseSnapshot = true;
       postCloseSnapshotReached = false;
       notifyPostCloseSnapshotReached = undefined;
@@ -655,6 +631,15 @@ export const fakeTopology = () => {
     },
     failRestoreFocus: () => {
       failFocusRestoration = true;
+    },
+    switchToOtherTab: () => {
+      focusedTabId = "user:other";
+    },
+    mismatchCurrentPane: () => {
+      currentPaneMismatch = true;
+    },
+    removeCallerPane: () => {
+      panes.delete("user:p0");
     },
   };
 };

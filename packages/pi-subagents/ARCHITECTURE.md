@@ -46,7 +46,7 @@ Every backend process, transport, harness, child scope, and writer lease belongs
 
 ### Herdr topology
 
-Herdr uses only the parent-inherited session. Workspace/tab/pane/terminal/agent/native-session selectors are exact evidence; every mutation revalidates them, mismatches are sticky, focus restoration never steals newer user focus, and uncertain topology is retained rather than adopted or retried. See [Herdr ownership](docs/herdr-ownership.md).
+Herdr uses only the parent-inherited session and requires one exact inherited calling pane. Launches split that pane, then the newest live owned subagent pane in the same current workspace/tab; active-tab changes do not invalidate committed runs. Workspace/tab/pane/terminal/agent/native-session selectors are exact evidence; every mutation revalidates them, mismatches are sticky, focus restoration never steals newer user focus, only exact subagent panes are closed, and uncertain topology is retained rather than adopted or retried. See [Herdr ownership](docs/herdr-ownership.md).
 
 ### Completion and delivery
 

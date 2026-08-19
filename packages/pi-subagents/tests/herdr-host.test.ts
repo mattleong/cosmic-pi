@@ -12,7 +12,7 @@ import { fakeTopology, launch, supervisor } from "./fixtures/herdr-host-fixture.
 
 describe("session-owned Herdr topology", () => {
   it.live(
-    "shares one workspace, closes only exact owned panes, and refuses mismatched identity",
+    "splits the calling pane first, then the newest owned pane, and closes only owned panes",
     () => {
       const fake = fakeTopology();
       const layer = HerdrHost.layer.pipe(
@@ -28,7 +28,9 @@ describe("session-owned Herdr topology", () => {
           runId: "agent-2",
         });
         expect(first.workspaceId).toBe(second.workspaceId);
+        expect(first.tabId).toBe(second.tabId);
         expect(first.paneId).not.toBe(second.paneId);
+        expect(fake.splitTargets()).toEqual([fake.callerPaneId, first.paneId]);
         expect(first.agentName).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
         expect(second.agentName).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
         expect(first.agentName).not.toBe(second.agentName);
@@ -44,11 +46,74 @@ describe("session-owned Herdr topology", () => {
         expect(fake.closedPanes).toEqual([first.paneId]);
         expect(fake.cleanupAuthorizations()).toBe(1);
         yield* second.close;
-        expect(fake.closedWorkspaces()).toBe(1);
+        expect(fake.closedPanes).toEqual([first.paneId, second.paneId]);
+        expect(fake.callerPaneLive()).toBe(true);
         expect(fake.cleanupAuthorizations()).toBe(2);
       }).pipe(Effect.scoped, Effect.provide(layer));
     },
   );
+
+  it.live("rejects an unresolvable calling pane before splitting", () => {
+    const fake = fakeTopology();
+    fake.mismatchCurrentPane();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const runScope = yield* Scope.make();
+      const launched = yield* host
+        .launch("pi", launch("agent-no-caller"), {
+          ...supervisor,
+          runId: "agent-no-caller",
+        })
+        .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
+      expect(Exit.isFailure(launched)).toBe(true);
+      expect(fake.splitCalls()).toBe(0);
+      expect(fake.closedPanes).toEqual([]);
+      expect(fake.callerPaneLive()).toBe(true);
+      expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
+      expect(fake.cleanupAuthorizations()).toBe(1);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.live("uses the newest remaining owned pane after the latest pane closes", () => {
+    const fake = fakeTopology();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const first = yield* host.launch("pi", launch("anchor-first"), supervisor);
+      const second = yield* host.launch("pi", launch("anchor-second"), {
+        ...supervisor,
+        runId: "anchor-second",
+      });
+      const third = yield* host.launch("pi", launch("anchor-third"), {
+        ...supervisor,
+        runId: "anchor-third",
+      });
+      yield* third.close;
+      const fourth = yield* host.launch("pi", launch("anchor-fourth"), {
+        ...supervisor,
+        runId: "anchor-fourth",
+      });
+      expect(fake.splitTargets()).toEqual([
+        fake.callerPaneId,
+        first.paneId,
+        second.paneId,
+        second.paneId,
+      ]);
+      yield* fourth.close;
+      yield* second.close;
+      yield* first.close;
+      expect(fake.callerPaneLive()).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
 
   it.live("generates distinct Herdr 0.8-safe names for every hosted runtime", () => {
     const fake = fakeTopology();
@@ -135,17 +200,18 @@ describe("session-owned Herdr topology", () => {
         _tag: "Failure",
         failure: { code: "herdr_pane_input_unavailable" },
       });
-      expect(fake.activationConfirmations.get("w:p1")).toBe(2);
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.activationConfirmations.get("user:p1")).toBe(2);
+      expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.focusedTab()).toBe("user:t");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.live("does not restore stale focus after rollback closes the owned tab", () => {
+  it.live("does not restore stale focus after rollback closes the owned pane", () => {
     const fake = fakeTopology();
     fake.dropEveryActivationProbe();
-    fake.moveFocusToOtherOnWorkspaceClose();
+    fake.moveFocusToOtherOnPaneClose();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
         Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
@@ -184,7 +250,8 @@ describe("session-owned Herdr topology", () => {
         _tag: "Failure",
         failure: { code: "agent_pane_busy" },
       });
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.focusedTab()).toBe("user:t");
     }).pipe(Effect.scoped, Effect.provide(layer));
@@ -192,6 +259,7 @@ describe("session-owned Herdr topology", () => {
 
   it.live("rolls back before committing a run when focus restoration fails", () => {
     const fake = fakeTopology();
+    fake.switchToOtherTab();
     fake.failRestoreFocus();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
@@ -210,7 +278,8 @@ describe("session-owned Herdr topology", () => {
         _tag: "Failure",
         failure: { code: "herdr_restore_focus_outcome_uncertain" },
       });
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
@@ -240,7 +309,7 @@ describe("session-owned Herdr topology", () => {
       expect(Exit.isFailure(closed)).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
       expect(fake.closedPanes).toEqual([]);
-      expect(fake.closedWorkspaces()).toBe(0);
+      expect(fake.callerPaneLive()).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -265,7 +334,8 @@ describe("session-owned Herdr topology", () => {
         expect(failure).toMatchObject({
           code: "herdr_secret_attestation_invalid",
         });
-        expect(fake.closedWorkspaces()).toBe(0);
+        expect(fake.closedPanes).toEqual([]);
+        expect(fake.callerPaneLive()).toBe(true);
         expect(fake.cleanupAuthorizations()).toBe(1);
       }).pipe(Effect.scoped, Effect.provide(layer));
     },
@@ -295,7 +365,7 @@ describe("session-owned Herdr topology", () => {
         expect(Exit.isFailure(closed)).toBe(true);
         expect(fake.cleanupAuthorizations()).toBe(0);
         expect(fake.closedPanes).toEqual([]);
-        expect(fake.closedWorkspaces()).toBe(0);
+        expect(fake.callerPaneLive()).toBe(true);
       }).pipe(Effect.scoped, Effect.provide(layer));
     },
   );

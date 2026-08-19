@@ -40,7 +40,7 @@ describe("Herdr launch ownership hardening", () => {
         message: expect.stringContaining("quarantined"),
       });
       expect(fake.closedPanes).toEqual([]);
-      expect(fake.closedWorkspaces()).toBe(0);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(layer));
     return Effect.gen(function* () {
@@ -61,20 +61,48 @@ describe("Herdr launch ownership hardening", () => {
         ...supervisor,
         runId: "agent-uncertain-close",
       });
-      fake.failWorkspaceCloseAfterApplying();
+      fake.failPaneCloseAfterApplying();
       expect(yield* hosted.close.pipe(Effect.flip)).toMatchObject({
-        code: "herdr_close_workspace_outcome_uncertain",
+        code: "herdr_close_pane_outcome_uncertain",
       });
       expect(yield* hosted.close.pipe(Effect.flip)).toMatchObject({
         code: "herdr_ownership_mismatch",
         message: expect.stringContaining("quarantined"),
       });
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.closedPanes).toEqual([hosted.paneId]);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(layer));
     return Effect.gen(function* () {
       expect(Exit.isFailure(yield* scenario.pipe(Effect.exit))).toBe(true);
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.closedPanes).toHaveLength(1);
+      expect(fake.callerPaneLive()).toBe(true);
+    });
+  });
+
+  it.live("refuses to collapse the user tab when the subagent is its final pane", () => {
+    const fake = fakeTopology();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    const scenario = Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const hosted = yield* host.launch("pi", launch("agent-last-pane"), {
+        ...supervisor,
+        runId: "agent-last-pane",
+      });
+      fake.removeCallerPane();
+      expect(yield* hosted.close.pipe(Effect.flip)).toMatchObject({
+        code: "herdr_ownership_mismatch",
+        message: expect.stringContaining("last visible pane"),
+      });
+      expect(fake.closedPanes).toEqual([]);
+      expect(fake.cleanupAuthorizations()).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+    return Effect.gen(function* () {
+      expect(Exit.isFailure(yield* scenario.pipe(Effect.exit))).toBe(true);
     });
   });
 
@@ -91,14 +119,15 @@ describe("Herdr launch ownership hardening", () => {
         ...supervisor,
         runId: "agent-interrupted-close",
       });
-      fake.blockSnapshotAfterWorkspaceClose();
+      fake.blockSnapshotAfterPaneClose();
       const closing = yield* hosted.close.pipe(Effect.forkScoped);
       yield* fake.awaitBlockedPostCloseSnapshot();
       const interrupting = yield* Fiber.interrupt(closing).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       fake.releaseBlockedPostCloseSnapshot();
       yield* Fiber.join(interrupting);
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.closedPanes).toEqual([hosted.paneId]);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
@@ -146,7 +175,7 @@ describe("Herdr launch ownership hardening", () => {
         .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
       expect(Exit.isFailure(launched)).toBe(true);
       expect(fake.paneCommands).toEqual([]);
-      expect(fake.closedWorkspaces()).toBe(0);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
       expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layer));
@@ -174,7 +203,7 @@ describe("Herdr launch ownership hardening", () => {
         "activate pane input",
         "activate pane input",
       ]);
-      expect(fake.closedWorkspaces()).toBe(0);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
       expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layer));
@@ -204,7 +233,7 @@ describe("Herdr launch ownership hardening", () => {
         "activate pane input",
         "prepare pane environment",
       ]);
-      expect(fake.closedWorkspaces()).toBe(0);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
       expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layer));
@@ -236,7 +265,7 @@ describe("Herdr launch ownership hardening", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.live("quarantines duplicate workspace, tab, and terminal selector identities", () =>
+  it.live("rejects duplicate caller workspace, tab, and terminal selectors before splitting", () =>
     Effect.gen(function* () {
       for (const selector of ["workspace", "tab", "terminal"] as const) {
         const fake = fakeTopology();
@@ -259,12 +288,15 @@ describe("Herdr launch ownership hardening", () => {
             })
             .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
           expect(Exit.isFailure(launched)).toBe(true);
+          expect(fake.splitCalls()).toBe(0);
           expect(fake.paneCommands).toEqual([]);
-          expect(fake.closedWorkspaces()).toBe(0);
+          expect(fake.closedPanes).toEqual([]);
+          expect(fake.callerPaneLive()).toBe(true);
           expect(fake.cleanupAuthorizations()).toBe(0);
-          expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(
+          expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(
             true,
           );
+          expect(fake.cleanupAuthorizations()).toBe(1);
         }).pipe(Effect.scoped, Effect.provide(layer));
       }
     }),
@@ -296,7 +328,7 @@ describe("Herdr launch ownership hardening", () => {
             })
             .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
           expect(Exit.isFailure(launched)).toBe(true);
-          expect(fake.closedWorkspaces()).toBe(0);
+          expect(fake.callerPaneLive()).toBe(true);
           expect(fake.closedPanes).toEqual([]);
           expect(fake.cleanupAuthorizations()).toBe(0);
           expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(
@@ -307,7 +339,7 @@ describe("Herdr launch ownership hardening", () => {
     }),
   );
 
-  it.live("refuses to split a quarantined committed anchor after ABA-looking restoration", () => {
+  it.live("skips a quarantined anchor without adopting restored-looking evidence", () => {
     const fake = fakeTopology();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
@@ -324,7 +356,6 @@ describe("Herdr launch ownership hardening", () => {
         ...supervisor,
         runId: "agent-anchor-second",
       });
-      expect(fake.splitCalls()).toBe(1);
       const exact = fake.agents.get(anchor.paneId)!;
       fake.agents.set(anchor.paneId, {
         ...exact,
@@ -335,18 +366,14 @@ describe("Herdr launch ownership hardening", () => {
         code: "herdr_ownership_mismatch",
       });
       fake.agents.set(anchor.paneId, exact);
-      expect(
-        yield* host
-          .launch("pi", launch("agent-after-quarantined-anchor"), {
-            ...supervisor,
-            runId: "agent-after-quarantined-anchor",
-          })
-          .pipe(Effect.flip),
-      ).toMatchObject({ code: "herdr_ownership_mismatch" });
-      expect(fake.splitCalls()).toBe(1);
-      expect(yield* first.inspect.pipe(Effect.flip)).toMatchObject({
-        code: "herdr_ownership_mismatch",
+      const next = yield* host.launch("pi", launch("agent-after-quarantined-anchor"), {
+        ...supervisor,
+        runId: "agent-after-quarantined-anchor",
       });
+      expect(fake.splitTargets()).toEqual([fake.callerPaneId, first.paneId, first.paneId]);
+      expect(yield* first.inspect).toMatchObject({ paneId: first.paneId });
+      yield* next.close;
+      yield* first.close;
     }).pipe(Effect.scoped, Effect.provide(layer));
     return Effect.gen(function* () {
       expect(Exit.isFailure(yield* scenario.pipe(Effect.exit))).toBe(true);
@@ -402,7 +429,8 @@ describe("Herdr launch ownership hardening", () => {
         _tag: "Failure",
         failure: { code: "herdr_agent_name_unavailable" },
       });
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
@@ -423,7 +451,8 @@ describe("Herdr launch ownership hardening", () => {
       fake.escapeAgentNameAfterClose();
       const failure = yield* hosted.close.pipe(Effect.flip);
       expect(failure).toMatchObject({ code: "herdr_cleanup_unconfirmed" });
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.closedPanes).toEqual([hosted.paneId]);
+      expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(layer));
     return Effect.gen(function* () {
@@ -431,7 +460,7 @@ describe("Herdr launch ownership hardening", () => {
     });
   });
 
-  it.live("refuses first activation after the original focus identity changes", () => {
+  it.live("quarantines a provisional pane when its caller tab identity changes after split", () => {
     const fake = fakeTopology();
     fake.replaceOriginalTabBeforeFirstActivation();
     const layer = HerdrHost.layer.pipe(
@@ -441,26 +470,23 @@ describe("Herdr launch ownership hardening", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const result = yield* Effect.result(
-        host.launch("pi", launch("agent-replaced-initial-focus"), {
+      const runScope = yield* Scope.make();
+      const launched = yield* host
+        .launch("pi", launch("agent-replaced-initial-focus"), {
           ...supervisor,
           runId: "agent-replaced-initial-focus",
-        }),
-      );
-      expect(result).toMatchObject({
-        _tag: "Failure",
-        failure: { code: "herdr_focus_changed" },
-      });
-      expect(
-        fake.focusOperations.filter((operation) => operation === "activate herdr tab"),
-      ).toEqual([]);
-      expect(fake.closedWorkspaces()).toBe(1);
+        })
+        .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
+      expect(Exit.isFailure(launched)).toBe(true);
+      expect(fake.focusOperations).toEqual([]);
+      expect(fake.closedPanes).toEqual([]);
+      expect(fake.callerPaneLive()).toBe(true);
+      expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.live("does not restore focus to a reparented original tab id", () => {
+  it.live("does not quarantine committed runs when the user switches tabs", () => {
     const fake = fakeTopology();
-    fake.replaceOriginalTabDuringStart();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
         Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
@@ -468,13 +494,17 @@ describe("Herdr launch ownership hardening", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const hosted = yield* host.launch("pi", launch("agent-reparented-focus"), {
+      const hosted = yield* host.launch("pi", launch("agent-tab-switch"), {
         ...supervisor,
-        runId: "agent-reparented-focus",
+        runId: "agent-tab-switch",
       });
-      expect(fake.focusedTab()).toBe("w:t");
-      expect(fake.focusOperations.filter((operation) => operation === "restore focus")).toEqual([]);
+      fake.switchToOtherTab();
+      expect(yield* hosted.inspect).toMatchObject({ paneId: hosted.paneId });
+      expect(yield* hosted.prompt("continue inspection")).toMatchObject({ paneId: hosted.paneId });
       yield* hosted.close;
+      expect(fake.focusedTab()).toBe("user:other");
+      expect(fake.closedPanes).toEqual([hosted.paneId]);
+      expect(fake.callerPaneLive()).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -502,7 +532,8 @@ describe("Herdr launch ownership hardening", () => {
       expect(
         fake.focusOperations.filter((operation) => operation === "activate herdr tab"),
       ).toEqual(["activate herdr tab"]);
-      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.callerPaneLive()).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 });

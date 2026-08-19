@@ -22,14 +22,19 @@ const enabled = process.env.PI_SUBAGENTS_REAL_HERDR_CODEX_SMOKE === "1";
 const disposableEnvironment = (): NodeJS.ProcessEnv => {
   const socket = process.env.PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH;
   const configPath = process.env.PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH;
-  if (!socket || !configPath)
-    throw new Error("Herdr Codex smoke requires a separate disposable socket and config path.");
+  const paneId = process.env.PI_SUBAGENTS_REAL_HERDR_PANE_ID;
+  if (!socket || !configPath || !paneId)
+    throw new Error(
+      "Herdr Codex smoke requires a separate disposable socket/config and an existing caller pane ID.",
+    );
   const selected = validateDisposableHerdrSelection(socket, configPath, process.env);
   return captureHerdrEnvironment({
     ...process.env,
     HERDR_SOCKET_PATH: selected.socket,
     HERDR_CONFIG_PATH: selected.configPath,
     HERDR_SESSION: undefined,
+    HERDR_ENV: "1",
+    HERDR_PANE_ID: paneId,
   });
 };
 
@@ -53,9 +58,7 @@ describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
         const cli = yield* HerdrCli;
         const before = yield* cli.snapshot;
         expect(before).toMatchObject({ version: expect.stringMatching(/^0\.8\./u), protocol: 19 });
-        expect([...before.workspaces, ...before.tabs, ...before.panes, ...before.agents]).toEqual(
-          [],
-        );
+        expect(before.panes.some((pane) => pane.paneId === environment.HERDR_PANE_ID)).toBe(true);
         const herdr = yield* HerdrHost;
         const supervisors = yield* SupervisorChannel;
         const runId = `real-herdr-codex-${randomBytes(4).toString("hex")}`;
@@ -81,7 +84,9 @@ describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
         yield* channel.awaitReady;
         yield* hosted.close;
         const after = yield* cli.snapshot;
-        expect([...after.workspaces, ...after.tabs, ...after.panes, ...after.agents]).toEqual([]);
+        expect(after.panes.some((pane) => pane.paneId === environment.HERDR_PANE_ID)).toBe(true);
+        expect(after.panes.some((pane) => pane.paneId === hosted.paneId)).toBe(false);
+        expect(after.agents.some((agent) => agent.name === hosted.agentName)).toBe(false);
       }).pipe(Effect.scoped, Effect.provide(layer)),
     );
   }, 180_000);

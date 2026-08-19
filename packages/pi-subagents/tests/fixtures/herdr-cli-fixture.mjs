@@ -7,6 +7,7 @@ await appendFile(
   `${JSON.stringify({
     args: process.argv.slice(2),
     socket: process.env.HERDR_SOCKET_PATH ?? null,
+    pane: process.env.HERDR_PANE_ID ?? null,
     piDirectory: process.env.PI_CODING_AGENT_DIR ?? null,
     claudeDirectory: process.env.CLAUDE_CONFIG_DIR ?? null,
     codexHome: process.env.CODEX_HOME ?? null,
@@ -131,10 +132,10 @@ if (args[0] === "api" && args[1] === "snapshot" && config.mode === "split-unicod
   process.exit(0);
 }
 const pane = {
-  pane_id: "w-owned:p1",
-  terminal_id: "term-owned",
-  workspace_id: "w-owned",
-  tab_id: "w-owned:t1",
+  pane_id: process.env.HERDR_PANE_ID ?? "user:p0",
+  terminal_id: "term-caller",
+  workspace_id: "user",
+  tab_id: "user:t",
   cwd: "/project",
   foreground_cwd: "/project",
   label: null,
@@ -143,6 +144,18 @@ const pane = {
   revision: 1,
   scroll: null,
 };
+if (args[0] === "pane" && args[1] === "current") {
+  console.log(
+    JSON.stringify({
+      id: "cli:pane:current",
+      result: {
+        type: "pane_current",
+        pane: config.mode === "current-pane-mismatch" ? { ...pane, pane_id: "foreign:p" } : pane,
+      },
+    }),
+  );
+  process.exit(0);
+}
 if (args[0] === "workspace" && args[1] === "create") {
   console.log(
     JSON.stringify({
@@ -211,12 +224,27 @@ if (args[0] === "api" && args[1] === "snapshot") {
         snapshot: {
           version: "0.8.0",
           protocol: config.mode === "live-protocol-mismatch" ? 18 : protocol,
-          focused_workspace_id: null,
-          focused_tab_id: null,
-          focused_pane_id: null,
-          workspaces: [],
-          tabs: [],
-          panes: [],
+          focused_workspace_id: "user",
+          focused_tab_id: "user:t",
+          focused_pane_id: pane.pane_id,
+          workspaces: [
+            {
+              workspace_id: "user",
+              label: "user",
+              focused: true,
+              active_tab_id: "user:t",
+            },
+          ],
+          tabs: [
+            {
+              tab_id: "user:t",
+              workspace_id: "user",
+              label: "user",
+              pane_count: 1,
+              focused: true,
+            },
+          ],
+          panes: [pane],
           layouts: [],
           agents: [],
         },

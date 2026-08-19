@@ -71,14 +71,6 @@ export interface HerdrHostContract {
   ) => Effect.Effect<HerdrHostedAgent, SubagentProcessError, Scope.Scope>;
 }
 
-interface ProjectEvidence {
-  readonly workspaceId: string;
-  readonly workspaceLabel: string;
-  readonly tabId: string;
-  readonly tabLabel: string;
-  anchorPaneId: string;
-}
-
 interface LaunchCleanupOwnership {
   mutationStarted: boolean;
   cleanupConfirmed: boolean;
@@ -86,7 +78,6 @@ interface LaunchCleanupOwnership {
 
 interface ProvisionalLaunchEvidence {
   readonly pane: HerdrPane;
-  readonly workspaceCreated: boolean;
   readonly agentName: string;
   readonly runtime: SubagentRuntime;
   ownershipInvalidated: boolean;
@@ -116,11 +107,6 @@ const processError = (operation: string, code: string, message: string) =>
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
 
-const safeIdentityPart = (value: string): string =>
-  value
-    .replaceAll(/[^A-Za-z0-9_-]/gu, "-")
-    .replaceAll(/-+/gu, "-")
-    .slice(0, 30) || "session";
 const ownedAgentName = (request: BackendLaunchRequest, runtime: SubagentRuntime): string => {
   const prefix = `psa-${runtime}-`;
   const digest = createHash("sha256")
@@ -140,8 +126,6 @@ const ownedAgentName = (request: BackendLaunchRequest, runtime: SubagentRuntime)
 };
 const paneLabel = (request: BackendLaunchRequest, runtime: SubagentRuntime): string =>
   `Subagent ${runtime} · ${request.name}`.slice(0, MAX_LABEL_CHARS);
-const projectLabel = (request: BackendLaunchRequest): string =>
-  `pi-subagents · ${safeIdentityPart(request.parentSessionId)}`.slice(0, MAX_LABEL_CHARS);
 
 const matchingPane = (run: OwnedRun, snapshot: HerdrSnapshot): HerdrPane | undefined =>
   matchingPaneIdentity(run, snapshot);
@@ -153,27 +137,21 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   const harnesses = yield* HerdrHarness;
   const lock = yield* Semaphore.make(1);
   const records = new Map<string, OwnedRun>();
-  let project: ProjectEvidence | undefined;
   let closed = false;
   const withLock = lock.withPermits(1);
 
-  const exactProject = (snapshot: HerdrSnapshot): ProjectEvidence | undefined => {
-    const current = project;
-    if (!current) return undefined;
-    const workspaceIds = snapshot.workspaces.filter(
-      (candidate) => candidate.workspaceId === current.workspaceId,
+  const exactPaneContext = (
+    pane: Pick<HerdrPane, "paneId" | "terminalId" | "workspaceId" | "tabId">,
+    snapshot: HerdrSnapshot,
+  ): boolean => {
+    if (!matchingPaneIdentity(pane, snapshot)) return false;
+    const workspaces = snapshot.workspaces.filter(
+      (candidate) => candidate.workspaceId === pane.workspaceId,
     );
-    const tabIds = snapshot.tabs.filter((candidate) => candidate.tabId === current.tabId);
-    const workspace = workspaceIds[0];
-    const tab = tabIds[0];
-    return workspaceIds.length === 1 &&
-      tabIds.length === 1 &&
-      workspace?.label === current.workspaceLabel &&
-      workspace.activeTabId === current.tabId &&
-      tab?.workspaceId === current.workspaceId &&
-      tab.label === current.tabLabel
-      ? current
-      : undefined;
+    const tabs = snapshot.tabs.filter((candidate) => candidate.tabId === pane.tabId);
+    return (
+      workspaces.length === 1 && tabs.length === 1 && tabs[0]?.workspaceId === pane.workspaceId
+    );
   };
 
   const ownershipMismatch = (operation: string, message: string) =>
@@ -188,7 +166,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
     activatePaneInput,
     confirmShellInput,
     restoreFocus,
-  } = makeHerdrLaunchSafety(cli, (snapshot) => exactProject(snapshot) !== undefined);
+  } = makeHerdrLaunchSafety(cli, exactPaneContext);
 
   const runSelectorsAbsent = (snapshot: HerdrSnapshot, run: OwnedRun): boolean =>
     !snapshot.panes.some(
@@ -227,58 +205,69 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   const quarantineRun = (run: OwnedRun): void => {
     run.quarantined = true;
   };
-  const quarantineActiveRuns = (): void => {
-    for (const run of records.values()) if (!run.closed) quarantineRun(run);
-  };
   const quarantinedRunError = (operation: string) =>
     ownershipMismatch(
       operation,
       "The Herdr run is quarantined after an ownership or cleanup uncertainty; no further mutation was attempted.",
     );
 
+  const resolveCallingPane = (
+    snapshot: HerdrSnapshot,
+  ): Effect.Effect<HerdrPane, SubagentProcessError> => {
+    const callingPaneId = cli.callingPaneId;
+    if (!callingPaneId)
+      return Effect.fail(
+        processError(
+          "resolve calling pane",
+          "herdr_calling_pane_unresolvable",
+          "The inherited Herdr calling-pane selector is unavailable.",
+        ),
+      );
+    return cli.currentPane.pipe(
+      Effect.flatMap((pane) =>
+        pane.paneId === callingPaneId && exactPaneContext(pane, snapshot)
+          ? Effect.succeed(matchingPaneIdentity(pane, snapshot)!)
+          : Effect.fail(
+              processError(
+                "resolve calling pane",
+                "herdr_calling_pane_unresolvable",
+                "The inherited Herdr calling pane did not match one exact live pane/terminal/workspace/tab tuple.",
+              ),
+            ),
+      ),
+    );
+  };
+
+  const newestOwnedAnchor = (pane: HerdrPane, snapshot: HerdrSnapshot): HerdrPane => {
+    for (const run of [...records.values()].reverse()) {
+      if (
+        run.closed ||
+        run.workspaceId !== pane.workspaceId ||
+        run.tabId !== pane.tabId ||
+        run.quarantined
+      )
+        continue;
+      if (exactPaneContext(run, snapshot) && matchingAgent(run, snapshot))
+        return matchingPane(run, snapshot)!;
+      quarantineRun(run);
+    }
+    return pane;
+  };
+
   const inspectOwned = (run: OwnedRun) => {
     if (run.quarantined) return Effect.fail(quarantinedRunError("inspect Herdr agent"));
     return cli.snapshot.pipe(
       Effect.flatMap((snapshot) => {
-        if (!exactProject(snapshot)) {
-          quarantineRun(run);
-          return Effect.fail(
-            ownershipMismatch(
-              "inspect Herdr agent",
-              "The session-owned Herdr workspace/tab identity changed; the agent was not adopted.",
-            ),
-          );
-        }
-        const remote = matchingAgent(run, snapshot);
+        const remote = exactPaneContext(run, snapshot) ? matchingAgent(run, snapshot) : undefined;
         if (remote) return Effect.succeed(remote);
         quarantineRun(run);
         return Effect.fail(
           ownershipMismatch(
             "inspect Herdr agent",
-            "The session-owned Herdr pane/terminal/agent/native-session identity changed.",
+            "The session-owned Herdr workspace/tab/pane/terminal/agent/native-session identity changed.",
           ),
         );
       }),
-    );
-  };
-
-  const workspaceContainsOnlyOwnedTopology = (
-    current: ProjectEvidence,
-    snapshot: HerdrSnapshot,
-    included: ReadonlyArray<OwnedRun>,
-  ): boolean => {
-    const tabs = snapshot.tabs.filter((tab) => tab.workspaceId === current.workspaceId);
-    const panes = snapshot.panes.filter((pane) => pane.workspaceId === current.workspaceId);
-    const agents = snapshot.agents.filter((agent) => agent.workspaceId === current.workspaceId);
-    return (
-      tabs.length === 1 &&
-      tabs[0]?.tabId === current.tabId &&
-      panes.length === included.length &&
-      agents.length === included.length &&
-      included.every(
-        (run) =>
-          matchingPane(run, snapshot) !== undefined && matchingAgent(run, snapshot) !== undefined,
-      )
     );
   };
 
@@ -294,69 +283,28 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             "The run no longer owns its recorded Herdr topology.",
           );
         const before = yield* cli.snapshot;
-        const managed = exactProject(before);
-        if (!managed) {
+        if (!exactPaneContext(run, before) || !matchingAgent(run, before)) {
           quarantineRun(run);
           return yield* ownershipMismatch(
             "close Herdr agent",
-            "The session-owned Herdr workspace/tab identity changed; no topology was closed.",
+            "The exact workspace/tab/pane/terminal/agent/native-session identity changed; no topology was closed.",
           );
         }
-        if (!matchingAgent(run, before)) {
+        const siblingPanes = before.panes.filter(
+          (pane) =>
+            pane.paneId !== run.paneId &&
+            pane.workspaceId === run.workspaceId &&
+            pane.tabId === run.tabId,
+        );
+        if (siblingPanes.length === 0) {
           quarantineRun(run);
           return yield* ownershipMismatch(
             "close Herdr agent",
-            "The exact pane/terminal/agent/native-session identity changed; no topology was closed.",
+            "The owned subagent pane is the last visible pane in its user-owned tab; closure was refused to avoid collapsing the tab or workspace.",
           );
         }
-        const active = [...records.values()].filter((candidate) => !candidate.closed);
-        if (active.length === 1) {
-          if (!workspaceContainsOnlyOwnedTopology(managed, before, active)) {
-            quarantineRun(run);
-            return yield* ownershipMismatch(
-              "close Herdr workspace",
-              "The owned workspace contains unowned or mismatched topology and was not closed.",
-            );
-          }
-          // Close mutation, confirmation snapshot, and ownership-state publication are one
-          // interruption-safe commit. Cancellation is observed only after `closed` or quarantine.
-          yield* Effect.gen(function* () {
-            yield* cli
-              .closeWorkspace(managed.workspaceId)
-              .pipe(Effect.tapError(() => Effect.sync(() => quarantineRun(run))));
-            const after = yield* cli.snapshot.pipe(
-              Effect.tapError(() => Effect.sync(() => quarantineRun(run))),
-            );
-            const workspaceSelectorsRemain =
-              after.workspaces.some((workspace) => workspace.workspaceId === managed.workspaceId) ||
-              after.tabs.some(
-                (tab) => tab.tabId === managed.tabId || tab.workspaceId === managed.workspaceId,
-              ) ||
-              after.panes.some(
-                (pane) => pane.workspaceId === managed.workspaceId || pane.tabId === managed.tabId,
-              ) ||
-              after.agents.some(
-                (agent) =>
-                  agent.workspaceId === managed.workspaceId || agent.tabId === managed.tabId,
-              ) ||
-              !runSelectorsAbsent(after, run);
-            if (workspaceSelectorsRemain) {
-              quarantineRun(run);
-              return yield* processError(
-                "close Herdr workspace",
-                "herdr_cleanup_unconfirmed",
-                "Herdr acknowledged workspace closure, but an owned workspace/tab/pane/terminal/agent selector remains visible.",
-              );
-            }
-            records.delete(run.runId);
-            run.closed = true;
-            run.launchCleanup.cleanupConfirmed = true;
-            project = undefined;
-            run.harness.authorizeCleanup();
-          }).pipe(Effect.uninterruptible);
-          yield* restoreFocus(before, managed.tabId);
-          return;
-        }
+        // Close mutation, confirmation snapshot, and ownership-state publication are one
+        // interruption-safe commit. Cancellation is observed only after `closed` or quarantine.
         yield* Effect.gen(function* () {
           yield* cli
             .closePane(run.paneId)
@@ -369,19 +317,15 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             return yield* processError(
               "close Herdr pane",
               "herdr_cleanup_unconfirmed",
-              "Herdr acknowledged pane closure, but an owned pane/terminal/agent-name selector remains visible.",
+              "Herdr acknowledged pane closure, but an owned pane/terminal/agent-name/session selector remains visible.",
             );
           }
           records.delete(run.runId);
           run.closed = true;
           run.launchCleanup.cleanupConfirmed = true;
           run.harness.authorizeCleanup();
-          if (managed.anchorPaneId === run.paneId) {
-            const replacement = [...records.values()].find((candidate) => !candidate.closed);
-            if (replacement) managed.anchorPaneId = replacement.paneId;
-          }
         }).pipe(Effect.uninterruptible);
-        yield* restoreFocus(before, managed.tabId);
+        yield* restoreFocus(before, run.tabId);
       }),
     );
 
@@ -391,13 +335,9 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   ): Effect.Effect<void, SubagentProcessError> =>
     Effect.gen(function* () {
       const snapshot = yield* cli.snapshot;
-      const managed = exactProject(snapshot);
-      if (!managed)
-        return yield* ownershipMismatch(
-          "rollback Herdr launch",
-          "Provisional Herdr project ownership could not be revalidated; cleanup was refused.",
-        );
-      const pane = matchingPaneIdentity(evidence.pane, snapshot);
+      const pane = exactPaneContext(evidence.pane, snapshot)
+        ? matchingPaneIdentity(evidence.pane, snapshot)
+        : undefined;
       const agentMayHaveApplied =
         evidence.startedIdentity !== undefined || evidence.agentStartUncertain === true;
       const occupants = snapshot.agents.filter(
@@ -420,48 +360,14 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           "rollback Herdr launch",
           "Provisional Herdr pane occupancy changed; cleanup was refused.",
         );
-      if (evidence.workspaceCreated) {
-        const tabs = snapshot.tabs.filter((tab) => tab.workspaceId === managed.workspaceId);
-        const panes = snapshot.panes.filter(
-          (candidate) => candidate.workspaceId === managed.workspaceId,
+      yield* cli.closePane(pane.paneId);
+      const after = yield* cli.snapshot;
+      if (!provisionalSelectorsAbsent(after, evidence))
+        return yield* processError(
+          "rollback Herdr pane",
+          "herdr_cleanup_unconfirmed",
+          "Provisional pane cleanup left an owned pane/terminal/agent-name/session selector visible.",
         );
-        if (tabs.length !== 1 || panes.length !== 1)
-          return yield* ownershipMismatch(
-            "rollback Herdr workspace",
-            "Provisional Herdr workspace topology changed; cleanup was refused.",
-          );
-        yield* cli.closeWorkspace(managed.workspaceId);
-        const after = yield* cli.snapshot;
-        const workspaceSelectorsRemain =
-          after.workspaces.some((workspace) => workspace.workspaceId === managed.workspaceId) ||
-          after.tabs.some(
-            (tab) => tab.tabId === managed.tabId || tab.workspaceId === managed.workspaceId,
-          ) ||
-          after.panes.some(
-            (candidate) =>
-              candidate.workspaceId === managed.workspaceId || candidate.tabId === managed.tabId,
-          ) ||
-          after.agents.some(
-            (agent) => agent.workspaceId === managed.workspaceId || agent.tabId === managed.tabId,
-          ) ||
-          !provisionalSelectorsAbsent(after, evidence);
-        if (workspaceSelectorsRemain)
-          return yield* processError(
-            "rollback Herdr workspace",
-            "herdr_cleanup_unconfirmed",
-            "Provisional workspace cleanup left an owned workspace/tab/pane/terminal/agent selector visible.",
-          );
-        project = undefined;
-      } else {
-        yield* cli.closePane(pane.paneId);
-        const after = yield* cli.snapshot;
-        if (!provisionalSelectorsAbsent(after, evidence))
-          return yield* processError(
-            "rollback Herdr pane",
-            "herdr_cleanup_unconfirmed",
-            "Provisional pane cleanup left an owned pane/terminal/agent-name selector visible.",
-          );
-      }
       harness.authorizeCleanup();
     });
 
@@ -531,85 +437,25 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
               harness.authorizeCleanup();
             }
           });
-        let workspaceCreated = false;
-        let ownershipInvalidated = false;
-        let pane: HerdrPane;
-        if (!project) {
-          launchCleanup.mutationStarted = true;
-          const created = yield* cli
-            .createWorkspace(request.cwd, projectLabel(request))
-            .pipe(Effect.tapError(markDefiniteNonApplication));
-          project = {
-            workspaceId: created.workspaceId,
-            workspaceLabel: created.workspaceLabel,
-            tabId: created.tabId,
-            tabLabel: created.tabLabel,
-            anchorPaneId: created.rootPane.paneId,
-          };
-          workspaceCreated = true;
-          pane = created.rootPane;
-          ownershipInvalidated =
-            before.workspaces.some((workspace) => workspace.workspaceId === created.workspaceId) ||
-            before.tabs.some((tab) => tab.tabId === created.tabId) ||
-            before.panes.some(
-              (candidate) =>
-                candidate.workspaceId === created.workspaceId ||
-                candidate.tabId === created.tabId ||
-                candidate.paneId === pane.paneId ||
-                candidate.terminalId === pane.terminalId,
-            ) ||
-            before.agents.some(
-              (agent) =>
-                agent.workspaceId === created.workspaceId ||
-                agent.tabId === created.tabId ||
-                agent.paneId === pane.paneId ||
-                agent.terminalId === pane.terminalId,
-            );
-        } else {
-          const managed = exactProject(before);
-          if (!managed) {
-            quarantineActiveRuns();
-            return yield* ownershipMismatch(
-              "launch Herdr agent",
-              "The shared session-owned Herdr workspace/tab identity changed; no pane was created and existing runs were quarantined.",
-            );
-          }
-          const anchorCandidates = before.panes.filter(
+        const callerPane = yield* resolveCallingPane(before);
+        const anchor = newestOwnedAnchor(callerPane, before);
+        launchCleanup.mutationStarted = true;
+        const pane = yield* cli
+          .splitPane(anchor.paneId, request.cwd)
+          .pipe(Effect.tapError(markDefiniteNonApplication));
+        const ownershipInvalidated =
+          pane.paneId === anchor.paneId ||
+          pane.workspaceId !== callerPane.workspaceId ||
+          pane.tabId !== callerPane.tabId ||
+          before.panes.some(
             (candidate) =>
-              candidate.paneId === managed.anchorPaneId &&
-              candidate.workspaceId === managed.workspaceId &&
-              candidate.tabId === managed.tabId,
+              candidate.paneId === pane.paneId || candidate.terminalId === pane.terminalId,
+          ) ||
+          before.agents.some(
+            (agent) => agent.paneId === pane.paneId || agent.terminalId === pane.terminalId,
           );
-          const anchor =
-            anchorCandidates.length === 1
-              ? matchingPaneIdentity(anchorCandidates[0]!, before)
-              : undefined;
-          const anchorRun = [...records.values()].find(
-            (candidate) => !candidate.closed && candidate.paneId === managed.anchorPaneId,
-          );
-          if (!anchor || !anchorRun || anchorRun.quarantined || !matchingAgent(anchorRun, before)) {
-            quarantineActiveRuns();
-            return yield* ownershipMismatch(
-              "launch Herdr agent",
-              "The shared session-owned Herdr anchor pane/agent/session identity changed or was quarantined; no pane was created.",
-            );
-          }
-          launchCleanup.mutationStarted = true;
-          pane = yield* cli
-            .splitPane(anchor.paneId, request.cwd)
-            .pipe(Effect.tapError(markDefiniteNonApplication));
-          ownershipInvalidated =
-            before.panes.some(
-              (candidate) =>
-                candidate.paneId === pane.paneId || candidate.terminalId === pane.terminalId,
-            ) ||
-            before.agents.some(
-              (agent) => agent.paneId === pane.paneId || agent.terminalId === pane.terminalId,
-            );
-        }
         const provisional: ProvisionalLaunchEvidence = {
           pane,
-          workspaceCreated,
           agentName,
           runtime,
           ownershipInvalidated,
@@ -618,17 +464,11 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           provisional.ownershipInvalidated = true;
         };
         const launch = Effect.gen(function* () {
-          const managed = project;
-          if (
-            provisional.ownershipInvalidated ||
-            !managed ||
-            pane.workspaceId !== managed.workspaceId ||
-            pane.tabId !== managed.tabId
-          ) {
+          if (provisional.ownershipInvalidated) {
             invalidateProvisional();
             return yield* provisionalOwnershipMismatch(
               "launch Herdr agent",
-              "Herdr returned topology whose selectors were pre-existing or outside the session-owned workspace/tab.",
+              "Herdr returned topology whose selectors were pre-existing or outside the calling pane's current workspace/tab.",
             );
           }
           yield* inspectProvisionalPane(pane, "rename pane", invalidateProvisional);
@@ -735,7 +575,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             quarantined: false,
           };
           const validateStartedOwnership = (snapshot: HerdrSnapshot) => {
-            if (exactProject(snapshot) && matchingAgent(run, snapshot)) return Effect.void;
+            if (exactPaneContext(run, snapshot) && matchingAgent(run, snapshot)) return Effect.void;
             invalidateProvisional();
             return Effect.fail(
               provisionalOwnershipMismatch(
@@ -745,9 +585,8 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             );
           };
           yield* cli.snapshot.pipe(Effect.flatMap(validateStartedOwnership));
-          yield* restoreFocus(before, managed.tabId, validateStartedOwnership);
+          yield* restoreFocus(before, pane.tabId, validateStartedOwnership);
           records.set(run.runId, run);
-          managed.anchorPaneId = run.paneId;
           const hosted: HerdrHostedAgent = {
             runId: run.runId,
             runtime,

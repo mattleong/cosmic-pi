@@ -60,7 +60,7 @@ export interface HerdrLaunchSafety {
 /** I/O safety gate for provisional pane mutation and non-stealing focus restoration. */
 export const makeHerdrLaunchSafety = (
   cli: HerdrCliContract,
-  exactProject: (snapshot: HerdrSnapshot) => boolean,
+  exactPaneContext: (pane: HerdrPane, snapshot: HerdrSnapshot) => boolean,
 ): HerdrLaunchSafety => {
   const inspectProvisionalPane: HerdrLaunchSafety["inspectProvisionalPane"] = (
     pane,
@@ -70,7 +70,7 @@ export const makeHerdrLaunchSafety = (
     cli.snapshot.pipe(
       Effect.flatMap((snapshot) => {
         const exactPane = matchingPaneIdentity(pane, snapshot);
-        if (!exactProject(snapshot) || !exactPane) {
+        if (!exactPaneContext(pane, snapshot) || !exactPane) {
           invalidate();
           return Effect.fail(
             provisionalOwnershipMismatch(
