@@ -102,7 +102,7 @@ describe("Cosmic UI host service", () => {
       calls++;
       if (command === "gh")
         return Promise.resolve({ stdout: "42\n", stderr: "", code: 0, killed: false });
-      if (args[0] === "diff")
+      if (args.includes("diff"))
         return Promise.resolve({ stdout: "10\t4\ta.ts\n", stderr: "", code: 0, killed: false });
       return Promise.resolve({
         stdout: "## main...origin/main\n M a.ts\n",

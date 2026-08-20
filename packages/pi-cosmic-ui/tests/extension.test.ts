@@ -32,7 +32,7 @@ function harness(mode: "tui" | "rpc" = "tui") {
       stdout:
         command === "gh"
           ? "42\n"
-          : args[0] === "diff"
+          : args.includes("diff")
             ? "10\t4\tchanged.ts\n"
             : "## main...origin/main\n M changed.ts\n?? new.ts\n",
       stderr: "",
