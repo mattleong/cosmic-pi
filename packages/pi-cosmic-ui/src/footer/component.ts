@@ -21,7 +21,6 @@ import {
 import { type FooterGitStatus } from "./git.ts";
 import {
   combineSurface,
-  isTerminalImageLine,
   renderContextLine,
   renderContributionLine,
   renderLabeledContributionLine,
@@ -226,9 +225,7 @@ export function createFooterComponent(options: {
               lines,
             );
           }
-          return lines.map((line) =>
-            isTerminalImageLine(line) ? line : truncateToWidth(line, width, ""),
-          );
+          return surface ? lines : lines.map((line) => truncateToWidth(line, width, ""));
         },
         [],
       );

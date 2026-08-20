@@ -147,14 +147,15 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
   const resolveConfig = Effect.fn(`${spanPrefix}.resolveConfig`)(function* (
     cwd: string,
     agentDir: string,
-    projectTrusted = true,
+    projectTrusted = false,
   ) {
     const paths = yield* configPaths(cwd, agentDir);
+    const trusted = projectTrusted === true;
     // Untrusted projects perform no project-document I/O at all: the path stays inert metadata.
-    const selected = yield* selectScopedDocument(paths, { probeProject: projectTrusted }).pipe(
+    const selected = yield* selectScopedDocument(paths, { probeProject: trusted }).pipe(
       Effect.mapError((error) => errorFactory("inspect", error.path)()),
     );
-    const projectExists = projectTrusted && selected.projectExists;
+    const projectExists = trusted && selected.projectExists;
     let globalExists = selected.globalExists;
     if (!projectExists && !globalExists) {
       yield* writeConfig(paths.global, defaultDocument());

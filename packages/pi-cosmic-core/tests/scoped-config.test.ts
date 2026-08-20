@@ -154,7 +154,7 @@ const testStore = makeScopedConfigStore<TestFile, TestResolved, TestConfigError>
 });
 
 testLayer(Path.layer)("scoped config store", (it) => {
-  it.effect("untrusted resolution performs no project-document I/O at all", () => {
+  it.effect("omitted trust fails closed without project-document I/O", () => {
     const memory = makeInMemoryDocuments({
       "/project/.pi/extensions/config.json": { fromProject: true },
       "/agent/extensions/config.json": { fromGlobal: true },
@@ -180,7 +180,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
       updateObject: record("update", memory.service.updateObject),
     };
     return Effect.gen(function* () {
-      const resolved = yield* testStore.resolveConfig("/project", "/agent", false);
+      const resolved = yield* testStore.resolveConfig("/project", "/agent");
       expect(resolved.projectConfigPath).toBe("/project/.pi/extensions/config.json");
       expect(resolved.projectConfigExists).toBe(false);
       expect(resolved.project).toEqual({});

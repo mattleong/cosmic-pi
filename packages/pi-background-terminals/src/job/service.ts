@@ -21,6 +21,7 @@ import {
   BackgroundJobNotFoundError,
   BackgroundRuntimeClosedError,
   BackgroundSpawnError,
+  BackgroundTerminationError,
   InvalidBackgroundCommandError,
   InvalidBackgroundCwdError,
   type BackgroundTerminalError,
@@ -96,6 +97,9 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   const processes = yield* LocalProcess;
   const path = yield* Path.Path;
   const ownerScope = yield* Effect.scope;
+  // The parent owns one fixed monitor scope. The service shutdown finalizer is registered later,
+  // so it requests and confirms process settlement before the monitor scope is interrupted.
+  const monitorScope = yield* Scope.fork(ownerScope);
   const lock = yield* Semaphore.make(1);
   const jobs = new Map<string, JobRecord>();
   let nextId = 1;
@@ -245,8 +249,9 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   ) => Effect.Effect<BackgroundJobSnapshot, BackgroundTerminalError>;
   let requestStop: RequestStop;
 
-  const monitor = (id: string, ownerRecord: JobRecord, request: StartBackgroundJob) =>
-    Effect.scoped(
+  const monitor = (id: string, ownerRecord: JobRecord, request: StartBackgroundJob) => {
+    let handleAcquired = false;
+    return Effect.scoped(
       Effect.gen(function* () {
         const handle = yield* processes.spawn(
           (() => {
@@ -267,6 +272,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
             return objectPart8477_1;
           })(),
         );
+        handleAcquired = true;
         const terminateLateHandle = yield* withLock(
           Effect.sync(() => {
             Deferred.doneUnsafe(ownerRecord.handleReady, Effect.succeed(handle));
@@ -274,14 +280,15 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
             if (record !== ownerRecord || !isActiveJobState(ownerRecord.snapshot.state)) {
               return true;
             }
+            const stopping = ownerRecord.snapshot.state === "stopping";
             ownerRecord.snapshot = {
               ...ownerRecord.snapshot,
-              state: ownerRecord.snapshot.state === "stopping" ? "stopping" : "running",
+              state: stopping ? "stopping" : "running",
               pid: handle.pid,
             };
             wake(ownerRecord);
             publish();
-            return false;
+            return stopping;
           }),
         );
         if (terminateLateHandle) {
@@ -327,6 +334,13 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
             const record = jobs.get(id);
             Deferred.doneUnsafe(ownerRecord.handleReady, Effect.fail(spawnError));
             if (record !== ownerRecord || !isActiveJobState(ownerRecord.snapshot.state)) return;
+            // A stopping job remains active until awaitExit confirms process settlement. Boundary
+            // failure after acquisition cannot manufacture a terminal snapshot.
+            if (handleAcquired && ownerRecord.snapshot.state === "stopping") {
+              wake(ownerRecord);
+              publish();
+              return;
+            }
             const endedAt = yield* Clock.currentTimeMillis;
             ownerRecord.snapshot = {
               ...ownerRecord.snapshot,
@@ -342,6 +356,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         ),
       ),
     );
+  };
 
   const start: BackgroundTerminalServiceContract["start"] = (request) =>
     Effect.uninterruptibleMask((restore) =>
@@ -408,14 +423,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
           }),
         );
         yield* monitor(record.snapshot.id, record, prepared).pipe(
-          Effect.forkIn(ownerScope, { startImmediately: true }),
-        );
-        yield* Scope.addFinalizer(
-          ownerScope,
-          requestStop(record.snapshot.id, false).pipe(
-            Effect.asVoid,
-            Effect.catch(() => Effect.void),
-          ),
+          Effect.forkIn(monitorScope, { startImmediately: true }),
         );
         return yield* restore(Deferred.await(record.handleReady)).pipe(
           Effect.andThen(Effect.sync(() => record.snapshot)),
@@ -520,16 +528,16 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         Option.isSome(handleResult) && Option.isSome(handleResult.value)
           ? handleResult.value.value
           : undefined;
-      let terminationError: string | undefined;
       const terminate = (mode: "graceful" | "force") =>
         handle
           ? handle.terminate(mode).pipe(
-              Effect.match({
-                onFailure: (error) => {
-                  terminationError = error.message;
-                },
-                onSuccess: () => undefined,
-              }),
+              Effect.mapError(
+                (error) =>
+                  new BackgroundTerminationError({
+                    id,
+                    message: error.message,
+                  }),
+              ),
             )
           : Effect.void;
 
@@ -547,20 +555,10 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         Effect.timeoutOption(Duration.millis(Math.max(5_000, config.stopGraceMs + 5_000))),
       );
       if (Option.isSome(finalWait)) return finalWait.value;
-
-      const message =
-        terminationError ?? "Background process did not settle after forced termination.";
-      return yield* withLock(
-        Effect.gen(function* () {
-          const record = jobs.get(id);
-          if (!record) return yield* notFound(id);
-          if (isActiveJobState(record.snapshot.state)) {
-            const endedAt = yield* Clock.currentTimeMillis;
-            completeRecord(record, { exitCode: null, error: message }, endedAt);
-          }
-          return record.snapshot;
-        }),
-      );
+      return yield* new BackgroundTerminationError({
+        id,
+        message: "Background process did not confirm exit after forced termination.",
+      });
     });
 
   const stop: BackgroundTerminalServiceContract["stop"] = (id, force) => requestStop(id, force);

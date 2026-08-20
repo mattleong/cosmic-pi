@@ -30,7 +30,11 @@ export class PiExec extends Context.Service<PiExec, PiExecContract>()(
       return PiExec.of({
         exec: (command, args, options) =>
           Effect.tryPromise({
-            try: (signal) => pi.exec(command, [...args], { ...options, signal }),
+            try: (signal) =>
+              pi.exec(command, command === "git" ? ["--no-optional-locks", ...args] : [...args], {
+                ...options,
+                signal,
+              }),
             catch: () =>
               new PiExecError({
                 operation: command,

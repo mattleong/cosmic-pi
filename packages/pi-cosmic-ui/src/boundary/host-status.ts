@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createCosmicFooterClient } from "../footer/client.ts";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
 import { makeHostUiTickerPool } from "./host-ui-ticker-pool.ts";
 
@@ -13,7 +14,8 @@ export const makeSetStatusSafely =
   (ctx: ExtensionContext | undefined, text?: string): void => {
     if (!ctx || ctx.mode !== "tui") return;
     try {
-      ctx.ui.setStatus(statusKey, text);
+      const sanitized = text === undefined ? undefined : sanitizeTerminalLine(text) || undefined;
+      ctx.ui.setStatus(statusKey, sanitized);
     } catch {
       // Host UI may already be tearing down.
     }

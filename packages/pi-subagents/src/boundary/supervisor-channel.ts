@@ -146,6 +146,10 @@ export interface SupervisorChannelOpenRequest {
 
 export interface SupervisorChannelLayerOptions {
   readonly agentDirectory: string;
+  /** Deterministic boundary seam for proving interrupted late acquisition cleanup. */
+  readonly beforeAcquireComplete?:
+    | ((metadata: SupervisorConnectionMetadata) => Promise<void>)
+    | undefined;
 }
 
 interface PendingQuestion {
@@ -919,6 +923,7 @@ const acquireNodeChannel = async (
   agentDirectory: string,
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
+  beforeAcquireComplete?: ((metadata: SupervisorConnectionMetadata) => Promise<void>) | undefined,
 ): Promise<NodeChannelState> => {
   let stateDirectory: string | undefined;
   let connectionConfigPath: string | undefined;
@@ -971,6 +976,7 @@ const acquireNodeChannel = async (
       closed: false,
       closePromise: undefined,
     };
+    if (beforeAcquireComplete) await beforeAcquireComplete(metadata);
     return state;
   } catch (error) {
     await closeServer(server).catch(() => undefined);
@@ -980,6 +986,53 @@ const acquireNodeChannel = async (
     throw error;
   }
 };
+
+const acquireNodeChannelEffect = (
+  options: SupervisorChannelLayerOptions,
+  runId: SupervisorRunId,
+  events: Queue.Queue<SupervisorEvent, Cause.Done>,
+): Effect.Effect<NodeChannelState, SupervisorChannelError> =>
+  Effect.callback<NodeChannelState, SupervisorChannelError>((resume) => {
+    let interrupted = false;
+    const complete = (effect: Effect.Effect<NodeChannelState, SupervisorChannelError>) => {
+      try {
+        resume(effect);
+      } catch {
+        // Callback resumption cannot escape the foreign Promise chain.
+      }
+    };
+    const pending = acquireNodeChannel(
+      options.agentDirectory,
+      runId,
+      events,
+      options.beforeAcquireComplete,
+    );
+    void pending.then(
+      (state) => {
+        if (interrupted) {
+          // Effect no longer owns the Promise, so a late successful acquisition must close itself.
+          void closeNodeChannel(state).catch(() => undefined);
+          return;
+        }
+        complete(Effect.succeed(state));
+      },
+      () => {
+        if (interrupted) return;
+        complete(
+          Effect.fail(
+            channelError(
+              "open",
+              "channel_open_failed",
+              "Unable to create the private loopback supervisor channel.",
+            ),
+          ),
+        );
+      },
+    );
+    return Effect.sync(() => {
+      interrupted = true;
+    });
+  });
 
 export const makeSupervisorChannel = (
   options: SupervisorChannelLayerOptions,
@@ -994,15 +1047,21 @@ export const makeSupervisorChannel = (
         );
       const runId: SupervisorRunId = request.runId;
       const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
-      const state = yield* Effect.tryPromise({
-        try: () => acquireNodeChannel(options.agentDirectory, runId, events),
-        catch: () =>
-          channelError(
-            "open",
-            "channel_open_failed",
-            "Unable to create the private loopback supervisor channel.",
-          ),
-      });
+      const release = (state: NodeChannelState) =>
+        Effect.tryPromise({
+          try: () => closeNodeChannel(state),
+          catch: () =>
+            channelError(
+              "close",
+              "channel_close_failed",
+              "Private supervisor transport closed, but its bounded state cleanup was not confirmed.",
+            ),
+        });
+      const state = yield* Effect.acquireRelease(
+        acquireNodeChannelEffect(options, runId, events),
+        (acquired) => release(acquired).pipe(Effect.orDie),
+        { interruptible: true },
+      );
       const close = Effect.tryPromise({
         try: () => closeNodeChannel(state),
         catch: () =>
@@ -1012,7 +1071,6 @@ export const makeSupervisorChannel = (
             "Private supervisor transport closed, but its bounded state cleanup was not confirmed.",
           ),
       });
-      yield* Effect.addFinalizer(() => close.pipe(Effect.orDie));
 
       const awaitReady = Effect.suspend(() => {
         if (state.closed)

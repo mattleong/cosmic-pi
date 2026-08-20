@@ -68,6 +68,8 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
     readonly startPolling?: boolean;
     readonly agentDir?: string;
     readonly projectTrusted?: boolean;
+    /** Owned domain seam for deterministic refresh/concurrency tests. */
+    readonly requestUsage?: typeof requestXaiUsage;
   }) {
     return Layer.effect(
       this,
@@ -85,6 +87,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
             Effect.provideService(ModelRegistryAuth, registryAuth),
             Effect.provideService(Tracer.Tracer, tracer),
           );
+        const requestUsage = options.requestUsage ?? requestXaiUsage;
         const subscriptionEligibility = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
           const model = ctx.model;
           if (!model || model.provider !== "xai") return Effect.succeed(false);
@@ -136,7 +139,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
               ),
             ),
           fetchOutcome: ({ authPath }) =>
-            requestXaiUsage(authPath).pipe(
+            requestUsage(authPath).pipe(
               Effect.timeout("10 seconds"),
               Effect.result,
               Effect.map((result): UsageFetchOutcome<UsageSnapshot, Partial<XaiProjection>> => {

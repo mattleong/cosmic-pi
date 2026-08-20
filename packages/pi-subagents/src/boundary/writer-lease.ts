@@ -151,7 +151,11 @@ export interface WriterLeaseLayerOptions {
   readonly nowMillis?: (() => number) | undefined;
   readonly randomToken?: (() => string) | undefined;
   readonly probeOwner?: ((pid: number) => WriterOwnerLiveness) | undefined;
-  /** Narrow synchronization seam for deterministic release-ABA tests. */
+  /** Interruptible pre-ownership seam used to prove shutdown does not wait for reservation. */
+  readonly beforeAcquireCommit?: (() => Promise<void>) | undefined;
+  /** Uninterruptible commit seam used to prove a created slot always gains durable evidence. */
+  readonly afterAcquireDirectoryCreated?: (() => Promise<void>) | undefined;
+  /** Narrow synchronization seam for deterministic release-ABA and cleanup interruption tests. */
   readonly beforeReleaseRename?: (() => Promise<void>) | undefined;
 }
 
@@ -436,6 +440,8 @@ const claimDeadReservedLease = (
           )
         : Effect.succeed(false),
     ),
+    // Once rename claims the old slot, token verification and root fsync must complete together.
+    Effect.uninterruptible,
   );
 };
 
@@ -457,6 +463,29 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseCo
   const nowMillis = options.nowMillis ?? Date.now;
   const nextToken = options.randomToken ?? randomToken;
   const probeOwner = options.probeOwner ?? probeProcess;
+
+  const createAndCommitEvidence = (
+    path: string,
+    evidence: WriterLeaseEvidence,
+  ): Effect.Effect<boolean, WriterLeaseAcquireError> =>
+    Effect.gen(function* () {
+      const created = yield* createLeaseDirectory(path);
+      if (!created) return false;
+      if (options.afterAcquireDirectoryCreated)
+        yield* Effect.tryPromise({
+          try: options.afterAcquireDirectoryCreated,
+          catch: () =>
+            new WriterLeaseAcquireError({
+              message: "Writer-lease commit synchronization failed; ownership remains fail-closed.",
+            }),
+        });
+      yield* writeOwnedEvidence(root, path, evidence);
+      return true;
+    }).pipe(
+      // Exclusive mkdir starts ownership. Evidence write, cleanup-on-failure, and fsync are one
+      // commit so interruption can observe either no slot or durable fail-closed ownership.
+      Effect.uninterruptible,
+    );
 
   const canonicalize: WriterLeaseContract["canonicalize"] = (cwd) =>
     Effect.tryPromise({
@@ -480,262 +509,300 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseCo
     });
 
   const acquire: WriterLeaseContract["acquire"] = (request) =>
-    Effect.gen(function* () {
-      if (
-        platform === "win32" ||
-        !validFilesystemIdentity(request.cwd) ||
-        request.sessionId.length < 1 ||
-        request.sessionId.length > MAX_ID_CHARS ||
-        request.runId.length < 1 ||
-        request.runId.length > MAX_ID_CHARS ||
-        !Number.isSafeInteger(parentPid) ||
-        parentPid <= 0 ||
-        !DIGEST_PATTERN.test(ownerNonce)
-      )
-        return yield* new WriterLeaseAcquireError({
-          message:
-            "Writer-lease ownership input or platform was invalid; writer startup was denied.",
-        });
+    Effect.uninterruptibleMask(() =>
+      Effect.gen(function* () {
+        if (
+          platform === "win32" ||
+          !validFilesystemIdentity(request.cwd) ||
+          request.sessionId.length < 1 ||
+          request.sessionId.length > MAX_ID_CHARS ||
+          request.runId.length < 1 ||
+          request.runId.length > MAX_ID_CHARS ||
+          !Number.isSafeInteger(parentPid) ||
+          parentPid <= 0 ||
+          !DIGEST_PATTERN.test(ownerNonce)
+        )
+          return yield* new WriterLeaseAcquireError({
+            message:
+              "Writer-lease ownership input or platform was invalid; writer startup was denied.",
+          });
 
-      yield* ensureLeaseRoot(root);
-      const ownershipToken = nextToken();
-      if (!DIGEST_PATTERN.test(ownershipToken))
-        return yield* new WriterLeaseAcquireError({
-          message: "Writer-lease ownership token generation failed; writer startup was denied.",
-        });
-      const evidence: WriterLeaseEvidence = {
-        version: LEASE_VERSION,
-        phase: "reserved",
-        ownershipToken,
-        filesystemIdentityDigest: request.cwd.digest,
-        parentPid,
-        parentProcessStartedAtMillis,
-        ownerNonce,
-        sessionId: request.sessionId,
-        runId: request.runId,
-        acquiredAtMillis: Math.max(0, Math.floor(nowMillis())),
-      };
-      const path = writerLeasePath(options.agentDirectory, request.cwd.digest);
-      let created = yield* createLeaseDirectory(path);
-      if (!created) {
-        const existing = (yield* readEvidence(path)).evidence;
-        if (existing.filesystemIdentityDigest !== request.cwd.digest)
-          return yield* conflict(
-            "corrupt",
-            "Writer-lease filesystem identity does not match its hashed slot; ownership remains locked.",
-            existing,
+        yield* Effect.interruptible(ensureLeaseRoot(root));
+        const ownershipToken = nextToken();
+        if (!DIGEST_PATTERN.test(ownershipToken))
+          return yield* new WriterLeaseAcquireError({
+            message: "Writer-lease ownership token generation failed; writer startup was denied.",
+          });
+        const evidence: WriterLeaseEvidence = {
+          version: LEASE_VERSION,
+          phase: "reserved",
+          ownershipToken,
+          filesystemIdentityDigest: request.cwd.digest,
+          parentPid,
+          parentProcessStartedAtMillis,
+          ownerNonce,
+          sessionId: request.sessionId,
+          runId: request.runId,
+          acquiredAtMillis: Math.max(0, Math.floor(nowMillis())),
+        };
+        const path = writerLeasePath(options.agentDirectory, request.cwd.digest);
+        if (options.beforeAcquireCommit)
+          yield* Effect.interruptible(
+            Effect.tryPromise({
+              try: options.beforeAcquireCommit,
+              catch: () =>
+                new WriterLeaseAcquireError({
+                  message: "Writer-lease acquisition synchronization failed before ownership.",
+                }),
+            }),
           );
-        const liveness = probeOwner(existing.parentPid);
-        if (liveness === "alive")
-          return yield* conflict(
-            "live",
-            `Writer ${existing.runId} in parent session ${existing.sessionId} already owns this filesystem directory identity.`,
-            existing,
-          );
-        if (liveness !== "dead")
-          return yield* conflict(
-            "uncertain",
-            "The existing writer owner could not be proven dead; ownership remains locked.",
-            existing,
-          );
-        if (existing.phase !== "reserved")
-          return yield* conflict(
-            "spawn-started",
-            "The writer parent is dead but backend spawn had started; automatic reclaim is forbidden until external backend death is verified and private state is recovered manually.",
-            existing,
-          );
-        const claimed = yield* claimDeadReservedLease(root, path, existing);
-        if (!claimed)
-          return yield* conflict(
-            "contended",
-            "Another contender changed or claimed the dead reserved writer lease; writer startup was denied.",
-            existing,
-          );
-        created = yield* createLeaseDirectory(path);
-        if (!created)
-          return yield* conflict(
-            "contended",
-            "Another contender acquired the filesystem directory identity during orphan takeover.",
-            existing,
-          );
-      }
-      yield* writeOwnedEvidence(root, path, evidence);
-      return {
-        canonicalCwd: request.cwd.path,
-        filesystemIdentityDigest: request.cwd.digest,
-        leasePath: path,
-        ownershipToken,
-        evidence,
-      } satisfies WriterLease;
-    }).pipe(Effect.uninterruptible);
+        let created = yield* createAndCommitEvidence(path, evidence);
+        if (!created) {
+          const existing = (yield* Effect.interruptible(readEvidence(path))).evidence;
+          if (existing.filesystemIdentityDigest !== request.cwd.digest)
+            return yield* conflict(
+              "corrupt",
+              "Writer-lease filesystem identity does not match its hashed slot; ownership remains locked.",
+              existing,
+            );
+          const liveness = probeOwner(existing.parentPid);
+          if (liveness === "alive")
+            return yield* conflict(
+              "live",
+              `Writer ${existing.runId} in parent session ${existing.sessionId} already owns this filesystem directory identity.`,
+              existing,
+            );
+          if (liveness !== "dead")
+            return yield* conflict(
+              "uncertain",
+              "The existing writer owner could not be proven dead; ownership remains locked.",
+              existing,
+            );
+          if (existing.phase !== "reserved")
+            return yield* conflict(
+              "spawn-started",
+              "The writer parent is dead but backend spawn had started; automatic reclaim is forbidden until external backend death is verified and private state is recovered manually.",
+              existing,
+            );
+          const claimed = yield* claimDeadReservedLease(root, path, existing);
+          if (!claimed)
+            return yield* conflict(
+              "contended",
+              "Another contender changed or claimed the dead reserved writer lease; writer startup was denied.",
+              existing,
+            );
+          created = yield* createAndCommitEvidence(path, evidence);
+          if (!created)
+            return yield* conflict(
+              "contended",
+              "Another contender acquired the filesystem directory identity during orphan takeover.",
+              existing,
+            );
+        }
+        return {
+          canonicalCwd: request.cwd.path,
+          filesystemIdentityDigest: request.cwd.digest,
+          leasePath: path,
+          ownershipToken,
+          evidence,
+        } satisfies WriterLease;
+      }),
+    );
 
   const markSpawnStarted: WriterLeaseContract["markSpawnStarted"] = (lease) =>
-    Effect.gen(function* () {
-      const expectedPath = writerLeasePath(options.agentDirectory, lease.filesystemIdentityDigest);
-      if (
-        platform === "win32" ||
-        lease.leasePath !== expectedPath ||
-        !DIGEST_PATTERN.test(lease.filesystemIdentityDigest) ||
-        !DIGEST_PATTERN.test(lease.ownershipToken)
-      )
-        return yield* new WriterLeaseMarkError({
-          message:
-            "Writer-lease spawn transition ownership evidence was invalid; no backend spawn is permitted.",
-        });
-      const current = yield* readEvidence(lease.leasePath).pipe(
-        Effect.mapError(
-          (error) =>
-            new WriterLeaseMarkError({
-              message: `${error.message} No backend spawn is permitted.`,
-            }),
-        ),
-      );
-      if (
-        current.evidence.ownershipToken !== lease.ownershipToken ||
-        current.evidence.filesystemIdentityDigest !== lease.filesystemIdentityDigest
-      )
-        return yield* new WriterLeaseMarkError({
-          message:
-            "Writer-lease spawn transition token did not match; no backend spawn is permitted.",
-        });
-      if (current.evidence.phase === "spawn-started")
-        return { ...lease, evidence: current.evidence } satisfies WriterLease;
-
-      const startedEvidence: WriterLeaseEvidence = {
-        ...current.evidence,
-        phase: "spawn-started",
-        spawnStartedAtMillis: Math.max(0, Math.floor(nowMillis())),
-      };
-      yield* Effect.tryPromise({
-        try: async () => {
-          const source = `${JSON.stringify(startedEvidence)}\n`;
-          if (Buffer.byteLength(source, "utf8") > MAX_EVIDENCE_BYTES) throw new Error("size");
-          const temporaryPath = transitionPath(lease.leasePath, lease.ownershipToken);
-          let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-          try {
-            handle = await fs.open(
-              temporaryPath,
-              constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-              0o600,
-            );
-            await handle.writeFile(source, { encoding: "utf8" });
-            await handle.sync();
-            await handle.close();
-            handle = undefined;
-            const directory = await fs.lstat(lease.leasePath, { bigint: true });
-            if (
-              directory.dev !== current.directoryDevice ||
-              directory.ino !== current.directoryInode
-            )
-              throw new Error("directory-changed");
-            await fs.rename(temporaryPath, evidencePath(lease.leasePath));
-            await syncDirectory(lease.leasePath);
-          } catch (error) {
-            if (handle) await handle.close().catch(() => undefined);
-            // A transition artifact is intentionally retained. Its presence makes dead-owner
-            // inspection transitional/fail-closed rather than misclassifying the old reservation.
-            throw error;
-          }
-        },
-        catch: () =>
-          new WriterLeaseMarkError({
+    Effect.uninterruptibleMask(() =>
+      Effect.gen(function* () {
+        const expectedPath = writerLeasePath(
+          options.agentDirectory,
+          lease.filesystemIdentityDigest,
+        );
+        if (
+          platform === "win32" ||
+          lease.leasePath !== expectedPath ||
+          !DIGEST_PATTERN.test(lease.filesystemIdentityDigest) ||
+          !DIGEST_PATTERN.test(lease.ownershipToken)
+        )
+          return yield* new WriterLeaseMarkError({
             message:
-              "Writer-lease spawn-started evidence could not be committed durably; no backend spawn is permitted and ownership remains fail-closed.",
-          }),
-      });
-      const confirmed = yield* readEvidence(lease.leasePath).pipe(
-        Effect.mapError(
-          (error) =>
+              "Writer-lease spawn transition ownership evidence was invalid; no backend spawn is permitted.",
+          });
+        const current = yield* Effect.interruptible(
+          readEvidence(lease.leasePath).pipe(
+            Effect.mapError(
+              (error) =>
+                new WriterLeaseMarkError({
+                  message: `${error.message} No backend spawn is permitted.`,
+                }),
+            ),
+          ),
+        );
+        if (
+          current.evidence.ownershipToken !== lease.ownershipToken ||
+          current.evidence.filesystemIdentityDigest !== lease.filesystemIdentityDigest
+        )
+          return yield* new WriterLeaseMarkError({
+            message:
+              "Writer-lease spawn transition token did not match; no backend spawn is permitted.",
+          });
+        if (current.evidence.phase === "spawn-started")
+          return { ...lease, evidence: current.evidence } satisfies WriterLease;
+
+        const startedEvidence: WriterLeaseEvidence = {
+          ...current.evidence,
+          phase: "spawn-started",
+          spawnStartedAtMillis: Math.max(0, Math.floor(nowMillis())),
+        };
+        yield* Effect.tryPromise({
+          try: async () => {
+            const source = `${JSON.stringify(startedEvidence)}\n`;
+            if (Buffer.byteLength(source, "utf8") > MAX_EVIDENCE_BYTES) throw new Error("size");
+            const temporaryPath = transitionPath(lease.leasePath, lease.ownershipToken);
+            let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+            try {
+              handle = await fs.open(
+                temporaryPath,
+                constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+                0o600,
+              );
+              await handle.writeFile(source, { encoding: "utf8" });
+              await handle.sync();
+              await handle.close();
+              handle = undefined;
+              const directory = await fs.lstat(lease.leasePath, { bigint: true });
+              if (
+                directory.dev !== current.directoryDevice ||
+                directory.ino !== current.directoryInode
+              )
+                throw new Error("directory-changed");
+              await fs.rename(temporaryPath, evidencePath(lease.leasePath));
+              await syncDirectory(lease.leasePath);
+            } catch (error) {
+              if (handle) await handle.close().catch(() => undefined);
+              // A transition artifact is intentionally retained. Its presence makes dead-owner
+              // inspection transitional/fail-closed rather than misclassifying the old reservation.
+              throw error;
+            }
+          },
+          catch: () =>
             new WriterLeaseMarkError({
-              message: `${error.message} The spawn transition is ambiguous, so no backend spawn is permitted.`,
+              message:
+                "Writer-lease spawn-started evidence could not be committed durably; no backend spawn is permitted and ownership remains fail-closed.",
             }),
-        ),
-      );
-      if (
-        confirmed.directoryDevice !== current.directoryDevice ||
-        confirmed.directoryInode !== current.directoryInode ||
-        confirmed.evidence.ownershipToken !== lease.ownershipToken ||
-        confirmed.evidence.filesystemIdentityDigest !== lease.filesystemIdentityDigest ||
-        confirmed.evidence.phase !== "spawn-started"
-      )
-        return yield* new WriterLeaseMarkError({
-          message:
-            "Writer-lease spawn-started evidence could not be ownership-confirmed; no backend spawn is permitted.",
-        });
-      return { ...lease, evidence: confirmed.evidence } satisfies WriterLease;
-    }).pipe(Effect.uninterruptible);
+        }).pipe(
+          // Temporary creation through rename and directory fsync is the irreversible phase commit.
+          Effect.uninterruptible,
+        );
+        const confirmed = yield* Effect.interruptible(
+          readEvidence(lease.leasePath).pipe(
+            Effect.mapError(
+              (error) =>
+                new WriterLeaseMarkError({
+                  message: `${error.message} The spawn transition is ambiguous, so no backend spawn is permitted.`,
+                }),
+            ),
+          ),
+        );
+        if (
+          confirmed.directoryDevice !== current.directoryDevice ||
+          confirmed.directoryInode !== current.directoryInode ||
+          confirmed.evidence.ownershipToken !== lease.ownershipToken ||
+          confirmed.evidence.filesystemIdentityDigest !== lease.filesystemIdentityDigest ||
+          confirmed.evidence.phase !== "spawn-started"
+        )
+          return yield* new WriterLeaseMarkError({
+            message:
+              "Writer-lease spawn-started evidence could not be ownership-confirmed; no backend spawn is permitted.",
+          });
+        return { ...lease, evidence: confirmed.evidence } satisfies WriterLease;
+      }),
+    );
 
   const release: WriterLeaseContract["release"] = (lease) =>
-    Effect.gen(function* () {
-      const expectedPath = writerLeasePath(options.agentDirectory, lease.filesystemIdentityDigest);
-      if (
-        lease.leasePath !== expectedPath ||
-        !DIGEST_PATTERN.test(lease.filesystemIdentityDigest) ||
-        !DIGEST_PATTERN.test(lease.ownershipToken)
-      )
-        return yield* new WriterLeaseReleaseError({
-          message: "Writer-lease release ownership evidence was invalid; the lease remains locked.",
-        });
-      const current = yield* readEvidence(lease.leasePath).pipe(
-        Effect.mapError(
-          () =>
-            new WriterLeaseReleaseError({
-              message:
-                "Writer-lease ownership could not be confirmed during release; the lease remains fail-closed.",
+    Effect.uninterruptibleMask(() =>
+      Effect.gen(function* () {
+        const expectedPath = writerLeasePath(
+          options.agentDirectory,
+          lease.filesystemIdentityDigest,
+        );
+        if (
+          lease.leasePath !== expectedPath ||
+          !DIGEST_PATTERN.test(lease.filesystemIdentityDigest) ||
+          !DIGEST_PATTERN.test(lease.ownershipToken)
+        )
+          return yield* new WriterLeaseReleaseError({
+            message:
+              "Writer-lease release ownership evidence was invalid; the lease remains locked.",
+          });
+        const current = yield* Effect.interruptible(
+          readEvidence(lease.leasePath).pipe(
+            Effect.mapError(
+              () =>
+                new WriterLeaseReleaseError({
+                  message:
+                    "Writer-lease ownership could not be confirmed during release; the lease remains fail-closed.",
+                }),
+            ),
+          ),
+        );
+        if (
+          current.evidence.ownershipToken !== lease.ownershipToken ||
+          current.evidence.filesystemIdentityDigest !== lease.filesystemIdentityDigest
+        )
+          return yield* new WriterLeaseReleaseError({
+            message: "Writer-lease ownership token did not match; the lease remains locked.",
+          });
+        if (options.beforeReleaseRename)
+          yield* Effect.interruptible(
+            Effect.tryPromise({
+              try: options.beforeReleaseRename,
+              catch: () =>
+                new WriterLeaseReleaseError({
+                  message: "Writer-lease release synchronization failed; the lease remains locked.",
+                }),
             }),
-        ),
-      );
-      if (
-        current.evidence.ownershipToken !== lease.ownershipToken ||
-        current.evidence.filesystemIdentityDigest !== lease.filesystemIdentityDigest
-      )
-        return yield* new WriterLeaseReleaseError({
-          message: "Writer-lease ownership token did not match; the lease remains locked.",
-        });
-      if (options.beforeReleaseRename)
-        yield* Effect.tryPromise({
-          try: options.beforeReleaseRename,
-          catch: () =>
-            new WriterLeaseReleaseError({
-              message: "Writer-lease release synchronization failed; the lease remains locked.",
-            }),
-        });
+          );
 
-      const releasedPath = tombstonePath(lease.leasePath, lease.ownershipToken);
-      yield* Effect.tryPromise({
-        try: () => fs.rename(lease.leasePath, releasedPath),
-        catch: () =>
-          new WriterLeaseReleaseError({
-            message:
-              "Writer-lease release tombstone could not be committed; the slot was not considered released.",
-          }),
-      });
-      const moved = yield* readEvidence(releasedPath).pipe(
-        Effect.mapError(
-          () =>
-            new WriterLeaseReleaseError({
+        const releasedPath = tombstonePath(lease.leasePath, lease.ownershipToken);
+        yield* Effect.gen(function* () {
+          yield* Effect.tryPromise({
+            try: () => fs.rename(lease.leasePath, releasedPath),
+            catch: () =>
+              new WriterLeaseReleaseError({
+                message:
+                  "Writer-lease release tombstone could not be committed; the slot was not considered released.",
+              }),
+          });
+          const moved = yield* readEvidence(releasedPath).pipe(
+            Effect.mapError(
+              () =>
+                new WriterLeaseReleaseError({
+                  message:
+                    "Moved writer-lease release evidence could not be read stably; release remains ownership-uncertain.",
+                }),
+            ),
+          );
+          if (
+            moved.evidence.ownershipToken !== lease.ownershipToken ||
+            moved.evidence.filesystemIdentityDigest !== lease.filesystemIdentityDigest
+          )
+            return yield* new WriterLeaseReleaseError({
               message:
-                "Moved writer-lease release evidence could not be read stably; release remains ownership-uncertain.",
-            }),
-        ),
-      );
-      if (
-        moved.evidence.ownershipToken !== lease.ownershipToken ||
-        moved.evidence.filesystemIdentityDigest !== lease.filesystemIdentityDigest
-      )
-        return yield* new WriterLeaseReleaseError({
-          message:
-            "Moved writer-lease release evidence did not retain the expected token; release remains ownership-uncertain.",
-        });
-      yield* Effect.tryPromise({
-        try: () => syncDirectory(root),
-        catch: () =>
-          new WriterLeaseReleaseError({
-            message:
-              "Writer-lease release tombstone could not be durably confirmed; release remains ownership-uncertain.",
-          }),
-      });
-    }).pipe(Effect.uninterruptible);
+                "Moved writer-lease release evidence did not retain the expected token; release remains ownership-uncertain.",
+            });
+          yield* Effect.tryPromise({
+            try: () => syncDirectory(root),
+            catch: () =>
+              new WriterLeaseReleaseError({
+                message:
+                  "Writer-lease release tombstone could not be durably confirmed; release remains ownership-uncertain.",
+              }),
+          });
+        }).pipe(
+          // Rename, moved-token confirmation, and root fsync are one ABA-safe release commit.
+          Effect.uninterruptible,
+        );
+      }),
+    );
 
   return { platform, canonicalize, acquire, markSpawnStarted, release };
 };

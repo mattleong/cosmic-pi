@@ -3,7 +3,9 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { HostCallbackBoundaryContract } from "./host-callback.ts";
+import { decodeContextUsage, decodeHostCount } from "./host-usage.ts";
 
 export type FooterContextUsage = ReturnType<ExtensionContext["getContextUsage"]>;
 export type FooterModel = NonNullable<ExtensionContext["model"]>;
@@ -52,15 +54,17 @@ export const materializeModel = (
     callbacks,
     () => {
       const source = ctx.model;
-      return source
-        ? Object.freeze({
+      if (!source) return undefined;
+      const contextWindow = decodeHostCount(source.contextWindow);
+      return contextWindow === undefined
+        ? undefined
+        : Object.freeze({
             source,
             id: source.id,
             provider: source.provider,
             reasoning: source.reasoning,
-            contextWindow: source.contextWindow,
-          })
-        : undefined;
+            contextWindow,
+          });
     },
     undefined,
   );
@@ -73,18 +77,16 @@ export const materializeContextUsage = (
     callbacks,
     () => {
       const usage = ctx.getContextUsage();
-      return usage
-        ? Object.freeze({
-            tokens: usage.tokens,
-            contextWindow: usage.contextWindow,
-            percent: usage.percent,
-          })
-        : undefined;
+      if (!usage) return undefined;
+      const decoded = decodeContextUsage({
+        tokens: usage.tokens,
+        contextWindow: usage.contextWindow,
+        percent: usage.percent,
+      });
+      return decoded ? Object.freeze(decoded) : undefined;
     },
     undefined,
   );
-
-const sanitizeStatus = (text: string) => text.replace(/[ \r\n\t]+/g, " ").trim();
 
 export const materializeFooterHostProjection = (options: {
   readonly pi: ExtensionAPI;
@@ -101,7 +103,7 @@ export const materializeFooterHostProjection = (options: {
     () =>
       [...footerData.getExtensionStatuses().entries()]
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([id, text]) => ({ id, text: sanitizeStatus(text) }))
+        .map(([id, text]) => ({ id, text: sanitizeTerminalLine(text) }))
         .filter(({ text }) => Boolean(text)),
     [] as Array<{ readonly id: string; readonly text: string }>,
   );
@@ -129,7 +131,11 @@ export const materializeFooterHostProjection = (options: {
         ? hostQuery(callbacks, () => ctx.modelRegistry.isUsingOAuth(model.source), false)
         : false,
     thinking: hostQuery(callbacks, () => pi.getThinkingLevel(), "off"),
-    providerCount: hostQuery(callbacks, () => footerData.getAvailableProviderCount(), 0),
+    providerCount: hostQuery(
+      callbacks,
+      () => decodeHostCount(footerData.getAvailableProviderCount()) ?? 0,
+      0,
+    ),
     extensionStatuses: Object.freeze(extensionStatuses),
   });
 };

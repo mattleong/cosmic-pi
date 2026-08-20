@@ -47,7 +47,7 @@ Run `/cosmic-ui` to configure footer visibility, density, and media placement. C
 
 Unknown configuration fields are preserved by the settings UI. Known fields are decoded independently, so an invalid value does not discard valid siblings.
 
-Each active Pi session owns one scoped Effect runtime. Git and pull-request polling is single-flight, uses the current callback context, and is interrupted on session replacement, abort, or shutdown.
+Each active Pi session owns one scoped Effect runtime. Git and pull-request polling is single-flight, uses the current callback context, and is interrupted on session replacement, abort, or shutdown. Background Git probes disable optional locks so status refreshes do not contend with concurrent repository operations.
 
 ## Extension contributions
 

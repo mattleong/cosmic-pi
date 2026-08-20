@@ -6,7 +6,7 @@ import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterXai, {
@@ -23,6 +23,23 @@ afterEach(() => {
 
 type Handler = ExtensionHandler<any, any>;
 type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
+type TestSurface = {
+  readonly render?: (width: number) => string[];
+  readonly invalidate?: () => void;
+  readonly handleInput?: (data: string) => void;
+};
+type TestSurfaceFactory = (
+  tui: { readonly terminal?: { readonly rows: number }; readonly requestRender: () => void },
+  theme: {
+    readonly bold: (text: string) => string;
+    readonly fg: (color: string, text: string) => string;
+  },
+  keybindings: {
+    readonly matches: (data: string, id: string) => boolean;
+    readonly getKeys?: (id: string) => readonly string[];
+  },
+  done: (result: undefined) => void,
+) => TestSurface;
 
 function harness(dependencies?: BetterXaiExtensionDependencies) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-better-xai-project-"));
@@ -108,6 +125,8 @@ describe("Better xAI Effect boundary", () => {
     expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
     await invoke(h.commands.get("xai-usage")?.("", h.ctx));
     expect(h.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
+    await invoke(h.commands.get("xai-settings")?.("", h.ctx));
+    expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("Better xAI settings"), "info");
     await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
   });
 
@@ -189,6 +208,130 @@ describe("Better xAI Effect boundary", () => {
 
     expect(() => h.handlers.get("turn_end")?.({}, h.ctx)).not.toThrow();
     expect(() => h.handlers.get("model_select")?.({}, h.ctx)).not.toThrow();
+    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+  });
+
+  test("fails closed when interactive settings capability getters throw", async () => {
+    const h = harness();
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+    Object.defineProperty(h.ctx.ui, "custom", {
+      configurable: true,
+      get() {
+        throw new Error("host-custom-capability-secret");
+      },
+    });
+
+    let command: unknown;
+    expect(() => {
+      command = h.commands.get("xai-settings")?.("", h.ctx);
+    }).not.toThrow();
+    await invoke(command);
+
+    expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("Better xAI settings"), "info");
+    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+  });
+
+  test("contains synchronous and rejected custom-surface opens", async () => {
+    for (const open of [
+      () => {
+        throw new Error("host-custom-open-secret");
+      },
+      () =>
+        // oxlint-disable-next-line unicorn/no-thenable -- Deliberately hostile foreign thenable boundary fixture.
+        Object.defineProperty({}, "then", {
+          value: (_resolve: (value: undefined) => void, reject: (error: Error) => void) => {
+            reject(new Error("host-custom-thenable-secret"));
+          },
+        }),
+    ]) {
+      const h = harness();
+      await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: open });
+
+      let command: unknown;
+      expect(() => {
+        command = h.commands.get("xai-settings")?.("", h.ctx);
+      }).not.toThrow();
+      await invoke(command);
+
+      expect(h.notify).toHaveBeenCalledWith("Unable to open Better xAI settings.", "warning");
+      await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+    }
+  });
+
+  test("contains hostile surface factory, done, render, and input callbacks", async () => {
+    initTheme(undefined, false);
+    const h = harness();
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+    let renderResult: string[] | undefined;
+    const custom = (factory: TestSurfaceFactory) => {
+      const surface = factory(
+        {
+          terminal: { rows: 24 },
+          requestRender() {
+            throw new Error("host-render-secret");
+          },
+        },
+        {
+          bold: (text) => text,
+          fg(color, text) {
+            if (color === "dim") throw new Error("host-theme-secret");
+            return text;
+          },
+        },
+        {
+          matches() {
+            throw new Error("host-keybinding-secret");
+          },
+          getKeys: () => [],
+        },
+        () => {
+          throw new Error("host-done-secret");
+        },
+      );
+      expect(() => {
+        renderResult = surface.render?.(80);
+      }).not.toThrow();
+      expect(() => surface.invalidate?.()).not.toThrow();
+      expect(() => surface.handleInput?.("j")).not.toThrow();
+      expect(() => surface.handleInput?.("\u001b")).not.toThrow();
+      return Promise.resolve(undefined);
+    };
+    Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });
+
+    await invoke(h.commands.get("xai-settings")?.("", h.ctx));
+
+    expect(renderResult).toEqual(expect.any(Array));
+    expect(h.notify).not.toHaveBeenCalledWith("Unable to open Better xAI settings.", "warning");
+    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+  });
+
+  test("degrades a throwing settings factory to an inert surface", async () => {
+    const h = harness();
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+    const custom = (factory: TestSurfaceFactory) => {
+      const surface = factory(
+        { terminal: { rows: 24 }, requestRender: () => undefined },
+        {
+          bold: (text) => text,
+          fg() {
+            throw new Error("host-factory-secret");
+          },
+        },
+        { matches: () => false, getKeys: () => [] },
+        () => {
+          throw new Error("host-done-secret");
+        },
+      );
+      expect(() => surface.render?.(80)).not.toThrow();
+      expect(() => surface.handleInput?.("j")).not.toThrow();
+      return Promise.resolve(undefined);
+    };
+    Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });
+
+    await invoke(h.commands.get("xai-settings")?.("", h.ctx));
+
+    expect(h.notify).toHaveBeenCalledWith("Unable to open Better xAI settings.", "warning");
     await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
   });
 

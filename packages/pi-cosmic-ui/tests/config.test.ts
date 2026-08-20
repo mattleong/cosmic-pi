@@ -49,13 +49,13 @@ describe("Cosmic UI config", () => {
           custom: 42,
           footer: { density: "compact", enabled: "bad", future: true },
         });
-        const config = yield* resolveConfig(cwd, agent);
+        const config = yield* resolveConfig(cwd, agent, true);
         expect(config.footer).toMatchObject({
           enabled: false,
           density: "compact",
           hidden: ["metrics"],
         });
-        yield* updateFooterConfig(cwd, agent, { enabled: true });
+        yield* updateFooterConfig(cwd, agent, { enabled: true }, true);
         expect(yield* documents.readObject(paths.project)).toEqual({
           custom: 42,
           footer: { density: "compact", enabled: true, future: true },
@@ -88,7 +88,7 @@ describe("Cosmic UI config", () => {
     ),
   );
 
-  it.effect("untrusted resolution and writes perform no project-document I/O at all", () => {
+  it.effect("omitted trust fails closed for resolution and writes", () => {
     const memory = makeInMemoryDocuments();
     const operations: string[] = [];
     const record =
@@ -115,11 +115,11 @@ describe("Cosmic UI config", () => {
       memory.documents.set(paths.project, { footer: { enabled: false, density: "compact" } });
       memory.documents.set(paths.global, { footer: { density: "comfortable" } });
 
-      const config = yield* resolveConfig("/project", "/agent", false);
+      const config = yield* resolveConfig("/project", "/agent");
       expect(config.configPath).toBe(paths.global);
       expect(config.footer).toMatchObject({ enabled: true, density: "comfortable" });
 
-      const updated = yield* updateFooterConfig("/project", "/agent", { enabled: false }, false);
+      const updated = yield* updateFooterConfig("/project", "/agent", { enabled: false });
       expect(updated.configPath).toBe(paths.global);
       expect(memory.documents.get(paths.global)).toEqual({
         footer: { density: "comfortable", enabled: false },
@@ -143,13 +143,13 @@ describe("Cosmic UI config", () => {
         yield* documents.writeObject(paths.global, {
           footer: { density: "comfortable", hidden: ["global-item"] },
         });
-        const global = yield* resolveConfig(cwd, agent);
+        const global = yield* resolveConfig(cwd, agent, true);
         expect(global.configPath).toBe(paths.global);
 
         yield* documents.writeObject(paths.project, {
           footer: { density: "auto", hidden: ["project-item"] },
         });
-        const project = yield* updateFooterConfig(cwd, agent, { density: "compact" });
+        const project = yield* updateFooterConfig(cwd, agent, { density: "compact" }, true);
         expect(project.configPath).toBe(paths.project);
         expect(yield* documents.readObject(paths.project)).toEqual({
           footer: { density: "compact", hidden: ["project-item"] },
@@ -159,7 +159,7 @@ describe("Cosmic UI config", () => {
         });
 
         yield* fs.remove(paths.project);
-        const next = yield* setFooterVisibility(cwd, agent, "metrics", false);
+        const next = yield* setFooterVisibility(cwd, agent, "metrics", false, true);
         expect(next.configPath).toBe(paths.global);
         expect(yield* fs.exists(paths.project)).toBe(false);
         expect(yield* documents.readObject(paths.global)).toEqual({
@@ -205,11 +205,11 @@ describe("Cosmic UI config", () => {
         const paths = yield* configPaths(cwd, agent);
         yield* fs.makeDirectory((yield* Path.Path).dirname(paths.project), { recursive: true });
         yield* fs.writeFileString(paths.project, "{not-json");
-        const config = yield* resolveConfig(cwd, agent);
+        const config = yield* resolveConfig(cwd, agent, true);
         expect(config.footer.enabled).toBe(true);
         expect(config.configPath).toBe(paths.project);
         expect(
-          yield* Effect.exit(updateFooterConfig(cwd, agent, { enabled: false })).pipe(
+          yield* Effect.exit(updateFooterConfig(cwd, agent, { enabled: false }, true)).pipe(
             Effect.map((exit) => exit._tag),
           ),
         ).toBe("Failure");

@@ -42,20 +42,22 @@ type ProjectionData =
   | ReadonlyArray<ProjectionData>
   | ProjectionRecord;
 
+const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 const ProjectionDataSchema: Schema.Codec<ProjectionData> = Schema.Tree(
-  Schema.Union([Schema.Undefined, Schema.Null, Schema.String, Schema.Number, Schema.Boolean]),
+  Schema.Union([Schema.Undefined, Schema.Null, Schema.String, FiniteNumberSchema, Schema.Boolean]),
 );
 
 const cloneAndFreeze = <Value>(
   value: Value,
   seen: WeakMap<object, ProjectionData>,
+  activePaths: WeakMap<object, string>,
   path: string,
 ): ProjectionData => {
   if (value === undefined) return undefined;
   if (value === null) return null;
   if (Predicate.isString(value) || Predicate.isBoolean(value)) return value;
   if (Predicate.isNumber(value)) {
-    if (!Schema.is(Schema.Number)(value)) return unsupported(path, "non-finite number");
+    if (!Number.isFinite(value)) return unsupported(path, "non-finite number");
     return value;
   }
   const kind = runtimeTypeName(value);
@@ -63,8 +65,11 @@ const cloneAndFreeze = <Value>(
   if (!hasObjectRuntimeType(value) || value === null) return unsupported(path, kind);
 
   const object = value;
+  const activePath = activePaths.get(object);
+  if (activePath !== undefined) return unsupported(path, `cyclic reference to ${activePath}`);
   const prior = seen.get(object);
   if (prior !== undefined) return prior;
+  activePaths.set(object, path);
 
   if (Array.isArray(value)) {
     const ownKeys = Reflect.ownKeys(value);
@@ -80,8 +85,9 @@ const cloneAndFreeze = <Value>(
       if (!descriptor) return unsupported(childPath(path, index), "sparse array entry");
       if (!("value" in descriptor) || !descriptor.enumerable)
         return unsupported(childPath(path, index), "non-data array entry");
-      clone.push(cloneAndFreeze(descriptor.value, seen, childPath(path, index)));
+      clone.push(cloneAndFreeze(descriptor.value, seen, activePaths, childPath(path, index)));
     }
+    activePaths.delete(object);
     return Object.freeze(clone);
   }
 
@@ -101,18 +107,19 @@ const cloneAndFreeze = <Value>(
     if (!("value" in descriptor)) return unsupported(childPath(path, key), "accessor");
     if (!descriptor.enumerable) return unsupported(childPath(path, key), "non-enumerable property");
     Object.defineProperty(clone, key, {
-      value: cloneAndFreeze(descriptor.value, seen, childPath(path, key)),
+      value: cloneAndFreeze(descriptor.value, seen, activePaths, childPath(path, key)),
       configurable: true,
       enumerable: true,
       writable: true,
     });
   }
+  activePaths.delete(object);
   return Object.freeze(clone);
 };
 
 /** Clones and deeply freezes a schema-validated plain-data snapshot. */
 export const freezeSnapshot = <Snapshot>(snapshot: Snapshot): Snapshot => {
-  const cloned = cloneAndFreeze(snapshot, new WeakMap(), "$");
+  const cloned = cloneAndFreeze(snapshot, new WeakMap(), new WeakMap(), "$");
   if (!Schema.is(ProjectionDataSchema)(cloned))
     return unsupported("$", "value outside the projection schema");
   // SAFETY: Recursive cloning preserved the caller's plain-data structure and Schema.Tree validated it.

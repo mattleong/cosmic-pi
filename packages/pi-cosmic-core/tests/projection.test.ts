@@ -7,6 +7,14 @@ class TransitionFailure extends Schema.TaggedError<TransitionFailure>()("Transit
   message: Schema.String,
 }) {}
 
+interface DirectCycleFixture {
+  self?: unknown;
+}
+
+interface IndirectCycleFixture {
+  child: { parent?: unknown };
+}
+
 it.effect("publishes cloned deeply frozen plain snapshots", () =>
   Effect.gen(function* () {
     const state = { count: 1, nested: { values: ["a"] } };
@@ -23,6 +31,53 @@ it.effect("publishes cloned deeply frozen plain snapshots", () =>
     expect(snapshot.nested.values).toEqual(["a"]);
   }),
 );
+
+it("allows acyclic shared references while preserving snapshot identity", () => {
+  const shared = { value: 1 };
+  const snapshot = freezeSnapshot({ left: shared, right: shared });
+
+  expect(snapshot.left).toBe(snapshot.right);
+  expect(snapshot.left).not.toBe(shared);
+  expect(Object.isFrozen(snapshot.left)).toBe(true);
+});
+
+it.each([
+  ["NaN", Number.NaN],
+  ["positive infinity", Number.POSITIVE_INFINITY],
+  ["negative infinity", Number.NEGATIVE_INFINITY],
+])("rejects %s as a typed projection failure", (_name, value) => {
+  try {
+    freezeSnapshot({ nested: value });
+    throw new Error("expected projection failure");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProjectionError);
+    if (!(error instanceof ProjectionError)) throw error;
+    expect(error.path).toBe("$.nested");
+    expect(error.message).toContain("non-finite number");
+  }
+});
+
+it("rejects direct and indirect cycles with the offending path", () => {
+  const direct: DirectCycleFixture = {};
+  direct.self = direct;
+  expect(() => freezeSnapshot(direct)).toThrow("cyclic reference to $");
+
+  const root: IndirectCycleFixture = { child: {} };
+  root.child.parent = root;
+  try {
+    freezeSnapshot(root);
+    throw new Error("expected projection failure");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProjectionError);
+    if (!(error instanceof ProjectionError)) throw error;
+    expect(error.path).toBe("$.child.parent");
+    expect(error.message).toContain("cyclic reference to $");
+  }
+
+  const array: unknown[] = [];
+  array.push(array);
+  expect(() => freezeSnapshot(array)).toThrow("$[0]");
+});
 
 it("preserves an own __proto__ property without changing the clone prototype", () => {
   const source = Object.defineProperty({ ok: true }, "__proto__", {

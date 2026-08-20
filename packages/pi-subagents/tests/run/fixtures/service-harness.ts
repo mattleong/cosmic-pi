@@ -342,6 +342,7 @@ export function fakeWriterLeaseLayer(
     readonly onAcquireStarted?: (() => void) | undefined;
     readonly onAcquire?: ((lease: WriterLease) => void) | undefined;
     readonly acquireGate?: Deferred.Deferred<void, never> | undefined;
+    readonly acquireUninterruptible?: boolean | undefined;
     readonly failAcquire?: boolean | undefined;
     readonly onMark?: ((lease: WriterLease) => void) | undefined;
     readonly markGate?: Deferred.Deferred<void, never> | undefined;
@@ -406,12 +407,15 @@ export function fakeWriterLeaseLayer(
           acquiredAtMillis: ordinal,
         },
       };
-      return Effect.gen(function* () {
+      const acquire = Effect.gen(function* () {
         options.onAcquireStarted?.();
         if (options.acquireGate) yield* Deferred.await(options.acquireGate);
         options.onAcquire?.(lease);
         return lease;
       });
+      return options.acquireUninterruptible
+        ? acquire.pipe(Effect.uninterruptible)
+        : acquire.pipe(Effect.interruptible);
     },
     markSpawnStarted: (lease) =>
       Effect.gen(function* () {

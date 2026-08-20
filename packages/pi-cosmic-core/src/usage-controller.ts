@@ -202,7 +202,7 @@ export const makeUsageRefreshController = <
     const path = yield* Path.Path;
     const agentDir = options.agentDir ?? (yield* AgentDirectory);
     const authPath = path.join(agentDir, "auth.json");
-    const projectTrusted = options.projectTrusted ?? true;
+    const projectTrusted = options.projectTrusted === true;
     const config = yield* options.store.resolveConfig(cwd, agentDir, projectTrusted);
     // The overridden fields all belong to UsageProjectionBase, so the merge stays within P.
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.

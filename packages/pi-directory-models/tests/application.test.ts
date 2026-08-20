@@ -15,6 +15,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   registerDirectoryModelsWithDependencies,
@@ -74,6 +76,7 @@ function harness(
     readonly entries?: readonly { readonly type: string }[];
     readonly cwd?: string;
     readonly delayThinkingEvents?: boolean;
+    readonly setModelSettlement?: Promise<void>;
   } = {},
 ) {
   const realCwd = mkdtempSync(join(tmpdir(), "pi-directory-models-project-"));
@@ -95,6 +98,7 @@ function harness(
   let ctx!: ExtensionContext;
   const delayedThinkingEvents: unknown[] = [];
   const setModel = vi.fn(async (next: Model) => {
+    await options.setModelSettlement;
     const previousModel = activeModel;
     activeModel = next;
     await handlers.get("model_select")?.(
@@ -212,6 +216,37 @@ describe.sequential("directory models application", () => {
     await h.shutdown();
   });
 
+  test("waits for a noncancelable model settlement before a successor session starts", async () => {
+    const settlement = await Effect.runPromise(Deferred.make<void>());
+    const h = harness({ setModelSettlement: Effect.runPromise(Deferred.await(settlement)) });
+    writePreference(h.agentDirectory, h.cwd, {
+      provider: h.remembered.provider,
+      model: h.remembered.id,
+      thinkingLevel: "high",
+    });
+
+    const first = h.start();
+    await vi.waitFor(() => expect(h.setModel).toHaveBeenCalledTimes(1));
+    let successorSettled = false;
+    const successor = h.start("new").then(() => {
+      successorSettled = true;
+    });
+    await Effect.runPromise(Effect.sleep("10 millis"));
+
+    expect(successorSettled).toBe(false);
+    expect(h.setModel).toHaveBeenCalledTimes(1);
+
+    await Effect.runPromise(Deferred.succeed(settlement, undefined));
+    await Promise.all([first, successor]);
+    expect(h.setModel).toHaveBeenCalledTimes(1);
+    expect(h.thinking()).toBe("high");
+    expect(h.notify).not.toHaveBeenCalledWith(
+      "Unable to save the directory model preference.",
+      "warning",
+    );
+    await h.shutdown();
+  });
+
   test("leaves explicit --model and resumed session choices alone", async () => {
     const explicit = harness({ explicitModel: true });
     await explicit.start();
@@ -280,6 +315,25 @@ describe.sequential("directory models application", () => {
       provider: h.remembered.provider,
       model: h.remembered.id,
       thinkingLevel: "high",
+    });
+    await h.shutdown();
+  });
+
+  test("ignores malformed thinking-level events", async () => {
+    const h = harness();
+    await h.start();
+    h.select(h.remembered, "high");
+
+    await h.emit("thinking_level_select", {
+      type: "thinking_level_select",
+      level: "unexpected-level",
+      previousLevel: "low",
+    });
+
+    expect(readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+      provider: h.initial.provider,
+      model: h.initial.id,
+      thinkingLevel: "low",
     });
     await h.shutdown();
   });

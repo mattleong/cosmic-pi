@@ -116,14 +116,15 @@ export const readConfig = Effect.fn("pi-cosmic-ui.config.read")(function* (path:
 export const resolveConfig = Effect.fn("pi-cosmic-ui.config.resolve")(function* (
   cwd: string,
   agentDir: string,
-  projectTrusted = true,
+  projectTrusted = false,
 ) {
   const paths = yield* configPaths(cwd, agentDir);
+  const trusted = projectTrusted === true;
   // Untrusted projects never probe the project document: its path stays inert metadata.
-  const selected = yield* selectScopedDocument(paths, { probeProject: projectTrusted }).pipe(
+  const selected = yield* selectScopedDocument(paths, { probeProject: trusted }).pipe(
     Effect.mapError((error) => mapError("inspect", error.path)()),
   );
-  const projectExists = projectTrusted && selected.projectExists;
+  const projectExists = trusted && selected.projectExists;
   const { globalExists } = selected;
   const project = projectExists ? yield* readConfigTolerantly(paths.project) : undefined;
   const global = globalExists ? yield* readConfigTolerantly(paths.global) : undefined;
@@ -184,7 +185,7 @@ export const updateFooterConfig = Effect.fn("pi-cosmic-ui.config.update-footer")
   cwd: string,
   agentDir: string,
   patch: Partial<ResolvedCosmicUiConfig["footer"]>,
-  projectTrusted = true,
+  projectTrusted = false,
   afterCommit: CosmicUiConfigAfterCommit = noAfterCommit,
 ) {
   return yield* modifyFooterConfig(
@@ -209,7 +210,7 @@ export const setFooterVisibility = Effect.fn("pi-cosmic-ui.config.set-visibility
   agentDir: string,
   id: string,
   visible: boolean,
-  projectTrusted = true,
+  projectTrusted = false,
   afterCommit: CosmicUiConfigAfterCommit = noAfterCommit,
 ) {
   return yield* modifyFooterConfig(

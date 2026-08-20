@@ -10,7 +10,12 @@ import * as Effect from "effect/Effect";
 import { completeSettingsArguments, dispatchSettingsCommand } from "pi-cosmic-core";
 import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
 import { notifyAtHostBoundary, type HostNotificationLevel } from "../boundary/host-notifier.ts";
-import { recoverHostUi } from "../boundary/host-ui.ts";
+import {
+  hasSettingsSurface,
+  invokeHostCallback,
+  openSettingsSurfaceAtHostBoundary,
+  recoverHostUi,
+} from "../boundary/host-ui.ts";
 import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config/index.ts";
 import { XaiUsageService } from "../usage/index.ts";
 
@@ -112,39 +117,46 @@ export function registerSettingsController(
       values: [...(descriptor.values ?? [])],
       description: descriptor.description,
     }));
-    return ctx.ui
-      .custom<undefined>(
-        (tui, theme, keybindings, done) =>
-          createSettingsListSurface({
-            header: new Text(theme.fg("accent", theme.bold("Better xAI Settings")), 1, 1),
-            items,
-            height: Math.min(12, items.length + 2),
-            listTheme: getSettingsListTheme(),
-            // SettingsList displays the cycled value optimistically, so both apply outcomes route
-            // through the same display update: success shows the committed value and failure
-            // restores the persisted projection value.
-            onChange: (id, value, list) => {
-              const show = (currentValue: string) => {
+    return openSettingsSurfaceAtHostBoundary(
+      ctx,
+      (tui, theme, keybindings, done) =>
+        createSettingsListSurface({
+          header: new Text(theme.fg("accent", theme.bold("Better xAI Settings")), 1, 1),
+          items,
+          height: Math.min(12, items.length + 2),
+          listTheme: getSettingsListTheme(),
+          // SettingsList displays the cycled value optimistically, so both apply outcomes route
+          // through the same display update: success shows the committed value and failure
+          // restores the persisted projection value.
+          onChange: (id, value, list) => {
+            const show = (currentValue: string) => {
+              invokeHostCallback(() => {
                 list.updateValue(id, currentValue);
                 tui.requestRender();
-              };
-              void applySetting(ctx, id, value, capturedSignal.signal, {
-                applied: show,
-                reverted: show,
-              });
-            },
-            onCancel: () => done(undefined),
-            matchesKeybinding: Predicate.isFunction(keybindings?.matches)
-              ? (data, id) => keybindings.matches(data, id)
-              : undefined,
-            requestRender: () => tui.requestRender(),
-            dim: (text) => theme.fg("dim", text),
-          }).surface,
-      )
-      .then(
-        () => undefined,
-        () => notifyAtHostBoundary(ctx, "Unable to open Better xAI settings.", "warning"),
-      );
+              }, undefined);
+            };
+            void applySetting(ctx, id, value, capturedSignal.signal, {
+              applied: show,
+              reverted: show,
+            });
+          },
+          onCancel: () => invokeHostCallback(() => done(undefined), undefined),
+          matchesKeybinding: invokeHostCallback(
+            () => Predicate.isFunction(keybindings?.matches),
+            false,
+          )
+            ? (data, id) => invokeHostCallback(() => keybindings.matches(data, id), false)
+            : undefined,
+          requestRender: () => invokeHostCallback(() => tui.requestRender(), undefined),
+          dim: (text) => invokeHostCallback(() => theme.fg("dim", text), text),
+          // The shared bridge guards render, invalidate, and input delegation through this
+          // package-owned host boundary.
+          bridge: { invoke: invokeHostCallback },
+        }).surface,
+    ).then((outcome) => {
+      if (outcome === "failed")
+        notifyAtHostBoundary(ctx, "Unable to open Better xAI settings.", "warning");
+    });
   };
 
   pi.registerCommand("xai-settings", {
@@ -187,9 +199,7 @@ export function registerSettingsController(
       };
       switch (dispatch._tag) {
         case "OpenInteractive":
-          return ctx.mode === "tui" && Predicate.isFunction(ctx.ui.custom)
-            ? openInteractiveSettings(ctx)
-            : showHelp();
+          return hasSettingsSurface(ctx) ? openInteractiveSettings(ctx) : showHelp();
         case "Help":
           return showHelp();
         case "Diagnostics":

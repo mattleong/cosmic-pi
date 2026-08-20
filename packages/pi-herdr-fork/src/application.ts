@@ -42,11 +42,11 @@ export const registerHerdrForkApplication = (pi: ExtensionAPI): void => {
 
   pi.on("session_start", (_event, ctx) => {
     const captured = captureHerdrForkSession(ctx);
-    if (!captured) {
+    if (!captured || captured.aborted) {
       notifyHerdrFork(ctx, "The /herdr-fork command could not capture this Pi session.", "error");
       return slot.shutdown().then(() => undefined);
     }
-    return slot.start({ ...captured, ctx }, ctx.signal).then(() => undefined);
+    return slot.start({ ...captured, ctx }, captured.signal).then(() => undefined);
   });
 
   pi.on("session_shutdown", () => slot.shutdown());

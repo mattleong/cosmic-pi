@@ -23,9 +23,24 @@ import {
 import { registerProcessManagerCommand } from "./settings/controller.ts";
 import { registerBackgroundTerminalTool } from "./tools/background-terminal.ts";
 
-export function registerBackgroundTerminalsApplication(pi: ExtensionAPI): void {
+export interface BackgroundTerminalsApplicationBoundaries {
+  readonly loadSettings: (
+    cwd: string,
+    projectTrusted: boolean,
+  ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
+}
+
+const LIVE_APPLICATION_BOUNDARIES: BackgroundTerminalsApplicationBoundaries = {
+  loadSettings: loadCodePreviewSettings,
+};
+
+export function registerBackgroundTerminalsApplication(
+  pi: ExtensionAPI,
+  boundaries: BackgroundTerminalsApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
+): void {
   const bridge = makeProjectionBridge(pi.events);
   let currentContext: ExtensionContext | undefined;
+  let preparationGeneration = 0;
 
   const slot = makePiSessionRuntimeSlot<
     BackgroundTerminalSessionInput,
@@ -70,15 +85,51 @@ export function registerBackgroundTerminalsApplication(pi: ExtensionAPI): void {
       run(BackgroundTerminalService.use((service) => service.clear)).then(() => undefined),
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  const prepareActivation = (ctx: ExtensionContext): Promise<void> => {
+    const generation = ++preparationGeneration;
+    currentContext = undefined;
     bridge.clear();
+    // Replacement begins before the settings boundary so no tool call can target the prior
+    // session while a newer activation is still being prepared.
+    const shutdown = slot.shutdown();
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable") return slot.shutdown().then(() => undefined);
+    if (captured._tag === "Unavailable") return shutdown.then(() => undefined);
+    if (captured.aborted) return shutdown.then(() => undefined);
+    const preparationAborted = () => {
+      try {
+        return captured.signal?.aborted === true;
+      } catch {
+        return true;
+      }
+    };
+    let removePreparationAbort: () => void = () => undefined;
+    if (captured.signal) {
+      try {
+        const invalidatePreparation = () => {
+          if (generation === preparationGeneration) ++preparationGeneration;
+        };
+        captured.signal.addEventListener("abort", invalidatePreparation, { once: true });
+        removePreparationAbort = () => {
+          try {
+            captured.signal?.removeEventListener("abort", invalidatePreparation);
+          } catch {
+            // A stale host signal cannot escape lifecycle cleanup.
+          }
+        };
+        if (preparationAborted()) invalidatePreparation();
+      } catch {
+        return shutdown.then(() => undefined);
+      }
+    }
     const projectTrusted = isProjectTrusted(ctx);
-    return loadCodePreviewSettings(captured.cwd, projectTrusted)
-      .catch(() => undefined)
+    const settings = Promise.resolve()
+      .then(() => Promise.resolve(boundaries.loadSettings(captured.cwd, projectTrusted)))
+      .catch(() => undefined);
+    return Promise.all([shutdown, settings])
       .then(() => {
+        if (generation !== preparationGeneration || preparationAborted()) return undefined;
         registerBackgroundTerminalTool(pi, { run });
+        if (generation !== preparationGeneration || preparationAborted()) return undefined;
         return slot.start(
           {
             ctx,
@@ -88,8 +139,11 @@ export function registerBackgroundTerminalsApplication(pi: ExtensionAPI): void {
           captured.signal,
         );
       })
-      .then(() => undefined);
-  });
+      .then(() => undefined)
+      .finally(removePreparationAbort);
+  };
+
+  pi.on("session_start", (_event, ctx) => prepareActivation(ctx));
 
   pi.on("turn_end", (_event, ctx) => {
     if (currentContext) {
@@ -98,5 +152,10 @@ export function registerBackgroundTerminalsApplication(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("session_shutdown", () => slot.shutdown());
+  pi.on("session_shutdown", () => {
+    ++preparationGeneration;
+    currentContext = undefined;
+    bridge.clear();
+    return slot.shutdown();
+  });
 }

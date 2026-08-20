@@ -56,7 +56,7 @@ describe("OpenAI configuration and credentials", () => {
       },
     });
     return Effect.gen(function* () {
-      const cfg = yield* resolveConfig("/project", "/agent");
+      const cfg = yield* resolveConfig("/project", "/agent", true);
       expect(cfg.usage).toMatchObject({
         enabled: true,
         refreshIntervalMs: 30_000,
