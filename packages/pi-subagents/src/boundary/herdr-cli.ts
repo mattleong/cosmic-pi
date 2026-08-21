@@ -526,48 +526,40 @@ const decodeEnvelope = (operation: string, source: string) =>
 
 const paneView = (pane: Schema.Schema.Type<typeof PaneSchema>): HerdrPane =>
   (() => {
-    const objectPart19364_0 = {
+    const baseResult = {
       paneId: pane.pane_id,
       terminalId: pane.terminal_id,
       workspaceId: pane.workspace_id,
       tabId: pane.tab_id,
     };
-    const objectPart19364_1 = pane.cwd
-      ? { ...objectPart19364_0, cwd: pane.cwd }
-      : objectPart19364_0;
-    const objectPart19364_2 = pane.foreground_cwd
-      ? { ...objectPart19364_1, foregroundCwd: pane.foreground_cwd }
-      : objectPart19364_1;
-    const objectPart19364_3 = pane.label
-      ? { ...objectPart19364_2, label: pane.label }
-      : objectPart19364_2;
-    const objectPart19364_4 = {
-      ...objectPart19364_3,
+    const withCwd = pane.cwd ? { ...baseResult, cwd: pane.cwd } : baseResult;
+    const withForegroundCwd = pane.foreground_cwd
+      ? { ...withCwd, foregroundCwd: pane.foreground_cwd }
+      : withCwd;
+    const withLabel = pane.label ? { ...withForegroundCwd, label: pane.label } : withForegroundCwd;
+    const withFocusedAndAgentStatus = {
+      ...withLabel,
       focused: pane.focused,
       agentStatus: pane.agent_status,
     };
-    return objectPart19364_4;
+    return withFocusedAndAgentStatus;
   })();
 const agentView = (agent: Schema.Schema.Type<typeof AgentSchema>): HerdrAgent =>
   (() => {
-    const objectPart19787_0 = { ...paneView(agent) };
-    const objectPart19787_1 = agent.name
-      ? { ...objectPart19787_0, name: agent.name }
-      : objectPart19787_0;
-    const objectPart19787_2 = agent.agent
-      ? { ...objectPart19787_1, runtime: agent.agent }
-      : objectPart19787_1;
-    const objectPart19787_3 = {
-      ...objectPart19787_2,
+    const baseResult = { ...paneView(agent) };
+    const withName = agent.name ? { ...baseResult, name: agent.name } : baseResult;
+    const withRuntime = agent.agent ? { ...withName, runtime: agent.agent } : withName;
+    const withStateChangeSequence = {
+      ...withRuntime,
       stateChangeSequence: agent.state_change_seq ?? 0,
     };
-    const objectPart19787_4 =
+    const withInteractiveReady =
       agent.interactive_ready === undefined
-        ? objectPart19787_3
-        : { ...objectPart19787_3, interactiveReady: agent.interactive_ready };
-    const objectPart19787_5 = agent.agent_session
+        ? withStateChangeSequence
+        : { ...withStateChangeSequence, interactiveReady: agent.interactive_ready };
+    const withAgentSessionAndNativeSession = agent.agent_session
       ? {
-          ...objectPart19787_4,
+          ...withInteractiveReady,
           agentSession: {
             source: agent.agent_session.source,
             agent: agent.agent_session.agent,
@@ -576,8 +568,8 @@ const agentView = (agent: Schema.Schema.Type<typeof AgentSchema>): HerdrAgent =>
           },
           nativeSession: agent.agent_session.value,
         }
-      : objectPart19787_4;
-    return objectPart19787_5;
+      : withInteractiveReady;
+    return withAgentSessionAndNativeSession;
   })();
 
 const decodeSnapshot = (source: string) =>
@@ -596,18 +588,18 @@ const decodeSnapshot = (source: string) =>
     Effect.map(
       ({ snapshot }) =>
         (() => {
-          const objectPart20869_0 = { version: snapshot.version, protocol: snapshot.protocol };
-          const objectPart20869_1 = snapshot.focused_workspace_id
-            ? { ...objectPart20869_0, focusedWorkspaceId: snapshot.focused_workspace_id }
-            : objectPart20869_0;
-          const objectPart20869_2 = snapshot.focused_tab_id
-            ? { ...objectPart20869_1, focusedTabId: snapshot.focused_tab_id }
-            : objectPart20869_1;
-          const objectPart20869_3 = snapshot.focused_pane_id
-            ? { ...objectPart20869_2, focusedPaneId: snapshot.focused_pane_id }
-            : objectPart20869_2;
-          const objectPart20869_4 = {
-            ...objectPart20869_3,
+          const baseResult = { version: snapshot.version, protocol: snapshot.protocol };
+          const withFocusedWorkspaceId = snapshot.focused_workspace_id
+            ? { ...baseResult, focusedWorkspaceId: snapshot.focused_workspace_id }
+            : baseResult;
+          const withFocusedTabId = snapshot.focused_tab_id
+            ? { ...withFocusedWorkspaceId, focusedTabId: snapshot.focused_tab_id }
+            : withFocusedWorkspaceId;
+          const withFocusedPaneId = snapshot.focused_pane_id
+            ? { ...withFocusedTabId, focusedPaneId: snapshot.focused_pane_id }
+            : withFocusedTabId;
+          const withWorkspacesAndAdditionalFields = {
+            ...withFocusedPaneId,
             workspaces: snapshot.workspaces.map((workspace) => ({
               workspaceId: workspace.workspace_id,
               label: workspace.label,
@@ -624,7 +616,7 @@ const decodeSnapshot = (source: string) =>
             panes: snapshot.panes.map(paneView),
             agents: snapshot.agents.map(agentView),
           };
-          return objectPart20869_4;
+          return withWorkspacesAndAdditionalFields;
         })() satisfies HerdrSnapshot,
     ),
   );
@@ -932,21 +924,21 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         ),
         Effect.map(({ process_info: info }) =>
           (() => {
-            const objectPart32026_0 = { paneId: info.pane_id };
-            const objectPart32026_1 = info.shell_pid
-              ? { ...objectPart32026_0, shellPid: info.shell_pid }
-              : objectPart32026_0;
-            const objectPart32026_2 = info.foreground_process_group_id
-              ? { ...objectPart32026_1, foregroundProcessGroupId: info.foreground_process_group_id }
-              : objectPart32026_1;
-            const objectPart32026_3 = {
-              ...objectPart32026_2,
+            const baseResult = { paneId: info.pane_id };
+            const withShellPid = info.shell_pid
+              ? { ...baseResult, shellPid: info.shell_pid }
+              : baseResult;
+            const withForegroundProcessGroupId = info.foreground_process_group_id
+              ? { ...withShellPid, foregroundProcessGroupId: info.foreground_process_group_id }
+              : withShellPid;
+            const withForegroundProcesses = {
+              ...withForegroundProcessGroupId,
               foregroundProcesses: (info.foreground_processes ?? []).map((process) => ({
                 pid: process.pid,
                 name: process.name,
               })),
             };
-            return objectPart32026_3;
+            return withForegroundProcesses;
           })(),
         ),
       ),

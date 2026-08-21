@@ -67,10 +67,9 @@ if (args.includes("--print")) {
         write({
           type: "control_response",
           response: (() => {
-            const objectPart2323_0 = { subtype: "success", request_id: frame.request_id };
-            const objectPart2323_1 =
-              response === undefined ? objectPart2323_0 : { ...objectPart2323_0, response };
-            return objectPart2323_1;
+            const baseResult = { subtype: "success", request_id: frame.request_id };
+            const withResponse = response === undefined ? baseResult : { ...baseResult, response };
+            return withResponse;
           })(),
         });
       if (frame.request?.subtype === "initialize") {
@@ -144,26 +143,26 @@ if (args.includes("--print")) {
         const marker = () =>
           write(
             (() => {
-              const objectPart5161_0 = {
+              const baseResult = {
                 type: "user",
                 isReplay: true,
                 session_id: "claude-fixture-session",
               };
-              const objectPart5161_1 =
+              const withUuid =
                 model === "interrupt-foreign-marker"
-                  ? { ...objectPart5161_0, uuid: "00000000-0000-4000-8000-00000000fade" }
-                  : objectPart5161_0;
-              const objectPart5161_2 = {
-                ...objectPart5161_1,
+                  ? { ...baseResult, uuid: "00000000-0000-4000-8000-00000000fade" }
+                  : baseResult;
+              const withMessage = {
+                ...withUuid,
                 message: { role: "user", content: "[Request interrupted by user]" },
               };
-              return objectPart5161_2;
+              return withMessage;
             })(),
           );
         const result = () =>
           write(
             (() => {
-              const objectPart5546_0 = {
+              const baseResult = {
                 type: "result",
                 subtype: "error_during_execution",
                 stop_reason:
@@ -175,14 +174,14 @@ if (args.includes("--print")) {
                     : ["Request aborted."],
                 session_id: "claude-fixture-session",
               };
-              const objectPart5546_1 =
+              const withUserMessageUuid =
                 model === "interrupt-foreign-result"
                   ? {
-                      ...objectPart5546_0,
+                      ...baseResult,
                       user_message_uuid: "00000000-0000-4000-8000-00000000dead",
                     }
-                  : objectPart5546_0;
-              return objectPart5546_1;
+                  : baseResult;
+              return withUserMessageUuid;
             })(),
           );
         const terminal = () => {
@@ -221,16 +220,14 @@ if (args.includes("--print")) {
       : String(frame.message?.content ?? "");
     write(
       (() => {
-        const objectPart7177_0 = {
+        const baseResult = {
           type: "user",
           isReplay: true,
           session_id: "claude-fixture-session",
         };
-        const objectPart7177_1 = frame.uuid
-          ? { ...objectPart7177_0, uuid: frame.uuid }
-          : objectPart7177_0;
-        const objectPart7177_2 = { ...objectPart7177_1, message: frame.message };
-        return objectPart7177_2;
+        const withUuid = frame.uuid ? { ...baseResult, uuid: frame.uuid } : baseResult;
+        const withMessage = { ...withUuid, message: frame.message };
+        return withMessage;
       })(),
     );
     if (model === "duplicate-replay" && frame.uuid)
@@ -252,7 +249,7 @@ if (args.includes("--print")) {
     if (frame.shouldQuery === false) {
       write(
         (() => {
-          const objectPart7938_0 = {
+          const baseResult = {
             type: "result",
             subtype: "success",
             is_error: false,
@@ -260,10 +257,10 @@ if (args.includes("--print")) {
             stop_reason: null,
             session_id: "claude-fixture-session",
           };
-          const objectPart7938_1 = frame.uuid
-            ? { ...objectPart7938_0, user_message_uuid: frame.uuid }
-            : objectPart7938_0;
-          return objectPart7938_1;
+          const withUserMessageUuid = frame.uuid
+            ? { ...baseResult, user_message_uuid: frame.uuid }
+            : baseResult;
+          return withUserMessageUuid;
         })(),
       );
       return;
@@ -321,22 +318,22 @@ if (args.includes("--print")) {
       const emitResult = () =>
         write(
           (() => {
-            const objectPart10086_0 = {
+            const baseResult = {
               type: "result",
               subtype: "success",
               is_error: false,
               result: "raw final ignored",
               session_id: "claude-fixture-session",
             };
-            const objectPart10086_1 = frame.uuid
-              ? { ...objectPart10086_0, user_message_uuid: frame.uuid }
-              : objectPart10086_0;
-            const objectPart10086_2 = {
-              ...objectPart10086_1,
+            const withUserMessageUuid = frame.uuid
+              ? { ...baseResult, user_message_uuid: frame.uuid }
+              : baseResult;
+            const withUsageAndTotalCostUsd = {
+              ...withUserMessageUuid,
               usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
               total_cost_usd: 0.001,
             };
-            return objectPart10086_2;
+            return withUsageAndTotalCostUsd;
           })(),
         );
       // Exceeds the former two-second grace to characterize real post-tool finalization.

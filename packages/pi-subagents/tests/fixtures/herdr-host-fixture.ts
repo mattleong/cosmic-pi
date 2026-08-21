@@ -422,7 +422,7 @@ export const fakeTopology = () => {
           );
         const pane = snapshot().panes.find((candidate) => candidate.paneId === paneId)!;
         const agent: HerdrAgent = (() => {
-          const objectPart14279_0 = {
+          const baseResult = {
             ...pane,
             agentStatus: "working" as const,
             name: agentName,
@@ -430,10 +430,10 @@ export const fakeTopology = () => {
             stateChangeSequence: 1,
             interactiveReady: true,
           };
-          const objectPart14279_1 = omitAgentSession
-            ? objectPart14279_0
+          const withAgentSessionAndNativeSession = omitAgentSession
+            ? baseResult
             : {
-                ...objectPart14279_0,
+                ...baseResult,
                 agentSession: {
                   source: "fixture",
                   agent: runtime,
@@ -442,7 +442,7 @@ export const fakeTopology = () => {
                 },
                 nativeSession: `native-${paneId}`,
               };
-          return objectPart14279_1;
+          return withAgentSessionAndNativeSession;
         })();
         agents.set(paneId, agent);
         if (duplicateNameAfterStart) agentNameCollision = true;

@@ -267,12 +267,12 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               );
             if (event.item.type === "agentMessage") {
               const backendEvent: BackendEvent = (() => {
-                const objectPart9643_0 = { type: "assistant_message" as const, assignmentEpoch };
-                const objectPart9643_1 = event.item.text
-                  ? { ...objectPart9643_0, text: event.item.text }
-                  : objectPart9643_0;
-                const objectPart9643_2 = {
-                  ...objectPart9643_1,
+                const baseResult = { type: "assistant_message" as const, assignmentEpoch };
+                const withText = event.item.text
+                  ? { ...baseResult, text: event.item.text }
+                  : baseResult;
+                const withUsage = {
+                  ...withText,
                   usage: {
                     input: 0,
                     output: 0,
@@ -281,7 +281,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                     totalTokens: 0,
                   },
                 };
-                return objectPart9643_2;
+                return withUsage;
               })();
               return offer(backendEvent, raw);
             }
@@ -573,12 +573,10 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     awaitExit: child.awaitExit.pipe(
       Effect.map((event) =>
         (() => {
-          const objectPart20550_0 = { type: "exit" as const, exitCode: event.exitCode };
-          const objectPart20550_1 = event.signal
-            ? { ...objectPart20550_0, signal: event.signal }
-            : objectPart20550_0;
-          const objectPart20550_2 = { ...objectPart20550_1, diagnostic: event.stderr };
-          return objectPart20550_2;
+          const baseResult = { type: "exit" as const, exitCode: event.exitCode };
+          const withSignal = event.signal ? { ...baseResult, signal: event.signal } : baseResult;
+          const withDiagnostic = { ...withSignal, diagnostic: event.stderr };
+          return withDiagnostic;
         })(),
       ),
     ),

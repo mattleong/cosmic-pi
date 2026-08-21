@@ -277,9 +277,9 @@ const toolResult = (id, text, isError = false) =>
     jsonrpc: "2.0",
     id,
     result: (() => {
-      const objectPart9380_0 = { content: [{ type: "text", text }] };
-      const objectPart9380_1 = isError ? { ...objectPart9380_0, isError: true } : objectPart9380_0;
-      return objectPart9380_1;
+      const baseResult = { content: [{ type: "text", text }] };
+      const withIsError = isError ? { ...baseResult, isError: true } : baseResult;
+      return withIsError;
     })(),
   });
 
@@ -693,10 +693,9 @@ const decodeMcpMessage = (value) => {
       };
     default:
       return (() => {
-        const objectPart22066_0 = { method: value.method };
-        const objectPart22066_1 =
-          id === undefined ? objectPart22066_0 : { ...objectPart22066_0, id };
-        return objectPart22066_1;
+        const baseResult = { method: value.method };
+        const withId = id === undefined ? baseResult : { ...baseResult, id };
+        return withId;
       })();
   }
 };

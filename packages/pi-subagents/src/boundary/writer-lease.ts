@@ -181,16 +181,16 @@ const conflict = (
 ): WriterLeaseConflictError =>
   new WriterLeaseConflictError(
     (() => {
-      const objectPart6618_0 = { reason, message };
-      const objectPart6618_1 = evidence
+      const baseResult = { reason, message };
+      const withOwnerPidAndAdditionalFields = evidence
         ? {
-            ...objectPart6618_0,
+            ...baseResult,
             ownerPid: evidence.parentPid,
             ownerSessionId: evidence.sessionId,
             ownerRunId: evidence.runId,
           }
-        : objectPart6618_0;
-      return objectPart6618_1;
+        : baseResult;
+      return withOwnerPidAndAdditionalFields;
     })(),
   );
 

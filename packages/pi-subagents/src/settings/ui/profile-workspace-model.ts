@@ -201,16 +201,16 @@ export const candidateFieldRows = (
       fixed: false,
     },
     (() => {
-      const objectPart6705_0 = {
+      const baseResult = {
         field: "context" as const,
         label: "Context",
         value: localPi ? candidate.context : `${candidate.context} · fixed: fork requires local Pi`,
         fixed: !localPi,
       };
-      const objectPart6705_1 = !localPi
-        ? { ...objectPart6705_0, fixedReason: "Fork context is available only to local Pi." }
-        : objectPart6705_0;
-      return objectPart6705_1;
+      const withFixedReason = !localPi
+        ? { ...baseResult, fixedReason: "Fork context is available only to local Pi." }
+        : baseResult;
+      return withFixedReason;
     })(),
     {
       field: "writeIntent",
@@ -219,7 +219,7 @@ export const candidateFieldRows = (
       fixed: false,
     },
     (() => {
-      const objectPart7105_0 = {
+      const baseResult = {
         field: "fastMode" as const,
         label: "OpenAI fast mode",
         value: fastAvailable
@@ -231,14 +231,14 @@ export const candidateFieldRows = (
             : `unavailable · ${fastUnavailableReason}`,
         fixed: !fastAvailable && !candidate.fastMode,
       };
-      const objectPart7105_1 =
+      const withFixedReason =
         !fastAvailable && !candidate.fastMode
-          ? { ...objectPart7105_0, fixedReason: `${fastUnavailableReason}.` }
-          : objectPart7105_0;
-      return objectPart7105_1;
+          ? { ...baseResult, fixedReason: `${fastUnavailableReason}.` }
+          : baseResult;
+      return withFixedReason;
     })(),
     (() => {
-      const objectPart7651_0 = {
+      const baseResult = {
         field: "closeOnReport" as const,
         label: "Report policy",
         value: retainedAllowed
@@ -248,13 +248,13 @@ export const candidateFieldRows = (
           : "close after report · fixed: retain requires Herdr read-only",
         fixed: !retainedAllowed,
       };
-      const objectPart7651_1 = !retainedAllowed
+      const withFixedReason = !retainedAllowed
         ? {
-            ...objectPart7651_0,
+            ...baseResult,
             fixedReason: "Retention is available only to Herdr read-only candidates.",
           }
-        : objectPart7651_0;
-      return objectPart7651_1;
+        : baseResult;
+      return withFixedReason;
     })(),
   ];
 };

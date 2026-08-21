@@ -47,18 +47,16 @@ const protocolError = (message: string) => new SubagentProtocolError({ message }
 const noBackendEvent: Effect.Effect<BackendEvent | undefined> = Effect.as(Effect.void, undefined);
 const usageFromRpc = (usage: ReturnType<typeof decodeRpcUsageOption>): SubagentUsage =>
   (() => {
-    const objectPart1552_0 = {
+    const baseResult = {
       input: usage?.input ?? 0,
       output: usage?.output ?? 0,
       cacheRead: usage?.cacheRead ?? 0,
       cacheWrite: usage?.cacheWrite ?? 0,
       totalTokens: usage?.totalTokens ?? 0,
     };
-    const objectPart1552_1 =
-      usage?.cost?.total === undefined
-        ? objectPart1552_0
-        : { ...objectPart1552_0, cost: usage.cost.total };
-    return objectPart1552_1;
+    const withCost =
+      usage?.cost?.total === undefined ? baseResult : { ...baseResult, cost: usage.cost.total };
+    return withCost;
   })();
 
 const rpcOutcomeCode = (command: string): string => {
@@ -107,18 +105,18 @@ const normalizeRpcEvent = <ValueInput>(value: ValueInput, assignmentEpoch: numbe
             Effect.map((message) =>
               message
                 ? (() => {
-                    const objectPart3609_0 = {
+                    const baseResult = {
                       type: "assistant_message" as const,
                       assignmentEpoch,
                     };
-                    const objectPart3609_1 = assistantText(message)
-                      ? { ...objectPart3609_0, text: assistantText(message) }
-                      : objectPart3609_0;
-                    const objectPart3609_2 = {
-                      ...objectPart3609_1,
+                    const withText = assistantText(message)
+                      ? { ...baseResult, text: assistantText(message) }
+                      : baseResult;
+                    const withUsage = {
+                      ...withText,
                       usage: usageFromRpc(decodeRpcUsageOption(message.usage)),
                     };
-                    return objectPart3609_2;
+                    return withUsage;
                   })()
                 : undefined,
             ),
@@ -397,23 +395,23 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       ),
       Effect.map((state) =>
         (() => {
-          const objectPart12987_0 = {};
-          const objectPart12987_1 = rpcStateModelId(state.model)
-            ? { ...objectPart12987_0, model: rpcStateModelId(state.model) }
-            : objectPart12987_0;
-          const objectPart12987_2 = {
-            ...objectPart12987_1,
+          const baseResult = {};
+          const withModel = rpcStateModelId(state.model)
+            ? { ...baseResult, model: rpcStateModelId(state.model) }
+            : baseResult;
+          const withEffortAndSessionId = {
+            ...withModel,
             effort: state.thinkingLevel,
             sessionId: state.sessionId,
           };
-          const objectPart12987_3 = state.sessionFile
+          const withSessionFileAndResumeToken = state.sessionFile
             ? {
-                ...objectPart12987_2,
+                ...withEffortAndSessionId,
                 sessionFile: state.sessionFile,
                 resumeToken: localPiResumeToken(state.sessionFile),
               }
-            : objectPart12987_2;
-          return objectPart12987_3;
+            : withEffortAndSessionId;
+          return withSessionFileAndResumeToken;
         })(),
       ),
     ),
@@ -453,12 +451,10 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     awaitExit: child.awaitExit.pipe(
       Effect.map((event) =>
         (() => {
-          const objectPart14668_0 = { type: "exit" as const, exitCode: event.exitCode };
-          const objectPart14668_1 = event.signal
-            ? { ...objectPart14668_0, signal: event.signal }
-            : objectPart14668_0;
-          const objectPart14668_2 = { ...objectPart14668_1, diagnostic: event.stderr };
-          return objectPart14668_2;
+          const baseResult = { type: "exit" as const, exitCode: event.exitCode };
+          const withSignal = event.signal ? { ...baseResult, signal: event.signal } : baseResult;
+          const withDiagnostic = { ...withSignal, diagnostic: event.stderr };
+          return withDiagnostic;
         })(),
       ),
       Effect.tapError((error) => Effect.sync(() => cancelPending(error))),
@@ -490,7 +486,7 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessContract): 
         ? (yield* decodeLocalPiResumeToken(request.resumeToken)).sessionFile
         : undefined;
       const childRequest: ChildLaunchRequest = (() => {
-        const objectPart15832_0 = {
+        const baseResult = {
           runId: request.runId,
           name: request.name,
           cwd: request.cwd,
@@ -500,26 +496,26 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessContract): 
           model: request.model,
           effort: request.effort,
         };
-        const objectPart15832_1 = request.runtimeApiKey
-          ? { ...objectPart15832_0, runtimeApiKey: request.runtimeApiKey }
-          : objectPart15832_0;
-        const objectPart15832_2 = {
-          ...objectPart15832_1,
+        const withRuntimeApiKey = request.runtimeApiKey
+          ? { ...baseResult, runtimeApiKey: request.runtimeApiKey }
+          : baseResult;
+        const withActiveToolsAndAdditionalFields = {
+          ...withRuntimeApiKey,
           activeTools: request.activeTools,
           projectTrusted: request.projectTrusted,
           parentSessionId: request.parentSessionId,
         };
-        const objectPart15832_3 = request.parentSessionFile
-          ? { ...objectPart15832_2, parentSessionFile: request.parentSessionFile }
-          : objectPart15832_2;
-        const objectPart15832_4 = request.parentLeafId
-          ? { ...objectPart15832_3, parentLeafId: request.parentLeafId }
-          : objectPart15832_3;
-        const objectPart15832_5 = resumeSessionFile
-          ? { ...objectPart15832_4, resumeSessionFile }
-          : objectPart15832_4;
-        const objectPart15832_6 = { ...objectPart15832_5, systemPrompt: request.systemPrompt };
-        return objectPart15832_6;
+        const withParentSessionFile = request.parentSessionFile
+          ? { ...withActiveToolsAndAdditionalFields, parentSessionFile: request.parentSessionFile }
+          : withActiveToolsAndAdditionalFields;
+        const withParentLeafId = request.parentLeafId
+          ? { ...withParentSessionFile, parentLeafId: request.parentLeafId }
+          : withParentSessionFile;
+        const withResumeSessionFile = resumeSessionFile
+          ? { ...withParentLeafId, resumeSessionFile }
+          : withParentLeafId;
+        const withSystemPrompt = { ...withResumeSessionFile, systemPrompt: request.systemPrompt };
+        return withSystemPrompt;
       })();
       const child = yield* childProcesses.spawn(childRequest);
       return yield* makeLocalPiHandle(child);

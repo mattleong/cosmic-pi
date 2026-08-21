@@ -106,7 +106,7 @@ const hydrateEntry = (
     : cards.find((candidate) => candidate.name === entry.name);
   if (!card || card.host === undefined || card.runtime === undefined) return entry;
   return (() => {
-    const objectPart4066_0 = {
+    const baseResult = {
       ...entry,
       profile: card.profile ?? entry.profile,
       routeStatus: "selected" as const,
@@ -115,15 +115,13 @@ const hydrateEntry = (
       model: card.model,
       effort: card.effort,
     };
-    const objectPart4066_1 = card.fastMode
-      ? { ...objectPart4066_0, fastMode: true as const }
-      : objectPart4066_0;
-    const objectPart4066_2 =
+    const withFastMode = card.fastMode ? { ...baseResult, fastMode: true as const } : baseResult;
+    const withCandidateIndex =
       card.selection.candidateIndex === undefined
-        ? objectPart4066_1
-        : { ...objectPart4066_1, candidateIndex: card.selection.candidateIndex };
-    const objectPart4066_3 = { ...objectPart4066_2, runId: card.id };
-    return objectPart4066_3;
+        ? withFastMode
+        : { ...withFastMode, candidateIndex: card.selection.candidateIndex };
+    const withRunId = { ...withCandidateIndex, runId: card.id };
+    return withRunId;
   })();
 };
 
@@ -137,7 +135,7 @@ const legacyEntries = (
     while (failedIndexes.has(nextSuccessIndex)) nextSuccessIndex += 1;
     const index = nextSuccessIndex++;
     return (() => {
-      const objectPart4919_0 = {
+      const baseResult = {
         index,
         name: card.name,
         profile: card.profile ?? "generalist",
@@ -147,22 +145,19 @@ const legacyEntries = (
             ? ("selected" as const)
             : ("unavailable" as const),
       };
-      const objectPart4919_1 =
-        card.host === undefined ? objectPart4919_0 : { ...objectPart4919_0, host: card.host };
-      const objectPart4919_2 =
-        card.runtime === undefined
-          ? objectPart4919_1
-          : { ...objectPart4919_1, runtime: card.runtime };
-      const objectPart4919_3 = { ...objectPart4919_2, model: card.model, effort: card.effort };
-      const objectPart4919_4 = card.fastMode
-        ? { ...objectPart4919_3, fastMode: true as const }
-        : objectPart4919_3;
-      const objectPart4919_5 =
+      const withHost = card.host === undefined ? baseResult : { ...baseResult, host: card.host };
+      const withRuntime =
+        card.runtime === undefined ? withHost : { ...withHost, runtime: card.runtime };
+      const withModelAndEffort = { ...withRuntime, model: card.model, effort: card.effort };
+      const withFastMode = card.fastMode
+        ? { ...withModelAndEffort, fastMode: true as const }
+        : withModelAndEffort;
+      const withCandidateIndex =
         card.selection.candidateIndex === undefined
-          ? objectPart4919_4
-          : { ...objectPart4919_4, candidateIndex: card.selection.candidateIndex };
-      const objectPart4919_6 = { ...objectPart4919_5, runId: card.id };
-      return objectPart4919_6;
+          ? withFastMode
+          : { ...withFastMode, candidateIndex: card.selection.candidateIndex };
+      const withRunId = { ...withCandidateIndex, runId: card.id };
+      return withRunId;
     })();
   });
   return [

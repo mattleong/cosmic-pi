@@ -66,17 +66,15 @@ export const makeCandidateFieldSelector = (
   };
   return new SearchableSelectPage<string>(
     (() => {
-      const objectPart2615_0 = {
+      const baseResult = {
         theme: options.theme,
         breadcrumb: `/subagents profiles › ${options.profile} › candidate ${options.candidateIndex + 1} › ${label}`,
         title: `Choose ${label.toLowerCase()}`,
         subtitle: `${options.profile} · candidate ${options.candidateIndex + 1} · current: ${row?.value ?? current}`,
       };
-      const objectPart2615_1 = options.notice
-        ? { ...objectPart2615_0, notice: options.notice }
-        : objectPart2615_0;
-      const objectPart2615_2 = {
-        ...objectPart2615_1,
+      const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
+      const withChoicesAndAdditionalFields = {
+        ...withNotice,
         choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map(
           (choice) => ({
             value: choice.value,
@@ -103,7 +101,7 @@ export const makeCandidateFieldSelector = (
           ),
         cancel: () => options.cancel(label),
       };
-      return objectPart2615_2;
+      return withChoicesAndAdditionalFields;
     })(),
   );
 };
@@ -123,7 +121,7 @@ export const makeProfileSearchSelector = (
 ): SearchableSelectPage<string> =>
   new SearchableSelectPage<string>(
     (() => {
-      const objectPart4405_0 = {
+      const baseResult = {
         theme: options.theme,
         breadcrumb: "/subagents profiles › search",
         title: "Search profiles",
@@ -146,11 +144,11 @@ export const makeProfileSearchSelector = (
         current: options.current,
         initialSearchMode: true,
       };
-      const objectPart4405_1 = options.initialQuery
-        ? { ...objectPart4405_0, initialQuery: options.initialQuery }
-        : objectPart4405_0;
-      const objectPart4405_2 = {
-        ...objectPart4405_1,
+      const withInitialQuery = options.initialQuery
+        ? { ...baseResult, initialQuery: options.initialQuery }
+        : baseResult;
+      const withEmptyTextAndAdditionalFields = {
+        ...withInitialQuery,
         emptyText: "No matching profiles",
         getHeight: options.getHeight,
         requestRender: options.requestRender,
@@ -162,6 +160,6 @@ export const makeProfileSearchSelector = (
         },
         cancel: options.cancel,
       };
-      return objectPart4405_2;
+      return withEmptyTextAndAdditionalFields;
     })(),
   );

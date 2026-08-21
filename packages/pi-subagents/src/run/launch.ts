@@ -256,13 +256,13 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const { id, name } = allocateRunIdentity(requestedName);
             const assignmentAttemptToken = allocateAssignmentAttemptToken();
             const view: SubagentRunView = (() => {
-              const objectPart10771_0 = { id, name, task: request.task.trim() };
-              const objectPart10771_1 = request.profile
-                ? { ...objectPart10771_0, profile: request.profile }
-                : objectPart10771_0;
-              const objectPart10771_2 = request.supersedes
-                ? { ...objectPart10771_1, predecessorRunId: request.supersedes.runId }
-                : objectPart10771_1;
+              const baseResult = { id, name, task: request.task.trim() };
+              const withProfile = request.profile
+                ? { ...baseResult, profile: request.profile }
+                : baseResult;
+              const withPredecessorRunId = request.supersedes
+                ? { ...withProfile, predecessorRunId: request.supersedes.runId }
+                : withProfile;
               const remainingCandidateCount = request.routeContinuation
                 ? Math.max(
                     0,
@@ -271,12 +271,12 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                       1,
                   )
                 : undefined;
-              const objectPart10771_3 =
+              const withRemainingCandidateCount =
                 remainingCandidateCount === undefined
-                  ? objectPart10771_2
-                  : { ...objectPart10771_2, remainingCandidateCount };
-              const objectPart10771_4 = {
-                ...objectPart10771_3,
+                  ? withPredecessorRunId
+                  : { ...withPredecessorRunId, remainingCandidateCount };
+              const withSelectionAndAdditionalFields = {
+                ...withRemainingCandidateCount,
                 selection: request.selection ?? {
                   source: "profile-candidate",
                   host: request.host,
@@ -302,10 +302,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 sessionEvents: [],
                 usage: emptyUsage(),
               };
-              return objectPart10771_4;
+              return withSelectionAndAdditionalFields;
             })();
             const launch: BackendLaunchRequest = (() => {
-              const objectPart11961_0 = {
+              const baseResult = {
                 runId: id,
                 name,
                 closeOnReport: request.closeOnReport,
@@ -316,29 +316,32 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 model: request.model,
                 effort: request.effort,
               };
-              const objectPart11961_1 = request.runtimeApiKey
-                ? { ...objectPart11961_0, runtimeApiKey: request.runtimeApiKey }
-                : objectPart11961_0;
-              const objectPart11961_2 = {
-                ...objectPart11961_1,
+              const withRuntimeApiKey = request.runtimeApiKey
+                ? { ...baseResult, runtimeApiKey: request.runtimeApiKey }
+                : baseResult;
+              const withActiveToolsAndAdditionalFields = {
+                ...withRuntimeApiKey,
                 activeTools: request.activeTools,
                 projectTrusted: request.projectTrusted,
                 parentSessionId: request.parentSessionId,
               };
-              const objectPart11961_3 = request.parentSessionFile
-                ? { ...objectPart11961_2, parentSessionFile: request.parentSessionFile }
-                : objectPart11961_2;
-              const objectPart11961_4 = request.parentLeafId
-                ? { ...objectPart11961_3, parentLeafId: request.parentLeafId }
-                : objectPart11961_3;
-              const objectPart11961_5 = {
-                ...objectPart11961_4,
+              const withParentSessionFile = request.parentSessionFile
+                ? {
+                    ...withActiveToolsAndAdditionalFields,
+                    parentSessionFile: request.parentSessionFile,
+                  }
+                : withActiveToolsAndAdditionalFields;
+              const withParentLeafId = request.parentLeafId
+                ? { ...withParentSessionFile, parentLeafId: request.parentLeafId }
+                : withParentSessionFile;
+              const withSystemPrompt = {
+                ...withParentLeafId,
                 systemPrompt: childSystemPrompt(request),
               };
-              return objectPart11961_5;
+              return withSystemPrompt;
             })();
             const record: RunRecord = (() => {
-              const objectPart12902_0 = {
+              const baseResult = {
                 view,
                 scope,
                 driver,
@@ -353,19 +356,19 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 cleanupPending: false,
                 runStateReclaimState: "pending" as const,
               };
-              const objectPart12902_1 = canonicalWriterCwd
-                ? { ...objectPart12902_0, canonicalWriterCwd }
-                : objectPart12902_0;
-              const objectPart12902_2 = writerLeaseScope
+              const withCanonicalWriterCwd = canonicalWriterCwd
+                ? { ...baseResult, canonicalWriterCwd }
+                : baseResult;
+              const withWriterLeaseScopeAndAdditionalFields = writerLeaseScope
                 ? {
-                    ...objectPart12902_1,
+                    ...withCanonicalWriterCwd,
                     writerLeaseScope,
                     writerLeasePreparationState: "pending" as const,
                     writerLeaseReleaseState,
                   }
-                : objectPart12902_1;
-              const objectPart12902_3 = {
-                ...objectPart12902_2,
+                : withCanonicalWriterCwd;
+              const withInitializationPendingAndAdditionalFields = {
+                ...withWriterLeaseScopeAndAdditionalFields,
                 initializationPending: true,
                 notificationGeneration: 0,
                 completionGeneration: 0,
@@ -382,7 +385,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 },
                 nextAssignmentEpoch: 2,
               };
-              return objectPart12902_3;
+              return withInitializationPendingAndAdditionalFields;
             })();
             if (predecessor) {
               predecessor.retryClaim = undefined;
@@ -507,17 +510,17 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               const pendingSettlement = reserved.pendingInitializationSettlement;
               reserved.pendingInitializationSettlement = undefined;
               reserved.view = (() => {
-                const objectPart20085_0 = {
+                const baseResult = {
                   ...reserved.view,
                   effort: state.effort,
                   model: resolvedModel,
                   lastActivityAt: startedAt,
                   sessionId: state.sessionId,
                 };
-                const objectPart20085_1 = state.sessionFile
-                  ? { ...objectPart20085_0, sessionFile: state.sessionFile }
-                  : objectPart20085_0;
-                return objectPart20085_1;
+                const withSessionFile = state.sessionFile
+                  ? { ...baseResult, sessionFile: state.sessionFile }
+                  : baseResult;
+                return withSessionFile;
               })();
               yield* publish;
               return {

@@ -106,7 +106,7 @@ const loadNativeModels = async (
   for (const model of [...models, ...nativeFallbackModels(runtime, input.candidate.model)])
     if (!catalog.has(model.selector)) catalog.set(model.selector, model);
   return (() => {
-    const objectPart4263_0 = {
+    const baseResult = {
       choices: createNativeModelChoices([...catalog.values()], input.candidate.model),
       current: input.candidate.model,
       defaultSelector:
@@ -115,8 +115,8 @@ const loadNativeModels = async (
         input.candidate.model,
       context: pickerContext(input),
     };
-    const objectPart4263_1 = warning ? { ...objectPart4263_0, warning } : objectPart4263_0;
-    return objectPart4263_1;
+    const withWarning = warning ? { ...baseResult, warning } : baseResult;
+    return withWarning;
   })();
 };
 
@@ -216,10 +216,10 @@ export async function loadCandidateModelPicker(
     choices.length === 0 ? "No authenticated canonical Pi models are available." : undefined,
   ].filter((warning): warning is string => warning !== undefined);
   return (() => {
-    const objectPart9104_0 = { choices, current: candidate.model, context: pickerContext(input) };
-    const objectPart9104_1 =
-      warnings.length > 0 ? { ...objectPart9104_0, warning: warnings.join(" ") } : objectPart9104_0;
-    return objectPart9104_1;
+    const baseResult = { choices, current: candidate.model, context: pickerContext(input) };
+    const withWarning =
+      warnings.length > 0 ? { ...baseResult, warning: warnings.join(" ") } : baseResult;
+    return withWarning;
   })();
 }
 

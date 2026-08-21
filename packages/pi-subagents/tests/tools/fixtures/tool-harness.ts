@@ -102,7 +102,7 @@ export const profileServiceFor = <Global extends object = never, Project extends
     makeSubagentProfileService(
       resolveSubagentConfig(
         (() => {
-          const objectPart3242_0 = {
+          const baseResult = {
             globalConfigPath: "/agent/pi-subagents.json",
             projectConfigPath: "/project/.pi/pi-subagents.json",
             projectTrusted: true,
@@ -110,11 +110,11 @@ export const profileServiceFor = <Global extends object = never, Project extends
             projectConfigExists: project !== undefined,
             global: decodeSubagentConfig({ version: 4, ...global }),
           };
-          const objectPart3242_1 =
+          const withProject =
             project === undefined
-              ? objectPart3242_0
-              : { ...objectPart3242_0, project: decodeSubagentConfig({ version: 4, ...project }) };
-          return objectPart3242_1;
+              ? baseResult
+              : { ...baseResult, project: decodeSubagentConfig({ version: 4, ...project }) };
+          return withProject;
         })(),
       ),
       { initialSessionOverrides },
@@ -180,12 +180,10 @@ export const captureSubagentTools = (
   registerSubagentTools(
     pi,
     (() => {
-      const objectPart5889_0 = {};
-      const objectPart5889_1 = startUiTicker
-        ? { ...objectPart5889_0, startUiTicker }
-        : objectPart5889_0;
-      const objectPart5889_2 = { ...objectPart5889_1, environment, run };
-      return objectPart5889_2;
+      const baseResult = {};
+      const withStartUiTicker = startUiTicker ? { ...baseResult, startUiTicker } : baseResult;
+      const withEnvironmentAndRun = { ...withStartUiTicker, environment, run };
+      return withEnvironmentAndRun;
     })(),
   );
   return tools;
@@ -288,15 +286,15 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
         requests.push(input);
         return view(
           (() => {
-            const objectPart8909_0 = {
+            const baseResult = {
               id: `agent-${requests.length}`,
               model: input.model,
               selection: input.selection ?? view().selection,
             };
-            const objectPart8909_1 = input.profile
-              ? { ...objectPart8909_0, profile: input.profile }
-              : objectPart8909_0;
-            return objectPart8909_1;
+            const withProfile = input.profile
+              ? { ...baseResult, profile: input.profile }
+              : baseResult;
+            return withProfile;
           })(),
         );
       }),

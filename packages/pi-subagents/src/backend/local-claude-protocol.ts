@@ -259,26 +259,24 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
                 : [];
             });
         const protocolEvent: ClaudeProtocolEvent = (() => {
-          const objectPart8981_0 = {
+          const baseResult = {
             type: "user" as const,
             text: textFromContent(event.message.content),
             toolResults,
           };
-          const objectPart8981_1 = event.uuid
-            ? { ...objectPart8981_0, uuid: event.uuid }
-            : objectPart8981_0;
-          const objectPart8981_2 = event.session_id
-            ? { ...objectPart8981_1, sessionId: event.session_id }
-            : objectPart8981_1;
-          const objectPart8981_3 = event.origin
-            ? { ...objectPart8981_2, originKind: event.origin.kind }
-            : objectPart8981_2;
-          const objectPart8981_4 = {
-            ...objectPart8981_3,
+          const withUuid = event.uuid ? { ...baseResult, uuid: event.uuid } : baseResult;
+          const withSessionId = event.session_id
+            ? { ...withUuid, sessionId: event.session_id }
+            : withUuid;
+          const withOriginKind = event.origin
+            ? { ...withSessionId, originKind: event.origin.kind }
+            : withSessionId;
+          const withIsSyntheticAndIsReplay = {
+            ...withOriginKind,
             isSynthetic: event.isSynthetic === true,
             isReplay: event.isReplay === true,
           };
-          return objectPart8981_4;
+          return withIsSyntheticAndIsReplay;
         })();
         return protocolEvent;
       }
@@ -292,17 +290,17 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
         });
         const text = textFromContent(event.message.content).trim();
         const protocolEvent: ClaudeProtocolEvent = (() => {
-          const objectPart9885_0 = { type: "assistant" as const };
-          const objectPart9885_1 = text ? { ...objectPart9885_0, text } : objectPart9885_0;
-          const objectPart9885_2 = event.message.id
-            ? { ...objectPart9885_1, messageId: event.message.id }
-            : objectPart9885_1;
-          const objectPart9885_3 = {
-            ...objectPart9885_2,
+          const baseResult = { type: "assistant" as const };
+          const withText = text ? { ...baseResult, text } : baseResult;
+          const withMessageId = event.message.id
+            ? { ...withText, messageId: event.message.id }
+            : withText;
+          const withToolsAndUsage = {
+            ...withMessageId,
             tools,
             usage: usageFromNative(event.message.usage),
           };
-          return objectPart9885_3;
+          return withToolsAndUsage;
         })();
         return protocolEvent;
       }
@@ -318,33 +316,33 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
             .filter(Boolean)
             .join("\n");
         const protocolEvent: ClaudeProtocolEvent = (() => {
-          const objectPart10534_0 = { type: "result" as const, isError: event.is_error === true };
-          const objectPart10534_1 = event.subtype
-            ? { ...objectPart10534_0, subtype: event.subtype }
-            : objectPart10534_0;
-          const objectPart10534_2 = event.stop_reason
-            ? { ...objectPart10534_1, stopReason: event.stop_reason }
-            : objectPart10534_1;
-          const objectPart10534_3 = event.session_id
-            ? { ...objectPart10534_2, sessionId: event.session_id }
-            : objectPart10534_2;
-          const objectPart10534_4 = event.user_message_uuid
-            ? { ...objectPart10534_3, userMessageUuid: event.user_message_uuid }
-            : objectPart10534_3;
-          const objectPart10534_5 = event.origin
-            ? { ...objectPart10534_4, originKind: event.origin.kind }
-            : objectPart10534_4;
-          const objectPart10534_6 = event.usage
-            ? { ...objectPart10534_5, usage: usageFromNative(event.usage) }
-            : objectPart10534_5;
-          const objectPart10534_7 =
+          const baseResult = { type: "result" as const, isError: event.is_error === true };
+          const withSubtype = event.subtype
+            ? { ...baseResult, subtype: event.subtype }
+            : baseResult;
+          const withStopReason = event.stop_reason
+            ? { ...withSubtype, stopReason: event.stop_reason }
+            : withSubtype;
+          const withSessionId = event.session_id
+            ? { ...withStopReason, sessionId: event.session_id }
+            : withStopReason;
+          const withUserMessageUuid = event.user_message_uuid
+            ? { ...withSessionId, userMessageUuid: event.user_message_uuid }
+            : withSessionId;
+          const withOriginKind = event.origin
+            ? { ...withUserMessageUuid, originKind: event.origin.kind }
+            : withUserMessageUuid;
+          const withUsage = event.usage
+            ? { ...withOriginKind, usage: usageFromNative(event.usage) }
+            : withOriginKind;
+          const withTotalCostUsd =
             event.total_cost_usd === undefined
-              ? objectPart10534_6
-              : { ...objectPart10534_6, totalCostUsd: event.total_cost_usd };
-          const objectPart10534_8 = diagnostic
-            ? { ...objectPart10534_7, diagnostic }
-            : objectPart10534_7;
-          return objectPart10534_8;
+              ? withUsage
+              : { ...withUsage, totalCostUsd: event.total_cost_usd };
+          const withDiagnostic = diagnostic
+            ? { ...withTotalCostUsd, diagnostic }
+            : withTotalCostUsd;
+          return withDiagnostic;
         })();
         return protocolEvent;
       }
@@ -357,15 +355,15 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
         }
         const success = event.response?.subtype === "success";
         const protocolEvent: ClaudeProtocolEvent = (() => {
-          const objectPart11655_0 = { type: "control_response" as const, requestId, success };
-          const objectPart11655_1 = event.response?.error
-            ? { ...objectPart11655_0, diagnostic: event.response.error }
-            : objectPart11655_0;
-          const objectPart11655_2 =
+          const baseResult = { type: "control_response" as const, requestId, success };
+          const withDiagnostic = event.response?.error
+            ? { ...baseResult, diagnostic: event.response.error }
+            : baseResult;
+          const withResponse =
             event.response?.response === undefined
-              ? objectPart11655_1
-              : { ...objectPart11655_1, response: event.response.response };
-          return objectPart11655_2;
+              ? withDiagnostic
+              : { ...withDiagnostic, response: event.response.response };
+          return withResponse;
         })();
         return protocolEvent;
       }
@@ -415,19 +413,17 @@ export const claudeUserFrame = (
   options: { readonly shouldQuery?: boolean | undefined; readonly uuid?: string | undefined } = {},
 ): ClaudeUserFrame => {
   const frame: ClaudeUserFrame = (() => {
-    const objectPart13295_0 = { type: "user" as const };
-    const objectPart13295_1 = options.uuid
-      ? { ...objectPart13295_0, uuid: options.uuid }
-      : objectPart13295_0;
-    const objectPart13295_2 = {
-      ...objectPart13295_1,
+    const baseResult = { type: "user" as const };
+    const withUuid = options.uuid ? { ...baseResult, uuid: options.uuid } : baseResult;
+    const withMessage = {
+      ...withUuid,
       message: { role: "user" as const, content: message },
     };
-    const objectPart13295_3 =
+    const withShouldQuery =
       options.shouldQuery === undefined
-        ? objectPart13295_2
-        : { ...objectPart13295_2, shouldQuery: options.shouldQuery };
-    return objectPart13295_3;
+        ? withMessage
+        : { ...withMessage, shouldQuery: options.shouldQuery };
+    return withShouldQuery;
   })();
   return frame;
 };

@@ -98,23 +98,23 @@ export const sanitizeLocalCliEnvironment = (
 ): NodeJS.ProcessEnv => {
   const codexApiKey = runtime === "codex" ? approvedCodexApiKey(source) : undefined;
   return (() => {
-    const objectPart3581_0 = Object.fromEntries(
+    const baseResult = Object.fromEntries(
       Object.entries(source).filter(
         ([key, value]) => value !== undefined && SAFE_ENV_KEYS.has(key),
       ),
     );
-    const objectPart3581_1 = codexApiKey
-      ? { ...objectPart3581_0, OPENAI_API_KEY: codexApiKey }
-      : objectPart3581_0;
-    const objectPart3581_2 = launch
+    const withOpenAiApiKey = codexApiKey
+      ? { ...baseResult, OPENAI_API_KEY: codexApiKey }
+      : baseResult;
+    const withSubagentLaunchEnvironment = launch
       ? {
-          ...objectPart3581_1,
+          ...withOpenAiApiKey,
           PI_SUBAGENT_CHILD: "1",
           PI_SUBAGENT_PARENT_SESSION: launch.parentSessionId,
           PI_SUBAGENT_RUN_ID: launch.runId,
         }
-      : objectPart3581_1;
-    return objectPart3581_2;
+      : withOpenAiApiKey;
+    return withSubagentLaunchEnvironment;
   })();
 };
 

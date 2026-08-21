@@ -174,7 +174,7 @@ export const hostProfileEnvironment = (
   ctx: ExtensionContext,
 ): ProfileResolutionEnvironment =>
   (() => {
-    const objectPart6996_0 = {
+    const baseResult = {
       availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
         provider: model.provider,
         id: model.id,
@@ -184,20 +184,20 @@ export const hostProfileEnvironment = (
         }),
       })),
     };
-    const objectPart6996_1 = ctx.model
+    const withParentModel = ctx.model
       ? {
-          ...objectPart6996_0,
+          ...baseResult,
           parentModel: {
             model: `${ctx.model.provider}/${ctx.model.id}`,
             effort: inheritedParentEffort(pi),
           },
         }
-      : objectPart6996_0;
-    const objectPart6996_2 = {
-      ...objectPart6996_1,
+      : baseResult;
+    const withForkAvailable = {
+      ...withParentModel,
       forkAvailable: Boolean(ctx.sessionManager.getSessionFile() && stableParentLeaf(ctx)),
     };
-    return objectPart6996_2;
+    return withForkAvailable;
   })();
 
 const resolveConcreteModel = (
@@ -375,12 +375,12 @@ const resolvePlannedStart = (
       })),
     });
     return (() => {
-      const objectPart14019_0 = {};
-      const objectPart14019_1 = input.rawInput.name?.trim()
-        ? { ...objectPart14019_0, name: input.rawInput.name.trim() }
-        : objectPart14019_0;
-      const objectPart14019_2 = {
-        ...objectPart14019_1,
+      const baseResult = {};
+      const withName = input.rawInput.name?.trim()
+        ? { ...baseResult, name: input.rawInput.name.trim() }
+        : baseResult;
+      const withHostAndAdditionalFields = {
+        ...withName,
         host: concrete.host,
         runtime: concrete.runtime,
         closeOnReport: concrete.closeOnReport,
@@ -395,20 +395,20 @@ const resolvePlannedStart = (
         writeIntent: selected.attempt.writeIntent,
         model: concrete.model,
       };
-      const objectPart14019_3 = input.retry
+      const withSupersedes = input.retry
         ? {
-            ...objectPart14019_2,
+            ...withHostAndAdditionalFields,
             supersedes: {
               runId: input.retry.sourceRunId,
               claimToken: input.retry.claimToken,
             },
           }
-        : objectPart14019_2;
-      const objectPart14019_4 = concrete.runtimeApiKey
-        ? { ...objectPart14019_3, runtimeApiKey: concrete.runtimeApiKey }
-        : objectPart14019_3;
-      const objectPart14019_5 = {
-        ...objectPart14019_4,
+        : withHostAndAdditionalFields;
+      const withRuntimeApiKey = concrete.runtimeApiKey
+        ? { ...withSupersedes, runtimeApiKey: concrete.runtimeApiKey }
+        : withSupersedes;
+      const withEffortAndAdditionalFields = {
+        ...withRuntimeApiKey,
         effort: concrete.effort,
         effortWasExplicit: concrete.effortWasExplicit,
         activeTools: piToolsForWriteIntent(
@@ -418,13 +418,13 @@ const resolvePlannedStart = (
         projectTrusted: environment.projectTrusted,
         parentSessionId: ctx.sessionManager.getSessionId(),
       };
-      const objectPart14019_6 = parentSessionFile
-        ? { ...objectPart14019_5, parentSessionFile }
-        : objectPart14019_5;
-      const objectPart14019_7 = parentLeafId
-        ? { ...objectPart14019_6, parentLeafId }
-        : objectPart14019_6;
-      return objectPart14019_7;
+      const withParentSessionFile = parentSessionFile
+        ? { ...withEffortAndAdditionalFields, parentSessionFile }
+        : withEffortAndAdditionalFields;
+      const withParentLeafId = parentLeafId
+        ? { ...withParentSessionFile, parentLeafId }
+        : withParentSessionFile;
+      return withParentLeafId;
     })() satisfies StartSubagentRequest;
   });
 

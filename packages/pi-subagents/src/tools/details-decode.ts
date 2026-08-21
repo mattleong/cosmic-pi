@@ -116,16 +116,15 @@ const decodeUsage = <ValueInput>(value: ValueInput): SubagentUsage | undefined =
   const cost = finiteNumber(record.cost);
   return boundedUsage(
     (() => {
-      const objectPart2664_0 = {
+      const baseResult = {
         input: finiteNumber(record.input) ?? 0,
         output: finiteNumber(record.output) ?? 0,
         cacheRead: finiteNumber(record.cacheRead) ?? 0,
         cacheWrite: finiteNumber(record.cacheWrite) ?? 0,
         totalTokens: finiteNumber(record.totalTokens) ?? 0,
       };
-      const objectPart2664_1 =
-        cost === undefined ? objectPart2664_0 : { ...objectPart2664_0, cost };
-      return objectPart2664_1;
+      const withCost = cost === undefined ? baseResult : { ...baseResult, cost };
+      return withCost;
     })(),
   );
 };
@@ -144,18 +143,16 @@ const decodeSkipped = <ValueInput>(value: ValueInput): ReadonlyArray<SkippedProf
         const candidateIndex = finiteNumber(record.candidateIndex);
         return [
           (() => {
-            const objectPart3454_0 = {};
-            const objectPart3454_1 =
-              candidateIndex === undefined
-                ? objectPart3454_0
-                : { ...objectPart3454_0, candidateIndex };
-            const objectPart3454_2 = {
-              ...objectPart3454_1,
+            const baseResult = {};
+            const withCandidateIndex =
+              candidateIndex === undefined ? baseResult : { ...baseResult, candidateIndex };
+            const withCandidateAndAdditionalFields = {
+              ...withCandidateIndex,
               candidate: clean(record.candidate, MAX_CARD_PROVENANCE_CHARS),
               code: clean(record.code, 128),
               reason: clean(record.reason, MAX_CARD_PROVENANCE_CHARS),
             };
-            return objectPart3454_2;
+            return withCandidateAndAdditionalFields;
           })(),
         ];
       })
@@ -272,17 +269,17 @@ const decodeFailures = <ValueInput>(
     const index = finiteNumber(record.index);
     return [
       (() => {
-        const objectPart8952_0 = {
+        const baseResult = {
           index: index === undefined ? 0 : Math.max(0, Math.floor(index)),
         };
-        const objectPart8952_1 = Predicate.isString(record.name)
-          ? { ...objectPart8952_0, name: sanitizeName(record.name) }
-          : objectPart8952_0;
-        const objectPart8952_2 = { ...objectPart8952_1, message: clean(record.message, 512) };
-        const objectPart8952_3 = Predicate.isString(record.code)
-          ? { ...objectPart8952_2, code: clean(record.code, 128) }
-          : objectPart8952_2;
-        return objectPart8952_3;
+        const withName = Predicate.isString(record.name)
+          ? { ...baseResult, name: sanitizeName(record.name) }
+          : baseResult;
+        const withMessage = { ...withName, message: clean(record.message, 512) };
+        const withCode = Predicate.isString(record.code)
+          ? { ...withMessage, code: clean(record.code, 128) }
+          : withMessage;
+        return withCode;
       })(),
     ];
   });
@@ -503,57 +500,53 @@ export function decodeCompactToolDetails<ValueInput>(
           return [];
         return [
           (() => {
-            const objectPart17361_0 = { id: clean(failure.id, 128) };
-            const objectPart17361_1 = Predicate.isString(failure.code)
-              ? { ...objectPart17361_0, code: clean(failure.code, 64) }
-              : objectPart17361_0;
-            const objectPart17361_2 = {
-              ...objectPart17361_1,
+            const baseResult = { id: clean(failure.id, 128) };
+            const withCode = Predicate.isString(failure.code)
+              ? { ...baseResult, code: clean(failure.code, 64) }
+              : baseResult;
+            const withMessage = {
+              ...withCode,
               message: clean(failure.message, 256),
             };
-            return objectPart17361_2;
+            return withMessage;
           })() satisfies CompactToolActionFailure,
         ];
       })
     : undefined;
   return freezeSnapshot(
     (() => {
-      const objectPart17649_0: CompactSubagentToolDetails = {
+      const baseResult: CompactSubagentToolDetails = {
         version: SUBAGENT_CARD_DETAILS_VERSION,
         action: clean(record.action, 32),
       };
-      const objectPart17649_1 =
-        cards.length > 0 ? { ...objectPart17649_0, cards } : objectPart17649_0;
-      const objectPart17649_2 =
-        runIds && runIds.length > 0 ? { ...objectPart17649_1, runIds } : objectPart17649_1;
-      const objectPart17649_3 =
+      const withCards = cards.length > 0 ? { ...baseResult, cards } : baseResult;
+      const withRunIds = runIds && runIds.length > 0 ? { ...withCards, runIds } : withCards;
+      const withRunCount =
         runCount === undefined
-          ? objectPart17649_2
-          : { ...objectPart17649_2, runCount: Math.max(0, Math.floor(runCount)) };
-      const objectPart17649_4 = profiles ? { ...objectPart17649_3, profiles } : objectPart17649_3;
-      const objectPart17649_5 =
-        profileIds && profileIds.length > 0
-          ? { ...objectPart17649_4, profileIds }
-          : objectPart17649_4;
-      const objectPart17649_6 =
+          ? withRunIds
+          : { ...withRunIds, runCount: Math.max(0, Math.floor(runCount)) };
+      const withProfiles = profiles ? { ...withRunCount, profiles } : withRunCount;
+      const withProfileIds =
+        profileIds && profileIds.length > 0 ? { ...withProfiles, profileIds } : withProfiles;
+      const withFallbackProfile =
         Predicate.isString(record.fallbackProfile) && normalizeProfileId(record.fallbackProfile)
-          ? { ...objectPart17649_5, fallbackProfile: normalizeProfileId(record.fallbackProfile)! }
-          : objectPart17649_5;
-      const objectPart17649_7 =
+          ? { ...withProfileIds, fallbackProfile: normalizeProfileId(record.fallbackProfile)! }
+          : withProfileIds;
+      const withActionFailures =
         actionFailures && actionFailures.length > 0
-          ? { ...objectPart17649_6, actionFailures }
-          : objectPart17649_6;
-      const objectPart17649_8 =
-        record.timedOut === true ? { ...objectPart17649_7, timedOut: true } : objectPart17649_7;
-      const objectPart17649_9 =
+          ? { ...withFallbackProfile, actionFailures }
+          : withFallbackProfile;
+      const withTimedOut =
+        record.timedOut === true ? { ...withActionFailures, timedOut: true } : withActionFailures;
+      const withAttentionRequired =
         record.attentionRequired === true
-          ? { ...objectPart17649_8, attentionRequired: true }
-          : objectPart17649_8;
-      const objectPart17649_10 =
+          ? { ...withTimedOut, attentionRequired: true }
+          : withTimedOut;
+      const withContentOmitted =
         record.contentOmitted === true
-          ? { ...objectPart17649_9, contentOmitted: true }
-          : objectPart17649_9;
-      return objectPart17649_10;
+          ? { ...withAttentionRequired, contentOmitted: true }
+          : withAttentionRequired;
+      return withContentOmitted;
     })(),
   );
 }

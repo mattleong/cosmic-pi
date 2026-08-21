@@ -298,11 +298,11 @@ async function openProfileSettings(
     try {
       inspection = await actions.inspectProfiles(isProjectTrusted(ctx));
       return (() => {
-        const objectPart11563_0 = { inspection };
-        const objectPart11563_1 = conflictMessage
-          ? { ...objectPart11563_0, conflictMessage }
-          : objectPart11563_0;
-        return objectPart11563_1;
+        const baseResult = { inspection };
+        const withConflictMessage = conflictMessage
+          ? { ...baseResult, conflictMessage }
+          : baseResult;
+        return withConflictMessage;
       })();
     } catch {
       return {
@@ -323,16 +323,16 @@ async function openProfileSettings(
       try {
         await actions.patchSessionProfile(
           (() => {
-            const objectPart12302_0 = { profile };
-            const objectPart12302_1 =
+            const baseResult = { profile };
+            const withRoute =
               declaration.route === undefined
-                ? objectPart12302_0
-                : { ...objectPart12302_0, route: normalizeDeclaredProfileRoute(declaration.route) };
-            const objectPart12302_2 = {
-              ...objectPart12302_1,
+                ? baseResult
+                : { ...baseResult, route: normalizeDeclaredProfileRoute(declaration.route) };
+            const withExpectedRevision = {
+              ...withRoute,
               expectedRevision: inspection.session.revision,
             };
-            return objectPart12302_2;
+            return withExpectedRevision;
           })(),
         );
       } catch (error) {
@@ -352,21 +352,24 @@ async function openProfileSettings(
         scope === "global" ? inspection.globalDocument : inspection.projectDocument;
       await actions.patchProfile(
         (() => {
-          const objectPart13147_0 = { scope, profile };
-          const objectPart13147_1 =
+          const baseResult = { scope, profile };
+          const withRoute =
             declaration.route === undefined
-              ? objectPart13147_0
-              : { ...objectPart13147_0, route: declaration.route };
-          const objectPart13147_2 = {
-            ...objectPart13147_1,
+              ? baseResult
+              : { ...baseResult, route: declaration.route };
+          const withExpectedExists = {
+            ...withRoute,
             expectedExists: expectedDocument !== undefined,
           };
-          const objectPart13147_3 =
+          const withExpectedDocument =
             expectedDocument === undefined
-              ? objectPart13147_2
-              : { ...objectPart13147_2, expectedDocument };
-          const objectPart13147_4 = { ...objectPart13147_3, projectTrusted: isProjectTrusted(ctx) };
-          return objectPart13147_4;
+              ? withExpectedExists
+              : { ...withExpectedExists, expectedDocument };
+          const withProjectTrusted = {
+            ...withExpectedDocument,
+            projectTrusted: isProjectTrusted(ctx),
+          };
+          return withProjectTrusted;
         })(),
       );
     }
@@ -397,21 +400,19 @@ async function openProfileSettings(
         requestWorkspaceRender = () => tui.requestRender();
         return new ProfileWorkspaceComponent(
           (() => {
-            const objectPart14928_0 = {
+            const baseResult = {
               theme,
               inspection,
               projectTrusted,
               initialScope: selectedInitialScope,
               parentEffort,
             };
-            const objectPart14928_1 = preferredPiModel
-              ? { ...objectPart14928_0, piModel: preferredPiModel }
-              : objectPart14928_0;
-            const objectPart14928_2 = parentModel
-              ? { ...objectPart14928_1, parentModel }
-              : objectPart14928_1;
-            const objectPart14928_3 = {
-              ...objectPart14928_2,
+            const withPiModel = preferredPiModel
+              ? { ...baseResult, piModel: preferredPiModel }
+              : baseResult;
+            const withParentModel = parentModel ? { ...withPiModel, parentModel } : withPiModel;
+            const withGetHeightAndAdditionalFields = {
+              ...withParentModel,
               getHeight: () => tui.terminal.rows,
               requestRender: () => tui.requestRender(),
               matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
@@ -436,26 +437,26 @@ async function openProfileSettings(
                 loadCandidateModelPicker(
                   ctx,
                   (() => {
-                    const objectPart15387_0 = {
+                    const baseResult = {
                       profile,
                       candidateIndex,
                       candidate,
                       listNativeModels: actions.listNativeModels,
                       piModels: availableModels,
                     };
-                    const objectPart15387_1 = parentCatalogModel
-                      ? { ...objectPart15387_0, piParentModel: parentCatalogModel }
-                      : objectPart15387_0;
-                    const objectPart15387_2 = {
-                      ...objectPart15387_1,
+                    const withPiParentModel = parentCatalogModel
+                      ? { ...baseResult, piParentModel: parentCatalogModel }
+                      : baseResult;
+                    const withAdditionalFields = {
+                      ...withPiParentModel,
                       ...(extensionProviders
                         ? { registeredPiProviderIds: [...extensionProviders] }
                         : { piProviderInspectionFailed: true }),
                     };
-                    const objectPart15387_3 = signal
-                      ? { ...objectPart15387_2, signal }
-                      : objectPart15387_2;
-                    return objectPart15387_3;
+                    const withSignal = signal
+                      ? { ...withAdditionalFields, signal }
+                      : withAdditionalFields;
+                    return withSignal;
                   })(),
                 ),
               supportedPiEfforts: (candidate: ProfileCandidate) =>
@@ -469,7 +470,7 @@ async function openProfileSettings(
                 fastModeAvailable(ctx, candidate, extensionProviders),
               reload: () => requestProfileReload(ctx, bridge),
             };
-            return objectPart14928_3;
+            return withGetHeightAndAdditionalFields;
           })(),
         );
       },

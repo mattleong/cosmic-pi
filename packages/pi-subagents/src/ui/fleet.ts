@@ -181,17 +181,17 @@ export class SubagentFleetComponent implements Component, Focusable {
     const input = new Input();
     input.focused = this._focused;
     this.prompt = (() => {
-      const objectPart6000_0 = {
+      const baseResult = {
         kind,
         runId: run.id,
         runName: sanitizeTerminalLine(run.name),
         input,
       };
-      const objectPart6000_1 =
+      const withContext =
         kind === "reply" && run.question?.message
-          ? { ...objectPart6000_0, context: sanitizeTerminalLine(run.question.message) }
-          : objectPart6000_0;
-      return objectPart6000_1;
+          ? { ...baseResult, context: sanitizeTerminalLine(run.question.message) }
+          : baseResult;
+      return withContext;
     })();
     this.notice = undefined;
   }

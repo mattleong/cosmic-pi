@@ -65,12 +65,12 @@ export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope"
   if (discriminant.method !== undefined) {
     const notification = yield* Schema.decodeUnknownEffect(Notification)(value);
     const envelope: CodexEnvelope = (() => {
-      const objectPart2419_0 = { type: "notification" as const, method: notification.method };
-      const objectPart2419_1 =
+      const baseResult = { type: "notification" as const, method: notification.method };
+      const withParams =
         notification.params === undefined
-          ? objectPart2419_0
-          : { ...objectPart2419_0, params: notification.params };
-      return objectPart2419_1;
+          ? baseResult
+          : { ...baseResult, params: notification.params };
+      return withParams;
     })();
     return envelope;
   }
@@ -78,16 +78,12 @@ export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope"
   if (response.result === undefined && response.error === undefined)
     yield* Schema.decodeUnknownEffect(Schema.Struct({ result: Schema.Unknown }))(value);
   const envelope: CodexEnvelope = (() => {
-    const objectPart2827_0 = { type: "response" as const, id: response.id };
-    const objectPart2827_1 =
-      response.result === undefined
-        ? objectPart2827_0
-        : { ...objectPart2827_0, result: response.result };
-    const objectPart2827_2 =
-      response.error === undefined
-        ? objectPart2827_1
-        : { ...objectPart2827_1, error: response.error };
-    return objectPart2827_2;
+    const baseResult = { type: "response" as const, id: response.id };
+    const withResult =
+      response.result === undefined ? baseResult : { ...baseResult, result: response.result };
+    const withError =
+      response.error === undefined ? withResult : { ...withResult, error: response.error };
+    return withError;
   })();
   return envelope;
 });
@@ -252,17 +248,17 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
       case "turn/completed": {
         const value = yield* Schema.decodeUnknownEffect(TurnCompleted)(params);
         const notification: CodexNotification = (() => {
-          const objectPart8544_0 = {
+          const baseResult = {
             type: "turn_completed" as const,
             threadId: value.threadId,
             turnId: value.turn.id,
             status: value.turn.status,
           };
-          const objectPart8544_1 =
+          const withDiagnostic =
             value.turn.error && hasObjectRuntimeType(value.turn.error)
-              ? { ...objectPart8544_0, diagnostic: value.turn.error.message }
-              : objectPart8544_0;
-          return objectPart8544_1;
+              ? { ...baseResult, diagnostic: value.turn.error.message }
+              : baseResult;
+          return withDiagnostic;
         })();
         return notification;
       }

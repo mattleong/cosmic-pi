@@ -23,7 +23,7 @@ export const agentOwnershipEvidence = (
 ): HerdrAgentOwnershipEvidence | undefined =>
   agent.name && agent.runtime && agent.agentSession
     ? (() => {
-        const objectPart688_0 = {
+        const baseResult = {
           workspaceId: agent.workspaceId,
           tabId: agent.tabId,
           paneId: agent.paneId,
@@ -32,13 +32,12 @@ export const agentOwnershipEvidence = (
           runtime: agent.runtime,
           agentSession: { ...agent.agentSession },
         };
-        const objectPart688_1 =
-          agent.cwd === undefined ? objectPart688_0 : { ...objectPart688_0, cwd: agent.cwd };
-        const objectPart688_2 =
+        const withCwd = agent.cwd === undefined ? baseResult : { ...baseResult, cwd: agent.cwd };
+        const withForegroundCwd =
           agent.foregroundCwd === undefined
-            ? objectPart688_1
-            : { ...objectPart688_1, foregroundCwd: agent.foregroundCwd };
-        return objectPart688_2;
+            ? withCwd
+            : { ...withCwd, foregroundCwd: agent.foregroundCwd };
+        return withForegroundCwd;
       })()
     : undefined;
 

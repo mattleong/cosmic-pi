@@ -38,14 +38,14 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
   const profiles = subagentProfileServiceLayer(
     (() => {
-      const objectPart2178_0 = { ...options };
-      const objectPart2178_1 = options.sessionBaseConfig
-        ? { ...objectPart2178_0, baseConfig: options.sessionBaseConfig }
-        : objectPart2178_0;
-      const objectPart2178_2 = options.publishSessionBaseConfig
-        ? { ...objectPart2178_1, publishBaseConfig: options.publishSessionBaseConfig }
-        : objectPart2178_1;
-      return objectPart2178_2;
+      const baseResult = { ...options };
+      const withBaseConfig = options.sessionBaseConfig
+        ? { ...baseResult, baseConfig: options.sessionBaseConfig }
+        : baseResult;
+      const withPublishBaseConfig = options.publishSessionBaseConfig
+        ? { ...withBaseConfig, publishBaseConfig: options.publishSessionBaseConfig }
+        : withBaseConfig;
+      return withPublishBaseConfig;
     })(),
   ).pipe(Layer.provide(configStore));
   const herdrEnvironment = captureHerdrEnvironment();

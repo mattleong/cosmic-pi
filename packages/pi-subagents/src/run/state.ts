@@ -102,15 +102,15 @@ export const addUsage = (left: SubagentUsage, right: SubagentUsage): SubagentUsa
       ? undefined
       : (left.cost ?? 0) + (right.cost ?? 0);
   const combined: SubagentUsage = (() => {
-    const objectPart4068_0 = {
+    const baseResult = {
       input: left.input + right.input,
       output: left.output + right.output,
       cacheRead: left.cacheRead + right.cacheRead,
       cacheWrite: left.cacheWrite + right.cacheWrite,
       totalTokens: left.totalTokens + right.totalTokens,
     };
-    const objectPart4068_1 = cost === undefined ? objectPart4068_0 : { ...objectPart4068_0, cost };
-    return objectPart4068_1;
+    const withCost = cost === undefined ? baseResult : { ...baseResult, cost };
+    return withCost;
   })();
   return isValidUsage(combined) ? combined : left;
 };

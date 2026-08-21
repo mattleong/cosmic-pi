@@ -115,9 +115,9 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
             return { transitioned: false as const, view: snapshotView(record.view) };
           if (record.initializationPending && state !== "stopped") {
             record.pendingInitializationSettlement = (() => {
-              const objectPart4903_0 = { state };
-              const objectPart4903_1 = error ? { ...objectPart4903_0, error } : objectPart4903_0;
-              return objectPart4903_1;
+              const baseResult = { state };
+              const withError = error ? { ...baseResult, error } : baseResult;
+              return withError;
             })();
             return {
               transitioned: false as const,
@@ -142,20 +142,20 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
             record.completionGenerations.set(
               completionGeneration,
               (() => {
-                const objectPart5996_0 = { generation: completionGeneration, outcome: state };
-                const objectPart5996_1 =
+                const baseResult = { generation: completionGeneration, outcome: state };
+                const withFinalText =
                   state === "completed" && record.latestAssistantText
-                    ? { ...objectPart5996_0, finalText: record.latestAssistantText }
-                    : objectPart5996_0;
-                const objectPart5996_2 =
+                    ? { ...baseResult, finalText: record.latestAssistantText }
+                    : baseResult;
+                const withError =
                   state === "failed"
-                    ? { ...objectPart5996_1, error: error ?? "Run failed." }
-                    : objectPart5996_1;
-                const objectPart5996_3 = completionWarning
-                  ? { ...objectPart5996_2, warning: completionWarning }
-                  : objectPart5996_2;
-                const objectPart5996_4 = { ...objectPart5996_3, retained: false };
-                return objectPart5996_4;
+                    ? { ...withFinalText, error: error ?? "Run failed." }
+                    : withFinalText;
+                const withWarning = completionWarning
+                  ? { ...withError, warning: completionWarning }
+                  : withError;
+                const withRetained = { ...withWarning, retained: false };
+                return withRetained;
               })(),
             );
           record.notificationGeneration += 1;

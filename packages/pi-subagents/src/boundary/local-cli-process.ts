@@ -71,7 +71,7 @@ export interface LocalCliProcessLayerOptions extends LocalCliHarnessOptions {
 const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
   new SubagentProcessError(
     (() => {
-      const objectPart2592_0 = {
+      const baseResult = {
         operation,
         message:
           error instanceof Error
@@ -80,8 +80,8 @@ const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: 
               ? error
               : `Unable to ${operation} local CLI process.`,
       };
-      const objectPart2592_1 = code ? { ...objectPart2592_0, code } : objectPart2592_0;
-      return objectPart2592_1;
+      const withCode = code ? { ...baseResult, code } : baseResult;
+      return withCode;
     })(),
   );
 

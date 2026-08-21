@@ -101,13 +101,13 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     record.completionGenerations.set(
       generation,
       (() => {
-        const objectPart3858_0 = { generation, outcome: "completed" as const };
-        const objectPart3858_1 = text ? { ...objectPart3858_0, finalText: text } : objectPart3858_0;
-        const objectPart3858_2 = completionWarning
-          ? { ...objectPart3858_1, warning: completionWarning }
-          : objectPart3858_1;
-        const objectPart3858_3 = { ...objectPart3858_2, retained: true };
-        return objectPart3858_3;
+        const baseResult = { generation, outcome: "completed" as const };
+        const withFinalText = text ? { ...baseResult, finalText: text } : baseResult;
+        const withWarning = completionWarning
+          ? { ...withFinalText, warning: completionWarning }
+          : withFinalText;
+        const withRetained = { ...withWarning, retained: true };
+        return withRetained;
       })(),
     );
     record.notificationGeneration += 1;

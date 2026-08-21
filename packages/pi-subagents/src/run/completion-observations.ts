@@ -71,20 +71,20 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       claimToken !== undefined &&
       completionClaimOwner(record, generation) === claimToken;
     return (() => {
-      const objectPart2781_0 = {
+      const baseResult = {
         run: owns ? snapshotView(record.view) : redactCompletionReport(record.view),
       };
-      const objectPart2781_1 = owns
+      const withCompletionReceipt = owns
         ? {
-            ...objectPart2781_0,
+            ...baseResult,
             completionReceipt: {
               id: record.view.id,
               generation,
               claimToken,
             },
           }
-        : objectPart2781_0;
-      return objectPart2781_1;
+        : baseResult;
+      return withCompletionReceipt;
     })();
   };
 

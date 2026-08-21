@@ -139,12 +139,10 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
             return false;
           record.process = process;
           record.view = (() => {
-            const objectPart5222_0 = { ...record.view };
-            const objectPart5222_1 =
-              process.pid === undefined
-                ? objectPart5222_0
-                : { ...objectPart5222_0, pid: process.pid };
-            return objectPart5222_1;
+            const baseResult = { ...record.view };
+            const withPid =
+              process.pid === undefined ? baseResult : { ...baseResult, pid: process.pid };
+            return withPid;
           })();
           yield* publish;
           return true;

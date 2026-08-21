@@ -49,7 +49,7 @@ export function createProfileModelChoices(input: {
       : undefined;
     result.push(
       (() => {
-        const objectPart2426_0 = {
+        const baseResult = {
           choice: { kind: "parent" as const },
           item: {
             value: "parent",
@@ -60,12 +60,10 @@ export function createProfileModelChoices(input: {
           },
           searchText: `parent ${canonical ?? "active model"} ${input.parentModel?.name ?? ""}`,
         };
-        const objectPart2426_1 =
-          efforts === undefined
-            ? objectPart2426_0
-            : { ...objectPart2426_0, supportedEfforts: efforts };
-        const objectPart2426_2 = {
-          ...objectPart2426_1,
+        const withSupportedEfforts =
+          efforts === undefined ? baseResult : { ...baseResult, supportedEfforts: efforts };
+        const withFastModeAvailable = {
+          ...withSupportedEfforts,
           fastModeAvailable: input.parentModel
             ? supportsSubagentFastMode(
                 "pi",
@@ -73,7 +71,7 @@ export function createProfileModelChoices(input: {
               )
             : false,
         };
-        return objectPart2426_2;
+        return withFastModeAvailable;
       })(),
     );
   }
@@ -156,7 +154,7 @@ export class ProfileModelPickerPage implements Component {
         : "native advertised models";
     this.page = new SearchableSelectPage(
       (() => {
-        const objectPart6829_0 = {
+        const baseResult = {
           theme: options.theme,
           breadcrumb: `/subagents profiles › ${context.profile} › candidate ${context.candidateIndex + 1} › Model`,
           title: `Choose model · ${context.profile} · candidate ${context.candidateIndex + 1}`,
@@ -169,11 +167,9 @@ export class ProfileModelPickerPage implements Component {
           })),
           current: options.current,
         };
-        const objectPart6829_1 = options.notice
-          ? { ...objectPart6829_0, notice: options.notice }
-          : objectPart6829_0;
-        const objectPart6829_2 = {
-          ...objectPart6829_1,
+        const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
+        const withEmptyTextAndAdditionalFields = {
+          ...withNotice,
           emptyText: "No matching models",
           getHeight: options.getHeight,
           requestRender: options.requestRender,
@@ -182,7 +178,7 @@ export class ProfileModelPickerPage implements Component {
           select: options.select,
           cancel: options.cancel,
         };
-        return objectPart6829_2;
+        return withEmptyTextAndAdditionalFields;
       })(),
     );
   }

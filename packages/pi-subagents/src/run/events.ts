@@ -166,22 +166,22 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             mutateView(record, event.assignmentEpoch, (current) => {
               record.latestAssistantText = latestAssistantText;
               return (() => {
-                const objectPart6077_0 = { ...current, lastActivityAt: now };
-                const objectPart6077_1 = latestAssistantText
+                const baseResult = { ...current, lastActivityAt: now };
+                const withSessionEvents = latestAssistantText
                   ? {
-                      ...objectPart6077_0,
+                      ...baseResult,
                       sessionEvents: appendAssistantSessionEvent(
                         current.sessionEvents,
                         latestAssistantText,
                         now,
                       ),
                     }
-                  : objectPart6077_0;
-                const objectPart6077_2 = {
-                  ...objectPart6077_1,
+                  : baseResult;
+                const withUsage = {
+                  ...withSessionEvents,
                   usage: addUsage(current.usage, event.usage),
                 };
-                return objectPart6077_2;
+                return withUsage;
               })();
             }),
           ),

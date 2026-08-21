@@ -111,7 +111,7 @@ export interface ChildProcessContract {
 const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
   new SubagentProcessError(
     (() => {
-      const objectPart4302_0 = {
+      const baseResult = {
         operation,
         message:
           error instanceof Error
@@ -120,8 +120,8 @@ const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: 
               ? error
               : `Unable to ${operation} subagent process.`,
       };
-      const objectPart4302_1 = code ? { ...objectPart4302_0, code } : objectPart4302_0;
-      return objectPart4302_1;
+      const withCode = code ? { ...baseResult, code } : baseResult;
+      return withCode;
     })(),
   );
 
@@ -249,7 +249,7 @@ export const releaseChildProcess = (
 
 function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   return (() => {
-    const objectPart8692_0 = {
+    const baseResult = {
       ...Object.fromEntries(
         Object.entries(process.env).filter(
           ([key, value]) => value !== undefined && !BLOCKED_ENV_KEYS.has(key),
@@ -259,14 +259,14 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
       PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
       PI_SUBAGENT_RUN_ID: request.runId,
     };
-    const objectPart8692_1 = request.runtimeApiKey
+    const withComputedFields = request.runtimeApiKey
       ? {
-          ...objectPart8692_0,
+          ...baseResult,
           [RUNTIME_API_KEY_ENV]: Redacted.value(request.runtimeApiKey),
           [RUNTIME_API_PROVIDER_ENV]: request.model.slice(0, request.model.indexOf("/")),
         }
-      : objectPart8692_0;
-    return objectPart8692_1;
+      : baseResult;
+    return withComputedFields;
   })();
 }
 
@@ -454,10 +454,10 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         if (settled) return;
         settled = true;
         const event: Extract<ChildWireEvent, { readonly type: "exit" }> = (() => {
-          const objectPart16646_0 = { type: "exit" as const, exitCode };
-          const objectPart16646_1 = signal ? { ...objectPart16646_0, signal } : objectPart16646_0;
-          const objectPart16646_2 = { ...objectPart16646_1, stderr };
-          return objectPart16646_2;
+          const baseResult = { type: "exit" as const, exitCode };
+          const withSignal = signal ? { ...baseResult, signal } : baseResult;
+          const withStderr = { ...withSignal, stderr };
+          return withStderr;
         })();
         Queue.endUnsafe(events);
         Deferred.doneUnsafe(exited, Effect.succeed(event));

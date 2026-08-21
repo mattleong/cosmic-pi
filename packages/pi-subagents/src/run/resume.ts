@@ -277,16 +277,16 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     const pendingSettlement = record.pendingInitializationSettlement;
                     record.pendingInitializationSettlement = undefined;
                     record.view = (() => {
-                      const objectPart12746_0 = {
+                      const baseResult = {
                         ...record.view,
                         model: resolvedModel,
                         effort: state.effort,
                         sessionId: state.sessionId,
                       };
-                      const objectPart12746_1 = state.sessionFile
-                        ? { ...objectPart12746_0, sessionFile: state.sessionFile }
-                        : objectPart12746_0;
-                      return objectPart12746_1;
+                      const withSessionFile = state.sessionFile
+                        ? { ...baseResult, sessionFile: state.sessionFile }
+                        : baseResult;
+                      return withSessionFile;
                     })();
                     yield* publish;
                     return pendingSettlement;

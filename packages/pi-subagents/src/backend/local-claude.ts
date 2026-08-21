@@ -403,15 +403,13 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                     "Claude reported a regressing cumulative assistant usage total; accounting stays monotone and the regression was ignored.",
                 });
               const backendEvent: BackendEvent = (() => {
-                const objectPart16100_0 = { type: "assistant_message" as const, assignmentEpoch };
-                const objectPart16100_1 = event.text
-                  ? { ...objectPart16100_0, text: event.text }
-                  : objectPart16100_0;
-                const objectPart16100_2 = {
-                  ...objectPart16100_1,
+                const baseResult = { type: "assistant_message" as const, assignmentEpoch };
+                const withText = event.text ? { ...baseResult, text: event.text } : baseResult;
+                const withUsage = {
+                  ...withText,
                   usage: { ...delta, totalTokens: usageComponentsTotal(delta) },
                 };
-                return objectPart16100_2;
+                return withUsage;
               })();
               yield* offer(backendEvent, raw);
             });
@@ -457,15 +455,13 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                       type: "assistant_message",
                       assignmentEpoch: expectation.epoch,
                       usage: (() => {
-                        const objectPart18761_0 = {
+                        const baseResult = {
                           ...delta,
                           totalTokens: usageComponentsTotal(delta),
                         };
-                        const objectPart18761_1 =
-                          costDelta === undefined
-                            ? objectPart18761_0
-                            : { ...objectPart18761_0, cost: costDelta };
-                        return objectPart18761_1;
+                        const withCost =
+                          costDelta === undefined ? baseResult : { ...baseResult, cost: costDelta };
+                        return withCost;
                       })(),
                     })
                   : Effect.void;
@@ -946,12 +942,10 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     awaitExit: child.awaitExit.pipe(
       Effect.map((event) =>
         (() => {
-          const objectPart37480_0 = { type: "exit" as const, exitCode: event.exitCode };
-          const objectPart37480_1 = event.signal
-            ? { ...objectPart37480_0, signal: event.signal }
-            : objectPart37480_0;
-          const objectPart37480_2 = { ...objectPart37480_1, diagnostic: event.stderr };
-          return objectPart37480_2;
+          const baseResult = { type: "exit" as const, exitCode: event.exitCode };
+          const withSignal = event.signal ? { ...baseResult, signal: event.signal } : baseResult;
+          const withDiagnostic = { ...withSignal, diagnostic: event.stderr };
+          return withDiagnostic;
         })(),
       ),
     ),

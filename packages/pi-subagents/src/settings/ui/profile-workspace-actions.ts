@@ -146,7 +146,7 @@ export const profileWorkspaceConfirmation = (input: {
           : "No candidate will launch for this profile after reload.",
     };
   return (() => {
-    const objectPart5568_0 = {
+    const baseResult = {
       key: "i",
       title: `Reset ${input.profile}?`,
       detail:
@@ -158,13 +158,13 @@ export const profileWorkspaceConfirmation = (input: {
             ? "The project declaration will be removed. The effective route will come from global settings or the built-in profile."
             : "The temporary session override will be removed. The active project, global, or built-in route will apply immediately.",
     };
-    const objectPart5568_1 =
+    const withPreview =
       input.currentSummary && input.afterSummary
         ? {
-            ...objectPart5568_0,
+            ...baseResult,
             preview: [`Current  ${input.currentSummary}`, `After    ${input.afterSummary}`],
           }
-        : objectPart5568_0;
-    return objectPart5568_1;
+        : baseResult;
+    return withPreview;
   })();
 };

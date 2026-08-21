@@ -121,7 +121,7 @@ const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
   if (route === "disabled") return route;
   const candidate = (value: DeclaredProfileCandidate): JsonObject =>
     (() => {
-      const objectPart4343_0 = {
+      const baseResult = {
         host: value.host,
         runtime: value.runtime,
         model: value.model,
@@ -129,15 +129,13 @@ const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
         context: value.context,
         writeIntent: value.writeIntent,
       };
-      const objectPart4343_1 =
-        value.fastMode === undefined
-          ? objectPart4343_0
-          : { ...objectPart4343_0, fastMode: value.fastMode };
-      const objectPart4343_2 =
+      const withFastMode =
+        value.fastMode === undefined ? baseResult : { ...baseResult, fastMode: value.fastMode };
+      const withCloseOnReport =
         value.closeOnReport === undefined
-          ? objectPart4343_1
-          : { ...objectPart4343_1, closeOnReport: value.closeOnReport };
-      return objectPart4343_2;
+          ? withFastMode
+          : { ...withFastMode, closeOnReport: value.closeOnReport };
+      return withCloseOnReport;
     })();
   // SAFETY: Configuration decoding validates the persisted value before this typed access.
   return Array.isArray(route)
@@ -209,7 +207,7 @@ export const subagentConfigStoreLayer = Layer.effect(
           return yield* unsupportedFieldsError(locations.project);
         const config = resolveSubagentConfig(
           (() => {
-            const objectPart7776_0 = {
+            const baseResult = {
               globalConfigPath: locations.global,
               projectConfigPath: locations.project,
               projectTrusted,
@@ -217,25 +215,21 @@ export const subagentConfigStoreLayer = Layer.effect(
               projectConfigExists: projectRaw !== undefined,
               global,
             };
-            const objectPart7776_1 =
-              project === undefined ? objectPart7776_0 : { ...objectPart7776_0, project };
-            return objectPart7776_1;
+            const withProject = project === undefined ? baseResult : { ...baseResult, project };
+            return withProject;
           })(),
         );
         return (() => {
-          const objectPart8112_0 = { config };
-          const objectPart8112_1 =
-            globalRaw === undefined
-              ? objectPart8112_0
-              : { ...objectPart8112_0, globalDocument: globalRaw };
-          const objectPart8112_2 =
+          const baseResult = { config };
+          const withGlobalDocument =
+            globalRaw === undefined ? baseResult : { ...baseResult, globalDocument: globalRaw };
+          const withProjectDocument =
             projectRaw === undefined
-              ? objectPart8112_1
-              : { ...objectPart8112_1, projectDocument: projectRaw };
-          const objectPart8112_3 = { ...objectPart8112_2, global };
-          const objectPart8112_4 =
-            project === undefined ? objectPart8112_3 : { ...objectPart8112_3, project };
-          return objectPart8112_4;
+              ? withGlobalDocument
+              : { ...withGlobalDocument, projectDocument: projectRaw };
+          const withGlobal = { ...withProjectDocument, global };
+          const withProject = project === undefined ? withGlobal : { ...withGlobal, project };
+          return withProject;
         })();
       });
 

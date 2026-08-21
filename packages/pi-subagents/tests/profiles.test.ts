@@ -41,7 +41,7 @@ const candidate = (value: Partial<DeclaredProfileCandidate> = {}): DeclaredProfi
 const resolved = <Project>(global = document(), project?: Project, projectTrusted = true) =>
   resolveSubagentConfig(
     (() => {
-      const objectPart1355_0 = {
+      const baseResult = {
         globalConfigPath: "/agent/pi-subagents.json",
         projectConfigPath: "/repo/.pi/pi-subagents.json",
         projectTrusted,
@@ -49,11 +49,11 @@ const resolved = <Project>(global = document(), project?: Project, projectTruste
         projectConfigExists: project !== undefined,
         global: decodeSubagentConfig(global, "global"),
       };
-      const objectPart1355_1 =
+      const withProject =
         project === undefined
-          ? objectPart1355_0
-          : { ...objectPart1355_0, project: decodeSubagentConfig(project, "project") };
-      return objectPart1355_1;
+          ? baseResult
+          : { ...baseResult, project: decodeSubagentConfig(project, "project") };
+      return withProject;
     })(),
   );
 

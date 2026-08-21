@@ -135,18 +135,18 @@ export function startToolSessionEvent(
   return appendSessionEvent(
     current,
     (() => {
-      const objectPart4450_0 = {
+      const baseResult = {
         type: "tool" as const,
         toolCallId: sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS),
         toolName: sanitizeDiagnosticText(input.toolName, 200),
       };
-      const objectPart4450_1 = target ? { ...objectPart4450_0, target } : objectPart4450_0;
-      const objectPart4450_2 = {
-        ...objectPart4450_1,
+      const withTarget = target ? { ...baseResult, target } : baseResult;
+      const withStateAndStartedAt = {
+        ...withTarget,
         state: "running" as const,
         startedAt: input.startedAt,
       };
-      return objectPart4450_2;
+      return withStateAndStartedAt;
     })(),
   );
 }

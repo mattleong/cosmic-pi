@@ -50,7 +50,7 @@ const inspection = <Global = undefined, Project = undefined>(
     : undefined;
   const config = resolveSubagentConfig(
     (() => {
-      const objectPart1464_0 = {
+      const baseResult = {
         globalConfigPath: "/agent/pi-subagents.json",
         projectConfigPath: "/repo/.pi/pi-subagents.json",
         projectTrusted: true,
@@ -58,26 +58,20 @@ const inspection = <Global = undefined, Project = undefined>(
         projectConfigExists: project !== undefined,
         global: decodedGlobal,
       };
-      const objectPart1464_1 = decodedProject
-        ? { ...objectPart1464_0, project: decodedProject }
-        : objectPart1464_0;
-      return objectPart1464_1;
+      const withProject = decodedProject ? { ...baseResult, project: decodedProject } : baseResult;
+      return withProject;
     })(),
   );
   return (() => {
-    const objectPart1776_0 = {
+    const baseResult = {
       config,
       session: makeSessionProfileSnapshot(config),
       globalDocument,
     };
-    const objectPart1776_1 = projectDocument
-      ? { ...objectPart1776_0, projectDocument }
-      : objectPart1776_0;
-    const objectPart1776_2 = { ...objectPart1776_1, global: decodedGlobal };
-    const objectPart1776_3 = decodedProject
-      ? { ...objectPart1776_2, project: decodedProject }
-      : objectPart1776_2;
-    return objectPart1776_3;
+    const withProjectDocument = projectDocument ? { ...baseResult, projectDocument } : baseResult;
+    const withGlobal = { ...withProjectDocument, global: decodedGlobal };
+    const withProject = decodedProject ? { ...withGlobal, project: decodedProject } : withGlobal;
+    return withProject;
   })();
 };
 

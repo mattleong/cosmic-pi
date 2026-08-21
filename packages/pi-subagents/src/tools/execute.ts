@@ -191,27 +191,26 @@ const profileDiscovery = (
       const attempt = attempts.find((value) => value.candidateIndex === index);
       const omitted = skipped.find((value) => value.candidateIndex === index);
       return (() => {
-        const objectPart6742_0: Pick<ProfileCandidateDiscovery, "order" | "candidate" | "status"> =
-          {
-            order: index + 1,
-            candidate: profileCandidateLabel(candidate),
-            status: attempt ? "eligible" : "skipped",
-          };
-        const objectPart6742_1 = attempt
-          ? { ...objectPart6742_0, effectiveContext: attempt.effectiveContext }
-          : objectPart6742_0;
-        const objectPart6742_2 = {
-          ...objectPart6742_1,
+        const baseResult: Pick<ProfileCandidateDiscovery, "order" | "candidate" | "status"> = {
+          order: index + 1,
+          candidate: profileCandidateLabel(candidate),
+          status: attempt ? "eligible" : "skipped",
+        };
+        const withEffectiveContext = attempt
+          ? { ...baseResult, effectiveContext: attempt.effectiveContext }
+          : baseResult;
+        const withReason = {
+          ...withEffectiveContext,
           reason: attempt
             ? "Candidate adapter is statically eligible before native authentication/integration/harness readiness."
             : (omitted?.reason ?? "Candidate was not eligible."),
         };
-        return objectPart6742_2;
+        return withReason;
       })();
     });
     return [
       (() => {
-        const objectPart7188_0 = {
+        const baseResult = {
           id: definition.id,
           description: definition.description,
           source: snapshot.effectiveConfig.profileSources[definition.id],
@@ -219,11 +218,11 @@ const profileDiscovery = (
           defaultContext: definition.defaultContext,
           defaultWriteIntent: definition.defaultWriteIntent,
         };
-        const objectPart7188_1 = definition.defaultEffort
-          ? { ...objectPart7188_0, defaultEffort: definition.defaultEffort }
-          : objectPart7188_0;
-        const objectPart7188_2 = { ...objectPart7188_1, candidates };
-        return objectPart7188_2;
+        const withDefaultEffort = definition.defaultEffort
+          ? { ...baseResult, defaultEffort: definition.defaultEffort }
+          : baseResult;
+        const withCandidates = { ...withDefaultEffort, candidates };
+        return withCandidates;
       })(),
     ];
   });
@@ -403,7 +402,7 @@ export const executeSubagentAction = async (
           sanitizeTerminalLine(spec.profile?.trim() || "generalist");
         const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRoute =>
           (() => {
-            const objectPart14752_0 = {
+            const baseResult = {
               profile: request.profile ?? "generalist",
               host: request.host,
               runtime: request.runtime,
@@ -411,11 +410,11 @@ export const executeSubagentAction = async (
               effort: request.effort,
               fastMode: request.fastMode,
             };
-            const objectPart14752_1 =
+            const withCandidateIndex =
               request.selection?.candidateIndex === undefined
-                ? objectPart14752_0
-                : { ...objectPart14752_0, candidateIndex: request.selection.candidateIndex };
-            return objectPart14752_1;
+                ? baseResult
+                : { ...baseResult, candidateIndex: request.selection.candidateIndex };
+            return withCandidateIndex;
           })();
         const startEntriesFor = (
           outcomes: ReadonlyMap<number, SubagentStartOutcome>,
@@ -430,7 +429,7 @@ export const executeSubagentAction = async (
             if (!outcome) return { ...base, status: "pending", routeStatus: "resolving" };
             if ("run" in outcome)
               return (() => {
-                const objectPart15723_0 = {
+                const baseResult = {
                   ...base,
                   profile: outcome.run.profile ?? base.profile,
                   status: "started" as const,
@@ -441,15 +440,15 @@ export const executeSubagentAction = async (
                   effort: outcome.run.effort,
                   fastMode: outcome.run.fastMode,
                 };
-                const objectPart15723_1 =
+                const withCandidateIndex =
                   outcome.run.selection.candidateIndex === undefined
-                    ? objectPart15723_0
+                    ? baseResult
                     : {
-                        ...objectPart15723_0,
+                        ...baseResult,
                         candidateIndex: outcome.run.selection.candidateIndex,
                       };
-                const objectPart15723_2 = { ...objectPart15723_1, runId: outcome.run.id };
-                return objectPart15723_2;
+                const withRunId = { ...withCandidateIndex, runId: outcome.run.id };
+                return withRunId;
               })();
             return {
               ...base,
@@ -465,25 +464,23 @@ export const executeSubagentAction = async (
           resolvedRoute?: SubagentStartResolvedRoute,
         ): SubagentStartOutcome =>
           (() => {
-            const objectPart16966_0 = {
+            const baseResult = {
               index,
               failure: (() => {
-                const objectPart16810_0 = { index };
-                const objectPart16810_1 = spec.name?.trim()
-                  ? { ...objectPart16810_0, name: spec.name.trim() }
-                  : objectPart16810_0;
-                const objectPart16810_2 = {
-                  ...objectPart16810_1,
+                const baseResult = { index };
+                const withName = spec.name?.trim()
+                  ? { ...baseResult, name: spec.name.trim() }
+                  : baseResult;
+                const withMessageAndCode = {
+                  ...withName,
                   message: error.message,
                   code: subagentErrorCode(error),
                 };
-                return objectPart16810_2;
+                return withMessageAndCode;
               })(),
             };
-            const objectPart16966_1 = resolvedRoute
-              ? { ...objectPart16966_0, resolvedRoute }
-              : objectPart16966_0;
-            return objectPart16966_1;
+            const withResolvedRoute = resolvedRoute ? { ...baseResult, resolvedRoute } : baseResult;
+            return withResolvedRoute;
           })();
         const publishOutcome = (outcome: SubagentStartOutcome): Effect.Effect<void> => {
           partialOutcomes.set(outcome.index, outcome);
@@ -506,16 +503,14 @@ export const executeSubagentAction = async (
               content: [{ type: "text", text: summary }],
               details: makeStartAwaitCardDetails(
                 (() => {
-                  const objectPart18237_0 = {
+                  const baseResult = {
                     action: "start" as const,
                     runs: launched,
                     startEntries: startEntriesFor(partialOutcomes),
                   };
-                  const objectPart18237_1 =
-                    failures.length > 0
-                      ? { ...objectPart18237_0, startFailures: failures }
-                      : objectPart18237_0;
-                  return objectPart18237_1;
+                  const withStartFailures =
+                    failures.length > 0 ? { ...baseResult, startFailures: failures } : baseResult;
+                  return withStartFailures;
                 })(),
               ),
             }),
@@ -750,42 +745,36 @@ export const executeSubagentAction = async (
     input.action === "start"
       ? makeStartAwaitCardDetails(
           (() => {
-            const objectPart25937_0 = { action: "start" as const, runs };
-            const objectPart25937_1 = startEntries
-              ? { ...objectPart25937_0, startEntries }
-              : objectPart25937_0;
-            const objectPart25937_2 =
-              startFailures.length > 0
-                ? { ...objectPart25937_1, startFailures }
-                : objectPart25937_1;
-            return objectPart25937_2;
+            const baseResult = { action: "start" as const, runs };
+            const withStartEntries = startEntries ? { ...baseResult, startEntries } : baseResult;
+            const withStartFailures =
+              startFailures.length > 0 ? { ...withStartEntries, startFailures } : withStartEntries;
+            return withStartFailures;
           })(),
         )
       : input.action === "await"
         ? makeStartAwaitCardDetails(
             (() => {
-              const objectPart26181_0 = { action: "await" as const, runs, awaitUntil: input.until };
-              const objectPart26181_1 = attentionRequired
-                ? { ...objectPart26181_0, attentionRequired: true }
-                : objectPart26181_0;
-              return objectPart26181_1;
+              const baseResult = { action: "await" as const, runs, awaitUntil: input.until };
+              const withAttentionRequired = attentionRequired
+                ? { ...baseResult, attentionRequired: true }
+                : baseResult;
+              return withAttentionRequired;
             })(),
           )
         : makeCompactToolDetails(
             (() => {
-              const objectPart26389_0 = {
+              const baseResult = {
                 action: input.action,
                 runs,
                 includeReports: input.action === "status",
               };
-              const objectPart26389_1 =
-                actionFailures.length > 0
-                  ? { ...objectPart26389_0, actionFailures }
-                  : objectPart26389_0;
-              const objectPart26389_2 = attentionRequired
-                ? { ...objectPart26389_1, attentionRequired: true }
-                : objectPart26389_1;
-              return objectPart26389_2;
+              const withActionFailures =
+                actionFailures.length > 0 ? { ...baseResult, actionFailures } : baseResult;
+              const withAttentionRequired = attentionRequired
+                ? { ...withActionFailures, attentionRequired: true }
+                : withActionFailures;
+              return withAttentionRequired;
             })(),
           );
   const text =

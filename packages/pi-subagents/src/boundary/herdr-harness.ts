@@ -624,15 +624,15 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
   const fixedOptions: HerdrHarnessLayerOptions = Object.freeze(
     (() => {
       const environment = harnessEnvironment(options.environment ?? process.env);
-      const objectPart20438_0 = {
+      const baseResult = {
         ...options,
         environment,
         codexHooks: options.codexHooks ?? makeHerdrCodexHooks({ environment }),
       };
-      const objectPart20438_1 = options.integrationPaths
-        ? { ...objectPart20438_0, integrationPaths: Object.freeze({ ...options.integrationPaths }) }
-        : objectPart20438_0;
-      return objectPart20438_1;
+      const withIntegrationPaths = options.integrationPaths
+        ? { ...baseResult, integrationPaths: Object.freeze({ ...options.integrationPaths }) }
+        : baseResult;
+      return withIntegrationPaths;
     })(),
   );
   // SAFETY: These keys and values come directly from the same typed owner object enumerated on this path.

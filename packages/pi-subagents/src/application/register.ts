@@ -115,16 +115,16 @@ export function registerSubagentApplication(
         pi,
         makeSubagentLayer(
           (() => {
-            const objectPart4155_0 = {
+            const baseResult = {
               cwd: activation.cwd,
               agentDirectory: activation.agentDirectory,
               projectTrusted: activation.projectTrusted,
             };
-            const objectPart4155_1 = activation.sessionBaseConfig
-              ? { ...objectPart4155_0, sessionBaseConfig: activation.sessionBaseConfig }
-              : objectPart4155_0;
-            const objectPart4155_2 = {
-              ...objectPart4155_1,
+            const withSessionBaseConfig = activation.sessionBaseConfig
+              ? { ...baseResult, sessionBaseConfig: activation.sessionBaseConfig }
+              : baseResult;
+            const withPublishSessionBaseConfigAndAdditionalFields = {
+              ...withSessionBaseConfig,
               publishSessionBaseConfig: (config: ResolvedSubagentConfig) =>
                 profileOverrideHandoff.publishBaseConfig(
                   activation.generation,
@@ -141,7 +141,7 @@ export function registerSubagentApplication(
               publish: bridge.publish,
               notify,
             };
-            return objectPart4155_2;
+            return withPublishSessionBaseConfigAndAdditionalFields;
           })(),
         ),
         { agentDirectory: () => activation.agentDirectory, packageName: "pi-subagents" },
@@ -293,27 +293,25 @@ export function registerSubagentApplication(
         if (restoredReload)
           profileOverrideHandoff.publish(generation, generation, restoredReload.seed);
         const activation: CapturedActivation = (() => {
-          const objectPart10835_0 = {
+          const baseResult = {
             ctx,
             cwd: captured.cwd,
             projectTrusted,
             agentDirectory,
             generation,
           };
-          const objectPart10835_1 = sessionKey
-            ? { ...objectPart10835_0, sessionKey }
-            : objectPart10835_0;
-          const objectPart10835_2 = restoredReload
-            ? { ...objectPart10835_1, reloadHandoffKey: restoredReload.sessionKey }
-            : objectPart10835_1;
-          const objectPart10835_3 = sessionBaseConfig
-            ? { ...objectPart10835_2, sessionBaseConfig }
-            : objectPart10835_2;
-          const objectPart10835_4 = {
-            ...objectPart10835_3,
+          const withSessionKey = sessionKey ? { ...baseResult, sessionKey } : baseResult;
+          const withReloadHandoffKey = restoredReload
+            ? { ...withSessionKey, reloadHandoffKey: restoredReload.sessionKey }
+            : withSessionKey;
+          const withSessionBaseConfig = sessionBaseConfig
+            ? { ...withReloadHandoffKey, sessionBaseConfig }
+            : withReloadHandoffKey;
+          const withSessionOverrides = {
+            ...withSessionBaseConfig,
             sessionOverrides: restoredReload?.seed ?? profileOverrideHandoff.capture(),
           };
-          return objectPart10835_4;
+          return withSessionOverrides;
         })();
         activeProfileGeneration = generation;
         try {

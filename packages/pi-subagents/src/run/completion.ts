@@ -52,24 +52,22 @@ export function collectPendingCompletionNotifications(
     }
     return [
       (() => {
-        const objectPart2006_0 = {
+        const baseResult = {
           id: record.view.id,
           name: record.view.name,
           generation: receipt.generation,
           outcome: completion.outcome,
         };
-        const objectPart2006_1 = completion.finalText
-          ? { ...objectPart2006_0, finalText: completion.finalText }
-          : objectPart2006_0;
-        const objectPart2006_2 = completion.error
-          ? { ...objectPart2006_1, error: completion.error }
-          : objectPart2006_1;
-        const objectPart2006_3 = completion.warning
-          ? { ...objectPart2006_2, warning: completion.warning }
-          : objectPart2006_2;
-        const objectPart2006_4 = completion.retained
-          ? { ...objectPart2006_3, retained: true }
-          : objectPart2006_3;
+        const withFinalText = completion.finalText
+          ? { ...baseResult, finalText: completion.finalText }
+          : baseResult;
+        const withError = completion.error
+          ? { ...withFinalText, error: completion.error }
+          : withFinalText;
+        const withWarning = completion.warning
+          ? { ...withError, warning: completion.warning }
+          : withError;
+        const withRetained = completion.retained ? { ...withWarning, retained: true } : withWarning;
         const remainingCandidateCount = record.view.remainingCandidateCount ?? 0;
         const retryAvailable =
           completion.outcome === "failed" &&
@@ -79,13 +77,13 @@ export function collectPendingCompletionNotifications(
           record.view.retryBlocked !== true &&
           record.view.supersededByRunId === undefined &&
           !record.assignment.outcomeUncertain;
-        const objectPart2006_5 = record.view.profile
-          ? { ...objectPart2006_4, profile: record.view.profile }
-          : objectPart2006_4;
-        const objectPart2006_6 = retryAvailable
-          ? { ...objectPart2006_5, retryAvailable: true, remainingCandidateCount }
-          : objectPart2006_5;
-        return objectPart2006_6;
+        const withProfile = record.view.profile
+          ? { ...withRetained, profile: record.view.profile }
+          : withRetained;
+        const withRetryAvailableAndRemainingCandidateCount = retryAvailable
+          ? { ...withProfile, retryAvailable: true, remainingCandidateCount }
+          : withProfile;
+        return withRetryAvailableAndRemainingCandidateCount;
       })(),
     ];
   });

@@ -70,7 +70,7 @@ export interface LocalCliTransportRequest {
 const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
   new SubagentProcessError(
     (() => {
-      const objectPart2651_0 = {
+      const baseResult = {
         operation,
         message:
           error instanceof Error
@@ -79,8 +79,8 @@ const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: 
               ? error
               : `Unable to ${operation} local CLI process.`,
       };
-      const objectPart2651_1 = code ? { ...objectPart2651_0, code } : objectPart2651_0;
-      return objectPart2651_1;
+      const withCode = code ? { ...baseResult, code } : baseResult;
+      return withCode;
     })(),
   );
 
@@ -209,10 +209,10 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
         settled = true;
         Queue.endUnsafe(events);
         const event: Extract<LocalCliWireEvent, { readonly type: "exit" }> = (() => {
-          const objectPart7875_0 = { type: "exit" as const, exitCode };
-          const objectPart7875_1 = signal ? { ...objectPart7875_0, signal } : objectPart7875_0;
-          const objectPart7875_2 = { ...objectPart7875_1, stderr: readTail(stderr) };
-          return objectPart7875_2;
+          const baseResult = { type: "exit" as const, exitCode };
+          const withSignal = signal ? { ...baseResult, signal } : baseResult;
+          const withStderr = { ...withSignal, stderr: readTail(stderr) };
+          return withStderr;
         })();
         Deferred.doneUnsafe(exited, Effect.succeed(event));
       };

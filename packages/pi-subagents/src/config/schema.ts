@@ -228,12 +228,12 @@ export function decodeSubagentConfig<InputInput>(
 
   return {
     file: (() => {
-      const objectPart8161_0 = {};
-      const objectPart8161_1 =
-        version === SUBAGENT_CONFIG_VERSION ? { ...objectPart8161_0, version } : objectPart8161_0;
-      const objectPart8161_2 =
-        Object.keys(profiles).length > 0 ? { ...objectPart8161_1, profiles } : objectPart8161_1;
-      return objectPart8161_2;
+      const baseResult = {};
+      const withVersion =
+        version === SUBAGENT_CONFIG_VERSION ? { ...baseResult, version } : baseResult;
+      const withProfiles =
+        Object.keys(profiles).length > 0 ? { ...withVersion, profiles } : withVersion;
+      return withProfiles;
     })(),
     diagnostics: [...new Set(diagnostics)],
     invalidProfileRoutes,

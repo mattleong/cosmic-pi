@@ -436,7 +436,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     const candidateIndex = this.candidateIndex;
     this.selectPage = makeCandidateFieldSelector(
       (() => {
-        const objectPart15278_0 = {
+        const baseResult = {
           theme: this.options.theme,
           profile: this.profile(),
           candidateIndex,
@@ -449,9 +449,9 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           supportedEfforts,
           fastModeAvailable,
         };
-        const objectPart15278_1 = notice ? { ...objectPart15278_0, notice } : objectPart15278_0;
-        const objectPart15278_2 = {
-          ...objectPart15278_1,
+        const withNotice = notice ? { ...baseResult, notice } : baseResult;
+        const withGetHeightAndAdditionalFields = {
+          ...withNotice,
           getHeight: this.options.getHeight,
           requestRender: this.options.requestRender,
           matchesKeybinding: this.options.matchesKeybinding,
@@ -481,7 +481,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
             this.renderSoon();
           },
         };
-        return objectPart15278_2;
+        return withGetHeightAndAdditionalFields;
       })(),
     );
     this.selectPage.focused = this._focused;
@@ -593,7 +593,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         }
         this.modelPicker = new ProfileModelPickerPage(
           (() => {
-            const objectPart20279_0 = {
+            const baseResult = {
               theme: this.options.theme,
               choices: picker.choices,
               current: preferAdvertisedDefault
@@ -605,11 +605,11 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
               matchesKeybinding: this.options.matchesKeybinding,
               keybindingLabel: this.options.keybindingLabel,
             };
-            const objectPart20279_1 = picker.warning
-              ? { ...objectPart20279_0, notice: picker.warning }
-              : objectPart20279_0;
-            const objectPart20279_2 = {
-              ...objectPart20279_1,
+            const withNotice = picker.warning
+              ? { ...baseResult, notice: picker.warning }
+              : baseResult;
+            const withSelectAndCancel = {
+              ...withNotice,
               select: (choice: ProfileModelChoice) => {
                 this.modelPicker = undefined;
                 this.candidateIndex = candidateIndex;
@@ -632,7 +632,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
                 this.renderSoon();
               },
             };
-            return objectPart20279_2;
+            return withSelectAndCancel;
           })(),
         );
         this.modelPicker.focused = this._focused;
@@ -648,18 +648,16 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private openProfileSearch(initialQuery = ""): void {
     this.selectPage = makeProfileSearchSelector(
       (() => {
-        const objectPart22002_0 = {
+        const baseResult = {
           theme: this.options.theme,
           inspection: this.inspection,
           current: this.profile(),
           parentEffort: this.options.parentEffort,
           parentModel: this.options.parentModel,
         };
-        const objectPart22002_1 = initialQuery
-          ? { ...objectPart22002_0, initialQuery }
-          : objectPart22002_0;
-        const objectPart22002_2 = {
-          ...objectPart22002_1,
+        const withInitialQuery = initialQuery ? { ...baseResult, initialQuery } : baseResult;
+        const withGetHeightAndAdditionalFields = {
+          ...withInitialQuery,
           getHeight: this.options.getHeight,
           requestRender: this.options.requestRender,
           matchesKeybinding: this.options.matchesKeybinding,
@@ -679,7 +677,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
             this.renderSoon();
           },
         };
-        return objectPart22002_2;
+        return withGetHeightAndAdditionalFields;
       })(),
     );
     this.selectPage.focused = this._focused;
@@ -989,7 +987,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
             : this.pendingAction
               ? profileWorkspaceConfirmation(
                   (() => {
-                    const objectPart33514_0 = {
+                    const baseResult = {
                       action: this.pendingAction,
                       profile,
                       candidateIndex: this.candidateIndex,
@@ -998,15 +996,15 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
                       projectOverrideActive:
                         this.scope === "global" && this.projectOverrideActive(),
                     };
-                    const objectPart33514_1 =
+                    const withCurrentSummaryAndAfterSummary =
                       this.pendingAction === "reset"
                         ? {
-                            ...objectPart33514_0,
+                            ...baseResult,
                             currentSummary: resetCurrent,
                             afterSummary: resetAfter,
                           }
-                        : objectPart33514_0;
-                    return objectPart33514_1;
+                        : baseResult;
+                    return withCurrentSummaryAndAfterSummary;
                   })(),
                 )
               : undefined,

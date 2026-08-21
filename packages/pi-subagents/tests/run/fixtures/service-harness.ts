@@ -234,15 +234,15 @@ export function fakeChildLayer(
                         data:
                           command.type === "get_state"
                             ? (() => {
-                                const objectPart10288_0 = { sessionId: "child-session" };
-                                const objectPart10288_1 = options.omitSessionFile
-                                  ? objectPart10288_0
+                                const baseResult = { sessionId: "child-session" };
+                                const withSessionFile = options.omitSessionFile
+                                  ? baseResult
                                   : {
-                                      ...objectPart10288_0,
+                                      ...baseResult,
                                       sessionFile: "/tmp/child-session.jsonl",
                                     };
-                                const objectPart10288_2 = {
-                                  ...objectPart10288_1,
+                                const withThinkingLevelAndAdditionalFields = {
+                                  ...withSessionFile,
                                   thinkingLevel: options.stateThinkingLevel ?? "high",
                                   model: {
                                     provider: "openai-codex",
@@ -258,7 +258,7 @@ export function fakeChildLayer(
                                   messageCount: 0,
                                   pendingMessageCount: 0,
                                 };
-                                return objectPart10288_2;
+                                return withThinkingLevelAndAdditionalFields;
                               })()
                             : undefined,
                       },
@@ -537,15 +537,13 @@ export function fakeRetainedBackendLayer(
                       const code = startFailures.shift();
                       return yield* new SubagentProcessError(
                         (() => {
-                          const objectPart21490_0 = { operation: "start assignment in" };
-                          const objectPart21490_1 = code
-                            ? { ...objectPart21490_0, code }
-                            : objectPart21490_0;
-                          const objectPart21490_2 = {
-                            ...objectPart21490_1,
+                          const baseResult = { operation: "start assignment in" };
+                          const withCode = code ? { ...baseResult, code } : baseResult;
+                          const withMessage = {
+                            ...withCode,
                             message: "Fixture retained start failure.",
                           };
-                          return objectPart21490_2;
+                          return withMessage;
                         })(),
                       );
                     }
