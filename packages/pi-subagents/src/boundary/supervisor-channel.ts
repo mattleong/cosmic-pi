@@ -354,18 +354,28 @@ const closeServer = (server: Server): Promise<void> =>
     server.close((error) => (error ? rejectClose(error) : resolveClose()));
   });
 
+/**
+ * A peer send rejected before any bytes were handed to the socket, so the message
+ * definitively never reached the transport and resending it is safe. Constructed as a
+ * Promise rejection reason at this boundary and discriminated by its tag there.
+ */
+export class PeerSendNotAttemptedError extends Schema.TaggedError<PeerSendNotAttemptedError>()(
+  "PeerSendNotAttemptedError",
+  { reason: Schema.Literals(["unavailable", "oversized"]) },
+) {}
+
 const makePeerSender = (socket: Socket, onFailure: () => void) => {
   let writeTail: Promise<void> = Promise.resolve();
   let pendingWrites = 0;
   return (message: SupervisorServerMessage): Promise<void> => {
     if (socket.destroyed || pendingWrites >= MAX_PENDING_WRITES) {
       onFailure();
-      return Promise.reject(new Error("socket-write-unavailable"));
+      return Promise.reject(new PeerSendNotAttemptedError({ reason: "unavailable" }));
     }
     const line = `${JSON.stringify(message)}\n`;
     if (Buffer.byteLength(line, "utf8") > MAX_SUPERVISOR_CHANNEL_LINE_BYTES) {
       onFailure();
-      return Promise.reject(new Error("socket-write-oversized"));
+      return Promise.reject(new PeerSendNotAttemptedError({ reason: "oversized" }));
     }
     pendingWrites += 1;
     const write = writeTail.then(
@@ -1210,15 +1220,24 @@ export const makeSupervisorChannel = (
                   message,
                 }),
               ),
-            catch: () => {
-              // A throwing send never reached the transport, so the reply cannot have
-              // been delivered: release the question for a later retry instead of
-              // leaving it installed but permanently unrepliable.
-              if (state.pendingQuestion === pending) pending.replyStarted = false;
+            catch: (error) => {
+              // Only a pre-write rejection proves nothing reached the transport; release
+              // the question for a later retry instead of leaving it installed but
+              // permanently unrepliable.
+              if (error instanceof PeerSendNotAttemptedError) {
+                if (state.pendingQuestion === pending) pending.replyStarted = false;
+                return channelError(
+                  "reply",
+                  "reply_send_failed",
+                  "The parent reply was not sent; the question remains open for retry.",
+                );
+              }
+              // A write-callback failure may race bytes already handed to the OS socket,
+              // so delivery is genuinely uncertain and the reply must not be retried.
               return channelError(
                 "reply",
                 "reply_outcome_uncertain",
-                "The exact parent reply could not be sent; the question remains open for retry.",
+                "The exact parent reply may have been delivered despite the send failure; it will not be retried automatically.",
               );
             },
           });

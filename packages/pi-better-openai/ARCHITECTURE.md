@@ -22,7 +22,7 @@ Adds OpenAI subscription usage, fast-mode request injection, provider-native com
 - The remaining `src/image/` modules own types, pure helpers, host registration, and protocol.
 - `src/config/`, `src/fast/controller.ts`, `src/fast/routing.ts`, `src/fast/models.ts`, `src/usage/format.ts`, and `src/image/protocol.ts` contain schemas and deterministic policy/protocol logic.
 - `src/boundary/` isolates Pi UI, provider-header and cached-transport adaptation, model registry, OpenAI compaction HTTP, and Sharp.
-- `src/ui/primitives.ts` and `src/footer/` consume synchronous frozen projections; the image tool renders through the `pi-code-previews` cooperative shell.
+- `src/ui/primitives.ts`, `src/ui/notify-text.ts`, and `src/footer/` consume synchronous frozen projections; `notify-text.ts` formats bounded host-notification failure details; the image tool renders through the `pi-code-previews` cooperative shell.
 - `src/settings/controller.ts` registers settings commands/pickers with finite argument completions and pure command dispatch (shared `completeSettingsArguments`/`dispatchSettingsCommand` from `pi-cosmic-core`; `diagnostics` is the only diagnostics verb — there is no `debug` alias and the picker's diagnostics item id is `diagnostics`) and composes the hierarchical settings surface through the shared `pi-cosmic-ui/manager/settings-surface` factory (this package's `safeHostUi` guard stays injected at the boundary).
 
 ## State and resources

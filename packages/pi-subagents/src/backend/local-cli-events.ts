@@ -40,14 +40,18 @@ export const makeLocalCliRawEventOwnership = (
       if (raw) rawOwners.set(event, raw);
       let offered = false;
       return Queue.offer(events, event).pipe(
-        Effect.tap(() => Effect.sync(() => void (offered = true))),
+        Effect.tap((delivered) => Effect.sync(() => void (offered = delivered))),
         Effect.ensuring(
-          offered
-            ? Effect.void
-            : // Make overflow losses diagnosable instead of acknowledging them silently.
-              Effect.logWarning(
-                `Subagent local-CLI event ingress overflowed; dropped a ${event.type} event.`,
-              ).pipe(Effect.andThen(Effect.sync(() => raw && acknowledge(event)))),
+          // The branch must be deferred to finalizer time: evaluating it while building
+          // the pipe would read `offered` before the offer ever ran.
+          Effect.suspend(() =>
+            offered
+              ? Effect.void
+              : // Make overflow losses diagnosable instead of acknowledging them silently.
+                Effect.logWarning(
+                  `Subagent local-CLI event ingress overflowed; dropped a ${event.type} event.`,
+                ).pipe(Effect.andThen(Effect.sync(() => raw && acknowledge(event)))),
+          ),
         ),
         Effect.asVoid,
       );

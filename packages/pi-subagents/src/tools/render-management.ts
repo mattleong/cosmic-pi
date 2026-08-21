@@ -58,6 +58,8 @@ export const failureRecovery = (
     return "Wait for automatic outcome delivery or claim the current outcome with subagent_await, then retry.";
   if (normalizedCode.includes("reply_outcome_uncertain"))
     return "Do not resend the reply automatically; inspect subagent_status and wait for the run's next event.";
+  if (normalizedCode.includes("reply_send_failed"))
+    return "The reply was never delivered and the question is still pending; resend it with subagent_reply.";
   if (normalizedCode.includes("question_ownership_mismatch"))
     return "The question is no longer pending; refresh the run with subagent_status before taking another action.";
   if (

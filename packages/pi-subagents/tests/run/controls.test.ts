@@ -566,6 +566,52 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect("rolls back a definitely unsent reply and keeps the question answerable", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "unsent-reply" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "unsent-question",
+        kind: "question",
+        message: "Proceed with the retry plan?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+
+      fake.controls[0]?.failNextIpc("transport_not_sent");
+      expect(yield* service.reply(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({
+        code: "reply_send_failed",
+      });
+      // A pre-send failure proves non-delivery: the question rolls back for an immediate retry.
+      const status = yield* service.status(run.id);
+      expect(status.state).toBe("waiting_for_parent");
+      expect(status.question).toMatchObject({ requestId: "unsent-question" });
+      expect(status.warning).toBeUndefined();
+
+      expect((yield* service.reply(run.id, "Proceed.")).state).toBe("running");
+      expect(fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply")).toEqual([
+        {
+          channel: "pi-subagents",
+          type: "parent_reply",
+          requestId: "unsent-question",
+          message: "Proceed.",
+        },
+        {
+          channel: "pi-subagents",
+          type: "parent_reply",
+          requestId: "unsent-question",
+          message: "Proceed.",
+        },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("clears an uncertain reply claim after terminal settlement and a resumed turn", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];

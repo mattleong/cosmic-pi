@@ -83,6 +83,35 @@ describe("local process boundary", () => {
     ),
   );
 
+  it.effect("passes an oversized chunk through whole while ingress still has capacity", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        const processes = yield* LocalProcess;
+        // One write far larger than maxEventBytes (= ingressBufferBytes / INGRESS_CHUNKS = 32):
+        // truncation must wait for real backpressure, not trigger on the first chunk.
+        const handle = yield* processes.spawn({
+          command: `node -e "process.stdout.write('A'.repeat(2000))"`,
+          cwd: ".",
+          ingressBufferBytes: 1024,
+        });
+        const result = yield* Effect.all(
+          {
+            events: Stream.fromQueue(handle.output).pipe(Stream.runCollect),
+            exit: handle.awaitExit,
+          },
+          { concurrency: "unbounded" },
+        );
+        expect(result.exit.exitCode).toBe(0);
+        const stdout = [...result.events]
+          .filter((event) => event.stream === "stdout")
+          .map((event) => event.text)
+          .join("");
+        expect(stdout).toBe("A".repeat(2000));
+        expect(handle.droppedOutputBytes()).toBe(0);
+      }),
+    ),
+  );
+
   it.effect("settles after killing descendants that retain inherited pipes", () =>
     withLocalProcess(
       Effect.gen(function* () {

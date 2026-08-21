@@ -19,6 +19,7 @@ import * as Scope from "effect/Scope";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   makeSupervisorChannel,
+  PeerSendNotAttemptedError,
   type SupervisorChannelHandle,
 } from "../src/boundary/supervisor-channel.ts";
 import {
@@ -262,6 +263,16 @@ const connectionConfig = async (handle: SupervisorChannelHandle) =>
   };
 
 describe("private supervisor channel", () => {
+  it("discriminates pre-write peer send failures from write-callback failures", () => {
+    const unsent = new PeerSendNotAttemptedError({ reason: "oversized" });
+    expect(unsent._tag).toBe("PeerSendNotAttemptedError");
+    expect(unsent.reason).toBe("oversized");
+    expect(unsent instanceof PeerSendNotAttemptedError).toBe(true);
+    // A write-callback failure may race bytes already handed to the OS socket, so it is
+    // deliberately NOT classified as unsent.
+    expect(new Error("write after end") instanceof PeerSendNotAttemptedError).toBe(false);
+  });
+
   it("constructs authenticated server messages with reserved fields authoritative", () => {
     expect(Option.isSome(SupervisorAuthTokenSchema.makeOption("a".repeat(64)))).toBe(true);
     expect(Option.isNone(SupervisorAuthTokenSchema.makeOption("short"))).toBe(true);

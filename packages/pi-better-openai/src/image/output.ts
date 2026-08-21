@@ -210,7 +210,12 @@ export const makeImageOutput = (dependencies: {
                   // so only a positive identity mismatch unlinks the published file.
                   const published = yield* fs.stat(destination).pipe(
                     Effect.option,
-                    Effect.catchCause(() => Effect.succeed(Option.none())),
+                    Effect.catchCause(() =>
+                      // Verification loss must stay visible even though it cannot undo the commit.
+                      Effect.logWarning(
+                        "OpenAI image post-commit verification could not stat the destination; skipping identity check.",
+                      ).pipe(Effect.as(Option.none())),
+                    ),
                   );
                   if (Option.isNone(published)) return;
                   const publishedStat = published.value;

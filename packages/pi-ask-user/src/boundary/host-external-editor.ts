@@ -52,8 +52,9 @@ function launch(command: string, file: string, signal: AbortSignal): Promise<num
     }
     // The Windows branch interpolates the path into a cmd.exe command line, so beyond
     // quotes it must not contain percent expansion or control characters either.
-    // Fail closed instead of attempting full cmd escaping.
-    if (file.includes('"') || /[%\p{Cc}]/u.test(file)) {
+    // Fail closed instead of attempting full cmd escaping. The POSIX branch passes the
+    // path as positional argv ("$1"), where those characters are safe.
+    if (process.platform === "win32" && (file.includes('"') || /[%\p{Cc}]/u.test(file))) {
       reject(new Error("External-editor temporary path contains unsupported characters."));
       return;
     }

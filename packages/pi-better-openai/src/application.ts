@@ -22,6 +22,7 @@ import {
 } from "./boundary/host-provider-routing.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
+import { describeHostFailure } from "./ui/notify-text.ts";
 import { type OpenAIConfigError, type ResolvedConfig } from "./config/index.ts";
 import {
   fastDebugLines,
@@ -228,8 +229,10 @@ export function betterOpenAIWithDependencies(
           ),
         ),
         safeHostSignal(ctx),
-      ).catch(() => {
-        safeHostUi(() => ctx.ui.notify("OpenAI fast mode is unavailable.", "warning"));
+      ).catch((error) => {
+        safeHostUi(() =>
+          ctx.ui.notify(`OpenAI fast mode is unavailable${describeHostFailure(error)}.`, "warning"),
+        );
       });
     },
   });
@@ -240,8 +243,10 @@ export function betterOpenAIWithDependencies(
       return run(
         OpenAIUsageService.use((service) => service.refresh({ notify: true, force: true })),
         safeHostSignal(ctx),
-      ).catch(() => {
-        safeHostUi(() => ctx.ui.notify("OpenAI usage is unavailable.", "warning"));
+      ).catch((error) => {
+        safeHostUi(() =>
+          ctx.ui.notify(`OpenAI usage is unavailable${describeHostFailure(error)}.`, "warning"),
+        );
       });
     },
   });

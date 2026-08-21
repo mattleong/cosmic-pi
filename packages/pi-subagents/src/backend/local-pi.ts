@@ -291,19 +291,23 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       rawEventOwners.set(event, raw);
       let offered = false;
       return Queue.offer(events, event).pipe(
-        Effect.tap(() =>
+        Effect.tap((delivered) =>
           Effect.sync(() => {
-            offered = true;
+            offered = delivered;
           }),
         ),
         Effect.ensuring(
-          offered
-            ? Effect.void
-            : // A dropped settlement/report degrades until process exit; make the loss
-              // diagnosable instead of acknowledging it silently.
-              Effect.logWarning(
-                `Subagent local-Pi event ingress overflowed; dropped a ${event.type} event.`,
-              ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event)))),
+          // The branch must be deferred to finalizer time: evaluating it while building
+          // the pipe would read `offered` before the offer ever ran.
+          Effect.suspend(() =>
+            offered
+              ? Effect.void
+              : // A dropped settlement/report degrades until process exit; make the loss
+                // diagnosable instead of acknowledging it silently.
+                Effect.logWarning(
+                  `Subagent local-Pi event ingress overflowed; dropped a ${event.type} event.`,
+                ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event)))),
+          ),
         ),
         Effect.asVoid,
       );

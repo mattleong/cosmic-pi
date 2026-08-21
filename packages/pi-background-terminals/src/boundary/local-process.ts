@@ -169,6 +169,9 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     const droppedBytes = totalDroppedBytes - reportedDroppedBytes;
     // Idle-capacity fast path: a chunk passes through whole while the queue still has
     // room, so ordinary large pipe writes are not truncated before backpressure exists.
+    // Trade-off: while idle, queued bytes are bounded by INGRESS_CHUNKS × the largest
+    // pipe chunk (~2 MB per job), NOT by ingressBufferBytes — that budget only bounds
+    // how much of each chunk survives once backpressure starts dropping heads.
     if (Queue.offerUnsafe(output, { stream, text: original, droppedBytes })) {
       reportedDroppedBytes = totalDroppedBytes;
       return;

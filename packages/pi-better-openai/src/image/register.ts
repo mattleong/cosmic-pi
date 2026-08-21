@@ -9,6 +9,7 @@ import * as Predicate from "effect/Predicate";
 import { withCodePreviewShell } from "pi-code-previews";
 import { safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import { isImageContent, resultText } from "./helpers.ts";
+import { describeHostFailure } from "../ui/notify-text.ts";
 import { OpenAIImageService } from "./service.ts";
 import {
   OPENAI_IMAGE_COMMAND,
@@ -94,8 +95,13 @@ export function registerOpenAIImage(
             details: result,
           }),
         )
-        .catch(() => {
-          safeHostUi(() => ctx.ui.notify("OpenAI image generation failed.", "warning"));
+        .catch((error) => {
+          safeHostUi(() =>
+            ctx.ui.notify(
+              `OpenAI image generation failed${describeHostFailure(error)}.`,
+              "warning",
+            ),
+          );
         });
     },
   });

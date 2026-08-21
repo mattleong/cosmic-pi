@@ -285,15 +285,24 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           }),
         );
         const commit = claimed.process.controls.reply(claimed.question.requestId, normalized).pipe(
-          Effect.mapError((error) =>
-            error._tag === "SubagentProcessError" && error.code === "transport_outcome_uncertain"
+          Effect.mapError((error) => {
+            if (error._tag !== "SubagentProcessError") return error;
+            // A pre-send failure proves the reply never reached the transport, so the
+            // question rolls back for an immediate retry instead of surfacing ambiguity.
+            if (error.code === "transport_not_sent")
+              return new SubagentProcessError({
+                operation: "reply",
+                code: "reply_send_failed",
+                message: `The reply to subagent ${id} was not sent; the question remains open for a retry. (${error.message})`,
+              });
+            return error.code === "transport_outcome_uncertain"
               ? new SubagentProcessError({
                   operation: "reply",
                   code: "reply_outcome_uncertain",
                   message: `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
                 })
-              : error,
-          ),
+              : error;
+          }),
           Effect.andThen(Clock.currentTimeMillis),
           Effect.flatMap((now) =>
             withLock(

@@ -4,6 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as TestClock from "effect/testing/TestClock";
 import {
   capturedTelemetrySnapshot,
   jsonHttpRawResponse,
@@ -87,25 +88,30 @@ describe("xAI authentication", () => {
           type: "oauth",
           access: expiredAccess,
           refresh: refreshSecret,
-          // Genuinely expired even under the frozen TestClock (t=0), well past any
-          // refresh skew: refresh is due, and a still-valid file token must NOT mask
-          // the registry fallback.
-          expires: -10_000_000,
+          expires: 3_600_000,
         },
       },
     });
+    let refreshAttempts = 0;
     const logger = makeCapturedLogger();
     const tracer = makeCapturedTracer();
     const layer = Layer.mergeAll(
       documents.layer,
       registryLayer(registrySecret),
-      jsonHttpTestLayer(() => Effect.succeed(jsonHttpRawResponse(503, "provider-secret-body"))),
+      jsonHttpTestLayer(() => {
+        refreshAttempts += 1;
+        return Effect.succeed(jsonHttpRawResponse(503, "provider-secret-body"));
+      }),
       logger.layer,
       tracer.layer,
     );
 
     return Effect.gen(function* () {
+      // Advance past expiry (plus skew) so the refresh fires and the still-valid-token
+      // guard cannot mask the registry fallback.
+      yield* TestClock.setTime(4_000_000);
       const result = yield* getXaiCredentialsResult(authPath);
+      expect(refreshAttempts).toBe(1);
       expect(result._tag).toBe("Found");
       if (result._tag === "Found") {
         expect(result.credentials.source).toBe("modelRegistry");
@@ -135,13 +141,18 @@ describe("xAI authentication", () => {
         },
       },
     });
+    let refreshAttempts = 0;
     const layer = Layer.mergeAll(
       documents.layer,
       registryLayer("registry-fallback-secret"),
-      jsonHttpTestLayer(() => Effect.succeed(jsonHttpRawResponse(503, "provider-secret-body"))),
+      jsonHttpTestLayer(() => {
+        refreshAttempts += 1;
+        return Effect.succeed(jsonHttpRawResponse(503, "provider-secret-body"));
+      }),
     );
     return Effect.gen(function* () {
       const result = yield* getXaiCredentialsResult(authPath);
+      expect(refreshAttempts).toBe(1);
       expect(result._tag).toBe("Found");
       if (result._tag === "Found") {
         expect(result.credentials.source).toBe("authFile");
