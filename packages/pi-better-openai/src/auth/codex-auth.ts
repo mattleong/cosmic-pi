@@ -158,6 +158,9 @@ export const getCodexCredentialsResult = Effect.fn("CodexAuth.getCredentialsResu
     const registry = yield* parseCodexRegistryCredentials(
       Predicate.isString(registryRaw.success) ? registryRaw.success : undefined,
     );
+    // Deliberate precedence: a registry API key wins over an existing auth-file OAuth
+    // token (the inverse of the xAI package). Registry credentials are the
+    // subscription-native path; change only with intent.
     if (registry)
       return {
         _tag: "Found",

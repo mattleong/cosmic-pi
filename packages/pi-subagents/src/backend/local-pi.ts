@@ -297,9 +297,13 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
           }),
         ),
         Effect.ensuring(
-          Effect.sync(() => {
-            if (!offered) acknowledge(event);
-          }),
+          offered
+            ? Effect.void
+            : // A dropped settlement/report degrades until process exit; make the loss
+              // diagnosable instead of acknowledging it silently.
+              Effect.logWarning(
+                `Subagent local-Pi event ingress overflowed; dropped a ${event.type} event.`,
+              ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event)))),
         ),
         Effect.asVoid,
       );

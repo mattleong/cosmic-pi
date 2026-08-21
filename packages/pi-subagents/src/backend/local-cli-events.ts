@@ -42,9 +42,12 @@ export const makeLocalCliRawEventOwnership = (
       return Queue.offer(events, event).pipe(
         Effect.tap(() => Effect.sync(() => void (offered = true))),
         Effect.ensuring(
-          Effect.sync(() => {
-            if (!offered && raw) acknowledge(event);
-          }),
+          offered
+            ? Effect.void
+            : // Make overflow losses diagnosable instead of acknowledging them silently.
+              Effect.logWarning(
+                `Subagent local-CLI event ingress overflowed; dropped a ${event.type} event.`,
+              ).pipe(Effect.andThen(Effect.sync(() => raw && acknowledge(event)))),
         ),
         Effect.asVoid,
       );

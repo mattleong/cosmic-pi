@@ -1211,12 +1211,17 @@ export const makeSupervisorChannel = (
                   message,
                 }),
               ),
-            catch: () =>
-              channelError(
+            catch: () => {
+              // A throwing send never reached the transport, so the reply cannot have
+              // been delivered: release the question for a later retry instead of
+              // leaving it installed but permanently unrepliable.
+              if (state.pendingQuestion === pending) pending.replyStarted = false;
+              return channelError(
                 "reply",
                 "reply_outcome_uncertain",
-                "The exact parent reply may have been delivered; it will not be retried automatically.",
-              ),
+                "The exact parent reply could not be sent; the question remains open for retry.",
+              );
+            },
           });
           const acknowledged = yield* Deferred.await(pending.acknowledgement).pipe(
             Effect.timeoutOption(REPLY_TIMEOUT),

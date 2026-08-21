@@ -118,11 +118,11 @@ export function parseWeeklyBilling<PayloadInput>(
 > {
   const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WeeklyBillingSchema)(payload));
   const config = decoded?.config;
+  // A decodable payload without creditUsagePercent is "unknown", not "0 used":
+  // rendering 0 would claim certainty ("100% left") the provider never reported.
   const weeklyUsedPercent = Predicate.isNumber(config?.creditUsagePercent)
     ? clampPercent(config.creditUsagePercent)
-    : config
-      ? 0
-      : null;
+    : null;
   const resetIso = config?.billingPeriodEnd ?? config?.currentPeriod?.end;
   return {
     weeklyUsedPercent,

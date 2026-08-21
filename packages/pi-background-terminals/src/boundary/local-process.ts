@@ -166,10 +166,21 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;
+    const droppedBytes = totalDroppedBytes - reportedDroppedBytes;
+    // Idle-capacity fast path: a chunk passes through whole while the queue still has
+    // room, so ordinary large pipe writes are not truncated before backpressure exists.
+    if (Queue.offerUnsafe(output, { stream, text: original, droppedBytes })) {
+      reportedDroppedBytes = totalDroppedBytes;
+      return;
+    }
+    // Backpressure: retain only the budgeted tail of this chunk.
     const tail = utf8Tail(original, maxEventBytes);
     totalDroppedBytes += utf8ByteLength(original) - tail.bytes;
-    const droppedBytes = totalDroppedBytes - reportedDroppedBytes;
-    if (tail.text && Queue.offerUnsafe(output, { stream, text: tail.text, droppedBytes })) {
+    const retriedDropped = totalDroppedBytes - reportedDroppedBytes;
+    if (
+      tail.text &&
+      Queue.offerUnsafe(output, { stream, text: tail.text, droppedBytes: retriedDropped })
+    ) {
       reportedDroppedBytes = totalDroppedBytes;
     } else {
       totalDroppedBytes += tail.bytes;
