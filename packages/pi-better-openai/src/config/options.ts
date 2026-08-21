@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { isJsonObject, type JsonObject } from "pi-cosmic-core";
+import { sectionSettingValue, type JsonObject } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
 import {
   FOOTER_MODES,
@@ -168,20 +168,12 @@ export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
   if (!descriptor) return (current: JsonObject): JsonObject => ({ ...current });
   const parsedValue = yield* descriptor.decode(rawValue);
-  return (current: JsonObject): JsonObject => {
-    const next: JsonObject = { ...current };
-    const separator = descriptor.id.indexOf(".");
-    if (separator < 0) next[descriptor.id] = parsedValue;
-    else {
-      const sectionName = descriptor.id.slice(0, separator);
-      const key = descriptor.id.slice(separator + 1);
-      const currentSection = next[sectionName];
-      const section: JsonObject = isJsonObject(currentSection)
-        ? Object.fromEntries(Object.entries(currentSection))
-        : {};
-      section[key] = parsedValue;
-      next[sectionName] = section;
-    }
-    return next;
-  };
+  const separator = descriptor.id.indexOf(".");
+  if (separator < 0)
+    return (current: JsonObject): JsonObject => ({ ...current, [descriptor.id]: parsedValue });
+  return sectionSettingValue(
+    descriptor.id.slice(0, separator),
+    descriptor.id.slice(separator + 1),
+    parsedValue,
+  );
 });

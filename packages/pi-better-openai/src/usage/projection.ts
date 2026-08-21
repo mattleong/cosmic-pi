@@ -1,9 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import {
-  freezeSnapshot,
   initialUsageProjection,
+  makeFrozenUsageProjection,
+  resetFrozenUsageProjection,
+  synchronizeUsageProjectionContext,
   withUsageEligibility,
+  type UsageEligibilityStatusTexts,
   type UsageProjectionBase,
 } from "pi-cosmic-core";
 import { isModelUsingOAuth } from "../boundary/model-registry.ts";
@@ -15,16 +18,23 @@ export interface OpenAIProjection extends UsageProjectionBase<ResolvedConfig, Us
   readonly accountId: string | undefined;
 }
 
-export const initialProjection = (): OpenAIProjection => ({
-  ...initialUsageProjection<ResolvedConfig, UsageSnapshot>(),
+type OpenAIProjectionExtras = Pick<OpenAIProjection, "authSource" | "accountId">;
+
+const initialExtras = (): OpenAIProjectionExtras => ({
   authSource: undefined,
   accountId: undefined,
 });
 
-export const makeProjection = () => MutableRef.make(freezeSnapshot(initialProjection()));
+export const initialProjection = (): OpenAIProjection => ({
+  ...initialUsageProjection<ResolvedConfig, UsageSnapshot>(),
+  ...initialExtras(),
+});
+
+export const makeProjection = (): MutableRef.MutableRef<OpenAIProjection> =>
+  makeFrozenUsageProjection<ResolvedConfig, UsageSnapshot, OpenAIProjectionExtras>(initialExtras());
 
 export const resetProjection = (projection: MutableRef.MutableRef<OpenAIProjection>): void => {
-  MutableRef.set(projection, freezeSnapshot(initialProjection()));
+  resetFrozenUsageProjection(projection, initialExtras);
 };
 
 export function usageConfigChanged(left: ResolvedConfig, right: ResolvedConfig): boolean {
@@ -46,23 +56,47 @@ export function isOpenAISubscriptionModel(
   return !cfg.usage.showOnlyOnSubscriptionModels || (isUsingOAuth ?? isModelUsingOAuth(ctx, model));
 }
 
+interface OpenAIUsageDecision {
+  readonly eligible: boolean;
+  readonly clear: boolean;
+  readonly hiddenStatusText: string;
+  readonly unavailableStatusText: string | undefined;
+}
+
+function openAIUsageDecision(
+  state: OpenAIProjection,
+  ctx: ExtensionContext,
+  clearUsageRequested: boolean,
+): OpenAIUsageDecision {
+  try {
+    const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
+    const scopeMatches = state.snapshot?.scope === usageScopeForModel(ctx.model?.id);
+    return {
+      eligible,
+      clear: clearUsageRequested || !scopeMatches,
+      hiddenStatusText: "Usage hidden: current model is not an OpenAI subscription model.",
+      unavailableStatusText: undefined,
+    };
+  } catch {
+    return {
+      eligible: false,
+      clear: true,
+      hiddenStatusText: "Usage unavailable.",
+      unavailableStatusText: "Usage unavailable.",
+    };
+  }
+}
+
 export function synchronizedProjection(
   state: OpenAIProjection,
   ctx: ExtensionContext,
   clearUsage: boolean,
 ): OpenAIProjection {
-  try {
-    const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
-    const scopeMatches = state.snapshot?.scope === usageScopeForModel(ctx.model?.id);
-    return withUsageEligibility(state, eligible, clearUsage || !scopeMatches, {
-      hiddenStatusText: "Usage hidden: current model is not an OpenAI subscription model.",
-    });
-  } catch {
-    return withUsageEligibility(state, false, true, {
-      hiddenStatusText: "Usage unavailable.",
-      unavailableStatusText: "Usage unavailable.",
-    });
-  }
+  const decision = openAIUsageDecision(state, ctx, clearUsage);
+  const texts: UsageEligibilityStatusTexts = { hiddenStatusText: decision.hiddenStatusText };
+  if (decision.unavailableStatusText !== undefined)
+    texts.unavailableStatusText = decision.unavailableStatusText;
+  return withUsageEligibility(state, decision.eligible, decision.clear, texts);
 }
 
 export function synchronizeProjectionContext(
@@ -70,12 +104,19 @@ export function synchronizeProjectionContext(
   ctx: ExtensionContext,
   options: { readonly clearUsage?: boolean } = {},
 ): void {
-  MutableRef.set(
-    projection,
-    freezeSnapshot(
-      synchronizedProjection(MutableRef.get(projection), ctx, options.clearUsage === true),
-    ),
-  );
+  synchronizeUsageProjectionContext(projection, (state) => {
+    const decision = openAIUsageDecision(state, ctx, options.clearUsage === true);
+    const statusTexts: UsageEligibilityStatusTexts = {
+      hiddenStatusText: decision.hiddenStatusText,
+    };
+    if (decision.unavailableStatusText !== undefined)
+      statusTexts.unavailableStatusText = decision.unavailableStatusText;
+    return {
+      eligible: decision.eligible,
+      clearUsage: decision.clear,
+      statusTexts,
+    };
+  });
 }
 
 export function visibleStatusLine(

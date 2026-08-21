@@ -117,6 +117,11 @@ export {
 export {
   initialUsageProjection,
   withUsageEligibility,
+  makeFrozenUsageProjection,
+  resetFrozenUsageProjection,
+  synchronizeUsageProjectionContext,
+  type UsageEligibilityDecision,
+  type UsageEligibilityStatusTexts,
   type UsageProjectionBase,
   type UsageVisibilityFields,
 } from "./src/usage-projection.ts";
@@ -190,6 +195,7 @@ export {
 } from "./src/security/terminal-styled.ts";
 export {
   completeSettingsArguments,
+  sectionSettingValue,
   type SettingsCompletionChoice,
   type SettingsCompletionDescriptor,
 } from "./src/settings-completion.ts";

@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type { JsonObject } from "pi-cosmic-core";
+import { sectionSettingValue, type JsonObject } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
 import { FiniteNumberSchema, FOOTER_MODES, FooterModeSchema } from "./schema.ts";
 
@@ -87,9 +87,6 @@ export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = 
 const SETTINGS_OPTION_BY_ID = new Map(
   SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
 );
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
-const isJsonObject = <Value>(value: Value): value is Value & JsonObject =>
-  Schema.is(JsonObjectSchema)(value);
 
 export type RawConfigUpdate = (current: JsonObject) => JsonObject;
 
@@ -100,13 +97,5 @@ export const decodeSettingUpdate = Effect.fn("XaiConfig.decodeSettingUpdate")(fu
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
   if (!descriptor) return (current: JsonObject) => ({ ...current });
   const parsedValue = yield* descriptor.decode(rawValue);
-  return ((current: JsonObject) => {
-    const next: JsonObject = { ...current };
-    const currentSection = next[descriptor.section];
-    const existing: JsonObject = isJsonObject(currentSection) ? currentSection : {};
-    const section: JsonObject = { ...existing };
-    section[descriptor.key] = parsedValue;
-    next[descriptor.section] = section;
-    return next;
-  }) satisfies RawConfigUpdate;
+  return sectionSettingValue(descriptor.section, descriptor.key, parsedValue);
 });

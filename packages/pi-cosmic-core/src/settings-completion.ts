@@ -1,4 +1,5 @@
 /** Pure slash-command argument completion shared by extension settings surfaces. */
+import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
 
 export interface SettingsCompletionDescriptor {
   readonly id: string;
@@ -50,3 +51,16 @@ export const completeSettingsArguments = (
     }));
   return matches.length > 0 ? matches : null;
 };
+
+/**
+ * Write-side twin of `completeSettingsArguments`: build a document patch that assigns one
+ * settings value into its dotted section (`section` + `key`, e.g. `"footer"` + `"mode"`).
+ * A missing section is created; a non-object section value is replaced.
+ */
+export const sectionSettingValue =
+  (section: string, key: string, value: JsonValue): ((current: JsonObject) => JsonObject) =>
+  (current) => {
+    const existing = current[section];
+    const sectionObject: JsonObject = isJsonObject(existing) ? existing : {};
+    return { ...current, [section]: { ...sectionObject, [key]: value } };
+  };
