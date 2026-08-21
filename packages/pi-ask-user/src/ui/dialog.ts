@@ -374,28 +374,23 @@ export class AskUserDialog implements Focusable {
   }
 
   render(width: number): string[] {
+    const baseModel = {
+      theme: this.options.theme,
+      request: this.options.request,
+      state: this.state,
+    };
+    const modelWithInput = this.input ? { ...baseModel, input: this.input } : baseModel;
+    const modelWithInputError = this.inputError
+      ? { ...modelWithInput, inputError: this.inputError }
+      : modelWithInput;
     return renderQuestionnaireView(
-      (() => {
-        const objectPart11680_0 = {
-          theme: this.options.theme,
-          request: this.options.request,
-          state: this.state,
-        };
-        const objectPart11680_1 = this.input
-          ? { ...objectPart11680_0, input: this.input }
-          : objectPart11680_0;
-        const objectPart11680_2 = this.inputError
-          ? { ...objectPart11680_1, inputError: this.inputError }
-          : objectPart11680_1;
-        const objectPart11680_3 = {
-          ...objectPart11680_2,
-          alternateHelp: this.alternateHelp,
-          externalEditorBusy: this.externalEditorBusy,
-          editor: this.editor,
-          preview: this.preview,
-        };
-        return objectPart11680_3;
-      })(),
+      {
+        ...modelWithInputError,
+        alternateHelp: this.alternateHelp,
+        externalEditorBusy: this.externalEditorBusy,
+        editor: this.editor,
+        preview: this.preview,
+      },
       width,
     );
   }

@@ -35,8 +35,11 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
 - `src/boundary/host-onboarding.ts` — authenticated-model discovery and first-run setup UI.
 - Other `src/boundary/host-*` modules — guarded Pi command, context, notifier, status, and event adapters.
 - `src/ui/review-card.ts` — pure strict card/action decode, sanitization, compact projection, and renderer.
+- `src/ui/projection.ts` — frozen synchronous controller snapshot projection (the sole dashboard input).
 - `src/settings/controller.ts` — exact `/advisor` parser.
 - `src/settings/panels.ts` — contextual dashboard, setup, internal state summary, and usage report.
+- `src/settings/notify.ts` — shared Fix/Dismiss card-action notifications.
+- `src/settings/format.ts` — pure dashboard and usage formatting helpers.
 - `src/config/schema.ts`, `options.ts`, `store.ts` — strict shape/defaults, path/options, and sole persistence door.
 - `src/review/` — concern/blocker schema, prompts, evidence gates, routing, dedupe, lifecycle, budgets, trajectory detection, and bounded observations. The review/checkpoint wire contract is single-shape: `suggestions` is a required array (no dual key sets or downstream fallbacks); a missing array fails the typed parse error path and the advisor fails open.
 - `src/checkpoint/` — compact ledger and checkpoint orchestrator.

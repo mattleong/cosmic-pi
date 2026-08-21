@@ -19,24 +19,25 @@ export class RepositoryProbe extends Context.Service<RepositoryProbe, Repository
     Effect.gen(function* () {
       const exec = yield* PiExec;
       return RepositoryProbe.of({
-        git: Effect.fn("pi-cosmic-ui.probe.git")(function* (cwd, isCurrent = () => true) {
-          const status = yield* exec.exec(
-            "git",
-            ["status", "--short", "--branch", "--untracked-files=normal"],
-            { cwd, timeout: 2_000 },
-          );
-          if (status.code !== 0 || !isCurrent()) return undefined;
-          let result = parseGitStatus(status.stdout);
-          if (!result) return undefined;
-          if (result.staged + result.modified + result.conflicts > 0 && isCurrent()) {
-            const diff = yield* exec
-              .exec("git", ["diff", "--numstat", "HEAD", "--"], { cwd, timeout: 2_000 })
-              .pipe(Effect.option);
-            if (diff._tag === "Some" && diff.value.code === 0 && isCurrent())
-              result = applyGitNumstat(result, diff.value.stdout);
-          }
-          return result;
-        }),
+        git: (cwd, isCurrent = () => true) =>
+          Effect.gen(function* () {
+            const status = yield* exec.exec(
+              "git",
+              ["status", "--short", "--branch", "--untracked-files=normal"],
+              { cwd, timeout: 2_000 },
+            );
+            if (status.code !== 0 || !isCurrent()) return undefined;
+            let result = parseGitStatus(status.stdout);
+            if (!result) return undefined;
+            if (result.staged + result.modified + result.conflicts > 0 && isCurrent()) {
+              const diff = yield* exec
+                .exec("git", ["diff", "--numstat", "HEAD", "--"], { cwd, timeout: 2_000 })
+                .pipe(Effect.option);
+              if (diff._tag === "Some" && diff.value.code === 0 && isCurrent())
+                result = applyGitNumstat(result, diff.value.stdout);
+            }
+            return result;
+          }).pipe(Effect.withSpan("pi-cosmic-ui.probe.git")),
         pullRequest: (cwd) =>
           exec
             .exec("gh", ["pr", "view", "--json", "number", "--jq", ".number"], {

@@ -24,22 +24,15 @@ export function renderSyntaxHighlightedDiff(
   limit: number,
   invalidate?: () => void,
 ): string {
-  return renderDiff(
-    diff,
-    (() => {
-      const objectPart909_0 = {};
-      const objectPart909_1 = lang === undefined ? objectPart909_0 : { ...objectPart909_0, lang };
-      const objectPart909_2 = { ...objectPart909_1, theme, limit };
-      const objectPart909_3 =
-        invalidate === undefined ? objectPart909_2 : { ...objectPart909_2, invalidate };
-      const objectPart909_4 = {
-        ...objectPart909_3,
-        syntaxHighlight: true,
-        wordEmphasis: codePreviewSettings.wordEmphasis,
-      };
-      return objectPart909_4;
-    })(),
-  );
+  const options: DiffRenderOptions = {
+    theme,
+    limit,
+    syntaxHighlight: true,
+    wordEmphasis: codePreviewSettings.wordEmphasis,
+  };
+  if (lang !== undefined) options.lang = lang;
+  if (invalidate !== undefined) options.invalidate = invalidate;
+  return renderDiff(diff, options);
 }
 
 export function renderPlainDiff(diff: string, theme: Theme, limit: number): string {

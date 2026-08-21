@@ -65,16 +65,9 @@ function decodeConfig<ValueInput>(value: ValueInput): CosmicUiConfigFile {
   ).value;
   const order = stringArray(root.footer?.order);
   const hidden = stringArray(root.footer?.hidden);
-  return {
-    footer: (() => {
-      const objectPart2036_0 = { ...footer };
-      const objectPart2036_1 =
-        order !== undefined ? { ...objectPart2036_0, order } : objectPart2036_0;
-      const objectPart2036_2 =
-        hidden !== undefined ? { ...objectPart2036_1, hidden } : objectPart2036_1;
-      return objectPart2036_2;
-    })(),
-  };
+  const base = { ...footer };
+  const withOrder = order !== undefined ? { ...base, order } : base;
+  return { footer: hidden !== undefined ? { ...withOrder, hidden } : withOrder };
 }
 
 const resolveDocuments = (

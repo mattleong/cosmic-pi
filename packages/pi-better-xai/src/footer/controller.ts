@@ -5,7 +5,7 @@ import { createFooterPresenter } from "pi-cosmic-core";
 import type { ResolvedConfig } from "../config/index.ts";
 import { visibleStatusLine, type XaiProjection } from "../usage/index.ts";
 
-export const STATUS_KEY = "better-xai";
+const STATUS_KEY = "better-xai";
 
 export interface FooterController {
   update(ctx: ExtensionContext): void;

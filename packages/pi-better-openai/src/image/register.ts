@@ -49,13 +49,9 @@ export function registerOpenAIImage(
       Predicate.isString(result.data) &&
       Predicate.isString(result.mimeType)
     )
-      image = (() => {
-        const objectPart1904_0 = { data: result.data, mimeType: result.mimeType };
-        const objectPart1904_1 = Predicate.isString(result.savedPath)
-          ? { ...objectPart1904_0, savedPath: result.savedPath }
-          : objectPart1904_0;
-        return objectPart1904_1;
-      })();
+      image = Predicate.isString(result.savedPath)
+        ? { data: result.data, mimeType: result.mimeType, savedPath: result.savedPath }
+        : { data: result.data, mimeType: result.mimeType };
     else if (Array.isArray(message.content)) {
       const part = message.content.find(isImageContent);
       if (part) image = part;
@@ -69,13 +65,9 @@ export function registerOpenAIImage(
           image.data,
           image.mimeType,
           { fallbackColor: (line) => theme.fg("dim", line) },
-          (() => {
-            const objectPart2591_0 = { maxWidthCells: 80, maxHeightCells: 24 };
-            const objectPart2591_1 = image.savedPath
-              ? { ...objectPart2591_0, filename: image.savedPath }
-              : objectPart2591_0;
-            return objectPart2591_1;
-          })(),
+          image.savedPath
+            ? { maxWidthCells: 80, maxHeightCells: 24, filename: image.savedPath }
+            : { maxWidthCells: 80, maxHeightCells: 24 },
         ),
       );
     container.addChild(box);

@@ -2,7 +2,6 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type { AdvisorEffectExecutor } from "./executor.ts";
 
@@ -22,14 +21,6 @@ const runClockTask = (task: () => void): Effect.Effect<void> =>
 
 export const advisorDelayEffect = (milliseconds: number, task: () => void) =>
   Effect.sleep(Duration.millis(milliseconds)).pipe(Effect.andThen(runClockTask(task)));
-
-export const advisorIntervalEffect = (milliseconds: number, task: () => void) =>
-  Effect.sleep(Duration.millis(milliseconds)).pipe(
-    Effect.andThen(
-      Effect.repeat(runClockTask(task), Schedule.fixed(Duration.millis(milliseconds))),
-    ),
-    Effect.asVoid,
-  );
 
 export function advisorDelay(
   executor: Pick<AdvisorEffectExecutor, "fork">,

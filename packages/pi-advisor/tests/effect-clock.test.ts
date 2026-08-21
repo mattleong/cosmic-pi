@@ -11,7 +11,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
-import { advisorDelayEffect, advisorIntervalEffect } from "../src/boundary/clock.ts";
+import { advisorDelayEffect } from "../src/boundary/clock.ts";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import { makeTestChildFactory, type TestChildFactoryOverrides } from "./support/child-factory.ts";
 import { standaloneAdvisorExecutor } from "./support/executor.ts";
@@ -603,22 +603,6 @@ describe("advisor Effect clock boundaries", () => {
     }),
   );
 
-  it.effect("drives spinner polling only after its fixed interval", () =>
-    Effect.gen(function* () {
-      let frames = 0;
-      const fiber = yield* advisorIntervalEffect(120, () => {
-        frames += 1;
-      }).pipe(Effect.forkChild({ startImmediately: true }));
-      yield* TestClock.adjust(119);
-      expect(frames).toBe(0);
-      yield* TestClock.adjust(1);
-      expect(frames).toBe(1);
-      yield* TestClock.adjust(120);
-      expect(frames).toBe(2);
-      yield* Fiber.interrupt(fiber);
-    }),
-  );
-
   it.effect("recovers when a delayed timer callback throws", () =>
     Effect.gen(function* () {
       const fiber = yield* advisorDelayEffect(120, () => {
@@ -626,19 +610,6 @@ describe("advisor Effect clock boundaries", () => {
       }).pipe(Effect.forkChild({ startImmediately: true }));
       yield* TestClock.adjust(120);
       yield* Fiber.join(fiber);
-    }),
-  );
-
-  it.effect("keeps polling after an interval callback throws", () =>
-    Effect.gen(function* () {
-      let attempts = 0;
-      const fiber = yield* advisorIntervalEffect(120, () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("sensitive interval callback failure");
-      }).pipe(Effect.forkChild({ startImmediately: true }));
-      yield* TestClock.adjust(240);
-      expect(attempts).toBe(2);
-      yield* Fiber.interrupt(fiber);
     }),
   );
 });

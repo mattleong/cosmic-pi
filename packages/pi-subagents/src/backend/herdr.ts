@@ -12,6 +12,7 @@ import type {
 } from "../boundary/supervisor-channel.ts";
 import {
   isOutcomeUncertain,
+  processError,
   SubagentProcessError,
   UnsupportedSubagentCapabilityError,
   type SubagentError,
@@ -27,8 +28,6 @@ const PROMPT_EVIDENCE_POLLS = 10;
 /** Bounded grace for sustained `unknown` agent status after a confirmed start. */
 const UNKNOWN_STATUS_POLLS = 20;
 
-const processError = (operation: string, code: string, message: string) =>
-  new SubagentProcessError({ operation, code, message });
 const unsupported = (runtime: SubagentRuntime, capability: string) =>
   new UnsupportedSubagentCapabilityError({
     backend: `herdr/${runtime}`,

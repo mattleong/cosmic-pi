@@ -130,27 +130,23 @@ interface HarnessOptions {
 
 const makeHarness = (cwd: string, options: HarnessOptions = {}) => {
   const state = makeState(options.config ?? {}, options.available ?? true);
-  return makeCodeModeToolExecute(
-    (() => {
-      const objectPart4729_0 = {
-        isCurrent: options.isCurrent ?? (() => true),
-        getState: () => (options.noState === true ? undefined : state),
-        runInSession:
-          options.runInSession ??
-          ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
-        definitions: options.definitions ?? testDefinitions(cwd),
-      };
-      const objectPart4729_1 =
-        options.executeCodeMode === undefined
-          ? objectPart4729_0
-          : { ...objectPart4729_0, executeCodeMode: options.executeCodeMode };
-      const objectPart4729_2 =
-        options.retainFailureDetails === undefined
-          ? objectPart4729_1
-          : { ...objectPart4729_1, retainFailureDetails: options.retainFailureDetails };
-      return objectPart4729_2;
-    })(),
-  );
+  const base = {
+    isCurrent: options.isCurrent ?? (() => true),
+    getState: () => (options.noState === true ? undefined : state),
+    runInSession:
+      options.runInSession ??
+      ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
+    definitions: options.definitions ?? testDefinitions(cwd),
+  };
+  const execute =
+    options.executeCodeMode === undefined
+      ? base
+      : { ...base, executeCodeMode: options.executeCodeMode };
+  const environment =
+    options.retainFailureDetails === undefined
+      ? execute
+      : { ...execute, retainFailureDetails: options.retainFailureDetails };
+  return makeCodeModeToolExecute(environment);
 };
 
 const textOf = (result: { content: ReadonlyArray<{ type: string; text?: string }> }): string =>

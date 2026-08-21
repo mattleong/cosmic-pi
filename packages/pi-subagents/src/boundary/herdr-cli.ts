@@ -12,7 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { HerdrPaneProcessInfo } from "../backend/herdr-shell-readiness.ts";
-import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
+import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
 
 const HERDR_EXECUTABLE = "herdr";
@@ -296,8 +296,6 @@ const inheritedEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
     ),
   );
 
-const processError = (operation: string, code: string, message: string) =>
-  new SubagentProcessError({ operation, code, message });
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
 
@@ -325,7 +323,8 @@ interface BoundedChunks {
   length: number;
 }
 
-const boundedAppend = (target: BoundedChunks, chunk: Buffer, maximum: number): void => {
+/** Head-bounded: keeps the FIRST `maximum` bytes and drops the tail. */
+const appendHeadBounded = (target: BoundedChunks, chunk: Buffer, maximum: number): void => {
   const room = maximum - target.length;
   if (room <= 0) return;
   const accepted = chunk.byteLength <= room ? chunk : chunk.subarray(0, room);
@@ -397,8 +396,8 @@ const run = (
         child.kill();
         return;
       }
-      if (target === "stdout") boundedAppend(stdout, chunk, maximumBytes);
-      else boundedAppend(stderr, chunk, MAX_DIAGNOSTIC_BYTES);
+      if (target === "stdout") appendHeadBounded(stdout, chunk, maximumBytes);
+      else appendHeadBounded(stderr, chunk, MAX_DIAGNOSTIC_BYTES);
     };
     child.once("spawn", () => {
       dispatched = true;

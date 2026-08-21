@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
+import type * as Types from "effect/Types";
 import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
 import { FAST_SERVICE_TIER } from "../fast/models.ts";
 import type { OpenAIProjection } from "../usage/index.ts";
@@ -121,18 +122,10 @@ export class OpenAICompactionService extends Context.Service<
           ]
             .filter((value): value is string => Boolean(value))
             .join("\n\n");
-          const result = yield* client.compact(
-            (() => {
-              const objectPart4544_0 = { model, input };
-              const objectPart4544_1 = instructions
-                ? { ...objectPart4544_0, instructions }
-                : objectPart4544_0;
-              const objectPart4544_2: OpenAICompactRequest = current.fastActive
-                ? { ...objectPart4544_1, serviceTier: FAST_SERVICE_TIER }
-                : objectPart4544_1;
-              return objectPart4544_2;
-            })(),
-          );
+          const request: Types.Mutable<OpenAICompactRequest> = { model, input };
+          if (instructions) request.instructions = instructions;
+          if (current.fastActive) request.serviceTier = FAST_SERVICE_TIER;
+          const result = yield* client.compact(request);
           const now = yield* Clock.currentTimeMillis;
           const checkpoint: OpenAICompactionCheckpoint = {
             version: 1,

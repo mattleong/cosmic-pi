@@ -270,12 +270,9 @@ export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
   const decodedMonthly = monthly.body;
   const decodedWeekly = weekly?._tag === "Accepted" ? weekly.body : undefined;
   const now = yield* Clock.currentTimeMillis;
-  const result: XaiUsageResult = (() => {
-    const objectPart8888_0 = { snapshot: parseUsageSnapshot(decodedMonthly, decodedWeekly, now) };
-    const objectPart8888_1 = credentials.teamId
-      ? { ...objectPart8888_0, teamId: credentials.teamId }
-      : objectPart8888_0;
-    return objectPart8888_1;
-  })();
+  const snapshot = parseUsageSnapshot(decodedMonthly, decodedWeekly, now);
+  const result: XaiUsageResult = credentials.teamId
+    ? { snapshot, teamId: credentials.teamId }
+    : { snapshot };
   return result;
 });

@@ -174,7 +174,7 @@ try {
     if (typeof codeMode.default !== "function") throw new Error("missing code-mode extension export");
     if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function") throw new Error("missing code-preview public exports");
     if (typeof runtime.CodeMode?.make !== "function" || typeof runtime.Tool?.make !== "function") throw new Error("missing source-loaded Code Mode runtime exports");
-    if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== "function") throw new Error("missing Cosmic UI protocol exports");
+    if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1) throw new Error("missing Cosmic UI protocol exports");
     if (typeof client.createCosmicFooterClient !== "function") throw new Error("missing Cosmic UI client export");
     if (typeof manager.renderResponsiveManagerFooter !== "function") throw new Error("missing Cosmic UI manager export");
     if (typeof fastModels.supportsFastModel !== "function") throw new Error("missing OpenAI fast-model export");

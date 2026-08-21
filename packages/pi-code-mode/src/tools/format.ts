@@ -155,14 +155,10 @@ export const callEntryDetails = (
   exactCounts: CodeModeCallCounts = countCallEntries(calls),
 ): Pick<CodeModeToolDetails, "toolCalls" | "totalToolCalls" | "counts"> => {
   const toolCalls = boundedCallEntries(calls);
-  return (() => {
-    const objectPart6331_0 = { toolCalls, counts: { ...exactCounts } };
-    const objectPart6331_1 =
-      exactCounts.total > toolCalls.length
-        ? { ...objectPart6331_0, totalToolCalls: exactCounts.total }
-        : objectPart6331_0;
-    return objectPart6331_1;
-  })();
+  const base = { toolCalls, counts: { ...exactCounts } };
+  return exactCounts.total > toolCalls.length
+    ? { ...base, totalToolCalls: exactCounts.total }
+    : base;
 };
 
 const withLogs = (text: string, logs: ReadonlyArray<string> | undefined): string => {

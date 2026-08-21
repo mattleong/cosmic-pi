@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import { startHostUiTicker, type BackgroundTerminalProjectionBridge } from "../boundary/host-ui.ts";
-import { synchronousNow } from "../boundary/native-clock.ts";
+import { synchronousNow } from "pi-cosmic-core";
 import { ProcessManagerComponent } from "../ui/manager.ts";
 
 export interface ProcessManagerActions {

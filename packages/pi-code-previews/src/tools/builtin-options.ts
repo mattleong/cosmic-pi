@@ -14,15 +14,11 @@ export function getBuiltinToolOptions(cwd: string, projectTrusted: boolean): Bui
   const settings = SettingsManager.create(cwd, getAgentDir(), { projectTrusted });
   const commandPrefix = settings.getShellCommandPrefix();
   const shellPath = settings.getShellPath();
+  const bashOptions: BashToolOptions = {};
+  if (commandPrefix !== undefined) bashOptions.commandPrefix = commandPrefix;
+  if (shellPath !== undefined) bashOptions.shellPath = shellPath;
   return {
-    bash: (() => {
-      const objectPart532_0 = {};
-      const objectPart532_1 =
-        commandPrefix === undefined ? objectPart532_0 : { ...objectPart532_0, commandPrefix };
-      const objectPart532_2 =
-        shellPath === undefined ? objectPart532_1 : { ...objectPart532_1, shellPath };
-      return objectPart532_2;
-    })(),
+    bash: bashOptions,
     read: {
       autoResizeImages: settings.getImageAutoResize(),
     },

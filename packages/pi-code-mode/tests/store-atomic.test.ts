@@ -17,14 +17,15 @@ const storeLayer = (
   memory: InMemoryDocuments,
   projectTrusted: boolean,
   publish?: (state: CodeModeState) => void,
-) =>
-  CodeModeConfigStore.layer(
-    (() => {
-      const objectPart953_0 = { cwd: "/project", projectTrusted };
-      const objectPart953_1 = publish ? { ...objectPart953_0, publish } : objectPart953_0;
-      return objectPart953_1;
-    })(),
-  ).pipe(Layer.provide(Layer.mergeAll(memory.layer, Path.layer, AgentDirectory.layer("/agent"))));
+) => {
+  const baseLayer = CodeModeConfigStore.layer({ cwd: "/project", projectTrusted });
+  const layer = publish
+    ? CodeModeConfigStore.layer({ cwd: "/project", projectTrusted, publish })
+    : baseLayer;
+  return layer.pipe(
+    Layer.provide(Layer.mergeAll(memory.layer, Path.layer, AgentDirectory.layer("/agent"))),
+  );
+};
 
 describe("code mode store atomic publication", () => {
   it.effect("publishes the committed document before interruption is observable", () => {

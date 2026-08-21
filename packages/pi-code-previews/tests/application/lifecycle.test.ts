@@ -78,17 +78,14 @@ function harness(load: (call: number, projectTrusted: boolean) => Effect.Effect<
       };
     },
   };
-  const context = (signal?: AbortSignal): Context =>
-    (() => {
-      const objectPart3005_0 = { cwd: "/project" };
-      const objectPart3005_1 = signal ? { ...objectPart3005_0, signal } : objectPart3005_0;
-      const objectPart3005_2 = {
-        ...objectPart3005_1,
-        isProjectTrusted: () => true,
-        ui: { notify: (message: string) => notifications.push(message) },
-      };
-      return objectPart3005_2;
-    })();
+  const context = (signal?: AbortSignal): Context => {
+    const base = {
+      cwd: "/project",
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifications.push(message) },
+    };
+    return signal ? { ...base, signal } : base;
+  };
   return {
     pi,
     handlers,

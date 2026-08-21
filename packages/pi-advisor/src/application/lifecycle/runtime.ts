@@ -180,39 +180,34 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
         const runtimeConfig = { ...d.currentConfig() };
         const startCancellation = makeCancellationLatch();
         refs.activeChildStart = startCancellation;
-        const startOptions = (() => {
-          const objectPart8185_0 = {
-            ctx: {
-              cwd: sessionInput.cwd,
-              modelRegistry: sessionInput.modelRegistry,
-            },
-            config: runtimeConfig,
-            seed: startSeed,
-            stateSummary: refs.latestStateSummary,
-          };
-          const objectPart8185_1 = refs.instructions.content
-            ? { ...objectPart8185_0, instructions: refs.instructions.content }
-            : objectPart8185_0;
-          const objectPart8185_2 = {
-            ...objectPart8185_1,
-            onUsage: (usage: AdvisorUsageTelemetry) => {
-              if (startEpoch !== d.getState().epoch) return;
-              d.updateApplicationState((state) => ({
-                ...state,
-                metrics: d.recordUsage(state.metrics, usage, runtimeConfig),
-              }));
-            },
-            onDiagnostic: (message: string) => {
-              if (d.getState().reportedDiagnostics.includes(message)) return;
-              d.updateApplicationState((state) => ({
-                ...state,
-                reportedDiagnostics: [...state.reportedDiagnostics, message],
-              }));
-              d.notifyBestEffort(ctx, message, "warning");
-            },
-          };
-          return objectPart8185_2;
-        })();
+        const baseStartOptions = {
+          ctx: {
+            cwd: sessionInput.cwd,
+            modelRegistry: sessionInput.modelRegistry,
+          },
+          config: runtimeConfig,
+          seed: startSeed,
+          stateSummary: refs.latestStateSummary,
+          onUsage: (usage: AdvisorUsageTelemetry) => {
+            if (startEpoch !== d.getState().epoch) return;
+            d.updateApplicationState((state) => ({
+              ...state,
+              metrics: d.recordUsage(state.metrics, usage, runtimeConfig),
+            }));
+          },
+          onDiagnostic: (message: string) => {
+            if (d.getState().reportedDiagnostics.includes(message)) return;
+            d.updateApplicationState((state) => ({
+              ...state,
+              reportedDiagnostics: [...state.reportedDiagnostics, message],
+            }));
+            d.notifyBestEffort(ctx, message, "warning");
+          },
+        };
+        const startOptions =
+          refs.instructions.content !== undefined && refs.instructions.content !== ""
+            ? { ...baseStartOptions, instructions: refs.instructions.content }
+            : baseStartOptions;
         yield* nextRuntime.start(startOptions).pipe(
           Effect.mapError(
             (error) =>

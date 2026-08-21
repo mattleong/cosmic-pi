@@ -11,6 +11,11 @@ import {
   type AdvisorReview,
   type AdvisorReviewFocus,
 } from "../review/index.ts";
+import {
+  MAX_ADVISOR_FINDINGS,
+  MAX_ADVISOR_SUGGESTIONS,
+  MAX_ADVISOR_SUMMARY_CHARS,
+} from "../review/schema.ts";
 
 export const MAX_ADVISOR_STATE_SUMMARY_CHARS = 4_000;
 export const MAX_ADVISOR_CHECKPOINT_CHARS = 64_000;
@@ -26,9 +31,11 @@ const CheckpointFields = {
   processedThrough: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
   stateSummary: Schema.String.check(Schema.isMaxLength(MAX_ADVISOR_STATE_SUMMARY_CHARS)),
   verdict: Schema.Literals(["pass", "suggest", "revise"]),
-  summary: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(2_000)),
-  suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(Schema.isMaxLength(2)),
-  findings: Schema.Array(AdvisorFindingWireSchema).check(Schema.isMaxLength(5)),
+  summary: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(MAX_ADVISOR_SUMMARY_CHARS)),
+  suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(
+    Schema.isMaxLength(MAX_ADVISOR_SUGGESTIONS),
+  ),
+  findings: Schema.Array(AdvisorFindingWireSchema).check(Schema.isMaxLength(MAX_ADVISOR_FINDINGS)),
 };
 const UsageNumberSchema = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
 export const AdvisorUsageWireSchema = Schema.Struct({

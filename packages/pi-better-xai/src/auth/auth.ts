@@ -87,22 +87,19 @@ const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function*
     });
   const refreshToken = decoded.refresh?.trim() || undefined;
   const teamId = yield* extractTeamIdFromJwt(accessToken);
-  const credentials: XaiCredentials = (() => {
-    const objectPart2848_0 = {
-      accessToken: Redacted.make(accessToken, { label: "xAI access token" }),
-    };
-    const objectPart2848_1 = refreshToken
-      ? {
-          ...objectPart2848_0,
-          refreshToken: Redacted.make(refreshToken, { label: "xAI refresh token" }),
-        }
-      : objectPart2848_0;
-    const objectPart2848_2 = Predicate.isNumber(decoded.expires)
-      ? { ...objectPart2848_1, expires: decoded.expires }
-      : objectPart2848_1;
-    const objectPart2848_3 = teamId ? { ...objectPart2848_2, teamId } : objectPart2848_2;
-    return objectPart2848_3;
-  })();
+  const baseCredentials: XaiCredentials = {
+    accessToken: Redacted.make(accessToken, { label: "xAI access token" }),
+  };
+  const withRefreshToken: XaiCredentials = refreshToken
+    ? {
+        ...baseCredentials,
+        refreshToken: Redacted.make(refreshToken, { label: "xAI refresh token" }),
+      }
+    : baseCredentials;
+  const withExpires: XaiCredentials = Predicate.isNumber(decoded.expires)
+    ? { ...withRefreshToken, expires: decoded.expires }
+    : withRefreshToken;
+  const credentials: XaiCredentials = teamId ? { ...withExpires, teamId } : withExpires;
   return credentials;
 });
 
@@ -207,15 +204,12 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
   const expires = now + expiresInSeconds * 1000;
   yield* writeXaiAuth(authPath, { access: accessToken, refresh: nextRefresh, expires });
   const teamId = yield* extractTeamIdFromJwt(accessToken);
-  const credentials: XaiCredentials = (() => {
-    const objectPart6431_0 = {
-      accessToken: Redacted.make(accessToken, { label: "xAI access token" }),
-      refreshToken: Redacted.make(nextRefresh, { label: "xAI refresh token" }),
-      expires,
-    };
-    const objectPart6431_1 = teamId ? { ...objectPart6431_0, teamId } : objectPart6431_0;
-    return objectPart6431_1;
-  })();
+  const credentialsBase: XaiCredentials = {
+    accessToken: Redacted.make(accessToken, { label: "xAI access token" }),
+    refreshToken: Redacted.make(nextRefresh, { label: "xAI refresh token" }),
+    expires,
+  };
+  const credentials: XaiCredentials = teamId ? { ...credentialsBase, teamId } : credentialsBase;
   return credentials;
 });
 
@@ -264,14 +258,13 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
     const registryAccess = registryToken.success?.trim();
     if (registryAccess) {
       const teamId = yield* extractTeamIdFromJwt(registryAccess);
-      const credentials: XaiAuthResultCredentials = (() => {
-        const objectPart8008_0 = {
-          accessToken: Redacted.make(registryAccess, { label: "xAI access token" }),
-          source: "modelRegistry" as const,
-        };
-        const objectPart8008_1 = teamId ? { ...objectPart8008_0, teamId } : objectPart8008_0;
-        return objectPart8008_1;
-      })();
+      const registryCredentials: XaiAuthResultCredentials = {
+        accessToken: Redacted.make(registryAccess, { label: "xAI access token" }),
+        source: "modelRegistry" as const,
+      };
+      const credentials: XaiAuthResultCredentials = teamId
+        ? { ...registryCredentials, teamId }
+        : registryCredentials;
       return { _tag: "Found", credentials } as const satisfies XaiAuthResult;
     }
   }

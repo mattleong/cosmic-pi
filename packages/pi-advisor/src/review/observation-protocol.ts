@@ -344,15 +344,11 @@ function coalesce(left: AdvisorObservation, right: AdvisorObservation): AdvisorO
     return { ...right, text: clip(`${left.text}${right.text}`, MAX_OBSERVATION_CHANNEL_CHARS) };
   }
   if (left.type === "assistant_thinking_delta" && right.type === "assistant_thinking_delta") {
-    return (() => {
-      const objectPart12615_0 = {
-        ...right,
-        text: clip(`${left.text}${right.text}`, MAX_OBSERVATION_CHANNEL_CHARS),
-      };
-      const objectPart12615_1 =
-        left.opaque || right.opaque ? { ...objectPart12615_0, opaque: true } : objectPart12615_0;
-      return objectPart12615_1;
-    })();
+    const merged = {
+      ...right,
+      text: clip(`${left.text}${right.text}`, MAX_OBSERVATION_CHANNEL_CHARS),
+    };
+    return left.opaque || right.opaque ? { ...merged, opaque: true } : merged;
   }
   return right;
 }

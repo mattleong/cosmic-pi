@@ -2,7 +2,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { hasAvailableHerdrShell } from "../backend/herdr-shell-readiness.ts";
 import { matchingPaneIdentity } from "../backend/herdr-ownership.ts";
-import { SubagentProcessError } from "../run/errors.ts";
+import { processError, SubagentProcessError } from "../run/errors.ts";
 import type { HerdrCliContract, HerdrPane, HerdrSnapshot } from "./herdr-cli.ts";
 import type { HerdrPreparedHarness } from "./herdr-harness.ts";
 
@@ -10,8 +10,6 @@ const SHELL_READINESS_ATTEMPTS = 51;
 const SHELL_READINESS_DELAY_MILLIS = 200;
 const PANE_INPUT_ACTIVATION_ATTEMPTS = 2;
 
-const processError = (operation: string, code: string, message: string) =>
-  new SubagentProcessError({ operation, code, message });
 const ownershipMismatch = (operation: string, message: string) =>
   processError(operation, "herdr_ownership_mismatch", message);
 const provisionalOwnershipMismatch = (operation: string, message: string) =>

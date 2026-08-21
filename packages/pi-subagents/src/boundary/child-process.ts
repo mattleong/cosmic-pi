@@ -6,7 +6,6 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -29,7 +28,7 @@ import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import type * as Scope from "effect/Scope";
 import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT, piToolsForWriteIntent } from "../run/tool-policy.ts";
-import { SubagentProcessError } from "../run/errors.ts";
+import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
 import type { RuntimeApiKey } from "../run/model.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { terminateProcessTree } from "./process-tree.ts";
@@ -107,23 +106,6 @@ export interface ChildProcessContract {
     readonly runId: string;
   }) => Effect.Effect<void, SubagentProcessError>;
 }
-
-const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
-  new SubagentProcessError(
-    (() => {
-      const baseResult = {
-        operation,
-        message:
-          error instanceof Error
-            ? error.message
-            : Predicate.isString(error)
-              ? error
-              : `Unable to ${operation} subagent process.`,
-      };
-      const withCode = code ? { ...baseResult, code } : baseResult;
-      return withCode;
-    })(),
-  );
 
 export function safeSubagentDirectorySegment(value: string): string {
   if (/^[A-Za-z0-9_-]{1,128}$/.test(value)) return value;

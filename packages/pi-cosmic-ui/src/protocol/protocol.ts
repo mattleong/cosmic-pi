@@ -247,14 +247,12 @@ export function normalizeCosmicFooterRemoveEvent<ValueInput>(
 ): CosmicFooterRemoveEvent | undefined {
   const event = decode(RemoveData, value);
   if (!event) return undefined;
-  return Object.freeze(
-    (() => {
-      const objectPart8792_0 = { version: event.version, owner: event.owner };
-      const objectPart8792_1 =
-        event.id === undefined ? objectPart8792_0 : { ...objectPart8792_0, id: event.id };
-      return objectPart8792_1;
-    })(),
-  );
+  const snapshot: CosmicFooterRemoveEvent = {
+    version: event.version,
+    owner: event.owner,
+  };
+  if (event.id !== undefined) snapshot.id = event.id;
+  return Object.freeze(snapshot);
 }
 
 /** Reads every hostile invalidation field exactly once into a detached plain snapshot. */
@@ -263,46 +261,8 @@ export function normalizeCosmicFooterInvalidateEvent<ValueInput>(
 ): CosmicFooterInvalidateEvent | undefined {
   const event = decode(InvalidateData, value);
   if (!event) return undefined;
-  return Object.freeze(
-    (() => {
-      const objectPart9257_0 = { version: event.version };
-      const objectPart9257_1 =
-        event.owner === undefined ? objectPart9257_0 : { ...objectPart9257_0, owner: event.owner };
-      const objectPart9257_2 =
-        event.id === undefined ? objectPart9257_1 : { ...objectPart9257_1, id: event.id };
-      return objectPart9257_2;
-    })(),
-  );
-}
-
-const isNormalized = <A, Value>(
-  normalize: <Input>(value: Input) => A | undefined,
-  value: Value,
-): value is Value & A => {
-  try {
-    return normalize(value) !== undefined;
-  } catch {
-    return false;
-  }
-};
-
-export function isCosmicUiHostQuery<ValueInput>(
-  value: ValueInput,
-): value is ValueInput & CosmicUiHostQuery {
-  return isNormalized(normalizeCosmicUiHostQuery, value);
-}
-export function isCosmicFooterUpsertEvent<ValueInput>(
-  value: ValueInput,
-): value is ValueInput & CosmicFooterUpsertEvent {
-  return isNormalized(normalizeCosmicFooterUpsertEvent, value);
-}
-export function isCosmicFooterRemoveEvent<ValueInput>(
-  value: ValueInput,
-): value is ValueInput & CosmicFooterRemoveEvent {
-  return isNormalized(normalizeCosmicFooterRemoveEvent, value);
-}
-export function isCosmicFooterInvalidateEvent<ValueInput>(
-  value: ValueInput,
-): value is ValueInput & CosmicFooterInvalidateEvent {
-  return isNormalized(normalizeCosmicFooterInvalidateEvent, value);
+  const snapshot: CosmicFooterInvalidateEvent = { version: event.version };
+  if (event.owner !== undefined) snapshot.owner = event.owner;
+  if (event.id !== undefined) snapshot.id = event.id;
+  return Object.freeze(snapshot);
 }

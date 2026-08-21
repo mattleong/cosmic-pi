@@ -134,18 +134,14 @@ export function registerBackgroundTerminalTool(
             case "start": {
               const command = yield* required(input.command, "command");
               const cwd = path.resolve(ctx.cwd, input.cwd ?? ".");
+              const startRequestBase = { command, cwd };
+              const startRequestWithName = input.name
+                ? { ...startRequestBase, name: input.name }
+                : startRequestBase;
               const snapshot = yield* service.start(
-                (() => {
-                  const objectPart6028_0 = { command, cwd };
-                  const objectPart6028_1 = input.name
-                    ? { ...objectPart6028_0, name: input.name }
-                    : objectPart6028_0;
-                  const objectPart6028_2 =
-                    input.timeoutSeconds !== undefined
-                      ? { ...objectPart6028_1, timeoutSeconds: input.timeoutSeconds }
-                      : objectPart6028_1;
-                  return objectPart6028_2;
-                })(),
+                input.timeoutSeconds !== undefined
+                  ? { ...startRequestWithName, timeoutSeconds: input.timeoutSeconds }
+                  : startRequestWithName,
               );
               return {
                 content: `Started ${formatJob(snapshot)}`,
@@ -189,15 +185,15 @@ export function registerBackgroundTerminalTool(
                   : { ...logRequestWithTail, waitSeconds: input.waitSeconds };
               const logs = yield* service.logs(logRequest);
               const formatted = formatLogs(logs);
+              const logDetails = {
+                action: input.action,
+                logs: { ...logs, events: [] },
+              } satisfies BackgroundTerminalToolDetails;
               return {
                 content: formatted.text,
-                details: (() => {
-                  const objectPart7999_0 = { action: input.action, logs: { ...logs, events: [] } };
-                  const objectPart7999_1 = formatted.truncation.truncated
-                    ? { ...objectPart7999_0, truncation: formatted.truncation }
-                    : objectPart7999_0;
-                  return objectPart7999_1;
-                })() satisfies BackgroundTerminalToolDetails,
+                details: formatted.truncation.truncated
+                  ? { ...logDetails, truncation: formatted.truncation }
+                  : logDetails,
               };
             }
             case "stop": {

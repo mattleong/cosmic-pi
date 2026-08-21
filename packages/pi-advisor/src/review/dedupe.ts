@@ -58,13 +58,13 @@ export const filterAdvisorFindingsWithRollback = (
       suppressed += 1;
       continue;
     }
-    const entry: AdvisorFindingDedupeRollbackEntry = (() => {
-      const objectPart2101_0 = { key };
-      const objectPart2101_1 =
-        previous === undefined ? objectPart2101_0 : { ...objectPart2101_0, previous };
-      const objectPart2101_2 = { ...objectPart2101_1, wasNew: previous === undefined, evicted: [] };
-      return objectPart2101_2;
-    })();
+    const baseEntry: AdvisorFindingDedupeRollbackEntry = {
+      key,
+      wasNew: previous === undefined,
+      evicted: [],
+    };
+    const entry: AdvisorFindingDedupeRollbackEntry =
+      previous === undefined ? baseEntry : { ...baseEntry, previous };
     if (previous === undefined) order.push(key);
     seen[key] = finding.severity;
     accepted.push(finding);

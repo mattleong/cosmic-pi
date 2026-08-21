@@ -11,6 +11,9 @@ import { isAbsolute, join, resolve } from "node:path";
 export const MAX_AUTH_BYTES = 64 * 1024;
 export const MAX_PATH_CHARS = 4_096;
 
+/** Quotes a value as a TOML basic string (Codex config.toml / channel connection.toml). */
+export const tomlString = (value: string): string => JSON.stringify(value);
+
 export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined =>
   error && hasObjectRuntimeType(error) && "code" in error && Predicate.isString(error.code)
     ? error.code

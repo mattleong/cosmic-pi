@@ -6,18 +6,10 @@ export interface FailureDetailsRetention {
   readonly consume: (toolCallId: string) => CodeModeToolDetails | undefined;
 }
 
-export const copyCodeModeToolDetails = (details: CodeModeToolDetails): CodeModeToolDetails =>
-  (() => {
-    const objectPart445_0 = {
-      ...details,
-      toolCalls: details.toolCalls.map((call) => ({ ...call })),
-    };
-    const objectPart445_1 =
-      details.counts === undefined
-        ? objectPart445_0
-        : { ...objectPart445_0, counts: { ...details.counts } };
-    return objectPart445_1;
-  })();
+export const copyCodeModeToolDetails = (details: CodeModeToolDetails): CodeModeToolDetails => {
+  const copied = { ...details, toolCalls: details.toolCalls.map((call) => ({ ...call })) };
+  return details.counts === undefined ? copied : { ...copied, counts: { ...details.counts } };
+};
 
 export const applyRetainedCodeModeFailureDetails = (
   retention: FailureDetailsRetention,

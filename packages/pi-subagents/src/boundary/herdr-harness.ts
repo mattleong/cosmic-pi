@@ -4,8 +4,6 @@
 // @effect-diagnostics effect/cryptoRandomBytes:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import * as Predicate from "effect/Predicate";
-
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -18,7 +16,7 @@ import * as Redacted from "effect/Redacted";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT } from "../run/tool-policy.ts";
-import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
+import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
 import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import { subagentRuntimeEfforts, type SubagentRuntime } from "../domain/routing.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
@@ -43,8 +41,10 @@ import {
   MAX_PATH_CHARS,
   readValidatedCodexAuth,
   safeAgentDirectory,
+  tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
+import { approvedCodexApiKey as approvedApiKey } from "./local-cli-harness.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
 
 const HARNESS_ROOT = "herdr-host-v1";
@@ -165,8 +165,6 @@ export interface HerdrHarnessLayerOptions {
   readonly platform?: NodeJS.Platform | undefined;
 }
 
-const processError = (operation: string, code: string, message: string) =>
-  new SubagentProcessError({ operation, code, message });
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
@@ -178,7 +176,6 @@ const controlFreeArgv = (argv: ReadonlyArray<string>): ReadonlyArray<string> => 
   if (argv.some(hasControlCharacter)) throw new Error("herdr-agent-argument-invalid");
   return argv;
 };
-const tomlString = (value: string): string => JSON.stringify(value);
 
 const harnessEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
   Object.freeze(
@@ -188,18 +185,6 @@ const harnessEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
       ),
     ),
   );
-
-const approvedApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
-  const key = source.OPENAI_API_KEY;
-  return Predicate.isString(key) &&
-    key.length > 0 &&
-    key.length <= 8_192 &&
-    !key.includes("\0") &&
-    !key.includes("\r") &&
-    !key.includes("\n")
-    ? key
-    : undefined;
-};
 
 const integrationPath = (
   options: HerdrHarnessLayerOptions,

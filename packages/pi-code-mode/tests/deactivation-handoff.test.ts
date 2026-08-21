@@ -148,21 +148,17 @@ const instance = (activeTools: string[], sessionId: string | undefined, sharedCw
     cwd = mkdtempSync(join(tmpdir(), "pi-code-mode-handoff-cwd-"));
     tempDirectories.push(cwd);
   }
+  const baseCtx = {
+    cwd,
+    mode: "rpc",
+    hasUI: true,
+    ui: { notify: vi.fn(), custom: vi.fn(), select: vi.fn() },
+    isProjectTrusted: () => true,
+  };
   const ctx = extensionContextFixture(
-    (() => {
-      const objectPart6668_0 = {
-        cwd,
-        mode: "rpc",
-        hasUI: true,
-        ui: { notify: vi.fn(), custom: vi.fn(), select: vi.fn() },
-        isProjectTrusted: () => true,
-      };
-      const objectPart6668_1 =
-        sessionId === undefined
-          ? objectPart6668_0
-          : { ...objectPart6668_0, sessionManager: { getSessionId: () => sessionId } };
-      return objectPart6668_1;
-    })(),
+    sessionId === undefined
+      ? baseCtx
+      : { ...baseCtx, sessionManager: { getSessionId: () => sessionId } },
   );
 
   return { handlers, registerTool, ctx };

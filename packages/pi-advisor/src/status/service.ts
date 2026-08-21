@@ -22,13 +22,11 @@ export const advisorStatusFramesEffect = (
   Effect.suspend(() => {
     let frame = 1;
     const renderFrame = (nextFrame: number): Effect.Effect<void> =>
-      Effect.sync(() => {
-        try {
-          render(nextFrame);
-        } catch {
-          // Status rendering is diagnostic-only and remains fail-open.
-        }
-      });
+      // Status rendering is diagnostic-only and remains fail-open.
+      Effect.try({
+        try: () => render(nextFrame),
+        catch: (cause) => ({ cause }),
+      }).pipe(Effect.catch(() => Effect.void));
     const animation = Effect.suspend(() => {
       const nextFrame = frame % Math.max(1, options.frameCount);
       frame += 1;

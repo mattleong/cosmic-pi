@@ -228,13 +228,13 @@ export function applyTextDecorations(
     .map((entry) => {
       const prefix = prefixes.get(entry.id);
       if (prefix === undefined) return entry;
-      return (() => {
-        const objectPart6835_0 = { ...entry, text: `${prefix}${entry.text}` };
-        const objectPart6835_1 = entry.compactText
-          ? { ...objectPart6835_0, compactText: `${prefix}${entry.compactText}` }
-          : objectPart6835_0;
-        return objectPart6835_1;
-      })();
+      return entry.compactText
+        ? {
+            ...entry,
+            text: `${prefix}${entry.text}`,
+            compactText: `${prefix}${entry.compactText}`,
+          }
+        : { ...entry, text: `${prefix}${entry.text}` };
     });
 }
 

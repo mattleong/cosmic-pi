@@ -268,24 +268,18 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
             next.lastAction = "failure";
             next.lastFailureKind = kind;
           });
-          const failureDetails = (() => {
-            const objectPart10776_0 = {
-              contextChars: activeQueue?.backlog ?? 0,
-              durationMs: d.getState().metrics.latestDurationMs ?? 0,
-              error,
-            };
-            const objectPart10776_1 = d.currentConfig().model
-              ? { ...objectPart10776_0, model: d.currentConfig().model }
-              : objectPart10776_0;
-            const objectPart10776_2 = d.currentConfig().provider
-              ? { ...objectPart10776_1, provider: d.currentConfig().provider }
-              : objectPart10776_1;
-            const objectPart10776_3 = {
-              ...objectPart10776_2,
-              timeoutMs: ADVISOR_OPERATION_TIMEOUT_MS,
-            };
-            return objectPart10776_3;
-          })();
+          const baseDetails = {
+            contextChars: activeQueue?.backlog ?? 0,
+            durationMs: d.getState().metrics.latestDurationMs ?? 0,
+            error,
+            timeoutMs: ADVISOR_OPERATION_TIMEOUT_MS,
+          };
+          const withModel = d.currentConfig().model
+            ? { ...baseDetails, model: d.currentConfig().model }
+            : baseDetails;
+          const failureDetails = d.currentConfig().provider
+            ? { ...withModel, provider: d.currentConfig().provider }
+            : withModel;
           yield* Effect.forkIn(
             d.failureLogger.log(d.currentConfig().configPath, failureDetails),
             d.applicationScope,

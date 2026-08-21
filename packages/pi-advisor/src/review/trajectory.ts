@@ -111,13 +111,12 @@ export const pushAdvisorTrajectory = (
       break;
     }
   }
-  return (() => {
-    const objectPart3646_0 = {
-      state: { channels: { ...state.channels, [channel]: { pending, recent, similarRun, tail } } },
-    };
-    const objectPart3646_1 = signal ? { ...objectPart3646_0, signal } : objectPart3646_0;
-    return objectPart3646_1;
-  })();
+  const nextState = {
+    state: { channels: { ...state.channels, [channel]: { pending, recent, similarRun, tail } } },
+  };
+  // Two distinct literals keep the return type a proper union so callers can narrow
+  // `signal` without an optional-property check.
+  return signal ? { ...nextState, signal } : nextState;
 };
 
 export interface AdvisorToolTrajectoryDetectorState {

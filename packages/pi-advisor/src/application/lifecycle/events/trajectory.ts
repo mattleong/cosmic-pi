@@ -85,37 +85,34 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
     const channel = update.type === "thinking_delta" ? "thinking" : "text";
     const trajectoryResult = pushAdvisorTrajectory(observation.detector, channel, update.delta);
     const signal = trajectoryResult.signal;
-    const next = d.mutateTrajectory(observation.id, (current) =>
-      (() => {
-        const objectPart3527_0 = {
-          ...current,
-          detector: trajectoryResult.state,
-          thinkingChars:
-            channel === "thinking"
-              ? current.thinkingChars + update.delta.length
-              : current.thinkingChars,
-          text:
-            channel === "text"
-              ? `${current.text}${update.delta}`.slice(-MAX_TRAJECTORY_EVIDENCE_CHARS)
-              : current.text,
-          abortAllowed:
-            signal !== undefined
-              ? advisorActiveToolCount(current.toolDetector) === 0
-              : current.loopChannel === "thinking" && channel === "text"
-                ? false
-                : current.abortAllowed,
-        };
-        const objectPart3527_1 = signal
-          ? {
-              ...objectPart3527_0,
-              loopChannel: signal.channel,
-              loopConfirmed: true,
-              loopReason: `${signal.channel} stream ${signal.reason}`,
-            }
-          : objectPart3527_0;
-        return objectPart3527_1;
-      })(),
-    );
+    const next = d.mutateTrajectory(observation.id, (current) => {
+      const base = {
+        ...current,
+        detector: trajectoryResult.state,
+        thinkingChars:
+          channel === "thinking"
+            ? current.thinkingChars + update.delta.length
+            : current.thinkingChars,
+        text:
+          channel === "text"
+            ? `${current.text}${update.delta}`.slice(-MAX_TRAJECTORY_EVIDENCE_CHARS)
+            : current.text,
+        abortAllowed:
+          signal !== undefined
+            ? advisorActiveToolCount(current.toolDetector) === 0
+            : current.loopChannel === "thinking" && channel === "text"
+              ? false
+              : current.abortAllowed,
+      };
+      return signal
+        ? {
+            ...base,
+            loopChannel: signal.channel,
+            loopConfirmed: true,
+            loopReason: `${signal.channel} stream ${signal.reason}`,
+          }
+        : base;
+    });
     if (!signal || !next) return;
     const currentResource = refs.activeTrajectoryResource;
     if (!currentResource || currentResource.id !== observation.id || next.reviewQueued) return;
@@ -193,28 +190,19 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
     const signal = toolResult.signal;
     const next = d.mutateTrajectory(observation.id, (current) => {
       const { loopReason: _loopReason, ...withoutLoopReason } = current;
-      return (() => {
-        const objectPart7167_0 = {
-          ...(concreteProgress ? withoutLoopReason : current),
-          toolDetector: concreteProgress
-            ? markConcreteAdvisorProgress(toolResult.state)
-            : toolResult.state,
-          loopConfirmed: concreteProgress ? false : signal ? true : current.loopConfirmed,
-        };
-        const objectPart7167_1 =
-          signal && !concreteProgress
-            ? { ...objectPart7167_0, loopReason: signal.reason }
-            : objectPart7167_0;
-        const objectPart7167_2 = {
-          ...objectPart7167_1,
-          abortAllowed: concreteProgress
-            ? false
-            : signal
-              ? signal.abortSafe
-              : advisorActiveToolCount(toolResult.state) === 0,
-        };
-        return objectPart7167_2;
-      })();
+      const base = {
+        ...(concreteProgress ? withoutLoopReason : current),
+        toolDetector: concreteProgress
+          ? markConcreteAdvisorProgress(toolResult.state)
+          : toolResult.state,
+        loopConfirmed: concreteProgress ? false : signal ? true : current.loopConfirmed,
+        abortAllowed: concreteProgress
+          ? false
+          : signal
+            ? signal.abortSafe
+            : advisorActiveToolCount(toolResult.state) === 0,
+      };
+      return signal && !concreteProgress ? { ...base, loopReason: signal.reason } : base;
     });
     if (concreteProgress || !signal || !next || next.reviewQueued) return;
     d.ingest({

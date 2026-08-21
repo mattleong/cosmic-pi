@@ -61,16 +61,13 @@ const run = (
   const trace = options.trace ?? makeTrace();
   return Effect.runPromise(
     CodeMode.execute(
-      (() => {
-        const objectPart1866_0 = {
-          tools: { host: { sleepy: sleepyTool(trace), fail: failingTool } },
-          code,
-        };
-        const objectPart1866_1 = options.limits
-          ? { ...objectPart1866_0, limits: options.limits }
-          : objectPart1866_0;
-        return objectPart1866_1;
-      })(),
+      options.limits
+        ? {
+            tools: { host: { sleepy: sleepyTool(trace), fail: failingTool } },
+            code,
+            limits: options.limits,
+          }
+        : { tools: { host: { sleepy: sleepyTool(trace), fail: failingTool } }, code },
     ),
   );
 };

@@ -78,20 +78,17 @@ const normalizeAdvisorConfigData = <Raw>(raw: Raw, configPath: string): Resolved
   }).value;
   const provider = nonEmptyString(decoded.provider);
   const model = nonEmptyString(decoded.model);
-  return (() => {
-    const objectPart2673_0 = {
-      configPath,
-      enabled: decoded.enabled ?? DEFAULT_ADVISOR_CONFIG.enabled,
-    };
-    const objectPart2673_1 = provider ? { ...objectPart2673_0, provider } : objectPart2673_0;
-    const objectPart2673_2 = model ? { ...objectPart2673_1, model } : objectPart2673_1;
-    const objectPart2673_3 = {
-      ...objectPart2673_2,
-      setupDismissed: decoded.setupDismissed ?? DEFAULT_ADVISOR_CONFIG.setupDismissed,
-      configured: Boolean(provider && model),
-    };
-    return objectPart2673_3;
-  })();
+  const base = {
+    configPath,
+    enabled: decoded.enabled ?? DEFAULT_ADVISOR_CONFIG.enabled,
+  };
+  const withProvider = provider ? { ...base, provider } : base;
+  const withModel = model ? { ...withProvider, model } : withProvider;
+  return {
+    ...withModel,
+    setupDismissed: decoded.setupDismissed ?? DEFAULT_ADVISOR_CONFIG.setupDismissed,
+    configured: Boolean(provider && model),
+  };
 };
 
 export const AdvisorConfigSchema = (configPath: string) =>

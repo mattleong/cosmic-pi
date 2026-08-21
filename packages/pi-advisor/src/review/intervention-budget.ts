@@ -13,23 +13,14 @@ export function sanitizeInterventionBudgetSnapshot(
   snapshot: Partial<AdvisorInterventionBudgetSnapshot> | undefined,
 ): AdvisorInterventionBudgetSnapshot {
   const delivered = snapshot?.delivered;
-  return (() => {
-    const objectPart563_0 = {
-      delivered:
-        Predicate.isNumber(delivered) && Number.isSafeInteger(delivered)
-          ? Math.max(0, Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, delivered))
-          : 0,
-    };
-    const objectPart563_1 =
-      snapshot?.highestSeverity === "concern" || snapshot?.highestSeverity === "blocker"
-        ? { ...objectPart563_0, highestSeverity: snapshot.highestSeverity }
-        : objectPart563_0;
-    const objectPart563_2 = {
-      ...objectPart563_1,
-      correctionUsed: snapshot?.correctionUsed === true,
-    };
-    return objectPart563_2;
-  })();
+  const deliveredValue =
+    Predicate.isNumber(delivered) && Number.isSafeInteger(delivered)
+      ? Math.max(0, Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, delivered))
+      : 0;
+  const base = { delivered: deliveredValue, correctionUsed: snapshot?.correctionUsed === true };
+  return snapshot?.highestSeverity === "concern" || snapshot?.highestSeverity === "blocker"
+    ? { ...base, highestSeverity: snapshot.highestSeverity }
+    : base;
 }
 
 export const emptyAdvisorInterventionBudget = (): AdvisorInterventionBudgetSnapshot =>

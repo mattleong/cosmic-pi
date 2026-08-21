@@ -20,6 +20,7 @@ import {
   InvalidSubagentRequestError,
   isCleanupUnconfirmed,
   isOutcomeUncertain,
+  processError,
   SubagentProcessError,
 } from "../run/errors.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
@@ -102,8 +103,6 @@ interface OwnedRun {
   quarantined: boolean;
 }
 
-const processError = (operation: string, code: string, message: string) =>
-  new SubagentProcessError({ operation, code, message });
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
 

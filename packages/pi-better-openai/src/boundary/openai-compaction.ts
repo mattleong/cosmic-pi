@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import type * as Types from "effect/Types";
 import { StreamingHttpClient } from "pi-cosmic-core";
 import type { OpenAICompactionJsonObject } from "../compaction/protocol.ts";
 
@@ -44,19 +45,21 @@ export class OpenAICompactionBoundaryError extends Schema.TaggedError<OpenAIComp
   },
 ) {}
 
+interface BoundaryErrorArgs {
+  operation: OpenAICompactionBoundaryError["operation"];
+  message: string;
+  status?: number | undefined;
+}
+
 const boundaryError = (
   operation: OpenAICompactionBoundaryError["operation"],
   message: string,
   status?: number,
-) =>
-  new OpenAICompactionBoundaryError(
-    (() => {
-      const objectPart1921_0 = { operation, message };
-      const objectPart1921_1 =
-        status === undefined ? objectPart1921_0 : { ...objectPart1921_0, status };
-      return objectPart1921_1;
-    })(),
-  );
+) => {
+  const error: BoundaryErrorArgs = { operation, message };
+  if (status !== undefined) error.status = status;
+  return new OpenAICompactionBoundaryError(error);
+};
 
 export interface OpenAICompactRequest {
   readonly model: Model<"openai-responses">;
@@ -147,16 +150,12 @@ export class OpenAICompactionClient extends Context.Service<
           );
           if (!hasAuthorization(headers))
             return yield* boundaryError("auth", "OpenAI API credentials were unavailable.");
-          const body = (() => {
-            const objectPart5275_0 = { model: request.model.id, input: request.input };
-            const objectPart5275_1 = request.instructions
-              ? { ...objectPart5275_0, instructions: request.instructions }
-              : objectPart5275_0;
-            const objectPart5275_2 = request.serviceTier
-              ? { ...objectPart5275_1, service_tier: request.serviceTier }
-              : objectPart5275_1;
-            return objectPart5275_2;
-          })();
+          const body: Types.Mutable<Schema.Schema.Type<typeof CompactRequestSchema>> = {
+            model: request.model.id,
+            input: request.input,
+          };
+          if (request.instructions) body.instructions = request.instructions;
+          if (request.serviceTier) body.service_tier = request.serviceTier;
           const response = yield* http
             .requestJsonRawBytes(
               {

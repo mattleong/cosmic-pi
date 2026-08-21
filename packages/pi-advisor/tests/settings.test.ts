@@ -20,19 +20,10 @@ function harness(
   let config = initial;
   const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
   const persist = vi.fn(async (patch: AdvisorConfigPatch) => {
-    const raw = patchAdvisorConfig(
-      (() => {
-        const objectPart1047_0 = { enabled: config.enabled, setupDismissed: config.setupDismissed };
-        const objectPart1047_1 = config.provider
-          ? { ...objectPart1047_0, provider: config.provider }
-          : objectPart1047_0;
-        const objectPart1047_2 = config.model
-          ? { ...objectPart1047_1, model: config.model }
-          : objectPart1047_1;
-        return objectPart1047_2;
-      })(),
-      patch,
-    );
+    const base = { enabled: config.enabled, setupDismissed: config.setupDismissed };
+    const withProvider = config.provider ? { ...base, provider: config.provider } : base;
+    const patched = config.model ? { ...withProvider, model: config.model } : withProvider;
+    const raw = patchAdvisorConfig(patched, patch);
     config = normalizeAdvisorConfig(raw, config.configPath);
     return config;
   });

@@ -207,18 +207,14 @@ export class AdvisorRuntime {
             "Advisor child session unexpectedly has a persistent file.",
           );
         self.resetRequiredReason = undefined;
-        self.pendingSeed = (() => {
-          const objectPart9441_0 = { seed: options.seed };
-          const objectPart9441_1 =
-            options.stateSummary === undefined
-              ? objectPart9441_0
-              : { ...objectPart9441_0, stateSummary: options.stateSummary };
-          const objectPart9441_2 = {
-            ...objectPart9441_1,
-            maxContextChars: ADVISOR_RECENT_CONTEXT_CHARS,
-          };
-          return objectPart9441_2;
-        })();
+        const basePendingSeed = {
+          seed: options.seed,
+          maxContextChars: ADVISOR_RECENT_CONTEXT_CHARS,
+        };
+        self.pendingSeed =
+          options.stateSummary === undefined
+            ? basePendingSeed
+            : { ...basePendingSeed, stateSummary: options.stateSummary };
       });
       yield* initialize.pipe(
         Effect.timeout(Duration.millis(ADVISOR_OPERATION_TIMEOUT_MS)),
@@ -366,18 +362,12 @@ export class AdvisorRuntime {
   }
   reprimeEffect(seed: string, stateSummary?: string) {
     const options = this.options;
-    return options
-      ? this.startEffect(
-          (() => {
-            const objectPart15809_0 = { ...options, seed };
-            const objectPart15809_1 =
-              stateSummary === undefined
-                ? objectPart15809_0
-                : { ...objectPart15809_0, stateSummary };
-            return objectPart15809_1;
-          })(),
-        ).pipe(Effect.withSpan("pi-advisor.child.reprime"))
-      : Effect.fail(new AdvisorModelError({ message: "Advisor runtime is not started." }));
+    if (!options)
+      return Effect.fail(new AdvisorModelError({ message: "Advisor runtime is not started." }));
+    const baseOptions = { ...options, seed };
+    const startOptions =
+      stateSummary === undefined ? baseOptions : { ...baseOptions, stateSummary };
+    return this.startEffect(startOptions).pipe(Effect.withSpan("pi-advisor.child.reprime"));
   }
   private acquireChildEffect(session: AgentSession, startEpoch: number, abortTimeoutMs: number) {
     const self = this;

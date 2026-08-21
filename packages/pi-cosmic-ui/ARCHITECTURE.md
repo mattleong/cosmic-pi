@@ -33,7 +33,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
   `host-ui-ticker-pool.ts` multiplexes equal-cadence animation consumers onto one ref-counted
   Effect fiber; registration remains independently cancellable and one throwing callback cannot
   starve its peers.
-- `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`). The package root publishes only the default extension; `./protocol`, `./client`, `./manager`, `./manager/keymap`, `./manager/key-labels`, `./manager/list-detail`, `./manager/settings-adapter`, and `./manager/settings-surface` are the named subpaths.
+- `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`). The package root publishes only the default extension; `./protocol`, `./boundary/host-status`, `./client`, `./manager`, `./manager/keymap`, `./manager/key-labels`, `./manager/list-detail`, `./manager/settings-adapter`, and `./manager/settings-surface` are the named subpaths.
 - `src/protocol/host.ts` is the scoped protocol ingress host.
 - `src/protocol/service.ts` is the session host service (`CosmicUiService`; Context keys follow file paths under `protocol/`).
 

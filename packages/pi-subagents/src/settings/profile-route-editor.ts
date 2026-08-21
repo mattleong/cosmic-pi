@@ -384,32 +384,3 @@ export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclaratio
     route: candidates.length === 1 ? candidates[0] : candidates,
   };
 }
-
-export const completeRouteSummary = (
-  draft: ProfileRouteDraft,
-  scope: ProfileSettingsScope,
-): string => {
-  if (draft.kind === "disabled") return "Disabled";
-  if (draft.kind === "invalid") return "Invalid fail-closed route (replacement required)";
-  const disposition =
-    draft.kind === "reset"
-      ? "Reset to built-in (remove global declaration)"
-      : draft.kind === "inherit"
-        ? scope === "session"
-          ? "Inherit active session base (clear temporary override)"
-          : "Inherit global (remove project declaration)"
-        : "Explicit ordered route";
-  const candidates = draft.candidates
-    .map(
-      (candidate, index) =>
-        `${index + 1}. host=${candidate.host} · runtime=${candidate.runtime} · model=${candidate.model} · effort=${candidate.effort} · context=${candidate.context} · writeIntent=${candidate.writeIntent} · fastMode=${candidate.fastMode} · closeOnReport=${candidate.closeOnReport}`,
-    )
-    .join("\n");
-  return candidates
-    ? `${disposition}\n${candidates}`
-    : scope === "session"
-      ? "Inherit active session base (resolved route has no candidates)"
-      : scope === "project"
-        ? "Inherit global (resolved route has no candidates)"
-        : "Reset to built-in";
-};

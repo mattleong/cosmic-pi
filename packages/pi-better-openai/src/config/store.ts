@@ -1,6 +1,7 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Number from "effect/Number";
 import * as Schema from "effect/Schema";
+import type * as Types from "effect/Types";
 import {
   decodeTolerantFields,
   makeConfigDocumentErrorFactory,
@@ -86,34 +87,15 @@ function decodeConfig<ValueInput>(value: ValueInput): ConfigFile {
     ...imageFields,
     ...(defaultModel ? { defaultModel } : { defaultModel: undefined }),
   };
-  return (() => {
-    const objectPart2666_0 = {};
-    const objectPart2666_1 =
-      root.persistState !== undefined
-        ? { ...objectPart2666_0, persistState: root.persistState }
-        : objectPart2666_0;
-    const objectPart2666_2 =
-      root.active !== undefined ? { ...objectPart2666_1, active: root.active } : objectPart2666_1;
-    const objectPart2666_3 =
-      root.desiredActive !== undefined
-        ? { ...objectPart2666_2, desiredActive: root.desiredActive }
-        : objectPart2666_2;
-    const objectPart2666_4 = Object.keys(usage).length
-      ? { ...objectPart2666_3, usage }
-      : objectPart2666_3;
-    const objectPart2666_5 =
-      footer.mode !== undefined
-        ? { ...objectPart2666_4, footer: { mode: footer.mode } }
-        : objectPart2666_4;
-    const objectPart2666_6 =
-      compaction.enabled !== undefined
-        ? { ...objectPart2666_5, compaction: { enabled: compaction.enabled } }
-        : objectPart2666_5;
-    const objectPart2666_7 = Object.values(image).some((field) => field !== undefined)
-      ? { ...objectPart2666_6, image }
-      : objectPart2666_6;
-    return objectPart2666_7;
-  })();
+  const decoded: Types.Mutable<ConfigFile> = {};
+  if (root.persistState !== undefined) decoded.persistState = root.persistState;
+  if (root.active !== undefined) decoded.active = root.active;
+  if (root.desiredActive !== undefined) decoded.desiredActive = root.desiredActive;
+  if (Object.keys(usage).length > 0) decoded.usage = usage;
+  if (footer.mode !== undefined) decoded.footer = { mode: footer.mode };
+  if (compaction.enabled !== undefined) decoded.compaction = { enabled: compaction.enabled };
+  if (Object.values(image).some((field) => field !== undefined)) decoded.image = image;
+  return decoded;
 }
 
 function resolveConfigFiles(

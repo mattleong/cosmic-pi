@@ -17,6 +17,7 @@ import type {
 } from "../boundary/supervisor-channel.ts";
 import {
   isOutcomeUncertain,
+  processError,
   SubagentProcessError,
   UnsupportedSubagentCapabilityError,
   type SubagentError,
@@ -57,9 +58,6 @@ const RESULT_REPORT_GRACE = "10 seconds";
 const MCP_READY_ATTEMPTS = 100;
 const INITIALIZATION_PROBE = "pi-subagents native initialization probe";
 const ASSISTANT_USAGE_MESSAGE_LIMIT = 32;
-
-const processError = (operation: string, code: string, message: string) =>
-  new SubagentProcessError({ operation, code, message });
 
 const unsupported = (capability: string) =>
   new UnsupportedSubagentCapabilityError({

@@ -73,13 +73,12 @@ export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(fu
         try: () => {
           const document = patchAdvisorConfig(raw, patch);
           const next = normalizeAdvisorConfig(document, path);
-          return (() => {
-            const objectPart2692_0 = { value: next, document };
-            const objectPart2692_1 = afterCommit
-              ? { ...objectPart2692_0, afterCommit: afterCommit(next) }
-              : objectPart2692_0;
-            return objectPart2692_1;
-          })() satisfies JsonDocumentModification<ResolvedAdvisorConfig, AfterCommitR>;
+          const base = { value: next, document };
+          const modification = afterCommit ? { ...base, afterCommit: afterCommit(next) } : base;
+          return modification satisfies JsonDocumentModification<
+            ResolvedAdvisorConfig,
+            AfterCommitR
+          >;
         },
         catch: mapConfigError("update", path),
       }),

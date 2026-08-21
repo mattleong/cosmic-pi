@@ -14,6 +14,7 @@ import type {
 } from "../boundary/supervisor-channel.ts";
 import {
   isOutcomeUncertain,
+  processError,
   SubagentProcessError,
   SubagentProtocolError,
   UnsupportedSubagentCapabilityError,
@@ -44,8 +45,6 @@ import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
 const EVENT_CAPACITY = 512;
 const RPC_TIMEOUT = "10 seconds";
 
-const processError = (operation: string, code: string, message: string) =>
-  new SubagentProcessError({ operation, code, message });
 const protocolError = (message: string) => new SubagentProtocolError({ message });
 const unsupported = (capability: string) =>
   new UnsupportedSubagentCapabilityError({

@@ -97,18 +97,15 @@ export const evaluateAdvisorEmission = (
   const previousSeverity = state.seen[hash];
   if (previousSeverity && advisorSeverityRank(previousSeverity) >= advisorSeverityRank(severity))
     return { state, decision: { accepted: false, reason: "duplicate" } };
-  const rollback: AdvisorEmissionRollback = (() => {
-    const objectPart4117_0 = { checkpointId, checkpointEvicted: [], hash };
-    const objectPart4117_1 = previousSeverity
-      ? { ...objectPart4117_0, previousSeverity }
-      : objectPart4117_0;
-    const objectPart4117_2 = {
-      ...objectPart4117_1,
-      wasNewHash: previousSeverity === undefined,
-      hashEvicted: [],
-    };
-    return objectPart4117_2;
-  })();
+  const baseRollback: AdvisorEmissionRollback = {
+    checkpointId,
+    checkpointEvicted: [],
+    hash,
+    wasNewHash: previousSeverity === undefined,
+    hashEvicted: [],
+  };
+  const rollback: AdvisorEmissionRollback =
+    previousSeverity === undefined ? baseRollback : { ...baseRollback, previousSeverity };
   const acceptedCheckpoints = [...state.acceptedCheckpoints, checkpointId];
   const checkpointOrder = [...state.checkpointOrder, checkpointId];
   while (checkpointOrder.length > state.capacity) {

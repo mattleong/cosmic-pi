@@ -1,11 +1,11 @@
-import * as Predicate from "effect/Predicate";
-
 /**
  * Leaf routing vocabulary shared by profiles, config, run orchestration, and backends.
  *
- * This module must stay import-free so profile and run models can both depend on it
- * without forming a cycle.
+ * This module stays dependency-light — leaf utilities such as `effect/Predicate` only —
+ * so profile and run models can both depend on it without forming a cycle.
  */
+
+import * as Predicate from "effect/Predicate";
 
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";

@@ -65,13 +65,7 @@ export function reduceQuestionnaire(
         const values = selectedChoices.map((candidate) => candidate.value);
         const labels = selectedChoices.map((candidate) => candidate.label);
         if (values.length > 0) return { ...draft, answer: { kind: "choices", values, labels } };
-        return (() => {
-          const objectPart2593_0 = { cursor: draft.cursor };
-          const objectPart2593_1 = draft.note
-            ? { ...objectPart2593_0, note: draft.note }
-            : objectPart2593_0;
-          return objectPart2593_1;
-        })();
+        return draft.note ? { cursor: draft.cursor, note: draft.note } : { cursor: draft.cursor };
       });
     }
     case "set-custom":
@@ -83,13 +77,9 @@ export function reduceQuestionnaire(
       return updateDraft(state, action.question, (draft) => {
         const note = action.note.trim();
         if (note) return { ...draft, note };
-        return (() => {
-          const objectPart3034_0 = { cursor: draft.cursor };
-          const objectPart3034_1 = draft.answer
-            ? { ...objectPart3034_0, answer: draft.answer }
-            : objectPart3034_0;
-          return objectPart3034_1;
-        })();
+        return draft.answer
+          ? { cursor: draft.cursor, answer: draft.answer }
+          : { cursor: draft.cursor };
       });
     case "set-review-cursor":
       return { ...state, reviewCursor: action.cursor };

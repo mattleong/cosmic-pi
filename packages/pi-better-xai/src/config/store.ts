@@ -97,12 +97,4 @@ const store = makeScopedConfigStore({
   }),
 });
 
-export const {
-  configPaths,
-  modifyConfig,
-  readConfig,
-  readRawConfig,
-  resolveCommittedConfig,
-  resolveConfig,
-  writeConfig,
-} = store;
+export const { modifyConfig, readRawConfig, resolveCommittedConfig, resolveConfig } = store;

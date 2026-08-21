@@ -930,20 +930,14 @@ export const make = <R>(
             recordCall(call);
             return calls.length - 1;
           }).pipe(
-            Effect.tap(
-              (index) =>
+            Effect.tap((index) => {
+              const call = { index, name, input };
+              return (
                 hooks?.onToolCallStart?.(
-                  (() => {
-                    const objectPart36478_0 = { index };
-                    const objectPart36478_1 =
-                      lifecycleId === undefined
-                        ? objectPart36478_0
-                        : { ...objectPart36478_0, lifecycleId };
-                    const objectPart36478_2 = { ...objectPart36478_1, name, input };
-                    return objectPart36478_2;
-                  })(),
-                ) ?? Effect.void,
-            ),
+                  lifecycleId === undefined ? call : { ...call, lifecycleId },
+                ) ?? Effect.void
+              );
+            }),
           );
         const tool = resolve(callableTools, path);
         let describedInput: unknown;
@@ -964,13 +958,8 @@ export const make = <R>(
         }
         const input = isDefinition(tool) ? describedInput : externalArgs;
         const index = yield* recordAndObserve(input);
-        const currentCall = (() => {
-          const objectPart37487_0 = { index };
-          const objectPart37487_1 =
-            lifecycleId === undefined ? objectPart37487_0 : { ...objectPart37487_0, lifecycleId };
-          const objectPart37487_2 = { ...objectPart37487_1, name, input };
-          return objectPart37487_2;
-        })();
+        const baseCall = { index, name, input };
+        const currentCall = lifecycleId === undefined ? baseCall : { ...baseCall, lifecycleId };
         if (isDefinition(tool)) {
           return yield* observeEnd(
             Effect.gen(function* () {

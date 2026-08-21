@@ -85,17 +85,13 @@ export function extractImageFromEvent<EventInput>(
           : undefined;
     if (!raw) return undefined;
     const parts = dataUrlParts(raw, fallbackMimeType);
-    return (() => {
-      const objectPart3492_0 = {
-        id: Predicate.isString(item.id) ? item.id : fallbackId,
-        status: Predicate.isString(item.status) ? item.status : "completed",
-      };
-      const objectPart3492_1 = Predicate.isString(item.revised_prompt)
-        ? { ...objectPart3492_0, revisedPrompt: item.revised_prompt }
-        : objectPart3492_0;
-      const objectPart3492_2 = { ...objectPart3492_1, ...parts };
-      return objectPart3492_2;
-    })();
+    const base = {
+      id: Predicate.isString(item.id) ? item.id : fallbackId,
+      status: Predicate.isString(item.status) ? item.status : "completed",
+    };
+    return Predicate.isString(item.revised_prompt)
+      ? { ...base, revisedPrompt: item.revised_prompt, ...parts }
+      : { ...base, ...parts };
   }
   const partial = Predicate.isString(event.partial_image_b64)
     ? event.partial_image_b64

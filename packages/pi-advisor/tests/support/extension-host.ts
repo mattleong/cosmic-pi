@@ -106,15 +106,12 @@ export function advisorExtensionContext(options: AdvisorExtensionContextOptions)
       hasConfiguredAuth: vi.fn(),
     },
     sessionManager: (() => {
-      const objectPart4226_0 = {
+      const base = {
         buildContextEntries: vi.fn(() => []),
         getBranch: vi.fn(options.getBranch),
         getLeafId: vi.fn(() => "anchor"),
       };
-      const objectPart4226_1 = options.withoutSessionId
-        ? objectPart4226_0
-        : { ...objectPart4226_0, getSessionId: vi.fn(() => "session") };
-      return objectPart4226_1;
+      return options.withoutSessionId ? base : { ...base, getSessionId: vi.fn(() => "session") };
     })(),
   };
   // SAFETY: Advisor extension tests exercise only the ExtensionContext members implemented here.

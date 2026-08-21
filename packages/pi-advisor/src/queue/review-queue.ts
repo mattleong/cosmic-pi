@@ -362,18 +362,16 @@ export class AdvisorReviewQueue {
       }
       isolate(() => self.options.onCheckpointStart?.(waiter.request));
       const batch = self.observations.peekThrough(waiter.target);
-      const runtimeRequest: AdvisorCheckpointRequest = (() => {
-        const objectPart13409_0 = {
-          checkpointId: waiter.request.checkpointId,
-          processedThrough: waiter.target,
-          observations: batch?.rendered ?? renderPreviouslyProcessed(waiter.target),
-          focus: waiter.request.focus,
-        };
-        const objectPart13409_1 = waiter.request.verificationReview
-          ? { ...objectPart13409_0, verificationReview: waiter.request.verificationReview }
-          : objectPart13409_0;
-        return objectPart13409_1;
-      })();
+      const baseRequest: AdvisorCheckpointRequest = {
+        checkpointId: waiter.request.checkpointId,
+        processedThrough: waiter.target,
+        observations: batch?.rendered ?? renderPreviouslyProcessed(waiter.target),
+        focus: waiter.request.focus,
+      };
+      const runtimeRequest: AdvisorCheckpointRequest =
+        waiter.request.verificationReview === undefined
+          ? baseRequest
+          : { ...baseRequest, verificationReview: waiter.request.verificationReview };
       const result = yield* self
         .checkpointWithBoundedRecovery(runtimeRequest, waiter.epoch)
         .pipe(Effect.exit);

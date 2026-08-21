@@ -188,21 +188,25 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
       actions.push("prompt");
       messages.push({ role: "user", content: [{ type: "text", text }] });
       if (pauseBeforeAnalysis) await analysisGate;
-      const analysis = (() => {
-        const objectPart6736_0 = {
-          role: "assistant",
-          content: [
-            { type: "thinking", thinking: `private-thinking-${promptCount}` },
-            { type: "text", text: "Analysis complete; awaiting trusted finalization." },
-          ],
-          stopReason,
-        };
-        const objectPart6736_1 =
-          stopReason === "error"
-            ? { ...objectPart6736_0, errorMessage: "child stopped" }
-            : objectPart6736_0;
-        return objectPart6736_1;
-      })();
+      const analysis =
+        stopReason === "error"
+          ? {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: `private-thinking-${promptCount}` },
+                { type: "text", text: "Analysis complete; awaiting trusted finalization." },
+              ],
+              stopReason,
+              errorMessage: "child stopped",
+            }
+          : {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: `private-thinking-${promptCount}` },
+                { type: "text", text: "Analysis complete; awaiting trusted finalization." },
+              ],
+              stopReason,
+            };
       messages.push(analysis);
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       listener?.({ type: "message_end", message: analysis } as never);

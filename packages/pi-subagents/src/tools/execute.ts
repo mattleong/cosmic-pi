@@ -47,7 +47,6 @@ import {
   formatDetailedRuns,
   formatRun,
   formatStartResult,
-  formatStartResultDetails,
   renderedCompletionReceipts,
 } from "./output.ts";
 import {
@@ -541,36 +540,15 @@ export const executeSubagentAction = async (
             Effect.catch((error) => Effect.succeed(failureFor(spec, index, error))),
             Effect.tap(publishOutcome),
           );
-        const summarize = (
-          outcomes: ReadonlyArray<SubagentStartOutcome>,
-          observation?: SubagentRunObservation,
-        ) => {
+        const summarize = (outcomes: ReadonlyArray<SubagentStartOutcome>) => {
           const ordered = [...outcomes].sort((left, right) => left.index - right.index);
-          const launched = ordered.flatMap((outcome) =>
-            "run" in outcome
-              ? [
-                  observation && observation.run.id === outcome.run.id
-                    ? observation.run
-                    : outcome.run,
-                ]
-              : [],
-          );
+          const launched = ordered.flatMap((outcome) => ("run" in outcome ? [outcome.run] : []));
           const failures = ordered.flatMap((outcome) =>
             "failure" in outcome ? [outcome.failure] : [],
           );
           const finalOutcomes = new Map(ordered.map((outcome) => [outcome.index, outcome]));
           const startEntries = startEntriesFor(finalOutcomes);
-          if (!observation)
-            return Effect.succeed({ runs: launched, startFailures: failures, startEntries });
-          const formatted = formatStartResultDetails(launched, failures);
-          return consumeCompletions([observation], formatted.fullyRenderedIds).pipe(
-            Effect.as({
-              runs: launched,
-              startFailures: failures,
-              startEntries,
-              text: formatted.text,
-            }),
-          );
+          return Effect.succeed({ runs: launched, startFailures: failures, startEntries });
         };
 
         const outcomes = yield* Effect.forEach(specs, launchOne, {

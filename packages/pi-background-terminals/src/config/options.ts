@@ -13,44 +13,39 @@ export function normalizeConfig(
     4 * 1024,
     4 * 1024 * 1024,
   );
-  return (() => {
-    const objectPart588_0 = {
-      enabled: value.enabled ?? DEFAULT_BACKGROUND_TERMINAL_CONFIG.enabled,
-      maxRunning: integerIn(value.maxRunning, DEFAULT_BACKGROUND_TERMINAL_CONFIG.maxRunning, 1, 64),
-      maxRetained: integerIn(
-        value.maxRetained,
-        DEFAULT_BACKGROUND_TERMINAL_CONFIG.maxRetained,
-        1,
-        500,
+  const normalizedConfig = {
+    enabled: value.enabled ?? DEFAULT_BACKGROUND_TERMINAL_CONFIG.enabled,
+    maxRunning: integerIn(value.maxRunning, DEFAULT_BACKGROUND_TERMINAL_CONFIG.maxRunning, 1, 64),
+    maxRetained: integerIn(
+      value.maxRetained,
+      DEFAULT_BACKGROUND_TERMINAL_CONFIG.maxRetained,
+      1,
+      500,
+    ),
+    logBufferBytesPerJob: perJob,
+    totalLogBufferBytes: Math.max(
+      perJob,
+      integerIn(
+        value.totalLogBufferBytes,
+        DEFAULT_BACKGROUND_TERMINAL_CONFIG.totalLogBufferBytes,
+        4 * 1024,
+        32 * 1024 * 1024,
       ),
-      logBufferBytesPerJob: perJob,
-      totalLogBufferBytes: Math.max(
-        perJob,
-        integerIn(
-          value.totalLogBufferBytes,
-          DEFAULT_BACKGROUND_TERMINAL_CONFIG.totalLogBufferBytes,
-          4 * 1024,
-          32 * 1024 * 1024,
-        ),
-      ),
-      stopGraceMs: integerIn(
-        value.stopGraceMs,
-        DEFAULT_BACKGROUND_TERMINAL_CONFIG.stopGraceMs,
-        0,
-        30_000,
-      ),
-      maxLogWaitSeconds: integerIn(
-        value.maxLogWaitSeconds,
-        DEFAULT_BACKGROUND_TERMINAL_CONFIG.maxLogWaitSeconds,
-        0,
-        120,
-      ),
-      showFooterStatus:
-        value.showFooterStatus ?? DEFAULT_BACKGROUND_TERMINAL_CONFIG.showFooterStatus,
-    };
-    const objectPart588_1 = value.shellPath?.trim()
-      ? { ...objectPart588_0, shellPath: value.shellPath.trim() }
-      : objectPart588_0;
-    return objectPart588_1;
-  })();
+    ),
+    stopGraceMs: integerIn(
+      value.stopGraceMs,
+      DEFAULT_BACKGROUND_TERMINAL_CONFIG.stopGraceMs,
+      0,
+      30_000,
+    ),
+    maxLogWaitSeconds: integerIn(
+      value.maxLogWaitSeconds,
+      DEFAULT_BACKGROUND_TERMINAL_CONFIG.maxLogWaitSeconds,
+      0,
+      120,
+    ),
+    showFooterStatus: value.showFooterStatus ?? DEFAULT_BACKGROUND_TERMINAL_CONFIG.showFooterStatus,
+  };
+  const shellPath = value.shellPath?.trim();
+  return shellPath ? { ...normalizedConfig, shellPath } : normalizedConfig;
 }

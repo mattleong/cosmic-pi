@@ -4,8 +4,6 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import * as Predicate from "effect/Predicate";
-
 import { spawn } from "node:child_process";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -19,7 +17,7 @@ import type {
   ClaudeControlRequestFrame,
   ClaudeUserFrame,
 } from "../backend/local-claude-protocol.ts";
-import { SubagentProcessError } from "../run/errors.ts";
+import { processCauseError, SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { releaseChildProcess } from "./child-process.ts";
 import { terminateProcessTree } from "./process-tree.ts";
@@ -67,29 +65,20 @@ export interface LocalCliTransportRequest {
   readonly platform?: NodeJS.Platform | undefined;
 }
 
-const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
-  new SubagentProcessError(
-    (() => {
-      const baseResult = {
-        operation,
-        message:
-          error instanceof Error
-            ? error.message
-            : Predicate.isString(error)
-              ? error
-              : `Unable to ${operation} local CLI process.`,
-      };
-      const withCode = code ? { ...baseResult, code } : baseResult;
-      return withCode;
-    })(),
-  );
+const processError = <ErrorInput>(
+  operation: string,
+  error?: ErrorInput,
+  code?: string,
+): SubagentProcessError =>
+  processCauseError(operation, error, code, `Unable to ${operation} local CLI process.`);
 
 interface BoundedTailChunks {
   readonly chunks: Buffer[];
   length: number;
 }
 
-const boundedAppend = (target: BoundedTailChunks, chunk: Buffer, maximum: number): void => {
+/** Tail-bounded: keeps the LAST `maximum` bytes and drops the head. */
+const appendTailBounded = (target: BoundedTailChunks, chunk: Buffer, maximum: number): void => {
   target.chunks.push(chunk);
   target.length += chunk.byteLength;
   while (target.length > maximum) {
@@ -187,7 +176,7 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
           })
         : () => {};
       const onStderr = (chunk: Buffer) => {
-        boundedAppend(stderr, chunk, MAX_STDERR_BYTES);
+        appendTailBounded(stderr, chunk, MAX_STDERR_BYTES);
       };
       const onStdoutError = (error: Error) => {
         onStderr(Buffer.from(`\nLocal CLI stdout error: ${error.message}\n`, "utf8"));

@@ -18,14 +18,10 @@ export const herdrForkError = (
   outcome: HerdrForkErrorOutcome = "confirmed",
   paneId?: string,
   herdrCode?: string,
-): HerdrForkError =>
-  new HerdrForkError(
-    (() => {
-      const objectPart654_0 = { operation, code, message, outcome };
-      const objectPart654_1 =
-        paneId === undefined ? objectPart654_0 : { ...objectPart654_0, paneId };
-      const objectPart654_2 =
-        herdrCode === undefined ? objectPart654_1 : { ...objectPart654_1, herdrCode };
-      return objectPart654_2;
-    })(),
+): HerdrForkError => {
+  const errorBase = { operation, code, message, outcome };
+  const errorWithPane = paneId !== undefined ? { ...errorBase, paneId } : errorBase;
+  return new HerdrForkError(
+    herdrCode !== undefined ? { ...errorWithPane, herdrCode } : errorWithPane,
   );
+};

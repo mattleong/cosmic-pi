@@ -9,21 +9,17 @@ export const normalizeAskUserRequest = (request: AskUserRequest): AskUserRequest
     key: question.key.trim(),
     title: question.title.trim(),
     prompt: question.prompt.trim(),
-    choices: question.choices.map((choice) =>
-      (() => {
-        const objectPart517_0 = {
-          ...choice,
-          value: choice.value.trim(),
-          label: choice.label.trim(),
-          description: choice.description.trim(),
-        };
-        const objectPart517_1 =
-          choice.preview === undefined
-            ? objectPart517_0
-            : { ...objectPart517_0, preview: choice.preview.trim() };
-        return objectPart517_1;
-      })(),
-    ),
+    choices: question.choices.map((choice) => {
+      const baseChoice = {
+        ...choice,
+        value: choice.value.trim(),
+        label: choice.label.trim(),
+        description: choice.description.trim(),
+      };
+      return choice.preview === undefined
+        ? baseChoice
+        : { ...baseChoice, preview: choice.preview.trim() };
+    }),
   })),
 });
 

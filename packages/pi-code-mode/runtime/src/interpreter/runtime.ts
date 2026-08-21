@@ -20,6 +20,7 @@ import {
   ToolRuntimeError,
   type HostTools,
   type Services,
+  type ToolCallHooks,
 } from "../tool-runtime.js";
 import { ToolError } from "../tool-error.js";
 import type {
@@ -190,30 +191,20 @@ const publicErrorMessage = (message: string): string =>
 
 const normalizeError = <ErrorInput>(error: ErrorInput): Diagnostic => {
   if (error instanceof InterpreterRuntimeError) {
-    return (() => {
-      const objectPart5202_0 = {
-        kind: error.kind,
-        message: `${error.message}${formatLocation(error.node)}`,
-      };
-      const objectPart5202_1 = error.node?.loc
-        ? { ...objectPart5202_0, location: sourceLocation(error.node) }
-        : objectPart5202_0;
-      const objectPart5202_2 = error.suggestions
-        ? { ...objectPart5202_1, suggestions: error.suggestions }
-        : objectPart5202_1;
-      return objectPart5202_2;
-    })();
+    const base = {
+      kind: error.kind,
+      message: `${error.message}${formatLocation(error.node)}`,
+    };
+    const withLocation =
+      error.node?.loc !== undefined ? { ...base, location: sourceLocation(error.node) } : base;
+    return error.suggestions !== undefined
+      ? { ...withLocation, suggestions: error.suggestions }
+      : withLocation;
   }
 
   if (error instanceof ToolRuntimeError) {
-    return (() => {
-      const objectPart5506_0 = { kind: error.kind, message: error.message };
-      const objectPart5506_1 =
-        error.suggestions.length > 0
-          ? { ...objectPart5506_0, suggestions: error.suggestions }
-          : objectPart5506_0;
-      return objectPart5506_1;
-    })();
+    const base = { kind: error.kind, message: error.message };
+    return error.suggestions.length > 0 ? { ...base, suggestions: error.suggestions } : base;
   }
 
   if (error instanceof ToolError) {
@@ -4181,22 +4172,13 @@ export const executeWithLimits = <const Tools extends object>(
   limits: ResolvedExecutionLimits,
   searchIndex: ToolRuntime.DiscoveryPlan["searchIndex"],
 ): Effect.Effect<Result, never, Services<Tools>> => {
-  const hooks = (() => {
-    const objectPart166594_0 = {};
-    const objectPart166594_1 =
-      options.onToolCallLifecycle === undefined
-        ? objectPart166594_0
-        : { ...objectPart166594_0, onToolCallLifecycle: options.onToolCallLifecycle };
-    const objectPart166594_2 =
-      options.onToolCallStart === undefined
-        ? objectPart166594_1
-        : { ...objectPart166594_1, onToolCallStart: options.onToolCallStart };
-    const objectPart166594_3 =
-      options.onToolCallEnd === undefined
-        ? objectPart166594_2
-        : { ...objectPart166594_2, onToolCallEnd: options.onToolCallEnd };
-    return objectPart166594_3;
-  })();
+  let hooks: ToolCallHooks<Services<Tools>> = {};
+  if (options.onToolCallLifecycle !== undefined)
+    hooks = { ...hooks, onToolCallLifecycle: options.onToolCallLifecycle };
+  if (options.onToolCallStart !== undefined)
+    hooks = { ...hooks, onToolCallStart: options.onToolCallStart };
+  if (options.onToolCallEnd !== undefined)
+    hooks = { ...hooks, onToolCallEnd: options.onToolCallEnd };
   // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
   const tools = ToolRuntime.make(
     (options.tools ?? {}) as HostTools<Services<Tools>>,

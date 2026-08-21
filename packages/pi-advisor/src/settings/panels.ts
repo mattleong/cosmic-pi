@@ -6,6 +6,7 @@ import { latestOpenAdvisorReviewCardAtHostBoundary } from "../boundary/host-revi
 import { type AdvisorConfigPatch, type ResolvedAdvisorConfig } from "../config/options.ts";
 import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
 import { formatLastReview, formatModel, formatUsageDuration } from "./format.ts";
+import { notifyCardAction } from "./notify.ts";
 import type { AdvisorCommandActions, AdvisorConfigState } from "./types.ts";
 
 export async function openAdvisorDashboard(
@@ -49,9 +50,8 @@ export async function openAdvisorDashboard(
           : "Advisor review could not start. Try again.",
       result === "started" ? "info" : "warning",
     );
-  } else if (choice === "Fix last") notifyDashboardCardAction(ctx, actions.fixLast(ctx), "fixed");
-  else if (choice === "Dismiss last")
-    notifyDashboardCardAction(ctx, actions.dismissLast(ctx), "dismissed");
+  } else if (choice === "Fix last") notifyCardAction(ctx, actions.fixLast(ctx), "fixed");
+  else if (choice === "Dismiss last") notifyCardAction(ctx, actions.dismissLast(ctx), "dismissed");
   else if (choice === "Cancel review") {
     const cancelled = await actions.cancel(ctx);
     ctx.ui.notify(
@@ -153,22 +153,4 @@ function advisorEffectiveState(
   if (!model) return "model unavailable";
   if (!ctx.modelRegistry.hasConfiguredAuth(model)) return "credentials required";
   return config.enabled ? "ready" : "disabled";
-}
-
-function notifyDashboardCardAction(
-  ctx: ExtensionCommandContext,
-  result: ReturnType<AdvisorCommandActions["fixLast"]>,
-  completed: "fixed" | "dismissed",
-): void {
-  if (result === "applied") ctx.ui.notify(`Advisor card ${completed}.`, "info");
-  else if (result === "unavailable") ctx.ui.notify("No open Advisor card.", "warning");
-  else if (result === "delivery-failed")
-    ctx.ui.notify("Advisor could not send guidance; the card remains open.", "error");
-  else
-    ctx.ui.notify(
-      completed === "fixed"
-        ? "Guidance was sent, but Advisor could not mark the card fixed."
-        : "Advisor could not mark the card dismissed.",
-      "error",
-    );
 }

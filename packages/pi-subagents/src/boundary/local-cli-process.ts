@@ -1,14 +1,16 @@
 // The LocalCliProcess service door: local CLI request/service contracts plus environment,
 // preflight, and probe orchestration over the private harness and wire-transport boundaries.
 // @effect-diagnostics effect/processEnv:off
-import * as Predicate from "effect/Predicate";
-
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
-import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
+import {
+  InvalidSubagentRequestError,
+  processCauseError,
+  SubagentProcessError,
+} from "../run/errors.ts";
 import {
   subagentRuntimeEfforts,
   type SubagentEffort,
@@ -68,22 +70,12 @@ export interface LocalCliProcessLayerOptions extends LocalCliHarnessOptions {
   readonly platform?: NodeJS.Platform | undefined;
 }
 
-const processError = <ErrorInput>(operation: string, error?: ErrorInput, code?: string) =>
-  new SubagentProcessError(
-    (() => {
-      const baseResult = {
-        operation,
-        message:
-          error instanceof Error
-            ? error.message
-            : Predicate.isString(error)
-              ? error
-              : `Unable to ${operation} local CLI process.`,
-      };
-      const withCode = code ? { ...baseResult, code } : baseResult;
-      return withCode;
-    })(),
-  );
+const processError = <ErrorInput>(
+  operation: string,
+  error?: ErrorInput,
+  code?: string,
+): SubagentProcessError =>
+  processCauseError(operation, error, code, `Unable to ${operation} local CLI process.`);
 
 const preflightError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });

@@ -51,6 +51,7 @@ import {
   ensurePrivateDirectory,
   nodeErrorCode,
   safeAgentDirectory,
+  tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
 
@@ -229,8 +230,6 @@ const exactConfig = <ValueInput>(value: ValueInput) => {
   })(value);
   return Option.isSome(decoded) ? decoded.value : undefined;
 };
-
-const tomlString = (value: string): string => JSON.stringify(value);
 
 const makeMetadata = (
   runId: SupervisorRunId,

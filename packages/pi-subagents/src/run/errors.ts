@@ -41,6 +41,31 @@ export class SubagentProcessError extends Schema.TaggedError<SubagentProcessErro
   { operation: Schema.String, message: Schema.String, code: Schema.optional(Schema.String) },
 ) {}
 
+/** Shared `SubagentProcessError` factory for failures with an explicit machine code. */
+export const processError = (
+  operation: string,
+  code: string,
+  message: string,
+): SubagentProcessError => new SubagentProcessError({ operation, code, message });
+
+/**
+ * Shared `SubagentProcessError` factory for caught causes of unknown type; `fallbackMessage` is
+ * used only when the cause is neither an `Error` nor a string.
+ */
+export const processCauseError = <ErrorInput>(
+  operation: string,
+  error?: ErrorInput,
+  code?: string,
+  fallbackMessage = `Unable to ${operation} subagent process.`,
+): SubagentProcessError => {
+  const baseResult = {
+    operation,
+    message:
+      error instanceof Error ? error.message : Predicate.isString(error) ? error : fallbackMessage,
+  };
+  return new SubagentProcessError(code ? { ...baseResult, code } : baseResult);
+};
+
 /** Machine-actionable failure code: an explicit `code` when present, else the error tag. */
 export const subagentErrorCode = (error: SubagentError): string =>
   ("code" in error && Predicate.isString(error.code) && error.code !== "" && error.code) ||

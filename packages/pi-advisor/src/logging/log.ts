@@ -50,7 +50,7 @@ export const logAdvisorFailureEffect = Effect.fn("AdvisorFailureLog.append")(fun
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const coordinator = yield* ProcessCoordinator;
-  const logPath = path.join(path.dirname(path.dirname(configPath)), "logs", "pi-advisor.jsonl");
+  const logPath = getAdvisorFailureLogPath(configPath);
   return yield* coordinator
     .withLock(
       path.resolve(logPath),
@@ -70,19 +70,15 @@ export const logAdvisorFailureEffect = Effect.fn("AdvisorFailureLog.append")(fun
         const now = yield* Clock.currentTimeMillis;
         const provider = safeAdvisorLabel(details.provider);
         const model = safeAdvisorLabel(details.model);
-        const record = (() => {
-          const objectPart2824_0 = { timestamp: DateTime.formatIso(DateTime.makeUnsafe(now)) };
-          const objectPart2824_1 = provider ? { ...objectPart2824_0, provider } : objectPart2824_0;
-          const objectPart2824_2 = model ? { ...objectPart2824_1, model } : objectPart2824_1;
-          const objectPart2824_3 = {
-            ...objectPart2824_2,
-            timeoutMs: details.timeoutMs,
-            contextChars: details.contextChars,
-            durationMs: Math.round(details.durationMs),
-            error: serializeError(details.error),
-          };
-          return objectPart2824_3;
-        })();
+        const baseRecord = {
+          timestamp: DateTime.formatIso(DateTime.makeUnsafe(now)),
+          timeoutMs: details.timeoutMs,
+          contextChars: details.contextChars,
+          durationMs: Math.round(details.durationMs),
+          error: serializeError(details.error),
+        };
+        const withProvider = provider ? { ...baseRecord, provider } : baseRecord;
+        const record = model ? { ...withProvider, model } : withProvider;
         const line = yield* Schema.encodeUnknownEffect(FailureRecordJson)(record);
         yield* fs.writeFileString(logPath, `${line}\n`, { flag: "a", mode: 0o600 });
         yield* fs.chmod(logPath, 0o600);
@@ -107,16 +103,11 @@ function serializeError<ErrorInput>(error: ErrorInput) {
   const name = Predicate.isString(snapshot?.name) ? snapshot.name : "Error";
   const message = Predicate.isString(snapshot?.message) ? snapshot.message : "Unknown error.";
   const stack = Predicate.isString(snapshot?.stack) ? snapshot.stack : undefined;
-  return (() => {
-    const objectPart4225_0 = {
-      name: clip(redactSensitiveText(name), MAX_ERROR_MESSAGE_CHARS),
-      message: clip(redactSensitiveText(message), MAX_ERROR_MESSAGE_CHARS),
-    };
-    const objectPart4225_1 = stack
-      ? { ...objectPart4225_0, stack: clip(redactSensitiveText(stack), MAX_ERROR_STACK_CHARS) }
-      : objectPart4225_0;
-    return objectPart4225_1;
-  })();
+  const base = {
+    name: clip(redactSensitiveText(name), MAX_ERROR_MESSAGE_CHARS),
+    message: clip(redactSensitiveText(message), MAX_ERROR_MESSAGE_CHARS),
+  };
+  return stack ? { ...base, stack: clip(redactSensitiveText(stack), MAX_ERROR_STACK_CHARS) } : base;
 }
 function clip(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `${value.slice(0, maxChars)}…`;

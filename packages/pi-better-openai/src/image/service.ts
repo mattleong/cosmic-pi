@@ -170,14 +170,9 @@ export class OpenAIImageService extends Context.Service<
             ).pipe(Effect.withSpan("pi-better-openai.image.write"));
           }
           const { bytes: _bytes, ...image } = validated;
-          const result: CodexImageResult = (() => {
-            const objectPart7866_0 = { ...image, prompt: params.prompt };
-            const objectPart7866_1 = savedPath
-              ? { ...objectPart7866_0, savedPath }
-              : objectPart7866_0;
-            const objectPart7866_2 = { ...objectPart7866_1, model, action, outputFormat };
-            return objectPart7866_2;
-          })();
+          const result: CodexImageResult = savedPath
+            ? { ...image, prompt: params.prompt, savedPath, model, action, outputFormat }
+            : { ...image, prompt: params.prompt, model, action, outputFormat };
           return result;
         });
         const safeGenerate = <Params>(params: Params) =>

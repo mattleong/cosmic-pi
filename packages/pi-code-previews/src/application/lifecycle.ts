@@ -177,19 +177,15 @@ export function codePreviewsWithDependencies(
     }
     if (capturedHost.aborted) notifyFailure();
     const projectTrusted = readProjectTrust(ctx);
-    return slot
-      .start(
-        (() => {
-          const objectPart5844_0 = { cwd: capturedHost.cwd, projectTrusted };
-          const objectPart5844_1 = capturedHost.signal
-            ? { ...objectPart5844_0, signal: capturedHost.signal }
-            : objectPart5844_0;
-          const objectPart5844_2 = { ...objectPart5844_1, notifyFailure };
-          return objectPart5844_2;
-        })(),
-        capturedHost.signal,
-      )
-      .then(() => undefined);
+    const input: SessionInput = capturedHost.signal
+      ? {
+          cwd: capturedHost.cwd,
+          projectTrusted,
+          signal: capturedHost.signal,
+          notifyFailure,
+        }
+      : { cwd: capturedHost.cwd, projectTrusted, notifyFailure };
+    return slot.start(input, capturedHost.signal).then(() => undefined);
   });
 
   pi.on("session_shutdown", () => slot.shutdown());

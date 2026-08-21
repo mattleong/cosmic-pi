@@ -15,19 +15,9 @@ import type {
   AdvisorCommandRegistrar,
   AdvisorConfigState,
 } from "./types.ts";
+import { notifyCardAction } from "./notify.ts";
 
-export {
-  emptyAdvisorOutcomes,
-  type AdvisorModelUsage,
-  type AdvisorOutcomeMetrics,
-  type AdvisorSessionMetrics,
-} from "../domain/metrics.ts";
-export type {
-  AdvisorCommandActions,
-  AdvisorCommandRegistrar,
-  AdvisorConfigState,
-  AdvisorReviewRequestResult,
-} from "./types.ts";
+export type { AdvisorCommandActions } from "./types.ts";
 
 const ADVISOR_COMMAND = "advisor";
 export const ADVISOR_COMMAND_DESCRIPTION = "Advisor controls, review, and usage";
@@ -130,25 +120,4 @@ function reviewRequestMessage(result: "started" | "unavailable" | "cancelled"): 
   if (result === "started") return "Advisor review started.";
   if (result === "unavailable") return "No completed response is available to review.";
   return "Advisor review could not start. Try again.";
-}
-
-function notifyCardAction(
-  ctx: ExtensionCommandContext,
-  result: ReturnType<AdvisorCommandActions["fixLast"]>,
-  completed: "fixed" | "dismissed",
-): void {
-  const [message, level] =
-    result === "applied"
-      ? [`Advisor card ${completed}.`, "info" as const]
-      : result === "unavailable"
-        ? ["No open Advisor card.", "warning" as const]
-        : result === "delivery-failed"
-          ? ["Advisor could not send guidance; the card remains open.", "error" as const]
-          : [
-              completed === "fixed"
-                ? "Guidance was sent, but Advisor could not mark the card fixed."
-                : "Advisor could not mark the card dismissed.",
-              "error" as const,
-            ];
-  ctx.ui.notify(message, level);
 }

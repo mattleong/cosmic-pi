@@ -73,14 +73,10 @@ interface MutableCallEntry {
 }
 
 const snapshotCalls = (calls: ReadonlyArray<MutableCallEntry>): ReadonlyArray<CodeModeCallEntry> =>
-  calls.map(({ tool, status, activity, durationMs }) =>
-    (() => {
-      const objectPart3391_0 = { tool, status, activity };
-      const objectPart3391_1 =
-        durationMs === undefined ? objectPart3391_0 : { ...objectPart3391_0, durationMs };
-      return objectPart3391_1;
-    })(),
-  );
+  calls.map(({ tool, status, activity, durationMs }) => {
+    const base = { tool, status, activity };
+    return durationMs === undefined ? base : { ...base, durationMs };
+  });
 
 const emptyCounts = (): MutableCallCounts => ({
   total: 0,
@@ -328,12 +324,9 @@ export const makeCodeModeToolExecute =
       };
     }
 
-    const baseDetails: CodeModeToolDetails = (() => {
-      const objectPart13458_0 = { ...callEntryDetails(snapshotCalls(calls), counts) };
-      const objectPart13458_1 =
-        result.truncated === true ? { ...objectPart13458_0, truncated: true } : objectPart13458_0;
-      return objectPart13458_1;
-    })();
+    const callEntry = callEntryDetails(snapshotCalls(calls), counts);
+    const baseDetails: CodeModeToolDetails =
+      result.truncated === true ? { ...callEntry, truncated: true } : callEntry;
     if (!result.ok) {
       environment.retainFailureDetails?.(toolCallId, baseDetails);
       throw new Error(clampModelVisibleText(formatCodeModeFailure(result), config.maxOutputBytes));

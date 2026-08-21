@@ -205,20 +205,14 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     closeOutput();
     cleanup();
   };
-  const settleExit = (code: number | null, signal: NodeJS.Signals | null) =>
-    Deferred.doneUnsafe(
-      exited,
-      Effect.succeed(
-        (() => {
-          const objectPart7073_0 = { exitCode: code };
-          const objectPart7073_1 = signal ? { ...objectPart7073_0, signal } : objectPart7073_0;
-          const objectPart7073_2 = spawnError
-            ? { ...objectPart7073_1, error: spawnError }
-            : objectPart7073_1;
-          return objectPart7073_2;
-        })(),
-      ),
-    );
+  const settleExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    const baseExit = { exitCode: code };
+    const exitWithSignal = signal ? { ...baseExit, signal } : baseExit;
+    const exitWithSpawnError = spawnError
+      ? { ...exitWithSignal, error: spawnError }
+      : exitWithSignal;
+    return Deferred.doneUnsafe(exited, Effect.succeed(exitWithSpawnError));
+  };
   const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
     terminateLingeringGroup(child);
     settleExit(code, signal);

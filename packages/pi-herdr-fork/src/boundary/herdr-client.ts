@@ -459,19 +459,16 @@ export const command = (
   mutation = false,
   timeoutMillis?: number,
   confirmedRejectionCodes?: ReadonlyArray<string>,
-): Effect.Effect<HerdrCommandOutput, HerdrForkError> =>
-  runner(
-    (() => {
-      const objectPart9136_0 = { args, operation, mutation };
-      const objectPart9136_1 =
-        timeoutMillis === undefined ? objectPart9136_0 : { ...objectPart9136_0, timeoutMillis };
-      const objectPart9136_2 =
-        confirmedRejectionCodes === undefined
-          ? objectPart9136_1
-          : { ...objectPart9136_1, confirmedRejectionCodes };
-      return objectPart9136_2;
-    })(),
+): Effect.Effect<HerdrCommandOutput, HerdrForkError> => {
+  const requestBase = { args, operation, mutation };
+  const requestWithTimeout =
+    timeoutMillis !== undefined ? { ...requestBase, timeoutMillis } : requestBase;
+  return runner(
+    confirmedRejectionCodes !== undefined
+      ? { ...requestWithTimeout, confirmedRejectionCodes }
+      : requestWithTimeout,
   );
+};
 
 export const paneCommand = (
   runner: HerdrCommandRunner,

@@ -7,7 +7,6 @@ import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts
 import {
   addRouteCandidate,
   candidateValidationError,
-  completeRouteSummary,
   declaredRouteForDraft,
   defaultRouteCandidate,
   disableRouteDraft,
@@ -88,12 +87,6 @@ describe("ordered profile-route editor state", () => {
     expect(draft).toEqual({ kind: "explicit", candidates: threeRoute });
     expect(draft.candidates).not.toBe(threeRoute);
     expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: threeRoute });
-    expect(completeRouteSummary(draft, "global")).toContain(
-      "2. host=herdr · runtime=claude · model=claude-opus-5",
-    );
-    expect(completeRouteSummary(draft, "global")).toContain(
-      "3. host=local · runtime=codex · model=gpt-5.6-codex",
-    );
   });
 
   it("loads session overrides as explicit routes and resets to the active base", () => {

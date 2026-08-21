@@ -246,21 +246,17 @@ describe("CodeMode tool-call observation", () => {
       onToolCallEnd: (call) =>
         Effect.sync(() => {
           expect(call.durationMs).toBeGreaterThanOrEqual(0);
-          events.push(
-            (() => {
-              const objectPart8185_0 = {
-                phase: "end",
-                index: call.index,
-                name: call.name,
-                outcome: call.outcome,
-              };
-              const objectPart8185_1 =
-                call.message === undefined
-                  ? objectPart8185_0
-                  : { ...objectPart8185_0, message: call.message };
-              return objectPart8185_1;
-            })(),
-          );
+          const event =
+            call.message === undefined
+              ? { phase: "end", index: call.index, name: call.name, outcome: call.outcome }
+              : {
+                  phase: "end",
+                  index: call.index,
+                  name: call.name,
+                  outcome: call.outcome,
+                  message: call.message,
+                };
+          events.push(event);
         }),
     });
 

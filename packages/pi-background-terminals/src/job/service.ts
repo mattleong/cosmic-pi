@@ -179,21 +179,23 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       : exit.error || exit.exitCode !== 0
         ? "failed"
         : "exited";
-    record.snapshot = (() => {
-      const objectPart6200_0 = { ...record.snapshot, state, endedAt, exitCode: exit.exitCode };
-      const objectPart6200_1 = exit.signal
-        ? { ...objectPart6200_0, signal: exit.signal }
-        : objectPart6200_0;
-      const objectPart6200_2 = exit.error
-        ? { ...objectPart6200_1, error: exit.error }
-        : objectPart6200_1;
-      const objectPart6200_3 = {
-        ...objectPart6200_2,
-        logCursor: record.logs.nextCursor - 1,
-        droppedLogBytes: record.logs.droppedBytes,
-      };
-      return objectPart6200_3;
-    })();
+    const baseSnapshot = {
+      ...record.snapshot,
+      state,
+      endedAt,
+      exitCode: exit.exitCode,
+    };
+    const snapshotWithSignal = exit.signal
+      ? { ...baseSnapshot, signal: exit.signal }
+      : baseSnapshot;
+    const snapshotWithError = exit.error
+      ? { ...snapshotWithSignal, error: exit.error }
+      : snapshotWithSignal;
+    record.snapshot = {
+      ...snapshotWithError,
+      logCursor: record.logs.nextCursor - 1,
+      droppedLogBytes: record.logs.droppedBytes,
+    };
     wake(record);
     Deferred.doneUnsafe(record.completion, Effect.succeed(record.snapshot));
     trimRetention();
@@ -253,24 +255,18 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
     let handleAcquired = false;
     return Effect.scoped(
       Effect.gen(function* () {
+        const spawnRequestBase = {
+          command: request.command,
+          cwd: request.cwd,
+          ingressBufferBytes: Math.max(
+            1,
+            Math.min(config.logBufferBytesPerJob, Math.floor(ingressLogBudget / config.maxRunning)),
+          ),
+        };
         const handle = yield* processes.spawn(
-          (() => {
-            const objectPart8477_0 = {
-              command: request.command,
-              cwd: request.cwd,
-              ingressBufferBytes: Math.max(
-                1,
-                Math.min(
-                  config.logBufferBytesPerJob,
-                  Math.floor(ingressLogBudget / config.maxRunning),
-                ),
-              ),
-            };
-            const objectPart8477_1 = config.shellPath
-              ? { ...objectPart8477_0, shellPath: config.shellPath }
-              : objectPart8477_0;
-            return objectPart8477_1;
-          })(),
+          config.shellPath
+            ? { ...spawnRequestBase, shellPath: config.shellPath }
+            : spawnRequestBase,
         );
         handleAcquired = true;
         const terminateLateHandle = yield* withLock(

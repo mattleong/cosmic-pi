@@ -16,7 +16,7 @@ export function formatResetCountdown(seconds: number | null): string | null {
   return `${secs}s`;
 }
 
-export function formatResetClock(
+function formatResetClock(
   seconds: number | null,
   options: { readonly includeDate?: boolean } | undefined,
   now: number,
