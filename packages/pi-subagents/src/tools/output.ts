@@ -48,6 +48,18 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     field("Selection", selectionSourceLabel(run)),
     run.selection.routeSource ? field("Route source", run.selection.routeSource) : undefined,
     field("Reason", run.selection.reason),
+    run.predecessorRunId ? field("Predecessor", run.predecessorRunId) : undefined,
+    run.supersededByRunId ? field("Superseded by", run.supersededByRunId) : undefined,
+    run.retryBlocked
+      ? field("Route retry", "blocked by uncertain execution or cleanup; inspect manually")
+      : run.retryExhausted
+        ? field("Route retry", "exhausted; only now consider a generalist replacement")
+        : (run.remainingCandidateCount ?? 0) > 0 && run.state === "failed"
+          ? field(
+              "Route retry",
+              `${run.remainingCandidateCount} candidate${run.remainingCandidateCount === 1 ? " remains" : "s remain"}; use subagent_lifecycle action=retry`,
+            )
+          : undefined,
     ...run.selection.skippedCandidates.map((candidate) =>
       field(
         "Skipped",

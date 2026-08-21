@@ -1,5 +1,6 @@
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -31,12 +32,14 @@ import { makeRunNotificationDelivery } from "./notification-delivery.ts";
 import { makeRunProcessLifecycle } from "./process-lifecycle.ts";
 import { makeRunRecordCleanup } from "./record-cleanup.ts";
 import { makeRunResume } from "./resume.ts";
+import { makeRunRetry, type SubagentRetryClaim } from "./retry.ts";
 import { makeRunReportLifecycle } from "./report-lifecycle.ts";
 import { makeRunSettlement } from "./settlement.ts";
 import {
   hasSubagentCapability,
   type StartSubagentRequest,
   type SubagentCapability,
+  type SubagentRetrySupersession,
   type SubagentProjection,
   type SubagentRunView,
 } from "./model.ts";
@@ -79,6 +82,17 @@ export interface SubagentServiceContract {
   /** Submit one launch to the session owner; cancelling the waiter never abandons ownership. */
   readonly startSessionOwned: (
     request: StartSubagentRequest,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly claimRetryContinuation: (id: string) => Effect.Effect<SubagentRetryClaim, SubagentError>;
+  readonly releaseRetryClaim: (id: string, claimToken: string) => Effect.Effect<void>;
+  readonly exhaustRetryClaim: (
+    id: string,
+    claimToken: string,
+  ) => Effect.Effect<void, SubagentError>;
+  readonly blockRetryClaim: (id: string, claimToken: string) => Effect.Effect<void, SubagentError>;
+  /** Submit an exclusively claimed successor; waiter cancellation never abandons ownership. */
+  readonly startRetrySessionOwned: (
+    request: StartSubagentRequest & { readonly supersedes: SubagentRetrySupersession },
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly awaitTerminal: (
     ids: ReadonlyArray<string>,
@@ -157,6 +171,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const runtimeNamespace = allocateRuntimeNamespace();
   let nextRunOrdinal = 1;
   let nextClaimOrdinal = 1;
+  let nextRetryClaimOrdinal = 1;
   let nextAssignmentAttemptOrdinal = 1;
   let revision = 0;
   let closed = false;
@@ -164,6 +179,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const withLock = lock.withPermits(1);
   const withCompletionGate = completionGate.withPermits(1);
   const allocateClaimToken = (): string => `completion-${runtimeNamespace}-${nextClaimOrdinal++}`;
+  const allocateRetryClaimToken = (): string =>
+    `retry-${runtimeNamespace}-${nextRetryClaimOrdinal++}`;
   const allocateAssignmentAttemptToken = (): string =>
     `assignment-${runtimeNamespace}-${nextAssignmentAttemptOrdinal++}`;
   const allocateRunIdentity = (requestedName: string) => {
@@ -242,6 +259,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     waitForRevision,
     allocateClaimToken,
     delivery,
+  });
+
+  const retry = makeRunRetry({
+    records,
+    withLock,
+    publish,
+    allocateClaimToken: allocateRetryClaimToken,
   });
 
   const {
@@ -353,6 +377,23 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     sendPeerNotices: (changedId) => sendPeerNotices(changedId),
   });
 
+  const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] = (request) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const outcome = yield* Deferred.make<SubagentRunView, SubagentError>();
+        yield* start(request).pipe(
+          Effect.exit,
+          Effect.flatMap((exit) =>
+            retry
+              .releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken)
+              .pipe(Effect.andThen(Deferred.done(outcome, exit))),
+          ),
+          Effect.forkIn(ownerScope, { startImmediately: true }),
+        );
+        return observations.redactCompletionReport(yield* restore(Deferred.await(outcome)));
+      }),
+    );
+
   const list = withLock(Effect.sync(() => currentProjection().runs));
   const status: SubagentServiceContract["status"] = (id) =>
     observations
@@ -410,6 +451,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const service: SubagentServiceContract = {
     start,
     startSessionOwned,
+    claimRetryContinuation: retry.claimRetryContinuation,
+    releaseRetryClaim: retry.releaseRetryClaim,
+    exhaustRetryClaim: retry.exhaustRetryClaim,
+    blockRetryClaim: retry.blockRetryClaim,
+    startRetrySessionOwned,
     awaitTerminal: observations.awaitTerminal,
     withAwaitTerminalObservations: observations.withAwaitTerminalObservations,
     list,

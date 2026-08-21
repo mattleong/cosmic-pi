@@ -15,7 +15,7 @@ import {
 import { SubagentConfigStore } from "../src/config/store.ts";
 import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
 import { PROFILE_IDS, type DeclaredProfileCandidate } from "../src/profiles/model.ts";
-import { resolveProfilePlan } from "../src/profiles/resolve.ts";
+import { resolveProfileContinuationPlan, resolveProfilePlan } from "../src/profiles/resolve.ts";
 import { SubagentProfileService, subagentProfileServiceLayer } from "../src/profiles/service.ts";
 
 const document = <Value extends object>(value?: Value): Schema.MutableJsonObject =>
@@ -272,6 +272,50 @@ describe("subagent v4 profile configuration and resolution", () => {
         { candidateIndex: 0, host: "herdr", runtime: "claude", model: "sonnet" },
         { candidateIndex: 1, host: "local", runtime: "codex", model: "gpt-5.4" },
         { candidateIndex: 2, host: "local", runtime: "pi", model: "openai/gpt-review" },
+      ],
+    });
+  });
+
+  it("continues a frozen route strictly after the failed candidate and preserves original indexes", () => {
+    const config = resolved(
+      document({
+        profiles: {
+          reviewer: [
+            candidate(),
+            candidate({ model: "openai/missing" }),
+            candidate({ model: "openai/gpt-review", effort: "medium" }),
+          ],
+        },
+      }),
+    );
+    const continuation = {
+      profile: "reviewer" as const,
+      routeSource: config.profileSources.reviewer,
+      candidates: config.profiles.reviewer.candidates,
+      selectedCandidateIndex: 0,
+      skippedCandidates: [],
+    };
+    expect(resolveProfileContinuationPlan(continuation, environment)).toMatchObject({
+      kind: "resolved",
+      attempts: [
+        {
+          candidateIndex: 2,
+          model: "openai/gpt-review",
+          skippedBefore: [{ candidateIndex: 1, code: "pi_model_unknown" }],
+        },
+      ],
+    });
+    expect(
+      resolveProfileContinuationPlan(continuation, {
+        ...environment,
+        availablePiModels: environment.availablePiModels.slice(0, 1),
+      }),
+    ).toMatchObject({
+      kind: "failed",
+      code: "retry_route_exhausted",
+      skippedCandidates: [
+        { candidateIndex: 1, code: "pi_model_unknown" },
+        { candidateIndex: 2, code: "pi_model_unknown" },
       ],
     });
   });

@@ -58,6 +58,11 @@ export interface SubagentRunCard {
   readonly lastActivityAt?: number | undefined;
   readonly usage?: SubagentUsage | undefined;
   readonly selection: SubagentSelectionProvenance;
+  readonly predecessorRunId?: string | undefined;
+  readonly supersededByRunId?: string | undefined;
+  readonly remainingCandidateCount?: number | undefined;
+  readonly retryExhausted?: boolean | undefined;
+  readonly retryBlocked?: boolean | undefined;
   readonly currentTool?: string | undefined;
   readonly progress?: string | undefined;
   readonly warning?: string | undefined;
@@ -291,31 +296,56 @@ const projectCard = (run: SubagentRunCard, budget: number): SubagentRunCard => {
     const objectPart9188_12 = run.usage
       ? { ...objectPart9188_11, usage: boundedUsage(run.usage) }
       : objectPart9188_11;
-    const objectPart9188_13 = { ...objectPart9188_12, selection };
-    const objectPart9188_14 = currentTool
-      ? { ...objectPart9188_13, currentTool }
+    const objectPart9188_13 = run.predecessorRunId
+      ? {
+          ...objectPart9188_12,
+          predecessorRunId: take(run.predecessorRunId, MAX_PROTOCOL_ID_CHARS),
+        }
+      : objectPart9188_12;
+    const objectPart9188_14 = run.supersededByRunId
+      ? {
+          ...objectPart9188_13,
+          supersededByRunId: take(run.supersededByRunId, MAX_PROTOCOL_ID_CHARS),
+        }
       : objectPart9188_13;
-    const objectPart9188_15 = progress ? { ...objectPart9188_14, progress } : objectPart9188_14;
-    const objectPart9188_16 = warning ? { ...objectPart9188_15, warning } : objectPart9188_15;
-    const objectPart9188_17 =
+    const objectPart9188_15 =
+      run.remainingCandidateCount === undefined
+        ? objectPart9188_14
+        : {
+            ...objectPart9188_14,
+            remainingCandidateCount: boundedNonNegative(run.remainingCandidateCount),
+          };
+    const objectPart9188_16 = run.retryExhausted
+      ? { ...objectPart9188_15, retryExhausted: true }
+      : objectPart9188_15;
+    const objectPart9188_17 = run.retryBlocked
+      ? { ...objectPart9188_16, retryBlocked: true }
+      : objectPart9188_16;
+    const objectPart9188_18 = { ...objectPart9188_17, selection };
+    const objectPart9188_19 = currentTool
+      ? { ...objectPart9188_18, currentTool }
+      : objectPart9188_18;
+    const objectPart9188_20 = progress ? { ...objectPart9188_19, progress } : objectPart9188_19;
+    const objectPart9188_21 = warning ? { ...objectPart9188_20, warning } : objectPart9188_20;
+    const objectPart9188_22 =
       run.endedAt === undefined
-        ? objectPart9188_16
-        : { ...objectPart9188_16, endedAt: boundedNonNegative(run.endedAt) };
-    const objectPart9188_18 = finalText ? { ...objectPart9188_17, finalText } : objectPart9188_17;
-    const objectPart9188_19 = error ? { ...objectPart9188_18, error } : objectPart9188_18;
-    const objectPart9188_20 =
+        ? objectPart9188_21
+        : { ...objectPart9188_21, endedAt: boundedNonNegative(run.endedAt) };
+    const objectPart9188_23 = finalText ? { ...objectPart9188_22, finalText } : objectPart9188_22;
+    const objectPart9188_24 = error ? { ...objectPart9188_23, error } : objectPart9188_23;
+    const objectPart9188_25 =
       run.finalTextTruncated ||
       (boundedFinalText !== undefined && finalText?.length !== boundedFinalText.length)
-        ? { ...objectPart9188_19, finalTextTruncated: true }
-        : objectPart9188_19;
-    const objectPart9188_21 =
+        ? { ...objectPart9188_24, finalTextTruncated: true }
+        : objectPart9188_24;
+    const objectPart9188_26 =
       run.errorTruncated || (boundedError !== undefined && error?.length !== boundedError.length)
-        ? { ...objectPart9188_20, errorTruncated: true }
-        : objectPart9188_20;
-    const objectPart9188_22 = question?.message
-      ? { ...objectPart9188_21, question }
-      : objectPart9188_21;
-    return objectPart9188_22;
+        ? { ...objectPart9188_25, errorTruncated: true }
+        : objectPart9188_25;
+    const objectPart9188_27 = question?.message
+      ? { ...objectPart9188_26, question }
+      : objectPart9188_26;
+    return objectPart9188_27;
   })();
 };
 

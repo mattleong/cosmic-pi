@@ -237,6 +237,15 @@ const decodeCard = <ValueInput>(value: ValueInput): SubagentRunCard | undefined 
   const lastActivityAt = finiteNumber(record.lastActivityAt);
   if (lastActivityAt !== undefined) card.lastActivityAt = boundedNonNegative(lastActivityAt);
   if (usage) card.usage = usage;
+  if (Predicate.isString(record.predecessorRunId))
+    card.predecessorRunId = clean(record.predecessorRunId, MAX_PROTOCOL_ID_CHARS);
+  if (Predicate.isString(record.supersededByRunId))
+    card.supersededByRunId = clean(record.supersededByRunId, MAX_PROTOCOL_ID_CHARS);
+  const remainingCandidateCount = finiteNumber(record.remainingCandidateCount);
+  if (remainingCandidateCount !== undefined)
+    card.remainingCandidateCount = boundedNonNegative(remainingCandidateCount);
+  if (record.retryExhausted === true) card.retryExhausted = true;
+  if (record.retryBlocked === true) card.retryBlocked = true;
   if (Predicate.isString(record.currentTool)) card.currentTool = clean(record.currentTool, 256);
   if (Predicate.isString(record.progress)) card.progress = clean(record.progress, 512);
   if (Predicate.isString(record.warning)) card.warning = clean(record.warning, 512);

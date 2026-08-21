@@ -212,7 +212,8 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
   const clearCleanupPending = (record: RunRecord, scope: Scope.Closeable = record.scope) =>
     withLock(
       Effect.gen(function* () {
-        if (record.scope !== scope) return false;
+        if (record.scope !== scope) return { owned: false as const, shouldReclaim: false };
+        const cleanupSettlement = record.cleanupSettlement;
         record.cleanupPending = false;
         record.process = undefined;
         record.writerLease = undefined;
@@ -229,19 +230,27 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
           record.view = view;
           yield* publish;
         }
-        return shouldReclaim;
+        return { owned: true as const, shouldReclaim, cleanupSettlement };
       }),
     ).pipe(
-      Effect.flatMap((shouldReclaim) =>
-        shouldReclaim ? reclaimRecordRunState(record) : Effect.void,
+      Effect.flatMap((result) =>
+        !result.owned
+          ? Effect.void
+          : (result.shouldReclaim ? reclaimRecordRunState(record) : Effect.void).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  Deferred.doneUnsafe(result.cleanupSettlement, Effect.succeed("confirmed"));
+                }),
+              ),
+            ),
       ),
     );
   const retainCleanupQuarantine = (record: RunRecord, scope: Scope.Closeable) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      yield* withLock(
+      const retained = yield* withLock(
         Effect.gen(function* () {
-          if (record.scope !== scope) return;
+          if (record.scope !== scope) return false;
           const ownershipQuarantined =
             record.process !== undefined ||
             record.writerLease !== undefined ||
@@ -253,6 +262,10 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
           record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
           record.view = {
             ...record.view,
+            retryBlocked:
+              record.view.state === "failed" && (record.view.remainingCandidateCount ?? 0) > 0
+                ? true
+                : record.view.retryBlocked,
             warning,
             sessionEvents: appendNoticeSessionEvent(
               record.view.sessionEvents,
@@ -262,8 +275,13 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             ),
           };
           yield* publish;
+          return true;
         }),
       );
+      if (retained)
+        yield* Effect.sync(() => {
+          Deferred.doneUnsafe(record.cleanupSettlement, Effect.succeed("quarantined"));
+        });
     });
   const waitForWriterLeasePreparation = (
     record: RunRecord,

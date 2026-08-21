@@ -140,6 +140,16 @@ export const LifecycleParameters = Type.Union([
     },
     strictObjectOptions,
   ),
+  Type.Object(
+    {
+      action: Type.Literal("retry", {
+        description:
+          "Continue failed runs on the next candidate in their immutable launch-time profile route.",
+      }),
+      runIds: RunIdsParameters,
+    },
+    strictObjectOptions,
+  ),
 ]);
 
 export const RenameParameters = Type.Object(

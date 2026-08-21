@@ -8,6 +8,7 @@ import type {
   BackendResumeToken,
 } from "../backend/model.ts";
 import type { CanonicalWriterCwd, WriterLease } from "../boundary/writer-lease.ts";
+import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import type { SubagentError } from "./errors.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 import type { RunWarningSlots } from "./warnings.ts";
@@ -62,6 +63,11 @@ export interface RunRecord {
     | undefined;
   readonly activeTools: Map<string, string>;
   settlement: Deferred.Deferred<SubagentRunView>;
+  /** Resolves only after backend/process/writer cleanup is confirmed or quarantined. */
+  cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
+  readonly routeContinuation?: ProfileRouteContinuation | undefined;
+  retryClaim?: { readonly token: string } | undefined;
+  retryExhausted: boolean;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
   pauseRequested: boolean;

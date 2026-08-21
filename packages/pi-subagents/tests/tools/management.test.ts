@@ -3,6 +3,7 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
 import { type SubagentServiceContract } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
@@ -643,6 +644,102 @@ describe("subagent tool", () => {
 
     await tool?.execute("call", { runIds: ["agent-1"] }, undefined, undefined, context);
     expect(consumed).toEqual([{ id: "agent-1", generation: 1, claimToken: "claim-agent-1" }]);
+  });
+
+  it("continues a failed run on the next frozen profile candidate", async () => {
+    const failed = view({
+      id: "agent-1",
+      state: "failed",
+      profile: "reviewer",
+      error: "Claude usage exhausted.",
+      remainingCandidateCount: 1,
+      selection: {
+        source: "profile-candidate",
+        routeSource: "global",
+        host: "local",
+        runtime: "claude",
+        closeOnReport: true,
+        candidateIndex: 0,
+        reason: "Profile reviewer selected candidate 1.",
+        skippedCandidates: [],
+      },
+    });
+    const route = {
+      profile: "reviewer",
+      routeSource: "global",
+      candidates: [
+        {
+          host: "local",
+          runtime: "claude",
+          model: "claude-fable-5",
+          effort: "medium",
+          context: "fresh",
+          writeIntent: "read-only",
+          fastMode: false,
+          closeOnReport: true,
+        },
+        {
+          host: "local",
+          runtime: "pi",
+          model: "openai-codex/gpt-5.6-sol",
+          effort: "xhigh",
+          context: "fresh",
+          writeIntent: "read-only",
+          fastMode: true,
+          closeOnReport: true,
+        },
+      ],
+      selectedCandidateIndex: 0,
+      skippedCandidates: [],
+    } satisfies ProfileRouteContinuation;
+    const requests: Array<Parameters<SubagentServiceContract["startRetrySessionOwned"]>[0]> = [];
+    const service = subagentServiceDouble({
+      ...startCapturingService([]),
+      claimRetryContinuation: () =>
+        Effect.succeed({ source: failed, continuation: route, claimToken: "retry-1" }),
+      startRetrySessionOwned: (request) =>
+        Effect.sync(() => {
+          requests.push(request);
+          return view({
+            id: "agent-2",
+            name: request.name ?? failed.name,
+            task: request.task,
+            profile: request.profile ?? "reviewer",
+            predecessorRunId: request.supersedes.runId,
+            selection: request.selection ?? failed.selection,
+          });
+        }),
+    });
+    const tool = captureSubagentTools(service).get("subagent_lifecycle");
+
+    const result = await tool?.execute(
+      "call",
+      { action: "retry", runIds: ["agent-1"] },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      task: failed.task,
+      profile: "reviewer",
+      model: "openai-codex/gpt-5.6-sol",
+      fastMode: true,
+      supersedes: { runId: "agent-1", claimToken: "retry-1" },
+      routeContinuation: { selectedCandidateIndex: 1 },
+      selection: {
+        candidateIndex: 1,
+        skippedCandidates: [{ candidateIndex: 0, code: "previous_run_failed" }],
+      },
+    });
+    expect(result?.content[0]?.text).toContain(
+      "Continued agent-1 as agent-2 on profile reviewer candidate 2.",
+    );
+    expect(result?.details).toMatchObject({
+      action: "retry",
+      cards: [{ id: "agent-2", predecessorRunId: "agent-1" }],
+    });
   });
 
   it("enforces the final model-visible output bound for list, zero-run, and all-failure paths", async () => {

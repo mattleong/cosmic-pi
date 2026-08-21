@@ -189,6 +189,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         const evictionEligible = (record: RunRecord): boolean =>
           !record.cleanupPending &&
           record.process === undefined &&
+          record.retryClaim === undefined &&
           record.completionClaims.size === 0 &&
           record.completionGenerations.size === 0 &&
           isTerminalRunState(record.view.state);
@@ -213,6 +214,20 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
          */
         const admitLocked = (evicted: RunRecord | undefined, ownReservation?: RunRecord) =>
           Effect.gen(function* () {
+            const predecessor = request.supersedes
+              ? records.get(request.supersedes.runId)
+              : undefined;
+            if (
+              request.supersedes &&
+              (!predecessor ||
+                predecessor.view.state !== "failed" ||
+                predecessor.retryClaim?.token !== request.supersedes.claimToken ||
+                predecessor.view.supersededByRunId !== undefined)
+            )
+              return yield* new InvalidSubagentRequestError({
+                code: "retry_claim_stale",
+                message: `Failed predecessor ${request.supersedes.runId} no longer owns this next-candidate retry claim.`,
+              });
             const capacityFailure = processCapacityError(records, ownReservation);
             if (capacityFailure) return yield* capacityFailure;
             if (canonicalWriterCwd) {
@@ -237,6 +252,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const writerLeaseScope = canonicalWriterCwd ? yield* Scope.make() : undefined;
             const writerLeaseReleaseState = writerLeaseScope ? { authorized: false } : undefined;
             const settlement = yield* Deferred.make<SubagentRunView>();
+            const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
             const { id, name } = allocateRunIdentity(requestedName);
             const assignmentAttemptToken = allocateAssignmentAttemptToken();
             const view: SubagentRunView = (() => {
@@ -244,8 +260,23 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               const objectPart10771_1 = request.profile
                 ? { ...objectPart10771_0, profile: request.profile }
                 : objectPart10771_0;
-              const objectPart10771_2 = {
-                ...objectPart10771_1,
+              const objectPart10771_2 = request.supersedes
+                ? { ...objectPart10771_1, predecessorRunId: request.supersedes.runId }
+                : objectPart10771_1;
+              const remainingCandidateCount = request.routeContinuation
+                ? Math.max(
+                    0,
+                    request.routeContinuation.candidates.length -
+                      request.routeContinuation.selectedCandidateIndex -
+                      1,
+                  )
+                : undefined;
+              const objectPart10771_3 =
+                remainingCandidateCount === undefined
+                  ? objectPart10771_2
+                  : { ...objectPart10771_2, remainingCandidateCount };
+              const objectPart10771_4 = {
+                ...objectPart10771_3,
                 selection: request.selection ?? {
                   source: "profile-candidate",
                   host: request.host,
@@ -271,7 +302,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 sessionEvents: [],
                 usage: emptyUsage(),
               };
-              return objectPart10771_2;
+              return objectPart10771_4;
             })();
             const launch: BackendLaunchRequest = (() => {
               const objectPart11961_0 = {
@@ -314,6 +345,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 launch,
                 activeTools: new Map(),
                 settlement,
+                cleanupSettlement,
+                routeContinuation: request.routeContinuation,
+                retryExhausted: false,
                 pauseRequested: false,
                 stoppedByParent: false,
                 cleanupPending: false,
@@ -350,6 +384,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               };
               return objectPart12902_3;
             })();
+            if (predecessor) {
+              predecessor.retryClaim = undefined;
+              predecessor.view = { ...predecessor.view, supersededByRunId: id };
+            }
             records.set(id, record);
             yield* publish;
             return record;

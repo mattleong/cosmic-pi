@@ -12,6 +12,8 @@ import {
   normalizeProfileId,
   type ProfileCandidate,
   type ProfileId,
+  type ProfileRoute,
+  type ProfileRouteContinuation,
   type ProfileRouteSource,
   type SkippedProfileCandidate,
   type SubagentSelectionSource,
@@ -57,7 +59,11 @@ export interface ProfileResolutionPlan {
 
 export interface ProfileResolutionFailure {
   readonly kind: "failed";
-  readonly code: "profile_unknown" | "profile_no_eligible_model" | "fork_context_unavailable";
+  readonly code:
+    | "profile_unknown"
+    | "profile_no_eligible_model"
+    | "fork_context_unavailable"
+    | "retry_route_exhausted";
   readonly message: string;
   readonly profile?: ProfileId | undefined;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
@@ -262,49 +268,25 @@ const resolveCandidate = (
   };
 };
 
-/** Pure deterministic profile planning. Foreign readiness checks happen while consuming attempts. */
-export function resolveProfilePlan(
-  requestedProfile: string,
-  config: ResolvedSubagentConfig,
+const resolveKnownProfileRoute = (
+  profile: ProfileId,
+  route: ProfileRoute,
+  routeSource: ProfileRouteSource,
   environment: ProfileResolutionEnvironment,
-): ProfileResolution {
-  const profile = normalizeProfileId(requestedProfile);
-  if (!profile)
-    return {
-      kind: "failed",
-      code: "profile_unknown",
-      message: `Unknown subagent profile "${requestedProfile}". Available profiles: ${Object.keys(config.profiles).join(", ")}.`,
-      skippedCandidates: [],
-    };
+  startCandidateIndex: number,
+): ProfileResolution => {
   const definition = profileDefinition(profile);
-  const route = config.profiles[profile];
-  if (route.candidates.length === 0) {
-    const source = config.profileSources[profile];
-    const message =
-      source === "global-invalid" || source === "project-invalid"
-        ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
-        : source === "session"
-          ? `Profile ${profile} is temporarily disabled by a session override; clear it in /subagents profiles session to reveal the loaded persistent route.`
-          : `Profile ${profile} is disabled and has no eligible candidate.`;
-    return {
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      profile,
-      message,
-      skippedCandidates: [],
-    };
-  }
-  const attempts: ProfileCandidateAttempt[] = [];
-  const routeSource = config.profileSources[profile];
   const routeLabel =
     routeSource === "builtin"
       ? "built-in route"
       : routeSource === "session"
         ? "session override"
         : `${routeSource} route`;
+  const attempts: ProfileCandidateAttempt[] = [];
   const skippedCandidates: SkippedProfileCandidate[] = [];
   let pendingSkipped: SkippedProfileCandidate[] = [];
   route.candidates.forEach((candidate, candidateIndex) => {
+    if (candidateIndex < startCandidateIndex) return;
     const result = resolveCandidate(
       profile,
       candidate,
@@ -334,6 +316,14 @@ export function resolveProfilePlan(
       skippedCandidates,
       trailingSkippedCandidates: pendingSkipped,
     };
+  if (startCandidateIndex > 0)
+    return {
+      kind: "failed",
+      code: "retry_route_exhausted",
+      profile,
+      message: `Profile ${profile} has no eligible remaining candidate after candidate ${startCandidateIndex}.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+      skippedCandidates,
+    };
   const forkUnavailable =
     skippedCandidates.length > 0 &&
     skippedCandidates.every((candidate) => candidate.code === "fork_context_unavailable");
@@ -346,4 +336,51 @@ export function resolveProfilePlan(
       : `Profile ${profile} has no eligible candidate.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
     skippedCandidates,
   };
+};
+
+/** Pure deterministic profile planning. Foreign readiness checks happen while consuming attempts. */
+export function resolveProfilePlan(
+  requestedProfile: string,
+  config: ResolvedSubagentConfig,
+  environment: ProfileResolutionEnvironment,
+): ProfileResolution {
+  const profile = normalizeProfileId(requestedProfile);
+  if (!profile)
+    return {
+      kind: "failed",
+      code: "profile_unknown",
+      message: `Unknown subagent profile "${requestedProfile}". Available profiles: ${Object.keys(config.profiles).join(", ")}.`,
+      skippedCandidates: [],
+    };
+  const route = config.profiles[profile];
+  if (route.candidates.length === 0) {
+    const source = config.profileSources[profile];
+    const message =
+      source === "global-invalid" || source === "project-invalid"
+        ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
+        : source === "session"
+          ? `Profile ${profile} is temporarily disabled by a session override; clear it in /subagents profiles session to reveal the loaded persistent route.`
+          : `Profile ${profile} is disabled and has no eligible candidate.`;
+    return {
+      kind: "failed",
+      code: "profile_no_eligible_model",
+      profile,
+      message,
+      skippedCandidates: [],
+    };
+  }
+  return resolveKnownProfileRoute(profile, route, config.profileSources[profile], environment, 0);
 }
+
+/** Re-evaluates only candidates after the failed run's frozen route cursor. */
+export const resolveProfileContinuationPlan = (
+  continuation: ProfileRouteContinuation,
+  environment: ProfileResolutionEnvironment,
+): ProfileResolution =>
+  resolveKnownProfileRoute(
+    continuation.profile,
+    { candidates: continuation.candidates },
+    continuation.routeSource,
+    environment,
+    continuation.selectedCandidateIndex + 1,
+  );

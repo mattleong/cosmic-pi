@@ -109,6 +109,16 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
     attemptToken: string,
   ) =>
     startPrompt(record, message, record.assignment.epoch).pipe(
+      Effect.tapError((error) =>
+        error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
+          ? withLock(
+              Effect.sync(() => {
+                if (record.assignment.attemptToken === attemptToken)
+                  record.assignment.outcomeUncertain = true;
+              }),
+            )
+          : Effect.void,
+      ),
       Effect.mapError((error) => {
         const outcomeUncertain = error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
         if (!outcomeUncertain || (operation === "start" && record.view.writeIntent !== "writer"))
@@ -184,7 +194,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
     });
 
   return {
-    /** Maps uncertain writer start / resume prompt failures, then confirms the issued attempt. */
+    /** Records uncertain delivery, maps writer/resume recovery detail, then confirms the issued attempt. */
     submitPrompt,
     /** Retains an outcome-uncertain assignment and replays buffered start evidence. */
     retainUncertainAssignment,

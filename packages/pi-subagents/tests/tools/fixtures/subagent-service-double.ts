@@ -1,10 +1,18 @@
 import * as Effect from "effect/Effect";
-import type { SubagentNotFoundError } from "../../../src/run/errors.ts";
+import {
+  InvalidSubagentRequestError,
+  type SubagentNotFoundError,
+} from "../../../src/run/errors.ts";
 import type { SubagentRunObservation, SubagentServiceContract } from "../../../src/run/service.ts";
 
 type ObservationMethods = Pick<
   SubagentServiceContract,
   | "startSessionOwned"
+  | "startRetrySessionOwned"
+  | "claimRetryContinuation"
+  | "releaseRetryClaim"
+  | "exhaustRetryClaim"
+  | "blockRetryClaim"
   | "withAwaitTerminalObservations"
   | "withStatusObservations"
   | "consumeCompletions"
@@ -27,6 +35,23 @@ export type SubagentServiceDoubleInput = Omit<SubagentServiceContract, keyof Obs
 export function subagentServiceDouble(base: SubagentServiceDoubleInput): SubagentServiceContract {
   const startSessionOwned: SubagentServiceContract["startSessionOwned"] =
     base.startSessionOwned ?? base.start;
+  const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] =
+    base.startRetrySessionOwned ?? base.start;
+  const claimRetryContinuation: SubagentServiceContract["claimRetryContinuation"] =
+    base.claimRetryContinuation ??
+    ((id) =>
+      Effect.fail(
+        new InvalidSubagentRequestError({
+          code: "retry_route_unavailable",
+          message: `No retry continuation fixture for ${id}.`,
+        }),
+      ));
+  const releaseRetryClaim: SubagentServiceContract["releaseRetryClaim"] =
+    base.releaseRetryClaim ?? (() => Effect.void);
+  const exhaustRetryClaim: SubagentServiceContract["exhaustRetryClaim"] =
+    base.exhaustRetryClaim ?? (() => Effect.void);
+  const blockRetryClaim: SubagentServiceContract["blockRetryClaim"] =
+    base.blockRetryClaim ?? (() => Effect.void);
   const observeStatus =
     base.observeStatus ??
     ((id: string) => base.status(id).pipe(Effect.map((run): SubagentRunObservation => ({ run }))));
@@ -66,6 +91,11 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
   return {
     ...base,
     startSessionOwned,
+    startRetrySessionOwned,
+    claimRetryContinuation,
+    releaseRetryClaim,
+    exhaustRetryClaim,
+    blockRetryClaim,
     consumeCompletions,
     withStatusObservations,
     withAwaitTerminalObservations,

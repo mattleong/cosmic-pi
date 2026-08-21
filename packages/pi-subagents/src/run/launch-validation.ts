@@ -5,6 +5,8 @@ export const DISALLOWED_LAUNCH_OVERRIDE_FIELDS = [
   "effort",
   "backend",
   "model",
+  "routeContinuation",
+  "supersedes",
 ] as const;
 
 export type DisallowedLaunchOverrideField = (typeof DISALLOWED_LAUNCH_OVERRIDE_FIELDS)[number];

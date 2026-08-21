@@ -45,6 +45,15 @@ export const failureRecovery = (
     return "Refresh run IDs with subagent_list.";
   if (normalizedCode.includes("completion_claim_conflict"))
     return "Wait for or cancel the operation that already owns this completion, then retry.";
+  if (normalizedCode.includes("retry_route_exhausted"))
+    return "The original profile route is exhausted; only now consider a generalist replacement.";
+  if (
+    normalizedCode.includes("retry_cleanup_unconfirmed") ||
+    normalizedCode.includes("retry_outcome_uncertain")
+  )
+    return "Do not retry automatically; inspect the failed run and resolve the reported ownership uncertainty.";
+  if (normalizedCode.includes("retry_claim") || normalizedCode.includes("retry_already"))
+    return "Inspect the predecessor and its linked successor with subagent_status.";
   if (normalizedCode.includes("report_delivery_backlog"))
     return "Wait for automatic outcome delivery or claim the current outcome with subagent_await, then retry.";
   if (normalizedCode.includes("reply_outcome_uncertain"))

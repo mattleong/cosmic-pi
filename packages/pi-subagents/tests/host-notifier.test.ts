@@ -96,6 +96,33 @@ describe("subagent host notifier", () => {
     });
   });
 
+  it("directs failed profiled runs through remaining candidates before generalist", () => {
+    const sendMessage = vi.fn();
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
+
+    notify({
+      type: "completed",
+      runs: [
+        {
+          id: "agent-7",
+          name: "reviewer",
+          generation: 1,
+          outcome: "failed",
+          error: "Claude usage exhausted.",
+          profile: "reviewer",
+          retryAvailable: true,
+          remainingCandidateCount: 2,
+        },
+      ],
+    });
+
+    const content = sendMessage.mock.calls[0]?.[0].content ?? "";
+    expect(content).toContain("2 configured reviewer candidates remain");
+    expect(content).toContain('subagent_lifecycle({ action: "retry", runIds: ["agent-7"] })');
+    expect(content).toContain("before launching any generalist replacement");
+  });
+
   it("names the exact reply tool when a subagent asks a parent question", () => {
     const sendMessage = vi.fn();
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.

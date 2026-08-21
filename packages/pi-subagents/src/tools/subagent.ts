@@ -171,6 +171,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
       "After subagent_start, continue independent work instead of waiting idle. Use subagent_await only when progress or final synthesis depends on a report; unclaimed completion reports are delivered automatically.",
       "Use subagent_start with profile=worker only for an explicit implementation handoff while the main agent does not edit. Keep one writer in the shared cwd, counting the main agent, and serialize writers unless isolated worktrees are available.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",
+      "When a profiled run fails and its status reports remaining route candidates, call subagent_lifecycle with action=retry for that run before launching any generalist replacement. Retry creates a new run on the next candidate from the original frozen route and never re-attempts the failed candidate.",
     ],
     parameters: StartParameters,
     prepareArguments: prepareSubagentStartArguments,
@@ -263,7 +264,13 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_lifecycle",
     label: "Manage Subagents",
     description:
-      "Interrupt, resume, or stop one or more subagents. Interrupt and resume require the matching capability reported by subagent_list/status; stop is available for every active run. Message is accepted only for resume. Mixed-target calls report each success and failure.",
+      "Interrupt, resume, stop, or explicitly continue failed subagents on their next configured profile candidate. Retry creates a new linked run from the immutable launch-time route, never re-attempts the failed candidate, and fails closed on uncertain execution or cleanup. Use generalist only after retry reports route exhaustion. Interrupt and resume require reported capabilities; stop is available for active runs. Message is accepted only for resume. Mixed-target calls report each success and failure.",
+    promptSnippet:
+      "Continue failed subagents through their remaining configured profile candidates",
+    promptGuidelines: [
+      "For a failed profiled run with remaining candidates, use subagent_lifecycle action=retry before starting a generalist replacement. Each retry advances the frozen route by one selected candidate and creates a new run; repeat only on the new failed successor until the route is exhausted.",
+      "Never retry when the tool reports uncertain execution or unconfirmed cleanup. Writer retries may repeat partial side effects, so retry them only when the original handoff and current user intent authorize a fresh execution.",
+    ],
     parameters: LifecycleParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, input, signal, onUpdate, ctx),

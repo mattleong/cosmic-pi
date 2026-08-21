@@ -11,6 +11,9 @@ export interface SubagentCompletionNotification {
   readonly error?: string | undefined;
   readonly warning?: string | undefined;
   readonly retained?: boolean | undefined;
+  readonly retryAvailable?: boolean | undefined;
+  readonly profile?: string | undefined;
+  readonly remainingCandidateCount?: number | undefined;
 }
 
 export type SubagentNotification =
@@ -73,7 +76,12 @@ const completionBody = (run: SubagentCompletionNotification): string => {
     run.outcome === "failed"
       ? `Error: ${run.error?.trim() || "Run failed without an error report."}`
       : run.finalText?.trim() || "Completed without a final report.";
-  return warning ? `${primary}\n\n${warning}` : primary;
+  const retry = run.retryAvailable
+    ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with subagent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
+    : undefined;
+  return [primary, warning, retry]
+    .filter((value): value is string => value !== undefined)
+    .join("\n\n");
 };
 
 const completionHeading = (run: SubagentCompletionNotification): string =>

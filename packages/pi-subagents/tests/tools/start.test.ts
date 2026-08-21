@@ -332,6 +332,11 @@ describe("subagent tool", () => {
         candidateIndex: 1,
         skippedCandidates: [{ candidateIndex: 0, code: "backend_not_implemented" }],
       },
+      routeContinuation: {
+        profile: "reviewer",
+        selectedCandidateIndex: 1,
+        candidates: [{ runtime: "claude" }, { runtime: "pi" }],
+      },
     });
   });
 
@@ -893,6 +898,14 @@ describe("subagent tool", () => {
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     await expect(
       reject({ task: "Probe", backend: "claude-cli" } as SubagentProfileStartSpec),
+    ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
+    // SAFETY: These hostile shapes prove internal continuation capabilities cannot enter public start.
+    await expect(
+      reject({ task: "Probe", routeContinuation: {} } as SubagentProfileStartSpec),
+    ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
+    // SAFETY: These hostile shapes prove internal continuation capabilities cannot enter public start.
+    await expect(
+      reject({ task: "Probe", supersedes: {} } as SubagentProfileStartSpec),
     ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
   });
 });

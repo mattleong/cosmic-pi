@@ -10,6 +10,7 @@ import type {
 import * as Effect from "effect/Effect";
 import {
   hostProfileEnvironment,
+  resolveProfileRetry,
   resolveProfileStart,
 } from "../boundary/host-profile-resolution.ts";
 import { normalizeProfileId, PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
@@ -21,6 +22,8 @@ import {
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import {
   InvalidSubagentRequestError,
+  isCleanupUnconfirmed,
+  isOutcomeUncertain,
   subagentErrorCode,
   type SubagentError,
 } from "../run/errors.ts";
@@ -278,6 +281,14 @@ const managementAcknowledgement = (
     }
     case "reply":
       return `Reply delivered to ${ids}.`;
+    case "retry":
+      return runs
+        .map((run) =>
+          run.predecessorRunId
+            ? `Continued ${run.predecessorRunId} as ${run.id} on profile ${run.profile ?? "generalist"} candidate ${(run.selection.candidateIndex ?? 0) + 1}.`
+            : `Started next profile candidate as ${run.id}.`,
+        )
+        .join("\n");
     case "interrupt":
       return `Interrupted ${ids}; state is paused.`;
     case "resume":
@@ -616,6 +627,42 @@ export const executeSubagentAction = async (
         const message = yield* requiredMessage(input.action, input.message);
         const outcome = yield* service.reply(id, message).pipe(matchActionOutcome(id));
         return singleOutcome(outcome);
+      }
+      case "retry": {
+        const ids = yield* requiredTargetIds(input.action, input.runIds);
+        const outcomes = yield* Effect.forEach(
+          ids,
+          (id) => {
+            let handedOff = false;
+            const operation = Effect.acquireUseRelease(
+              service.claimRetryContinuation(id),
+              (claim) =>
+                resolveProfileRetry(pi, claim, ctx, runtime.environment).pipe(
+                  Effect.catch((error) => {
+                    const finalize =
+                      subagentErrorCode(error) === "retry_route_exhausted"
+                        ? service.exhaustRetryClaim(id, claim.claimToken)
+                        : isCleanupUnconfirmed(error) || isOutcomeUncertain(error)
+                          ? service.blockRetryClaim(id, claim.claimToken)
+                          : Effect.void;
+                    return finalize.pipe(Effect.andThen(Effect.fail(error)));
+                  }),
+                  Effect.flatMap((request) =>
+                    Effect.uninterruptibleMask((restore) =>
+                      Effect.sync(() => {
+                        handedOff = true;
+                      }).pipe(Effect.andThen(restore(service.startRetrySessionOwned(request)))),
+                    ),
+                  ),
+                ),
+              (claim) =>
+                handedOff ? Effect.void : service.releaseRetryClaim(id, claim.claimToken),
+            );
+            return operation.pipe(matchActionOutcome(id));
+          },
+          { concurrency: 8 },
+        );
+        return splitOutcomes(outcomes);
       }
       case "interrupt":
       case "resume":

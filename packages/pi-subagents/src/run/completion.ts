@@ -70,7 +70,22 @@ export function collectPendingCompletionNotifications(
         const objectPart2006_4 = completion.retained
           ? { ...objectPart2006_3, retained: true }
           : objectPart2006_3;
-        return objectPart2006_4;
+        const remainingCandidateCount = record.view.remainingCandidateCount ?? 0;
+        const retryAvailable =
+          completion.outcome === "failed" &&
+          record.view.reportGeneration === 0 &&
+          remainingCandidateCount > 0 &&
+          record.view.retryExhausted !== true &&
+          record.view.retryBlocked !== true &&
+          record.view.supersededByRunId === undefined &&
+          !record.assignment.outcomeUncertain;
+        const objectPart2006_5 = record.view.profile
+          ? { ...objectPart2006_4, profile: record.view.profile }
+          : objectPart2006_4;
+        const objectPart2006_6 = retryAvailable
+          ? { ...objectPart2006_5, retryAvailable: true, remainingCandidateCount }
+          : objectPart2006_5;
+        return objectPart2006_6;
       })(),
     ];
   });

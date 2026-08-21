@@ -26,6 +26,14 @@ All six adapters are implemented. The shared registry resolves host/runtime/cont
 
 Selected host, runtime, route source, `fastMode`, and `closeOnReport` are retained in selection provenance, the internal start request, the run view, status output, and card details. Start-entry details additionally preserve the requested profile and concrete actual route/model for success, the attempted route/model after post-selection failure, or an explicit resolving/no-eligible-route discriminant. Each public start batch captures one immutable profile snapshot before resolving its agents, so concurrent session edits cannot split a batch across route revisions. Persisted cards decode only at the current details version.
 
+## Explicit route continuation
+
+A failed run with configured candidates after its selected candidate may be continued explicitly with `subagent_lifecycle({ action: "retry", runIds: [...] })`. This is a new launch and run ID, not implicit fallthrough or resurrection of the failed assignment. It preserves the original task, profile guidance, route source, and a deeply frozen copy of the complete launch-time route; later session/project/global edits do not alter the continuation. Planning begins strictly after the predecessor's selected candidate, preserves original zero-based candidate indexes, and performs the same current model/auth/executable/integration/harness preflight across all remaining candidates before ownership.
+
+Retry claims the failed predecessor exclusively. After cleanup is confirmed, successor admission atomically revalidates that claim, marks the predecessor with its successor ID, and admits the linked run. Concurrent retry attempts have one winner, retry-claimed records cannot be evicted, and a successor that later fails carries its own advanced cursor. A failed retry plan records every remaining static/dynamic skip and marks the route exhausted; only then should the parent choose a generalist replacement.
+
+Retry fails closed for non-failed, later-assignment, already-superseded, exhausted, outcome-uncertain, cleanup-quarantined, eviction-claimed, or concurrently retry-claimed records. Writers create a fresh execution and may repeat partial side effects, so parent prompt guidance permits writer continuation only when the original handoff and current user intent authorize it. These gates preserve the invariant that no spawn, transport, topology, lease, or cleanup uncertainty automatically launches duplicate work.
+
 ## Public launch contract
 
 `subagent_start` accepts one required array of 1–12 agents. Each item contains only:
@@ -36,7 +44,7 @@ Selected host, runtime, route source, `fastMode`, and `closeOnReport` are retain
 
 The TypeBox object is strict, and the service boundary independently rejects unknown launch overrides with `launch_override_not_allowed`.
 
-Start is always background and nonblocking. The public tool executes all admitted batch items without waiting. `subagent_await` supports `all_finished` and `any_finished` semantics.
+Start is always background and nonblocking. The public tool executes all admitted batch items without waiting. `subagent_await` supports `all_finished` and `any_finished` semantics. `subagent_lifecycle` action `retry` accepts failed run IDs and owns explicit next-candidate continuation; it never accepts task, model, candidate index, or route overrides.
 
 Main-agent prompt metadata follows a read-only-first adoption policy: before substantial work, check for at least two independent workstreams; launch one to three bounded read-only assignments early; skip delegation for trivial or tightly serial work; continue independent parent work after launch; and await only at a dependency or final-synthesis barrier because unclaimed completion reports are delivered automatically. Worker launches remain explicit implementation handoffs: the prompt requires the main agent not to edit and preserves the one-shared-cwd-writer rule.
 
@@ -48,4 +56,5 @@ Detailed responsibilities of the source files owning the behavior above:
 
 - `src/domain/routing.ts` — import-free leaf routing vocabulary: context/write-intent/host/runtime types, the effort scale, the shared runtime-native effort policy, and host-effort decoding. Profiles, config, run, backends, boundaries, and settings all import it directly, so the profile and run models stay cycle-free.
 - `src/profiles/` — fixed definitions, explicit built-in routes, ordered candidate planning, and a revisioned Effect-owned session override service. `session-overrides.ts` owns immutable overlay snapshots and conflict transitions.
-- `src/boundary/host-profile-resolution.ts` — Pi model/auth capture (local or Herdr) and ordered dynamic candidate consumption. Typed readiness failures fall through only before service start.
+- `src/boundary/host-profile-resolution.ts` — Pi model/auth capture (local or Herdr), initial ordered candidate consumption, and fresh-environment resolution of frozen retry continuations. Typed readiness failures fall through only before service start.
+- `src/run/retry.ts` and `src/run/launch.ts` — exclusive failed-run claims, cleanup/exhaustion gates, retry/eviction exclusion, and atomic predecessor/successor admission lineage.

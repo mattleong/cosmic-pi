@@ -89,6 +89,17 @@ export interface SkippedProfileCandidate {
   readonly reason: string;
 }
 
+/** Immutable launch-time route state used only to continue after an explicit retry action. */
+export interface ProfileRouteContinuation {
+  readonly profile: ProfileId;
+  readonly routeSource: ProfileRouteSource;
+  readonly candidates: ReadonlyArray<ProfileCandidate>;
+  /** Zero-based candidate selected for the run carrying this continuation. */
+  readonly selectedCandidateIndex: number;
+  /** Static/dynamic skips accumulated before that selected candidate. */
+  readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
+}
+
 export type SubagentSelectionSource = "profile-candidate" | "profile-parent-candidate";
 
 export interface SubagentSelectionProvenance {

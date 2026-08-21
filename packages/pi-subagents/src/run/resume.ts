@@ -226,6 +226,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
               const record = claimed.record;
               if (claimed.needsRespawn) {
                 const nextScope = yield* Scope.make();
+                const nextCleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
                 const nextWriterLeaseScope = claimed.record.canonicalWriterCwd
                   ? yield* Scope.make()
                   : undefined;
@@ -241,6 +242,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     )
                       return false;
                     record.scope = nextScope;
+                    record.cleanupSettlement = nextCleanupSettlement;
                     record.cleanupPending = false;
                     record.closingScope = undefined;
                     record.closingScopeSettled = undefined;

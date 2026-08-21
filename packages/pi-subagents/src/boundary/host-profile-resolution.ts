@@ -2,6 +2,7 @@ import * as Predicate from "effect/Predicate";
 
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { freezeSnapshot } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { SubagentBackendRegistry } from "../backend/service.ts";
@@ -24,12 +25,22 @@ import {
   type SubagentRuntime,
 } from "../domain/routing.ts";
 import type { RuntimeApiKey, StartSubagentRequest } from "../run/model.ts";
+import type { SubagentRetryClaim } from "../run/retry.ts";
 import {
   PROFILE_IDS,
+  type ProfileCandidate,
+  type ProfileDefinition,
+  type ProfileRouteSource,
   type SkippedProfileCandidate,
   type SubagentSelectionProvenance,
 } from "../profiles/model.ts";
-import type { ProfileCandidateAttempt, ProfileResolutionEnvironment } from "../profiles/resolve.ts";
+import {
+  profileCandidateLabel,
+  resolveProfileContinuationPlan,
+  type ProfileCandidateAttempt,
+  type ProfileResolutionEnvironment,
+  type ProfileResolutionPlan,
+} from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 
@@ -247,46 +258,40 @@ const dynamicCandidateSkip = (
   reason: error.message,
 });
 
-export const resolveProfileStart = (
+interface PlannedStartInput {
+  readonly rawInput: SubagentProfileStartSpec;
+  readonly definition: ProfileDefinition;
+  readonly plan: ProfileResolutionPlan;
+  readonly routeCandidates: ReadonlyArray<ProfileCandidate>;
+  readonly routeSource: ProfileRouteSource;
+  readonly priorSkippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
+  readonly retry?:
+    | {
+        readonly sourceRunId: string;
+        readonly claimToken: string;
+      }
+    | undefined;
+}
+
+const resolvePlannedStart = (
   pi: ExtensionAPI,
-  rawInput: SubagentProfileStartSpec,
+  input: PlannedStartInput,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
-  capturedProfiles?: SessionProfileSnapshot,
-): Effect.Effect<
-  StartSubagentRequest,
-  InvalidSubagentRequestError,
-  SubagentProfileService | SubagentBackendRegistry
-> =>
+): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentBackendRegistry> =>
   Effect.gen(function* () {
-    const profiles = yield* SubagentProfileService;
-    const profileSnapshot = capturedProfiles ?? (yield* profiles.capture);
-    const task = rawInput.task.trim();
+    const task = input.rawInput.task.trim();
     if (!task)
       return yield* new InvalidSubagentRequestError({
         code: "task_required",
         message: "subagent_start requires every agent to have a task.",
       });
-    const disallowedField = firstDisallowedLaunchOverride(rawInput);
+    const disallowedField = firstDisallowedLaunchOverride(input.rawInput);
     if (disallowedField)
       return yield* new InvalidSubagentRequestError({
         code: "launch_override_not_allowed",
         message: disallowedLaunchOverrideMessage(disallowedField),
       });
-
-    const requestedProfile = rawInput.profile?.trim();
-    const selectedProfile = requestedProfile || "generalist";
-    const definition = profiles.definition(selectedProfile);
-    if (!definition)
-      return yield* new InvalidSubagentRequestError({
-        code: "profile_unknown",
-        message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
-      });
-    const parentSessionFile = ctx.sessionManager.getSessionFile();
-    const parentLeafId = stableParentLeaf(ctx);
-    const plan = profiles.resolve(profileSnapshot, definition.id, hostProfileEnvironment(pi, ctx));
-    if (plan.kind === "failed")
-      return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
 
     const tryAttempt = (
       index: number,
@@ -300,9 +305,9 @@ export const resolveProfileStart = (
       InvalidSubagentRequestError,
       SubagentBackendRegistry
     > => {
-      const attempt = plan.attempts[index];
+      const attempt = input.plan.attempts[index];
       if (!attempt) {
-        const exhausted = [...skippedCandidates, ...plan.trailingSkippedCandidates];
+        const exhausted = [...skippedCandidates, ...input.plan.trailingSkippedCandidates];
         const allUnsupported =
           exhausted.length > 0 &&
           exhausted.every((candidate) => candidate.code === "backend_not_implemented");
@@ -314,8 +319,12 @@ export const resolveProfileStart = (
           .join(", ");
         return Effect.fail(
           new InvalidSubagentRequestError({
-            code: allUnsupported ? "backend_not_implemented" : "profile_no_eligible_model",
-            message: `Profile ${definition.id} has no eligible implemented backend after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+            code: input.retry
+              ? "retry_route_exhausted"
+              : allUnsupported
+                ? "backend_not_implemented"
+                : "profile_no_eligible_model",
+            message: `Profile ${input.definition.id} has no eligible ${input.retry ? "remaining candidate" : "implemented backend"} after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
           }),
         );
       }
@@ -337,7 +346,9 @@ export const resolveProfileStart = (
                 runtime: attempt.runtime,
                 closeOnReport: attempt.closeOnReport,
                 candidateIndex: attempt.candidateIndex,
-                reason: attempt.reason,
+                reason: input.retry
+                  ? `Profile ${input.definition.id} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${attempt.candidateIndex + 1} (${attempt.host}/${attempt.runtime}).`
+                  : attempt.reason,
                 skippedCandidates: precedingSkips,
               },
             }),
@@ -345,17 +356,28 @@ export const resolveProfileStart = (
       );
     };
 
-    const selected = yield* tryAttempt(0, []);
+    const selected = yield* tryAttempt(0, input.priorSkippedCandidates);
+    const parentSessionFile = ctx.sessionManager.getSessionFile();
+    const parentLeafId = stableParentLeaf(ctx);
     if (selected.attempt.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
       return yield* new InvalidSubagentRequestError({
         code: "fork_context_unavailable",
         message: "Forked context requires a persisted parent session with a stable leaf.",
       });
     const concrete = selected.concrete;
+    const routeContinuation = freezeSnapshot({
+      profile: input.definition.id,
+      routeSource: input.routeSource,
+      candidates: input.routeCandidates.map((candidate) => ({ ...candidate })),
+      selectedCandidateIndex: selected.attempt.candidateIndex,
+      skippedCandidates: selected.selection.skippedCandidates.map((candidate) => ({
+        ...candidate,
+      })),
+    });
     return (() => {
       const objectPart14019_0 = {};
-      const objectPart14019_1 = rawInput.name?.trim()
-        ? { ...objectPart14019_0, name: rawInput.name.trim() }
+      const objectPart14019_1 = input.rawInput.name?.trim()
+        ? { ...objectPart14019_0, name: input.rawInput.name.trim() }
         : objectPart14019_0;
       const objectPart14019_2 = {
         ...objectPart14019_1,
@@ -364,19 +386,29 @@ export const resolveProfileStart = (
         closeOnReport: concrete.closeOnReport,
         fastMode: concrete.fastMode,
         task,
-        profile: definition.id,
-        profileGuidance: definition.guidance,
+        profile: input.definition.id,
+        profileGuidance: input.definition.guidance,
         selection: selected.selection,
+        routeContinuation,
         cwd: environment.cwd,
         context: selected.attempt.effectiveContext,
         writeIntent: selected.attempt.writeIntent,
         model: concrete.model,
       };
-      const objectPart14019_3 = concrete.runtimeApiKey
-        ? { ...objectPart14019_2, runtimeApiKey: concrete.runtimeApiKey }
+      const objectPart14019_3 = input.retry
+        ? {
+            ...objectPart14019_2,
+            supersedes: {
+              runId: input.retry.sourceRunId,
+              claimToken: input.retry.claimToken,
+            },
+          }
         : objectPart14019_2;
-      const objectPart14019_4 = {
-        ...objectPart14019_3,
+      const objectPart14019_4 = concrete.runtimeApiKey
+        ? { ...objectPart14019_3, runtimeApiKey: concrete.runtimeApiKey }
+        : objectPart14019_3;
+      const objectPart14019_5 = {
+        ...objectPart14019_4,
         effort: concrete.effort,
         effortWasExplicit: concrete.effortWasExplicit,
         activeTools: piToolsForWriteIntent(
@@ -386,12 +418,114 @@ export const resolveProfileStart = (
         projectTrusted: environment.projectTrusted,
         parentSessionId: ctx.sessionManager.getSessionId(),
       };
-      const objectPart14019_5 = parentSessionFile
-        ? { ...objectPart14019_4, parentSessionFile }
-        : objectPart14019_4;
-      const objectPart14019_6 = parentLeafId
-        ? { ...objectPart14019_5, parentLeafId }
+      const objectPart14019_6 = parentSessionFile
+        ? { ...objectPart14019_5, parentSessionFile }
         : objectPart14019_5;
-      return objectPart14019_6;
+      const objectPart14019_7 = parentLeafId
+        ? { ...objectPart14019_6, parentLeafId }
+        : objectPart14019_6;
+      return objectPart14019_7;
     })() satisfies StartSubagentRequest;
+  });
+
+export const resolveProfileStart = (
+  pi: ExtensionAPI,
+  rawInput: SubagentProfileStartSpec,
+  ctx: ExtensionContext,
+  environment: SubagentSessionEnvironment,
+  capturedProfiles?: SessionProfileSnapshot,
+): Effect.Effect<
+  StartSubagentRequest,
+  InvalidSubagentRequestError,
+  SubagentProfileService | SubagentBackendRegistry
+> =>
+  Effect.gen(function* () {
+    const profiles = yield* SubagentProfileService;
+    const profileSnapshot = capturedProfiles ?? (yield* profiles.capture);
+    const selectedProfile = rawInput.profile?.trim() || "generalist";
+    const definition = profiles.definition(selectedProfile);
+    if (!definition)
+      return yield* new InvalidSubagentRequestError({
+        code: "profile_unknown",
+        message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
+      });
+    const plan = profiles.resolve(profileSnapshot, definition.id, hostProfileEnvironment(pi, ctx));
+    if (plan.kind === "failed")
+      return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
+    const route = profileSnapshot.effectiveConfig.profiles[definition.id];
+    return yield* resolvePlannedStart(
+      pi,
+      {
+        rawInput,
+        definition,
+        plan,
+        routeCandidates: route.candidates,
+        routeSource: profileSnapshot.effectiveConfig.profileSources[definition.id],
+        priorSkippedCandidates: [],
+      },
+      ctx,
+      environment,
+    );
+  });
+
+export const resolveProfileRetry = (
+  pi: ExtensionAPI,
+  claim: SubagentRetryClaim,
+  ctx: ExtensionContext,
+  environment: SubagentSessionEnvironment,
+): Effect.Effect<
+  StartSubagentRequest & {
+    readonly supersedes: { readonly runId: string; readonly claimToken: string };
+  },
+  InvalidSubagentRequestError,
+  SubagentProfileService | SubagentBackendRegistry
+> =>
+  Effect.gen(function* () {
+    const profiles = yield* SubagentProfileService;
+    const definition = profiles.definition(claim.continuation.profile);
+    if (!definition)
+      return yield* new InvalidSubagentRequestError({
+        code: "profile_unknown",
+        message: `Unknown subagent profile "${claim.continuation.profile}".`,
+      });
+    const failedCandidate =
+      claim.continuation.candidates[claim.continuation.selectedCandidateIndex];
+    const failedSkip: SkippedProfileCandidate = {
+      candidateIndex: claim.continuation.selectedCandidateIndex,
+      candidate: failedCandidate
+        ? profileCandidateLabel(failedCandidate)
+        : `${claim.source.host}/${claim.source.runtime}/${claim.source.model}:${claim.source.effort}`,
+      code: "previous_run_failed",
+      reason: `Candidate ${claim.continuation.selectedCandidateIndex + 1} failed in ${claim.source.id}: ${claim.source.error ?? "Run failed without a diagnostic."}`,
+    };
+    const plan = resolveProfileContinuationPlan(
+      claim.continuation,
+      hostProfileEnvironment(pi, ctx),
+    );
+    if (plan.kind === "failed")
+      return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
+    const request = yield* resolvePlannedStart(
+      pi,
+      {
+        rawInput: {
+          task: claim.source.task,
+          name: claim.source.name,
+          profile: claim.continuation.profile,
+        },
+        definition,
+        plan,
+        routeCandidates: claim.continuation.candidates,
+        routeSource: claim.continuation.routeSource,
+        priorSkippedCandidates: [...claim.continuation.skippedCandidates, failedSkip],
+        retry: { sourceRunId: claim.source.id, claimToken: claim.claimToken },
+      },
+      ctx,
+      environment,
+    );
+    if (!request.supersedes)
+      return yield* new InvalidSubagentRequestError({
+        code: "retry_claim_stale",
+        message: `Subagent ${claim.source.id} retry resolution lost its predecessor claim.`,
+      });
+    return { ...request, supersedes: request.supersedes };
   });

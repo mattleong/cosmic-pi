@@ -6,7 +6,11 @@ import type {
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
-import type { ProfileId, SubagentSelectionProvenance } from "../profiles/model.ts";
+import type {
+  ProfileId,
+  ProfileRouteContinuation,
+  SubagentSelectionProvenance,
+} from "../profiles/model.ts";
 
 export type RuntimeApiKey = Redacted.Redacted<string>;
 
@@ -89,6 +93,16 @@ export interface SubagentRunView {
   readonly task: string;
   readonly profile?: ProfileId | undefined;
   readonly selection: SubagentSelectionProvenance;
+  /** Failed predecessor continued explicitly through the remaining frozen profile route. */
+  readonly predecessorRunId?: string | undefined;
+  /** Successor admitted from this failed run's explicit retry claim. */
+  readonly supersededByRunId?: string | undefined;
+  /** Configured candidates after the selected candidate, before dynamic retry-time checks. */
+  readonly remainingCandidateCount?: number | undefined;
+  /** Remaining candidates were checked and none could be admitted. */
+  readonly retryExhausted?: boolean | undefined;
+  /** Continuation encountered ownership uncertainty and is permanently fail-closed. */
+  readonly retryBlocked?: boolean | undefined;
   readonly cwd: string;
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;
@@ -123,6 +137,11 @@ export interface SubagentProjection {
   readonly runs: ReadonlyArray<SubagentRunView>;
 }
 
+export interface SubagentRetrySupersession {
+  readonly runId: string;
+  readonly claimToken: string;
+}
+
 export interface StartSubagentRequest {
   readonly name?: string | undefined;
   readonly host: SubagentHost;
@@ -132,6 +151,10 @@ export interface StartSubagentRequest {
   readonly profile?: ProfileId | undefined;
   readonly profileGuidance?: string | undefined;
   readonly selection?: SubagentSelectionProvenance | undefined;
+  /** Frozen configured route and cursor; never accepted from the public start schema. */
+  readonly routeContinuation?: ProfileRouteContinuation | undefined;
+  /** Internal exclusive predecessor claim consumed atomically by successor admission. */
+  readonly supersedes?: SubagentRetrySupersession | undefined;
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
