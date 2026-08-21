@@ -33,13 +33,21 @@ export class SharpAdapter extends Context.Service<SharpAdapter, SharpAdapterCont
               limitInputPixels: 40_000_000,
               sequentialRead: true,
             });
-            return input.metadata().then((metadata) =>
-              input
-                .clone()
-                .raw()
-                .toBuffer()
-                .then(() => ({ format: metadata.format })),
-            );
+            // The pipeline instances own native resources; release them on every
+            // settlement (including rejection) instead of waiting for GC.
+            const clone = input.clone();
+            return input
+              .metadata()
+              .then((metadata) =>
+                clone
+                  .raw()
+                  .toBuffer()
+                  .then(() => ({ format: metadata.format })),
+              )
+              .finally(() => {
+                clone.destroy();
+                input.destroy();
+              });
           },
           catch: () =>
             new SharpError({ operation: "decode", message: "Image data is not readable." }),

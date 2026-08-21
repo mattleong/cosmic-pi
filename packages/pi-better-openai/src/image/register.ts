@@ -90,17 +90,21 @@ export function registerOpenAIImage(
         return Promise.resolve();
       }
       safeHostUi(() => ctx.ui.notify("Requesting OpenAI image...", "info"));
-      return generate({ prompt }, ctx, safeHostSignal(ctx)).then((result) =>
-        pi.sendMessage({
-          customType: "openai-image",
-          content: [
-            { type: "text", text: resultText(result) },
-            { type: "image", data: result.data, mimeType: result.mimeType },
-          ],
-          display: true,
-          details: result,
-        }),
-      );
+      return generate({ prompt }, ctx, safeHostSignal(ctx))
+        .then((result) =>
+          pi.sendMessage({
+            customType: "openai-image",
+            content: [
+              { type: "text", text: resultText(result) },
+              { type: "image", data: result.data, mimeType: result.mimeType },
+            ],
+            display: true,
+            details: result,
+          }),
+        )
+        .catch(() => {
+          safeHostUi(() => ctx.ui.notify("OpenAI image generation failed.", "warning"));
+        });
     },
   });
   const tool = defineTool({

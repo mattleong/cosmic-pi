@@ -234,7 +234,13 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
   );
   const auth = fileResult._tag === "Found" ? fileResult.credentials : undefined;
   let refreshFailure: XaiAuthError | undefined;
-  if (auth?.refreshToken && (auth.expires === undefined || now >= auth.expires - REFRESH_SKEW_MS)) {
+  // Only refresh when expiry is actually known: a schema-legal entry without `expires`
+  // is used until the API rejects it instead of forcing a refresh POST on every poll.
+  if (
+    auth?.refreshToken !== undefined &&
+    auth.expires !== undefined &&
+    now >= auth.expires - REFRESH_SKEW_MS
+  ) {
     const refreshed = yield* refreshXaiToken(authPath, auth.refreshToken).pipe(Effect.result);
     if (refreshed._tag === "Success")
       return {
@@ -242,6 +248,10 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
         credentials: { ...refreshed.success, source: "authFile" as const },
       } as const;
     refreshFailure = refreshed.failure;
+    // A failed refresh must not silently flip a still-valid file token over to the
+    // model-registry credential source; keep using it until it actually expires.
+    if (auth.accessToken && now < auth.expires)
+      return { _tag: "Found", credentials: auth } as const;
   }
 
   const registryToken = yield* ModelRegistryAuth.use((registry) => registry.getApiKey).pipe(

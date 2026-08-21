@@ -87,7 +87,10 @@ describe("xAI authentication", () => {
           type: "oauth",
           access: expiredAccess,
           refresh: refreshSecret,
-          expires: 1,
+          // Genuinely expired even under the frozen TestClock (t=0), well past any
+          // refresh skew: refresh is due, and a still-valid file token must NOT mask
+          // the registry fallback.
+          expires: -10_000_000,
         },
       },
     });
@@ -114,6 +117,36 @@ describe("xAI authentication", () => {
       })}`;
       for (const secret of [expiredAccess, refreshSecret, registrySecret, "provider-secret-body"])
         expect(serialized).not.toContain(secret);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps a still-valid file token when its refresh fails", () => {
+    const authPath = "/agent/auth.json";
+    // Expires inside the refresh-skew window relative to the frozen TestClock (t=0):
+    // the refresh fires early, fails, and the still-unexpired access token must stay
+    // in use instead of silently downgrading to the model-registry credential.
+    const documents = makeInMemoryDocuments({
+      [authPath]: {
+        xai: {
+          type: "oauth",
+          access: "valid-access-secret",
+          refresh: "stale-refresh-secret",
+          expires: 60_000,
+        },
+      },
+    });
+    const layer = Layer.mergeAll(
+      documents.layer,
+      registryLayer("registry-fallback-secret"),
+      jsonHttpTestLayer(() => Effect.succeed(jsonHttpRawResponse(503, "provider-secret-body"))),
+    );
+    return Effect.gen(function* () {
+      const result = yield* getXaiCredentialsResult(authPath);
+      expect(result._tag).toBe("Found");
+      if (result._tag === "Found") {
+        expect(result.credentials.source).toBe("authFile");
+        expect(Redacted.value(result.credentials.accessToken)).toBe("valid-access-secret");
+      }
     }).pipe(Effect.provide(layer));
   });
 });

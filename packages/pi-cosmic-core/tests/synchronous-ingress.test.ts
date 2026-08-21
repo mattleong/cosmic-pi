@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -220,4 +221,48 @@ it.effect("shutdown rejects offers and leaves no surviving worker fiber", () =>
     expect(ingress.offer(2)).toBe("closed");
     yield* ingress.shutdown;
   }),
+);
+
+it.effect("reports handler defects through onDefect and keeps the worker alive", () =>
+  Effect.gen(function* () {
+    const defects: Array<Cause.Cause<unknown>> = [];
+    const poisonSeen = yield* Deferred.make<void>();
+    const healthyDone = yield* Deferred.make<void>();
+    const ingress = yield* makeSynchronousIngress<number, never, never>({
+      capacity: 4,
+      overflow: "drop",
+      handle: (value) =>
+        value === 1
+          ? Deferred.succeed(poisonSeen, undefined).pipe(
+              Effect.andThen(Effect.die("ingress-poison")),
+            )
+          : Deferred.succeed(healthyDone, undefined),
+      onDefect: (cause) => {
+        defects.push(cause);
+      },
+    });
+    expect(ingress.offer(1)).toBe("accepted");
+    yield* Deferred.await(poisonSeen);
+    expect(ingress.offer(2)).toBe("accepted");
+    yield* Deferred.await(healthyDone);
+    yield* ingress.shutdown;
+    yield* ingress.awaitShutdown;
+    expect(defects.length).toBeGreaterThanOrEqual(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("logs a fixed diagnostic for handler defects when onDefect is absent", () =>
+  Effect.gen(function* () {
+    const poisonSeen = yield* Deferred.make<void>();
+    const ingress = yield* makeSynchronousIngress<number, never, never>({
+      capacity: 4,
+      overflow: "drop",
+      handle: () =>
+        Deferred.succeed(poisonSeen, undefined).pipe(Effect.andThen(Effect.die("ingress-poison"))),
+    });
+    expect(ingress.offer(1)).toBe("accepted");
+    yield* Deferred.await(poisonSeen);
+    yield* ingress.shutdown;
+    yield* ingress.awaitShutdown;
+  }).pipe(Effect.scoped),
 );

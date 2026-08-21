@@ -117,6 +117,15 @@ export function registerSettingsController(
       safeHostSignal(ctx),
     );
 
+  /** Config read that degrades to undefined instead of throwing inside host UI callbacks. */
+  const pickerConfig = (ctx: ExtensionContext): ResolvedConfig | undefined => {
+    try {
+      return config(ctx);
+    } catch {
+      return undefined;
+    }
+  };
+
   const applySetting = (ctx: ExtensionContext, id: string, value: string) => {
     updateContext(ctx);
     const update = Effect.gen(function* () {
@@ -168,6 +177,16 @@ export function registerSettingsController(
       .catch(() => ({}))
       .then((initialRedactedConfig) => {
         let redactedConfig = initialRedactedConfig;
+        // One guarded snapshot per picker session: closures below render inside host UI
+        // callbacks where a thrown OpenAIBoundaryError (projection reset mid-session)
+        // would escape into Pi's dispatcher.
+        let cfg: ResolvedConfig;
+        try {
+          cfg = config(ctx);
+        } catch {
+          safeHostUi(() => ctx.ui.notify("Better OpenAI settings are unavailable.", "warning"));
+          return undefined;
+        }
         return ctx.ui
           .custom((tui, theme, keyboard, done) => {
             const writeSetting = (writeContext: ExtensionContext, id: string, value: string) => {
@@ -176,6 +195,8 @@ export function registerSettingsController(
                   .catch(() => redactedConfig)
                   .then((nextRedactedConfig) => {
                     redactedConfig = nextRedactedConfig;
+                    const nextConfig = pickerConfig(ctx);
+                    if (nextConfig) cfg = nextConfig;
                     safeHostUi(() => tui.requestRender());
                   }),
               );
@@ -193,10 +214,9 @@ export function registerSettingsController(
                 values: ["true", "false"],
                 description: `Request OpenAI fast mode. Activates for package-supported models: ${modelList()}.`,
               },
-              ...settingsItemsFromDescriptors(FAST_SETTING_DESCRIPTORS, config(ctx)),
+              ...settingsItemsFromDescriptors(FAST_SETTING_DESCRIPTORS, cfg),
             ];
             const diagnosticItems = (): SettingsPickerItem[] => {
-              const cfg = config(ctx);
               return [
                 {
                   id: "diagnostics",
@@ -233,7 +253,6 @@ export function registerSettingsController(
               ];
             };
             const sections = (): (SettingsPickerItem & SettingsSurfaceItem)[] => {
-              const cfg = config(ctx);
               return [
                 {
                   kind: "group",
@@ -255,9 +274,8 @@ export function registerSettingsController(
                   submenu: (_value, complete) =>
                     submenu(
                       "Compaction settings",
-                      () =>
-                        settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, config(ctx)),
-                      () => complete(compactionSummary(config(ctx))),
+                      () => settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, cfg),
+                      () => complete(compactionSummary(cfg)),
                     ),
                 },
                 {
@@ -269,8 +287,8 @@ export function registerSettingsController(
                   submenu: (_value, complete) =>
                     submenu(
                       "Footer settings",
-                      () => settingsItemsFromDescriptors(FOOTER_SETTING_DESCRIPTORS, config(ctx)),
-                      () => complete(config(ctx).footer.mode),
+                      () => settingsItemsFromDescriptors(FOOTER_SETTING_DESCRIPTORS, cfg),
+                      () => complete(cfg.footer.mode),
                     ),
                 },
                 {
@@ -282,8 +300,8 @@ export function registerSettingsController(
                   submenu: (_value, complete) =>
                     submenu(
                       "Usage settings",
-                      () => settingsItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, config(ctx)),
-                      () => complete(usageSummary(config(ctx))),
+                      () => settingsItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, cfg),
+                      () => complete(usageSummary(cfg)),
                     ),
                 },
                 {
@@ -295,8 +313,8 @@ export function registerSettingsController(
                   submenu: (_value, complete) =>
                     submenu(
                       "Image tool settings",
-                      () => settingsItemsFromDescriptors(IMAGE_SETTING_DESCRIPTORS, config(ctx)),
-                      () => complete(imageSummary(config(ctx))),
+                      () => settingsItemsFromDescriptors(IMAGE_SETTING_DESCRIPTORS, cfg),
+                      () => complete(imageSummary(cfg)),
                     ),
                 },
                 {
@@ -315,7 +333,7 @@ export function registerSettingsController(
                 render() {
                   return [
                     theme.fg("accent", theme.bold("Better OpenAI Settings")),
-                    theme.fg("dim", config(ctx).configPath),
+                    theme.fg("dim", cfg.configPath),
                     "",
                   ];
                 }
@@ -363,14 +381,19 @@ export function registerSettingsController(
         case "OpenInteractive":
           return showPicker(ctx);
         case "Help": {
-          const cfg = config(ctx);
+          let cfg: ResolvedConfig | undefined;
+          try {
+            cfg = config(ctx);
+          } catch {
+            // Help remains useful before the session runtime has published its config.
+          }
           safeHostUi(() =>
             ctx.ui.notify(
               [
                 "Better OpenAI settings",
                 ...descriptors.map(
                   (descriptor) =>
-                    `  ${descriptor.id}=${descriptor.currentValue(cfg)}  — ${descriptor.description}`,
+                    `  ${descriptor.id}${cfg ? `=${descriptor.currentValue(cfg)}` : ""}  — ${descriptor.description}`,
                 ),
                 "",
                 "Usage: /openai-settings <id> <value>",

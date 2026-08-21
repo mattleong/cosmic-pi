@@ -158,7 +158,12 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
           "restore-branch",
           !options.requiresEnabled,
         );
-        if (restartEpoch === undefined || restartEpoch !== d.getState().epoch) return "discarded";
+        if (restartEpoch === undefined || restartEpoch !== d.getState().epoch) {
+          // A restart that failed or was superseded still consumed a real attempt window;
+          // account the discard (and its review duration) like every other discard path.
+          finishReviewDuration();
+          return discardRequest();
+        }
       }
       if (!validForDelivery || !d.refs.queue || !d.isStarted() || !d.refs.runtimeCursor)
         return "discarded";

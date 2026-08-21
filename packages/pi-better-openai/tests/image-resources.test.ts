@@ -75,4 +75,35 @@ describe("OpenAI image resources", () => {
       expect(visible.some((name) => name.endsWith(".tmp"))).toBe(false);
     }).pipe(Effect.provide(nodePlatformLayer)),
   );
+
+  it.effect("keeps the committed publication when post-commit verification is lost", () =>
+    Effect.gen(function* () {
+      const realFs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* realFs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
+      const directory = path.join(root, "images");
+      // Only the published destination (.png) is stat'd after the hard-link commit, so a
+      // defecting stat here simulates verification I/O loss immediately after commit.
+      const hostileFs: typeof realFs = Object.assign({}, realFs, {
+        stat: (pathArg: Parameters<typeof realFs.stat>[0]) =>
+          String(pathArg).endsWith(".png")
+            ? Effect.die("verification-io-loss")
+            : realFs.stat(pathArg),
+      });
+      const output = makeImageOutput({ fs: hostileFs, path, sharp });
+      const content = bytes("committed-image-bytes");
+      const destination = yield* output.persistImage(
+        directory,
+        root,
+        content,
+        "png",
+        "provider/id",
+      );
+      expect(yield* realFs.exists(destination)).toBe(true);
+      expect(Array.from(yield* realFs.readFile(destination))).toEqual(Array.from(content));
+      expect(
+        (yield* realFs.readDirectory(directory)).filter((name) => name.endsWith(".tmp")),
+      ).toEqual([]);
+    }).pipe(Effect.provide(nodePlatformLayer)),
+  );
 });

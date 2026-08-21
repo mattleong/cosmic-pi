@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -19,6 +20,12 @@ export interface SynchronousIngressOptions<A, E, R, FailureR = never> {
   readonly handle: (value: A) => Effect.Effect<void, E, R>;
   /** Failure observation is isolated too; failure of this callback never terminates the worker. */
   readonly onFailure?: (error: E) => Effect.Effect<void, never, FailureR>;
+  /**
+   * Defect observation runs when a handler violates an invariant; the worker continues
+   * either way. Defaults to a fixed-string diagnostic that never includes the cause,
+   * so unexpected defects can no longer disappear without any trace.
+   */
+  readonly onDefect?: (cause: Cause.Cause<E>) => void;
 }
 
 export interface SynchronousIngress<A> {
@@ -49,11 +56,18 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
     const workerDone = yield* Deferred.make<void>();
     let closed = false;
     let coalesced: { readonly value: A } | undefined;
+    const reportDefect = options.onDefect;
 
     const handle = (value: A) =>
       Effect.suspend(() => options.handle(value)).pipe(
         Effect.catch((error) => options.onFailure?.(error) ?? Effect.void),
-        Effect.catchCause(() => Effect.void),
+        Effect.catchCause((cause) =>
+          reportDefect
+            ? Effect.sync(() => reportDefect(cause))
+            : Effect.logWarning(
+                "Synchronous ingress handler raised an unexpected defect; the worker continues.",
+              ),
+        ),
       );
 
     // This is the adapter's sole synchronous unsafe Queue operation.

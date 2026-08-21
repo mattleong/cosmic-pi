@@ -347,9 +347,15 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
       )
       .then(
         (token) => {
-          if (token === undefined) host.releaseSignal();
+          if (token === undefined) {
+            // A superseded start never activates: stop publishing this dead context
+            // unless a newer start already replaced it.
+            if (currentContext === context) currentContext = undefined;
+            host.releaseSignal();
+          }
         },
         () => {
+          if (currentContext === context) currentContext = undefined;
           host.releaseSignal();
           callbacks.invoke(
             "notify",

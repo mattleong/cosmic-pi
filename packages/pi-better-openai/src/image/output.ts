@@ -204,30 +204,35 @@ export const makeImageOutput = (dependencies: {
                       dev: ownedIdentity.dev,
                       ino: ownedIdentity.ino,
                     };
-                  const published = yield* fs
-                    .stat(destination)
-                    .pipe(
-                      Effect.mapError(
-                        imageError("save", "Unable to verify published image identity."),
-                      ),
-                    );
-                  const publishedInode = Option.getOrUndefined(published.ino);
-                  if (publishedInode !== undefined)
-                    publishedIdentity = {
-                      type: published.type,
-                      dev: published.dev,
-                      ino: publishedInode,
-                    };
+                  // The hard link above is the commit point. Post-commit verification is
+                  // best-effort defense against a swapped destination: neither a typed
+                  // verification failure nor a defect may undo the committed publication,
+                  // so only a positive identity mismatch unlinks the published file.
+                  const published = yield* fs.stat(destination).pipe(
+                    Effect.option,
+                    Effect.catchCause(() => Effect.succeed(Option.none())),
+                  );
+                  if (Option.isNone(published)) return;
+                  const publishedStat = published.value;
+                  const publishedInode = Option.getOrUndefined(publishedStat.ino);
                   if (
                     !ownedIdentity ||
-                    published.type !== "File" ||
+                    publishedStat.type !== "File" ||
+                    publishedInode === undefined ||
                     publishedInode !== ownedIdentity.ino ||
-                    published.dev !== ownedIdentity.dev
-                  )
+                    publishedStat.dev !== ownedIdentity.dev
+                  ) {
+                    if (publishedInode !== undefined)
+                      publishedIdentity = {
+                        type: publishedStat.type,
+                        dev: publishedStat.dev,
+                        ino: publishedInode,
+                      };
                     return yield* fail(
                       "save",
                       "Published image did not match the owned temporary file.",
                     );
+                  }
                 }).pipe(Effect.onError(() => (linked ? removePublishedDestination : Effect.void)));
               }).pipe(Effect.uninterruptible),
             ),

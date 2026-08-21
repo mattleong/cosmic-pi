@@ -21,6 +21,7 @@ const request = (mutation = false, timeoutMillis?: number) => {
 
 const success = {
   status: 0,
+  signal: null,
   stdout: '{"protocol":19}',
   stderr: "",
   overflowed: false,
@@ -165,6 +166,7 @@ it.effect("keeps structured mutation precondition rejections confirmed", () =>
     const processRunner: HerdrProcessRunner = () =>
       Effect.succeed({
         status: 1,
+        signal: null,
         stdout: "",
         stderr: JSON.stringify({ error: { code: "agent_pane_busy", message: "busy" } }),
         overflowed: false,

@@ -91,6 +91,44 @@ describe("RefreshCoordinator", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("executes a request merged while the follow-up is running", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* makeRefreshCoordinatorWith<RefreshRequest>(mergeRefreshRequest);
+      const started = yield* Deferred.make<void>();
+      const followUpStarted = yield* Deferred.make<void>();
+      const releaseFollowUp = yield* Deferred.make<void>();
+      const requests: RefreshRequest[] = [];
+      const operation = (request: RefreshRequest) =>
+        Effect.gen(function* () {
+          requests.push(request);
+          if (requests.length === 1) {
+            yield* Deferred.succeed(started, undefined);
+            return;
+          }
+          if (requests.length === 2) {
+            yield* Deferred.succeed(followUpStarted, undefined);
+            yield* Deferred.await(releaseFollowUp);
+          }
+        });
+
+      const owner = yield* coordinator.run({}, operation).pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      const queued = yield* coordinator.run({ force: true }, operation).pipe(Effect.forkScoped);
+      // Block until the owner has left the first operation and entered the follow-up:
+      // a request offered from here used to resolve without ever running.
+      yield* Deferred.await(followUpStarted);
+      const late = yield* coordinator.run({ notify: true }, operation).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(releaseFollowUp, undefined);
+      yield* Fiber.join(owner);
+      yield* Fiber.join(queued);
+      yield* Fiber.join(late);
+      // The follow-up ({force}) is already dequeued and executing here, so the late
+      // request merges against an empty queue and drains afterwards.
+      expect(requests).toEqual([{}, { force: true }, { force: false, notify: true }]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("replays follow-up failure to late waiters and permits immediate reuse", () =>
     Effect.gen(function* () {
       const coordinator = yield* makeRefreshCoordinatorWith<number, string>(

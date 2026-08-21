@@ -110,6 +110,8 @@ export interface HerdrProcessRequest {
 
 export interface HerdrProcessResult {
   readonly status: number | null;
+  /** Non-null when the child was terminated by a signal instead of exiting normally. */
+  readonly signal: NodeJS.Signals | null;
   readonly stdout: string;
   readonly stderr: string;
   readonly overflowed: boolean;
@@ -212,6 +214,7 @@ const acquireNodeHerdrProcess = (request: HerdrProcessRequest) =>
       finish(
         Effect.succeed({
           status,
+          signal: child.signalCode ?? null,
           stdout: Buffer.concat(stdout.chunks).toString("utf8"),
           stderr: Buffer.concat(stderr.chunks).toString("utf8"),
           overflowed,
@@ -402,8 +405,13 @@ export const makeHerdrCommandRunner = (
           Buffer.byteLength(output.stderr, "utf8") > maximumOutputBytes
         )
           return Effect.fail(herdrTransportFailure(request));
-        if (output.status !== 0)
-          return Effect.fail(herdrCommandExitFailure(request, output.stderr || output.stdout));
+        if (output.status !== 0) {
+          const killedBySignal = output.status === null && output.signal !== null;
+          const detail = killedBySignal
+            ? `terminated by ${output.signal} signal${output.stderr ? `: ${output.stderr.trim()}` : ""}`
+            : output.stderr || output.stdout;
+          return Effect.fail(herdrCommandExitFailure(request, detail));
+        }
         return Effect.succeed({ stdout: output.stdout, stderr: output.stderr });
       }),
     );

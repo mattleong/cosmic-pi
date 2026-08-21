@@ -426,9 +426,9 @@ export class ProcessManagerComponent implements Component {
       lines.push(
         this.options.theme.fg("warning", `… ${job.droppedLogBytes} earlier bytes discarded`),
       );
+    const beforeLogs = lines.length;
     for (const line of this.logLines(job.logs)) lines.push(line);
-    if (lines.length === (this.showTechnicalDetails ? 5 : 2))
-      lines.push(this.options.theme.fg("dim", "(no output)"));
+    if (lines.length === beforeLogs) lines.push(this.options.theme.fg("dim", "(no output)"));
     return lines;
   }
 

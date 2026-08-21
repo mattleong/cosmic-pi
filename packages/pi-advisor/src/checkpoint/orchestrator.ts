@@ -169,7 +169,10 @@ export const makeCheckpointOrchestrator = (
         }).pipe(
           Effect.andThen(
             Effect.sync(() => {
-              for (const entry of entries) finalize(entry);
+              // Finalize every awaited entry, not just the active snapshot: an entry whose
+              // checkpoint fiber completed mid-sweep left `active` but still needs its
+              // cancellation bookkeeping. `finalize` is exactly-once guarded.
+              for (const entry of cancellationEntries) finalize(entry);
             }),
           ),
         );

@@ -11,7 +11,6 @@ export interface RefreshRequest {
 interface State<Request, E> {
   readonly active: Deferred.Deferred<void, E> | undefined;
   readonly queued: { readonly value: Request } | undefined;
-  readonly acceptingFollowUp: boolean;
 }
 
 type Registration<E> =
@@ -26,7 +25,7 @@ export const mergeRefreshRequest = (
   force: current?.force === true || next.force === true,
 });
 
-/** Generic single-flight coordinator with one bounded, merged follow-up. */
+/** Generic single-flight coordinator: concurrent requests merge into one queued request that the owner drains until it observes the queue empty while releasing ownership. */
 export const makeRefreshCoordinatorWith = <Request, E = never>(
   merge: (current: Request | undefined, next: Request) => Request,
 ) =>
@@ -34,7 +33,6 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
     const state = yield* SynchronizedRef.make<State<Request, E>>({
       active: undefined,
       queued: undefined,
-      acceptingFollowUp: false,
     });
 
     const run = <R>(
@@ -46,19 +44,19 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
           state,
           (current): Effect.Effect<readonly [Registration<E>, State<Request, E>]> => {
             if (current.active) {
-              const next: State<Request, E> = current.acceptingFollowUp
-                ? {
-                    ...current,
-                    queued: { value: merge(current.queued?.value, request) },
-                  }
-                : current;
+              // Merging stays open for the whole cycle so a request that arrives while a
+              // follow-up executes is queued and drained instead of resolving unexecuted.
+              const next: State<Request, E> = {
+                ...current,
+                queued: { value: merge(current.queued?.value, request) },
+              };
               const registration: Registration<E> = { owner: false, done: current.active };
               return Effect.succeed([registration, next] as const);
             }
             return Deferred.make<void, E>().pipe(
               Effect.map((done): readonly [Registration<E>, State<Request, E>] => [
                 { owner: true, done },
-                { active: done, queued: undefined, acceptingFollowUp: true },
+                { active: done, queued: undefined },
               ]),
             );
           },
@@ -66,14 +64,21 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
         if (!registration.owner) return yield* Deferred.await(registration.done);
 
         const work = Effect.gen(function* () {
-          yield* operation(request);
-          const followUp = yield* SynchronizedRef.modifyEffect(state, (current) =>
-            Effect.succeed([
-              current.queued,
-              { ...current, queued: undefined, acceptingFollowUp: false },
-            ] as const),
-          );
-          if (followUp !== undefined) yield* operation(followUp.value);
+          let pending: { readonly value: Request } | undefined = { value: request };
+          while (pending !== undefined) {
+            yield* operation(pending.value);
+            // Taking the queue and releasing ownership is one serialized transition:
+            // a non-empty queue keeps ownership (so later arrivals still merge), and an
+            // empty queue ends the cycle in that same step, leaving no lost-request window.
+            pending = yield* SynchronizedRef.modifyEffect(state, (current) => {
+              if (current.active !== registration.done)
+                return Effect.succeed([undefined, current] as const);
+              const queued = current.queued;
+              return queued !== undefined
+                ? Effect.succeed([queued, { active: current.active, queued: undefined }] as const)
+                : Effect.succeed([undefined, { active: undefined, queued: undefined }] as const);
+            });
+          }
         });
         return yield* Effect.uninterruptibleMask((restore) =>
           restore(work).pipe(
@@ -82,11 +87,7 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
                 Effect.succeed([
                   undefined,
                   current.active === registration.done
-                    ? {
-                        active: undefined,
-                        queued: undefined,
-                        acceptingFollowUp: false,
-                      }
+                    ? { active: undefined, queued: undefined }
                     : current,
                 ] as const),
               ).pipe(Effect.andThen(Deferred.done(registration.done, exit)), Effect.asVoid),

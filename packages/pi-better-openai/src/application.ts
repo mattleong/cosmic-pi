@@ -228,7 +228,9 @@ export function betterOpenAIWithDependencies(
           ),
         ),
         safeHostSignal(ctx),
-      );
+      ).catch(() => {
+        safeHostUi(() => ctx.ui.notify("OpenAI fast mode is unavailable.", "warning"));
+      });
     },
   });
   pi.registerCommand("openai-usage", {

@@ -126,8 +126,9 @@ export const registerTurnEvents = (d: EventsDeps): void => {
       }));
     if (!classification.eligible) {
       d.recordSkip(classification.reason === "empty" ? "empty" : "incomplete");
-      if (stopReason !== "stop" && trajectory)
-        d.mutateTrajectory(trajectory.id, (current) => ({ ...current, abortAllowed: false }));
+      // No trajectory mutation here: clearPersistentTrajectory() above already removed
+      // the active trajectory, and delivery treats a missing trajectory as abort-unsafe,
+      // so a mutateTrajectory(trajectory.id, ...) call would be a guaranteed no-op.
       if (stopReason === "aborted") {
         const provenance = d.getState().abortInProgress;
         const matchingAdvisorAbort = Boolean(

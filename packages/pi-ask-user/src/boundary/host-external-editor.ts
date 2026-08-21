@@ -50,8 +50,11 @@ function launch(command: string, file: string, signal: AbortSignal): Promise<num
       resolve(null);
       return;
     }
-    if (file.includes('"')) {
-      reject(new Error("External-editor temporary path contains an unsupported quote."));
+    // The Windows branch interpolates the path into a cmd.exe command line, so beyond
+    // quotes it must not contain percent expansion or control characters either.
+    // Fail closed instead of attempting full cmd escaping.
+    if (file.includes('"') || /[%\p{Cc}]/u.test(file)) {
+      reject(new Error("External-editor temporary path contains unsupported characters."));
       return;
     }
     const child =

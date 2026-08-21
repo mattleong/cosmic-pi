@@ -73,7 +73,9 @@ const required = (
 ): Effect.Effect<string, InvalidBackgroundCommandError> =>
   value?.trim()
     ? Effect.succeed(value.trim())
-    : new InvalidBackgroundCommandError({
+    : // Deliberately reuses InvalidBackgroundCommandError: only the message reaches the
+      // model, and it names the missing field precisely.
+      new InvalidBackgroundCommandError({
         message: `${field} is required for this background_terminal action.`,
       });
 
