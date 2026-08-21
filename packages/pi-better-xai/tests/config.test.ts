@@ -5,13 +5,7 @@ import * as Effect from "effect/Effect";
 import type { JsonObject } from "pi-cosmic-core";
 import { InvalidSettingError, decodeSettingUpdate } from "../src/config/options.ts";
 
-const runUpdate = async (id: string, raw: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const update = yield* decodeSettingUpdate(id, raw);
-      return update;
-    }),
-  );
+const runUpdate = (id: string, raw: string) => Effect.runPromise(decodeSettingUpdate(id, raw));
 
 describe("xAI setting updates", () => {
   it("parses each descriptor value from its persisted string form", async () => {

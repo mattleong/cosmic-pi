@@ -5,9 +5,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import { withCodePreviewShell } from "pi-code-previews";
-import { safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
+import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import { isImageContent, resultText } from "./helpers.ts";
 import { describeHostFailure } from "../ui/notify-text.ts";
 import { OpenAIImageService } from "./service.ts";
@@ -24,12 +25,11 @@ export function registerOpenAIImage(
   run: <A, E>(effect: Effect.Effect<A, E, OpenAIImageService>, signal?: AbortSignal) => Promise<A>,
   updateContext: (ctx: ExtensionContext) => void,
 ) {
+  const generateEffect = (params: ToolParams) =>
+    OpenAIImageService.use((service) => service.generate(params));
   const generate = (params: ToolParams, ctx: ExtensionContext, signal?: AbortSignal) => {
     updateContext(ctx);
-    return run(
-      OpenAIImageService.use((service) => service.generate(params)),
-      signal,
-    );
+    return run(generateEffect(params), signal);
   };
   pi.registerMessageRenderer<CodexImageResult>("openai-image", (message, _options, theme) => {
     const result = message.details;
@@ -83,24 +83,39 @@ export function registerOpenAIImage(
         return Promise.resolve();
       }
       safeHostUi(() => ctx.ui.notify("Requesting OpenAI image...", "info"));
-      return generate({ prompt }, ctx, safeHostSignal(ctx))
-        .then((result) =>
-          pi.sendMessage({
+      updateContext(ctx);
+      return run(
+        generateEffect({ prompt }).pipe(
+          Effect.tapError((error) =>
+            ignoreHostUi("image.command.failed", () =>
+              ctx.ui.notify(
+                `OpenAI image generation failed${describeHostFailure(error)}.`,
+                "warning",
+              ),
+            ),
+          ),
+          Effect.option,
+        ),
+        safeHostSignal(ctx),
+      )
+        .then((result) => {
+          if (Option.isNone(result)) return undefined;
+          const image = result.value;
+          return pi.sendMessage({
             customType: "openai-image",
             content: [
-              { type: "text", text: resultText(result) },
-              { type: "image", data: result.data, mimeType: result.mimeType },
+              { type: "text", text: resultText(image) },
+              { type: "image", data: image.data, mimeType: image.mimeType },
             ],
             display: true,
-            details: result,
-          }),
-        )
-        .catch((error) => {
+            details: image,
+          });
+        })
+        .catch(() => {
+          // Generation failures were already surfaced in the Effect channel; this
+          // guards the host message-delivery seam itself.
           safeHostUi(() =>
-            ctx.ui.notify(
-              `OpenAI image generation failed${describeHostFailure(error)}.`,
-              "warning",
-            ),
+            ctx.ui.notify("Unable to deliver the generated image message.", "warning"),
           );
         });
     },

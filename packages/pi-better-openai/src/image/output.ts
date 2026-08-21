@@ -11,6 +11,9 @@ import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { decodeBase64, extensionForFormat, imageMimeType, isInside } from "./helpers.ts";
 import { fail, type ExtractedImageResult, type ImageOutputFormat } from "./types.ts";
 
+const imageVerificationLostMessage =
+  "OpenAI image post-commit verification could not stat the destination; skipping identity check.";
+
 export const makeImageOutput = (dependencies: {
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
@@ -210,11 +213,18 @@ export const makeImageOutput = (dependencies: {
                   // so only a positive identity mismatch unlinks the published file.
                   const published = yield* fs.stat(destination).pipe(
                     Effect.option,
+                    // A typed stat failure also loses verification evidence; say so even
+                    // though the loss cannot undo the committed publication.
+                    Effect.tap((published) =>
+                      Option.isNone(published)
+                        ? Effect.logWarning(imageVerificationLostMessage)
+                        : Effect.void,
+                    ),
+                    // A defect during stat loses verification too; warn and continue.
                     Effect.catchCause(() =>
-                      // Verification loss must stay visible even though it cannot undo the commit.
-                      Effect.logWarning(
-                        "OpenAI image post-commit verification could not stat the destination; skipping identity check.",
-                      ).pipe(Effect.as(Option.none())),
+                      Effect.logWarning(imageVerificationLostMessage).pipe(
+                        Effect.as(Option.none()),
+                      ),
                     ),
                   );
                   if (Option.isNone(published)) return;

@@ -15,11 +15,11 @@ import {
   makePiSessionRuntimeSlot,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
-import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
 import {
   applyFastRoutingHeaders,
   resetOpenAICodexTransport,
 } from "./boundary/host-provider-routing.ts";
+import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
 import { describeHostFailure } from "./ui/notify-text.ts";
@@ -211,6 +211,14 @@ export function betterOpenAIWithDependencies(
       const desired = !MutableRef.get(fastProjection).desiredActive;
       return run(
         FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
+          Effect.tapError((error) =>
+            ignoreHostUi("fast.failure", () =>
+              ctx.ui.notify(
+                `OpenAI fast mode is unavailable${describeHostFailure(error)}.`,
+                "warning",
+              ),
+            ),
+          ),
           Effect.tap(() =>
             Effect.gen(function* () {
               yield* Effect.sync(() => resetProviderTransport(ctx));
@@ -227,12 +235,11 @@ export function betterOpenAIWithDependencies(
               );
             }),
           ),
+          Effect.catchCause(() => Effect.void),
         ),
         safeHostSignal(ctx),
-      ).catch((error) => {
-        safeHostUi(() =>
-          ctx.ui.notify(`OpenAI fast mode is unavailable${describeHostFailure(error)}.`, "warning"),
-        );
+      ).catch(() => {
+        // The Effect channel owns failure notifications; this only guards the promise seam.
       });
     },
   });
@@ -241,12 +248,17 @@ export function betterOpenAIWithDependencies(
     handler: (_args, ctx) => {
       updateContext(ctx);
       return run(
-        OpenAIUsageService.use((service) => service.refresh({ notify: true, force: true })),
+        OpenAIUsageService.use((service) => service.refresh({ notify: true, force: true })).pipe(
+          Effect.tapError((error) =>
+            ignoreHostUi("usage.failure", () =>
+              ctx.ui.notify(`OpenAI usage is unavailable${describeHostFailure(error)}.`, "warning"),
+            ),
+          ),
+          Effect.catchCause(() => Effect.void),
+        ),
         safeHostSignal(ctx),
-      ).catch((error) => {
-        safeHostUi(() =>
-          ctx.ui.notify(`OpenAI usage is unavailable${describeHostFailure(error)}.`, "warning"),
-        );
+      ).catch(() => {
+        // The Effect channel owns failure notifications; this only guards the promise seam.
       });
     },
   });

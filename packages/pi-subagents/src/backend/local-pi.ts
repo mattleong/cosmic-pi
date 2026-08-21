@@ -3,6 +3,7 @@ import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -289,26 +290,17 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   const offerEvent = (raw: ChildWireEvent, event: BackendEvent) =>
     Effect.suspend(() => {
       rawEventOwners.set(event, raw);
-      let offered = false;
+      const dropDiagnostic = (event: BackendEvent): Effect.Effect<void> =>
+        // A dropped settlement/report degrades until process exit; make the loss
+        // diagnosable instead of acknowledging it silently.
+        Effect.logWarning(
+          `Subagent local-Pi event ingress overflowed; dropped a ${event.type} event.`,
+        ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event))), Effect.asVoid);
       return Queue.offer(events, event).pipe(
-        Effect.tap((delivered) =>
-          Effect.sync(() => {
-            offered = delivered;
-          }),
-        ),
-        Effect.ensuring(
-          // The branch must be deferred to finalizer time: evaluating it while building
-          // the pipe would read `offered` before the offer ever ran.
-          Effect.suspend(() =>
-            offered
-              ? Effect.void
-              : // A dropped settlement/report degrades until process exit; make the loss
-                // diagnosable instead of acknowledging it silently.
-                Effect.logWarning(
-                  `Subagent local-Pi event ingress overflowed; dropped a ${event.type} event.`,
-                ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event)))),
-          ),
-        ),
+        // A delivered offer settles inline; every other exit (ended queue, failure, defect,
+        // interruption of a suspended offer) takes the same diagnostic path.
+        Effect.flatMap((delivered) => (delivered ? Effect.void : dropDiagnostic(event))),
+        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : dropDiagnostic(event))),
         Effect.asVoid,
       );
     });

@@ -1,5 +1,6 @@
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { BackendEvent } from "./model.ts";
@@ -35,24 +36,19 @@ export const makeLocalCliRawEventOwnership = (
     for (const raw of rawOwners.values()) acknowledgeRaw(raw);
     rawOwners.clear();
   };
+  const dropDiagnostic = (event: BackendEvent): Effect.Effect<void> =>
+    // Make overflow losses diagnosable instead of acknowledging them silently.
+    Effect.logWarning(
+      `Subagent local-CLI event ingress overflowed; dropped a ${event.type} event.`,
+    ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event))), Effect.asVoid);
   const offer = (event: BackendEvent, raw?: LocalCliWireEvent): Effect.Effect<void> =>
     Effect.suspend(() => {
       if (raw) rawOwners.set(event, raw);
-      let offered = false;
+      // A delivered offer settles inline; every other exit (ended queue, failure, defect,
+      // interruption of a suspended offer) takes the same diagnostic path.
       return Queue.offer(events, event).pipe(
-        Effect.tap((delivered) => Effect.sync(() => void (offered = delivered))),
-        Effect.ensuring(
-          // The branch must be deferred to finalizer time: evaluating it while building
-          // the pipe would read `offered` before the offer ever ran.
-          Effect.suspend(() =>
-            offered
-              ? Effect.void
-              : // Make overflow losses diagnosable instead of acknowledging them silently.
-                Effect.logWarning(
-                  `Subagent local-CLI event ingress overflowed; dropped a ${event.type} event.`,
-                ).pipe(Effect.andThen(Effect.sync(() => raw && acknowledge(event)))),
-          ),
-        ),
+        Effect.flatMap((delivered) => (delivered ? Effect.void : dropDiagnostic(event))),
+        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : dropDiagnostic(event))),
         Effect.asVoid,
       );
     });

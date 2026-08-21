@@ -1,12 +1,11 @@
 // Explicit test entry-point Layer provision owns the captured logger.
 // @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
-import { makeCapturedLogger } from "pi-cosmic-core/testing";
+import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
 import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import { makeLocalCliRawEventOwnership } from "../src/backend/local-cli-events.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
@@ -44,7 +43,9 @@ describe("local CLI raw event ownership", () => {
         ownership.acknowledge(event);
         expect(acknowledged).toEqual(["raw-1"]);
         // A successful offer must not log an overflow warning.
-        expect(JSON.stringify(captured.entries)).not.toContain("ingress overflowed");
+        expect(capturedTelemetrySnapshot({ entries: captured.entries })).not.toContain(
+          "ingress overflowed",
+        );
       }).pipe(Effect.provide(captured.layer));
     }),
   );
@@ -65,7 +66,7 @@ describe("local CLI raw event ownership", () => {
         const dropped = backendEvent(2);
         yield* ownership.offer(dropped, rawEvent(2));
         expect(acknowledged).toEqual(["raw-2"]);
-        const warnings = JSON.stringify(captured.entries);
+        const warnings = capturedTelemetrySnapshot({ entries: captured.entries });
         expect(warnings).toContain("ingress overflowed");
         expect(warnings).toContain("activity");
       }).pipe(Effect.provide(captured.layer));
@@ -89,7 +90,9 @@ describe("local CLI raw event ownership", () => {
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(blocked);
         expect(acknowledged).toEqual(["raw-3"]);
-        expect(JSON.stringify(captured.entries)).toContain("ingress overflowed");
+        expect(capturedTelemetrySnapshot({ entries: captured.entries })).toContain(
+          "ingress overflowed",
+        );
       }).pipe(Effect.provide(captured.layer));
     }),
   );

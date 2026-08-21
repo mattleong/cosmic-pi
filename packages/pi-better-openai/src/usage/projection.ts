@@ -87,16 +87,25 @@ function openAIUsageDecision(
   }
 }
 
+const eligibilityStatusTexts = (decision: OpenAIUsageDecision): UsageEligibilityStatusTexts => {
+  const texts: UsageEligibilityStatusTexts = { hiddenStatusText: decision.hiddenStatusText };
+  if (decision.unavailableStatusText !== undefined)
+    texts.unavailableStatusText = decision.unavailableStatusText;
+  return texts;
+};
+
 export function synchronizedProjection(
   state: OpenAIProjection,
   ctx: ExtensionContext,
   clearUsage: boolean,
 ): OpenAIProjection {
   const decision = openAIUsageDecision(state, ctx, clearUsage);
-  const texts: UsageEligibilityStatusTexts = { hiddenStatusText: decision.hiddenStatusText };
-  if (decision.unavailableStatusText !== undefined)
-    texts.unavailableStatusText = decision.unavailableStatusText;
-  return withUsageEligibility(state, decision.eligible, decision.clear, texts);
+  return withUsageEligibility(
+    state,
+    decision.eligible,
+    decision.clear,
+    eligibilityStatusTexts(decision),
+  );
 }
 
 export function synchronizeProjectionContext(
@@ -106,15 +115,10 @@ export function synchronizeProjectionContext(
 ): void {
   synchronizeUsageProjectionContext(projection, (state) => {
     const decision = openAIUsageDecision(state, ctx, options.clearUsage === true);
-    const statusTexts: UsageEligibilityStatusTexts = {
-      hiddenStatusText: decision.hiddenStatusText,
-    };
-    if (decision.unavailableStatusText !== undefined)
-      statusTexts.unavailableStatusText = decision.unavailableStatusText;
     return {
       eligible: decision.eligible,
       clearUsage: decision.clear,
-      statusTexts,
+      statusTexts: eligibilityStatusTexts(decision),
     };
   });
 }

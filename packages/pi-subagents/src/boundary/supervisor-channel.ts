@@ -1224,7 +1224,12 @@ export const makeSupervisorChannel = (
               // Only a pre-write rejection proves nothing reached the transport; release
               // the question for a later retry instead of leaving it installed but
               // permanently unrepliable.
-              if (error instanceof PeerSendNotAttemptedError) {
+              if (
+                error &&
+                hasObjectRuntimeType(error) &&
+                "_tag" in error &&
+                error._tag === "PeerSendNotAttemptedError"
+              ) {
                 if (state.pendingQuestion === pending) pending.replyStarted = false;
                 return channelError(
                   "reply",
