@@ -124,16 +124,15 @@ export default function registerPiSubagentSupervisorBridge(
     SupervisorBridgeSessionInput,
     SupervisorBridge,
     never,
-    RpcSessionError
+    RpcSessionError,
+    PiSupervisorBridgeClient
   >({
     makeRuntime: ({ configPath }) =>
       makePiManagedRuntime(pi, Layer.effect(SupervisorBridge, dependencies.openBridge(configPath))),
-    startup: () =>
-      SupervisorBridge.use((bridge) =>
-        Effect.sync(() => {
-          client = bridge;
-        }),
-      ),
+    startup: () => SupervisorBridge.use((bridge) => Effect.succeed(bridge)),
+    onActivated: (_input, _token, bridge) => {
+      client = bridge;
+    },
     onDeactivated: () => {
       client = undefined;
     },

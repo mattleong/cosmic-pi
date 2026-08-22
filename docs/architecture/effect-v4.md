@@ -32,7 +32,7 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
 - Represent expected failures with schema-backed tagged errors. Reserve defects for violated invariants.
 - Use `Clock`, `Duration`, `Random`, `Config`, `Logger`, queues, deferred values, semaphores, refs, schedules, streams, and scopes instead of corresponding unmanaged globals.
 - Create one `ManagedRuntime` from `session_start` at the Pi host boundary. Internal services never call Effect runners.
-- The shared Pi session-runtime slot is the minimal imperative island: it creates, replaces, and disposes the runtime that cannot own its own creation. Everything acquired after runtime construction is scoped inside Effect.
+- The shared Pi session-runtime slot is the minimal imperative island: it creates, replaces, and disposes the runtime that cannot own its own creation. Everything acquired after runtime construction is scoped inside Effect. Startup returns any host activation value through the slot; only the current generation receives it in `onActivated`, so packages do not use temporary mutable mailboxes for scoped services or initial projections.
 - Production session-runtime facades carry the exact `Layer.Error` type and never cast a returned
   Fiber to erase initialization failure. Exported compatibility types may default an omitted
   error argument to conservative `unknown`, but every workspace call site supplies the exact type;

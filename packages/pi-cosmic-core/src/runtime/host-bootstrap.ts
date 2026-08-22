@@ -15,32 +15,16 @@ export const bestEffortHostBootstrap = <Value>(
   operation: string,
   load: (signal: AbortSignal) => PromiseLike<Value>,
 ): Effect.Effect<void> =>
-  Effect.callback<void, HostBootstrapError>((resume) => {
-    const controller = new AbortController();
-    let active = true;
-    void Promise.resolve()
-      .then(() => load(controller.signal))
-      .then(
-        () => {
-          if (active) resume(Effect.void);
-        },
-        () => {
-          if (active)
-            resume(
-              Effect.fail(
-                new HostBootstrapError({
-                  operation,
-                  message: "A best-effort host startup prerequisite failed.",
-                }),
-              ),
-            );
-        },
-      );
-    return Effect.sync(() => {
-      active = false;
-      controller.abort();
-    });
+  Effect.tryPromise({
+    // Keep the explicit parameter: RC.108 allocates the interruption signal from function arity.
+    try: (signal) => load(signal),
+    catch: () =>
+      new HostBootstrapError({
+        operation,
+        message: "A best-effort host startup prerequisite failed.",
+      }),
   }).pipe(
+    Effect.asVoid,
     Effect.catch((error) =>
       Effect.logDebug(error.message).pipe(Effect.annotateLogs("operation", error.operation)),
     ),

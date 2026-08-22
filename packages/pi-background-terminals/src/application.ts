@@ -13,6 +13,7 @@ import {
 } from "pi-cosmic-core";
 import { makeProjectionBridge } from "./boundary/host-ui.ts";
 import { BackgroundTerminalConfigStore } from "./config/store.ts";
+import type { BackgroundTerminalProjection } from "./job/model.ts";
 import { BackgroundTerminalService } from "./job/service.ts";
 import {
   makeBackgroundTerminalLayer,
@@ -46,7 +47,8 @@ export function registerBackgroundTerminalsApplication(
     BackgroundTerminalSessionInput,
     BackgroundTerminalApplication,
     never,
-    BackgroundTerminalRuntimeError
+    BackgroundTerminalRuntimeError,
+    { readonly showFooterStatus: boolean; readonly projection: BackgroundTerminalProjection }
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
@@ -60,11 +62,15 @@ export function registerBackgroundTerminalsApplication(
       Effect.gen(function* () {
         const config = yield* BackgroundTerminalConfigStore;
         const service = yield* BackgroundTerminalService;
-        bridge.setFooterEnabled(config.showFooterStatus);
-        bridge.publish(yield* service.projection);
+        return {
+          showFooterStatus: config.showFooterStatus,
+          projection: yield* service.projection,
+        };
       }),
-    onActivated: ({ ctx }) => {
+    onActivated: ({ ctx }, _token, prepared) => {
       currentContext = ctx;
+      bridge.setFooterEnabled(prepared.showFooterStatus);
+      bridge.publish(prepared.projection);
       bridge.setContext(ctx);
     },
     onDeactivated: () => {

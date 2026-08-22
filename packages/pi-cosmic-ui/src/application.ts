@@ -172,7 +172,8 @@ export function cosmicUiWithDependencies(
     CosmicUiSessionInput,
     CosmicUiApplication,
     never,
-    CosmicUiRuntimeError
+    CosmicUiRuntimeError,
+    WorkingTimerServiceContract
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
@@ -191,10 +192,11 @@ export function cosmicUiWithDependencies(
         yield* CosmicUiService;
         yield* FooterRegistryService;
         yield* FooterProtocolHost;
-        workingTimer = yield* WorkingTimerService;
+        return yield* WorkingTimerService;
       }),
-    onActivated: ({ ctx, context, signal }) => {
+    onActivated: ({ ctx, context, signal }, _token, activeWorkingTimer) => {
       currentContext = context;
+      workingTimer = activeWorkingTimer;
       footerInstallation.update(ctx);
       slot.fork(
         CosmicUiService.use((service) => service.refreshAll(true)),

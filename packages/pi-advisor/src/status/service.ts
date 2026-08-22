@@ -1,6 +1,5 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import type * as Fiber from "effect/Fiber";
 import * as FiberHandle from "effect/FiberHandle";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -25,8 +24,8 @@ export const advisorStatusFramesEffect = (
       // Status rendering is diagnostic-only and remains fail-open.
       Effect.try({
         try: () => render(nextFrame),
-        catch: (cause) => ({ cause }),
-      }).pipe(Effect.catch(() => Effect.void));
+        catch: () => undefined,
+      }).pipe(Effect.ignore);
     const animation = Effect.suspend(() => {
       const nextFrame = frame % Math.max(1, options.frameCount);
       frame += 1;
@@ -49,7 +48,6 @@ export interface AdvisorStatusServiceContract {
   /** Cancels only the matching owner and reports whether the owner matched. */
   readonly settle: (owner: string) => boolean;
   readonly clear: () => void;
-  readonly shutdown: Effect.Effect<void>;
 }
 
 /**
@@ -61,16 +59,12 @@ export type AdvisorStatusFrames = (
   render: (frame: number) => void,
 ) => Effect.Effect<void>;
 
-export interface AdvisorStatusExecutor {
-  readonly fork: (effect: Effect.Effect<void>) => Fiber.Fiber<void>;
-}
-
 export const makeAdvisorStatusService = (
-  executor: AdvisorStatusExecutor,
   frames: AdvisorStatusFrames = advisorStatusFramesEffect,
 ): Effect.Effect<AdvisorStatusServiceContract, never, Scope.Scope> =>
   Effect.gen(function* () {
     const animation = yield* FiberHandle.make<void>();
+    const runAnimation = yield* FiberHandle.runtime(animation)<never>();
     let generation = 0;
     let owner: string | undefined;
 
@@ -87,25 +81,18 @@ export const makeAdvisorStatusService = (
     };
     const start = (options: AdvisorStatusStartOptions): void => {
       resetState();
-      interruptCurrent();
       const currentGeneration = generation;
       owner = options.owner;
-      const fiber = executor.fork(
+      runAnimation(
         frames(options, (frame) => {
-          if (generation === currentGeneration && owner === options.owner) options.render(frame);
+          if (generation === currentGeneration) options.render(frame);
         }),
       );
-      FiberHandle.setUnsafe(animation, fiber);
     };
     const settle = (expectedOwner: string): boolean => {
       if (owner !== expectedOwner) return false;
       clear();
       return true;
     };
-    const shutdown = Effect.suspend(() => {
-      resetState();
-      return FiberHandle.clear(animation);
-    });
-    yield* Effect.addFinalizer(() => shutdown);
-    return { start, settle, clear, shutdown };
+    return { start, settle, clear };
   });

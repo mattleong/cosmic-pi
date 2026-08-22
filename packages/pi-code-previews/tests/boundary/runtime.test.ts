@@ -6,10 +6,8 @@ import { test } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import {
-  clearCodePreviewSessionCapability,
-  previewScheduleEffect,
-} from "../../src/application/capability";
+import { clearCodePreviewSessionCapability } from "../../src/application/capability";
+import { previewScheduleEffect } from "../../src/application/scheduler";
 import {
   deferProjectedCodePreview,
   scheduleProjectedCodePreview,

@@ -13,7 +13,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 ## Source map
 
 - `src/extension.ts` is the thin Pi package entrypoint.
-- `src/application.ts` owns Pi registration, protocol subscriptions, and session orchestration.
+- `src/application.ts` owns Pi registration, protocol subscriptions, and session orchestration. Startup hands the working-timer service to the current activation through the runtime slot; failed or superseded startup cannot publish it.
 - `src/layer.ts` composes config, repository probe, footer registry, protocol host, and host-callback Layers.
 - `src/footer/installation.ts` owns the synchronous footer installation generation and disposal state machine.
 - `src/footer/component.ts` assembles synchronous footer lines and surfaces from detached projections.
@@ -30,10 +30,10 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/probe/`, `src/settings/`, and `src/working/` are vertical application features. `src/probe/pi-exec.ts` is the sole Git/`gh` process boundary; it disables optional locks for every background Git probe while leaving `gh` arguments unchanged.
 - `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
 - `src/boundary/` isolates hostile synchronous host callbacks, including working-message updates.
-  `host-ui-ticker-pool.ts` multiplexes equal-cadence animation consumers onto one ref-counted,
-  pool-scoped Effect fiber. Registration remains independently cancellable; default scheduler
-  closure is tracked as an awaitable Promise, idempotent pool disposal waits for every cadence
-  scope, and one throwing callback cannot starve its peers. The exported host-status owner remains
+  `host-ui-ticker-pool.ts` multiplexes equal-cadence animation consumers onto one Effect fiber per
+  cadence. One pool-level Effect `Scope` owns those fibers, so synchronous unsubscribe can interrupt
+  one cadence and idempotent disposal closes and awaits the whole pool without a Promise registry.
+  One throwing callback cannot starve its peers. The exported host-status owner remains
   cross-extension, but Cosmic UI rotates it during session shutdown and awaits the old pool so a
   later session receives a fresh pool without inheriting timer fibers.
 - `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`). The package root publishes only the default extension; `./protocol`, `./boundary/host-status`, `./client`, `./manager`, `./manager/keymap`, `./manager/key-labels`, `./manager/list-detail`, `./manager/settings-adapter`, and `./manager/settings-surface` are the named subpaths.

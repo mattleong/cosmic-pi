@@ -5,6 +5,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
 import { CodePreviewEnvironmentService } from "../config/env";
 import { CodePreviewSettingsService } from "../config/service";
@@ -27,22 +28,15 @@ const oneShotSettingsLayer = () => {
   );
 };
 
-let oneShotTransition: Promise<unknown> = Promise.resolve();
+const oneShotSettingsPermit = Semaphore.makeUnsafe(1);
 
 /** The only detached runner: explicit serialized public pre-session settings compatibility. */
 export function runOneShotSettingsEffect<A, E>(
   effect: Effect.Effect<A, E, CodePreviewSettingsService>,
   signal?: AbortSignal,
 ): Promise<A> {
-  const run = () =>
-    Effect.runPromise(
-      effect.pipe(Effect.provide(oneShotSettingsLayer())),
-      signal ? { signal } : undefined,
-    );
-  const result = oneShotTransition.then(run, run);
-  oneShotTransition = result.then(
-    () => undefined,
-    () => undefined,
+  const serialized = oneShotSettingsPermit.withPermit(
+    effect.pipe(Effect.provide(oneShotSettingsLayer())),
   );
-  return result;
+  return Effect.runPromise(serialized, signal ? { signal } : undefined);
 }

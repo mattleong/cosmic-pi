@@ -14,6 +14,7 @@ import {
   installCodePreviewSessionCapability,
   type CodePreviewSessionCapability,
 } from "../src/application/capability";
+import { previewScheduleEffect } from "../src/application/scheduler";
 import { resolvePreviewLanguage } from "../src/syntax/language";
 import { benchTheme, printBenchHeader, printLayerSummary, runBench, timeOnce } from "./helpers";
 
@@ -62,7 +63,14 @@ if (cpuBlockMs > 50)
 const capability = {
   token: 1,
   run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
-  fork: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runFork(effect),
+  defer: (task: () => void) => {
+    const fiber = Effect.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
+    return () => fiber.interruptUnsafe();
+  },
+  schedule: (interval: number, task: () => void) => {
+    const fiber = Effect.runFork(previewScheduleEffect(interval, task));
+    return () => fiber.interruptUnsafe();
+  },
 } as CodePreviewSessionCapability;
 installCodePreviewSessionCapability(capability);
 const cancellationSamplesMs: number[] = [];

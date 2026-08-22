@@ -12,10 +12,10 @@ export class PiSessionRuntimeError extends Schema.TaggedError<PiSessionRuntimeEr
   { operation: Schema.String, message: Schema.String },
 ) {}
 
-export interface PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError> {
+export interface PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError, StartupValue = void> {
   readonly makeRuntime: (input: Input) => PiManagedRuntime<R, RuntimeError>;
-  readonly startup?: (input: Input) => Effect.Effect<void, StartupError, PiApi | R>;
-  readonly onActivated?: (input: Input, token: number) => void;
+  readonly startup: (input: Input) => Effect.Effect<StartupValue, StartupError, PiApi | R>;
+  readonly onActivated?: (input: Input, token: number, value: StartupValue) => void;
   readonly onDeactivated?: (input: Input, token: number) => void;
   readonly onStartFailure?: (input: Input, token: number) => void;
 }
@@ -29,6 +29,7 @@ export interface PiSessionRuntimeSlot<Input, R, RuntimeError = unknown> {
     signal?: AbortSignal,
   ) => Fiber.Fiber<A, E | RuntimeError> | undefined;
   readonly shutdown: () => Promise<void>;
+  readonly isActive: () => boolean;
   readonly isCurrent: (token: number) => boolean;
 }
 
@@ -37,6 +38,7 @@ type Active<Input, R, RuntimeError> = {
   readonly token: number;
   readonly runtime: PiManagedRuntime<R, RuntimeError>;
   readonly removeAbort: () => void;
+  activated: boolean;
 };
 
 /** Host callbacks cannot take ownership away from the runtime slot. */
@@ -52,8 +54,14 @@ const runBestEffort = (operation: () => void): void => {
  * The minimal imperative island that owns the runtime which cannot own its own creation.
  * All resources acquired after `start` are scoped by the managed runtime.
  */
-export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, RuntimeError = unknown>(
-  hooks: PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError>,
+export function makePiSessionRuntimeSlot<
+  Input,
+  R,
+  StartupError = unknown,
+  RuntimeError = unknown,
+  StartupValue = void,
+>(
+  hooks: PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError, StartupValue>,
 ): PiSessionRuntimeSlot<Input, R, RuntimeError> {
   let generation = 0;
   let active: Active<Input, R, RuntimeError> | undefined;
@@ -122,7 +130,7 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, Runti
           void serialize(() => removal);
         };
         const removeAbort = () => signal?.removeEventListener("abort", abort);
-        current = { input, token, runtime, removeAbort };
+        current = { input, token, runtime, removeAbort, activated: false };
         active = current;
         try {
           signal?.addEventListener("abort", abort, { once: true });
@@ -133,20 +141,21 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, Runti
         } catch {
           return failStart(current);
         }
-        let started: Promise<unknown>;
+        let started: Promise<StartupValue>;
         try {
-          const startup = hooks.startup?.(input);
-          started = startup
-            ? runtime.run(startup.pipe(Effect.withSpan("pi-cosmic-core.runtime.startup")), signal)
-            : Promise.resolve();
+          started = runtime.run(
+            hooks.startup(input).pipe(Effect.withSpan("pi-cosmic-core.runtime.startup")),
+            signal,
+          );
         } catch {
           return failStart(current);
         }
         return Promise.resolve(started).then(
-          () => {
+          (value) => {
             if (active !== current || token !== generation) return undefined;
-            runBestEffort(() => hooks.onActivated?.(input, token));
-            return token;
+            current.activated = true;
+            runBestEffort(() => hooks.onActivated?.(input, token, value));
+            return active === current && token === generation ? token : undefined;
           },
           () => failStart(current),
         );
@@ -176,5 +185,12 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, Runti
     return serialize(() => immediate);
   };
 
-  return { start, run, fork, shutdown, isCurrent: (token) => token === generation && !!active };
+  return {
+    start,
+    run,
+    fork,
+    shutdown,
+    isActive: () => active?.activated === true,
+    isCurrent: (token) => token === generation && active?.activated === true,
+  };
 }

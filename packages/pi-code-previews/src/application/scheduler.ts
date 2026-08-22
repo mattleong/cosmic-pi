@@ -26,12 +26,7 @@ const makeScheduler = Effect.gen(function* () {
   const run = yield* FiberSet.makeRuntime<never>();
   const start = (effect: Effect.Effect<void>): (() => void) => {
     const fiber = run(effect);
-    let active = true;
-    return () => {
-      if (!active) return;
-      active = false;
-      fiber.interruptUnsafe();
-    };
+    return () => fiber.interruptUnsafe();
   };
   return CodePreviewSchedulerService.of({
     defer: (task) => start(Effect.yieldNow.pipe(Effect.andThen(invokeCodePreviewCallback(task)))),

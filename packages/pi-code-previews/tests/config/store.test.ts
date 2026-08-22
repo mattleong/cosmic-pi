@@ -357,7 +357,8 @@ test("loadCodePreviewSettings falls back when a replaced session capability reje
   installCodePreviewSessionCapability({
     token,
     run: () => Promise.reject(new Error("session replaced")),
-    fork: () => undefined,
+    defer: () => () => undefined,
+    schedule: () => () => undefined,
   });
   try {
     const loaded = await loadCodePreviewSettings(project, true);
@@ -372,6 +373,38 @@ test("the one-shot settings boundary forwards cancellation to Effect", async () 
   const pending = runOneShotSettingsEffect(Effect.never, controller.signal);
   controller.abort();
   await assert.rejects(pending);
+});
+
+test("a queued one-shot settings call can be cancelled before it acquires the permit", async () => {
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let releaseFirst!: () => void;
+  const first = runOneShotSettingsEffect(
+    Effect.promise(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+          markStarted();
+        }),
+    ),
+  );
+  await started;
+
+  let secondRan = false;
+  const controller = new AbortController();
+  const second = runOneShotSettingsEffect(
+    Effect.sync(() => {
+      secondRan = true;
+    }),
+    controller.signal,
+  );
+  controller.abort();
+  await assert.rejects(second);
+  releaseFirst();
+  await first;
+  assert.equal(secondRan, false);
 });
 
 test("an aborted session settings load does not retry through the one-shot runtime", async () => {
@@ -391,7 +424,8 @@ test("an aborted session settings load does not retry through the one-shot runti
       receivedSignal = signal;
       return Promise.reject(new Error("session startup was interrupted"));
     },
-    fork: () => undefined,
+    defer: () => () => undefined,
+    schedule: () => () => undefined,
   });
   try {
     await assert.rejects(loadCodePreviewSettings(project, true, controller.signal));

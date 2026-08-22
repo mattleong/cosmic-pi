@@ -1,5 +1,6 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
+import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
 import { makeHostUiTickerOwner } from "../src/boundary/host-status.ts";
 import {
@@ -11,15 +12,17 @@ import {
 interface ScheduledTicker {
   readonly intervalMs: number;
   readonly tick: () => void;
-  readonly stop: ReturnType<typeof vi.fn>;
+  readonly interrupt: ReturnType<typeof vi.fn>;
 }
 
 const schedulerHarness = () => {
   const scheduled: ScheduledTicker[] = [];
   const schedule: HostUiTickerScheduler = (intervalMs, tick) => {
-    const stop = vi.fn();
-    scheduled.push({ intervalMs, tick, stop });
-    return stop;
+    const fiber = Effect.runFork(Effect.never);
+    const interrupt = vi.fn(fiber.interruptUnsafe.bind(fiber));
+    Object.defineProperty(fiber, "interruptUnsafe", { value: interrupt });
+    scheduled.push({ intervalMs, tick, interrupt });
+    return fiber;
   };
   return { schedule, scheduled };
 };
@@ -42,14 +45,14 @@ describe("host UI ticker pool", () => {
 
     stopFirst();
     stopFirst();
-    expect(harness.scheduled[0]?.stop).not.toHaveBeenCalled();
+    expect(harness.scheduled[0]?.interrupt).not.toHaveBeenCalled();
     harness.scheduled[0]?.tick();
     expect(first).toHaveBeenCalledOnce();
     expect(second).toHaveBeenCalledTimes(2);
 
     stopSecond();
     stopSecond();
-    expect(harness.scheduled[0]?.stop).toHaveBeenCalledOnce();
+    expect(harness.scheduled[0]?.interrupt).toHaveBeenCalledOnce();
   });
 
   it("keeps different cadences independent and creates a fresh group after teardown", () => {
@@ -95,6 +98,7 @@ describe("host UI ticker pool", () => {
     expect(throwing).toHaveBeenCalledOnce();
     expect(remover).toHaveBeenCalledOnce();
     expect(removed).not.toHaveBeenCalled();
+    return pool.dispose();
   });
 
   it("disposes every active cadence group exactly once", async () => {
@@ -106,7 +110,7 @@ describe("host UI ticker pool", () => {
     const firstDisposal = pool.dispose();
     const secondDisposal = pool.dispose();
 
-    expect(harness.scheduled.map((ticker) => ticker.stop.mock.calls.length)).toEqual([1, 1]);
+    expect(harness.scheduled.map((ticker) => ticker.interrupt.mock.calls.length)).toEqual([1, 1]);
     expect(secondDisposal).toBe(firstDisposal);
     await firstDisposal;
   });
@@ -116,8 +120,8 @@ describe("host UI ticker pool", () => {
     const stopped = new Promise<void>((resolve) => {
       complete = resolve;
     });
-    const stop = Object.assign(vi.fn(), { awaitStopped: () => stopped });
-    const schedule: HostUiTickerScheduler = () => stop;
+    const schedule: HostUiTickerScheduler = () =>
+      Effect.runFork(Effect.never.pipe(Effect.ensuring(Effect.promise(() => stopped))));
     const pool = makeHostUiTickerPool(schedule);
     const stopSubscription = pool.start(160, vi.fn());
     stopSubscription();
@@ -127,7 +131,6 @@ describe("host UI ticker pool", () => {
       settled = true;
     });
     await Promise.resolve();
-    expect(stop).toHaveBeenCalledOnce();
     expect(settled).toBe(false);
 
     complete();

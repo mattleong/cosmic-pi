@@ -69,7 +69,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const platformContext = yield* Effect.context<AdvisorPlatform>();
       const resources = yield* makeAdvisorResourceState();
       const checkpointOrchestrator = yield* makeCheckpointOrchestrator(options.executor);
-      const statusService = yield* makeAdvisorStatusService(options.executor);
+      const statusService = yield* makeAdvisorStatusService();
       const projection = yield* makeAdvisorProjection({
         config: normalizeAdvisorConfig({}, ""),
         metrics: emptyAdvisorSessionMetrics(),

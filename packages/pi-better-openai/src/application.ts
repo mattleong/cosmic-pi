@@ -134,7 +134,6 @@ export function betterOpenAIWithDependencies(
   });
 
   let sessionSequence = 0;
-  let sessionActive = false;
   const slot = makePiSessionRuntimeSlot<
     OpenAISessionInput,
     OpenAIApplication,
@@ -148,7 +147,7 @@ export function betterOpenAIWithDependencies(
           projection,
           fastProjection,
           onUsageChange: (context) => {
-            if (sessionActive) updateFooter(MutableRef.get(context));
+            if (currentContext === context) updateFooter(MutableRef.get(context));
           },
           registerFastInjectionIngress: (offer) => {
             recordFastInjection = offer;
@@ -167,8 +166,8 @@ export function betterOpenAIWithDependencies(
           ),
         ),
       ),
-    onActivated: ({ ctx }) => {
-      sessionActive = true;
+    onActivated: ({ ctx, context }) => {
+      currentContext = context;
       registerOpenAIImage(pi, run, updateContext);
       if (hasTerminalUI(ctx)) cosmicUi.query();
       else cosmicUi.shutdown();
@@ -181,7 +180,6 @@ export function betterOpenAIWithDependencies(
         safeHostUi(() => ctx.ui.notify(fastStateText(ctx, fast), "info"));
     },
     onDeactivated: ({ context }) => {
-      sessionActive = false;
       if (currentContext === context) currentContext = undefined;
       cosmicUi.shutdown();
       resetProjection(projection);
@@ -192,7 +190,7 @@ export function betterOpenAIWithDependencies(
     },
   });
   const run = <A, E>(effect: Effect.Effect<A, E, OpenAIApplication>, signal?: AbortSignal) =>
-    sessionActive
+    slot.isActive()
       ? slot.run(effect, signal)
       : Promise.reject(
           new OpenAIBoundaryError({
@@ -334,7 +332,6 @@ export function betterOpenAIWithDependencies(
     footerController.invalidateContextUsage();
     footerController.invalidateSessionName();
     const context = MutableRef.make(ctx);
-    currentContext = context;
     return slot
       .start(
         {
@@ -373,7 +370,7 @@ export function betterOpenAIWithDependencies(
   };
   pi.on("session_before_compact", (event, ctx) => {
     updateContext(ctx);
-    if (!sessionActive) return undefined;
+    if (!currentContext) return undefined;
     return run(
       OpenAICompactionService.use((service) => service.compact(event)),
       event.signal,
@@ -432,7 +429,7 @@ export function betterOpenAIWithDependencies(
   });
   pi.on("context", (event, ctx) => {
     updateContext(ctx);
-    if (!sessionActive) return undefined;
+    if (!currentContext) return undefined;
     return run(
       OpenAICompactionService.use((service) => service.filterContext(event.messages)),
       safeHostSignal(ctx),
@@ -453,7 +450,7 @@ export function betterOpenAIWithDependencies(
       FAST_SERVICE_TIER,
       recordFastInjection,
     );
-    if (!sessionActive) return fastPayload;
+    if (!currentContext) return fastPayload;
     return run(
       OpenAICompactionService.use((service) => service.inject(fastPayload ?? event.payload)),
       safeHostSignal(ctx),

@@ -18,6 +18,7 @@ import {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
   type PiManagedRuntime,
+  type PiSessionRuntimeSlot,
 } from "../index.ts";
 import { makeCapturedTracer } from "../testing.ts";
 
@@ -105,6 +106,7 @@ function makeSignalSetupHarness(signal: AbortSignal) {
 it.effect("replaces a stalled runtime and releases every acquired layer exactly once", () =>
   Effect.gen(function* () {
     const events: string[] = [];
+    const activations: number[] = [];
     const firstStarted = yield* Deferred.make<void>();
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const pi = {} as ExtensionAPI;
@@ -126,6 +128,7 @@ it.effect("replaces a stalled runtime and releases every acquired layer exactly 
               Effect.andThen(Effect.never),
             )
           : Effect.void,
+      onActivated: (input) => void activations.push(input),
     });
 
     const first = slot.start(1);
@@ -135,6 +138,7 @@ it.effect("replaces a stalled runtime and releases every acquired layer exactly 
     expect(tokens[0]).toBeUndefined();
     expect(tokens[1]).toBe(2);
     expect(events).toEqual(["acquire:1", "release:1", "acquire:2"]);
+    expect(activations).toEqual([2]);
 
     yield* Effect.promise(() => slot.shutdown());
     yield* Effect.promise(() => slot.shutdown());
@@ -163,6 +167,64 @@ it.effect("captures a stable runtime startup span without session input", () =>
     expect(captured.spans.map((span) => span.name)).toContain("pi-cosmic-core.runtime.startup");
     expect(captured.spans.map((span) => span.name).join(" ")).not.toContain("secret-session-input");
     yield* Effect.promise(() => slot.shutdown());
+  }),
+);
+
+it.effect("publishes startup values only after activation", () =>
+  Effect.gen(function* () {
+    const startupEntered = yield* Deferred.make<void>();
+    const releaseStartup = yield* Deferred.make<void>();
+    const activations: Array<readonly [number, string]> = [];
+    const slot = makePiSessionRuntimeSlot<void, never, never, never, string>({
+      makeRuntime: () =>
+        makePiManagedRuntime(
+          // SAFETY: This locally constructed test fixture satisfies the host contract used here.
+          {} as ExtensionAPI,
+          Layer.empty,
+        ),
+      startup: () =>
+        Deferred.succeed(startupEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseStartup)),
+          Effect.as("ready"),
+        ),
+      onActivated: (_input, token, value) => void activations.push([token, value]),
+    });
+
+    const starting = slot.start(undefined);
+    yield* Deferred.await(startupEntered);
+    expect(slot.isActive()).toBe(false);
+    expect(slot.isCurrent(1)).toBe(false);
+    expect(slot.fork(Effect.void)).toBeDefined();
+    yield* Deferred.succeed(releaseStartup, undefined);
+    expect(yield* Effect.promise(() => starting)).toBe(1);
+    expect(slot.isActive()).toBe(true);
+    expect(slot.isCurrent(1)).toBe(true);
+    expect(activations).toEqual([[1, "ready"]]);
+    yield* Effect.promise(() => slot.shutdown());
+  }),
+);
+
+it.effect("rechecks ownership after reentrant activation teardown", () =>
+  Effect.gen(function* () {
+    let shutdown: Promise<void> | undefined;
+    let slot: PiSessionRuntimeSlot<void, never, never>;
+    slot = makePiSessionRuntimeSlot<void, never, never, never>({
+      makeRuntime: () =>
+        makePiManagedRuntime(
+          // SAFETY: This locally constructed test fixture satisfies the host contract used here.
+          {} as ExtensionAPI,
+          Layer.empty,
+        ),
+      startup: () => Effect.void,
+      onActivated: () => {
+        shutdown = slot.shutdown();
+      },
+    });
+
+    expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
+    expect(slot.isActive()).toBe(false);
+    const cleanup = shutdown;
+    if (cleanup) yield* Effect.promise(() => cleanup);
   }),
 );
 
@@ -198,6 +260,7 @@ it.effect("reports a synchronous runtime-construction throw without activating t
       makeRuntime: () => {
         throw new Error("hostile runtime constructor");
       },
+      startup: () => Effect.void,
       onStartFailure: (_input, token) => void failures.push(token),
     });
 
@@ -272,6 +335,7 @@ it.effect("disposes an already-aborted start and leaves the slot unavailable", (
             ),
           ),
         ),
+      startup: () => Effect.void,
     });
     expect(yield* Effect.promise(() => slot.start(undefined, controller.signal))).toBeUndefined();
     const result = yield* Effect.result(

@@ -44,7 +44,7 @@ Version 4 accepts only exact profile/candidate fields. Ordered candidates may fa
 
 ### Backend and writer ownership
 
-Every backend process, transport, harness, child scope, and writer lease belongs to the session runtime. Writers acquire and durably mark one token-bound stable-directory lease before every spawn; cleanup is ordered spawn settlement → backend scope closure → confirmed lease release, and uncertainty quarantines ownership. See [Local backends](docs/local-backends.md).
+Every backend process, transport, harness, child scope, and writer lease belongs to the session runtime. Runtime startup returns its initial fleet projection and private supervisor bridge as activation values, so only the current session publishes either host capability. Writers acquire and durably mark one token-bound stable-directory lease before every spawn; cleanup is ordered spawn settlement → backend scope closure → confirmed lease release, and uncertainty quarantines ownership. See [Local backends](docs/local-backends.md).
 
 ### Herdr topology
 

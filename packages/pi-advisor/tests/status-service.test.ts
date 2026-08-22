@@ -1,9 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as FiberSet from "effect/FiberSet";
 import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import {
   advisorStatusFramesEffect,
@@ -89,7 +90,6 @@ it.effect("keeps animating after a repeated-frame render throws", () =>
 
 it.effect("replaces the owned animation and preserves owner-matched settlement", () =>
   Effect.gen(function* () {
-    const runFork = yield* FiberSet.makeRuntime<never, void>();
     const firstStarted = yield* Deferred.make<void>();
     const firstStopped = yield* Deferred.make<void>();
     const secondStarted = yield* Deferred.make<void>();
@@ -106,7 +106,7 @@ it.effect("replaces the owned animation and preserves owner-matched settlement",
           Deferred.succeed(options.owner === "first" ? firstStopped : secondStopped, undefined),
         ),
       );
-    const service = yield* makeAdvisorStatusService({ fork: runFork }, frames);
+    const service = yield* makeAdvisorStatusService(frames);
 
     service.start(statusOptions("first"));
     yield* Deferred.await(firstStarted);
@@ -121,9 +121,8 @@ it.effect("replaces the owned animation and preserves owner-matched settlement",
   }),
 );
 
-it.effect("does not complete shutdown until the owned animation finalizer settles", () =>
+it.effect("scope closure awaits the owned animation finalizer", () =>
   Effect.gen(function* () {
-    const runFork = yield* FiberSet.makeRuntime<never, void>();
     const started = yield* Deferred.make<void>();
     const stopped = yield* Deferred.make<void>();
     const frames: AdvisorStatusFrames = () =>
@@ -131,11 +130,14 @@ it.effect("does not complete shutdown until the owned animation finalizer settle
         Effect.andThen(Effect.never),
         Effect.ensuring(Deferred.succeed(stopped, undefined)),
       );
-    const service = yield* makeAdvisorStatusService({ fork: runFork }, frames);
+    const scope = yield* Scope.make();
+    const service = yield* makeAdvisorStatusService(frames).pipe(
+      Effect.provideService(Scope.Scope, scope),
+    );
 
     service.start(statusOptions("owned"));
     yield* Deferred.await(started);
-    yield* service.shutdown;
+    yield* Scope.close(scope, Exit.void);
 
     expect(Option.isSome(yield* Deferred.poll(stopped))).toBe(true);
   }),

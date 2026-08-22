@@ -41,7 +41,6 @@ export function askUserWithDependencies(
   const bridge = makeAskUserDialogBridge();
   const loadPreviewSettings = dependencies.loadPreviewSettings ?? loadCodePreviewSettings;
   const startupEffect = dependencies.startupEffect ?? Effect.void;
-  let sessionActive = false;
 
   const slot = makePiSessionRuntimeSlot<
     AskUserSessionInput,
@@ -58,12 +57,11 @@ export function askUserWithDependencies(
       bestEffortHostBootstrap("pi-ask-user.preview-settings", (signal) =>
         loadPreviewSettings(cwd, projectTrusted, signal),
       ).pipe(Effect.andThen(startupEffect), Effect.andThen(AskUserService.use(() => Effect.void))),
-    onActivated: ({ ctx }) => {
-      sessionActive = true;
+    onActivated: ({ ctx }, token) => {
       bridge.setContext(ctx);
       registerAskUserTool(pi, {
         run: (effect, signal) =>
-          sessionActive
+          slot.isCurrent(token)
             ? slot.run(effect, signal)
             : Promise.reject(
                 new AskUserRuntimeClosedError({
@@ -73,7 +71,6 @@ export function askUserWithDependencies(
       });
     },
     onDeactivated: () => {
-      sessionActive = false;
       bridge.clear();
       bridge.setContext(undefined);
     },

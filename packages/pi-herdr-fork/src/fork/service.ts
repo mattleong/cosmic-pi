@@ -324,25 +324,24 @@ export const makeHerdrForkService = (
         );
         yield* validateStartedAgent(startedResult.agent, forkPane, agentName, sessionFile);
 
-        let promptFailure: HerdrForkError | undefined;
-        if (prompt !== undefined) {
-          const promptResult = yield* Effect.result(
-            command(
-              runner,
-              ["agent", "prompt", agentName, initialForkPrompt(prompt)],
-              "prompt forked Pi",
-              true,
-            ),
-          );
-          if (promptResult._tag === "Failure") promptFailure = promptResult.failure;
-        }
+        const promptResult =
+          prompt === undefined
+            ? undefined
+            : yield* Effect.result(
+                command(
+                  runner,
+                  ["agent", "prompt", agentName, initialForkPrompt(prompt)],
+                  "prompt forked Pi",
+                  true,
+                ),
+              );
         const focusResult = yield* Effect.result(
           command(runner, ["agent", "focus", agentName], "focus forked Pi", true),
         );
 
-        if (promptFailure)
+        if (promptResult?._tag === "Failure")
           return yield* retainPaneFailure(
-            promptFailure,
+            promptResult.failure,
             forkPane.pane_id,
             `The fork is running in pane ${forkPane.pane_id}; enter the prompt there manually.`,
           );

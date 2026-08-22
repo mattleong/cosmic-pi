@@ -7,7 +7,6 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
 import {
   makePiManagedRuntime,
@@ -38,7 +37,6 @@ type SessionInput = {
   readonly projectTrusted: boolean;
   readonly signal?: AbortSignal;
   readonly notifyFailure: () => void;
-  readonly scheduler: MutableRef.MutableRef<CodePreviewSchedulerServiceContract | undefined>;
 };
 
 class CodePreviewRendererRegistrationError extends Schema.TaggedError<CodePreviewRendererRegistrationError>()(
@@ -135,26 +133,21 @@ export function codePreviewsWithDependencies(
           ),
         ),
       );
-      MutableRef.set(input.scheduler, yield* CodePreviewSchedulerService);
+      return yield* CodePreviewSchedulerService;
     });
   const slot = makePiSessionRuntimeSlot<
     SessionInput,
     CodePreviewApplication,
     Effect.Error<ReturnType<typeof startup>>,
-    CodePreviewRuntimeError
+    CodePreviewRuntimeError,
+    CodePreviewSchedulerServiceContract
   >({
     makeRuntime: () => dependencies.makeRuntime(pi),
     startup,
-    onActivated: (input, token) => {
-      const scheduler = MutableRef.get(input.scheduler);
-      if (!scheduler) {
-        input.notifyFailure();
-        return;
-      }
+    onActivated: (input, token, scheduler) => {
       installCodePreviewSessionCapability({
         token,
         run: (effect, signal) => slot.run(effect, signal),
-        fork: (effect, signal) => slot.fork(effect, signal),
         defer: scheduler.defer,
         schedule: scheduler.schedule,
       });
@@ -166,12 +159,10 @@ export function codePreviewsWithDependencies(
           input.signal,
         );
     },
-    onDeactivated: (input, token) => {
-      MutableRef.set(input.scheduler, undefined);
+    onDeactivated: (_input, token) => {
       clearCodePreviewSessionCapability(token);
     },
     onStartFailure: (input) => {
-      MutableRef.set(input.scheduler, undefined);
       clearCodePreviewSessionCapability();
       input.notifyFailure();
     },
@@ -192,16 +183,14 @@ export function codePreviewsWithDependencies(
     }
     if (capturedHost.aborted) notifyFailure();
     const projectTrusted = readProjectTrust(ctx);
-    const scheduler = MutableRef.make<CodePreviewSchedulerServiceContract | undefined>(undefined);
     const input: SessionInput = capturedHost.signal
       ? {
           cwd: capturedHost.cwd,
           projectTrusted,
           signal: capturedHost.signal,
           notifyFailure,
-          scheduler,
         }
-      : { cwd: capturedHost.cwd, projectTrusted, notifyFailure, scheduler };
+      : { cwd: capturedHost.cwd, projectTrusted, notifyFailure };
     return slot.start(input, capturedHost.signal).then(() => undefined);
   });
 

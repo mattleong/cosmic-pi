@@ -13,6 +13,7 @@ import {
   installCodePreviewSessionCapability,
   type CodePreviewSessionCapability,
 } from "../../src/application/capability";
+import { previewScheduleEffect } from "../../src/application/scheduler";
 import { testTheme } from "../../src/testing/render";
 import { cachedDeferredPreview } from "../../src/tools/renderers/shared/cache";
 
@@ -24,8 +25,14 @@ function installTestCapability(): void {
     token: 1,
     run: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
       Effect.runPromise(effect, signal ? { signal } : undefined),
-    fork: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
-      Effect.runFork(effect, signal ? { signal } : undefined),
+    defer: (task: () => void) => {
+      const fiber = Effect.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
+      return () => fiber.interruptUnsafe();
+    },
+    schedule: (interval: number, task: () => void) => {
+      const fiber = Effect.runFork(previewScheduleEffect(interval, task));
+      return () => fiber.interruptUnsafe();
+    },
   } as CodePreviewSessionCapability;
   installCodePreviewSessionCapability(capability);
 }

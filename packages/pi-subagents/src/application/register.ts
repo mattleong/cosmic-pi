@@ -23,6 +23,7 @@ import {
   type SubagentApplication,
   type SubagentRuntimeError,
 } from "../layer.ts";
+import type { SubagentProjection } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
 import { registerSubagentTools, SUBAGENT_TOOL_NAMES } from "../tools/subagent.ts";
@@ -108,7 +109,8 @@ export function registerSubagentApplication(
     CapturedActivation,
     SubagentApplication,
     never,
-    SubagentRuntimeError
+    SubagentRuntimeError,
+    SubagentProjection
   >({
     makeRuntime: (activation) =>
       makePiManagedRuntime(
@@ -146,13 +148,10 @@ export function registerSubagentApplication(
         ),
         { agentDirectory: () => activation.agentDirectory, packageName: "pi-subagents" },
       ),
-    startup: () =>
-      SubagentService.use((service) => service.projection).pipe(
-        Effect.tap((projection) => Effect.sync(() => bridge.publish(projection))),
-        Effect.asVoid,
-      ),
-    onActivated: (activation) => {
+    startup: () => SubagentService.use((service) => service.projection),
+    onActivated: (activation, _token, projection) => {
       currentContext = activation.ctx;
+      bridge.publish(projection);
       currentActivation = activation;
       if (activation.reloadHandoffKey) profileReloadHandoff.clear(activation.reloadHandoffKey);
       bridge.setContext(activation.ctx);
