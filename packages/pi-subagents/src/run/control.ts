@@ -326,36 +326,47 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           ),
           // The owner-scoped commit outlives cancellation of the requesting tool.
           // Roll back only when the transport itself reports a definite failure.
-          Effect.tapError((error) =>
-            error._tag === "SubagentProcessError" && error.code === "reply_outcome_uncertain"
-              ? retainControlWarning(claimed.record, error.message).pipe(
-                  Effect.andThen(
-                    withLock(
-                      Effect.sync(() => {
-                        if (claimed.record.replyPendingRequestId === claimed.question.requestId)
-                          claimed.record.replyPendingRequestId = undefined;
-                      }),
-                    ),
+          Effect.tapError((error) => {
+            if (error._tag === "SubagentProcessError" && error.code === "reply_outcome_uncertain")
+              return retainControlWarning(claimed.record, error.message).pipe(
+                Effect.andThen(
+                  withLock(
+                    Effect.sync(() => {
+                      if (claimed.record.replyPendingRequestId === claimed.question.requestId)
+                        claimed.record.replyPendingRequestId = undefined;
+                    }),
                   ),
-                )
-              : withLock(
-                  Effect.gen(function* () {
-                    if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
-                    claimed.record.replyPendingRequestId = undefined;
-                    if (
-                      claimed.record.view.state === "running" &&
-                      claimed.record.view.question === undefined
-                    ) {
-                      claimed.record.view = {
-                        ...claimed.record.view,
-                        state: "waiting_for_parent",
-                        question: claimed.question,
-                      };
-                      yield* publish;
-                    }
-                  }),
                 ),
-          ),
+              );
+            if (
+              error._tag === "SubagentProcessError" &&
+              (error.code === "question_transport_closed" ||
+                error.code === "question_ownership_mismatch")
+            )
+              return withLock(
+                Effect.sync(() => {
+                  if (claimed.record.replyPendingRequestId === claimed.question.requestId)
+                    claimed.record.replyPendingRequestId = undefined;
+                }),
+              );
+            return withLock(
+              Effect.gen(function* () {
+                if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
+                claimed.record.replyPendingRequestId = undefined;
+                if (
+                  claimed.record.view.state === "running" &&
+                  claimed.record.view.question === undefined
+                ) {
+                  claimed.record.view = {
+                    ...claimed.record.view,
+                    state: "waiting_for_parent",
+                    question: claimed.question,
+                  };
+                  yield* publish;
+                }
+              }),
+            );
+          }),
         );
         const commitFiber = yield* commit.pipe(
           Effect.forkIn(ownerScope, { startImmediately: true }),

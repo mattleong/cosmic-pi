@@ -396,15 +396,15 @@ const makePeerSender = (socket: Socket, onFailure: () => void) => {
   let writeTail: Promise<void> = Promise.resolve();
   let pendingWrites = 0;
   return (message: SupervisorServerMessage): Promise<void> => {
-    if (socket.destroyed || pendingWrites >= MAX_PENDING_WRITES) {
+    if (socket.destroyed) {
       onFailure();
       return Promise.reject(new PeerSendNotAttemptedError({ reason: "unavailable" }));
     }
+    if (pendingWrites >= MAX_PENDING_WRITES)
+      return Promise.reject(new PeerSendNotAttemptedError({ reason: "unavailable" }));
     const line = `${JSON.stringify(message)}\n`;
-    if (Buffer.byteLength(line, "utf8") > MAX_SUPERVISOR_CHANNEL_LINE_BYTES) {
-      onFailure();
+    if (Buffer.byteLength(line, "utf8") > MAX_SUPERVISOR_CHANNEL_LINE_BYTES)
       return Promise.reject(new PeerSendNotAttemptedError({ reason: "oversized" }));
-    }
     pendingWrites += 1;
     const write = writeTail.then(
       () =>
@@ -423,6 +423,8 @@ const makePeerSender = (socket: Socket, onFailure: () => void) => {
     return write;
   };
 };
+
+export const supervisorChannelTesting = { makePeerSender } as const;
 
 const authenticatedServerMessage = (
   state: NodeChannelState,
@@ -1258,12 +1260,28 @@ export const makeSupervisorChannel = (
                 "_tag" in error &&
                 error._tag === "PeerSendNotAttemptedError"
               ) {
-                if (state.pendingQuestion === pending) pending.replyStarted = false;
-                return channelError(
-                  "reply",
-                  "reply_send_failed",
-                  "The parent reply was not sent; the question remains open for retry.",
-                );
+                if (state.pendingQuestion === pending && !pending.peer.socket.destroyed) {
+                  pending.replyStarted = false;
+                  const oversized = "reason" in error && error.reason === "oversized";
+                  return channelError(
+                    "reply",
+                    oversized ? "reply_too_large" : "reply_send_failed",
+                    oversized
+                      ? "The parent reply was too large; the question remains open for a shorter reply."
+                      : "The parent reply was not sent; the question remains open for retry.",
+                  );
+                }
+                return pending.peer.socket.destroyed
+                  ? channelError(
+                      "reply",
+                      "question_transport_closed",
+                      "The supervisor helper transport closed before the reply was sent; the question was cancelled.",
+                    )
+                  : channelError(
+                      "reply",
+                      "question_ownership_mismatch",
+                      "The pending question changed before the reply could be sent.",
+                    );
               }
               // A write-callback failure may race bytes already handed to the OS socket,
               // so delivery is genuinely uncertain and the reply must not be retried.

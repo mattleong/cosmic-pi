@@ -7,6 +7,7 @@ import * as RcMap from "effect/RcMap";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { makeFrozenProjection, type ProjectionError } from "pi-cosmic-core";
+import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import type { CodePreviewBeforeWrite } from "./preview-execution";
 import {
   clearWriteProjection,
@@ -44,7 +45,7 @@ export class CodePreviewWriteService extends Context.Service<
           lookup: (_path: string) => Semaphore.make(1),
           idleTimeToLive: Duration.zero,
         });
-        const projectionOwner = Symbol("code-preview-write-projection");
+        const projectionOwner = acquireProjectionOwnership("code-preview-write-projection");
         const projection = yield* makeFrozenProjection<WriteState, CodePreviewWriteSnapshot>(
           { entries: [] },
           (state) => state,

@@ -9,7 +9,7 @@ const MAX_HOST_FAILURE_CHARS = 240;
  */
 export function describeHostFailure(error: { readonly message: string }): string {
   const collapsed = error.message.replace(/\s+/g, " ").trim();
-  if (!collapsed) return ":";
+  if (!collapsed) return "";
   const truncated =
     collapsed.length <= MAX_HOST_FAILURE_CHARS
       ? collapsed

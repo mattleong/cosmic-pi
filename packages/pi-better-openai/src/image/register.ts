@@ -4,6 +4,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -84,39 +85,57 @@ export function registerOpenAIImage(
       }
       safeHostUi(() => ctx.ui.notify("Requesting OpenAI image...", "info"));
       updateContext(ctx);
-      return run(
-        generateEffect({ prompt }).pipe(
-          Effect.tapError((error) =>
-            ignoreHostUi("image.command.failed", () =>
-              ctx.ui.notify(
-                `OpenAI image generation failed${describeHostFailure(error)}.`,
-                "warning",
-              ),
+      const signal = safeHostSignal(ctx);
+      const request = generateEffect({ prompt }).pipe(
+        Effect.tapError((error) =>
+          ignoreHostUi("image.command.failed", () =>
+            ctx.ui.notify(
+              `OpenAI image generation failed${describeHostFailure(error)}.`,
+              "warning",
             ),
           ),
-          Effect.option,
         ),
-        safeHostSignal(ctx),
-      )
+        Effect.option,
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.succeed(Option.none())
+            : Effect.logError("Better OpenAI image command raised an unexpected defect.").pipe(
+                Effect.andThen(
+                  ignoreHostUi("image.command.defect", () =>
+                    ctx.ui.notify("OpenAI image generation failed unexpectedly.", "warning"),
+                  ),
+                ),
+                Effect.as(Option.none()),
+              ),
+        ),
+      );
+      return run(request, signal)
         .then((result) => {
           if (Option.isNone(result)) return undefined;
           const image = result.value;
-          return pi.sendMessage({
-            customType: "openai-image",
-            content: [
-              { type: "text", text: resultText(image) },
-              { type: "image", data: image.data, mimeType: image.mimeType },
-            ],
-            display: true,
-            details: image,
-          });
+          return Promise.resolve()
+            .then(() =>
+              pi.sendMessage({
+                customType: "openai-image",
+                content: [
+                  { type: "text", text: resultText(image) },
+                  { type: "image", data: image.data, mimeType: image.mimeType },
+                ],
+                display: true,
+                details: image,
+              }),
+            )
+            .catch(() => {
+              safeHostUi(() =>
+                ctx.ui.notify("Unable to deliver the generated image message.", "warning"),
+              );
+            });
         })
         .catch(() => {
-          // Generation failures were already surfaced in the Effect channel; this
-          // guards the host message-delivery seam itself.
-          safeHostUi(() =>
-            ctx.ui.notify("Unable to deliver the generated image message.", "warning"),
-          );
+          if (!signal?.aborted)
+            safeHostUi(() =>
+              ctx.ui.notify("OpenAI image generation failed unexpectedly.", "warning"),
+            );
         });
     },
   });

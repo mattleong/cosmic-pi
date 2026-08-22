@@ -306,90 +306,108 @@ export const runProbeEffect = (
   args: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv,
 ): Effect.Effect<ProbeResult> =>
-  Effect.gen(function* () {
-    const done = Deferred.makeUnsafe<ProbeResult>();
-    let stdout = "";
-    let stderr = "";
-    let overflowed = false;
-    let timedOut = false;
-    let cleanupUnconfirmed = false;
-    let settled = false;
-    let child: NodeChildProcess;
-    const finish = (code: number | null): void => {
-      if (settled) return;
-      settled = true;
-      Deferred.doneUnsafe(
-        done,
-        Effect.succeed({ code, stdout, stderr, overflowed, timedOut, cleanupUnconfirmed }),
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const done = Deferred.makeUnsafe<ProbeResult>();
+      let stdout = "";
+      let stderr = "";
+      let overflowed = false;
+      let timedOut = false;
+      let cleanupUnconfirmed = false;
+      let settled = false;
+      let child: NodeChildProcess;
+      const finish = (code: number | null): void => {
+        if (settled) return;
+        settled = true;
+        Deferred.doneUnsafe(
+          done,
+          Effect.succeed({ code, stdout, stderr, overflowed, timedOut, cleanupUnconfirmed }),
+        );
+      };
+      const spawned = yield* Effect.exit(
+        Effect.sync(() =>
+          spawn(executable, [...args], {
+            detached: process.platform !== "win32",
+            env,
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+          }),
+        ),
       );
-    };
-    const spawned = yield* Effect.exit(
-      Effect.sync(() =>
-        spawn(executable, [...args], {
-          detached: process.platform !== "win32",
-          env,
-          stdio: ["ignore", "pipe", "pipe"],
-          windowsHide: true,
-        }),
-      ),
-    );
-    if (Exit.isFailure(spawned)) {
-      // SAFETY: The only failure here is the spawn thunk's synchronous throw.
-      const thrown = Cause.squash(spawned.cause);
-      stderr = thrown instanceof Error ? thrown.message : "probe-spawn-failed";
-      finish(null);
-      return yield* Deferred.await(done);
-    }
-    child = spawned.value;
-    const append = (target: "stdout" | "stderr", chunk: Buffer) => {
-      if (
-        Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8") + chunk.length >
-        MAX_PROBE_OUTPUT_BYTES
-      ) {
-        overflowed = true;
-        void terminateProcessTree(child, "force").catch(() => undefined);
-        return;
+      if (Exit.isFailure(spawned)) {
+        // SAFETY: The only failure here is the spawn thunk's synchronous throw.
+        const thrown = Cause.squash(spawned.cause);
+        stderr = thrown instanceof Error ? thrown.message : "probe-spawn-failed";
+        finish(null);
+        return yield* Deferred.await(done);
       }
-      if (target === "stdout") stdout += chunk.toString("utf8");
-      else stderr += chunk.toString("utf8");
-    };
-    child.stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
-    child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
-    child.once("error", (error) => {
-      stderr = error.message;
-      finish(null);
-    });
-    child.once("close", (code) => {
-      void terminateProcessTree(child, "force").then(
-        () => finish(code),
-        () => {
-          cleanupUnconfirmed = true;
-          stderr = "Readiness probe cleanup could not be confirmed.";
-          finish(null);
-        },
+      child = spawned.value;
+      const append = (target: "stdout" | "stderr", chunk: Buffer) => {
+        if (
+          Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8") + chunk.length >
+          MAX_PROBE_OUTPUT_BYTES
+        ) {
+          overflowed = true;
+          void terminateProcessTree(child, "force").catch(() => undefined);
+          return;
+        }
+        if (target === "stdout") stdout += chunk.toString("utf8");
+        else stderr += chunk.toString("utf8");
+      };
+      child.stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
+      child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
+      child.once("error", (error) => {
+        stderr = error.message;
+        finish(null);
+      });
+      child.once("close", (code) => {
+        void terminateProcessTree(child, "force").then(
+          () => finish(code),
+          () => {
+            cleanupUnconfirmed = true;
+            stderr = "Readiness probe cleanup could not be confirmed.";
+            finish(null);
+          },
+        );
+      });
+      // The deadline drives the same confirm-then-settle path; a bare timeout race would
+      // abandon the probe process before its termination was confirmed.
+      const deadline = yield* Effect.sleep(PROBE_TIMEOUT_MILLIS).pipe(
+        Effect.andThen(() =>
+          Effect.sync(() => {
+            timedOut = true;
+            terminateProcessTree(child, "force").then(
+              () => finish(null),
+              () => {
+                cleanupUnconfirmed = true;
+                finish(null);
+              },
+            );
+          }),
+        ),
+        Effect.forkChild,
       );
-    });
-    // The deadline drives the same confirm-then-settle path; a bare timeout race would
-    // abandon the probe process before its termination was confirmed.
-    const deadline = yield* Effect.sleep(PROBE_TIMEOUT_MILLIS).pipe(
-      Effect.andThen(() =>
-        Effect.sync(() => {
-          timedOut = true;
-          terminateProcessTree(child, "force").then(
-            () => finish(null),
-            () => {
-              cleanupUnconfirmed = true;
-              finish(null);
-            },
-          );
-        }),
-      ),
-      Effect.forkChild,
-    );
-    const result = yield* Deferred.await(done);
-    yield* Effect.ignore(Fiber.interrupt(deadline));
-    return result;
-  });
+      return yield* restore(Deferred.await(done)).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : Effect.promise(() =>
+                terminateProcessTree(child, "force").then(
+                  () => true,
+                  () => false,
+                ),
+              ).pipe(
+                Effect.flatMap((confirmed) =>
+                  confirmed
+                    ? Effect.void
+                    : Effect.logWarning("Interrupted readiness probe cleanup was not confirmed."),
+                ),
+              ),
+        ),
+        Effect.ensuring(Fiber.interrupt(deadline).pipe(Effect.asVoid)),
+      );
+    }),
+  );
 
 export const runIsolatedCodexAuthProbe = async (
   executable: string,

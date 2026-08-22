@@ -62,11 +62,19 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
       Effect.suspend(() => options.handle(value)).pipe(
         Effect.catch((error) => options.onFailure?.(error) ?? Effect.void),
         Effect.catchCause((cause) =>
-          reportDefect
-            ? Effect.sync(() => reportDefect(cause))
-            : Effect.logWarning(
-                "Synchronous ingress handler raised an unexpected defect; the worker continues.",
-              ),
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : reportDefect
+              ? Effect.sync(() => {
+                  try {
+                    reportDefect(cause);
+                  } catch {
+                    // Failure observation must never terminate the ingress worker.
+                  }
+                })
+              : Effect.logWarning(
+                  "Synchronous ingress handler raised an unexpected defect; the worker continues.",
+                ),
         ),
       );
 

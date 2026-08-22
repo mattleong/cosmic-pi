@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import { makeSynchronousIngress, type SynchronousIngressError } from "pi-cosmic-core";
+import type { ProjectionOwnership } from "../shared/projection-ownership";
 import { installSyntaxRequests } from "./projection";
 
 const INGRESS_CAPACITY = 32;
@@ -44,7 +45,7 @@ const invokeCallbacks = (callbacks: readonly (() => void)[]) =>
 
 /** Owns the bounded synchronous renderer-to-Effect request bridge. */
 export const makeSyntaxIngress = (
-  owner: symbol,
+  owner: ProjectionOwnership,
   handlers: SyntaxIngressHandlers,
 ): Effect.Effect<SyntaxIngress, SynchronousIngressError, Scope.Scope> =>
   Effect.gen(function* () {

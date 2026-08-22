@@ -8,7 +8,6 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import {
   makeNdjsonRpcSession,
   type InboundClassification,
@@ -302,45 +301,36 @@ export const makeHerdrCodexHooks = (
   const timeoutMillis = options.timeoutMillis ?? CALL_TIMEOUT_MILLIS;
   return {
     establishTrust: (input) =>
-      Effect.gen(function* () {
-        const environment = { ...fixedEnvironment, CODEX_HOME: input.codexHome };
-        const scope = Scope.makeUnsafe();
-        let failure: HerdrCodexHooksError | undefined;
-        const opened = yield* Effect.exit(
-          Effect.gen(function* () {
-            const session = yield* makeNdjsonRpcSession<RpcResponse>({
+      Effect.scoped(
+        Effect.gen(function* () {
+          const environment = { ...fixedEnvironment, CODEX_HOME: input.codexHome };
+          const opened = yield* Effect.exit(
+            makeNdjsonRpcSession<RpcResponse>({
               command: executable,
               args: ["app-server", "--stdio", "--strict-config"],
               cwd: input.cwd,
               environment,
-              detached: process.platform !== "win32",
               diagnosticMaxBytes: MAX_DIAGNOSTIC_BYTES,
               waitForSpawnEvent: true,
               maxLineBytes: MAX_LINE_BYTES,
               maxQueuedOutputBytes: MAX_OUTPUT_BYTES,
+              maxTotalOutputBytes: MAX_OUTPUT_BYTES,
               maxPendingCalls: 64,
               writeQueueCapacity: 32,
               classifyInbound: classifyRpcLine,
               unknownReplyPolicy: "fail-session",
-            });
-            return session;
-          }).pipe(Scope.provide(scope)),
-        );
-        if (Exit.isFailure(opened)) {
-          yield* Scope.close(scope, opened).pipe(Effect.ignore);
-          return yield* makeUnavailable();
-        }
-        const session = opened.value;
-        const steps = yield* Effect.exit(runTrustSteps(session, input, timeoutMillis));
-        if (Exit.isFailure(steps)) {
-          failure = toHooksFailure(steps.cause);
-        }
-        // Cleanup confirmation stays observable: an unconfirmed kill must fail closed even
-        // when the trust steps themselves succeeded.
-        const closed = yield* Effect.exit(session.close());
-        yield* Scope.close(scope, Exit.succeed(undefined)).pipe(Effect.ignore);
-        if (Exit.isFailure(closed)) return yield* makeCleanupUnconfirmed();
-        if (failure) return yield* failure;
-      }),
+            }),
+          );
+          if (Exit.isFailure(opened)) return yield* makeUnavailable();
+          const session = opened.value;
+          const steps = yield* Effect.exit(runTrustSteps(session, input, timeoutMillis));
+          const failure = Exit.isFailure(steps) ? toHooksFailure(steps.cause) : undefined;
+          // Cleanup confirmation stays observable: an unconfirmed kill must fail closed even
+          // when the trust steps themselves succeeded.
+          const closed = yield* Effect.exit(session.close());
+          if (Exit.isFailure(closed)) return yield* makeCleanupUnconfirmed();
+          if (failure) return yield* failure;
+        }),
+      ),
   };
 };

@@ -122,7 +122,8 @@ export function synchronizeUsageProjectionContext<Projection extends UsageVisibi
   projection: MutableRef.MutableRef<Projection>,
   evaluateEligibility: (state: Projection) => UsageEligibilityDecision,
 ): void {
-  const decision = evaluateEligibility(MutableRef.get(projection));
+  const current = MutableRef.get(projection);
+  const decision = evaluateEligibility(current);
   const texts: UsageEligibilityStatusTexts = {
     hiddenStatusText:
       decision.statusTexts?.hiddenStatusText === undefined
@@ -133,13 +134,6 @@ export function synchronizeUsageProjectionContext<Projection extends UsageVisibi
     texts.unavailableStatusText = decision.statusTexts.unavailableStatusText;
   MutableRef.set(
     projection,
-    freezeSnapshot(
-      withUsageEligibility(
-        MutableRef.get(projection),
-        decision.eligible,
-        decision.clearUsage,
-        texts,
-      ),
-    ),
+    freezeSnapshot(withUsageEligibility(current, decision.eligible, decision.clearUsage, texts)),
   );
 }

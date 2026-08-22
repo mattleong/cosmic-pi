@@ -271,7 +271,6 @@ export const openPiSupervisorBridge = (
       command: process.execPath,
       args: [options.helperPath ?? packagedHelperPath, "--config", configPath],
       environment: {},
-      detached: false,
       diagnosticMaxBytes: 0,
       waitForSpawnEvent: false,
       maxLineBytes: MAX_LINE_BYTES,

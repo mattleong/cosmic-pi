@@ -251,6 +251,52 @@ it.effect("reports handler defects through onDefect and keeps the worker alive",
   }).pipe(Effect.scoped),
 );
 
+it.effect("contains a throwing defect observer and keeps the worker alive", () =>
+  Effect.gen(function* () {
+    const poisonSeen = yield* Deferred.make<void>();
+    const healthyDone = yield* Deferred.make<void>();
+    const ingress = yield* makeSynchronousIngress<number, never, never>({
+      capacity: 4,
+      overflow: "drop",
+      handle: (value) =>
+        value === 1
+          ? Deferred.succeed(poisonSeen, undefined).pipe(
+              Effect.andThen(Effect.die("ingress-poison")),
+            )
+          : Deferred.succeed(healthyDone, undefined),
+      onDefect: () => {
+        throw new Error("observer-poison");
+      },
+    });
+    expect(ingress.offer(1)).toBe("accepted");
+    yield* Deferred.await(poisonSeen);
+    expect(ingress.offer(2)).toBe("accepted");
+    yield* Deferred.await(healthyDone);
+    yield* ingress.shutdown;
+    yield* ingress.awaitShutdown;
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not report normal shutdown interruption as a handler defect", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    let observedDefects = 0;
+    const ingress = yield* makeSynchronousIngress<number, never, never>({
+      capacity: 1,
+      overflow: "drop",
+      handle: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      onDefect: () => {
+        observedDefects++;
+      },
+    });
+    expect(ingress.offer(1)).toBe("accepted");
+    yield* Deferred.await(started);
+    yield* ingress.shutdown;
+    yield* ingress.awaitShutdown;
+    expect(observedDefects).toBe(0);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("logs a fixed diagnostic for handler defects when onDefect is absent", () =>
   Effect.gen(function* () {
     const poisonSeen = yield* Deferred.make<void>();

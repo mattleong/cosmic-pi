@@ -213,6 +213,21 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
   return credentials;
 });
 
+/** Refresh a file-owned credential only when it matches the provider-rejected token. */
+export const refreshRejectedXaiCredentials = Effect.fn("XaiAuth.refreshRejectedXaiCredentials")(
+  function* (authPath: string, rejectedAccessToken: Redacted.Redacted<string>) {
+    const current = yield* readXaiAuthResult(authPath);
+    if (
+      current._tag !== "Found" ||
+      current.credentials.refreshToken === undefined ||
+      Redacted.value(current.credentials.accessToken) !== Redacted.value(rejectedAccessToken)
+    )
+      return undefined;
+    const refreshed = yield* refreshXaiToken(authPath, current.credentials.refreshToken);
+    return { ...refreshed, source: "authFile" as const } satisfies XaiAuthResultCredentials;
+  },
+);
+
 export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResult")(function* (
   authPath: string,
 ) {

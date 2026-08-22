@@ -1,4 +1,5 @@
 import type { ShikiHighlighter } from "../boundary/shiki";
+import type { ProjectionOwnership } from "../shared/projection-ownership";
 
 export type ShikiProjectionStatus = Readonly<{
   initialized: boolean;
@@ -32,29 +33,37 @@ type SyntaxRequests = Readonly<{
   language: (language: string, invalidate?: () => void) => void;
 }>;
 
-let activeOwner: symbol | undefined;
+let activeOwner: ProjectionOwnership | undefined;
+let newestGeneration = 0;
 let activeSnapshot: CodePreviewSyntaxSnapshot | undefined;
 let activeRequests: SyntaxRequests | undefined;
 
-const claimOwnership = (owner: symbol): boolean => {
-  // A stale session must never rebind state published by a newer live owner.
-  if (activeOwner !== undefined && activeOwner !== owner) return false;
+const claimOwnership = (owner: ProjectionOwnership): boolean => {
+  if (activeOwner?.key === owner.key) return true;
+  // A newly acquired session takes over immediately. Retired or stale owners cannot rebind.
+  if (owner.generation <= newestGeneration) return false;
+  newestGeneration = owner.generation;
   activeOwner = owner;
+  activeSnapshot = undefined;
+  activeRequests = undefined;
   return true;
 };
 
-export function publishSyntaxProjection(owner: symbol, snapshot: CodePreviewSyntaxSnapshot): void {
+export function publishSyntaxProjection(
+  owner: ProjectionOwnership,
+  snapshot: CodePreviewSyntaxSnapshot,
+): void {
   if (!claimOwnership(owner)) return;
   activeSnapshot = snapshot;
 }
 
-export function installSyntaxRequests(owner: symbol, requests: SyntaxRequests): void {
+export function installSyntaxRequests(owner: ProjectionOwnership, requests: SyntaxRequests): void {
   if (!claimOwnership(owner)) return;
   activeRequests = requests;
 }
 
-export function clearSyntaxProjection(owner: symbol): void {
-  if (activeOwner !== owner) return;
+export function clearSyntaxProjection(owner: ProjectionOwnership): void {
+  if (activeOwner?.key !== owner.key) return;
   activeOwner = undefined;
   activeSnapshot = undefined;
   activeRequests = undefined;

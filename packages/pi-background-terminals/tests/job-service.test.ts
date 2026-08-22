@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import {
   LocalProcess,
@@ -65,7 +66,7 @@ function fakeProcessLayer(
           };
           const handle: LocalProcessHandle = {
             pid: 10_000 + controls.length,
-            output,
+            output: Stream.fromQueue(output),
             awaitExit: Deferred.await(exited),
             droppedOutputBytes: () => 0,
             terminate: (mode) =>

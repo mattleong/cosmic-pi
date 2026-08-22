@@ -166,6 +166,49 @@ describe("Better OpenAI session boundary", () => {
     await h.emit("session_shutdown");
   });
 
+  test("reports a success-path command defect instead of swallowing it", async () => {
+    let resets = 0;
+    const h = harness({
+      startupEffect: () => Effect.void,
+      resetOpenAICodexTransport: () => {
+        resets++;
+        if (resets > 1) throw new Error("transport reset defect");
+      },
+    });
+    await h.emit("session_start");
+    vi.mocked(h.ctx.ui.notify).mockClear();
+
+    await expect(Promise.resolve(h.commands.get("fast")?.("", h.ctx))).resolves.toBeUndefined();
+
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+    await h.emit("session_shutdown");
+  });
+
+  test("does not report image cancellation as message-delivery failure", async () => {
+    const h = harness();
+    writeFileSync(
+      join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json"),
+      JSON.stringify({
+        persistState: false,
+        usage: { enabled: false },
+        footer: { mode: "off" },
+        image: { enabled: true },
+      }),
+    );
+    await h.emit("session_start");
+    const controller = new AbortController();
+    controller.abort(new Error("cancel image"));
+    h.ctx.signal = controller.signal;
+    vi.mocked(h.ctx.ui.notify).mockClear();
+
+    await expect(
+      Promise.resolve(h.commands.get("openai-image")?.("cancelled prompt", h.ctx)),
+    ).resolves.toBeUndefined();
+
+    expect(h.ctx.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
+    await h.emit("session_shutdown");
+  });
+
   test("keeps the replacement context current after deactivating the previous runtime", async () => {
     const h = harness();
     const configPath = join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json");

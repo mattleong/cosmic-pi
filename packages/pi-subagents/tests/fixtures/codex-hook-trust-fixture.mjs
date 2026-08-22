@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const codexHome = process.env.CODEX_HOME;
+await writeFile(join(codexHome, "fixture.pid"), String(process.pid));
+process.on("SIGTERM", () => {});
 let mode = "ok";
 try {
   mode = (await readFile(join(codexHome, "fixture-mode"), "utf8")).trim() || "ok";

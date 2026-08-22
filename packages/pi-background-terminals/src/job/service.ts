@@ -293,7 +293,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         if (terminateLateHandle) {
           yield* handle.terminate("force").pipe(Effect.catch(() => Effect.void));
         }
-        const outputFiber = yield* Stream.fromQueue(handle.output).pipe(
+        const outputFiber = yield* handle.output.pipe(
           Stream.runForEach((event) =>
             appendOutput(id, event.stream, event.text, event.droppedBytes),
           ),

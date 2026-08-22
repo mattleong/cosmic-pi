@@ -360,81 +360,97 @@ const runEffect = (
   timeoutMillis: number,
   maximumBytes: number,
 ): Effect.Effect<CommandResult> =>
-  Effect.gen(function* () {
-    const done = Deferred.makeUnsafe<CommandResult>();
-    const stdout: BoundedChunks = { chunks: [], length: 0 };
-    const stderr: BoundedChunks = { chunks: [], length: 0 };
-    let overflowed = false;
-    let observedBytes = 0;
-    let timedOut = false;
-    let cleanupUnconfirmed = false;
-    let dispatched = false;
-    let settled = false;
-    let child: NodeChildProcess;
-    const finish = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      Deferred.doneUnsafe(
-        done,
-        Effect.succeed({
-          code,
-          stdout: Buffer.concat(stdout.chunks).toString("utf8"),
-          stderr: Buffer.concat(stderr.chunks).toString("utf8"),
-          overflowed,
-          timedOut,
-          cleanupUnconfirmed,
-          dispatched,
-        }),
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const done = Deferred.makeUnsafe<CommandResult>();
+      const stdout: BoundedChunks = { chunks: [], length: 0 };
+      const stderr: BoundedChunks = { chunks: [], length: 0 };
+      let overflowed = false;
+      let observedBytes = 0;
+      let timedOut = false;
+      let cleanupUnconfirmed = false;
+      let dispatched = false;
+      let settled = false;
+      let child: NodeChildProcess;
+      const finish = (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        Deferred.doneUnsafe(
+          done,
+          Effect.succeed({
+            code,
+            stdout: Buffer.concat(stdout.chunks).toString("utf8"),
+            stderr: Buffer.concat(stderr.chunks).toString("utf8"),
+            overflowed,
+            timedOut,
+            cleanupUnconfirmed,
+            dispatched,
+          }),
+        );
+      };
+      const spawned = yield* Effect.exit(
+        Effect.sync(() =>
+          spawn(executable, [...args], {
+            env: environment,
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+          }),
+        ),
       );
-    };
-    const spawned = yield* Effect.exit(
-      Effect.sync(() =>
-        spawn(executable, [...args], {
-          env: environment,
-          stdio: ["ignore", "pipe", "pipe"],
-          windowsHide: true,
-        }),
-      ),
-    );
-    if (Exit.isFailure(spawned)) {
-      finish(null);
-      return yield* Deferred.await(done);
-    }
-    child = spawned.value;
-    const append = (target: "stdout" | "stderr", chunk: Buffer) => {
-      observedBytes += chunk.byteLength;
-      if (observedBytes > maximumBytes) {
-        overflowed = true;
-        child.kill();
-        return;
+      if (Exit.isFailure(spawned)) {
+        finish(null);
+        return yield* Deferred.await(done);
       }
-      if (target === "stdout") appendHeadBounded(stdout, chunk, maximumBytes);
-      else appendHeadBounded(stderr, chunk, MAX_DIAGNOSTIC_BYTES);
-    };
-    child.once("spawn", () => {
-      dispatched = true;
-    });
-    child.stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
-    child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
-    child.once("error", () => finish(null));
-    child.once("close", (code) => finish(code));
-    // The deadline drives the same confirm-then-settle path; a bare timeout race would
-    // abandon the probe process before its termination was confirmed.
-    const deadline = yield* Effect.sleep(timeoutMillis).pipe(
-      Effect.andThen(() =>
-        Effect.gen(function* () {
-          timedOut = true;
-          const confirmed = yield* terminateProbeEffect(child);
-          cleanupUnconfirmed = !confirmed;
-          finish(null);
-        }),
-      ),
-      Effect.forkChild,
-    );
-    const result = yield* Deferred.await(done);
-    yield* Effect.ignore(Fiber.interrupt(deadline));
-    return result;
-  });
+      child = spawned.value;
+      const append = (target: "stdout" | "stderr", chunk: Buffer) => {
+        observedBytes += chunk.byteLength;
+        if (observedBytes > maximumBytes) {
+          overflowed = true;
+          child.kill();
+          return;
+        }
+        if (target === "stdout") appendHeadBounded(stdout, chunk, maximumBytes);
+        else appendHeadBounded(stderr, chunk, MAX_DIAGNOSTIC_BYTES);
+      };
+      child.once("spawn", () => {
+        dispatched = true;
+      });
+      child.stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
+      child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
+      child.once("error", () => finish(null));
+      child.once("close", (code) => finish(code));
+      // The deadline drives the same confirm-then-settle path; a bare timeout race would
+      // abandon the probe process before its termination was confirmed.
+      const deadline = yield* Effect.sleep(timeoutMillis).pipe(
+        Effect.andThen(() =>
+          Effect.gen(function* () {
+            timedOut = true;
+            const confirmed = yield* terminateProbeEffect(child);
+            cleanupUnconfirmed = !confirmed;
+            finish(null);
+          }),
+        ),
+        Effect.forkChild,
+      );
+      return yield* restore(Deferred.await(done)).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : terminateProbeEffect(child).pipe(
+                Effect.flatMap((confirmed) =>
+                  confirmed
+                    ? Effect.void
+                    : Effect.logWarning("Interrupted Herdr probe cleanup was not confirmed."),
+                ),
+                Effect.catchCause(() =>
+                  Effect.logWarning("Interrupted Herdr probe cleanup was not confirmed."),
+                ),
+              ),
+        ),
+        Effect.ensuring(Fiber.interrupt(deadline).pipe(Effect.asVoid)),
+      );
+    }),
+  );
 
 const runCommand = (
   options: HerdrCliLayerOptions,

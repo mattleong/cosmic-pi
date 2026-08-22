@@ -8,7 +8,7 @@
 - `src/layer.ts` — session Layer composition.
 - `src/application.ts` — session lifecycle, tool, `/ps`, and footer wiring.
 - `src/config/` — `schema.ts` shape/defaults, `options.ts` normalization, and `store.ts` as the single persistence door.
-- `src/boundary/local-process.ts` — Node child-process and process-tree adapter; requests color from compatible piped CLIs with a default `FORCE_COLOR=1` while honoring explicit `FORCE_COLOR`/`NO_COLOR`. Ingress chunks pass through whole while the queue has room, so peak queued memory is bounded by the chunk-slot count times the largest pipe chunk (~2 MB per job); `ingressBufferBytes` bounds how much of each chunk survives once backpressure starts truncating.
+- `src/boundary/local-process.ts` — Node child-process and process-tree adapter; requests color from compatible piped CLIs with a default `FORCE_COLOR=1` while honoring explicit `FORCE_COLOR`/`NO_COLOR`. The ingress queue enforces `ingressBufferBytes` across retained UTF-8 tails and evicts the oldest event when recent output must replace a full queue.
 - `src/boundary/host-ui.ts` — exception-safe Pi status projection and disposable manager repaint ticker.
 - `src/boundary/native-clock.ts` — synchronous clock adapter for Pi render callbacks.
 - `src/job/` — job model, typed errors, bounded logs with shared UTF-8 byte accounting (`utf8.ts`), projection, and scoped service owner.

@@ -16,7 +16,7 @@ import {
   usedToLeftPercent,
   type JsonHttpResponseSchema,
 } from "pi-cosmic-core";
-import { getXaiCredentials } from "../auth/auth.ts";
+import { getXaiCredentials, refreshRejectedXaiCredentials } from "../auth/auth.ts";
 
 export const BILLING_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const MONTHLY_BILLING_URL = `${BILLING_BASE_URL}/billing`;
@@ -237,12 +237,10 @@ export interface XaiUsageResult {
   readonly teamId?: string;
 }
 
-export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (authPath: string) {
-  const credentials = yield* getXaiCredentials(authPath);
-  if (!credentials) return undefined;
-  const [monthly, weekly] = yield* Effect.all(
+const fetchUsageResponses = (accessToken: Redacted.Redacted<string>) =>
+  Effect.all(
     [
-      fetchBilling(MONTHLY_BILLING_URL, credentials.accessToken, MonthlyBillingSchema).pipe(
+      fetchBilling(MONTHLY_BILLING_URL, accessToken, MonthlyBillingSchema).pipe(
         Effect.mapError((error) =>
           error.operation === "decode"
             ? new XaiUsageError({
@@ -255,12 +253,33 @@ export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
               }),
         ),
       ),
-      fetchBilling(WEEKLY_BILLING_URL, credentials.accessToken, WeeklyBillingSchema).pipe(
+      fetchBilling(WEEKLY_BILLING_URL, accessToken, WeeklyBillingSchema).pipe(
         Effect.catch(() => Effect.void),
       ),
     ] as const,
     { concurrency: 2 },
   );
+
+export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (authPath: string) {
+  let credentials = yield* getXaiCredentials(authPath);
+  if (!credentials) return undefined;
+  let responses = yield* fetchUsageResponses(credentials.accessToken);
+  if (responses[0]._tag === "Rejected" && responses[0].status === 401) {
+    const refreshed = yield* refreshRejectedXaiCredentials(authPath, credentials.accessToken).pipe(
+      Effect.mapError(
+        () =>
+          new XaiUsageError({
+            operation: "refresh",
+            message: "xAI OAuth credentials could not be refreshed.",
+          }),
+      ),
+    );
+    if (refreshed !== undefined) {
+      credentials = refreshed;
+      responses = yield* fetchUsageResponses(credentials.accessToken);
+    }
+  }
+  const [monthly, weekly] = responses;
   if (monthly._tag === "Rejected") {
     return yield* new XaiUsageError({
       operation: "monthly",

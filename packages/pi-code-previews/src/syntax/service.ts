@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { codePreviewSettings } from "../config/state";
@@ -94,7 +95,7 @@ export class CodePreviewSyntaxService extends Context.Service<
     this,
     Effect.gen(function* () {
       const adapter = yield* ShikiAdapter;
-      const owner = Symbol("code-preview-syntax-projection");
+      const owner = acquireProjectionOwnership("code-preview-syntax-projection");
       const initial: SyntaxState = {
         highlighter: undefined,
         theme: undefined,

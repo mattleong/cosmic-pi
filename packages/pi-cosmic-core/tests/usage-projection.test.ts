@@ -60,6 +60,26 @@ describe("usage projection helpers", () => {
     expect(Object.isFrozen(reset)).toBe(true);
   });
 
+  it("applies a decision to the exact projection state observed by its callback", () => {
+    const ref = makeProjectionRef();
+    const observed = MutableRef.get(ref);
+
+    synchronizeUsageProjectionContext(ref, (state) => {
+      expect(state).toBe(observed);
+      MutableRef.set(ref, { ...state, accountId: "reentrant-update", statusText: "Reentrant." });
+      return {
+        eligible: true,
+        clearUsage: true,
+        statusTexts: { hiddenStatusText: "Hidden." },
+      };
+    });
+
+    const published = MutableRef.get(ref);
+    expect(published.accountId).toBeUndefined();
+    expect(published.statusText).toBe("Usage unavailable.");
+    expect(Object.isFrozen(published)).toBe(true);
+  });
+
   it("synchronizeUsageProjectionContext applies eligibility decisions and default texts", () => {
     const ref = makeProjectionRef();
 

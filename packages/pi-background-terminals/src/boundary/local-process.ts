@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { BackgroundLogStream } from "../job/model.ts";
 import { utf8ByteLength, utf8Tail } from "../job/utf8.ts";
 
@@ -39,7 +40,7 @@ export interface LocalProcessExit {
 
 export interface LocalProcessHandle {
   readonly pid: number;
-  readonly output: Queue.Dequeue<LocalProcessOutput, Cause.Done>;
+  readonly output: Stream.Stream<LocalProcessOutput>;
   readonly awaitExit: Effect.Effect<LocalProcessExit>;
   readonly droppedOutputBytes: () => number;
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, LocalProcessError>;
@@ -139,12 +140,13 @@ const verifyCwd = (cwd: string) =>
 
 const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: LocalProcessRequest) {
   yield* verifyCwd(request.cwd);
-  const output = yield* Queue.dropping<LocalProcessOutput, Cause.Done>(INGRESS_CHUNKS);
+  const ingressBufferBytes = Math.max(1, Math.floor(request.ingressBufferBytes));
+  const outputQueue = yield* Queue.dropping<LocalProcessOutput, Cause.Done>(INGRESS_CHUNKS);
   const ready = yield* Deferred.make<void, LocalProcessError>();
   const exited = yield* Deferred.make<LocalProcessExit>();
   const stdoutDecoder = new StringDecoder("utf8");
   const stderrDecoder = new StringDecoder("utf8");
-  const maxEventBytes = Math.max(1, Math.ceil(request.ingressBufferBytes / INGRESS_CHUNKS));
+  let queuedBytes = 0;
   let totalDroppedBytes = 0;
   let reportedDroppedBytes = 0;
   let outputClosed = false;
@@ -166,24 +168,31 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;
-    const droppedBytes = totalDroppedBytes - reportedDroppedBytes;
-    // Idle-capacity fast path: a chunk passes through whole while the queue still has
-    // room, so ordinary large pipe writes are not truncated before backpressure exists.
-    // Trade-off: while idle, queued bytes are bounded by INGRESS_CHUNKS × the largest
-    // pipe chunk (~2 MB per job), NOT by ingressBufferBytes — that budget only bounds
-    // how much of each chunk survives once backpressure starts dropping heads.
-    if (Queue.offerUnsafe(output, { stream, text: original, droppedBytes })) {
-      reportedDroppedBytes = totalDroppedBytes;
+    const tail = utf8Tail(original, ingressBufferBytes);
+    totalDroppedBytes += utf8ByteLength(original) - tail.bytes;
+    if (!tail.text) return;
+
+    // Make room by bytes and count. Eviction also restores any dropped-byte delta carried
+    // only by the removed event so a later event reports it.
+    while (Queue.isFullUnsafe(outputQueue) || queuedBytes + tail.bytes > ingressBufferBytes) {
+      const evicted = Queue.takeUnsafe(outputQueue);
+      if (evicted?._tag !== "Success") break;
+      const evictedBytes = utf8ByteLength(evicted.value.text);
+      queuedBytes = Math.max(0, queuedBytes - evictedBytes);
+      totalDroppedBytes += evictedBytes;
+      reportedDroppedBytes = Math.max(0, reportedDroppedBytes - evicted.value.droppedBytes);
+    }
+    if (Queue.isFullUnsafe(outputQueue) || queuedBytes + tail.bytes > ingressBufferBytes) {
+      totalDroppedBytes += tail.bytes;
       return;
     }
-    // Backpressure: retain only the budgeted tail of this chunk.
-    const tail = utf8Tail(original, maxEventBytes);
-    totalDroppedBytes += utf8ByteLength(original) - tail.bytes;
-    const retriedDropped = totalDroppedBytes - reportedDroppedBytes;
-    if (
-      tail.text &&
-      Queue.offerUnsafe(output, { stream, text: tail.text, droppedBytes: retriedDropped })
-    ) {
+    const event = {
+      stream,
+      text: tail.text,
+      droppedBytes: totalDroppedBytes - reportedDroppedBytes,
+    } satisfies LocalProcessOutput;
+    if (Queue.offerUnsafe(outputQueue, event)) {
+      queuedBytes += tail.bytes;
       reportedDroppedBytes = totalDroppedBytes;
     } else {
       totalDroppedBytes += tail.bytes;
@@ -194,7 +203,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     offer("stdout", stdoutDecoder.end());
     offer("stderr", stderrDecoder.end());
     outputClosed = true;
-    Queue.endUnsafe(output);
+    Queue.endUnsafe(outputQueue);
   };
   const onStdout = (chunk: Buffer) => offer("stdout", stdoutDecoder.write(chunk));
   const onStderr = (chunk: Buffer) => offer("stderr", stderrDecoder.write(chunk));
@@ -254,6 +263,15 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
       try: () => terminateTree(child, mode),
       catch: (error) => processError("terminate", error),
     });
+
+  const output = Stream.fromQueue(outputQueue).pipe(
+    Stream.mapEffect((event) =>
+      Effect.sync(() => {
+        queuedBytes = Math.max(0, queuedBytes - utf8ByteLength(event.text));
+        return event;
+      }),
+    ),
+  );
 
   return {
     pid,

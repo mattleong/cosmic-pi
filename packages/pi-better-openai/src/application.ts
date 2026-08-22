@@ -4,6 +4,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import { loadCodePreviewSettings } from "pi-code-previews";
@@ -194,6 +195,28 @@ export function betterOpenAIWithDependencies(
             message: "Better OpenAI session has not started.",
           }),
         );
+  const containCommandFailure = <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+    operation: string,
+    ctx: ExtensionContext,
+    typedMessage: (error: E) => string,
+  ): Effect.Effect<A | void, never, R> =>
+    effect.pipe(
+      Effect.catch((error) =>
+        ignoreHostUi(`${operation}.failure`, () => ctx.ui.notify(typedMessage(error), "warning")),
+      ),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : Effect.logError(`Better OpenAI ${operation} raised an unexpected defect.`).pipe(
+              Effect.andThen(
+                ignoreHostUi(`${operation}.defect`, () =>
+                  ctx.ui.notify(`OpenAI ${operation} failed unexpectedly.`, "warning"),
+                ),
+              ),
+            ),
+      ),
+    );
 
   pi.registerFlag(FAST_ID, {
     description: "Start with OpenAI fast mode enabled (service_tier=priority)",
@@ -209,37 +232,36 @@ export function betterOpenAIWithDependencies(
         return Promise.resolve();
       }
       const desired = !MutableRef.get(fastProjection).desiredActive;
-      return run(
-        FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
-          Effect.tapError((error) =>
-            ignoreHostUi("fast.failure", () =>
+      const signal = safeHostSignal(ctx);
+      const update = FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
+        Effect.tap(() =>
+          Effect.gen(function* () {
+            yield* Effect.sync(() => resetProviderTransport(ctx));
+            yield* ignoreHostUi("fast.render", () => updateFooter(ctx));
+            const fast = MutableRef.get(fastProjection);
+            const active = isFastActive(ctx, fast);
+            yield* ignoreHostUi("fast.notify", () =>
               ctx.ui.notify(
-                `OpenAI fast mode is unavailable${describeHostFailure(error)}.`,
-                "warning",
+                fast.desiredActive && !active
+                  ? unsupportedRequestMessage(ctx)
+                  : fastStateText(ctx, fast),
+                fast.desiredActive && !active ? "warning" : "info",
               ),
-            ),
-          ),
-          Effect.tap(() =>
-            Effect.gen(function* () {
-              yield* Effect.sync(() => resetProviderTransport(ctx));
-              yield* ignoreHostUi("fast.render", () => updateFooter(ctx));
-              const fast = MutableRef.get(fastProjection);
-              const active = isFastActive(ctx, fast);
-              yield* ignoreHostUi("fast.notify", () =>
-                ctx.ui.notify(
-                  fast.desiredActive && !active
-                    ? unsupportedRequestMessage(ctx)
-                    : fastStateText(ctx, fast),
-                  fast.desiredActive && !active ? "warning" : "info",
-                ),
-              );
-            }),
-          ),
-          Effect.catchCause(() => Effect.void),
+            );
+          }),
         ),
-        safeHostSignal(ctx),
+      );
+      return run(
+        containCommandFailure(
+          update,
+          "fast mode",
+          ctx,
+          (error) => `OpenAI fast mode is unavailable${describeHostFailure(error)}.`,
+        ),
+        signal,
       ).catch(() => {
-        // The Effect channel owns failure notifications; this only guards the promise seam.
+        if (!signal?.aborted)
+          safeHostUi(() => ctx.ui.notify("OpenAI fast mode is unavailable.", "warning"));
       });
     },
   });
@@ -247,18 +269,21 @@ export function betterOpenAIWithDependencies(
     description: "Show OpenAI subscription usage status",
     handler: (_args, ctx) => {
       updateContext(ctx);
+      const signal = safeHostSignal(ctx);
+      const refresh = OpenAIUsageService.use((service) =>
+        service.refresh({ notify: true, force: true }),
+      );
       return run(
-        OpenAIUsageService.use((service) => service.refresh({ notify: true, force: true })).pipe(
-          Effect.tapError((error) =>
-            ignoreHostUi("usage.failure", () =>
-              ctx.ui.notify(`OpenAI usage is unavailable${describeHostFailure(error)}.`, "warning"),
-            ),
-          ),
-          Effect.catchCause(() => Effect.void),
+        containCommandFailure(
+          refresh,
+          "usage",
+          ctx,
+          (error) => `OpenAI usage is unavailable${describeHostFailure(error)}.`,
         ),
-        safeHostSignal(ctx),
+        signal,
       ).catch(() => {
-        // The Effect channel owns failure notifications; this only guards the promise seam.
+        if (!signal?.aborted)
+          safeHostUi(() => ctx.ui.notify("OpenAI usage is unavailable.", "warning"));
       });
     },
   });

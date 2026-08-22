@@ -39,7 +39,7 @@ describe("local process boundary", () => {
         });
         const result = yield* Effect.all(
           {
-            events: Stream.fromQueue(handle.output).pipe(Stream.runCollect),
+            events: handle.output.pipe(Stream.runCollect),
             exit: handle.awaitExit,
           },
           { concurrency: "unbounded" },
@@ -83,31 +83,57 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.effect("passes an oversized chunk through whole while ingress still has capacity", () =>
+  it.effect("keeps a chunk whole when it fits in the remaining byte budget", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
-        // One write far larger than maxEventBytes (= ingressBufferBytes / INGRESS_CHUNKS = 32):
-        // truncation must wait for real backpressure, not trigger on the first chunk.
+        const content = "A".repeat(512);
         const handle = yield* processes.spawn({
-          command: `node -e "process.stdout.write('A'.repeat(2000))"`,
+          command: `node -e "process.stdout.write('A'.repeat(512))"`,
           cwd: ".",
-          ingressBufferBytes: 1024,
+          ingressBufferBytes: 1_024,
         });
         const result = yield* Effect.all(
           {
-            events: Stream.fromQueue(handle.output).pipe(Stream.runCollect),
+            events: handle.output.pipe(Stream.runCollect),
+            exit: handle.awaitExit,
+          },
+          { concurrency: "unbounded" },
+        );
+        const stdout = [...result.events]
+          .filter((event) => event.stream === "stdout")
+          .map((event) => event.text)
+          .join("");
+        expect(stdout).toBe(content);
+        expect(handle.droppedOutputBytes()).toBe(0);
+      }),
+    ),
+  );
+
+  it.effect("keeps queued output within the configured byte budget", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        const processes = yield* LocalProcess;
+        const producedBytes = 2_000;
+        const ingressBufferBytes = 1_024;
+        const handle = yield* processes.spawn({
+          command: `node -e "process.stdout.write('A'.repeat(${producedBytes}))"`,
+          cwd: ".",
+          ingressBufferBytes,
+        });
+        const result = yield* Effect.all(
+          {
+            events: handle.output.pipe(Stream.runCollect),
             exit: handle.awaitExit,
           },
           { concurrency: "unbounded" },
         );
         expect(result.exit.exitCode).toBe(0);
-        const stdout = [...result.events]
+        const deliveredBytes = [...result.events]
           .filter((event) => event.stream === "stdout")
-          .map((event) => event.text)
-          .join("");
-        expect(stdout).toBe("A".repeat(2000));
-        expect(handle.droppedOutputBytes()).toBe(0);
+          .reduce((total, event) => total + Buffer.byteLength(event.text, "utf8"), 0);
+        expect(deliveredBytes).toBeLessThanOrEqual(ingressBufferBytes);
+        expect(handle.droppedOutputBytes() + deliveredBytes).toBe(producedBytes);
       }),
     ),
   );
@@ -123,7 +149,7 @@ describe("local process boundary", () => {
         });
         const result = yield* Effect.all(
           {
-            events: Stream.fromQueue(handle.output).pipe(Stream.runCollect),
+            events: handle.output.pipe(Stream.runCollect),
             exit: handle.awaitExit,
           },
           { concurrency: "unbounded" },
