@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import { HostDialogs } from "../boundary/host-dialogs.ts";
@@ -15,11 +16,12 @@ export interface AskUserServiceContract {
 const makeService = Effect.fn("AskUserService.make")(function* () {
   const host = yield* HostDialogs;
   const lock = yield* Semaphore.make(1);
-  let closed = false;
+  // Open while the runtime admits requests; the scope finalizer closes it atomically.
+  const admissions = yield* Latch.make(true);
   const ask: AskUserServiceContract["ask"] = (request) =>
     lock.withPermits(1)(
       Effect.gen(function* () {
-        if (closed) {
+        if (!admissions.isOpen()) {
           return yield* new AskUserRuntimeClosedError({
             message: "The ask-user session runtime is closed.",
           });
@@ -30,11 +32,7 @@ const makeService = Effect.fn("AskUserService.make")(function* () {
         return yield* host.ask(normalized);
       }),
     );
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      closed = true;
-    }),
-  );
+  yield* Effect.addFinalizer(() => Latch.close(admissions));
   return { ask } satisfies AskUserServiceContract;
 });
 

@@ -386,7 +386,7 @@ describe("Herdr native harness security", () => {
       integrationPaths: test.integrations,
       codexHooks: {
         establishTrust: () =>
-          Promise.reject(new HerdrCodexHooksError({ code: "codex_herdr_hook_unavailable" })),
+          Effect.fail(new HerdrCodexHooksError({ code: "codex_herdr_hook_unavailable" })),
       },
     });
     await expect(

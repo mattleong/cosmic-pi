@@ -36,13 +36,20 @@ let activeOwner: symbol | undefined;
 let activeSnapshot: CodePreviewSyntaxSnapshot | undefined;
 let activeRequests: SyntaxRequests | undefined;
 
-export function publishSyntaxProjection(owner: symbol, snapshot: CodePreviewSyntaxSnapshot): void {
+const claimOwnership = (owner: symbol): boolean => {
+  // A stale session must never rebind state published by a newer live owner.
+  if (activeOwner !== undefined && activeOwner !== owner) return false;
   activeOwner = owner;
+  return true;
+};
+
+export function publishSyntaxProjection(owner: symbol, snapshot: CodePreviewSyntaxSnapshot): void {
+  if (!claimOwnership(owner)) return;
   activeSnapshot = snapshot;
 }
 
 export function installSyntaxRequests(owner: symbol, requests: SyntaxRequests): void {
-  activeOwner = owner;
+  if (!claimOwnership(owner)) return;
   activeRequests = requests;
 }
 

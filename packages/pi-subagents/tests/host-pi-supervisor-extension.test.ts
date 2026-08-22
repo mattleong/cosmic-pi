@@ -1,6 +1,8 @@
 // Promise-shaped Pi host boundary test.
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/processEnv:off
+import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import registerBridge from "../src/boundary/host-pi-supervisor-extension.ts";
@@ -20,21 +22,24 @@ type BridgeCall = {
 const bridgeCalls: BridgeCall[] = [];
 let reportFailuresRemaining = 0;
 const close = vi.fn();
-const openBridge = vi.fn(async () => ({
-  call: async <Name extends SupervisorToolName>(
-    name: Name,
-    input: SupervisorToolArgumentsByName[Name],
-  ) => {
-    // SAFETY: The generic name/input pair is correlated by SupervisorToolArgumentsByName.
-    bridgeCalls.push({ name, input } as BridgeCall);
-    if (name === "supervisor_submit_report" && reportFailuresRemaining > 0) {
-      reportFailuresRemaining -= 1;
-      throw new Error("uncertain report delivery");
-    }
-    return "accepted";
-  },
-  close,
-}));
+const openBridge = vi.fn(
+  (_: string) =>
+    Effect.succeed({
+      call: async <Name extends SupervisorToolName>(
+        name: Name,
+        input: SupervisorToolArgumentsByName[Name],
+      ) => {
+        // SAFETY: The generic name/input pair is correlated by SupervisorToolArgumentsByName.
+        bridgeCalls.push({ name, input } as BridgeCall);
+        if (name === "supervisor_submit_report" && reportFailuresRemaining > 0) {
+          reportFailuresRemaining -= 1;
+          throw new Error("uncertain report delivery");
+        }
+        return "accepted";
+      },
+      close,
+    }) satisfies Effect.Effect<unknown, never, Scope.Scope>,
+);
 
 afterEach(() => {
   bridgeCalls.length = 0;

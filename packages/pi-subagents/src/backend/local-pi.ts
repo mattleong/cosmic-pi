@@ -25,6 +25,7 @@ import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 import {
   assistantText,
   decodeAssistantMessage,
+  decodeContactCancelEnvelope,
   decodeContactParentEnvelope,
   decodeRpcEnvelope,
   decodeRpcStateData,
@@ -169,10 +170,19 @@ const normalizeIpcEvent = <ValueInput>(
       message: envelope.message,
     })),
     Effect.catch(() =>
-      Effect.succeed<BackendEvent>({
-        type: "protocol_error",
-        message: "Subagent emitted an invalid parent-contact event.",
-      }),
+      decodeContactCancelEnvelope(value).pipe(
+        Effect.map((envelope) => ({
+          type: "supervisor_question_cancelled" as const,
+          assignmentEpoch,
+          requestId: envelope.requestId,
+        })),
+        Effect.catch(() =>
+          Effect.succeed<BackendEvent>({
+            type: "protocol_error",
+            message: "Subagent emitted an invalid parent-contact event.",
+          }),
+        ),
+      ),
     ),
   );
 

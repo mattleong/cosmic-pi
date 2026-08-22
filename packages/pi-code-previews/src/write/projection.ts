@@ -10,6 +10,8 @@ let activeOwner: symbol | undefined;
 let activeSnapshot: CodePreviewWriteSnapshot | undefined;
 
 export function publishWriteProjection(owner: symbol, snapshot: CodePreviewWriteSnapshot): void {
+  // A stale session must never overwrite state published by a newer live owner.
+  if (activeOwner !== undefined && activeOwner !== owner) return;
   activeOwner = owner;
   activeSnapshot = snapshot;
 }

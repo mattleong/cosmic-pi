@@ -7,7 +7,10 @@
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -332,29 +335,33 @@ const appendHeadBounded = (target: BoundedChunks, chunk: Buffer, maximum: number
   target.length += accepted.byteLength;
 };
 
-const terminateProbe = (child: NodeChildProcess): Promise<boolean> =>
-  new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve(true);
-      return;
-    }
-    const timer = setTimeout(() => resolve(false), 1_000);
-    timer.unref();
-    child.once("close", () => {
-      clearTimeout(timer);
-      resolve(true);
-    });
+const terminateProbeEffect = (child: NodeChildProcess): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    if (child.exitCode !== null || child.signalCode !== null) return true;
+    const closed = Deferred.makeUnsafe<boolean>();
+    const onClose = (): void => {
+      Deferred.doneUnsafe(closed, Effect.succeed(true));
+    };
+    child.once("close", onClose);
     child.kill("SIGKILL");
+    // One second to observe the close; otherwise cleanup is reported unconfirmed.
+    const confirmed = yield* Effect.raceFirst(
+      Deferred.await(closed),
+      Effect.as(Effect.sleep(1_000), false),
+    );
+    child.off("close", onClose);
+    return confirmed;
   });
 
-const run = (
+const runEffect = (
   executable: string,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv,
   timeoutMillis: number,
   maximumBytes: number,
-): Promise<CommandResult> =>
-  new Promise((resolve) => {
+): Effect.Effect<CommandResult> =>
+  Effect.gen(function* () {
+    const done = Deferred.makeUnsafe<CommandResult>();
     const stdout: BoundedChunks = { chunks: [], length: 0 };
     const stderr: BoundedChunks = { chunks: [], length: 0 };
     let overflowed = false;
@@ -364,31 +371,36 @@ const run = (
     let dispatched = false;
     let settled = false;
     let child: NodeChildProcess;
-    let timer: NodeJS.Timeout | undefined;
     const finish = (code: number | null) => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
-      resolve({
-        code,
-        stdout: Buffer.concat(stdout.chunks).toString("utf8"),
-        stderr: Buffer.concat(stderr.chunks).toString("utf8"),
-        overflowed,
-        timedOut,
-        cleanupUnconfirmed,
-        dispatched,
-      });
+      Deferred.doneUnsafe(
+        done,
+        Effect.succeed({
+          code,
+          stdout: Buffer.concat(stdout.chunks).toString("utf8"),
+          stderr: Buffer.concat(stderr.chunks).toString("utf8"),
+          overflowed,
+          timedOut,
+          cleanupUnconfirmed,
+          dispatched,
+        }),
+      );
     };
-    try {
-      child = spawn(executable, [...args], {
-        env: environment,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
-    } catch {
+    const spawned = yield* Effect.exit(
+      Effect.sync(() =>
+        spawn(executable, [...args], {
+          env: environment,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        }),
+      ),
+    );
+    if (Exit.isFailure(spawned)) {
       finish(null);
-      return;
+      return yield* Deferred.await(done);
     }
+    child = spawned.value;
     const append = (target: "stdout" | "stderr", chunk: Buffer) => {
       observedBytes += chunk.byteLength;
       if (observedBytes > maximumBytes) {
@@ -406,14 +418,22 @@ const run = (
     child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
     child.once("error", () => finish(null));
     child.once("close", (code) => finish(code));
-    timer = setTimeout(() => {
-      timedOut = true;
-      void terminateProbe(child).then((confirmed) => {
-        cleanupUnconfirmed = !confirmed;
-        finish(null);
-      });
-    }, timeoutMillis);
-    timer.unref();
+    // The deadline drives the same confirm-then-settle path; a bare timeout race would
+    // abandon the probe process before its termination was confirmed.
+    const deadline = yield* Effect.sleep(timeoutMillis).pipe(
+      Effect.andThen(() =>
+        Effect.gen(function* () {
+          timedOut = true;
+          const confirmed = yield* terminateProbeEffect(child);
+          cleanupUnconfirmed = !confirmed;
+          finish(null);
+        }),
+      ),
+      Effect.forkChild,
+    );
+    const result = yield* Deferred.await(done);
+    yield* Effect.ignore(Fiber.interrupt(deadline));
+    return result;
   });
 
 const runCommand = (
@@ -424,17 +444,16 @@ const runCommand = (
   maximumBytes = MAX_JSON_BYTES,
   confirmedRejectionCodes?: ReadonlySet<string>,
 ): Effect.Effect<string, SubagentProcessError> => {
-  const command = Effect.tryPromise({
-    try: () =>
-      run(
-        options.executable ?? HERDR_EXECUTABLE,
-        args,
-        options.environment ?? {},
-        timeoutMillis,
-        maximumBytes,
-      ),
-    catch: () => processError(operation, "herdr_cli_failed", `Herdr failed during ${operation}.`),
-  }).pipe(
+  const command = runEffect(
+    options.executable ?? HERDR_EXECUTABLE,
+    args,
+    options.environment ?? {},
+    timeoutMillis,
+    maximumBytes,
+  ).pipe(
+    Effect.mapError(() =>
+      processError(operation, "herdr_cli_failed", `Herdr failed during ${operation}.`),
+    ),
     Effect.flatMap((result) => {
       if (result.cleanupUnconfirmed) return Effect.fail(cleanupUnconfirmed(operation));
       if (result.timedOut)
@@ -784,21 +803,20 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
           `The current Herdr ${runtime} integration is required before topology can be created.`,
         );
       const nativeArgs = runtime === "claude" ? ["auth", "status", "--json"] : ["--version"];
-      const native = yield* Effect.tryPromise({
-        try: () =>
-          run(
-            fixedOptions.runtimeExecutables?.[runtime] ?? runtime,
-            nativeArgs,
-            environment,
-            5_000,
-            32 * 1024,
-          ),
-        catch: () =>
+      const native = yield* runEffect(
+        fixedOptions.runtimeExecutables?.[runtime] ?? runtime,
+        nativeArgs,
+        environment,
+        5_000,
+        32 * 1024,
+      ).pipe(
+        Effect.mapError(() =>
           readinessError(
             `${runtime}_preflight_failed`,
             `Unable to run the bounded ${runtime} native readiness probe.`,
           ),
-      });
+        ),
+      );
       if (native.cleanupUnconfirmed)
         return yield* readinessError(
           `${runtime}_preflight_cleanup_unconfirmed`,

@@ -326,33 +326,57 @@ const removePrivateState = async (
 };
 
 const listen = (server: Server): Promise<number> =>
-  new Promise((resolveListen, rejectListen) => {
-    const onError = () => {
-      server.off("listening", onListening);
-      rejectListen(new Error("listen-failed"));
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      const address = server.address();
-      if (!address || Predicate.isString(address)) {
-        rejectListen(new Error("invalid-listener-address"));
-        return;
-      }
-      resolveListen(address.port);
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen({ host: LOOPBACK_HOST, port: 0, exclusive: true });
-  });
+  Effect.runPromise(
+    Effect.callback<number, SupervisorChannelError>((resume) => {
+      const onError = () => {
+        server.off("listening", onListening);
+        resume(
+          Effect.fail(
+            channelError("listen", "listen_failed", "The supervisor listener failed to start."),
+          ),
+        );
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        const address = server.address();
+        if (!address || Predicate.isString(address)) {
+          resume(
+            Effect.fail(
+              channelError(
+                "listen",
+                "invalid_listener_address",
+                "The supervisor listener address is invalid.",
+              ),
+            ),
+          );
+          return;
+        }
+        resume(Effect.succeed(address.port));
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen({ host: LOOPBACK_HOST, port: 0, exclusive: true });
+    }),
+  );
 
 const closeServer = (server: Server): Promise<void> =>
-  new Promise((resolveClose, rejectClose) => {
-    if (!server.listening) {
-      resolveClose();
-      return;
-    }
-    server.close((error) => (error ? rejectClose(error) : resolveClose()));
-  });
+  Effect.runPromise(
+    Effect.callback<void, SupervisorChannelError>((resume) => {
+      if (!server.listening) {
+        resume(Effect.void);
+        return;
+      }
+      server.close((closeError) =>
+        closeError
+          ? resume(
+              Effect.fail(
+                channelError("listen", "close_failed", "The supervisor listener failed to close."),
+              ),
+            )
+          : resume(Effect.void),
+      );
+    }),
+  );
 
 /**
  * A peer send rejected before any bytes were handed to the socket, so the message
@@ -364,6 +388,10 @@ export class PeerSendNotAttemptedError extends Schema.TaggedError<PeerSendNotAtt
   { reason: Schema.Literals(["unavailable", "oversized"]) },
 ) {}
 
+// The write tail stays a promise chain on purpose: sends are issued from synchronous Node
+// callbacks where no fiber exists, the chain preserves strict frame order, and the pending
+// counter bounds queued frames. Effect queue/fiber machinery would add a writer fiber without
+// changing either guarantee.
 const makePeerSender = (socket: Socket, onFailure: () => void) => {
   let writeTail: Promise<void> = Promise.resolve();
   let pendingWrites = 0;

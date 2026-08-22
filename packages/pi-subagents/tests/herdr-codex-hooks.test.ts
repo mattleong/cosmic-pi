@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeHerdrCodexHooks } from "../src/boundary/herdr-codex-hooks.ts";
 
@@ -54,14 +55,14 @@ afterEach(async () => {
 describe("Herdr Codex hook trust", () => {
   it("round-trips Codex's opaque key and hash and confirms the exact hook is trusted", async () => {
     const test = await setup();
-    await expect(test.hooks.establishTrust(test.input)).resolves.toBeUndefined();
+    await expect(Effect.runPromise(test.hooks.establishTrust(test.input))).resolves.toBeUndefined();
   });
 
   it.each(["extra", "wrong-command", "disabled", "warning", "modified", "overridden"])(
     "fails closed for %s hook evidence",
     async (mode) => {
       const test = await setup(mode);
-      await expect(test.hooks.establishTrust(test.input)).rejects.toMatchObject({
+      await expect(Effect.runPromise(test.hooks.establishTrust(test.input))).rejects.toMatchObject({
         _tag: "HerdrCodexHooksError",
         code: "codex_herdr_hook_unavailable",
       });
@@ -70,7 +71,7 @@ describe("Herdr Codex hook trust", () => {
 
   it.each(["malformed", "exit", "timeout"])("bounds %s transport failure", async (mode) => {
     const test = await setup(mode);
-    await expect(test.hooks.establishTrust(test.input)).rejects.toMatchObject({
+    await expect(Effect.runPromise(test.hooks.establishTrust(test.input))).rejects.toMatchObject({
       _tag: "HerdrCodexHooksError",
       code: "codex_herdr_hook_unavailable",
     });

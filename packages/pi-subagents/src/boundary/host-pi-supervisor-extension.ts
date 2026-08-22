@@ -1,7 +1,10 @@
 // Sole pi-subagents bridge extension loaded into Herdr-hosted Pi children.
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/asyncFunction:off
+import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
+import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { defineTool, type AgentEndEvent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
@@ -104,6 +107,7 @@ export default function registerPiSubagentSupervisorBridge(
   });
   const fastMode = pi.getFlag("pi-subagents-fast-mode") === true;
   let client: PiSupervisorBridgeClient | undefined;
+  let bridgeScope: Scope.Closeable | undefined;
   let started = false;
   let shuttingDown = false;
   let assignment: AssignmentReportState = {
@@ -187,9 +191,23 @@ export default function registerPiSubagentSupervisorBridge(
       pi.registerProvider(runtimeApiProvider, { apiKey: runtimeApiKey });
 
     try {
-      client = await dependencies.openBridge(config);
+      const scope = Scope.makeUnsafe();
+      const opened = await Effect.runPromiseExit(
+        dependencies.openBridge(config).pipe(Scope.provide(scope)),
+      );
+      if (Exit.isSuccess(opened)) {
+        client = opened.value;
+        bridgeScope = scope;
+      } else {
+        await Effect.runPromise(Scope.close(scope, opened));
+      }
       await loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted()).catch(() => undefined);
     } catch {
+      if (ctx.hasUI)
+        ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
+      return;
+    }
+    if (!client) {
       if (ctx.hasUI)
         ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
       return;
@@ -308,5 +326,10 @@ export default function registerPiSubagentSupervisorBridge(
     shuttingDown = true;
     client?.close();
     client = undefined;
+    const scope = bridgeScope;
+    bridgeScope = undefined;
+    // The explicit close above tears the session down; this releases any partially acquired
+    // resources if open never completed.
+    if (scope) void Effect.runPromise(Scope.close(scope, Exit.succeed(undefined)));
   });
 }

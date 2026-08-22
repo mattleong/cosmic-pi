@@ -30,7 +30,8 @@ import {
   prepareLocalCliHarness,
   removeLocalCliHarness,
   runIsolatedCodexAuthProbe,
-  runProbe,
+  runProbeEffect,
+  type ProbeResult,
   sanitizeLocalCliEnvironment,
   type LocalCliHarnessOptions,
 } from "./local-cli-harness.ts";
@@ -200,22 +201,25 @@ export const makeLocalCliProcess = (
             ? ["--version"]
             : ["login", "status"];
       const probeEnvironment = sanitizeLocalCliEnvironment(environment, request.runtime);
-      const result = yield* Effect.tryPromise({
-        try: () =>
-          request.runtime === "codex" && !codexApiKeyFallback
-            ? runIsolatedCodexAuthProbe(executable, options.agentDirectory, environment)
-            : runProbe(executable, args, probeEnvironment),
-        catch: (error) =>
-          isHarnessCleanupUnconfirmed(error)
-            ? preflightError(
-                `${request.runtime}_preflight_cleanup_unconfirmed`,
-                `${request.runtime} readiness probe private harness cleanup could not be confirmed; no later candidate will be attempted.`,
-              )
-            : preflightError(
-                `${request.runtime}_preflight_failed`,
-                `Unable to run bounded ${request.runtime} readiness preflight.`,
-              ),
-      });
+      let result: ProbeResult;
+      if (request.runtime === "codex" && !codexApiKeyFallback) {
+        result = yield* Effect.tryPromise({
+          try: () => runIsolatedCodexAuthProbe(executable, options.agentDirectory, environment),
+          catch: (error) =>
+            isHarnessCleanupUnconfirmed(error)
+              ? preflightError(
+                  `${request.runtime}_preflight_cleanup_unconfirmed`,
+                  `${request.runtime} readiness probe private harness cleanup could not be confirmed; no later candidate will be attempted.`,
+                )
+              : preflightError(
+                  `${request.runtime}_preflight_failed`,
+                  `Unable to run bounded ${request.runtime} readiness preflight.`,
+                ),
+        });
+      } else {
+        // The bounded probe is total: it always resolves an outcome record.
+        result = yield* runProbeEffect(executable, args, probeEnvironment);
+      }
       if (result.cleanupUnconfirmed)
         return yield* preflightError(
           `${request.runtime}_preflight_cleanup_unconfirmed`,

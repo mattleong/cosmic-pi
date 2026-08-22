@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -103,7 +104,9 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   const lock = yield* Semaphore.make(1);
   const jobs = new Map<string, JobRecord>();
   let nextId = 1;
-  let closed = false;
+  // Open while the runtime admits starts; the shutdown finalizer closes it under the same
+  // lock that guards admission.
+  const admissions = yield* Latch.make(true);
   const retainedLogBudget = Math.max(1, Math.floor(config.totalLogBufferBytes / 2));
   const ingressLogBudget = Math.max(1, config.totalLogBufferBytes - retainedLogBudget);
 
@@ -375,11 +378,11 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         const prepared = { ...request, command, cwd };
         const record = yield* withLock(
           Effect.gen(function* () {
-            if (closed || !config.enabled) {
+            if (!admissions.isOpen() || !config.enabled) {
               return yield* new BackgroundRuntimeClosedError({
-                message: closed
-                  ? "Background terminal runtime is closed."
-                  : "Background terminals are disabled.",
+                message: admissions.isOpen()
+                  ? "Background terminals are disabled."
+                  : "Background terminal runtime is closed.",
               });
             }
             const active = [...jobs.values()].filter((item) =>
@@ -597,11 +600,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   };
 
   yield* Effect.addFinalizer(() =>
-    withLock(
-      Effect.sync(() => {
-        closed = true;
-      }),
-    ).pipe(
+    withLock(Latch.close(admissions)).pipe(
       Effect.andThen(stopAll(false)),
       Effect.asVoid,
       Effect.catch(() => Effect.void),

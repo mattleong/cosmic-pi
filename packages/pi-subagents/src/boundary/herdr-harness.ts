@@ -556,13 +556,15 @@ const prepareHarness = async (
     };
     await writeExclusive(hooksPath, `${JSON.stringify(hooks)}\n`);
     await writeExclusive(configPath, codexConfig(request, supervisor, integration));
-    await options.codexHooks!.establishTrust({
-      codexHome,
-      configPath,
-      hooksPath,
-      cwd: request.cwd,
-      command: hookCommand,
-    });
+    await Effect.runPromise(
+      options.codexHooks!.establishTrust({
+        codexHome,
+        configPath,
+        hooksPath,
+        cwd: request.cwd,
+        command: hookCommand,
+      }),
+    );
     const secretPath = join(directory, "codex-environment.sh");
     await writeExclusive(
       secretPath,

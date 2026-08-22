@@ -81,6 +81,11 @@ const ContactParentSchema = Schema.Struct({
   ]),
   message: ParentMessageSchema,
 });
+const ContactCancelSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("contact_cancel"),
+  requestId: ProtocolIdSchema,
+});
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
 const RpcDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
 export type RpcResponse = Schema.Schema.Type<typeof RpcResponseSchema>;
@@ -100,6 +105,9 @@ export type RpcChildEnvelope =
 
 export const decodeContactParentEnvelope = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(ContactParentSchema)(value);
+
+export const decodeContactCancelEnvelope = <ValueInput>(value: ValueInput) =>
+  Schema.decodeUnknownEffect(ContactCancelSchema)(value);
 
 export function decodeRpcEnvelope<ValueInput>(
   value: ValueInput,

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,12 +50,19 @@ describe("packaged delegated-Pi supervisor bridge", () => {
       directories.push(directory);
       const scenario = join(directory, "scenario.json");
       await fs.writeFile(scenario, JSON.stringify({ mode }));
-      await expect(
-        openPiSupervisorBridge(scenario, {
-          helperPath: openFixture,
-          initializeTimeoutMillis: 75,
-        }),
-      ).rejects.toBeInstanceOf(Error);
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const opened = yield* Effect.exit(
+              openPiSupervisorBridge(scenario, {
+                helperPath: openFixture,
+                initializeTimeoutMillis: 75,
+              }),
+            );
+            expect(Exit.isFailure(opened)).toBe(true);
+          }),
+        ),
+      );
       const pid = await fs
         .readFile(`${scenario}.pid`, "utf8")
         .then((value) => Number(value))
@@ -75,9 +83,7 @@ describe("packaged delegated-Pi supervisor bridge", () => {
           const channel = yield* makeSupervisorChannel({ agentDirectory: directory }).open({
             runId: "agent-pi-bridge",
           });
-          const client = yield* Effect.tryPromise(() =>
-            openPiSupervisorBridge(channel.metadata.connectionConfigPath),
-          );
+          const client = yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath);
           yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
           yield* channel.awaitReady;
           yield* channel.setAssignmentEpoch(1);
@@ -137,9 +143,7 @@ describe("packaged delegated-Pi supervisor bridge", () => {
           const channel = yield* makeSupervisorChannel({ agentDirectory: directory }).open({
             runId: "agent-pi-invalid",
           });
-          const client = yield* Effect.tryPromise(() =>
-            openPiSupervisorBridge(channel.metadata.connectionConfigPath),
-          );
+          const client = yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath);
           yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
           yield* channel.awaitReady;
           yield* channel.setAssignmentEpoch(1);

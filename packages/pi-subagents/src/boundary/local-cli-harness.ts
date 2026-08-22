@@ -9,6 +9,11 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
@@ -296,12 +301,13 @@ export const claudeAuthLoggedIn = (source: string): boolean => {
   }
 };
 
-export const runProbe = (
+export const runProbeEffect = (
   executable: string,
   args: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv,
-): Promise<ProbeResult> =>
-  new Promise((resolveProbe) => {
+): Effect.Effect<ProbeResult> =>
+  Effect.gen(function* () {
+    const done = Deferred.makeUnsafe<ProbeResult>();
     let stdout = "";
     let stderr = "";
     let overflowed = false;
@@ -309,25 +315,32 @@ export const runProbe = (
     let cleanupUnconfirmed = false;
     let settled = false;
     let child: NodeChildProcess;
-    let timer: NodeJS.Timeout | undefined;
     const finish = (code: number | null): void => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
-      resolveProbe({ code, stdout, stderr, overflowed, timedOut, cleanupUnconfirmed });
+      Deferred.doneUnsafe(
+        done,
+        Effect.succeed({ code, stdout, stderr, overflowed, timedOut, cleanupUnconfirmed }),
+      );
     };
-    try {
-      child = spawn(executable, [...args], {
-        detached: process.platform !== "win32",
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
-    } catch (error) {
-      stderr = error instanceof Error ? error.message : "probe-spawn-failed";
+    const spawned = yield* Effect.exit(
+      Effect.sync(() =>
+        spawn(executable, [...args], {
+          detached: process.platform !== "win32",
+          env,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        }),
+      ),
+    );
+    if (Exit.isFailure(spawned)) {
+      // SAFETY: The only failure here is the spawn thunk's synchronous throw.
+      const thrown = Cause.squash(spawned.cause);
+      stderr = thrown instanceof Error ? thrown.message : "probe-spawn-failed";
       finish(null);
-      return;
+      return yield* Deferred.await(done);
     }
+    child = spawned.value;
     const append = (target: "stdout" | "stderr", chunk: Buffer) => {
       if (
         Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8") + chunk.length >
@@ -356,16 +369,26 @@ export const runProbe = (
         },
       );
     });
-    timer = setTimeout(() => {
-      timedOut = true;
-      void terminateProcessTree(child, "force").catch(() => undefined);
-      const hardStop = setTimeout(() => {
-        cleanupUnconfirmed = true;
-        finish(null);
-      }, 1_000);
-      hardStop.unref();
-    }, PROBE_TIMEOUT_MILLIS);
-    timer.unref();
+    // The deadline drives the same confirm-then-settle path; a bare timeout race would
+    // abandon the probe process before its termination was confirmed.
+    const deadline = yield* Effect.sleep(PROBE_TIMEOUT_MILLIS).pipe(
+      Effect.andThen(() =>
+        Effect.sync(() => {
+          timedOut = true;
+          terminateProcessTree(child, "force").then(
+            () => finish(null),
+            () => {
+              cleanupUnconfirmed = true;
+              finish(null);
+            },
+          );
+        }),
+      ),
+      Effect.forkChild,
+    );
+    const result = yield* Deferred.await(done);
+    yield* Effect.ignore(Fiber.interrupt(deadline));
+    return result;
   });
 
 export const runIsolatedCodexAuthProbe = async (
@@ -374,7 +397,9 @@ export const runIsolatedCodexAuthProbe = async (
   environment: NodeJS.ProcessEnv,
 ): Promise<ProbeResult> => {
   const harness = await prepareCodexCatalogHarness({ agentDirectory, environment });
-  const result = await runProbe(executable, ["login", "status"], harness.env);
+  const result = await Effect.runPromise(
+    runProbeEffect(executable, ["login", "status"], harness.env),
+  );
   try {
     await harness.release();
     return result;

@@ -7,6 +7,9 @@ import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
@@ -20,15 +23,30 @@ import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
 const ProtocolIdSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS));
 const ParentMessageSchema = Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS));
 const PARENT_REPLY_PREFIX = "Parent replied: ";
+const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
 
-interface PendingReply {
-  readonly resolve: (message: string) => void;
-  readonly reject: (error: Error) => void;
+interface ContactParentEnvelope {
+  readonly channel: "pi-subagents";
+  readonly type: "contact_parent";
+  readonly requestId: string;
+  readonly kind: "progress" | "question" | "warning";
+  readonly message: string;
 }
+
+interface ContactCancelEnvelope {
+  readonly channel: "pi-subagents";
+  readonly type: "contact_cancel";
+  readonly requestId: string;
+}
+
+export class ParentContactError extends Schema.TaggedError<ParentContactError>()(
+  "ParentContactError",
+  { message: Schema.String },
+) {}
 
 const ParentControlSchema = Schema.Union([
   Schema.Struct({
@@ -58,18 +76,30 @@ const ContactParentParameters = Type.Object(
 
 type IpcMessage = Parameters<NonNullable<typeof process.send>>[0];
 
-function sendIpc(message: IpcMessage): Promise<void> {
-  return new Promise((resolve, reject) => {
+const sendIpcEffect = (message: IpcMessage): Effect.Effect<void, ParentContactError> =>
+  Effect.callback((resume) => {
     if (!process.send || !process.connected) {
-      reject(new Error("The parent subagent supervisor is unavailable."));
+      resume(
+        Effect.fail(
+          new ParentContactError({
+            message: "The parent subagent supervisor is unavailable.",
+          }),
+        ),
+      );
       return;
     }
     process.send(message, (error) => {
-      if (error) reject(new Error("Unable to contact the parent subagent supervisor."));
-      else resolve();
+      resume(
+        error
+          ? Effect.fail(
+              new ParentContactError({
+                message: "Unable to contact the parent subagent supervisor.",
+              }),
+            )
+          : Effect.void,
+      );
     });
   });
-}
 
 export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (process.env.PI_SUBAGENT_CHILD !== "1") return;
@@ -85,7 +115,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
   delete process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
   if (runtimeApiKey && runtimeApiProvider)
     pi.registerProvider(runtimeApiProvider, { apiKey: runtimeApiKey });
-  const pending = new Map<string, PendingReply>();
+  const pending = new Map<string, Deferred.Deferred<string, ParentContactError>>();
   let listening = false;
 
   const onMessage = <RawInput>(raw: RawInput) => {
@@ -95,7 +125,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
       const waiter = pending.get(message.requestId);
       if (!waiter) return;
       pending.delete(message.requestId);
-      waiter.resolve(message.message);
+      Deferred.doneUnsafe(waiter, Effect.succeed(message.message));
       return;
     }
     if (message.type === "peer_notice") {
@@ -118,7 +148,14 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
 
   const rejectPending = () => {
     for (const waiter of pending.values())
-      waiter.reject(new Error("The parent subagent supervisor disconnected."));
+      Deferred.doneUnsafe(
+        waiter,
+        Effect.fail(
+          new ParentContactError({
+            message: "The parent subagent supervisor disconnected.",
+          }),
+        ),
+      );
     pending.clear();
   };
 
@@ -159,51 +196,67 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
     executionMode: "sequential",
     async execute(_toolCallId, params, signal) {
       const requestId = `contact-${process.pid}-${nextRequest++}`;
-      const envelope = {
-        channel: "pi-subagents" as const,
-        type: "contact_parent" as const,
+      const envelope: ContactParentEnvelope = {
+        channel: "pi-subagents",
+        type: "contact_parent",
         requestId,
         kind: params.kind,
         message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),
       };
       if (params.kind !== "question") {
-        await sendIpc(envelope);
+        await Effect.runPromise(sendIpcEffect(envelope));
         return {
           content: [{ type: "text" as const, text: `Parent received ${params.kind}.` }],
           details: {},
         };
       }
 
-      const reply = await new Promise<string>((resolve, reject) => {
-        const abort = () => {
-          pending.delete(requestId);
-          reject(new Error("Parent question was cancelled."));
-        };
-        if (signal?.aborted) {
-          reject(new Error("Parent question was cancelled."));
-          return;
-        }
-        pending.set(requestId, {
-          resolve: (message) => {
-            signal?.removeEventListener("abort", abort);
-            resolve(message);
-          },
-          reject: (error) => {
-            signal?.removeEventListener("abort", abort);
-            reject(error);
-          },
-        });
-        signal?.addEventListener("abort", abort, { once: true });
-        if (signal?.aborted) {
-          abort();
-          return;
-        }
-        void sendIpc(envelope).catch((error) => {
-          pending.delete(requestId);
-          signal?.removeEventListener("abort", abort);
-          reject(error instanceof Error ? error : new Error("Unable to contact parent."));
-        });
-      });
+      let reply: string;
+      try {
+        reply = await Effect.runPromise(
+          Effect.gen(function* () {
+            const waiter = Deferred.makeUnsafe<string, ParentContactError>();
+            pending.set(requestId, waiter);
+            yield* sendIpcEffect(envelope).pipe(
+              Effect.catch((error) =>
+                Effect.sync(() => {
+                  if (pending.get(requestId) === waiter) pending.delete(requestId);
+                }).pipe(Effect.andThen(() => Effect.fail(error))),
+              ),
+            );
+            return yield* Deferred.await(waiter);
+          }).pipe(
+            // A parent that never replies must not block this child forever.
+            Effect.timeout(QUESTION_TIMEOUT_MILLIS),
+            Effect.mapError((error) =>
+              error instanceof ParentContactError
+                ? error
+                : new ParentContactError({
+                    message: "Parent question timed out without a reply.",
+                  }),
+            ),
+            // Cancellation (tool abort or timeout) tells the parent to stop waiting too;
+            // the supervisor view already understands the cancelled-question event.
+            Effect.onExit((exit) =>
+              Exit.isSuccess(exit)
+                ? Effect.void
+                : Effect.sync(() => {
+                    if (!pending.delete(requestId)) return;
+                    const cancel: ContactCancelEnvelope = {
+                      channel: "pi-subagents",
+                      type: "contact_cancel",
+                      requestId,
+                    };
+                    void Effect.runPromise(sendIpcEffect(cancel).pipe(Effect.ignore));
+                  }),
+            ),
+          ),
+          { signal },
+        );
+      } catch (error) {
+        if (signal?.aborted) throw new Error("Parent question was cancelled.");
+        throw error instanceof ParentContactError ? new Error(error.message) : error;
+      }
       return {
         content: [
           {
