@@ -1,11 +1,15 @@
 // Sole pi-subagents bridge extension loaded into Herdr-hosted Pi children.
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/asyncFunction:off
-import * as Exit from "effect/Exit";
+import * as Context from "effect/Context";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
-import * as Scope from "effect/Scope";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import * as Layer from "effect/Layer";
+import {
+  hasObjectRuntimeType,
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+} from "pi-cosmic-core";
 import { defineTool, type AgentEndEvent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
@@ -15,6 +19,7 @@ import {
   openPiSupervisorBridge,
   type PiSupervisorBridgeClient,
 } from "./pi-supervisor-bridge-client.ts";
+import type { RpcSessionError } from "./rpc-session.ts";
 
 const MAX_MESSAGE_CHARS = 16 * 1024;
 const MAX_REPORT_CHARS = 32 * 1024;
@@ -92,6 +97,14 @@ export interface PiSupervisorBridgeExtensionDependencies {
   readonly openBridge: typeof openPiSupervisorBridge;
 }
 
+class SupervisorBridge extends Context.Service<SupervisorBridge, PiSupervisorBridgeClient>()(
+  "pi-subagents/boundary/host-pi-supervisor-extension/SupervisorBridge",
+) {}
+
+interface SupervisorBridgeSessionInput {
+  readonly configPath: string;
+}
+
 export default function registerPiSubagentSupervisorBridge(
   pi: ExtensionAPI,
   dependencies: PiSupervisorBridgeExtensionDependencies = { openBridge: openPiSupervisorBridge },
@@ -107,7 +120,24 @@ export default function registerPiSubagentSupervisorBridge(
   });
   const fastMode = pi.getFlag("pi-subagents-fast-mode") === true;
   let client: PiSupervisorBridgeClient | undefined;
-  let bridgeScope: Scope.Closeable | undefined;
+  const slot = makePiSessionRuntimeSlot<
+    SupervisorBridgeSessionInput,
+    SupervisorBridge,
+    never,
+    RpcSessionError
+  >({
+    makeRuntime: ({ configPath }) =>
+      makePiManagedRuntime(pi, Layer.effect(SupervisorBridge, dependencies.openBridge(configPath))),
+    startup: () =>
+      SupervisorBridge.use((bridge) =>
+        Effect.sync(() => {
+          client = bridge;
+        }),
+      ),
+    onDeactivated: () => {
+      client = undefined;
+    },
+  });
   let started = false;
   let shuttingDown = false;
   let assignment: AssignmentReportState = {
@@ -190,28 +220,14 @@ export default function registerPiSubagentSupervisorBridge(
     if (runtimeApiKey && runtimeApiProvider)
       pi.registerProvider(runtimeApiProvider, { apiKey: runtimeApiKey });
 
-    try {
-      const scope = Scope.makeUnsafe();
-      const opened = await Effect.runPromiseExit(
-        dependencies.openBridge(config).pipe(Scope.provide(scope)),
-      );
-      if (Exit.isSuccess(opened)) {
-        client = opened.value;
-        bridgeScope = scope;
-      } else {
-        await Effect.runPromise(Scope.close(scope, opened));
-      }
-      await loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted()).catch(() => undefined);
-    } catch {
-      if (ctx.hasUI)
+    const token = await slot.start({ configPath: config });
+    if (token === undefined || shuttingDown || !slot.isCurrent(token)) {
+      if (!shuttingDown && ctx.hasUI)
         ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
       return;
     }
-    if (!client) {
-      if (ctx.hasUI)
-        ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
-      return;
-    }
+    await loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted()).catch(() => undefined);
+    if (shuttingDown || !slot.isCurrent(token) || !client) return;
 
     const messageTool = (
       name: "supervisor_progress" | "supervisor_warning" | "supervisor_question",
@@ -324,12 +340,7 @@ export default function registerPiSubagentSupervisorBridge(
 
   pi.on("session_shutdown", () => {
     shuttingDown = true;
-    client?.close();
     client = undefined;
-    const scope = bridgeScope;
-    bridgeScope = undefined;
-    // The explicit close above tears the session down; this releases any partially acquired
-    // resources if open never completed.
-    if (scope) void Effect.runPromise(Scope.close(scope, Exit.succeed(undefined)));
+    return slot.shutdown();
   });
 }

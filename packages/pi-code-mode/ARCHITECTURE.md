@@ -75,7 +75,8 @@ external dependencies.
 - `src/boundary/host-tool-update.ts` — guarded semantic-leading-edge and frame-coalesced
   `onUpdate` publisher (new rows can join Pi's already-pending next render; undefined hosts,
   sync throws, and rejecting thenables are contained; latest pending snapshot flushes on settle;
-  no updates after settle or replacement).
+  each publisher owns a closeable scope for pending frame fibers, and no updates survive settle or
+  replacement).
 - `src/boundary/native-clock.ts` — synchronous host clock door for TUI animation frames.
 - `src/config/schema.ts` — configuration shape, locked defaults, documented bounds, field codecs.
 - `src/config/options.ts` — field-wise project/global/default resolution with provenance, and

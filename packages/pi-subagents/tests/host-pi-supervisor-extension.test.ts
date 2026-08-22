@@ -1,11 +1,14 @@
 // Promise-shaped Pi host boundary test.
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/processEnv:off
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import registerBridge from "../src/boundary/host-pi-supervisor-extension.ts";
+import registerBridge, {
+  type PiSupervisorBridgeExtensionDependencies,
+} from "../src/boundary/host-pi-supervisor-extension.ts";
 import type {
   SupervisorToolArgumentsByName,
   SupervisorToolName,
@@ -24,21 +27,24 @@ let reportFailuresRemaining = 0;
 const close = vi.fn();
 const openBridge = vi.fn(
   (_: string) =>
-    Effect.succeed({
-      call: async <Name extends SupervisorToolName>(
-        name: Name,
-        input: SupervisorToolArgumentsByName[Name],
-      ) => {
-        // SAFETY: The generic name/input pair is correlated by SupervisorToolArgumentsByName.
-        bridgeCalls.push({ name, input } as BridgeCall);
-        if (name === "supervisor_submit_report" && reportFailuresRemaining > 0) {
-          reportFailuresRemaining -= 1;
-          throw new Error("uncertain report delivery");
-        }
-        return "accepted";
-      },
-      close,
-    }) satisfies Effect.Effect<unknown, never, Scope.Scope>,
+    Effect.acquireRelease(
+      Effect.succeed({
+        call: async <Name extends SupervisorToolName>(
+          name: Name,
+          input: SupervisorToolArgumentsByName[Name],
+        ) => {
+          // SAFETY: The generic name/input pair is correlated by SupervisorToolArgumentsByName.
+          bridgeCalls.push({ name, input } as BridgeCall);
+          if (name === "supervisor_submit_report" && reportFailuresRemaining > 0) {
+            reportFailuresRemaining -= 1;
+            throw new Error("uncertain report delivery");
+          }
+          return "accepted";
+        },
+        close,
+      }),
+      (bridge) => Effect.sync(bridge.close),
+    ) satisfies Effect.Effect<unknown, never, Scope.Scope>,
 );
 
 afterEach(() => {
@@ -67,7 +73,9 @@ type BridgeTool = Omit<NativeBridgeTool, "execute"> & {
 
 const bridgeContext = extensionContextFixture({});
 
-const startBridgeHarness = async () => {
+const bridgeHarness = (
+  bridgeOpen: PiSupervisorBridgeExtensionDependencies["openBridge"] = openBridge,
+) => {
   const handlers = new Map<string, BridgeEventHandler>();
   const tools: BridgeTool[] = [];
   let active = ["read"];
@@ -83,12 +91,17 @@ const startBridgeHarness = async () => {
     setActiveTools: vi.fn((next: string[]) => void (active = next)),
     registerProvider: vi.fn(),
   });
-  registerBridge(pi, { openBridge });
-  await handlers.get("session_start")?.(
+  registerBridge(pi, { openBridge: bridgeOpen });
+  return { handlers, tools };
+};
+
+const startBridgeHarness = async () => {
+  const harness = bridgeHarness();
+  await harness.handlers.get("session_start")?.(
     {},
     extensionContextFixture({ cwd: "/project", isProjectTrusted: () => false, hasUI: false }),
   );
-  return { handlers, tools };
+  return harness;
 };
 
 const assistantMessage = (text: string, stopReason: "stop" | "aborted" = "stop") => ({
@@ -357,6 +370,40 @@ describe("Herdr-hosted Pi bridge extension", () => {
     ]);
   });
 
+  it("releases a bridge acquired by startup when shutdown interrupts initialization", async () => {
+    const acquired = Deferred.makeUnsafe<void>();
+    const initialization = Deferred.makeUnsafe<void>();
+    const release = vi.fn();
+    const blockedOpen: PiSupervisorBridgeExtensionDependencies["openBridge"] = () =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          Deferred.doneUnsafe(acquired, Effect.void);
+          return {
+            call: async <Name extends SupervisorToolName>(
+              _name: Name,
+              _input: SupervisorToolArgumentsByName[Name],
+            ) => "accepted",
+            close: vi.fn(),
+          };
+        }),
+        () => Effect.sync(release),
+      ).pipe(Effect.tap(() => Deferred.await(initialization)));
+    const { handlers, tools } = bridgeHarness(blockedOpen);
+    const starting = Promise.resolve(
+      handlers.get("session_start")?.(
+        {},
+        extensionContextFixture({ cwd: "/project", isProjectTrusted: () => false, hasUI: false }),
+      ),
+    );
+    await Effect.runPromise(Deferred.await(acquired));
+
+    await handlers.get("session_shutdown")?.({}, bridgeContext);
+    await starting;
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(tools).toEqual([]);
+  });
+
   it("does not auto-report an interrupted turn or after session shutdown", async () => {
     const { handlers } = await startBridgeHarness();
     handlers.get("before_agent_start")?.({}, bridgeContext);
@@ -372,7 +419,7 @@ describe("Herdr-hosted Pi bridge extension", () => {
       { messages: [assistantMessage("Late complete report.")] },
       bridgeContext,
     );
-    handlers.get("session_shutdown")?.({}, bridgeContext);
+    await handlers.get("session_shutdown")?.({}, bridgeContext);
     await handlers.get("agent_settled")?.({}, bridgeContext);
 
     expect(bridgeCalls).toEqual([]);

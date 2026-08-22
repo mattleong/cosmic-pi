@@ -32,7 +32,7 @@ import {
   writeExclusive,
 } from "./harness-shared.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
-import { terminateProcessTree } from "./process-tree.ts";
+import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
 
 const HARNESS_ROOT = "local-cli-v1";
 const CATALOG_HARNESS_ROOT = "native-model-catalog-v1";
@@ -391,12 +391,9 @@ export const runProbeEffect = (
         Effect.onExit((exit) =>
           Exit.isSuccess(exit)
             ? Effect.void
-            : Effect.promise(() =>
-                terminateProcessTree(child, "force").then(
-                  () => true,
-                  () => false,
-                ),
-              ).pipe(
+            : terminateProcessTreeEffect(child, "force").pipe(
+                Effect.as(true),
+                Effect.catch(() => Effect.succeed(false)),
                 Effect.flatMap((confirmed) =>
                   confirmed
                     ? Effect.void

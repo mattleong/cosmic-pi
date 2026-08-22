@@ -11,7 +11,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
-import { terminateProcessTree } from "./process-tree.ts";
+import { terminateProcessTreeEffect } from "./process-tree.ts";
 
 export class RpcSessionTransportError extends Schema.TaggedError<RpcSessionTransportError>()(
   "RpcSessionTransportError",
@@ -188,10 +188,9 @@ const makeNdjsonRpcSession = <Reply>(
       });
 
     const terminateTreeFor = (process_: NodeChildProcess) =>
-      Effect.tryPromise({
-        try: () => terminateProcessTree(process_, "force"),
-        catch: () => cleanupUnconfirmed(),
-      });
+      terminateProcessTreeEffect(process_, "force").pipe(
+        Effect.mapError(() => cleanupUnconfirmed()),
+      );
 
     const terminateAndConfirm = (process_: NodeChildProcess) =>
       Effect.gen(function* () {

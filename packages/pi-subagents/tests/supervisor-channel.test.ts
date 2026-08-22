@@ -21,6 +21,7 @@ import {
   makeSupervisorChannel,
   PeerSendNotAttemptedError,
   type SupervisorChannelHandle,
+  type SupervisorChannelLayerOptions,
 } from "../src/boundary/supervisor-channel.ts";
 import {
   authenticateSupervisorServerPayload,
@@ -67,7 +68,10 @@ interface OpenTestChannel {
   readonly projectDirectory: string;
 }
 
-const openChannel = async (runId = "agent-supervisor-test"): Promise<OpenTestChannel> => {
+const openChannel = async (
+  runId = "agent-supervisor-test",
+  options: Omit<SupervisorChannelLayerOptions, "agentDirectory"> = {},
+): Promise<OpenTestChannel> => {
   const root = await mkdtemp(join(tmpdir(), "pi-subagents-supervisor-"));
   temporaryDirectories.push(root);
   const agentDirectory = join(root, "agent-home");
@@ -79,7 +83,7 @@ const openChannel = async (runId = "agent-supervisor-test"): Promise<OpenTestCha
   await writeFile(join(projectDirectory, "marker.txt"), "project-only\n", "utf8");
   const scope = await Effect.runPromise(Scope.make());
   const handle = await Effect.runPromise(
-    makeSupervisorChannel({ agentDirectory })
+    makeSupervisorChannel({ agentDirectory, ...options })
       .open({ runId })
       .pipe(Effect.provideService(Scope.Scope, scope)),
   );
@@ -335,7 +339,7 @@ describe("private supervisor channel", () => {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   });
 
-  it("closes a late successful acquisition after open is interrupted", async () => {
+  it("cleans staged acquisition immediately when open is interrupted", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-subagents-supervisor-late-open-"));
     temporaryDirectories.push(root);
     const agentDirectory = join(root, "agent-home");
@@ -371,18 +375,13 @@ describe("private supervisor channel", () => {
     await expect(withTimeout(opening)).rejects.toBeDefined();
     const acquired = metadata;
     if (!acquired) throw new Error("late acquisition metadata was not captured");
-    expect(await stat(acquired.connectionConfigPath)).toBeDefined();
+    const cleaned = await stat(acquired.connectionConfigPath).then(
+      () => false,
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+    );
+    expect(cleaned).toBe(true);
 
     complete();
-    let cleaned = false;
-    for (let attempt = 0; attempt < 100 && !cleaned; attempt += 1) {
-      cleaned = await stat(acquired.connectionConfigPath).then(
-        () => false,
-        (error: NodeJS.ErrnoException) => error.code === "ENOENT",
-      );
-      if (!cleaned) await wait(10);
-    }
-    expect(cleaned).toBe(true);
     const refused = await new Promise<boolean>((resolve) => {
       const socket = connect({ host: acquired.host, port: acquired.port });
       socket.once("connect", () => {
@@ -393,6 +392,25 @@ describe("private supervisor channel", () => {
     });
     expect(refused).toBe(true);
     await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
+  it("closes an unauthenticated peer at the scoped authentication deadline", async () => {
+    const opened = await openChannel("agent-supervisor-auth-deadline", {
+      authTimeoutMillis: 10,
+    });
+    const socket = connect({
+      host: opened.handle.metadata.host,
+      port: opened.handle.metadata.port,
+    });
+    await withTimeout(
+      new Promise<void>((resolve) => {
+        socket.once("close", () => resolve());
+        socket.once("error", () => resolve());
+      }),
+    );
+
+    expect(socket.destroyed).toBe(true);
+    await Effect.runPromise(Scope.close(opened.scope, Exit.void));
   });
 
   it("spawns the helper and keeps blocked questions concurrent, correlated, cancellable, and epoch-safe", async () => {

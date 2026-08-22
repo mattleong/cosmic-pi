@@ -115,14 +115,18 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
       return "coalesced";
     };
 
-    const shutdown = Effect.suspend(() =>
-      closed
-        ? Deferred.await(workerDone)
-        : Queue.shutdown(queue).pipe(
-            Effect.andThen(Fiber.interrupt(fiber)),
-            Effect.andThen(Deferred.await(workerDone)),
-            Effect.asVoid,
-          ),
+    const shutdown = Effect.uninterruptible(
+      Effect.suspend(() => {
+        if (closed) return Deferred.await(workerDone);
+        // Reject synchronous ingress as soon as shutdown starts, before yielding to queue cleanup.
+        closed = true;
+        coalesced = undefined;
+        return Queue.shutdown(queue).pipe(
+          Effect.andThen(Fiber.interrupt(fiber)),
+          Effect.andThen(Deferred.await(workerDone)),
+          Effect.asVoid,
+        );
+      }),
     );
 
     return { offer, shutdown, awaitShutdown: Deferred.await(workerDone) };

@@ -11,7 +11,7 @@
 - `src/config/store.ts` — the single persistence door; canonicalizes the cwd and reads/writes atomic per-directory documents.
 - `src/preference/service.ts` — serialized restore and remember policy.
 - `src/boundary/host-cli.ts` — one-off `--model` detection.
-- `src/boundary/host-model.ts` — guarded Pi model registry and model/thinking operations, including the shared runtime thinking-level validator.
+- `src/boundary/host-model.ts` — guarded Pi model registry and model/thinking operations, including Schema-decoded synchronous host model and thinking-level capture.
 - `src/boundary/host-session.ts` — guarded session capture and fresh-session classification.
 - `src/boundary/host-notifier.ts` — best-effort warning delivery.
 - `src/boundary/path-key.ts` — deterministic readable preference filenames.

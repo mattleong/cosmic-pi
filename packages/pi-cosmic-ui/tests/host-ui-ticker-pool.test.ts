@@ -93,6 +93,19 @@ describe("host UI ticker pool", () => {
     expect(removed).not.toHaveBeenCalled();
   });
 
+  it("disposes every active cadence group exactly once", () => {
+    const harness = schedulerHarness();
+    const pool = makeHostUiTickerPool(harness.schedule);
+    pool.start(160, vi.fn());
+    pool.start(1_000, vi.fn());
+
+    expect(pool.dispose).toBeTypeOf("function");
+    pool.dispose?.();
+    pool.dispose?.();
+
+    expect(harness.scheduled.map((ticker) => ticker.stop.mock.calls.length)).toEqual([1, 1]);
+  });
+
   it("fails soft for invalid intervals and scheduler failures", () => {
     const schedule = vi.fn<HostUiTickerScheduler>(() => {
       throw new Error("scheduler unavailable");

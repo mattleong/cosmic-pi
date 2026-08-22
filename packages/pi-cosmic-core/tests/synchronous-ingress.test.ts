@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import {
   makeSynchronousIngress,
@@ -197,6 +198,20 @@ it.effect("explicit shutdown interrupts an idle waiting worker", () =>
     yield* ingress.shutdown.pipe(Effect.timeout("500 millis"));
     yield* ingress.awaitShutdown.pipe(Effect.timeout("500 millis"));
     expect(ingress.offer(1)).toBe("closed");
+  }),
+);
+
+it.effect("rejects synchronous offers as soon as shutdown starts", () =>
+  Effect.gen(function* () {
+    const ingress = yield* makeSynchronousIngress<number, never, never>({
+      capacity: 1,
+      overflow: "drop",
+      handle: () => Effect.void,
+    });
+    const stopping = yield* ingress.shutdown.pipe(Effect.forkChild({ startImmediately: true }));
+
+    expect(ingress.offer(1)).toBe("closed");
+    yield* Fiber.join(stopping);
   }),
 );
 

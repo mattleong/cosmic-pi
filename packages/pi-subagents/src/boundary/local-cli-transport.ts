@@ -20,7 +20,7 @@ import type {
 import { processCauseError, SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { releaseChildProcess } from "./child-process.ts";
-import { terminateProcessTree } from "./process-tree.ts";
+import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
 
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
@@ -302,10 +302,9 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
           ),
         );
       const terminate = (mode: "graceful" | "force") =>
-        Effect.tryPromise({
-          try: () => terminateProcessTree(child, mode, { platform }),
-          catch: (error) => processError("terminate local CLI", error),
-        });
+        terminateProcessTreeEffect(child, mode, { platform }).pipe(
+          Effect.mapError((error) => processError("terminate local CLI", error)),
+        );
       const release = releaseChildProcess({
         platform,
         requestAbort: Effect.void,

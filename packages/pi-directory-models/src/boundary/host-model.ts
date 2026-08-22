@@ -1,19 +1,22 @@
-import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
-  THINKING_LEVELS,
   makeDirectoryModelPreference,
   type DirectoryModelPreference,
+  ThinkingLevelSchema,
   type ThinkingLevel,
 } from "../config/schema.ts";
 
-export interface SelectedModel {
-  readonly provider: string;
-  readonly id: string;
-}
+const SelectedModelSchema = Schema.Struct({
+  provider: Schema.String,
+  id: Schema.String,
+});
+const decodeSelectedModel = Schema.decodeUnknownOption(SelectedModelSchema);
+const decodeThinkingLevel = Schema.decodeUnknownOption(ThinkingLevelSchema);
+
+export type SelectedModel = typeof SelectedModelSchema.Type;
 
 export class DirectoryModelHostError extends Schema.TaggedError<DirectoryModelHostError>()(
   "DirectoryModelHostError",
@@ -25,8 +28,7 @@ const hostError = (operation: string, message: string) => () =>
 
 export function captureThinkingLevel<ValueInput>(value: ValueInput): ThinkingLevel | undefined {
   try {
-    if (!Predicate.isString(value)) return undefined;
-    return THINKING_LEVELS.find((level) => level === value);
+    return Option.getOrUndefined(decodeThinkingLevel(value));
   } catch {
     return undefined;
   }
@@ -34,12 +36,7 @@ export function captureThinkingLevel<ValueInput>(value: ValueInput): ThinkingLev
 
 export function captureSelectedModel<ValueInput>(value: ValueInput): SelectedModel | undefined {
   try {
-    if (!value || !hasObjectRuntimeType(value)) return undefined;
-    // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
-    const candidate = value as { provider?: unknown; id?: unknown };
-    if (!Predicate.isString(candidate.provider) || !Predicate.isString(candidate.id))
-      return undefined;
-    return { provider: candidate.provider, id: candidate.id };
+    return Option.getOrUndefined(decodeSelectedModel(value));
   } catch {
     return undefined;
   }

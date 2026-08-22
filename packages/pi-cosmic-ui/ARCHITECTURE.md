@@ -30,9 +30,9 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/probe/`, `src/settings/`, and `src/working/` are vertical application features. `src/probe/pi-exec.ts` is the sole Git/`gh` process boundary; it disables optional locks for every background Git probe while leaving `gh` arguments unchanged.
 - `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
 - `src/boundary/` isolates hostile synchronous host callbacks, including working-message updates.
-  `host-ui-ticker-pool.ts` multiplexes equal-cadence animation consumers onto one ref-counted
-  Effect fiber; registration remains independently cancellable and one throwing callback cannot
-  starve its peers.
+  `host-ui-ticker-pool.ts` multiplexes equal-cadence animation consumers onto one ref-counted,
+  pool-scoped Effect fiber; registration remains independently cancellable, pool disposal closes
+  every cadence scope, and one throwing callback cannot starve its peers.
 - `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`). The package root publishes only the default extension; `./protocol`, `./boundary/host-status`, `./client`, `./manager`, `./manager/keymap`, `./manager/key-labels`, `./manager/list-detail`, `./manager/settings-adapter`, and `./manager/settings-surface` are the named subpaths.
 - `src/protocol/host.ts` is the scoped protocol ingress host.
 - `src/protocol/service.ts` is the session host service (`CosmicUiService`; Context keys follow file paths under `protocol/`).

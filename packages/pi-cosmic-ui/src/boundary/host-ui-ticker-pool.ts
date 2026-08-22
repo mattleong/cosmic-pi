@@ -1,6 +1,8 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Scope from "effect/Scope";
 
 export type HostUiTickerScheduler = (intervalMs: number, tick: () => void) => () => void;
 
@@ -16,17 +18,35 @@ interface HostUiTickerGroup {
 
 export interface HostUiTickerPool {
   readonly start: (intervalMs: number, tick: () => void) => () => void;
+  readonly dispose?: (() => void) | undefined;
 }
 
+const closeScope = (scope: Scope.Closeable): void => {
+  const finalizer = Scope.closeUnsafe(scope, Exit.succeed(undefined));
+  if (finalizer !== undefined) void Effect.runFork(finalizer);
+};
+
 const scheduleHostUiTicker: HostUiTickerScheduler = (intervalMs, tick) => {
-  const fiber = Effect.runFork(
-    Effect.sleep(Duration.millis(intervalMs)).pipe(
-      Effect.andThen(Effect.sync(tick)),
-      Effect.forever,
-    ),
-  );
+  const scope = Scope.makeUnsafe("sequential");
+  try {
+    Fiber.runIn(
+      Effect.runFork(
+        Effect.sleep(Duration.millis(intervalMs)).pipe(
+          Effect.andThen(Effect.sync(tick)),
+          Effect.forever,
+        ),
+      ),
+      scope,
+    );
+  } catch (error) {
+    closeScope(scope);
+    throw error;
+  }
+  let active = true;
   return () => {
-    void Effect.runFork(Fiber.interrupt(fiber));
+    if (!active) return;
+    active = false;
+    closeScope(scope);
   };
 };
 
@@ -95,5 +115,17 @@ export const makeHostUiTickerPool = (
     };
   };
 
-  return { start };
+  const dispose = (): void => {
+    for (const group of groups.values()) {
+      group.subscriptions.clear();
+      try {
+        group.stop();
+      } catch {
+        // Presentation timer cleanup is best effort during process or test teardown.
+      }
+    }
+    groups.clear();
+  };
+
+  return { start, dispose };
 };

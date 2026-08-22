@@ -31,7 +31,7 @@ import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT, piToolsForWriteIntent } from "../
 import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
 import type { RuntimeApiKey } from "../run/model.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
-import { terminateProcessTree } from "./process-tree.ts";
+import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../backend/local-pi-protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../domain/routing.ts";
 
@@ -567,10 +567,9 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
           "send IPC message to",
         );
       const terminate = (mode: "graceful" | "force") =>
-        Effect.tryPromise({
-          try: () => terminateProcessTree(child, mode),
-          catch: (error) => processError("terminate", error),
-        });
+        terminateProcessTreeEffect(child, mode).pipe(
+          Effect.mapError((error) => processError("terminate", error)),
+        );
       const releaseActive = releaseChildProcess({
         platform: process.platform,
         requestAbort: requestCooperativeAbort(send),

@@ -4,7 +4,6 @@
 // @effect-diagnostics effect/cryptoRandomBytes:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
@@ -17,6 +16,8 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -151,6 +152,8 @@ export interface SupervisorChannelLayerOptions {
   readonly beforeAcquireComplete?:
     | ((metadata: SupervisorConnectionMetadata) => Promise<void>)
     | undefined;
+  /** Test seam; production uses the fixed five-second authentication deadline. */
+  readonly authTimeoutMillis?: number | undefined;
 }
 
 interface PendingQuestion {
@@ -178,6 +181,7 @@ interface PendingEpochAcknowledgement {
 interface AuthenticatedPeer {
   readonly socket: Socket;
   readonly send: (message: SupervisorServerMessage) => Promise<void>;
+  readonly authenticatedSignal: Deferred.Deferred<void>;
   authenticated: boolean;
   detach: () => void;
 }
@@ -200,8 +204,9 @@ interface NodeChannelState {
   currentAssignmentEpoch: number;
   nextReportSequence: number;
   pendingQuestion: PendingQuestion | undefined;
+  cleanupStarted: boolean;
+  readonly cleanupDone: Deferred.Deferred<void, SupervisorChannelError>;
   closed: boolean;
-  closePromise: Promise<void> | undefined;
 }
 
 const channelError = (operation: string, code: string, message: string) =>
@@ -283,23 +288,41 @@ const makeMetadata = (
   };
 };
 
+interface PreparedStateDirectory {
+  readonly stateDirectory: string;
+  readonly connectionConfigPath: string;
+}
+
 const prepareStateDirectory = async (
   agentDirectory: string,
   runId: string,
-): Promise<{ readonly stateDirectory: string; readonly connectionConfigPath: string }> => {
+  signal: AbortSignal,
+  onPrepared: (prepared: PreparedStateDirectory) => void,
+): Promise<PreparedStateDirectory> => {
   const canonicalAgentDirectory = await safeAgentDirectory(agentDirectory);
   const packageRoot = join(canonicalAgentDirectory, "subagents");
   const channelRoot = join(packageRoot, CHANNEL_ROOT);
   await ensurePrivateDirectory(packageRoot);
   await ensurePrivateDirectory(channelRoot);
+  if (signal.aborted) throw new Error("state-directory-acquisition-interrupted");
   const stateDirectory = join(channelRoot, `${runId}-${randomBytes(12).toString("hex")}`);
-  await fs.mkdir(stateDirectory, { mode: 0o700 });
-  const stateStat = await fs.lstat(stateDirectory);
-  if (!stateStat.isDirectory() || stateStat.isSymbolicLink()) throw new Error("unsafe-run-dir");
-  return {
+  const prepared = {
     stateDirectory,
     connectionConfigPath: join(stateDirectory, CONNECTION_CONFIG_FILE),
-  };
+  } satisfies PreparedStateDirectory;
+  // Publish the unique cleanup identity before the non-cancelable mkdir can establish ownership.
+  onPrepared(prepared);
+  try {
+    await fs.mkdir(stateDirectory, { mode: 0o700 });
+    if (signal.aborted) throw new Error("state-directory-acquisition-interrupted");
+    const stateStat = await fs.lstat(stateDirectory);
+    if (signal.aborted || !stateStat.isDirectory() || stateStat.isSymbolicLink())
+      throw new Error("unsafe-run-dir");
+    return prepared;
+  } catch (error) {
+    await fs.rmdir(stateDirectory).catch(() => undefined);
+    throw error;
+  }
 };
 
 const writePrivateConfig = async <ValueInput>(path: string, value: ValueInput): Promise<void> => {
@@ -325,58 +348,73 @@ const removePrivateState = async (
   await fs.rmdir(stateDirectory);
 };
 
-const listen = (server: Server): Promise<number> =>
-  Effect.runPromise(
-    Effect.callback<number, SupervisorChannelError>((resume) => {
-      const onError = () => {
-        server.off("listening", onListening);
+const listenEffect = (server: Server) =>
+  Effect.callback<number, SupervisorChannelError>((resume) => {
+    let settled = false;
+    const detach = () => {
+      server.off("error", onError);
+      server.off("listening", onListening);
+    };
+    const onError = () => {
+      if (settled) return;
+      settled = true;
+      detach();
+      resume(
+        Effect.fail(
+          channelError("listen", "listen_failed", "The supervisor listener failed to start."),
+        ),
+      );
+    };
+    const onListening = () => {
+      if (settled) return;
+      settled = true;
+      detach();
+      const address = server.address();
+      if (!address || Predicate.isString(address)) {
         resume(
           Effect.fail(
-            channelError("listen", "listen_failed", "The supervisor listener failed to start."),
+            channelError(
+              "listen",
+              "invalid_listener_address",
+              "The supervisor listener address is invalid.",
+            ),
           ),
         );
-      };
-      const onListening = () => {
-        server.off("error", onError);
-        const address = server.address();
-        if (!address || Predicate.isString(address)) {
-          resume(
-            Effect.fail(
-              channelError(
-                "listen",
-                "invalid_listener_address",
-                "The supervisor listener address is invalid.",
-              ),
-            ),
-          );
-          return;
-        }
-        resume(Effect.succeed(address.port));
-      };
-      server.once("error", onError);
-      server.once("listening", onListening);
-      server.listen({ host: LOOPBACK_HOST, port: 0, exclusive: true });
-    }),
-  );
-
-const closeServer = (server: Server): Promise<void> =>
-  Effect.runPromise(
-    Effect.callback<void, SupervisorChannelError>((resume) => {
-      if (!server.listening) {
-        resume(Effect.void);
         return;
       }
-      server.close((closeError) =>
-        closeError
-          ? resume(
-              Effect.fail(
-                channelError("listen", "close_failed", "The supervisor listener failed to close."),
-              ),
-            )
-          : resume(Effect.void),
-      );
-    }),
-  );
+      resume(Effect.succeed(address.port));
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen({ host: LOOPBACK_HOST, port: 0, exclusive: true });
+    return Effect.sync(() => {
+      if (settled) return;
+      settled = true;
+      detach();
+      try {
+        server.close();
+      } catch {
+        // Interrupted acquisition owns the listener even when Node has not begun listening yet.
+      }
+    });
+  });
+
+const closeServerEffect = (server: Server) =>
+  Effect.callback<void, SupervisorChannelError>((resume) => {
+    if (!server.listening) {
+      resume(Effect.void);
+      return;
+    }
+    server.close((closeError) =>
+      closeError
+        ? resume(
+            Effect.fail(
+              channelError("listen", "close_failed", "The supervisor listener failed to close."),
+            ),
+          )
+        : resume(Effect.void),
+    );
+  });
 
 /**
  * A peer send rejected before any bytes were handed to the socket, so the message
@@ -836,7 +874,12 @@ const dispatchAuthenticated = (
   }
 };
 
-const acceptSocket = (state: NodeChannelState, socket: Socket): void => {
+const acceptSocket = (
+  state: NodeChannelState,
+  socket: Socket,
+  scope: Scope.Scope,
+  authTimeoutMillis: number,
+): void => {
   if (
     state.closed ||
     state.peers.size >= MAX_CONNECTIONS ||
@@ -846,11 +889,7 @@ const acceptSocket = (state: NodeChannelState, socket: Socket): void => {
     return;
   }
   socket.setNoDelay(true);
-  let authTimer: NodeJS.Timeout | undefined = setTimeout(
-    () => socket.destroy(),
-    AUTH_TIMEOUT_MILLIS,
-  );
-  authTimer.unref();
+  const authenticatedSignal = Deferred.makeUnsafe<void>();
   let peer!: AuthenticatedPeer;
   const destroy = () => closePeer(state, peer);
   const send = makePeerSender(socket, destroy);
@@ -890,8 +929,7 @@ const acceptSocket = (state: NodeChannelState, socket: Socket): void => {
           return;
         }
         peer.authenticated = true;
-        if (authTimer) clearTimeout(authTimer);
-        authTimer = undefined;
+        Deferred.doneUnsafe(peer.authenticatedSignal, Effect.void);
         sendAuthenticated(state, peer, {
           type: "hello_ok",
           id: message.id,
@@ -911,10 +949,10 @@ const acceptSocket = (state: NodeChannelState, socket: Socket): void => {
   peer = {
     socket,
     send,
+    authenticatedSignal,
     authenticated: false,
     detach: () => {
-      if (authTimer) clearTimeout(authTimer);
-      authTimer = undefined;
+      Deferred.doneUnsafe(authenticatedSignal, Effect.void);
       detachParser();
       socket.off("error", destroy);
       socket.off("close", destroy);
@@ -923,155 +961,205 @@ const acceptSocket = (state: NodeChannelState, socket: Socket): void => {
   state.peers.add(peer);
   socket.once("error", destroy);
   socket.once("close", destroy);
-};
-
-const closeNodeChannel = (state: NodeChannelState): Promise<void> => {
-  if (state.closePromise) return state.closePromise;
-  state.closed = true;
-  for (const waiter of state.readinessWaiters)
-    Deferred.doneUnsafe(
-      waiter,
-      Effect.fail(
-        channelError(
-          "await helper readiness",
-          "supervisor_helper_unavailable",
-          "The private supervisor channel closed before a live helper became ready.",
+  try {
+    Fiber.runIn(
+      Effect.runFork(
+        Effect.raceFirst(
+          Deferred.await(authenticatedSignal),
+          Effect.sleep(authTimeoutMillis).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                if (!peer.authenticated) destroy();
+              }),
+            ),
+          ),
         ),
       ),
+      scope,
     );
-  state.readinessWaiters.clear();
-  failPendingQuestion(
-    state,
-    "channel_closed",
-    "The private supervisor channel closed before the pending question settled.",
-  );
-  Queue.endUnsafe(state.events);
-  state.closePromise = (async () => {
-    const serverClose = closeServer(state.server);
-    for (const peer of state.peers) {
-      sendAuthenticated(state, peer, { type: "closed" });
-      closePeer(state, peer);
-    }
-    await serverClose;
-    await removePrivateState(state.stateDirectory, state.connectionConfigPath);
-  })();
-  return state.closePromise;
-};
-
-const acquireNodeChannel = async (
-  agentDirectory: string,
-  runId: SupervisorRunId,
-  events: Queue.Queue<SupervisorEvent, Cause.Done>,
-  beforeAcquireComplete?: ((metadata: SupervisorConnectionMetadata) => Promise<void>) | undefined,
-): Promise<NodeChannelState> => {
-  let stateDirectory: string | undefined;
-  let connectionConfigPath: string | undefined;
-  const token = Redacted.make(SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")), {
-    label: "Supervisor auth token",
-  });
-  const server = createServer();
-  let state: NodeChannelState | undefined;
-  server.on("error", () => {
-    if (state) void closeNodeChannel(state).catch(() => undefined);
-  });
-  server.on("connection", (socket) => {
-    if (!state) {
-      socket.destroy();
-      return;
-    }
-    acceptSocket(state, socket);
-  });
-  try {
-    ({ stateDirectory, connectionConfigPath } = await prepareStateDirectory(agentDirectory, runId));
-    const port = await listen(server);
-    const config = {
-      version: SUPERVISOR_CHANNEL_VERSION,
-      runId,
-      host: LOOPBACK_HOST,
-      port,
-      token: Redacted.value(token),
-    };
-    if (!exactConfig(config)) throw new Error("invalid-generated-config");
-    await writePrivateConfig(connectionConfigPath, config);
-    const metadata = makeMetadata(runId, port, stateDirectory, connectionConfigPath);
-    state = {
-      runId,
-      server,
-      peers: new Set(),
-      events,
-      metadata,
-      stateDirectory,
-      connectionConfigPath,
-      token,
-      assignmentEpochs: new Set(),
-      questionEpochs: new Set(),
-      reports: new Map(),
-      epochAcknowledgements: new Map(),
-      readinessWaiters: new Set(),
-      pendingAssignmentEpoch: undefined,
-      currentAssignmentEpoch: 0,
-      nextReportSequence: 1,
-      pendingQuestion: undefined,
-      closed: false,
-      closePromise: undefined,
-    };
-    if (beforeAcquireComplete) await beforeAcquireComplete(metadata);
-    return state;
-  } catch (error) {
-    await closeServer(server).catch(() => undefined);
-    if (connectionConfigPath && stateDirectory)
-      await removePrivateState(stateDirectory, connectionConfigPath).catch(() => undefined);
-    else if (stateDirectory) await fs.rmdir(stateDirectory).catch(() => undefined);
-    throw error;
+  } catch {
+    destroy();
   }
 };
+
+const closeNodeChannelEffect = (state: NodeChannelState) =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.suspend(() => {
+      if (state.cleanupStarted) return restore(Deferred.await(state.cleanupDone));
+      state.cleanupStarted = true;
+      state.closed = true;
+      for (const waiter of state.readinessWaiters)
+        Deferred.doneUnsafe(
+          waiter,
+          Effect.fail(
+            channelError(
+              "await helper readiness",
+              "supervisor_helper_unavailable",
+              "The private supervisor channel closed before a live helper became ready.",
+            ),
+          ),
+        );
+      state.readinessWaiters.clear();
+      failPendingQuestion(
+        state,
+        "channel_closed",
+        "The private supervisor channel closed before the pending question settled.",
+      );
+      Queue.endUnsafe(state.events);
+      for (const peer of state.peers) {
+        sendAuthenticated(state, peer, { type: "closed" });
+        closePeer(state, peer);
+      }
+      return Effect.gen(function* () {
+        yield* closeServerEffect(state.server);
+        yield* Effect.tryPromise({
+          try: () => removePrivateState(state.stateDirectory, state.connectionConfigPath),
+          catch: () =>
+            channelError(
+              "close",
+              "channel_close_failed",
+              "Private supervisor transport closed, but its bounded state cleanup was not confirmed.",
+            ),
+        });
+      }).pipe(Effect.onExit((exit) => Deferred.done(state.cleanupDone, exit).pipe(Effect.asVoid)));
+    }),
+  );
+
+const closeNodeChannel = (state: NodeChannelState): Promise<void> =>
+  Effect.runPromise(closeNodeChannelEffect(state));
 
 const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
-): Effect.Effect<NodeChannelState, SupervisorChannelError> =>
-  Effect.callback<NodeChannelState, SupervisorChannelError>((resume) => {
-    let interrupted = false;
-    const complete = (effect: Effect.Effect<NodeChannelState, SupervisorChannelError>) => {
-      try {
-        resume(effect);
-      } catch {
-        // Callback resumption cannot escape the foreign Promise chain.
-      }
-    };
-    const pending = acquireNodeChannel(
-      options.agentDirectory,
-      runId,
-      events,
-      options.beforeAcquireComplete,
-    );
-    void pending.then(
-      (state) => {
-        if (interrupted) {
-          // Effect no longer owns the Promise, so a late successful acquisition must close itself.
-          void closeNodeChannel(state).catch(() => undefined);
+): Effect.Effect<NodeChannelState, SupervisorChannelError, Scope.Scope> =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope;
+      let stateDirectory: string | undefined;
+      let connectionConfigPath: string | undefined;
+      let state: NodeChannelState | undefined;
+      const token = Redacted.make(SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")), {
+        label: "Supervisor auth token",
+      });
+      const server = createServer();
+      const requestedAuthTimeout = options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS;
+      const authTimeoutMillis = Number.isFinite(requestedAuthTimeout)
+        ? Math.max(1, Math.min(60_000, Math.floor(requestedAuthTimeout)))
+        : AUTH_TIMEOUT_MILLIS;
+      server.on("error", () => {
+        if (state) void closeNodeChannel(state).catch(() => undefined);
+      });
+      server.on("connection", (socket) => {
+        if (!state) {
+          socket.destroy();
           return;
         }
-        complete(Effect.succeed(state));
-      },
-      () => {
-        if (interrupted) return;
-        complete(
-          Effect.fail(
+        acceptSocket(state, socket, scope, authTimeoutMillis);
+      });
+
+      const cleanupPartial = Effect.suspend(() => {
+        if (state) return closeNodeChannelEffect(state).pipe(Effect.catchCause(() => Effect.void));
+        const directory = stateDirectory;
+        const configPath = connectionConfigPath;
+        return Effect.gen(function* () {
+          yield* closeServerEffect(server).pipe(Effect.catchCause(() => Effect.void));
+          if (directory && configPath)
+            yield* Effect.promise(() =>
+              removePrivateState(directory, configPath).catch(() => undefined),
+            );
+          else if (directory)
+            yield* Effect.promise(() => fs.rmdir(directory).catch(() => undefined));
+        });
+      });
+
+      return yield* restore(
+        Effect.gen(function* () {
+          const prepared = yield* Effect.tryPromise({
+            try: (signal) =>
+              prepareStateDirectory(options.agentDirectory, runId, signal, (candidate) => {
+                stateDirectory = candidate.stateDirectory;
+                connectionConfigPath = candidate.connectionConfigPath;
+              }),
+            catch: () =>
+              channelError(
+                "open",
+                "channel_open_failed",
+                "Unable to create the private loopback supervisor channel.",
+              ),
+          });
+          stateDirectory = prepared.stateDirectory;
+          connectionConfigPath = prepared.connectionConfigPath;
+          const port = yield* listenEffect(server);
+          const config = {
+            version: SUPERVISOR_CHANNEL_VERSION,
+            runId,
+            host: LOOPBACK_HOST,
+            port,
+            token: Redacted.value(token),
+          };
+          if (!exactConfig(config))
+            return yield* channelError(
+              "open",
+              "channel_open_failed",
+              "Unable to create the private loopback supervisor channel.",
+            );
+          yield* Effect.tryPromise({
+            try: () => writePrivateConfig(connectionConfigPath!, config),
+            catch: () =>
+              channelError(
+                "open",
+                "channel_open_failed",
+                "Unable to create the private loopback supervisor channel.",
+              ),
+          });
+          const metadata = makeMetadata(runId, port, stateDirectory, connectionConfigPath);
+          state = {
+            runId,
+            server,
+            peers: new Set(),
+            events,
+            metadata,
+            stateDirectory,
+            connectionConfigPath,
+            token,
+            assignmentEpochs: new Set(),
+            questionEpochs: new Set(),
+            reports: new Map(),
+            epochAcknowledgements: new Map(),
+            readinessWaiters: new Set(),
+            pendingAssignmentEpoch: undefined,
+            currentAssignmentEpoch: 0,
+            nextReportSequence: 1,
+            pendingQuestion: undefined,
+            cleanupStarted: false,
+            cleanupDone: Deferred.makeUnsafe<void, SupervisorChannelError>(),
+            closed: false,
+          };
+          if (options.beforeAcquireComplete)
+            yield* Effect.tryPromise({
+              try: () => options.beforeAcquireComplete!(metadata),
+              catch: () =>
+                channelError(
+                  "open",
+                  "channel_open_failed",
+                  "Unable to create the private loopback supervisor channel.",
+                ),
+            });
+          return state;
+        }).pipe(
+          Effect.mapError(() =>
             channelError(
               "open",
               "channel_open_failed",
               "Unable to create the private loopback supervisor channel.",
             ),
           ),
-        );
-      },
-    );
-    return Effect.sync(() => {
-      interrupted = true;
-    });
-  });
+          Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : cleanupPartial)),
+        ),
+      );
+    }),
+  );
 
 export const makeSupervisorChannel = (
   options: SupervisorChannelLayerOptions,
@@ -1086,30 +1174,12 @@ export const makeSupervisorChannel = (
         );
       const runId: SupervisorRunId = request.runId;
       const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
-      const release = (state: NodeChannelState) =>
-        Effect.tryPromise({
-          try: () => closeNodeChannel(state),
-          catch: () =>
-            channelError(
-              "close",
-              "channel_close_failed",
-              "Private supervisor transport closed, but its bounded state cleanup was not confirmed.",
-            ),
-        });
       const state = yield* Effect.acquireRelease(
         acquireNodeChannelEffect(options, runId, events),
-        (acquired) => release(acquired).pipe(Effect.orDie),
+        (acquired) => closeNodeChannelEffect(acquired).pipe(Effect.orDie),
         { interruptible: true },
       );
-      const close = Effect.tryPromise({
-        try: () => closeNodeChannel(state),
-        catch: () =>
-          channelError(
-            "close",
-            "channel_close_failed",
-            "Private supervisor transport closed, but its bounded state cleanup was not confirmed.",
-          ),
-      });
+      const close = closeNodeChannelEffect(state);
 
       const awaitReady = Effect.suspend(() => {
         if (state.closed)
