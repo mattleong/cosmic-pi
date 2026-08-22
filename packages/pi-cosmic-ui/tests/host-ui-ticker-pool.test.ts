@@ -1,6 +1,10 @@
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/newPromise:off
 import { describe, expect, it, vi } from "vitest";
+import { makeHostUiTickerOwner } from "../src/boundary/host-status.ts";
 import {
   makeHostUiTickerPool,
+  type HostUiTickerPool,
   type HostUiTickerScheduler,
 } from "../src/boundary/host-ui-ticker-pool.ts";
 
@@ -93,17 +97,75 @@ describe("host UI ticker pool", () => {
     expect(removed).not.toHaveBeenCalled();
   });
 
-  it("disposes every active cadence group exactly once", () => {
+  it("disposes every active cadence group exactly once", async () => {
     const harness = schedulerHarness();
     const pool = makeHostUiTickerPool(harness.schedule);
     pool.start(160, vi.fn());
     pool.start(1_000, vi.fn());
 
-    expect(pool.dispose).toBeTypeOf("function");
-    pool.dispose?.();
-    pool.dispose?.();
+    const firstDisposal = pool.dispose();
+    const secondDisposal = pool.dispose();
 
     expect(harness.scheduled.map((ticker) => ticker.stop.mock.calls.length)).toEqual([1, 1]);
+    expect(secondDisposal).toBe(firstDisposal);
+    await firstDisposal;
+  });
+
+  it("waits for every tracked ticker closure before disposal settles", async () => {
+    let complete!: () => void;
+    const stopped = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const stop = Object.assign(vi.fn(), { awaitStopped: () => stopped });
+    const schedule: HostUiTickerScheduler = () => stop;
+    const pool = makeHostUiTickerPool(schedule);
+    const stopSubscription = pool.start(160, vi.fn());
+    stopSubscription();
+
+    let settled = false;
+    const disposal = pool.dispose().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    complete();
+    await disposal;
+    expect(settled).toBe(true);
+    const postDisposal = vi.fn();
+    pool.start(160, postDisposal)();
+    expect(postDisposal).not.toHaveBeenCalled();
+  });
+
+  it("rotates to a fresh pool while awaiting the previous pool", async () => {
+    let finishDisposal!: () => void;
+    const disposal = new Promise<void>((resolve) => {
+      finishDisposal = resolve;
+    });
+    const firstStart = vi.fn(() => () => undefined);
+    const secondStart = vi.fn(() => () => undefined);
+    const pools: HostUiTickerPool[] = [
+      { start: firstStart, dispose: vi.fn(() => disposal) },
+      { start: secondStart, dispose: vi.fn(() => Promise.resolve()) },
+    ];
+    let poolIndex = 0;
+    const owner = makeHostUiTickerOwner(() => pools[poolIndex++]!);
+
+    owner.start(160, vi.fn());
+    let settled = false;
+    const shutdown = owner.shutdown().then(() => {
+      settled = true;
+    });
+    owner.start(160, vi.fn());
+    await Promise.resolve();
+
+    expect(firstStart).toHaveBeenCalledOnce();
+    expect(secondStart).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    finishDisposal();
+    await shutdown;
+    expect(settled).toBe(true);
   });
 
   it("fails soft for invalid intervals and scheduler failures", () => {

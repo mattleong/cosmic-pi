@@ -7,8 +7,9 @@ import {
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
-import { loadCodePreviewSettings } from "pi-code-previews";
+import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
 import {
+  bestEffortHostBootstrap,
   captureSessionHost,
   hasTerminalUI,
   isProjectTrusted,
@@ -68,7 +69,8 @@ export interface BetterOpenAIExtensionDependencies {
   readonly loadPreviewSettings?: (
     projectCwd: string,
     projectTrusted: boolean,
-  ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
+    signal?: AbortSignal,
+  ) => PromiseLike<CodePreviewSettings | void>;
   readonly resetOpenAICodexTransport?: (ctx: ExtensionContext) => void;
 }
 
@@ -96,6 +98,7 @@ export function betterOpenAIWithDependencies(
   const fastProjection = MutableRef.make(initialFastSnapshot());
   const resetProviderTransport =
     dependencies.resetOpenAICodexTransport ?? resetOpenAICodexTransport;
+  const loadPreviewSettings = dependencies.loadPreviewSettings ?? loadCodePreviewSettings;
   let recordFastInjection: (event: {
     readonly model: string;
     readonly tier: string;
@@ -130,7 +133,7 @@ export function betterOpenAIWithDependencies(
     hasTerminalUI,
   });
 
-  let startGeneration = 0;
+  let sessionSequence = 0;
   let sessionActive = false;
   const slot = makePiSessionRuntimeSlot<
     OpenAISessionInput,
@@ -153,18 +156,20 @@ export function betterOpenAIWithDependencies(
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-openai" },
       ),
-    startup: ({ ctx, generation }) =>
-      dependencies
-        .startupEffect(generation)
-        .pipe(
-          Effect.andThen(
-            FastModeService.use((service) =>
-              service.initialize(ctx, config(ctx), pi.getFlag(FAST_ID) === true),
-            ),
+    startup: ({ ctx, cwd, generation, projectTrusted }) =>
+      bestEffortHostBootstrap("pi-better-openai.preview-settings", (signal) =>
+        loadPreviewSettings(cwd, projectTrusted, signal),
+      ).pipe(
+        Effect.andThen(dependencies.startupEffect(generation)),
+        Effect.andThen(
+          FastModeService.use((service) =>
+            service.initialize(ctx, config(ctx), pi.getFlag(FAST_ID) === true),
           ),
         ),
+      ),
     onActivated: ({ ctx }) => {
       sessionActive = true;
+      registerOpenAIImage(pi, run, updateContext);
       if (hasTerminalUI(ctx)) cosmicUi.query();
       else cosmicUi.shutdown();
       footerController.refreshTotals(ctx);
@@ -313,8 +318,7 @@ export function betterOpenAIWithDependencies(
   });
 
   pi.on("session_start", (_event, ctx) => {
-    // Admission order, not asynchronous settings-load completion order, owns session freshness.
-    const generation = ++startGeneration;
+    const generation = ++sessionSequence;
     const captured = captureSessionHost(ctx);
     if (captured._tag !== "Captured" || captured.aborted) {
       safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
@@ -331,14 +335,8 @@ export function betterOpenAIWithDependencies(
     footerController.invalidateSessionName();
     const context = MutableRef.make(ctx);
     currentContext = context;
-    return Promise.all([
-      (dependencies.loadPreviewSettings ?? loadCodePreviewSettings)(cwd, projectTrusted)
-        .catch(() => undefined)
-        .then(() => {
-          if (generation !== startGeneration) return;
-          registerOpenAIImage(pi, run, updateContext);
-        }),
-      slot.start(
+    return slot
+      .start(
         {
           ctx,
           context,
@@ -347,8 +345,8 @@ export function betterOpenAIWithDependencies(
           projectTrusted,
         },
         signal,
-      ),
-    ]).then(() => undefined);
+      )
+      .then(() => undefined);
   });
   pi.on("agent_start", (_event, ctx) => {
     updateContext(ctx);

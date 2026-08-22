@@ -1,5 +1,6 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
 import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
@@ -122,13 +123,21 @@ function deferredPromise() {
   return { promise, resolve };
 }
 
+async function waitFor(predicate: () => boolean): Promise<void> {
+  while (!predicate()) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("Better OpenAI session boundary", () => {
-  test("ignores an older session when settings loads complete out of order", async () => {
+  test("interrupts an older settings bootstrap before activating its replacement", async () => {
     const loads = [deferredPromise(), deferredPromise()];
     const started: number[] = [];
+    const signals: AbortSignal[] = [];
     let loadIndex = 0;
     const h = harness({
-      loadPreviewSettings: () => loads[loadIndex++]!.promise,
+      loadPreviewSettings: (_cwd, _projectTrusted, signal) => {
+        if (signal) signals.push(signal);
+        return loads[loadIndex++]!.promise;
+      },
       startupEffect: (generation) =>
         Effect.sync(() => {
           started.push(generation);
@@ -136,15 +145,30 @@ describe("Better OpenAI session boundary", () => {
     });
 
     const first = h.emit("session_start");
+    await waitFor(() => loadIndex === 1);
     const second = h.emit("session_start");
-    expect(loadIndex).toBe(2);
-
+    await waitFor(() => loadIndex === 2);
     loads[1]!.resolve();
-    await second;
+    await Promise.all([first, second]);
     loads[0]!.resolve();
-    await first;
 
     expect(started).toEqual([2]);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    await h.emit("session_shutdown");
+  });
+
+  test("contains a preview-settings failure before provider startup", async () => {
+    let started = 0;
+    const h = harness({
+      loadPreviewSettings: () => Promise.reject(new Error("settings unavailable")),
+      startupEffect: () =>
+        Effect.sync(() => {
+          started += 1;
+        }),
+    });
+    await h.emit("session_start");
+    expect(started).toBe(1);
     await h.emit("session_shutdown");
   });
 
@@ -276,9 +300,6 @@ describe("Better OpenAI session boundary", () => {
     expect(hostAbortListener).toBeTypeOf("function");
     expect(removeEventListener).toHaveBeenCalledWith("abort", hostAbortListener);
     expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
-    await expect(
-      h.tool.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),
-    ).rejects.toThrow("has not started");
   });
 
   test("shutdown immediately interrupts a stalled session startup", async () => {

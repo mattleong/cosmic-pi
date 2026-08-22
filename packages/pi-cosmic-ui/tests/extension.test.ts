@@ -10,6 +10,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { describe, expect, test, vi } from "vitest";
 import cosmicUi from "../index.ts";
 import {
+  cosmicUiWithDependencies,
+  type CosmicUiApplicationDependencies,
+} from "../src/application.ts";
+import {
   COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
@@ -21,7 +25,7 @@ import { extensionApiFixture, extensionContextFixture } from "./support/host.ts"
 type Handler = ExtensionHandler<any, any>;
 type BusHandler = Parameters<ExtensionAPI["events"]["on"]>[1];
 
-function harness(mode: "tui" | "rpc" = "tui") {
+function harness(mode: "tui" | "rpc" = "tui", dependencies?: CosmicUiApplicationDependencies) {
   const handlers = new Map<string, Handler[]>();
   const bus = new Map<string, Set<BusHandler>>();
   const setFooter = vi.fn();
@@ -78,7 +82,8 @@ function harness(mode: "tui" | "rpc" = "tui") {
     ui: { setFooter, setWorkingMessage, notify: vi.fn(), custom: vi.fn() },
     isProjectTrusted: vi.fn(() => true),
   });
-  cosmicUi(pi);
+  if (dependencies) cosmicUiWithDependencies(pi, dependencies);
+  else cosmicUi(pi);
   return { pi, ctx, handlers, setFooter, setWorkingMessage, exec, unsubscribed };
 }
 
@@ -939,6 +944,28 @@ describe("Cosmic UI extension", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+  });
+
+  test("awaits shared ticker cleanup during session shutdown", async () => {
+    let finishTickerShutdown!: () => void;
+    const tickerShutdown = new Promise<void>((resolve) => {
+      finishTickerShutdown = resolve;
+    });
+    const shutdownHostUiTickers = vi.fn(() => tickerShutdown);
+    const h = harness("tui", { shutdownHostUiTickers });
+    await emit(h, "session_start");
+
+    let settled = false;
+    const shutdown = emit(h, "session_shutdown").then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(shutdownHostUiTickers).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    finishTickerShutdown();
+    await shutdown;
+    expect(settled).toBe(true);
   });
 
   test("releases protocol subscriptions exactly once on repeated shutdown", async () => {

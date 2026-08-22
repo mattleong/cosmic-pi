@@ -2,6 +2,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { ShikiAdapter } from "./boundary/shiki";
+import { CodePreviewSchedulerService } from "./application/scheduler";
 import { CodePreviewSession } from "./application/service";
 import { CodePreviewEnvironmentService } from "./config/env";
 import { CodePreviewSettingsService } from "./config/service";
@@ -27,6 +28,7 @@ export const makeCodePreviewApplicationLayer = <E>(
     settingsLayer,
     syntaxLayer,
     CodePreviewWriteService.layer,
+    CodePreviewSchedulerService.layer,
     selectedSessionLayer,
   );
 

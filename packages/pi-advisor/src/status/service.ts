@@ -1,10 +1,10 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
+import * as FiberHandle from "effect/FiberHandle";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
-import { interruptFiber } from "../boundary/clock.ts";
-import type { AdvisorEffectExecutor } from "../boundary/executor.ts";
 
 export interface AdvisorStatusStartOptions {
   readonly owner: string;
@@ -56,40 +56,56 @@ export interface AdvisorStatusServiceContract {
  * Owns the status delay/animation fiber. Generation checks make replacement and settlement
  * synchronous at the Pi callback boundary even though interruption is performed by Effect.
  */
+export type AdvisorStatusFrames = (
+  options: AdvisorStatusStartOptions,
+  render: (frame: number) => void,
+) => Effect.Effect<void>;
+
+export interface AdvisorStatusExecutor {
+  readonly fork: (effect: Effect.Effect<void>) => Fiber.Fiber<void>;
+}
+
 export const makeAdvisorStatusService = (
-  executor: AdvisorEffectExecutor,
+  executor: AdvisorStatusExecutor,
+  frames: AdvisorStatusFrames = advisorStatusFramesEffect,
 ): Effect.Effect<AdvisorStatusServiceContract, never, Scope.Scope> =>
   Effect.gen(function* () {
+    const animation = yield* FiberHandle.make<void>();
     let generation = 0;
     let owner: string | undefined;
-    let fiber: Fiber.Fiber<void> | undefined;
 
-    const interruptCurrent = (): void => {
-      const current = fiber;
-      fiber = undefined;
-      interruptFiber(current);
-    };
-    const clear = (): void => {
+    const resetState = (): void => {
       generation += 1;
       owner = undefined;
+    };
+    const interruptCurrent = (): void => {
+      Option.getOrUndefined(FiberHandle.getUnsafe(animation))?.interruptUnsafe();
+    };
+    const clear = (): void => {
+      resetState();
       interruptCurrent();
     };
     const start = (options: AdvisorStatusStartOptions): void => {
-      clear();
+      resetState();
+      interruptCurrent();
       const currentGeneration = generation;
       owner = options.owner;
-      fiber = executor.fork(
-        advisorStatusFramesEffect(options, (frame) => {
+      const fiber = executor.fork(
+        frames(options, (frame) => {
           if (generation === currentGeneration && owner === options.owner) options.render(frame);
         }),
       );
+      FiberHandle.setUnsafe(animation, fiber);
     };
     const settle = (expectedOwner: string): boolean => {
       if (owner !== expectedOwner) return false;
       clear();
       return true;
     };
-    const shutdown = Effect.sync(clear);
+    const shutdown = Effect.suspend(() => {
+      resetState();
+      return FiberHandle.clear(animation);
+    });
     yield* Effect.addFinalizer(() => shutdown);
     return { start, settle, clear, shutdown };
   });

@@ -11,6 +11,7 @@ import * as MutableRef from "effect/MutableRef";
 import { isProjectTrusted, makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
 import { makeHostCallbackBoundary, snapshotHostAbortSignal } from "./boundary/host-callback.ts";
 import { addAssistantUsage, decodeAssistantUsage } from "./boundary/host-usage.ts";
+import { shutdownHostUiTickers } from "./boundary/host-status.ts";
 import { DEFAULT_CONFIG, type ResolvedCosmicUiConfig } from "./config/schema.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import {
@@ -57,8 +58,21 @@ interface MutableInvalidateProtocolEvent {
   id?: string;
 }
 
+export interface CosmicUiApplicationDependencies {
+  readonly shutdownHostUiTickers?: () => Promise<void>;
+}
+
 export function registerCosmicUiApplication(pi: ExtensionAPI): void {
+  cosmicUiWithDependencies(pi, {});
+}
+
+/** Internal seam for host-lifecycle cleanup tests. */
+export function cosmicUiWithDependencies(
+  pi: ExtensionAPI,
+  dependencies: CosmicUiApplicationDependencies,
+): void {
   const callbacks = makeHostCallbackBoundary();
+  const shutdownTickers = dependencies.shutdownHostUiTickers ?? shutdownHostUiTickers;
   const protocolBuffer = makeFooterProtocolBuffer();
   const bridge: FooterRegistryBridge = {
     snapshot: emptyFooterRegistrySnapshot(),
@@ -475,7 +489,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     disposeSubscriptions();
     footerInstallation.uninstall();
-    return slot.shutdown().then(() => {
+    return Promise.all([slot.shutdown(), shutdownTickers()]).then(() => {
       currentContext = undefined;
       resetTotals();
       protocolBuffer.reset();

@@ -31,8 +31,11 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
 - `src/boundary/` isolates hostile synchronous host callbacks, including working-message updates.
   `host-ui-ticker-pool.ts` multiplexes equal-cadence animation consumers onto one ref-counted,
-  pool-scoped Effect fiber; registration remains independently cancellable, pool disposal closes
-  every cadence scope, and one throwing callback cannot starve its peers.
+  pool-scoped Effect fiber. Registration remains independently cancellable; default scheduler
+  closure is tracked as an awaitable Promise, idempotent pool disposal waits for every cadence
+  scope, and one throwing callback cannot starve its peers. The exported host-status owner remains
+  cross-extension, but Cosmic UI rotates it during session shutdown and awaits the old pool so a
+  later session receives a fresh pool without inheriting timer fibers.
 - `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`). The package root publishes only the default extension; `./protocol`, `./boundary/host-status`, `./client`, `./manager`, `./manager/keymap`, `./manager/key-labels`, `./manager/list-detail`, `./manager/settings-adapter`, and `./manager/settings-surface` are the named subpaths.
 - `src/protocol/host.ts` is the scoped protocol ingress host.
 - `src/protocol/service.ts` is the session host service (`CosmicUiService`; Context keys follow file paths under `protocol/`).
@@ -48,5 +51,5 @@ protocol events -> bounded buffer -> scoped protocol host -> registry snapshot
 session_start -> application -> layer -> services -> footer installation
 agent_start + streaming deltas -> working timer/rate estimate -> Pi working message -> agent_end reset
 Pi changes -> service refresh -> frozen projection -> render request
-session_shutdown -> subscriptions/footer/runtime disposed
+session_shutdown -> subscriptions/footer/runtime disposed -> shared ticker pool rotated and awaited
 ```

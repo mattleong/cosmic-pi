@@ -386,6 +386,23 @@ describe("herdr-fork workflow", () => {
     });
   });
 
+  it("structurally retains the pane when a shell-readiness inspection fails", () => {
+    const test = fixture({ failOperation: "inspect fork pane shell" });
+    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          code: "fixture_inspect_fork_pane_shell",
+          outcome: "confirmed",
+          paneId: "w1:p2",
+        });
+        expect(result.failure.message).toContain("retained for manual inspection");
+      }
+      expect(operationNames(test.calls)).not.toContain("start forked Pi");
+      expect(test.calls.some((call) => call.args.includes("close"))).toBe(false);
+    });
+  });
+
   it("retains the pane and skips Pi launch when its shell misses the readiness deadline", () => {
     const test = fixture({ shellReadyAfter: 100 });
     return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
@@ -457,8 +474,10 @@ describe("herdr-fork workflow", () => {
     const test = fixture({ layoutWorkspaceId: "w2" });
     return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
+      if (result._tag === "Failure") {
         expect(result.failure.code).toBe("herdr_parent_topology_mismatch");
+        expect(result.failure.paneId).toBeUndefined();
+      }
       expect(operationNames(test.calls)).not.toContain("split fork pane");
     });
   });

@@ -367,6 +367,40 @@ test("loadCodePreviewSettings falls back when a replaced session capability reje
   }
 });
 
+test("the one-shot settings boundary forwards cancellation to Effect", async () => {
+  const controller = new AbortController();
+  const pending = runOneShotSettingsEffect(Effect.never, controller.signal);
+  controller.abort();
+  await assert.rejects(pending);
+});
+
+test("an aborted session settings load does not retry through the one-shot runtime", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-aborted-bootstrap-");
+  const project = join(root, "project");
+  await writeJson(join(project, ".pi", "settings.json"), {
+    codePreview: { readCollapsedLines: 31 },
+  });
+
+  const controller = new AbortController();
+  controller.abort();
+  let receivedSignal: AbortSignal | undefined;
+  const token = 992;
+  installCodePreviewSessionCapability({
+    token,
+    run: (_effect, signal) => {
+      receivedSignal = signal;
+      return Promise.reject(new Error("session startup was interrupted"));
+    },
+    fork: () => undefined,
+  });
+  try {
+    await assert.rejects(loadCodePreviewSettings(project, true, controller.signal));
+    assert.equal(receivedSignal, controller.signal);
+  } finally {
+    clearCodePreviewSessionCapability(token);
+  }
+});
+
 test("loadCodePreviewSettings resets to defaults when no settings files exist", async () => {
   const root = await createTestTempDirectory("pi-code-previews-no-settings-");
   const home = join(root, "home");

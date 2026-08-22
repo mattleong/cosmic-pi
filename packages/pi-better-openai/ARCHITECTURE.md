@@ -32,7 +32,9 @@ Usage, fast mode, compaction, and image work are scoped services. They publish i
 ## Lifecycle
 
 ```text
-session_start -> application -> layer -> usage + fast + image services
+session_start -> application -> layer -> abort-aware preview-settings bootstrap
+                              -> usage + fast + image services -> current-session activation
+current-session activation -> register image command/tool with captured preview shell settings
 command/event -> runtime service -> projection -> footer/UI or request injection
 Pi compaction trigger -> OpenAI /responses/compact -> custom checkpoint -> request projection
 session_shutdown -> fibers/resources disposed -> projections reset

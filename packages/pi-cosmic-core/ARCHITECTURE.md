@@ -11,7 +11,7 @@
 
 ## Source map
 
-- `src/runtime/` defines Pi-owned execution boundaries (`runtime.ts`, `session-runtime.ts`, `pi-api.ts`).
+- `src/runtime/` defines Pi-owned execution boundaries (`runtime.ts`, `session-runtime.ts`, `pi-api.ts`) plus `host-bootstrap.ts`, the shared interruptible adapter for best-effort Promise prerequisites. It forwards an owned abort signal, detaches loaders that ignore cancellation, contains late settlement, and records a redacted debug diagnostic on failure.
 - `src/coordination/` provides scoped concurrency primitives (`refresh-coordinator.ts`, `subscription-refresh.ts`, `synchronous-ingress.ts`); the single-flight refresh coordinator serializes ownership and its one merged follow-up through `SynchronizedRef`.
 - `src/platform/` contains typed Node, HTTP, document, file, process-coordination, and agent-directory adapters. Schema-document decode failures expose only bounded, sanitized issue paths and never rejected values.
 - `src/config/` contains reusable scoped-store, document-ops, and tolerant-field configuration infrastructure.

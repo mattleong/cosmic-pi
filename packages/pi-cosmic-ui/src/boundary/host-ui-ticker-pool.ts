@@ -4,7 +4,12 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 
-export type HostUiTickerScheduler = (intervalMs: number, tick: () => void) => () => void;
+export interface HostUiTickerStop {
+  (): void;
+  readonly awaitStopped?: (() => Promise<void>) | undefined;
+}
+
+export type HostUiTickerScheduler = (intervalMs: number, tick: () => void) => HostUiTickerStop;
 
 interface HostUiTickerSubscription {
   readonly tick: () => void;
@@ -13,17 +18,19 @@ interface HostUiTickerSubscription {
 interface HostUiTickerGroup {
   readonly intervalMs: number;
   readonly subscriptions: Set<HostUiTickerSubscription>;
-  stop: () => void;
+  stop: HostUiTickerStop;
 }
 
 export interface HostUiTickerPool {
   readonly start: (intervalMs: number, tick: () => void) => () => void;
-  readonly dispose?: (() => void) | undefined;
+  readonly dispose: () => Promise<void>;
 }
 
-const closeScope = (scope: Scope.Closeable): void => {
+const closeScope = (scope: Scope.Closeable): Promise<void> => {
   const finalizer = Scope.closeUnsafe(scope, Exit.succeed(undefined));
-  if (finalizer !== undefined) void Effect.runFork(finalizer);
+  return finalizer === undefined
+    ? Promise.resolve()
+    : Effect.runPromise(finalizer).catch(() => undefined);
 };
 
 const scheduleHostUiTicker: HostUiTickerScheduler = (intervalMs, tick) => {
@@ -39,15 +46,19 @@ const scheduleHostUiTicker: HostUiTickerScheduler = (intervalMs, tick) => {
       scope,
     );
   } catch (error) {
-    closeScope(scope);
+    void closeScope(scope);
     throw error;
   }
-  let active = true;
-  return () => {
-    if (!active) return;
-    active = false;
-    closeScope(scope);
+  let closing: Promise<void> | undefined;
+  const stop = (): void => {
+    closing ??= closeScope(scope);
   };
+  return Object.assign(stop, {
+    awaitStopped: () => {
+      stop();
+      return closing ?? Promise.resolve();
+    },
+  });
 };
 
 /**
@@ -61,7 +72,24 @@ export const makeHostUiTickerPool = (
   schedule: HostUiTickerScheduler = scheduleHostUiTicker,
 ): HostUiTickerPool => {
   const groups = new Map<number, HostUiTickerGroup>();
+  const pendingClosures = new Set<Promise<void>>();
+  let disposed = false;
+  let disposal: Promise<void> | undefined;
 
+  const trackClosure = (closure: Promise<void>): void => {
+    const settled = closure.catch(() => undefined);
+    pendingClosures.add(settled);
+    void settled.then(() => pendingClosures.delete(settled));
+  };
+  const stopGroup = (group: HostUiTickerGroup): void => {
+    try {
+      group.stop();
+      const closure = group.stop.awaitStopped?.();
+      if (closure) trackClosure(closure);
+    } catch {
+      // Presentation timer cleanup is best effort during component/session teardown.
+    }
+  };
   const invokeGroup = (group: HostUiTickerGroup): void => {
     if (groups.get(group.intervalMs) !== group) return;
     for (const subscription of Array.from(group.subscriptions)) {
@@ -75,7 +103,7 @@ export const makeHostUiTickerPool = (
   };
 
   const start = (intervalMs: number, tick: () => void): (() => void) => {
-    if (!Number.isFinite(intervalMs) || intervalMs <= 0) return () => undefined;
+    if (disposed || !Number.isFinite(intervalMs) || intervalMs <= 0) return () => undefined;
     const cadence = Math.max(1, intervalMs);
     const subscription: HostUiTickerSubscription = { tick };
     let group = groups.get(cadence);
@@ -107,24 +135,20 @@ export const makeHostUiTickerPool = (
       activeGroup.subscriptions.delete(subscription);
       if (activeGroup.subscriptions.size > 0 || groups.get(cadence) !== activeGroup) return;
       groups.delete(cadence);
-      try {
-        activeGroup.stop();
-      } catch {
-        // Presentation timer cleanup is best effort during component/session teardown.
-      }
+      stopGroup(activeGroup);
     };
   };
 
-  const dispose = (): void => {
+  const dispose = (): Promise<void> => {
+    if (disposal) return disposal;
+    disposed = true;
     for (const group of groups.values()) {
       group.subscriptions.clear();
-      try {
-        group.stop();
-      } catch {
-        // Presentation timer cleanup is best effort during process or test teardown.
-      }
+      stopGroup(group);
     }
     groups.clear();
+    disposal = Promise.all(pendingClosures).then(() => undefined);
+    return disposal;
   };
 
   return { start, dispose };

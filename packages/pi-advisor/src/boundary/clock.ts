@@ -1,7 +1,6 @@
 // Synchronous Pi callback timing is confined here; fibers use Effect Clock.
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import type { AdvisorEffectExecutor } from "./executor.ts";
 
@@ -29,7 +28,4 @@ export function advisorDelay(
 ): () => void {
   const fiber = executor.fork(advisorDelayEffect(milliseconds, task));
   return () => fiber.interruptUnsafe();
-}
-export function interruptFiber(fiber: Fiber.Fiber<unknown, unknown> | undefined): void {
-  fiber?.interruptUnsafe();
 }

@@ -32,8 +32,13 @@ let oneShotTransition: Promise<unknown> = Promise.resolve();
 /** The only detached runner: explicit serialized public pre-session settings compatibility. */
 export function runOneShotSettingsEffect<A, E>(
   effect: Effect.Effect<A, E, CodePreviewSettingsService>,
+  signal?: AbortSignal,
 ): Promise<A> {
-  const run = () => Effect.runPromise(effect.pipe(Effect.provide(oneShotSettingsLayer())));
+  const run = () =>
+    Effect.runPromise(
+      effect.pipe(Effect.provide(oneShotSettingsLayer())),
+      signal ? { signal } : undefined,
+    );
   const result = oneShotTransition.then(run, run);
   oneShotTransition = result.then(
     () => undefined,

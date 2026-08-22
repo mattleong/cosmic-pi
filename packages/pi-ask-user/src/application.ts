@@ -1,7 +1,8 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { loadCodePreviewSettings } from "pi-code-previews";
+import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
 import {
+  bestEffortHostBootstrap,
   captureSessionHost,
   isProjectTrusted,
   makePiManagedRuntime,
@@ -15,12 +16,32 @@ import {
   type AskUserRuntimeError,
   type AskUserSessionInput,
 } from "./layer.ts";
+import { AskUserRuntimeClosedError } from "./questionnaire/errors.ts";
 import { AskUserService } from "./questionnaire/service.ts";
 import { registerAskUserTool } from "./tools/ask-user.ts";
 
+export interface AskUserApplicationDependencies {
+  readonly loadPreviewSettings?: (
+    projectCwd: string,
+    projectTrusted: boolean,
+    signal?: AbortSignal,
+  ) => PromiseLike<CodePreviewSettings | void>;
+  readonly startupEffect?: Effect.Effect<void>;
+}
+
 export function registerAskUserApplication(pi: ExtensionAPI): void {
+  askUserWithDependencies(pi, {});
+}
+
+/** Internal seam for lifecycle and startup-order tests. */
+export function askUserWithDependencies(
+  pi: ExtensionAPI,
+  dependencies: AskUserApplicationDependencies,
+): void {
   const bridge = makeAskUserDialogBridge();
-  let startupGeneration = 0;
+  const loadPreviewSettings = dependencies.loadPreviewSettings ?? loadCodePreviewSettings;
+  const startupEffect = dependencies.startupEffect ?? Effect.void;
+  let sessionActive = false;
 
   const slot = makePiSessionRuntimeSlot<
     AskUserSessionInput,
@@ -33,21 +54,34 @@ export function registerAskUserApplication(pi: ExtensionAPI): void {
         agentDirectory: getAgentDir,
         packageName: "pi-ask-user",
       }),
-    startup: () => AskUserService.use(() => Effect.void),
-    onActivated: ({ ctx }) => bridge.setContext(ctx),
+    startup: ({ cwd, projectTrusted }) =>
+      bestEffortHostBootstrap("pi-ask-user.preview-settings", (signal) =>
+        loadPreviewSettings(cwd, projectTrusted, signal),
+      ).pipe(Effect.andThen(startupEffect), Effect.andThen(AskUserService.use(() => Effect.void))),
+    onActivated: ({ ctx }) => {
+      sessionActive = true;
+      bridge.setContext(ctx);
+      registerAskUserTool(pi, {
+        run: (effect, signal) =>
+          sessionActive
+            ? slot.run(effect, signal)
+            : Promise.reject(
+                new AskUserRuntimeClosedError({
+                  message: "The ask-user session runtime is not active.",
+                }),
+              ),
+      });
+    },
     onDeactivated: () => {
+      sessionActive = false;
       bridge.clear();
       bridge.setContext(undefined);
     },
   });
 
-  const run = <A, E>(effect: Effect.Effect<A, E, AskUserApplication>, signal?: AbortSignal) =>
-    slot.run(effect, signal);
-
   registerAskUserCommands(pi, bridge);
 
   pi.on("session_start", (_event, ctx) => {
-    const generation = ++startupGeneration;
     bridge.clear();
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable" || !ctx.hasUI) {
@@ -55,30 +89,19 @@ export function registerAskUserApplication(pi: ExtensionAPI): void {
       return slot.shutdown().then(() => undefined);
     }
     const projectTrusted = isProjectTrusted(ctx);
-    return Promise.all([
-      slot.shutdown(),
-      loadCodePreviewSettings(captured.cwd, projectTrusted).catch(() => undefined),
-    ])
-      .then(() => {
-        if (generation !== startupGeneration || captured.signal?.aborted) return undefined;
-        return slot.start(
-          {
-            ctx,
-            cwd: captured.cwd,
-            projectTrusted,
-          },
-          captured.signal,
-        );
-      })
-      .then((token) => {
-        if (token === undefined || generation !== startupGeneration || !slot.isCurrent(token))
-          return;
-        registerAskUserTool(pi, { run });
-      });
+    return slot
+      .start(
+        {
+          ctx,
+          cwd: captured.cwd,
+          projectTrusted,
+        },
+        captured.signal,
+      )
+      .then(() => undefined);
   });
 
   pi.on("session_shutdown", () => {
-    startupGeneration += 1;
     bridge.clear();
     bridge.setContext(undefined);
     return slot.shutdown();

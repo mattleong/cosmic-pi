@@ -7,6 +7,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
 import {
   makePiManagedRuntime,
@@ -25,6 +26,7 @@ import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
 } from "./capability";
+import { CodePreviewSchedulerService, type CodePreviewSchedulerServiceContract } from "./scheduler";
 import { CodePreviewSession } from "./service";
 import { codePreviewSettings } from "../config/state";
 import type { CodePreviewToolName } from "../tools/names";
@@ -36,6 +38,7 @@ type SessionInput = {
   readonly projectTrusted: boolean;
   readonly signal?: AbortSignal;
   readonly notifyFailure: () => void;
+  readonly scheduler: MutableRef.MutableRef<CodePreviewSchedulerServiceContract | undefined>;
 };
 
 class CodePreviewRendererRegistrationError extends Schema.TaggedError<CodePreviewRendererRegistrationError>()(
@@ -119,8 +122,9 @@ export function codePreviewsWithDependencies(
   dependencies.registerSettings(pi);
 
   const startup = (input: SessionInput) =>
-    CodePreviewSession.use((service) =>
-      service.loadSettings(input.cwd, input.projectTrusted).pipe(
+    Effect.gen(function* () {
+      const service = yield* CodePreviewSession;
+      yield* service.loadSettings(input.cwd, input.projectTrusted).pipe(
         Effect.tap(() =>
           registerRenderersAtHostBoundary(() =>
             dependencies.registerRenderers(pi, input.cwd, {
@@ -130,9 +134,9 @@ export function codePreviewsWithDependencies(
             }),
           ),
         ),
-        Effect.asVoid,
-      ),
-    );
+      );
+      MutableRef.set(input.scheduler, yield* CodePreviewSchedulerService);
+    });
   const slot = makePiSessionRuntimeSlot<
     SessionInput,
     CodePreviewApplication,
@@ -142,10 +146,17 @@ export function codePreviewsWithDependencies(
     makeRuntime: () => dependencies.makeRuntime(pi),
     startup,
     onActivated: (input, token) => {
+      const scheduler = MutableRef.get(input.scheduler);
+      if (!scheduler) {
+        input.notifyFailure();
+        return;
+      }
       installCodePreviewSessionCapability({
         token,
         run: (effect, signal) => slot.run(effect, signal),
         fork: (effect, signal) => slot.fork(effect, signal),
+        defer: scheduler.defer,
+        schedule: scheduler.schedule,
       });
       if (codePreviewSettings.syntaxHighlighting)
         slot.fork(
@@ -155,8 +166,12 @@ export function codePreviewsWithDependencies(
           input.signal,
         );
     },
-    onDeactivated: (_input, token) => clearCodePreviewSessionCapability(token),
+    onDeactivated: (input, token) => {
+      MutableRef.set(input.scheduler, undefined);
+      clearCodePreviewSessionCapability(token);
+    },
     onStartFailure: (input) => {
+      MutableRef.set(input.scheduler, undefined);
       clearCodePreviewSessionCapability();
       input.notifyFailure();
     },
@@ -177,14 +192,16 @@ export function codePreviewsWithDependencies(
     }
     if (capturedHost.aborted) notifyFailure();
     const projectTrusted = readProjectTrust(ctx);
+    const scheduler = MutableRef.make<CodePreviewSchedulerServiceContract | undefined>(undefined);
     const input: SessionInput = capturedHost.signal
       ? {
           cwd: capturedHost.cwd,
           projectTrusted,
           signal: capturedHost.signal,
           notifyFailure,
+          scheduler,
         }
-      : { cwd: capturedHost.cwd, projectTrusted, notifyFailure };
+      : { cwd: capturedHost.cwd, projectTrusted, notifyFailure, scheduler };
     return slot.start(input, capturedHost.signal).then(() => undefined);
   });
 

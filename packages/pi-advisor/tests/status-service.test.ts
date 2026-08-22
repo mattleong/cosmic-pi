@@ -1,8 +1,25 @@
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FiberSet from "effect/FiberSet";
+import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
-import { advisorStatusFramesEffect } from "../src/status/service.ts";
+import {
+  advisorStatusFramesEffect,
+  makeAdvisorStatusService,
+  type AdvisorStatusFrames,
+  type AdvisorStatusStartOptions,
+} from "../src/status/service.ts";
+
+const statusOptions = (owner: string): AdvisorStatusStartOptions => ({
+  owner,
+  delayMs: 200,
+  intervalMs: 120,
+  animated: true,
+  frameCount: 10,
+  render: () => undefined,
+});
 
 it.effect("delays status, advances frames, and stops without a surviving timer fiber", () =>
   Effect.gen(function* () {
@@ -67,5 +84,59 @@ it.effect("keeps animating after a repeated-frame render throws", () =>
     yield* TestClock.adjust(240);
     expect(attempts).toEqual([0, 1, 2]);
     yield* Fiber.interrupt(fiber);
+  }),
+);
+
+it.effect("replaces the owned animation and preserves owner-matched settlement", () =>
+  Effect.gen(function* () {
+    const runFork = yield* FiberSet.makeRuntime<never, void>();
+    const firstStarted = yield* Deferred.make<void>();
+    const firstStopped = yield* Deferred.make<void>();
+    const secondStarted = yield* Deferred.make<void>();
+    const secondStopped = yield* Deferred.make<void>();
+    const frames: AdvisorStatusFrames = (options) =>
+      Effect.gen(function* () {
+        yield* Deferred.succeed(
+          options.owner === "first" ? firstStarted : secondStarted,
+          undefined,
+        );
+        return yield* Effect.never;
+      }).pipe(
+        Effect.ensuring(
+          Deferred.succeed(options.owner === "first" ? firstStopped : secondStopped, undefined),
+        ),
+      );
+    const service = yield* makeAdvisorStatusService({ fork: runFork }, frames);
+
+    service.start(statusOptions("first"));
+    yield* Deferred.await(firstStarted);
+    service.start(statusOptions("second"));
+    yield* Deferred.await(firstStopped);
+    yield* Deferred.await(secondStarted);
+
+    expect(service.settle("first")).toBe(false);
+    expect(Option.isNone(yield* Deferred.poll(secondStopped))).toBe(true);
+    expect(service.settle("second")).toBe(true);
+    yield* Deferred.await(secondStopped);
+  }),
+);
+
+it.effect("does not complete shutdown until the owned animation finalizer settles", () =>
+  Effect.gen(function* () {
+    const runFork = yield* FiberSet.makeRuntime<never, void>();
+    const started = yield* Deferred.make<void>();
+    const stopped = yield* Deferred.make<void>();
+    const frames: AdvisorStatusFrames = () =>
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(Deferred.succeed(stopped, undefined)),
+      );
+    const service = yield* makeAdvisorStatusService({ fork: runFork }, frames);
+
+    service.start(statusOptions("owned"));
+    yield* Deferred.await(started);
+    yield* service.shutdown;
+
+    expect(Option.isSome(yield* Deferred.poll(stopped))).toBe(true);
   }),
 );

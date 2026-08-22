@@ -22,6 +22,7 @@ import {
   type HerdrForkSessionInput,
 } from "../boundary/host-session.ts";
 import { HerdrForkError, herdrForkError } from "./errors.ts";
+import { retainPaneFailure, withRetainedPane } from "./ownership.ts";
 import { initialForkPrompt, makeAgentName, selectSplitDirection } from "./policy.ts";
 
 const MINIMUM_HERDR_PROTOCOL = 17;
@@ -30,12 +31,6 @@ const MAX_PROMPT_BYTES = 32 * 1024;
 const SHELL_READINESS_ATTEMPTS = 31;
 const SHELL_READINESS_DELAY_MILLIS = 200;
 const REQUIRED_STABLE_SHELL_READINGS = 6;
-const retainPane = (failure: HerdrForkError, paneId: string, guidance: string) =>
-  new HerdrForkError({
-    ...failure,
-    paneId,
-    message: `${failure.message} ${guidance}`,
-  });
 const HERDR_SHELL_PROCESS_NAMES = new Set([
   "sh",
   "bash",
@@ -151,9 +146,7 @@ const waitForAvailableShell = (
         return yield* herdrForkError(
           "inspect fork pane shell",
           "herdr_fork_pane_shell_mismatch",
-          `Herdr returned process information for a different pane. No Pi launch was attempted. Pane ${paneId} was retained for manual inspection.`,
-          "confirmed",
-          paneId,
+          "Herdr returned process information for a different pane. No Pi launch was attempted.",
         );
       stableReadings = paneHasAvailableShell(result.process_info) ? stableReadings + 1 : 0;
       if (stableReadings >= REQUIRED_STABLE_SHELL_READINGS) return;
@@ -163,9 +156,7 @@ const waitForAvailableShell = (
     return yield* herdrForkError(
       "inspect fork pane shell",
       "herdr_fork_pane_shell_not_ready",
-      `The new Herdr pane did not reach an available shell before the readiness deadline. No Pi launch was attempted. Pane ${paneId} was retained for manual inspection.`,
-      "confirmed",
-      paneId,
+      "The new Herdr pane did not reach an available shell before the readiness deadline. No Pi launch was attempted.",
     );
   });
 
@@ -194,9 +185,8 @@ const validateStartedAgent = (
       herdrForkError(
         "start forked Pi",
         "herdr_agent_ownership_mismatch",
-        `Herdr returned forked Pi startup evidence that did not match this launch. Pane ${pane.pane_id} was retained for manual inspection.`,
+        "Herdr returned forked Pi startup evidence that did not match this launch.",
         "uncertain",
-        pane.pane_id,
       ),
     );
 
@@ -286,38 +276,24 @@ export const makeHerdrForkService = (
         "split fork pane",
         true,
       );
-      if (
-        forkPane.pane_id === parentPane.pane_id ||
-        forkPane.workspace_id !== parentPane.workspace_id ||
-        forkPane.tab_id !== parentPane.tab_id
-      )
-        return yield* herdrForkError(
-          "split fork pane",
-          "herdr_split_topology_mismatch",
-          "Herdr returned a pane outside the calling pane's current workspace/tab; no further action was taken.",
-          "uncertain",
-          forkPane.pane_id,
-        );
+      return yield* Effect.gen(function* () {
+        if (
+          forkPane.pane_id === parentPane.pane_id ||
+          forkPane.workspace_id !== parentPane.workspace_id ||
+          forkPane.tab_id !== parentPane.tab_id
+        )
+          return yield* herdrForkError(
+            "split fork pane",
+            "herdr_split_topology_mismatch",
+            "Herdr returned a pane outside the calling pane's current workspace/tab; no further action was taken.",
+            "uncertain",
+          );
 
-      yield* waitForAvailableShell(runner, forkPane.pane_id, readinessDelay);
+        yield* waitForAvailableShell(runner, forkPane.pane_id, readinessDelay);
 
-      const retainForkPane = <A>(
-        effect: Effect.Effect<A, HerdrForkError>,
-      ): Effect.Effect<A, HerdrForkError> =>
-        effect.pipe(
-          Effect.mapError((failure) =>
-            retainPane(
-              failure,
-              forkPane.pane_id,
-              `Pane ${forkPane.pane_id} was retained for manual inspection.`,
-            ),
-          ),
-        );
-
-      const agentName = makeAgentName(sessionId, forkPane.pane_id);
-      const displayName = parentForkDisplayName(input.cwd);
-      const startedOutput = yield* retainForkPane(
-        command(
+        const agentName = makeAgentName(sessionId, forkPane.pane_id);
+        const displayName = parentForkDisplayName(input.cwd);
+        const startedOutput = yield* command(
           runner,
           [
             "agent",
@@ -339,48 +315,51 @@ export const makeHerdrForkService = (
           true,
           START_TIMEOUT_MILLIS,
           ["agent_pane_busy"],
-        ),
-      );
-      const { result: startedResult } = yield* retainForkPane(
-        decodeJson(AgentEnvelopeSchema, startedOutput.stdout, "start forked Pi", true),
-      );
-      yield* validateStartedAgent(startedResult.agent, forkPane, agentName, sessionFile);
-
-      let promptFailure: HerdrForkError | undefined;
-      if (prompt !== undefined) {
-        const promptResult = yield* Effect.result(
-          command(
-            runner,
-            ["agent", "prompt", agentName, initialForkPrompt(prompt)],
-            "prompt forked Pi",
-            true,
-          ),
         );
-        if (promptResult._tag === "Failure") promptFailure = promptResult.failure;
-      }
-      const focusResult = yield* Effect.result(
-        command(runner, ["agent", "focus", agentName], "focus forked Pi", true),
-      );
-
-      if (promptFailure)
-        return yield* retainPane(
-          promptFailure,
-          forkPane.pane_id,
-          `The fork is running in pane ${forkPane.pane_id}; enter the prompt there manually.`,
+        const { result: startedResult } = yield* decodeJson(
+          AgentEnvelopeSchema,
+          startedOutput.stdout,
+          "start forked Pi",
+          true,
         );
-      if (focusResult._tag === "Failure")
-        return yield* retainPane(
-          focusResult.failure,
-          forkPane.pane_id,
-          `The fork is running in pane ${forkPane.pane_id}; focus it manually.`,
+        yield* validateStartedAgent(startedResult.agent, forkPane, agentName, sessionFile);
+
+        let promptFailure: HerdrForkError | undefined;
+        if (prompt !== undefined) {
+          const promptResult = yield* Effect.result(
+            command(
+              runner,
+              ["agent", "prompt", agentName, initialForkPrompt(prompt)],
+              "prompt forked Pi",
+              true,
+            ),
+          );
+          if (promptResult._tag === "Failure") promptFailure = promptResult.failure;
+        }
+        const focusResult = yield* Effect.result(
+          command(runner, ["agent", "focus", agentName], "focus forked Pi", true),
         );
 
-      return {
-        agentName,
-        paneId: forkPane.pane_id,
-        direction,
-        prompted: prompt !== undefined,
-      };
+        if (promptFailure)
+          return yield* retainPaneFailure(
+            promptFailure,
+            forkPane.pane_id,
+            `The fork is running in pane ${forkPane.pane_id}; enter the prompt there manually.`,
+          );
+        if (focusResult._tag === "Failure")
+          return yield* retainPaneFailure(
+            focusResult.failure,
+            forkPane.pane_id,
+            `The fork is running in pane ${forkPane.pane_id}; focus it manually.`,
+          );
+
+        return {
+          agentName,
+          paneId: forkPane.pane_id,
+          direction,
+          prompted: prompt !== undefined,
+        };
+      }).pipe(withRetainedPane(forkPane.pane_id));
     });
 
   return { open };

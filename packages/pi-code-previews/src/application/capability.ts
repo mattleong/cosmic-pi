@@ -1,7 +1,5 @@
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as Schedule from "effect/Schedule";
+import type * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import type * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -15,6 +13,7 @@ import {
   publishCodePreviewSchedule,
   publishCodePreviewSessionActive,
 } from "./projection";
+import { previewScheduleEffect } from "./scheduler";
 
 type SessionRequirements =
   | CodePreviewSession
@@ -40,6 +39,8 @@ export interface CodePreviewSessionCapability {
     effect: Effect.Effect<A, E, SessionRequirements>,
     signal?: AbortSignal,
   ) => CodePreviewSessionFiber<A, E> | undefined;
+  readonly defer?: ((task: () => void) => () => void) | undefined;
+  readonly schedule?: ((interval: number, task: () => void) => () => void) | undefined;
 }
 
 let activeCapability: CodePreviewSessionCapability | undefined;
@@ -47,33 +48,18 @@ let activeCapability: CodePreviewSessionCapability | undefined;
 const invokeCodePreviewCallback = (task: () => void): Effect.Effect<void> =>
   Effect.try({ try: task, catch: () => undefined }).pipe(Effect.ignore);
 
-function forkSessionEffect<A, E>(
+const forkWithAbort = (
   capability: CodePreviewSessionCapability,
-  effect: Effect.Effect<A, E, SessionRequirements>,
-): CodePreviewSessionFiber<A, E> | undefined {
+  effect: Effect.Effect<void, never, SessionRequirements>,
+): (() => void) => {
+  const controller = new AbortController();
   try {
-    return capability.fork(effect);
+    if (!capability.fork(effect, controller.signal)) return () => undefined;
   } catch {
-    return undefined;
+    return () => undefined;
   }
-}
-
-function interruptSessionFiber<A, E>(
-  capability: CodePreviewSessionCapability,
-  fiber: Fiber.Fiber<A, E> | undefined,
-): void {
-  if (!fiber) return;
-  forkSessionEffect(capability, Fiber.interrupt(fiber));
-}
-
-function scheduleWithCapability(
-  capability: CodePreviewSessionCapability,
-  interval: number,
-  task: () => void,
-): () => void {
-  const fiber = forkSessionEffect(capability, previewScheduleEffect(interval, task));
-  return () => interruptSessionFiber(capability, fiber);
-}
+  return () => controller.abort();
+};
 
 export function installCodePreviewSessionCapability(
   capability: CodePreviewSessionCapability | undefined,
@@ -82,19 +68,19 @@ export function installCodePreviewSessionCapability(
   publishCodePreviewSessionActive(capability !== undefined);
   publishCodePreviewDefer(
     capability
-      ? (task) => {
-          const fiber = forkSessionEffect(
-            capability,
-            Effect.yieldNow.pipe(Effect.andThen(invokeCodePreviewCallback(task))),
-          );
-          return () => {
-            interruptSessionFiber(capability, fiber);
-          };
-        }
+      ? (capability.defer ??
+          ((task) =>
+            forkWithAbort(
+              capability,
+              Effect.yieldNow.pipe(Effect.andThen(invokeCodePreviewCallback(task))),
+            )))
       : undefined,
   );
   publishCodePreviewSchedule(
-    capability ? (interval, task) => scheduleWithCapability(capability, interval, task) : undefined,
+    capability
+      ? (capability.schedule ??
+          ((interval, task) => forkWithAbort(capability, previewScheduleEffect(interval, task))))
+      : undefined,
   );
 }
 
@@ -125,11 +111,4 @@ export function runCodePreviewSessionEffect<A, E>(
   );
 }
 
-/** Fixed cadence avoids recursive-sleep drift while remaining TestClock driven. */
-export const previewScheduleEffect = (interval: number, task: () => void) =>
-  Effect.sleep(Duration.millis(interval)).pipe(
-    Effect.andThen(
-      Effect.repeat(invokeCodePreviewCallback(task), Schedule.fixed(Duration.millis(interval))),
-    ),
-    Effect.asVoid,
-  );
+export { previewScheduleEffect };

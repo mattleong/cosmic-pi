@@ -32,7 +32,7 @@ The service requires protocol 17 or newer, a current Herdr Pi integration, a reg
 
 Topology creation is managed only until the forked Pi is confirmed. The successful pane is user-owned and intentionally survives the parent Pi session. The package persists no topology record and performs no shutdown cleanup or later adoption.
 
-A failed mutating request is outcome-uncertain and is never retried automatically, except when Herdr returns a recognized structured precondition rejection such as `agent_pane_busy`; that is confirmed not applied. Read-only shell readiness inspections may repeat within a fixed deadline. Once a split has occurred, later failures retain the exact pane for inspection rather than risk closing a fork whose startup result is ambiguous.
+A failed mutating request is outcome-uncertain and is never retried automatically, except when Herdr returns a recognized structured precondition rejection such as `agent_pane_busy`; that is confirmed not applied. Read-only shell readiness inspections may repeat within a fixed deadline. Once a split has occurred, one structural Effect ownership region covers topology validation, shell readiness, startup, prompting, and focus. Every later failure retains the exact pane for inspection without changing its confirmed/uncertain classification, rather than risk closing a fork whose startup result is ambiguous.
 
 ## Security
 

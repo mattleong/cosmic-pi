@@ -32,11 +32,11 @@ The extension factory registers callbacks and `/ask-user` but acquires no resour
 
 1. captures the Pi session host;
 2. skips the runtime and tool when `ctx.hasUI` is false;
-3. loads trusted code-preview settings;
-4. starts one managed session runtime;
-5. wraps and registers `ask_user`.
+3. starts one managed session runtime whose Effect startup workflow loads trusted code-preview settings;
+4. activates only after that interruptible prerequisite settles;
+5. wraps and registers `ask_user` from the slot's current-session activation hook.
 
-A preparation generation prevents an obsolete settings load from registering against a replaced session. `session_shutdown` invalidates preparation, clears the bridge, and disposes the runtime idempotently.
+The runtime slot is the sole admission authority. Replacing or shutting down a session forwards cancellation to a pending settings bootstrap, detaches loaders that ignore it, clears the bridge, and disposes the runtime idempotently. The previously registered tool rejects while replacement startup is pending, so it cannot enter a runtime before activation.
 
 - TUI uses the full custom overlay.
 - RPC walks native `select` and `input` dialogs sequentially.

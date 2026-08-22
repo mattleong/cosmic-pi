@@ -45,7 +45,7 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
 - `src/checkpoint/` — compact ledger and checkpoint orchestrator.
 - `src/runtime/` — persistent child Advisor conversation, strict response decoding, no-discovery resource loader, and read-only tools. All model/tool/session construction runs through the single `AdvisorChildFactory` Effect Context service (`child-factory.ts`); `advisorChildFactoryLayer` is the production composition and its `createSession` is the only Promise-shaped Pi host boundary. All exported runtime, instruction, tool, and model APIs are Effect-shaped; there are no Promise wrapper exports.
 - `src/queue/` — bounded observation/checkpoint queue.
-- `src/status/` — Effect-owned spinner resource.
+- `src/status/` — Effect-owned spinner resource; a scoped `FiberHandle` structurally owns replacement and makes shutdown wait for animation interruption.
 - `src/logging/` and `src/domain/` — redacted diagnostics and plain domain contracts.
 - `tests/support/` — direct-import test fixtures (no barrel): Promise deferred/tick, resolved config, final-turn/pass checkpoints, the standalone test executor (`executor.ts`), the controllable Effect-shaped `AdvisorRuntimeService` layer (`runtime-service.ts`), the Effect-shaped `AdvisorChildFactory` test layer (`child-factory.ts`), composable extension host doubles, and Effect-typed ConfigStore/FailureLogger test layers (`layers.ts`; production code carries no Promise-shaped test seams — `AdvisorExtensionDependencies` accepts Layer overrides only: `configStore`, `failureLogger`, and `runtimeService`). Semantically local seams (Effect deferreds, hostile accessors, spy harnesses) stay in their test files.
 

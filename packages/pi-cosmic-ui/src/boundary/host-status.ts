@@ -2,12 +2,35 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { createCosmicFooterClient } from "../footer/client.ts";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
-import { makeHostUiTickerPool } from "./host-ui-ticker-pool.ts";
+import { makeHostUiTickerPool, type HostUiTickerPool } from "./host-ui-ticker-pool.ts";
 
-const hostUiTickerPool = makeHostUiTickerPool();
+export interface HostUiTickerOwner {
+  readonly start: HostUiTickerPool["start"];
+  readonly shutdown: () => Promise<void>;
+}
+
+/** Rotates the process-shared pool before awaiting the old pool's Effect cleanup. */
+export const makeHostUiTickerOwner = (
+  createPool: () => HostUiTickerPool = makeHostUiTickerPool,
+): HostUiTickerOwner => {
+  let pool = createPool();
+  return {
+    start: (intervalMs, tick) => pool.start(intervalMs, tick),
+    shutdown: () => {
+      const previous = pool;
+      pool = createPool();
+      return previous.dispose();
+    },
+  };
+};
+
+const hostUiTickerOwner = makeHostUiTickerOwner();
 
 /** Shares one underlying Effect timer across all host-UI consumers at the same cadence. */
-export const startHostUiTicker = hostUiTickerPool.start;
+export const startHostUiTicker = hostUiTickerOwner.start;
+
+/** Session shutdown awaits the old pool; later sessions use the replacement pool. */
+export const shutdownHostUiTickers = hostUiTickerOwner.shutdown;
 
 export const makeSetStatusSafely =
   (statusKey: string) =>

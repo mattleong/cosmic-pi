@@ -7,6 +7,7 @@ export {
   type PiHostLogTarget,
   type PiManagedRuntime,
 } from "./src/runtime/runtime.ts";
+export { bestEffortHostBootstrap } from "./src/runtime/host-bootstrap.ts";
 export {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
