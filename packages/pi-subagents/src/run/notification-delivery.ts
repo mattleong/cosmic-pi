@@ -1,6 +1,6 @@
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Latch from "effect/Latch";
 import type * as Scope from "effect/Scope";
 import type {
   SubagentNotification,
@@ -22,7 +22,7 @@ export type SubagentQuestionNotification = Extract<
 >;
 
 export interface RunNotificationDeliveryDependencies {
-  /** Owner scope for the retry fibers; closing it ends every pending redelivery. */
+  /** Owner scope for the persistent outbox workers. */
   readonly ownerScope: Scope.Scope;
   readonly records: ReadonlyMap<string, RunRecord>;
   /** The shared service lock. Every `*Locked` method requires the caller to hold it. */
@@ -33,86 +33,78 @@ export interface RunNotificationDeliveryDependencies {
   readonly notify: (notification: SubagentNotification) => SubagentNotificationDelivery | undefined;
 }
 
+type ActionDeliveryState =
+  | { readonly _tag: "Idle" }
+  | { readonly _tag: "Retry"; readonly immediate: boolean; readonly delayMillis: number };
+
 /**
- * Owns the completion/question delivery outbox: the pending maps, scheduler
- * flags, retry backoff, and owner-scoped delivery fibers. Mutations are exposed
- * only through caller-lock-required methods so committed record transitions and
- * outbox state stay in the same critical section.
+ * Owns the completion/question delivery outbox. Two owner-scoped workers stay
+ * alive for the service lifetime and sleep on reusable latches while idle.
+ * Mutations remain caller-lock-required so record transitions and outbox state
+ * commit in one critical section.
  */
-export function makeRunNotificationDelivery(dependencies: RunNotificationDeliveryDependencies) {
+export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.make")(function* (
+  dependencies: RunNotificationDeliveryDependencies,
+) {
   const { ownerScope, records, withLock, withCompletionGate, notify } = dependencies;
   const pendingCompletions = new Map<
     string,
     { readonly id: string; readonly generation: number }
   >();
   const pendingActionNotifications = new Map<string, SubagentQuestionNotification>();
-  let completionFlushScheduled = false;
-  let actionFlushScheduled = false;
+  const completionWake = yield* Latch.make();
+  const actionWake = yield* Latch.make();
   let completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
   let actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
 
-  let scheduleCompletionFlush: Effect.Effect<void> = Effect.void;
   const flushPendingCompletions = Effect.suspend(() =>
-    Effect.sleep(Duration.millis(completionRetryDelayMillis)).pipe(
-      Effect.andThen(
-        withCompletionGate(
-          withLock(
-            Effect.sync(() => collectPendingCompletionNotifications(records, pendingCompletions)),
-          ).pipe(
-            Effect.flatMap((runs) =>
-              runs.length === 0
-                ? withLock(
-                    Effect.sync(() => {
-                      completionFlushScheduled = false;
-                      completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
-                    }),
-                  )
-                : Effect.sync(() => notify({ type: "completed", runs })).pipe(
-                    Effect.flatMap((delivery) =>
-                      withLock(
-                        Effect.sync(() => {
-                          const acknowledged = acknowledgePendingCompletions(
-                            records,
-                            pendingCompletions,
-                            runs,
-                            deliveredCompletionKeys(delivery, runs),
-                          );
-                          completionFlushScheduled = false;
-                          completionRetryDelayMillis =
-                            pendingCompletions.size === 0 || acknowledged > 0
-                              ? COMPLETION_RETRY_INITIAL_MILLIS
-                              : Math.min(
-                                  COMPLETION_RETRY_MAX_MILLIS,
-                                  completionRetryDelayMillis * 2,
-                                );
-                        }),
-                      ),
-                    ),
-                  ),
-            ),
-          ),
-        ),
-      ),
-      Effect.andThen(scheduleCompletionFlush),
-      Effect.asVoid,
-    ),
+    Effect.gen(function* () {
+      yield* Effect.sleep(Duration.millis(completionRetryDelayMillis));
+      yield* withCompletionGate(
+        Effect.gen(function* () {
+          const runs = yield* withLock(
+            Effect.sync(() => {
+              Latch.closeUnsafe(completionWake);
+              return collectPendingCompletionNotifications(records, pendingCompletions);
+            }),
+          );
+          if (runs.length === 0) {
+            yield* withLock(
+              Effect.sync(() => {
+                completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
+              }),
+            );
+            return;
+          }
+          const delivery = yield* Effect.sync(() => notify({ type: "completed", runs }));
+          yield* withLock(
+            Effect.sync(() => {
+              const acknowledged = acknowledgePendingCompletions(
+                records,
+                pendingCompletions,
+                runs,
+                deliveredCompletionKeys(delivery, runs),
+              );
+              completionRetryDelayMillis =
+                pendingCompletions.size === 0 || acknowledged > 0
+                  ? COMPLETION_RETRY_INITIAL_MILLIS
+                  : Math.min(COMPLETION_RETRY_MAX_MILLIS, completionRetryDelayMillis * 2);
+              if (pendingCompletions.size > 0) Latch.openUnsafe(completionWake);
+            }),
+          );
+        }),
+      );
+    }),
   );
 
-  scheduleCompletionFlush = withLock(
+  const completionWorker = Effect.forever(
+    Latch.await(completionWake).pipe(Effect.andThen(flushPendingCompletions)),
+  );
+
+  const scheduleCompletionFlush = withLock(
     Effect.sync(() => {
-      if (completionFlushScheduled || pendingCompletions.size === 0) return false;
-      completionFlushScheduled = true;
-      return true;
+      if (pendingCompletions.size > 0) Latch.openUnsafe(completionWake);
     }),
-  ).pipe(
-    Effect.flatMap((shouldSchedule) =>
-      shouldSchedule
-        ? flushPendingCompletions.pipe(
-            Effect.forkIn(ownerScope, { startImmediately: true }),
-            Effect.asVoid,
-          )
-        : Effect.void,
-    ),
   );
 
   const queueCompletion = (record: RunRecord, generation: number) =>
@@ -126,9 +118,6 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
     `${actionSlot(notification)}:${notification.generation}`;
   const actionRelevant = (notification: SubagentQuestionNotification): boolean => {
     const record = records.get(notification.id);
-    // Question queueing stamps the record's current notification generation and
-    // every later record transition increments it, so a queued question is
-    // relevant exactly while it still matches that generation.
     return (
       record !== undefined &&
       record.notificationGeneration === notification.generation &&
@@ -137,125 +126,85 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
     );
   };
 
-  type ActionDeliveryState =
-    | { readonly retry: false }
-    | { readonly retry: true; readonly immediate: true }
-    | {
-        readonly retry: true;
-        readonly immediate: false;
-        readonly wake: Deferred.Deferred<void>;
-      };
-  let scheduleActionFlush: Effect.Effect<void> = Effect.void;
-  let actionDeliveryLoop: Effect.Effect<void> = Effect.void;
-  let actionRetryWake: Deferred.Deferred<void> | undefined;
-  actionDeliveryLoop = Effect.suspend(() =>
-    withCompletionGate(
-      withLock(
-        Effect.sync(() => {
-          const notifications = [...pendingActionNotifications.values()].filter((notification) => {
-            if (actionRelevant(notification)) return true;
-            pendingActionNotifications.delete(actionSlot(notification));
-            return false;
-          });
-          // Clear the scheduler flag in the same critical section that observes no pending work.
-          // A producer arriving afterward sees false and necessarily starts a replacement loop.
-          if (notifications.length === 0) {
-            actionFlushScheduled = false;
-            actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
-            actionRetryWake = undefined;
-          }
-          return notifications;
-        }),
-      ).pipe(
-        Effect.flatMap((notifications) =>
-          notifications.length === 0
-            ? Effect.succeed<ActionDeliveryState>({ retry: false })
-            : Effect.sync(() =>
-                notifications.map((notification) => ({
-                  notification,
-                  delivery: notify(notification),
-                })),
-              ).pipe(
-                Effect.flatMap((deliveries) =>
-                  withLock(
-                    Effect.sync<ActionDeliveryState>(() => {
-                      let acknowledged = 0;
-                      const attempted = new Set(
-                        deliveries.map(({ notification }) => actionDeliveryKey(notification)),
+  const flushPendingActions: Effect.Effect<ActionDeliveryState> = withCompletionGate(
+    withLock(
+      Effect.sync(() => {
+        Latch.closeUnsafe(actionWake);
+        const notifications = [...pendingActionNotifications.values()].filter((notification) => {
+          if (actionRelevant(notification)) return true;
+          pendingActionNotifications.delete(actionSlot(notification));
+          return false;
+        });
+        if (notifications.length === 0) actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
+        return notifications;
+      }),
+    ).pipe(
+      Effect.flatMap((notifications) =>
+        notifications.length === 0
+          ? Effect.succeed<ActionDeliveryState>({ _tag: "Idle" })
+          : Effect.sync(() =>
+              notifications.map((notification) => ({
+                notification,
+                delivery: notify(notification),
+              })),
+            ).pipe(
+              Effect.flatMap((deliveries) =>
+                withLock(
+                  Effect.sync<ActionDeliveryState>(() => {
+                    let acknowledged = 0;
+                    const attempted = new Set(
+                      deliveries.map(({ notification }) => actionDeliveryKey(notification)),
+                    );
+                    for (const { notification, delivery } of deliveries) {
+                      const delivered = new Set(
+                        delivery?.deliveredActionKeys ?? [actionDeliveryKey(notification)],
                       );
-                      for (const { notification, delivery } of deliveries) {
-                        const delivered = new Set(
-                          delivery?.deliveredActionKeys ?? [actionDeliveryKey(notification)],
-                        );
-                        if (!delivered.has(actionDeliveryKey(notification))) continue;
-                        if (
-                          pendingActionNotifications.get(actionSlot(notification)) === notification
-                        )
-                          pendingActionNotifications.delete(actionSlot(notification));
-                        acknowledged += 1;
-                      }
-                      actionRetryDelayMillis =
-                        pendingActionNotifications.size === 0 || acknowledged > 0
-                          ? COMPLETION_RETRY_INITIAL_MILLIS
-                          : Math.min(COMPLETION_RETRY_MAX_MILLIS, actionRetryDelayMillis * 2);
-                      if (pendingActionNotifications.size === 0) {
-                        actionFlushScheduled = false;
-                        actionRetryWake = undefined;
-                        return { retry: false };
-                      }
-                      const immediate = [...pendingActionNotifications.values()].some(
-                        (notification) => !attempted.has(actionDeliveryKey(notification)),
-                      );
-                      if (immediate) {
-                        actionRetryWake = undefined;
-                        return { retry: true, immediate: true };
-                      }
-                      const wake = Deferred.makeUnsafe<void>();
-                      actionRetryWake = wake;
-                      return { retry: true, immediate: false, wake };
-                    }),
-                  ),
+                      if (!delivered.has(actionDeliveryKey(notification))) continue;
+                      if (pendingActionNotifications.get(actionSlot(notification)) === notification)
+                        pendingActionNotifications.delete(actionSlot(notification));
+                      acknowledged += 1;
+                    }
+                    actionRetryDelayMillis =
+                      pendingActionNotifications.size === 0 || acknowledged > 0
+                        ? COMPLETION_RETRY_INITIAL_MILLIS
+                        : Math.min(COMPLETION_RETRY_MAX_MILLIS, actionRetryDelayMillis * 2);
+                    if (pendingActionNotifications.size === 0) return { _tag: "Idle" };
+                    const immediate = [...pendingActionNotifications.values()].some(
+                      (notification) => !attempted.has(actionDeliveryKey(notification)),
+                    );
+                    return {
+                      _tag: "Retry",
+                      immediate,
+                      delayMillis: actionRetryDelayMillis,
+                    };
+                  }),
                 ),
               ),
-        ),
-      ),
-    ).pipe(
-      Effect.flatMap((state) => {
-        if (!state.retry) return Effect.void;
-        if (state.immediate) return actionDeliveryLoop;
-        return Effect.raceFirst(
-          Effect.sleep(Duration.millis(actionRetryDelayMillis)),
-          Deferred.await(state.wake),
-        ).pipe(
-          Effect.andThen(
-            withLock(
-              Effect.sync(() => {
-                if (actionRetryWake === state.wake) actionRetryWake = undefined;
-              }),
             ),
-          ),
-          Effect.andThen(actionDeliveryLoop),
-        );
-      }),
+      ),
     ),
   );
 
-  scheduleActionFlush = withLock(
-    Effect.sync(() => {
-      if (actionFlushScheduled || pendingActionNotifications.size === 0) return false;
-      actionFlushScheduled = true;
-      return true;
-    }),
-  ).pipe(
-    Effect.flatMap((shouldSchedule) =>
-      shouldSchedule
-        ? actionDeliveryLoop.pipe(
-            Effect.forkIn(ownerScope, { startImmediately: true }),
-            Effect.asVoid,
-          )
-        : Effect.void,
-    ),
+  const deliverPendingActions = (): Effect.Effect<void> =>
+    flushPendingActions.pipe(
+      Effect.flatMap((state) => {
+        if (state._tag === "Idle") return Effect.void;
+        const retry = state.immediate
+          ? Effect.void
+          : Effect.raceFirst(
+              Effect.sleep(Duration.millis(state.delayMillis)),
+              Latch.await(actionWake),
+            );
+        return retry.pipe(Effect.flatMap(() => deliverPendingActions()));
+      }),
+    );
+
+  const actionWorker = Effect.forever(
+    Latch.await(actionWake).pipe(Effect.flatMap(() => deliverPendingActions())),
   );
+
+  yield* Effect.forkIn(completionWorker, ownerScope, { startImmediately: true });
+  yield* Effect.forkIn(actionWorker, ownerScope, { startImmediately: true });
 
   const queueActionNotification = (
     record: RunRecord,
@@ -264,30 +213,30 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
     withLock(
       Effect.sync(() => {
         const generation = ++record.notificationGeneration;
-        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+        // SAFETY: The typed owner constructs the queued notification on this path.
         const queued = { ...notification, generation } as SubagentQuestionNotification;
         pendingActionNotifications.set(actionSlot(queued), queued);
-        if (actionRetryWake) Deferred.doneUnsafe(actionRetryWake, Effect.void);
+        Latch.openUnsafe(actionWake);
       }),
-    ).pipe(Effect.andThen(scheduleActionFlush));
+    );
 
   return {
-    /** Best-effort scheduler; safe to run whenever queued work may exist. */
+    /** Best-effort wakeup; safe whenever queued completion work may exist. */
     scheduleCompletionFlush,
-    /** Locks internally, queues one completion generation, and schedules delivery. */
+    /** Locks internally, queues one completion generation, and wakes delivery. */
     queueCompletion,
-    /** Locks internally, stamps the question generation, queues it, and wakes a sleeping retry. */
+    /** Locks internally, stamps the question generation, queues it, and wakes delivery. */
     queueActionNotification,
-    /** Caller must hold the service lock; schedule the flush after the critical section commits. */
+    /** Caller must hold the service lock; wake completion delivery after commit. */
     queueCompletionLocked: (record: RunRecord, generation: number): void =>
       queuePendingCompletion(pendingCompletions, record, generation),
-    /** Caller must hold the service lock (claim acquisition and consumption paths). */
+    /** Caller must hold the service lock. */
     removeCompletionLocked: (id: string, generation: number): void =>
       removePendingCompletion(pendingCompletions, id, generation),
-    /** Caller must hold the service lock; requeues a released claim for redelivery. */
+    /** Caller must hold the service lock; wake completion delivery after commit. */
     requeueCompletionLocked: (record: RunRecord, generation: number): void =>
       queuePendingCompletion(pendingCompletions, record, generation),
-    /** Caller must hold the service lock; drops the run's single default question slot. */
+    /** Caller must hold the service lock; drops the run's default question slot. */
     discardQuestionLocked: (id: string): void =>
       void pendingActionNotifications.delete(`${id}:question:default`),
     /** Caller must hold the service lock; drops every queued question owned by the run. */
@@ -296,6 +245,13 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
         if (notification.id === id) pendingActionNotifications.delete(slot);
     },
   };
-}
+});
 
-export type RunNotificationDelivery = ReturnType<typeof makeRunNotificationDelivery>;
+export type RunNotificationDelivery =
+  ReturnType<typeof makeRunNotificationDelivery> extends Effect.Effect<
+    infer Success,
+    unknown,
+    unknown
+  >
+    ? Success
+    : never;

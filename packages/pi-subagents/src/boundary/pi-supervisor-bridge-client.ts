@@ -121,13 +121,10 @@ type BridgeReply =
 const decodeInboundOption = Schema.decodeUnknownOption;
 
 const classifyBridgeLine = (line: string): InboundClassification<BridgeReply> => {
-  let value: unknown;
-  try {
-    // SAFETY: The parsed representation stays unknown until the strict schemas below decode it.
-    value = JSON.parse(line) as unknown;
-  } catch {
+  const parsed = decodeInboundOption(Schema.fromJsonString(Schema.Unknown))(line);
+  if (Option.isNone(parsed))
     return { kind: "protocol-error", reason: "Private supervisor bridge returned malformed JSON." };
-  }
+  const value = parsed.value;
   const discriminant = decodeInboundOption(BridgeResponseDiscriminant)(value);
   if (Option.isNone(discriminant)) {
     return {

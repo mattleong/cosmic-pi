@@ -166,7 +166,8 @@ export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate
   rawValue: string,
 ) {
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
-  if (!descriptor) return (current: JsonObject): JsonObject => ({ ...current });
+  if (!descriptor)
+    return yield* new InvalidSettingError({ id, message: `Unknown setting: ${id}.` });
   const parsedValue = yield* descriptor.decode(rawValue);
   const separator = descriptor.id.indexOf(".");
   if (separator < 0)

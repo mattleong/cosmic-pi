@@ -176,6 +176,18 @@ export {
   fileLayer as nodeFilePlatformLayer,
   layer as nodePlatformLayer,
 } from "./src/platform/node.ts";
+export {
+  BoundedProcessError,
+  confirmEffectProcessClose,
+  nodeProcessLayer,
+  provideNodeProcess,
+  runBoundedProcess,
+  runBoundedProcessNode,
+  runBoundedProcessScoped,
+  type BoundedProcessRequest,
+  type BoundedProcessResult,
+} from "./src/platform/process.ts";
+export { awaitProcessClose, type ProcessCloseSource } from "./src/platform/process-close.ts";
 export { synchronousNow } from "./src/platform/native-clock.ts";
 export {
   decodeJwtPayloadText,

@@ -15,6 +15,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Latch from "effect/Latch";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
@@ -200,7 +201,7 @@ interface NodeChannelState {
   readonly questionEpochs: Set<number>;
   readonly reports: Map<SupervisorDeliveryId, AcceptedReport>;
   readonly epochAcknowledgements: Map<SupervisorChannelId, PendingEpochAcknowledgement>;
-  readonly readinessWaiters: Set<Deferred.Deferred<void, SupervisorChannelError>>;
+  readonly readiness: Latch.Latch;
   pendingAssignmentEpoch: number | undefined;
   currentAssignmentEpoch: number;
   nextReportSequence: number;
@@ -386,10 +387,9 @@ const removePrivateState = (
 const hasReadyPeer = (state: NodeChannelState): boolean =>
   [...state.peers.values()].some((peer) => peer.watching);
 
-const publishReadyGeneration = (state: NodeChannelState): void => {
-  if (!hasReadyPeer(state)) return;
-  for (const waiter of state.readinessWaiters) Deferred.doneUnsafe(waiter, Effect.void);
-  state.readinessWaiters.clear();
+const synchronizeReadiness = (state: NodeChannelState): void => {
+  if (hasReadyPeer(state)) Latch.openUnsafe(state.readiness);
+  else Latch.closeUnsafe(state.readiness);
 };
 
 const failPendingQuestion = (
@@ -424,6 +424,7 @@ const removePeer = (state: NodeChannelState, clientId: number): void => {
   const peer = state.peers.get(clientId);
   if (!peer) return;
   state.peers.delete(clientId);
+  synchronizeReadiness(state);
   Queue.endUnsafe(peer.assignments);
   const affected = new Set<Deferred.Deferred<void, SupervisorChannelError>>();
   for (const [id, acknowledgement] of state.epochAcknowledgements) {
@@ -571,9 +572,14 @@ const makeRpcHandlers = (state: NodeChannelState) =>
                 "This supervisor session already has an assignment stream.",
               );
             peer.watching = true;
-            publishReadyGeneration(state);
+            synchronizeReadiness(state);
             return Stream.fromQueue(peer.assignments).pipe(
-              Stream.ensuring(Effect.sync(() => void (peer.watching = false))),
+              Stream.ensuring(
+                Effect.sync(() => {
+                  peer.watching = false;
+                  synchronizeReadiness(state);
+                }),
+              ),
             );
           }),
         ),
@@ -794,14 +800,7 @@ const closeNodeChannelEffect = (state: NodeChannelState) =>
       state.cleanupStarted = true;
       return Effect.gen(function* () {
         state.closed = true;
-        for (const waiter of state.readinessWaiters)
-          Deferred.doneUnsafe(
-            waiter,
-            Effect.fail(
-              channelError("await ready", "channel_closed", "Supervisor channel closed."),
-            ),
-          );
-        state.readinessWaiters.clear();
+        Latch.openUnsafe(state.readiness);
         failPendingQuestion(
           state,
           "channel_closed",
@@ -917,6 +916,7 @@ const acquireNodeChannelEffect = (
         const token = Redacted.make(
           SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")),
         );
+        const readiness = yield* Latch.make();
         state = {
           runId,
           scope: internalScope,
@@ -930,7 +930,7 @@ const acquireNodeChannelEffect = (
           questionEpochs: new Set(),
           reports: new Map(),
           epochAcknowledgements: new Map(),
-          readinessWaiters: new Set(),
+          readiness,
           pendingAssignmentEpoch: undefined,
           currentAssignmentEpoch: 0,
           nextReportSequence: 1,
@@ -1022,32 +1022,29 @@ export const makeSupervisorChannel = (
       );
       const close = closeNodeChannelEffect(state);
 
-      const awaitReady: Effect.Effect<void, SupervisorChannelError> = Effect.suspend(() => {
-        if (state.closed)
-          return Effect.fail(
-            channelError("await ready", "channel_closed", "Supervisor channel is closed."),
-          );
-        if (hasReadyPeer(state)) return Effect.void;
-        const waiter = Deferred.makeUnsafe<void, SupervisorChannelError>();
-        state.readinessWaiters.add(waiter);
-        return Deferred.await(waiter).pipe(
-          Effect.timeoutOption(REPLY_TIMEOUT),
-          Effect.ensuring(Effect.sync(() => void state.readinessWaiters.delete(waiter))),
-          Effect.flatMap((outcome) =>
-            Option.isSome(outcome)
-              ? hasReadyPeer(state)
-                ? Effect.void
-                : awaitReady
-              : Effect.fail(
-                  channelError(
-                    "await ready",
-                    "supervisor_helper_unavailable",
-                    "No authenticated supervisor helper became ready.",
-                  ),
+      const waitUntilReady = (): Effect.Effect<void, SupervisorChannelError> =>
+        Effect.suspend(() => {
+          if (state.closed)
+            return Effect.fail(
+              channelError("await ready", "channel_closed", "Supervisor channel is closed."),
+            );
+          if (hasReadyPeer(state)) return Effect.void;
+          return Latch.await(state.readiness).pipe(Effect.flatMap(() => waitUntilReady()));
+        });
+      const awaitReady: Effect.Effect<void, SupervisorChannelError> = waitUntilReady().pipe(
+        Effect.timeoutOption(REPLY_TIMEOUT),
+        Effect.flatMap((outcome) =>
+          Option.isSome(outcome)
+            ? Effect.void
+            : Effect.fail(
+                channelError(
+                  "await ready",
+                  "supervisor_helper_unavailable",
+                  "No authenticated supervisor helper became ready.",
                 ),
-          ),
-        );
-      });
+              ),
+        ),
+      );
 
       const setAssignmentEpoch: SupervisorChannelHandle["setAssignmentEpoch"] = (epoch) =>
         Effect.gen(function* () {

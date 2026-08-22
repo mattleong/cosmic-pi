@@ -18,10 +18,10 @@ Adds OpenAI subscription usage, fast-mode request injection, provider-native com
 - `src/auth/` owns Codex OAuth credential reads (`codex-auth.ts`, `result.ts`); decoded and registry access tokens remain `Redacted` until the usage or image HTTP transport constructs its authorization header.
 - `src/usage/index.ts`, `src/fast/service.ts`, `src/compaction/`, and `src/image/` own the major feature resources.
 - `src/usage/controller.ts` is the usage Context service door; `projection.ts` owns frozen projection policy and `debug.ts` owns deterministic diagnostics.
-- `src/image/service.ts` is the image Context service door and orchestration path; `input.ts`, `stream.ts`, and `output.ts` isolate safe input reads, SSE decoding, generated-byte validation, and atomic publication.
+- `src/image/service.ts` is the image Context service door and orchestration path; `input.ts`, `stream.ts`, and `output.ts` isolate safe input reads, bounded Effect SSE decoding, generated-byte validation, and atomic publication.
 - The remaining `src/image/` modules own types, pure helpers, host registration, and protocol.
 - `src/config/`, `src/fast/controller.ts`, `src/fast/routing.ts`, `src/fast/models.ts`, `src/usage/format.ts`, and `src/image/protocol.ts` contain schemas and deterministic policy/protocol logic.
-- `src/boundary/` isolates Pi UI, provider-header and cached-transport adaptation, model registry, OpenAI compaction HTTP, and Sharp.
+- `src/boundary/` isolates Pi UI, provider-header and cached-transport adaptation, model registry, schema-encoded and response-bounded OpenAI compaction HTTP, and Sharp.
 - `src/ui/primitives.ts`, `src/ui/notify-text.ts`, and `src/footer/` consume synchronous frozen projections; `notify-text.ts` formats bounded host-notification failure details; the image tool renders through the `pi-code-previews` cooperative shell.
 - `src/settings/controller.ts` registers settings commands/pickers with finite argument completions and pure command dispatch (shared `completeSettingsArguments`/`dispatchSettingsCommand` from `pi-cosmic-core`; `diagnostics` is the only diagnostics verb — there is no `debug` alias and the picker's diagnostics item id is `diagnostics`) and composes the hierarchical settings surface through the shared `pi-cosmic-ui/manager/settings-surface` factory (this package's `safeHostUi` guard stays injected at the boundary).
 

@@ -3,14 +3,17 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/strictEffectProvide:off
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
+import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -37,6 +40,14 @@ for (const key of Object.keys(process.env)) delete process.env[key];
 
 const VERSION = SUPERVISOR_CHANNEL_VERSION;
 const SERVER_NAME = "pi-subagents-supervisor";
+
+class McpToolCallFailure extends Data.TaggedError("McpToolCallFailure")<{
+  readonly failure: unknown;
+}> {}
+
+class McpWriteFailure extends Data.TaggedError("McpWriteFailure")<{
+  readonly reason: "capacity" | "closed" | "size" | "stream";
+}> {}
 const SERVER_VERSION = "2.0.0";
 const MAX_CONFIG_BYTES = 4 * 1024;
 const MAX_LINE_BYTES = 512 * 1024;
@@ -202,41 +213,69 @@ const readConfig = (path: string): Effect.Effect<SupervisorChannelConfig, Helper
     );
   });
 
-const makeSerializedWriter = (
+const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerializedWriter")(function* (
   stream: NodeJS.WritableStream,
   maximumWrites = MAX_PENDING_WRITES,
-): SerializedWriter => {
-  let tail = Promise.resolve();
+) {
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const frames = yield* Queue.bounded<{
+    readonly line: string;
+    readonly ack: Deferred.Deferred<void, McpWriteFailure>;
+  }>(maximumWrites);
+  const acknowledgements = new Set<Deferred.Deferred<void, McpWriteFailure>>();
   let pending = 0;
   let closed = false;
+  const writeLine = (line: string) =>
+    Effect.callback<void, McpWriteFailure>((resume) => {
+      stream.write(line, "utf8", (error?: Error | null) =>
+        resume(error ? Effect.fail(new McpWriteFailure({ reason: "stream" })) : Effect.void),
+      );
+    });
+  yield* Effect.forever(
+    Queue.take(frames).pipe(
+      Effect.flatMap((frame) =>
+        Effect.exit(writeLine(frame.line)).pipe(
+          Effect.flatMap((exit) => Deferred.done(frame.ack, exit)),
+          Effect.ensuring(
+            Effect.sync(() => {
+              acknowledgements.delete(frame.ack);
+              pending = Math.max(0, pending - 1);
+            }),
+          ),
+        ),
+      ),
+    ),
+  ).pipe(Effect.forkScoped({ startImmediately: true }));
   const write = <ValueInput>(value: ValueInput): Promise<void> => {
-    if (closed || pending >= maximumWrites) return Promise.reject(new Error("write-capacity"));
+    if (closed) return runPromise(Effect.fail(new McpWriteFailure({ reason: "closed" })));
+    if (pending >= maximumWrites)
+      return runPromise(Effect.fail(new McpWriteFailure({ reason: "capacity" })));
     const line = `${JSON.stringify(value)}\n`;
     if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES)
-      return Promise.reject(new Error("write-size"));
+      return runPromise(Effect.fail(new McpWriteFailure({ reason: "size" })));
+    const ack = Deferred.makeUnsafe<void, McpWriteFailure>();
+    acknowledgements.add(ack);
     pending += 1;
-    const operation = tail.then(
-      () =>
-        new Promise<void>((resolveWrite, rejectWrite) => {
-          stream.write(line, "utf8", (error?: Error | null) =>
-            error ? rejectWrite(error) : resolveWrite(undefined),
-          );
-        }),
-    );
-    tail = operation
-      .catch(() => undefined)
-      .then(() => {
-        pending = Math.max(0, pending - 1);
-      });
-    return operation;
+    if (!Queue.offerUnsafe(frames, { line, ack })) {
+      acknowledgements.delete(ack);
+      pending -= 1;
+      return runPromise(Effect.fail(new McpWriteFailure({ reason: "capacity" })));
+    }
+    return runPromise(Deferred.await(ack));
   };
   return {
     write,
     close: () => {
+      if (closed) return;
       closed = true;
+      const failure = new McpWriteFailure({ reason: "closed" });
+      for (const acknowledgement of acknowledgements)
+        Deferred.doneUnsafe(acknowledgement, Effect.fail(failure));
+      acknowledgements.clear();
+      pending = 0;
     },
-  };
-};
+  } satisfies SerializedWriter;
+});
 
 const attachLineReader = (
   stream: NodeJS.ReadableStream,
@@ -304,9 +343,11 @@ if (Exit.isFailure(configExit)) {
 }
 const config: SupervisorChannelConfig = configExit.value;
 
-const stdout = makeSerializedWriter(process.stdout);
-const activeCalls = new Map<string, AbortController>();
 const rpcScope = await Effect.runPromise(Scope.make());
+const stdout = await Effect.runPromise(
+  makeSerializedWriter(process.stdout).pipe(Scope.provide(rpcScope)),
+);
+const activeCalls = await Effect.runPromise(FiberMap.make<string>().pipe(Scope.provide(rpcScope)));
 let assignmentEpoch = 0;
 let channelClosed = false;
 let initialized = false;
@@ -737,7 +778,7 @@ const dispatchMcp = (request: DecodedMcpMessage): void => {
     case "notifications/initialized":
       return;
     case "notifications/cancelled":
-      activeCalls.get(rpcKey(request.requestId))?.abort();
+      void Effect.runPromise(FiberMap.remove(activeCalls, rpcKey(request.requestId)));
       return;
     case "ping":
       void sendRpc({ jsonrpc: "2.0", id: request.id, result: {} });
@@ -754,27 +795,36 @@ const dispatchMcp = (request: DecodedMcpMessage): void => {
         void rpcError(request.id, -32002, "MCP helper is not initialized.");
         return;
       }
-      if (activeCalls.size >= MAX_CONCURRENT_CALLS) {
+      if ([...activeCalls].length >= MAX_CONCURRENT_CALLS) {
         void rpcError(request.id, -32000, "Bounded concurrent MCP call capacity is full.");
         return;
       }
       const key = rpcKey(request.id);
-      if (activeCalls.has(key)) {
+      if (FiberMap.hasUnsafe(activeCalls, key)) {
         void rpcError(request.id, -32600, "An MCP request with this id is already active.");
         return;
       }
-      const controller = new AbortController();
-      activeCalls.set(key, controller);
-      void executeTool(request, controller.signal)
-        .catch(<FailureInput>(failure: FailureInput) => {
-          const code = failureCode(failure);
-          return rpcError(
-            request.id,
-            isCancellationCode(code) ? -32800 : -32000,
-            failureMessage(failure) ?? "Private supervisor tool delivery failed.",
+      const call = Effect.tryPromise({
+        try: (signal) => executeTool(request, signal),
+        catch: <FailureInput>(failure: FailureInput) => new McpToolCallFailure({ failure }),
+      }).pipe(
+        Effect.catch((wrapped) => {
+          const code = failureCode(wrapped.failure);
+          return Effect.promise(() =>
+            rpcError(
+              request.id,
+              isCancellationCode(code) ? -32800 : -32000,
+              failureMessage(wrapped.failure) ?? "Private supervisor tool delivery failed.",
+            ),
           );
-        })
-        .finally(() => activeCalls.delete(key));
+        }),
+        Effect.onInterrupt(() =>
+          Effect.promise(() => rpcError(request.id, -32800, "MCP request was cancelled.")),
+        ),
+      );
+      void Effect.runPromise(
+        FiberMap.run(activeCalls, key, { onlyIfMissing: true, startImmediately: true })(call),
+      );
       return;
     }
     default:
@@ -809,8 +859,6 @@ let inputClosed = false;
 const closeInput = (): void => {
   if (inputClosed) return;
   inputClosed = true;
-  for (const call of activeCalls.values()) call.abort();
-  activeCalls.clear();
   detachStdin();
   stdout.close();
   closeRpcScope();

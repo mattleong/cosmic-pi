@@ -18,7 +18,7 @@ import {
 } from "../../config/options.ts";
 import { ConfigStore } from "../../config/store.ts";
 import { FailureLogger } from "../../logging/logger.ts";
-import { AdvisorReviewQueue, AdvisorReviewQueueService } from "../../queue/service.ts";
+import { AdvisorReviewQueueService, type AdvisorReviewQueue } from "../../queue/service.ts";
 import { rollbackAdvisorFindingDedupe } from "../../review/dedupe.ts";
 import { buildAdvisorContext } from "../../review/context.ts";
 import { rollbackAdvisorEmission } from "../../review/emission-guard.ts";

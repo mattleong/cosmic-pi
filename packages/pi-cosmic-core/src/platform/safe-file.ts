@@ -33,14 +33,118 @@ interface FileHandleWithClose {
 const safeFileError = (operation: string, message: string) => () =>
   new SafeFileError({ operation, message });
 
+const nodePromise = <Value>(
+  operation: string,
+  message: string,
+  evaluate: () => PromiseLike<Value>,
+): Effect.Effect<Value, SafeFileError> =>
+  Effect.tryPromise({ try: evaluate, catch: safeFileError(operation, message) });
+
+const failRead = () =>
+  Effect.fail(
+    new SafeFileError({
+      operation: "read",
+      message: "Unable to read a stable contained regular file.",
+    }),
+  );
+
 /** Internal Promise adapter kept exported for focused typed-error regression coverage. */
 export const closeSafeFileHandle = (
   handle: FileHandleWithClose,
 ): Effect.Effect<void, SafeFileError> =>
-  Effect.tryPromise({
-    try: () => handle.close(),
-    catch: safeFileError("close", "Unable to close a stable regular file."),
+  nodePromise("close", "Unable to close a stable regular file.", () => handle.close());
+
+const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(function* (
+  path: string,
+  containmentRoot: string,
+  maximumBytes: number,
+) {
+  const maximumSize = yield* Effect.try({
+    try: () => BigInt(maximumBytes),
+    catch: safeFileError("size", "Unable to open a stable regular file."),
   });
+  const before = yield* nodePromise("open", "Unable to open a stable regular file.", () =>
+    fs.lstat(path, { bigint: true }),
+  );
+  if (!before.isFile())
+    return yield* new SafeFileError({
+      operation: "open",
+      message: "Unable to open a stable regular file.",
+    });
+  if (before.size > maximumSize)
+    return yield* new SafeFileError({
+      operation: "size",
+      message: "Unable to open a stable regular file.",
+    });
+
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  return yield* Effect.acquireUseRelease(
+    nodePromise("open", "Unable to open a stable regular file.", () =>
+      fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK | noFollow),
+    ),
+    (handle) =>
+      Effect.gen(function* () {
+        const opened = yield* nodePromise(
+          "read",
+          "Unable to read a stable contained regular file.",
+          () => handle.stat({ bigint: true }),
+        );
+        if (
+          !opened.isFile() ||
+          opened.size > maximumSize ||
+          before.dev !== opened.dev ||
+          before.ino !== opened.ino
+        )
+          return yield* failRead();
+
+        const [resolvedPath, resolvedRoot] = yield* Effect.all(
+          [
+            nodePromise("read", "Unable to read a stable contained regular file.", () =>
+              fs.realpath(path),
+            ),
+            nodePromise("read", "Unable to read a stable contained regular file.", () =>
+              fs.realpath(containmentRoot),
+            ),
+          ] as const,
+          { concurrency: 2 },
+        );
+        if (
+          nodePath.resolve(resolvedRoot) !== nodePath.resolve(containmentRoot) ||
+          !isStrictlyInsidePath(resolvedRoot, resolvedPath)
+        )
+          return yield* failRead();
+
+        const visible = yield* nodePromise(
+          "read",
+          "Unable to read a stable contained regular file.",
+          () => fs.stat(resolvedPath, { bigint: true }),
+        );
+        if (!visible.isFile() || visible.dev !== opened.dev || visible.ino !== opened.ino)
+          return yield* failRead();
+
+        const bytes = yield* nodePromise(
+          "read",
+          "Unable to read a stable contained regular file.",
+          () => handle.readFile(),
+        );
+        const after = yield* nodePromise(
+          "read",
+          "Unable to read a stable contained regular file.",
+          () => handle.stat({ bigint: true }),
+        );
+        if (
+          after.dev !== opened.dev ||
+          after.ino !== opened.ino ||
+          after.size !== opened.size ||
+          bytes.byteLength !== Number(opened.size) ||
+          bytes.byteLength > maximumBytes
+        )
+          return yield* failRead();
+        return { path: resolvedPath, bytes: new Uint8Array(bytes) } satisfies SafeFileResult;
+      }),
+    (handle) => closeSafeFileHandle(handle).pipe(Effect.catch(() => Effect.void)),
+  );
+});
 
 /** Node-specific stable file acquisition for security-sensitive image inputs. */
 export class SafeFile extends Context.Service<SafeFile, SafeFileContract>()(
@@ -48,76 +152,8 @@ export class SafeFile extends Context.Service<SafeFile, SafeFileContract>()(
 ) {
   static readonly layer = Layer.effect(
     this,
-    Effect.sync(() =>
-      this.of({
-        readContainedRegularFile: (path, containmentRoot, maximumBytes) =>
-          Effect.acquireUseRelease(
-            Effect.tryPromise({
-              try: () =>
-                fs.lstat(path, { bigint: true }).then((before) => {
-                  if (!before.isFile()) return Promise.reject("not-regular");
-                  if (before.size > BigInt(maximumBytes)) return Promise.reject("too-large");
-                  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-                  return fs
-                    .open(path, constants.O_RDONLY | constants.O_NONBLOCK | noFollow)
-                    .then((handle) => ({ before, handle }));
-                }),
-              catch: (error) =>
-                safeFileError(
-                  error === "too-large" ? "size" : "open",
-                  "Unable to open a stable regular file.",
-                )(),
-            }),
-            ({ before, handle }) =>
-              Effect.tryPromise({
-                try: () =>
-                  handle.stat({ bigint: true }).then((opened) => {
-                    if (
-                      !opened.isFile() ||
-                      opened.size > BigInt(maximumBytes) ||
-                      before.dev !== opened.dev ||
-                      before.ino !== opened.ino
-                    )
-                      return Promise.reject("identity");
-                    return Promise.all([fs.realpath(path), fs.realpath(containmentRoot)]).then(
-                      ([resolvedPath, resolvedRoot]) => {
-                        if (
-                          nodePath.resolve(resolvedRoot) !== nodePath.resolve(containmentRoot) ||
-                          !isStrictlyInsidePath(resolvedRoot, resolvedPath)
-                        )
-                          return Promise.reject("containment");
-                        return fs.stat(resolvedPath, { bigint: true }).then((visible) => {
-                          if (
-                            !visible.isFile() ||
-                            visible.dev !== opened.dev ||
-                            visible.ino !== opened.ino
-                          )
-                            return Promise.reject("visible-identity");
-                          return handle.readFile().then((bytes) =>
-                            handle.stat({ bigint: true }).then((after) => {
-                              if (
-                                after.dev !== opened.dev ||
-                                after.ino !== opened.ino ||
-                                after.size !== opened.size ||
-                                bytes.byteLength !== Number(opened.size) ||
-                                bytes.byteLength > maximumBytes
-                              )
-                                return Promise.reject("changed");
-                              return {
-                                path: resolvedPath,
-                                bytes: new Uint8Array(bytes),
-                              } satisfies SafeFileResult;
-                            }),
-                          );
-                        });
-                      },
-                    );
-                  }),
-                catch: safeFileError("read", "Unable to read a stable contained regular file."),
-              }),
-            ({ handle }) => closeSafeFileHandle(handle).pipe(Effect.catch(() => Effect.void)),
-          ),
-      }),
-    ).pipe(Effect.withSpan("pi-cosmic-core.safe-file.initialize")),
+    Effect.succeed(this.of({ readContainedRegularFile })).pipe(
+      Effect.withSpan("pi-cosmic-core.safe-file.initialize"),
+    ),
   );
 }

@@ -4,6 +4,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
+import { awaitProcessClose } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -280,7 +281,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     droppedOutputBytes: () => totalDroppedBytes,
     terminate,
     release: terminate("force").pipe(
-      Effect.andThen(Deferred.await(exited).pipe(Effect.timeoutOption("2 seconds"))),
+      Effect.andThen(awaitProcessClose(child, 2_000)),
       Effect.asVoid,
       Effect.catch(() => Effect.void),
       Effect.ensuring(Effect.sync(cleanup)),

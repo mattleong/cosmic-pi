@@ -233,7 +233,6 @@ describe("SubagentService", () => {
 
       yield* Deferred.succeed(cleanupGate, undefined);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-      yield* TestClock.adjust("25 millis");
       expect((yield* Fiber.join(resuming)).state).toBe("running");
       expect(fake.controls).toHaveLength(2);
     }).pipe(Effect.scoped, Effect.provide(layer));

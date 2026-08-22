@@ -3,9 +3,10 @@ import * as Predicate from "effect/Predicate";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Sse from "effect/unstable/encoding/Sse";
 import { sanitizeDiagnosticError, type StreamingHttpError } from "pi-cosmic-core";
-import { decodeImageStreamEvent } from "./protocol.ts";
 import { extractImageFromEvent } from "./helpers.ts";
+import { decodeImageStreamEvent } from "./protocol.ts";
 import {
   MAX_IMAGE_RESPONSE_BYTES,
   MAX_SSE_EVENT_CHARS,
@@ -20,22 +21,21 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
 ) {
   const fallbackId = `ig_${(yield* Random.nextIntBetween(0, 0xffff_ffff)).toString(16).padStart(8, "0")}`;
   let totalBytes = 0;
-  let buffer = "";
-  let previousWasCarriageReturn = false;
   let completed: ExtractedImageResult | undefined;
   let providerFailure: OpenAIImageError | undefined;
   let terminated = false;
+  const pendingEvents: Sse.Event[] = [];
+  const parser = Sse.makeParser(
+    (event) => {
+      // Retry directives control EventSource reconnection. This one-shot response
+      // has no reconnect transport, so they remain advisory as before.
+      if (event._tag === "Event") pendingEvents.push(event);
+    },
+    { maxEventSize: MAX_SSE_EVENT_CHARS },
+  );
 
-  const processBlock = Effect.fn("OpenAIImage.processSseBlock")(function* (block: string) {
-    if (block.length > MAX_SSE_EVENT_CHARS)
-      return yield* fail("stream", "Codex image response event was too large.");
-    const data = block
-      .split(/\r\n|\n|\r/)
-      .filter((line) => !line.startsWith(":"))
-      .filter((line) => line === "data" || line.startsWith("data:"))
-      .map((line) => (line === "data" ? "" : line.slice(5).replace(/^ /, "")))
-      .join("\n")
-      .trim();
+  const processData = Effect.fn("OpenAIImage.processSseData")(function* (source: string) {
+    const data = source.trim();
     if (!data) return true;
     if (data === "[DONE]") {
       terminated = true;
@@ -73,33 +73,20 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
     return true;
   });
 
-  const appendNormalized = (chunk: string) => {
-    let normalized = "";
-    for (const character of chunk) {
-      if (character === "\r") {
-        normalized += "\n";
-        previousWasCarriageReturn = true;
-      } else if (character === "\n" && previousWasCarriageReturn) {
-        previousWasCarriageReturn = false;
-      } else {
-        normalized += character;
-        previousWasCarriageReturn = false;
-      }
+  const drainEvents = Effect.fn("OpenAIImage.drainSseEvents")(function* () {
+    while (pendingEvents.length > 0) {
+      const event = pendingEvents.shift();
+      if (event && !(yield* processData(event.data))) return false;
     }
-    buffer += normalized;
-  };
-  const drainCompleteEvents = Effect.fn("OpenAIImage.drainSseEvents")(function* () {
-    while (true) {
-      const separator = buffer.indexOf("\n\n");
-      if (separator < 0) break;
-      const block = buffer.slice(0, separator);
-      buffer = buffer.slice(separator + 2);
-      if (!(yield* processBlock(block))) return false;
-    }
-    if (buffer.length > MAX_SSE_EVENT_CHARS)
-      return yield* fail("stream", "Codex image response event was too large.");
     return true;
   });
+
+  const feed = Effect.fn("OpenAIImage.feedSseParser")(function* (chunk: string) {
+    const parserError = parser.feed(chunk);
+    if (parserError) return yield* fail("stream", "Codex image response event was too large.");
+    return yield* drainEvents();
+  });
+
   const bounded = body.pipe(
     Stream.mapEffect((bytes) => {
       totalBytes += bytes.byteLength;
@@ -110,19 +97,17 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
     Stream.decodeText,
   );
   yield* bounded.pipe(
-    Stream.runForEachWhile((chunk) =>
-      Effect.gen(function* () {
-        appendNormalized(chunk);
-        return yield* drainCompleteEvents();
-      }),
-    ),
+    Stream.runForEachWhile(feed),
     Effect.mapError((error) =>
       error instanceof OpenAIImageError
         ? error
         : fail("stream", "Codex image response stream failed."),
     ),
   );
-  if (!completed && !providerFailure && !terminated && buffer.trim()) yield* processBlock(buffer);
+  // Effect's spec-compliant parser leaves an unterminated final event pending.
+  // The provider and the previous parser accept that response shape, so append
+  // one synthetic separator after the transport reaches EOF.
+  if (!completed && !providerFailure && !terminated) yield* feed("\n\n");
   if (completed) return completed;
   if (providerFailure) return yield* providerFailure;
   return yield* fail("stream", "No completed image_generation_call result returned by Codex.");

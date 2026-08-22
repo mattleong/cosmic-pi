@@ -1,21 +1,17 @@
 // Native CLI catalog discovery and bounded child-process ownership live at this boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-import { spawn } from "node:child_process";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import { confirmEffectProcessClose, provideNodeProcess } from "pi-cosmic-core";
 import {
   initializeRequest,
   initializedNotification,
@@ -33,8 +29,6 @@ import {
   sanitizeLocalCliEnvironment,
 } from "./local-cli-harness.ts";
 import type { LocalCliRuntime } from "./local-cli-process.ts";
-import { attachBoundedLineParser } from "./bounded-line-parser.ts";
-import { terminateProcessTree } from "./process-tree.ts";
 
 const MAX_OUTPUT_BYTES = 512 * 1024;
 const MAX_SELECTOR_CHARS = 256;
@@ -109,9 +103,6 @@ const ClaudeCatalogResponse = Schema.Struct({
 });
 
 const CodexCatalogCorrelatedFrame = Schema.Struct({ id: Schema.Literal(CATALOG_REQUEST_ID) });
-type CatalogCorrelatedFrame =
-  | Schema.Schema.Type<typeof ClaudeCatalogCorrelatedFrame>
-  | Schema.Schema.Type<typeof CodexCatalogCorrelatedFrame>;
 const CodexCatalogErrorResponse = Schema.Struct({
   id: Schema.Literal(CATALOG_REQUEST_ID),
   error: Schema.Struct({
@@ -273,219 +264,146 @@ const runCatalogProcess = (
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMillis: number,
-  signal?: AbortSignal | undefined,
 ): Effect.Effect<unknown, NativeModelCatalogError> =>
-  Effect.gen(function* () {
-    const child = yield* Effect.try({
-      try: () =>
-        spawn(executable, [...args], {
-          cwd,
-          detached: process.platform !== "win32",
-          env,
-          stdio: ["pipe", "pipe", "pipe"],
-          windowsHide: true,
-        }),
-      catch: () =>
-        catalogError(
-          runtime,
-          "catalog_executable_unavailable",
-          `${runtime} model catalog executable is unavailable.`,
-        ),
-    });
-    const reply = Deferred.makeUnsafe<unknown, NativeModelCatalogError>();
-    const stdin = child.stdin;
-    let released = false;
-    let detachParser: (() => void) | undefined;
-
-    // Every settlement path terminates the process tree first and settles only after the
-    // kill is confirmed; an unconfirmed cleanup fails closed with its dedicated code.
-    const beginRelease = (
-      value: CatalogCorrelatedFrame | undefined,
-      error?: NativeModelCatalogError | undefined,
-    ): void => {
-      if (released) return;
-      released = true;
-      detachParser?.();
-      detachParser = undefined;
-      signal?.removeEventListener("abort", onAbort);
-      void terminateProcessTree(child, "force").then(
-        () => Deferred.doneUnsafe(reply, error ? Effect.fail(error) : Effect.succeed(value)),
-        () =>
-          Deferred.doneUnsafe(
-            reply,
+  Effect.scoped(
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const input = new TextEncoder().encode(
+          `${frames.map((frame) => JSON.stringify(frame)).join("\n")}\n`,
+        );
+        const child = yield* restore(
+          ChildProcess.make(executable, [...args], {
+            cwd,
+            detached: process.platform !== "win32",
+            env,
+            stdin: { stream: Stream.make(input), endOnDone: false },
+            stdout: "pipe",
+            stderr: "pipe",
+            windowsHide: true,
+            killSignal: "SIGTERM",
+            forceKillAfter: 1_000,
+          }),
+        ).pipe(
+          Effect.mapError(() =>
+            catalogError(
+              runtime,
+              "catalog_executable_unavailable",
+              `${runtime} model catalog executable is unavailable.`,
+            ),
+          ),
+        );
+        let stdoutBytes = 0;
+        const reply = child.stdout.pipe(
+          Stream.mapEffect((bytes) => {
+            stdoutBytes += bytes.byteLength;
+            return stdoutBytes > MAX_OUTPUT_BYTES
+              ? Effect.fail(
+                  catalogError(
+                    runtime,
+                    "catalog_output_unbounded",
+                    `${runtime} model catalog output exceeded its bounded limit.`,
+                  ),
+                )
+              : Effect.succeed(bytes);
+          }),
+          Stream.mapError((error) =>
+            error instanceof NativeModelCatalogError
+              ? error
+              : catalogError(
+                  runtime,
+                  "catalog_transport_unavailable",
+                  `${runtime} catalog output failed.`,
+                ),
+          ),
+          Stream.decodeText,
+          Stream.splitLines,
+          Stream.mapEffect((line) => {
+            if (!line.trim()) return Effect.succeedNone;
+            const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(line);
+            if (Option.isNone(parsed))
+              return Effect.fail(
+                catalogError(
+                  runtime,
+                  "catalog_protocol_invalid",
+                  `${runtime} catalog emitted invalid JSONL.`,
+                ),
+              );
+            const correlated = Schema.decodeUnknownOption(
+              runtime === "codex" ? CodexCatalogCorrelatedFrame : ClaudeCatalogCorrelatedFrame,
+            )(parsed.value);
+            return Effect.succeed(
+              Option.isSome(correlated) ? Option.some(parsed.value) : Option.none(),
+            );
+          }),
+          Stream.filter(Option.isSome),
+          Stream.map((value) => value.value),
+          Stream.runHead,
+          Effect.flatMap((value) =>
+            Option.isSome(value)
+              ? Effect.succeed(value.value)
+              : Effect.fail(
+                  catalogError(
+                    runtime,
+                    "catalog_response_missing",
+                    `${runtime} model catalog closed without a model list.`,
+                  ),
+                ),
+          ),
+        );
+        let diagnosticBytes = 0;
+        const diagnostics = child.stderr.pipe(
+          Stream.mapEffect((bytes) => {
+            diagnosticBytes += bytes.byteLength;
+            return diagnosticBytes > MAX_OUTPUT_BYTES
+              ? Effect.fail(
+                  catalogError(
+                    runtime,
+                    "catalog_output_unbounded",
+                    `${runtime} model catalog output exceeded its bounded limit.`,
+                  ),
+                )
+              : Effect.void;
+          }),
+          Stream.mapError((error) =>
+            error instanceof NativeModelCatalogError
+              ? error
+              : catalogError(
+                  runtime,
+                  "catalog_transport_unavailable",
+                  `${runtime} catalog diagnostics failed.`,
+                ),
+          ),
+          Stream.runDrain,
+          // Stderr can close before the stdout decoder drains the final reply.
+          // Stay pending after clean EOF while still surfacing overflow/stream failures.
+          Effect.andThen(Effect.never),
+        );
+        const deadline = Effect.sleep(timeoutMillis).pipe(
+          Effect.andThen(
             Effect.fail(
               catalogError(
                 runtime,
-                "catalog_cleanup_unconfirmed",
-                `${runtime} model catalog process cleanup could not be confirmed.`,
+                "catalog_timeout",
+                `${runtime} model catalog did not respond within its bounded deadline.`,
               ),
             ),
           ),
-      );
-    };
-
-    const onAbort = (): void =>
-      beginRelease(
-        undefined,
-        catalogError(runtime, "catalog_canceled", `${runtime} model catalog was canceled.`),
-      );
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    child.once("spawn", () => {
-      if (!stdin || stdin.destroyed) {
-        beginRelease(
-          undefined,
-          catalogError(
-            runtime,
-            "catalog_transport_unavailable",
-            `${runtime} catalog input closed.`,
-          ),
         );
-        return;
-      }
-      for (const frame of frames) stdin.write(`${JSON.stringify(frame)}\n`);
-    });
-    stdin?.on("error", () =>
-      beginRelease(
-        undefined,
-        catalogError(runtime, "catalog_transport_unavailable", `${runtime} catalog input failed.`),
-      ),
-    );
-    child.stdout?.on("error", () =>
-      beginRelease(
-        undefined,
-        catalogError(runtime, "catalog_transport_unavailable", `${runtime} catalog output failed.`),
-      ),
-    );
-    child.stderr?.on("error", () =>
-      beginRelease(
-        undefined,
-        catalogError(
-          runtime,
-          "catalog_transport_unavailable",
-          `${runtime} catalog diagnostics failed.`,
-        ),
-      ),
-    );
-
-    if (child.stdout) {
-      const stdout = child.stdout;
-      let observedBytes = 0;
-      const unbounded = () =>
-        beginRelease(
-          undefined,
-          catalogError(
+        const outcome = yield* restore(
+          Effect.raceFirst(reply, Effect.raceFirst(diagnostics, deadline)),
+        ).pipe(Effect.exit);
+        const cleanupConfirmed = yield* confirmEffectProcessClose(child, 2_000);
+        if (!cleanupConfirmed)
+          return yield* catalogError(
             runtime,
-            "catalog_output_unbounded",
-            `${runtime} model catalog output exceeded its bounded limit.`,
-          ),
-        );
-      detachParser = attachBoundedLineParser(stdout, {
-        maxLineBytes: MAX_OUTPUT_BYTES,
-        maxQueuedBytes: MAX_OUTPUT_BYTES,
-        onOverflow: unbounded,
-        onLine: (line) => {
-          observedBytes += Buffer.byteLength(line, "utf8");
-          if (observedBytes > MAX_OUTPUT_BYTES) {
-            unbounded();
-            return;
-          }
-          if (!line.trim()) return;
-          let value: unknown;
-          try {
-            // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-            value = JSON.parse(line) as unknown;
-          } catch {
-            beginRelease(
-              undefined,
-              catalogError(
-                runtime,
-                "catalog_protocol_invalid",
-                `${runtime} catalog emitted invalid JSONL.`,
-              ),
-            );
-            return;
-          }
-          const correlated = Schema.decodeUnknownOption(
-            runtime === "codex" ? CodexCatalogCorrelatedFrame : ClaudeCatalogCorrelatedFrame,
-          )(value);
-          if (Option.isSome(correlated)) beginRelease(correlated.value);
-        },
-      });
-    }
-    if (child.stderr) {
-      const stderr = child.stderr;
-      let diagnosticBytes = 0;
-      stderr.on("data", (chunk: Buffer) => {
-        diagnosticBytes += chunk.length;
-        if (diagnosticBytes > MAX_OUTPUT_BYTES)
-          beginRelease(
-            undefined,
-            catalogError(
-              runtime,
-              "catalog_output_unbounded",
-              `${runtime} model catalog output exceeded its bounded limit.`,
-            ),
+            "catalog_cleanup_unconfirmed",
+            `${runtime} model catalog process cleanup could not be confirmed.`,
           );
-      });
-    }
-
-    child.once("error", () =>
-      beginRelease(
-        undefined,
-        catalogError(
-          runtime,
-          "catalog_executable_unavailable",
-          `${runtime} model catalog executable is unavailable.`,
-        ),
-      ),
-    );
-    child.once("close", () => {
-      if (!released)
-        beginRelease(
-          undefined,
-          catalogError(
-            runtime,
-            "catalog_response_missing",
-            `${runtime} model catalog closed without a model list.`,
-          ),
-        );
-    });
-
-    // The deadline drives the same confirm-then-settle release; a bare timeout race would
-    // abandon the child before its termination was confirmed.
-    const deadline = yield* Effect.sleep(timeoutMillis).pipe(
-      Effect.andThen(() =>
-        Effect.sync(() =>
-          beginRelease(
-            undefined,
-            catalogError(
-              runtime,
-              "catalog_timeout",
-              `${runtime} model catalog did not respond within its bounded deadline.`,
-            ),
-          ),
-        ),
-      ),
-      Effect.forkChild,
-    );
-
-    const outcome = yield* Deferred.await(reply).pipe(
-      // External interruption (scope teardown) still releases the child process.
-      Effect.onExit((exit) =>
-        Exit.isSuccess(exit)
-          ? Effect.void
-          : Effect.sync(() =>
-              beginRelease(
-                undefined,
-                catalogError(runtime, "catalog_canceled", `${runtime} model catalog was canceled.`),
-              ),
-            ),
-      ),
-    );
-    yield* Effect.ignore(Fiber.interrupt(deadline));
-    return outcome;
-  });
+        if (Exit.isSuccess(outcome)) return outcome.value;
+        return yield* Effect.failCause(outcome.cause);
+      }),
+    ).pipe(provideNodeProcess),
+  );
 
 const decodeClaudeModels = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(ClaudeCatalogResponse)(value).pipe(
@@ -526,36 +444,35 @@ const decodeCodexModels = <ValueInput>(value: ValueInput) =>
     ),
   );
 
-const discoverCatalog = async (
+const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
   runtime: LocalCliRuntime,
   executable: string,
   cwd: string,
   sourceEnvironment: NodeJS.ProcessEnv,
   timeoutMillis: number,
-  signal: AbortSignal,
   options: NativeModelCatalogLayerOptions,
-) => {
+) {
   if (runtime !== "codex" || !options.agentDirectory)
-    return Effect.runPromise(
-      runCatalogProcess(
-        runtime,
-        executable,
-        runtime === "claude" ? claudeArgs() : codexArgv(),
-        catalogFrames(runtime),
-        cwd,
-        sanitizeLocalCliEnvironment(sourceEnvironment, runtime),
-        timeoutMillis,
-      ),
-      { signal },
+    return yield* runCatalogProcess(
+      runtime,
+      executable,
+      runtime === "claude" ? claudeArgs() : codexArgv(),
+      catalogFrames(runtime),
+      cwd,
+      sanitizeLocalCliEnvironment(sourceEnvironment, runtime),
+      timeoutMillis,
     );
-  const harness = await prepareCodexCatalogHarness({
-    agentDirectory: options.agentDirectory,
-    environment: sourceEnvironment,
-  });
-  let result: unknown;
-  let failure: unknown;
-  try {
-    result = await Effect.runPromise(
+  return yield* Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () =>
+        prepareCodexCatalogHarness({
+          agentDirectory: options.agentDirectory!,
+          environment: sourceEnvironment,
+        }),
+      catch: () =>
+        catalogError(runtime, "catalog_failed", "Unable to prepare the Codex model catalog."),
+    }),
+    (harness) =>
       runCatalogProcess(
         runtime,
         executable,
@@ -565,23 +482,18 @@ const discoverCatalog = async (
         harness.env,
         timeoutMillis,
       ),
-      { signal },
-    );
-  } catch (error) {
-    failure = error;
-  }
-  try {
-    await harness.release();
-  } catch {
-    throw catalogError(
-      runtime,
-      "catalog_cleanup_unconfirmed",
-      "Codex model catalog private harness cleanup could not be confirmed.",
-    );
-  }
-  if (failure !== undefined) throw failure;
-  return result;
-};
+    (harness) =>
+      Effect.tryPromise({
+        try: () => harness.release(),
+        catch: () =>
+          catalogError(
+            runtime,
+            "catalog_cleanup_unconfirmed",
+            "Codex model catalog private harness cleanup could not be confirmed.",
+          ),
+      }),
+  );
+});
 
 class CatalogCacheKey extends Data.Class<{
   readonly runtime: LocalCliRuntime;
@@ -596,22 +508,14 @@ const loadNativeModelCatalog =
     const { runtime, cwd } = key;
     const executable = options.executables?.[runtime] ?? runtime;
     const sourceEnvironment = options.environment ?? process.env;
-    return Effect.tryPromise({
-      try: (signal) =>
-        discoverCatalog(
-          runtime,
-          executable,
-          cwd,
-          sourceEnvironment,
-          options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
-          signal,
-          options,
-        ),
-      catch: (error) =>
-        error instanceof NativeModelCatalogError
-          ? error
-          : catalogError(runtime, "catalog_failed", `Unable to load the ${runtime} model catalog.`),
-    }).pipe(
+    return discoverCatalog(
+      runtime,
+      executable,
+      cwd,
+      sourceEnvironment,
+      options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
+      options,
+    ).pipe(
       Effect.flatMap((value) => {
         if (
           (runtime === "codex" && isCodexCatalogErrorResponse(value)) ||

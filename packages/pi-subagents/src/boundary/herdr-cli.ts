@@ -1,19 +1,11 @@
 // Herdr CLI process ownership and inherited-session selection are isolated at this boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
-import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
 import * as Context from "effect/Context";
-import * as Deferred from "effect/Deferred";
-import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { runBoundedProcessNode } from "pi-cosmic-core";
 import type { HerdrPaneProcessInfo } from "../backend/herdr-shell-readiness.ts";
 import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
@@ -321,38 +313,6 @@ const protocolError = (operation: string, code: string, message: string) =>
     ? outcomeUncertain(operation, message)
     : processError(operation, code, message);
 
-interface BoundedChunks {
-  readonly chunks: Buffer[];
-  length: number;
-}
-
-/** Head-bounded: keeps the FIRST `maximum` bytes and drops the tail. */
-const appendHeadBounded = (target: BoundedChunks, chunk: Buffer, maximum: number): void => {
-  const room = maximum - target.length;
-  if (room <= 0) return;
-  const accepted = chunk.byteLength <= room ? chunk : chunk.subarray(0, room);
-  target.chunks.push(accepted);
-  target.length += accepted.byteLength;
-};
-
-const terminateProbeEffect = (child: NodeChildProcess): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
-    if (child.exitCode !== null || child.signalCode !== null) return true;
-    const closed = Deferred.makeUnsafe<boolean>();
-    const onClose = (): void => {
-      Deferred.doneUnsafe(closed, Effect.succeed(true));
-    };
-    child.once("close", onClose);
-    child.kill("SIGKILL");
-    // One second to observe the close; otherwise cleanup is reported unconfirmed.
-    const confirmed = yield* Effect.raceFirst(
-      Deferred.await(closed),
-      Effect.as(Effect.sleep(1_000), false),
-    );
-    child.off("close", onClose);
-    return confirmed;
-  });
-
 const runEffect = (
   executable: string,
   args: ReadonlyArray<string>,
@@ -360,96 +320,29 @@ const runEffect = (
   timeoutMillis: number,
   maximumBytes: number,
 ): Effect.Effect<CommandResult> =>
-  Effect.uninterruptibleMask((restore) =>
-    Effect.gen(function* () {
-      const done = Deferred.makeUnsafe<CommandResult>();
-      const stdout: BoundedChunks = { chunks: [], length: 0 };
-      const stderr: BoundedChunks = { chunks: [], length: 0 };
-      let overflowed = false;
-      let observedBytes = 0;
-      let timedOut = false;
-      let cleanupUnconfirmed = false;
-      let dispatched = false;
-      let settled = false;
-      let child: NodeChildProcess;
-      const finish = (code: number | null) => {
-        if (settled) return;
-        settled = true;
-        Deferred.doneUnsafe(
-          done,
-          Effect.succeed({
-            code,
-            stdout: Buffer.concat(stdout.chunks).toString("utf8"),
-            stderr: Buffer.concat(stderr.chunks).toString("utf8"),
-            overflowed,
-            timedOut,
-            cleanupUnconfirmed,
-            dispatched,
-          }),
-        );
-      };
-      const spawned = yield* Effect.exit(
-        Effect.sync(() =>
-          spawn(executable, [...args], {
-            env: environment,
-            stdio: ["ignore", "pipe", "pipe"],
-            windowsHide: true,
-          }),
-        ),
-      );
-      if (Exit.isFailure(spawned)) {
-        finish(null);
-        return yield* Deferred.await(done);
-      }
-      child = spawned.value;
-      const append = (target: "stdout" | "stderr", chunk: Buffer) => {
-        observedBytes += chunk.byteLength;
-        if (observedBytes > maximumBytes) {
-          overflowed = true;
-          child.kill();
-          return;
-        }
-        if (target === "stdout") appendHeadBounded(stdout, chunk, maximumBytes);
-        else appendHeadBounded(stderr, chunk, MAX_DIAGNOSTIC_BYTES);
-      };
-      child.once("spawn", () => {
-        dispatched = true;
-      });
-      child.stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
-      child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
-      child.once("error", () => finish(null));
-      child.once("close", (code) => finish(code));
-      // The deadline drives the same confirm-then-settle path; a bare timeout race would
-      // abandon the probe process before its termination was confirmed.
-      const deadline = yield* Effect.sleep(timeoutMillis).pipe(
-        Effect.andThen(() =>
-          Effect.gen(function* () {
-            timedOut = true;
-            const confirmed = yield* terminateProbeEffect(child);
-            cleanupUnconfirmed = !confirmed;
-            finish(null);
-          }),
-        ),
-        Effect.forkChild,
-      );
-      return yield* restore(Deferred.await(done)).pipe(
-        Effect.onExit((exit) =>
-          Exit.isSuccess(exit)
-            ? Effect.void
-            : terminateProbeEffect(child).pipe(
-                Effect.flatMap((confirmed) =>
-                  confirmed
-                    ? Effect.void
-                    : Effect.logWarning("Interrupted Herdr probe cleanup was not confirmed."),
-                ),
-                Effect.catchCause(() =>
-                  Effect.logWarning("Interrupted Herdr probe cleanup was not confirmed."),
-                ),
-              ),
-        ),
-        Effect.ensuring(Fiber.interrupt(deadline).pipe(Effect.asVoid)),
-      );
-    }),
+  runBoundedProcessNode({
+    executable,
+    args,
+    environment,
+    stdoutLimitBytes: maximumBytes,
+    stderrLimitBytes: MAX_DIAGNOSTIC_BYTES,
+    totalOutputLimitBytes: maximumBytes,
+    timeoutMillis,
+    cleanupTimeoutMillis: 1_000,
+    detached: false,
+    windowsHide: true,
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.succeed({
+        code: null,
+        stdout: "",
+        stderr: "",
+        overflowed: false,
+        timedOut: false,
+        cleanupUnconfirmed: false,
+        dispatched: error.operation === "stream",
+      }),
+    ),
   );
 
 const runCommand = (
@@ -492,17 +385,13 @@ const runCommand = (
         let code = result.code === null ? "herdr_executable_unavailable" : "herdr_cli_failed";
         let message = `Herdr command failed during ${operation}.`;
         let confirmedRejection = false;
-        try {
-          // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-          const value = JSON.parse(result.stderr) as unknown;
-          const decoded = Schema.decodeUnknownOption(ErrorEnvelopeSchema)(value);
-          if (Option.isSome(decoded)) {
-            code = decoded.value.error.code.slice(0, 128);
-            message = decoded.value.error.message.slice(0, 1_024);
-            confirmedRejection = confirmedRejectionCodes?.has(code) === true;
-          }
-        } catch {
-          // Herdr usage/process failures are not guaranteed to be JSON. Never retain raw stderr.
+        const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorEnvelopeSchema))(
+          result.stderr,
+        );
+        if (Option.isSome(decoded)) {
+          code = decoded.value.error.code.slice(0, 128);
+          message = decoded.value.error.message.slice(0, 1_024);
+          confirmedRejection = confirmedRejectionCodes?.has(code) === true;
         }
         return Effect.fail(
           MUTATING_OPERATIONS.has(operation) && result.dispatched && !confirmedRejection
@@ -521,17 +410,16 @@ const runCommand = (
   return MUTATING_OPERATIONS.has(operation) ? Effect.uninterruptible(command) : command;
 };
 
-// SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
 const parseJson = (operation: string, source: string) =>
-  Effect.try({
-    try: () => JSON.parse(source) as unknown,
-    catch: () =>
+  Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(source).pipe(
+    Effect.mapError(() =>
       protocolError(
         operation,
         "herdr_json_invalid",
         `Herdr returned invalid JSON for ${operation}.`,
       ),
-  });
+    ),
+  );
 
 const decodeEnvelope = (operation: string, source: string) =>
   parseJson(operation, source).pipe(

@@ -204,6 +204,74 @@ it.effect("maps transport failure without exposing its URL or cause", () =>
   }),
 );
 
+it.effect("encodes JSON request bodies through their schema", () =>
+  Effect.gen(function* () {
+    const response = yield* JsonHttpClient.use((http) =>
+      http.requestJson(
+        {
+          url: "https://example.invalid",
+          method: "POST",
+          responseSchema: Schema.Struct({ ok: Schema.Boolean }),
+        },
+        Schema.Struct({ value: Schema.Number }),
+        { value: 42 },
+      ),
+    ).pipe(
+      Effect.provide(
+        jsonHttpTestLayer((input) => {
+          expect(input.encodedJsonBody).toEqual({ value: 42 });
+          return Effect.succeed(jsonHttpRawResponse(200, '{"ok":true}'));
+        }),
+      ),
+    );
+    expect(response).toEqual({ _tag: "Accepted", status: 200, body: { ok: true } });
+  }),
+);
+
+it.effect("rejects invalid JSON request bodies before transport", () =>
+  Effect.gen(function* () {
+    let executions = 0;
+    const client = HttpClient.make((request) => {
+      executions++;
+      return Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok")));
+    });
+    const result = yield* JsonHttpClient.use((http) =>
+      Effect.result(
+        http.requestJson(
+          {
+            url: "https://example.invalid",
+            method: "POST",
+            responseSchema: Schema.Struct({ ok: Schema.Boolean }),
+          },
+          Schema.Struct({ value: Schema.Number.check(Schema.isFinite()) }),
+          { value: Number.NaN },
+        ),
+      ),
+    ).pipe(
+      Effect.provide(
+        JsonHttpClient.layer.pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, client))),
+      ),
+    );
+    expect(result._tag).toBe("Failure");
+    expect(executions).toBe(0);
+  }),
+);
+
+it.effect("bounds JSON response buffering before decoding", () =>
+  Effect.gen(function* () {
+    const http = yield* JsonHttpClient;
+    const result = yield* Effect.result(
+      http.request({
+        url: "https://example.invalid",
+        maxResponseBytes: 4,
+        responseSchema: Schema.Struct({ ok: Schema.Boolean }),
+      }),
+    );
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.operation).toBe("response");
+  }).pipe(Effect.provide(JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":true}'))))),
+);
+
 it.effect("rejects streaming request bodies that fail schema encoding before transport", () =>
   Effect.gen(function* () {
     let executions = 0;

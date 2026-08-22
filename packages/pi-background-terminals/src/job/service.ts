@@ -126,19 +126,37 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   });
   let outputPublishPending = false;
   let outputPublishDeadline = 0;
-  let outputFlushScheduled = false;
+  const outputPublishWake = yield* Latch.make();
   const publish = () => {
     outputPublishPending = false;
     options.publish?.(currentProjection());
   };
-  const flushOutputPublish = withLock(
-    Effect.gen(function* () {
-      outputFlushScheduled = false;
-      if (!outputPublishPending) return;
-      outputPublishDeadline = (yield* Clock.currentTimeMillis) + OUTPUT_PUBLISH_INTERVAL_MILLIS;
-      publish();
-    }),
+  const outputPublishWorker = Effect.forever(
+    Latch.await(outputPublishWake).pipe(
+      Effect.flatMap(() =>
+        withLock(
+          Effect.gen(function* () {
+            Latch.closeUnsafe(outputPublishWake);
+            const now = yield* Clock.currentTimeMillis;
+            return Math.max(0, outputPublishDeadline - now);
+          }),
+        ),
+      ),
+      Effect.flatMap((delayMillis) => Effect.sleep(Duration.millis(delayMillis))),
+      Effect.andThen(
+        withLock(
+          Effect.gen(function* () {
+            Latch.closeUnsafe(outputPublishWake);
+            if (!outputPublishPending) return;
+            outputPublishDeadline =
+              (yield* Clock.currentTimeMillis) + OUTPUT_PUBLISH_INTERVAL_MILLIS;
+            publish();
+          }),
+        ),
+      ),
+    ),
   );
+  yield* Effect.forkIn(outputPublishWorker, ownerScope, { startImmediately: true });
   const totalLogBytes = () =>
     [...jobs.values()].reduce((total, record) => total + record.logs.bytes, 0);
   const enforceTotalLogBudget = () => {
@@ -237,12 +255,8 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         if (timestamp >= outputPublishDeadline) {
           outputPublishDeadline = timestamp + OUTPUT_PUBLISH_INTERVAL_MILLIS;
           publish();
-        } else if (!outputFlushScheduled) {
-          outputFlushScheduled = true;
-          yield* flushOutputPublish.pipe(
-            Effect.delay(Duration.millis(OUTPUT_PUBLISH_INTERVAL_MILLIS)),
-            Effect.forkIn(ownerScope, { startImmediately: true }),
-          );
+        } else {
+          Latch.openUnsafe(outputPublishWake);
         }
       }),
     );

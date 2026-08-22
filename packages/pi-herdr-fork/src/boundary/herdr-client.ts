@@ -1,14 +1,11 @@
 // Fixed Node process and Herdr protocol boundary for the /herdr-fork command.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
-import { spawn } from "node:child_process";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import { runBoundedProcessNode } from "pi-cosmic-core";
 import { HerdrForkError, herdrForkError, type HerdrForkErrorOutcome } from "../fork/errors.ts";
 
 const HERDR_EXECUTABLE = "herdr";
@@ -135,132 +132,40 @@ export interface HerdrCommandRunnerOptions {
   readonly maximumOutputBytes?: number | undefined;
 }
 
-interface BoundedChunks {
-  readonly chunks: Buffer[];
-  length: number;
-}
-
-interface OwnedHerdrProcess {
-  readonly awaitResult: Effect.Effect<HerdrProcessResult, HerdrProcessError>;
-  readonly release: Effect.Effect<void>;
-}
-
 const PROCESS_CLEANUP_MILLIS = 1_000;
 const MAX_COMMAND_TIMEOUT_MILLIS = 120_000;
 
 const processBoundaryError = (operation: string) =>
   new HerdrProcessError({ operation, message: `Unable to ${operation} Herdr process.` });
 
-const appendBounded = (target: BoundedChunks, chunk: Buffer, maximum: number): boolean => {
-  const room = maximum - target.length;
-  if (room > 0) {
-    const accepted = chunk.byteLength <= room ? chunk : chunk.subarray(0, room);
-    target.chunks.push(accepted);
-    target.length += accepted.byteLength;
-  }
-  return chunk.byteLength > Math.max(0, room);
-};
-
-const acquireNodeHerdrProcess = (request: HerdrProcessRequest) =>
-  Effect.gen(function* () {
-    const completed = yield* Deferred.make<HerdrProcessResult, HerdrProcessError>();
-    const closed = yield* Deferred.make<void>();
-    const stdout: BoundedChunks = { chunks: [], length: 0 };
-    const stderr: BoundedChunks = { chunks: [], length: 0 };
-    let overflowed = false;
-    let settled = false;
-    let closeSettled = false;
-    let cleaned = false;
-
-    const child = yield* Effect.try({
-      try: () =>
-        spawn(request.executable, [...request.args], {
-          env: { ...request.environment },
-          shell: false,
-          stdio: ["ignore", "pipe", "pipe"],
-          windowsHide: true,
-        }),
-      catch: () => processBoundaryError("spawn"),
-    });
-
-    const finish = (effect: Effect.Effect<HerdrProcessResult, HerdrProcessError>): void => {
-      if (settled) return;
-      settled = true;
-      Deferred.doneUnsafe(completed, effect);
-    };
-    const fail = (operation: string): void => finish(Effect.fail(processBoundaryError(operation)));
-    const kill = (signal: NodeJS.Signals): void => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      try {
-        child.kill(signal);
-      } catch {
-        // Exit and cleanup can race; bounded settlement below is authoritative.
-      }
-    };
-    const append = (target: BoundedChunks, chunk: Buffer): void => {
-      if (appendBounded(target, chunk, request.maximumOutputBytes)) {
-        overflowed = true;
-        kill("SIGKILL");
-      }
-    };
-    const onStdout = (chunk: Buffer) => append(stdout, chunk);
-    const onStderr = (chunk: Buffer) => append(stderr, chunk);
-    const onStdoutError = () => fail("read Herdr stdout from");
-    const onStderrError = () => fail("read Herdr stderr from");
-    const onError = () => fail("run");
-    const onClose = (status: number | null) => {
-      closeSettled = true;
-      Deferred.doneUnsafe(closed, Effect.void);
-      finish(
-        Effect.succeed({
-          status,
-          signal: child.signalCode ?? null,
-          stdout: Buffer.concat(stdout.chunks).toString("utf8"),
-          stderr: Buffer.concat(stderr.chunks).toString("utf8"),
-          overflowed,
-        }),
-      );
-    };
-    const cleanup = (): void => {
-      if (cleaned) return;
-      cleaned = true;
-      child.stdout?.off("data", onStdout);
-      child.stdout?.off("error", onStdoutError);
-      child.stderr?.off("data", onStderr);
-      child.stderr?.off("error", onStderrError);
-      child.off("error", onError);
-      child.off("close", onClose);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-    };
-
-    child.stdout?.on("data", onStdout);
-    child.stdout?.on("error", onStdoutError);
-    child.stderr?.on("data", onStderr);
-    child.stderr?.on("error", onStderrError);
-    child.once("error", onError);
-    child.once("close", onClose);
-    if (!child.stdout || !child.stderr) fail("capture output from");
-
-    const awaitBoundedClosure = Deferred.await(closed).pipe(
-      Effect.timeoutOption(Duration.millis(PROCESS_CLEANUP_MILLIS)),
-    );
-    const release = Effect.gen(function* () {
-      if (!closeSettled) kill("SIGTERM");
-      const graceful = yield* awaitBoundedClosure;
-      if (Option.isNone(graceful)) {
-        kill("SIGKILL");
-        yield* awaitBoundedClosure;
-      }
-    }).pipe(Effect.ensuring(Effect.sync(cleanup)));
-
-    return { awaitResult: Deferred.await(completed), release } satisfies OwnedHerdrProcess;
-  });
-
-/** Scoped asynchronous Node child-process implementation used by the production command runner. */
+/** Scoped Effect child-process implementation used by the production command runner. */
 export const runNodeHerdrProcess: HerdrProcessRunner = (request) =>
-  Effect.acquireRelease(acquireNodeHerdrProcess(request), (owned) => owned.release).pipe(
-    Effect.flatMap((owned) => owned.awaitResult),
+  runBoundedProcessNode({
+    executable: request.executable,
+    args: request.args,
+    environment: request.environment,
+    stdoutLimitBytes: request.maximumOutputBytes,
+    stderrLimitBytes: request.maximumOutputBytes,
+    timeoutMillis: MAX_COMMAND_TIMEOUT_MILLIS,
+    cleanupTimeoutMillis: PROCESS_CLEANUP_MILLIS,
+    detached: false,
+    windowsHide: true,
+  }).pipe(
+    Effect.flatMap((result) =>
+      result.timedOut || result.cleanupUnconfirmed
+        ? Effect.fail(processBoundaryError("run"))
+        : Effect.succeed({
+            status: result.code,
+            // SAFETY: The Node process adapter extracts only Node-reported signal names.
+            signal: result.signal as NodeJS.Signals | null,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            overflowed: result.overflowed,
+          }),
+    ),
+    Effect.mapError((error) =>
+      error instanceof HerdrProcessError ? error : processBoundaryError(error.operation),
+    ),
   );
 
 const safeDiagnostic = (value: string): string =>
@@ -285,17 +190,10 @@ const operationCode = (operation: string, suffix: string): string =>
     .replaceAll(/[^a-z0-9]+/gu, "_")
     .replaceAll(/^_|_$/gu, "")}_${suffix}`;
 
-const parseHerdrCliError = (
-  source: string,
-): typeof HerdrCliErrorEnvelopeSchema.Type | undefined => {
-  try {
-    return Option.getOrUndefined(
-      Schema.decodeUnknownOption(HerdrCliErrorEnvelopeSchema)(JSON.parse(source)),
-    );
-  } catch {
-    return undefined;
-  }
-};
+const parseHerdrCliError = (source: string): typeof HerdrCliErrorEnvelopeSchema.Type | undefined =>
+  Option.getOrUndefined(
+    Schema.decodeUnknownOption(Schema.fromJsonString(HerdrCliErrorEnvelopeSchema))(source),
+  );
 
 export const herdrCommandExitFailure = (
   request: HerdrCommandRequest,
@@ -424,9 +322,8 @@ export const decodeJson = <A>(
   operation: string,
   mutation = false,
 ): Effect.Effect<A, HerdrForkError> =>
-  Effect.try({
-    try: () => JSON.parse(source),
-    catch: () =>
+  Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(source).pipe(
+    Effect.mapError(() =>
       herdrForkError(
         operation,
         operationCode(operation, mutation ? "outcome_uncertain" : "json_invalid"),
@@ -435,7 +332,7 @@ export const decodeJson = <A>(
           : `Herdr returned invalid data while attempting to ${operation}.`,
         mutation ? "uncertain" : "confirmed",
       ),
-  }).pipe(
+    ),
     Effect.flatMap((value) =>
       Schema.decodeUnknownEffect(schema)(value).pipe(
         Effect.mapError(() =>

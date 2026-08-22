@@ -24,8 +24,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT, piToolsForWriteIntent } from "../run/tool-policy.ts";
 import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
@@ -391,12 +393,10 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       };
       const onLine = (line: string) => {
         const bytes = Buffer.byteLength(line, "utf8") + 1;
-        try {
-          // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-          offer({ type: "rpc_message", value: JSON.parse(line) as unknown }, bytes);
-        } catch {
+        const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(line);
+        if (Option.isSome(decoded)) offer({ type: "rpc_message", value: decoded.value }, bytes);
+        else
           offer({ type: "protocol_error", message: "Subagent emitted malformed RPC JSON." }, bytes);
-        }
       };
       const detachStdout = child.stdout
         ? attachBoundedLineParser(child.stdout, {

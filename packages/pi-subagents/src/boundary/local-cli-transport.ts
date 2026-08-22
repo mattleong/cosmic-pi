@@ -8,7 +8,9 @@ import { spawn } from "node:child_process";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import type {
   CodexInitializedNotification,
   CodexRequest,
@@ -156,15 +158,15 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
             maxQueuedBytes: MAX_QUEUED_BYTES,
             onLine: (line) => {
               const bytes = Buffer.byteLength(line, "utf8") + 1;
-              try {
-                // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-                offer({ type: "message", value: JSON.parse(line) as unknown }, bytes);
-              } catch {
+              const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(
+                line,
+              );
+              if (Option.isSome(decoded)) offer({ type: "message", value: decoded.value }, bytes);
+              else
                 offer(
                   { type: "protocol_error", message: "Local CLI emitted malformed JSONL." },
                   bytes,
                 );
-              }
             },
             onOverflow: () => {
               offer({

@@ -1,4 +1,5 @@
-import type * as Deferred from "effect/Deferred";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type {
   BackendDriver,
@@ -87,10 +88,12 @@ export interface RunRecord {
   writerLease?: WriterLease | undefined;
   writerLeaseScope?: Scope.Closeable | undefined;
   writerLeasePreparationState?: "pending" | "running" | "settled" | undefined;
+  writerLeasePreparationSettled?: Deferred.Deferred<void> | undefined;
   writerLeaseReleaseState?: { authorized: boolean } | undefined;
   closingScope?: Scope.Closeable | undefined;
   closingScopeSettled?: Deferred.Deferred<void> | undefined;
   initializationPending: boolean;
+  initializationSettled?: Deferred.Deferred<void> | undefined;
   pendingInitializationSettlement?: PendingInitializationSettlement | undefined;
   replyPendingRequestId?: string | undefined;
   notificationGeneration: number;
@@ -104,3 +107,10 @@ export interface RunRecord {
   nextAssignmentEpoch: number;
   lastBackendReport?: BackendReportWatermark | undefined;
 }
+
+export const completeRunInitialization = (record: RunRecord): void => {
+  record.initializationPending = false;
+  const settled = record.initializationSettled;
+  record.initializationSettled = undefined;
+  if (settled) Deferred.doneUnsafe(settled, Effect.void);
+};

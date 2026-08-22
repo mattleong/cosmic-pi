@@ -11,16 +11,19 @@ import type { CodexAuthResult } from "./result.ts";
 const CodexAuthDocumentSchema = Schema.Struct({
   "openai-codex": Schema.optional(Schema.Unknown),
 });
+const redactedAccessToken = Schema.RedactedFromValue(Schema.Trim.check(Schema.isMinLength(1)), {
+  label: "OpenAI Codex access token",
+});
 const CodexAuthEntrySchema = Schema.Struct({
   type: Schema.Literal("oauth"),
-  access: Schema.String,
+  access: redactedAccessToken,
   accountId: Schema.optional(Schema.NullOr(Schema.String)),
   account_id: Schema.optional(Schema.NullOr(Schema.String)),
   expires: Schema.optional(Schema.NullOr(Schema.Number.check(Schema.isFinite()))),
 });
 const RegistryCredentialsSchema = Schema.Struct({
-  access: Schema.optional(Schema.String),
-  token: Schema.optional(Schema.String),
+  access: Schema.optional(redactedAccessToken),
+  token: Schema.optional(redactedAccessToken),
   accountId: Schema.optional(Schema.String),
   account_id: Schema.optional(Schema.String),
 });
@@ -77,13 +80,9 @@ export const parseCodexRegistryCredentials = Effect.fn("CodexAuth.parseRegistryC
       Schema.fromJsonString(RegistryCredentialsSchema),
     )(value).pipe(Effect.catch(() => Effect.void));
     if (parsed) {
-      const accessToken = (parsed.access ?? parsed.token)?.trim();
+      const accessToken = parsed.access ?? parsed.token;
       const accountId = (parsed.accountId ?? parsed.account_id)?.trim();
-      if (accessToken && accountId)
-        return {
-          accessToken: redactAccessToken(accessToken),
-          accountId,
-        } satisfies CodexCredentials;
+      if (accessToken && accountId) return { accessToken, accountId } satisfies CodexCredentials;
     }
     const accountId = yield* extractAccountIdFromJwt(value);
     return accountId
@@ -120,14 +119,13 @@ export const readCodexAuthResult = Effect.fn("CodexAuth.readAuthResult")(functio
   const now = yield* Clock.currentTimeMillis;
   if (Predicate.isNumber(entry.success.expires) && now >= entry.success.expires)
     return { _tag: "Missing" } as const;
-  const accessToken = entry.success.access.trim();
+  const accessToken = entry.success.access;
   const accountId = (entry.success.accountId ?? entry.success.account_id)?.trim();
-  if (!accessToken || !accountId)
-    return malformed("decode", "OpenAI credential fields are malformed.");
+  if (!accountId) return malformed("decode", "OpenAI credential fields are malformed.");
   return {
     _tag: "Found",
     credentials: {
-      accessToken: redactAccessToken(accessToken),
+      accessToken,
       accountId,
       source: "authFile" as const,
     },

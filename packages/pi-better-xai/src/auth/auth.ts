@@ -25,16 +25,18 @@ const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 
 const XaiAuthDocumentSchema = Schema.Struct({ xai: Schema.optional(Schema.Unknown) });
+const redactedToken = (label: string) =>
+  Schema.RedactedFromValue(Schema.Trim.check(Schema.isMinLength(1)), { label });
 const XaiAuthEntrySchema = Schema.Struct({
   type: Schema.Literal("oauth"),
-  access: Schema.String,
-  refresh: Schema.optional(Schema.NullOr(Schema.String)),
+  access: redactedToken("xAI access token"),
+  refresh: Schema.optional(Schema.NullOr(redactedToken("xAI refresh token"))),
   expires: Schema.optional(Schema.NullOr(PositiveIntegerSchema)),
 });
 
 const RefreshResponseSchema = Schema.Struct({
-  access_token: Schema.String,
-  refresh_token: Schema.optional(Schema.String),
+  access_token: redactedToken("xAI access token"),
+  refresh_token: Schema.optional(redactedToken("xAI refresh token")),
   expires_in: Schema.optional(PositiveIntegerSchema),
 });
 
@@ -79,22 +81,12 @@ const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function*
         new XaiAuthError({ operation: "decode", message: "xAI credential fields are malformed." }),
     ),
   );
-  const accessToken = decoded.access.trim();
-  if (!accessToken)
-    return yield* new XaiAuthError({
-      operation: "decode",
-      message: "xAI credential fields are malformed.",
-    });
-  const refreshToken = decoded.refresh?.trim() || undefined;
-  const teamId = yield* extractTeamIdFromJwt(accessToken);
-  const baseCredentials: XaiCredentials = {
-    accessToken: Redacted.make(accessToken, { label: "xAI access token" }),
-  };
+  const accessToken = decoded.access;
+  const refreshToken = decoded.refresh ?? undefined;
+  const teamId = yield* extractTeamIdFromJwt(Redacted.value(accessToken));
+  const baseCredentials: XaiCredentials = { accessToken };
   const withRefreshToken: XaiCredentials = refreshToken
-    ? {
-        ...baseCredentials,
-        refreshToken: Redacted.make(refreshToken, { label: "xAI refresh token" }),
-      }
+    ? { ...baseCredentials, refreshToken }
     : baseCredentials;
   const withExpires: XaiCredentials = Predicate.isNumber(decoded.expires)
     ? { ...withRefreshToken, expires: decoded.expires }
@@ -191,24 +183,18 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
     });
   }
   const body = response.body;
-  const accessToken = body.access_token.trim();
-  if (!accessToken) {
-    return yield* new XaiAuthError({
-      operation: "refresh-decode",
-      message: "xAI OAuth token refresh returned an invalid payload.",
-    });
-  }
-  const nextRefresh = body.refresh_token?.trim() || refreshTokenValue;
+  const accessToken = body.access_token;
+  const nextRefresh = body.refresh_token ?? refreshToken;
   const expiresInSeconds = body.expires_in ?? DEFAULT_TOKEN_LIFETIME_SECONDS;
   const now = yield* Clock.currentTimeMillis;
   const expires = now + expiresInSeconds * 1000;
-  yield* writeXaiAuth(authPath, { access: accessToken, refresh: nextRefresh, expires });
-  const teamId = yield* extractTeamIdFromJwt(accessToken);
-  const credentialsBase: XaiCredentials = {
-    accessToken: Redacted.make(accessToken, { label: "xAI access token" }),
-    refreshToken: Redacted.make(nextRefresh, { label: "xAI refresh token" }),
+  yield* writeXaiAuth(authPath, {
+    access: Redacted.value(accessToken),
+    refresh: Redacted.value(nextRefresh),
     expires,
-  };
+  });
+  const teamId = yield* extractTeamIdFromJwt(Redacted.value(accessToken));
+  const credentialsBase: XaiCredentials = { accessToken, refreshToken: nextRefresh, expires };
   const credentials: XaiCredentials = teamId ? { ...credentialsBase, teamId } : credentialsBase;
   return credentials;
 });

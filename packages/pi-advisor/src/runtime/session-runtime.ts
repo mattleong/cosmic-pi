@@ -13,6 +13,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
+import type { AdvisorPlatform } from "../boundary/executor.ts";
 import { ADVISOR_OPERATION_TIMEOUT_MS, ADVISOR_RECENT_CONTEXT_CHARS } from "../config/options.ts";
 import { emptyAdvisorTrajectoryDetector, pushAdvisorTrajectory } from "../review/trajectory.ts";
 import { AdvisorModelError } from "./client.ts";
@@ -43,6 +44,7 @@ import {
   type ActiveAdvisorChild,
   type ActiveCheckpointFinalization,
   type AdvisorAbortSelection,
+  type AdvisorCheckpoint,
   type AdvisorCheckpointRequest,
   type AdvisorChildEvent,
   type AdvisorFinalizationCompletion,
@@ -52,6 +54,30 @@ import {
 import { NoDiscoveryAdvisorResourceLoader } from "./resource-loader.ts";
 import { makeAdvisorSessionEvents } from "./session-events.ts";
 import { makeAdvisorSessionSafety } from "./session-safety.ts";
+
+export interface AdvisorRuntimeOperations {
+  readonly activeToolNames: () => readonly string[];
+  readonly start: (options: AdvisorRuntimeStartOptions) => Effect.Effect<void, AdvisorModelError>;
+  readonly checkpoint: (
+    request: AdvisorCheckpointRequest,
+  ) => Effect.Effect<AdvisorCheckpoint, AdvisorModelError>;
+  readonly steer: (observations: string) => Effect.Effect<boolean, AdvisorModelError>;
+  readonly reprime: (seed: string, stateSummary?: string) => Effect.Effect<void, AdvisorModelError>;
+  readonly abort: () => Effect.Effect<void>;
+  readonly dispose: () => Effect.Effect<void>;
+}
+
+export interface ManagedAdvisorRuntimeOperations {
+  readonly operations: AdvisorRuntimeOperations;
+  readonly dispose: Effect.Effect<void>;
+}
+
+export const makeAdvisorControlMailbox = (handle: () => Effect.Effect<void>) =>
+  makeSynchronousIngress<void, never, never>({
+    capacity: 1,
+    overflow: "coalesce-latest",
+    handle,
+  }).pipe(Effect.orDie);
 
 export class AdvisorRuntime {
   private activeChildProjection: ActiveAdvisorChild | undefined;
@@ -573,3 +599,42 @@ export class AdvisorRuntime {
     return true;
   }
 }
+
+/** Builds the plain Context-service implementation around the internal session state machine. */
+export const makeAdvisorRuntimeOperations = Effect.fn("AdvisorRuntimeOperations.make")(function* (
+  childFactory: AdvisorChildFactoryContract,
+  toolRunner: AdvisorToolRunner,
+) {
+  const resourceScope = yield* Effect.scope;
+  const platform = yield* Effect.context<AdvisorPlatform>();
+  let runtime: AdvisorRuntime | undefined;
+  const controlMailbox = yield* makeAdvisorControlMailbox(() =>
+    runtime ? runtime.controlEffect().pipe(Effect.provide(platform)) : Effect.void,
+  );
+  const activeChild = yield* SynchronizedRef.make<ActiveAdvisorChild | undefined>(undefined);
+  const lifecycleLock = yield* Semaphore.make(1);
+  runtime = new AdvisorRuntime(
+    childFactory,
+    toolRunner,
+    resourceScope,
+    controlMailbox,
+    activeChild,
+    lifecycleLock,
+  );
+  const owned = runtime;
+  const provide = <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) =>
+    effect.pipe(Effect.provide(platform));
+  const operations: AdvisorRuntimeOperations = {
+    activeToolNames: () => owned.activeToolNames,
+    start: (options) => provide(owned.startEffect(options)),
+    checkpoint: (request) => provide(owned.checkpointEffect(request)),
+    steer: (observations) => provide(owned.steerEffect(observations)),
+    reprime: (seed, stateSummary) => provide(owned.reprimeEffect(seed, stateSummary)),
+    abort: () => provide(owned.abortEffect()),
+    dispose: () => provide(owned.disposeChildEffect()),
+  };
+  return {
+    operations,
+    dispose: provide(owned.disposeEffect()),
+  } satisfies ManagedAdvisorRuntimeOperations;
+});

@@ -4,7 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { AgentDirectory, JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import { AgentDirectory, JsonDocumentStore } from "pi-cosmic-core";
 import { preferenceFilename } from "../boundary/path-key.ts";
 import { DirectoryModelPreferenceSchema, type DirectoryModelPreference } from "./schema.ts";
 
@@ -82,13 +82,11 @@ export class DirectoryModelStore extends Context.Service<
         identity: DirectoryIdentity,
         preference: DirectoryModelPreference,
       ) {
-        const document: JsonObject = {
-          version: preference.version,
-          cwd: preference.cwd,
-          provider: preference.provider,
-          model: preference.model,
-          thinkingLevel: preference.thinkingLevel,
-        };
+        const document = yield* Schema.encodeEffect(DirectoryModelPreferenceSchema)(
+          preference,
+        ).pipe(
+          Effect.mapError(storeError("encode", "Unable to encode the directory model preference.")),
+        );
         yield* documents
           .writeObject(identity.preferencePath, document)
           .pipe(

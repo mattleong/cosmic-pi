@@ -18,7 +18,7 @@ import {
   UnsupportedSafeWriterOwnershipError,
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
+import { completeRunInitialization, type RunRecord } from "./internal.ts";
 import { isTerminalRunState, type SubagentCapability, type SubagentRunView } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
@@ -96,17 +96,31 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
     sendPeerNotices,
   } = dependencies;
 
-  const waitForRunCleanup: (id: string) => Effect.Effect<void, SubagentNotFoundError> = (id) =>
+  const waitForRunCleanup = (
+    id: string,
+  ): Effect.Effect<void, SubagentNotFoundError | SubagentProcessError> =>
     withLock(
       Effect.gen(function* () {
         const record = yield* requireRecord(id);
-        return record.cleanupPending;
+        return record.cleanupPending ? record.cleanupSettlement : undefined;
       }),
     ).pipe(
-      Effect.flatMap((cleanupPending) =>
-        cleanupPending
-          ? Effect.sleep("25 millis").pipe(Effect.andThen(waitForRunCleanup(id)))
-          : Effect.void,
+      Effect.flatMap((settlement) =>
+        settlement === undefined
+          ? Effect.void
+          : Deferred.await(settlement).pipe(
+              Effect.flatMap((outcome) =>
+                outcome === "confirmed"
+                  ? Effect.void
+                  : Effect.fail(
+                      new SubagentProcessError({
+                        operation: "resume",
+                        code: "cleanup_unconfirmed",
+                        message: `Subagent ${id} cleanup could not be confirmed; resume remains blocked for this session.`,
+                      }),
+                    ),
+              ),
+            ),
       ),
     );
 
@@ -197,6 +211,9 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 delivery.discardRunQuestionsLocked(selected.view.id);
                 selected.replyPendingRequestId = undefined;
                 selected.initializationPending = needsRespawn;
+                selected.initializationSettled = needsRespawn
+                  ? Deferred.makeUnsafe<void>()
+                  : undefined;
                 selected.pendingInitializationSettlement = undefined;
                 selected.latestAssistantText = undefined;
                 selected.warningSlots = emptyRunWarningSlots();
@@ -233,6 +250,9 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 const nextWriterLeaseReleaseState = nextWriterLeaseScope
                   ? { authorized: false }
                   : undefined;
+                const nextWriterLeasePreparationSettled = nextWriterLeaseScope
+                  ? Deferred.makeUnsafe<void>()
+                  : undefined;
                 const installed = yield* withLock(
                   Effect.sync(() => {
                     if (
@@ -251,6 +271,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     record.writerLeasePreparationState = nextWriterLeaseScope
                       ? "pending"
                       : undefined;
+                    record.writerLeasePreparationSettled = nextWriterLeasePreparationSettled;
                     record.writerLeaseReleaseState = nextWriterLeaseReleaseState;
                     record.launch = {
                       ...record.launch,
@@ -272,7 +293,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 const committed = yield* withLock(
                   Effect.gen(function* () {
                     if (record.view.state !== "starting") return undefined;
-                    record.initializationPending = false;
+                    completeRunInitialization(record);
                     record.resumeToken = state.resumeToken;
                     const pendingSettlement = record.pendingInitializationSettlement;
                     record.pendingInitializationSettlement = undefined;
@@ -336,7 +357,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 error._tag === "SubagentProcessError" && error.code === "resume_outcome_uncertain"
                   ? withLock(
                       Effect.sync(() => {
-                        claimed.record.initializationPending = false;
+                        completeRunInitialization(claimed.record);
                         const pending = claimed.record.pendingInitializationSettlement;
                         claimed.record.pendingInitializationSettlement = undefined;
                         return pending;
@@ -361,7 +382,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     )
                   : withLock(
                       Effect.sync(() => {
-                        claimed.record.initializationPending = false;
+                        completeRunInitialization(claimed.record);
                         claimed.record.pendingInitializationSettlement = undefined;
                       }),
                     ).pipe(

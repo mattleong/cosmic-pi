@@ -17,6 +17,7 @@ import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   registerDirectoryModelsWithDependencies,
@@ -227,17 +228,19 @@ describe.sequential("directory models application", () => {
 
     const first = h.start();
     await vi.waitFor(() => expect(h.setModel).toHaveBeenCalledTimes(1));
-    let successorSettled = false;
-    const successor = h.start("new").then(() => {
-      successorSettled = true;
-    });
-    await Effect.runPromise(Effect.sleep("10 millis"));
+    const successorSettled = await Effect.runPromise(Deferred.make<void>());
+    const successor = Effect.runFork(
+      Effect.promise(() => h.start("new")).pipe(
+        Effect.ensuring(Deferred.succeed(successorSettled, undefined)),
+      ),
+    );
+    await Promise.resolve();
 
-    expect(successorSettled).toBe(false);
+    expect(await Effect.runPromise(Deferred.isDone(successorSettled))).toBe(false);
     expect(h.setModel).toHaveBeenCalledTimes(1);
 
     await Effect.runPromise(Deferred.succeed(settlement, undefined));
-    await Promise.all([first, successor]);
+    await Promise.all([first, Effect.runPromise(Fiber.join(successor))]);
     expect(h.setModel).toHaveBeenCalledTimes(1);
     expect(h.thinking()).toBe("high");
     expect(h.notify).not.toHaveBeenCalledWith(

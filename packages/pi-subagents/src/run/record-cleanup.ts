@@ -150,8 +150,12 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             if (
               record.writerLeaseScope === leaseScope &&
               record.writerLeaseReleaseState === releaseState
-            )
+            ) {
               record.writerLeasePreparationState = "settled";
+              const settled = record.writerLeasePreparationSettled;
+              record.writerLeasePreparationSettled = undefined;
+              if (settled) Deferred.doneUnsafe(settled, Effect.void);
+            }
           }),
         ),
       ),
@@ -219,6 +223,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
         record.writerLease = undefined;
         record.writerLeaseScope = undefined;
         record.writerLeasePreparationState = undefined;
+        record.writerLeasePreparationSettled = undefined;
         record.writerLeaseReleaseState = undefined;
         const shouldReclaim =
           record.stoppedByParent ||
@@ -287,21 +292,13 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
     record: RunRecord,
     scope: Scope.Closeable,
   ): Effect.Effect<void> =>
-    Effect.suspend(() =>
-      withLock(
-        Effect.sync(
-          () => record.scope === scope && record.writerLeasePreparationState === "running",
-        ),
-      ).pipe(
-        Effect.flatMap((running) =>
-          running
-            ? Effect.sleep("25 millis").pipe(
-                Effect.andThen(waitForWriterLeasePreparation(record, scope)),
-              )
-            : Effect.void,
-        ),
+    withLock(
+      Effect.sync(() =>
+        record.scope === scope && record.writerLeasePreparationState === "running"
+          ? record.writerLeasePreparationSettled
+          : undefined,
       ),
-    );
+    ).pipe(Effect.flatMap((settled) => (settled ? Deferred.await(settled) : Effect.void)));
   const releaseWriterLeaseAfterCleanup = (record: RunRecord, scope: Scope.Closeable) =>
     waitForWriterLeasePreparation(record, scope).pipe(
       Effect.andThen(
@@ -334,8 +331,12 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             };
           record.closingScope = scope;
           record.closingScopeSettled = closeSettled;
-          if (record.writerLeasePreparationState === "pending")
+          if (record.writerLeasePreparationState === "pending") {
             record.writerLeasePreparationState = "settled";
+            const preparationSettled = record.writerLeasePreparationSettled;
+            record.writerLeasePreparationSettled = undefined;
+            if (preparationSettled) Deferred.doneUnsafe(preparationSettled, Effect.void);
+          }
           return {
             close: true as const,
             settled: closeSettled,
@@ -379,25 +380,24 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
       );
     });
   const closeExitedScope = (record: RunRecord, scope: Scope.Closeable): Effect.Effect<void> =>
-    Effect.suspend(() =>
-      withLock(
-        Effect.sync(() =>
-          record.scope !== scope || record.closingScope === scope
-            ? "stale"
-            : record.initializationPending
-              ? "waiting"
-              : "close",
-        ),
-      ).pipe(
-        Effect.flatMap((ownership) =>
-          ownership === "close"
-            ? closeRecordScope(record, scope)
-            : ownership === "waiting"
-              ? Effect.sleep("25 millis").pipe(Effect.andThen(closeExitedScope(record, scope)))
-              : Effect.void,
-        ),
-        Effect.asVoid,
-      ),
+    withLock(
+      Effect.sync(() => {
+        if (record.scope !== scope || record.closingScope === scope)
+          return { _tag: "Stale" } as const;
+        if (!record.initializationPending) return { _tag: "Close" } as const;
+        return { _tag: "Wait", settled: record.initializationSettled } as const;
+      }),
+    ).pipe(
+      Effect.flatMap((ownership) => {
+        if (ownership._tag === "Stale") return Effect.void;
+        if (ownership._tag === "Close") return closeRecordScope(record, scope);
+        return ownership.settled
+          ? Deferred.await(ownership.settled).pipe(
+              Effect.flatMap(() => closeExitedScope(record, scope)),
+            )
+          : Effect.never;
+      }),
+      Effect.asVoid,
     );
 
   return {

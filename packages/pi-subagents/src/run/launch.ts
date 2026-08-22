@@ -16,7 +16,7 @@ import {
   SubagentRuntimeClosedError,
   UnsupportedSafeWriterOwnershipError,
 } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
+import { completeRunInitialization, type RunRecord } from "./internal.ts";
 import { MAX_RETAINED_RUNS } from "./limits.ts";
 import {
   emptyUsage,
@@ -251,6 +251,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             // close every backend scope, then authorize and close the corresponding lease scope.
             const writerLeaseScope = canonicalWriterCwd ? yield* Scope.make() : undefined;
             const writerLeaseReleaseState = writerLeaseScope ? { authorized: false } : undefined;
+            const writerLeasePreparationSettled = writerLeaseScope
+              ? Deferred.makeUnsafe<void>()
+              : undefined;
+            const initializationSettled = Deferred.makeUnsafe<void>();
             const settlement = yield* Deferred.make<SubagentRunView>();
             const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
             const { id, name } = allocateRunIdentity(requestedName);
@@ -364,12 +368,14 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                     ...withCanonicalWriterCwd,
                     writerLeaseScope,
                     writerLeasePreparationState: "pending" as const,
+                    writerLeasePreparationSettled,
                     writerLeaseReleaseState,
                   }
                 : withCanonicalWriterCwd;
               const withInitializationPendingAndAdditionalFields = {
                 ...withWriterLeaseScopeAndAdditionalFields,
                 initializationPending: true,
+                initializationSettled,
                 notificationGeneration: 0,
                 completionGeneration: 0,
                 warningSlots: emptyRunWarningSlots(),
@@ -505,7 +511,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 reserved.view.state === "stopped"
               )
                 return undefined;
-              reserved.initializationPending = false;
+              completeRunInitialization(reserved);
               reserved.resumeToken = state.resumeToken;
               const pendingSettlement = reserved.pendingInitializationSettlement;
               reserved.pendingInitializationSettlement = undefined;
@@ -566,7 +572,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 cause.reasons.length > 0 && cause.reasons.every(Cause.isInterruptReason);
               yield* withLock(
                 Effect.sync(() => {
-                  reserved.initializationPending = false;
+                  completeRunInitialization(reserved);
                   reserved.pendingInitializationSettlement = undefined;
                 }),
               );

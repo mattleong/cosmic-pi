@@ -1,13 +1,23 @@
 // External editor integration is a narrow Node/Pi host boundary.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/strictEffectProvide:off
 import { SettingsManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import { nodeFilePlatformLayer, nodeProcessLayer } from "pi-cosmic-core";
+
+const externalEditorLayer = Layer.merge(nodeFilePlatformLayer, nodeProcessLayer);
+
+class ExternalEditorError extends Schema.TaggedError<ExternalEditorError>()("ExternalEditorError", {
+  message: Schema.String,
+}) {}
 
 export function captureExternalEditorCommand(ctx: ExtensionContext): string | undefined {
   try {
@@ -19,101 +29,76 @@ export function captureExternalEditorCommand(ctx: ExtensionContext): string | un
   }
 }
 
-function killChild(child: ChildProcess): void {
-  try {
-    child.kill("SIGKILL");
-  } catch {
-    // The process already settled.
-  }
-}
+const restoreTui = (tui: TUI) =>
+  Effect.try(() => {
+    tui.start();
+    tui.requestRender(true);
+  }).pipe(Effect.ignore);
 
-function terminate(child: ChildProcess): void {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform !== "win32" || !child.pid) {
-    killChild(child);
-    return;
-  }
-  try {
-    const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    killer.once("error", () => killChild(child));
-  } catch {
-    killChild(child);
-  }
-}
-
-function launch(command: string, file: string, signal: AbortSignal): Promise<number | null> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      resolve(null);
-      return;
-    }
-    // The Windows branch interpolates the path into a cmd.exe command line, so beyond
-    // quotes it must not contain percent expansion or control characters either.
-    // Fail closed instead of attempting full cmd escaping. The POSIX branch passes the
-    // path as positional argv ("$1"), where those characters are safe.
-    if (process.platform === "win32" && (file.includes('"') || /[%\p{Cc}]/u.test(file))) {
-      reject(new Error("External-editor temporary path contains unsupported characters."));
-      return;
-    }
-    const child =
-      process.platform === "win32"
-        ? spawn(`${command} "${file}"`, {
+const editWithExternalEditorEffect = (
+  tui: TUI,
+  configuredCommand: string | undefined,
+  value: string,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const command = configuredCommand ?? (process.platform === "win32" ? "notepad" : "nano");
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-ask-user-" });
+      const file = path.join(directory, "answer.md");
+      if (process.platform === "win32" && (file.includes('"') || /[%\p{Cc}]/u.test(file)))
+        return yield* new ExternalEditorError({
+          message: "External-editor temporary path contains unsupported characters.",
+        });
+      yield* fs.writeFileString(file, value);
+      yield* Effect.acquireRelease(
+        Effect.try(() => tui.stop()),
+        () => restoreTui(tui),
+      );
+      const child = yield* process.platform === "win32"
+        ? ChildProcess.make(`${command} "${file}"`, {
             shell: true,
-            stdio: "inherit",
+            stdin: "inherit",
+            stdout: "inherit",
+            stderr: "inherit",
+            killSignal: "SIGTERM",
+            forceKillAfter: 1_000,
           })
-        : spawn("/bin/sh", ["-c", `exec ${command} "$1"`, "pi-ask-user-editor", file], {
-            stdio: "inherit",
+        : ChildProcess.make("/bin/sh", ["-c", `exec ${command} "$1"`, "pi-ask-user-editor", file], {
+            stdin: "inherit",
+            stdout: "inherit",
+            stderr: "inherit",
+            detached: false,
+            killSignal: "SIGTERM",
+            forceKillAfter: 1_000,
           });
-    let settled = false;
-    const abort = () => terminate(child);
-    const exit = () => killChild(child);
-    const clear = () => {
-      signal.removeEventListener("abort", abort);
-      process.removeListener("exit", exit);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    process.once("exit", exit);
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clear();
-      reject(error);
-    });
-    child.once("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clear();
-      resolve(code);
-    });
-  });
-}
+      const status = yield* child.exitCode;
+      if (status !== 0)
+        return yield* new ExternalEditorError({
+          message: `External editor exited with status ${status}.`,
+        });
+      return (yield* fs.readFileString(file)).replace(/\n$/u, "");
+    }),
+  );
 
-export async function editWithExternalEditor(
+export function editWithExternalEditor(
   tui: TUI,
   configuredCommand: string | undefined,
   value: string,
   signal: AbortSignal,
 ): Promise<string | undefined> {
-  const command = configuredCommand ?? (process.platform === "win32" ? "notepad" : "nano");
-  const directory = await mkdtemp(join(tmpdir(), "pi-ask-user-"));
-  const file = join(directory, "answer.md");
-  try {
-    await writeFile(file, value, "utf8");
-    tui.stop();
-    const status = await launch(command, file, signal);
+  if (signal.aborted) return Promise.resolve(undefined);
+  return Effect.runPromiseExit(
+    editWithExternalEditorEffect(tui, configuredCommand, value).pipe(
+      Effect.provide(externalEditorLayer),
+    ),
+    { signal },
+  ).then((exit) => {
+    if (Exit.isSuccess(exit)) return exit.value;
     if (signal.aborted) return undefined;
-    if (status !== 0) throw new Error(`External editor exited with status ${status ?? "unknown"}.`);
-    return (await readFile(file, "utf8")).replace(/\n$/, "");
-  } finally {
-    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
-    try {
-      tui.start();
-      tui.requestRender(true);
-    } catch {
-      // The session may have shut down while the editor was open.
-    }
-  }
+    const failure = Cause.squash(exit.cause);
+    if (failure instanceof ExternalEditorError) throw failure;
+    throw new ExternalEditorError({ message: "External editor execution failed." });
+  });
 }

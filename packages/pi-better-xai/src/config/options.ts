@@ -95,7 +95,8 @@ export const decodeSettingUpdate = Effect.fn("XaiConfig.decodeSettingUpdate")(fu
   rawValue: string,
 ) {
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
-  if (!descriptor) return (current: JsonObject) => ({ ...current });
+  if (!descriptor)
+    return yield* new InvalidSettingError({ id, message: `Unknown setting: ${id}.` });
   const parsedValue = yield* descriptor.decode(rawValue);
   return sectionSettingValue(descriptor.section, descriptor.key, parsedValue);
 });

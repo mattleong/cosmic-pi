@@ -41,7 +41,10 @@ it.effect("usage controller treats omitted project trust as untrusted", () => {
     AgentDirectory.layer("/agent"),
     Layer.succeed(
       JsonHttpClient,
-      JsonHttpClient.of({ request: () => Effect.die("unused HTTP request") }),
+      JsonHttpClient.of({
+        request: () => Effect.die("unused HTTP request"),
+        requestJson: () => Effect.die("unused HTTP request"),
+      }),
     ),
   );
   // SAFETY: This minimal host fixture is only observed by callbacks that ignore its fields.

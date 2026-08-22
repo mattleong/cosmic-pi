@@ -4,9 +4,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
-import { StreamingHttpClient } from "pi-cosmic-core";
+import { JsonHttpClient } from "pi-cosmic-core";
 import type { OpenAICompactionJsonObject } from "../compaction/protocol.ts";
 
 const ProviderHeadersSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.String));
@@ -26,6 +25,7 @@ const CompactRequestSchema = Schema.Struct({
   instructions: Schema.optional(Schema.String),
   service_tier: Schema.optional(Schema.Literal("priority")),
 });
+const MAX_COMPACTION_RESPONSE_BYTES = 20 * 1024 * 1024;
 const CompactedResponseSchema = Schema.Struct({
   object: Schema.Literal("response.compaction"),
   output: Schema.Array(JsonObjectSchema),
@@ -111,17 +111,6 @@ function hasAuthorization(headers: Readonly<Record<string, string>>): boolean {
   );
 }
 
-function concatenateBytes(values: readonly Uint8Array[]): Uint8Array {
-  const size = values.reduce((total, value) => total + value.byteLength, 0);
-  const output = new Uint8Array(size);
-  let offset = 0;
-  for (const value of values) {
-    output.set(value, offset);
-    offset += value.byteLength;
-  }
-  return output;
-}
-
 export class OpenAICompactionClient extends Context.Service<
   OpenAICompactionClient,
   OpenAICompactionClientContract
@@ -130,7 +119,7 @@ export class OpenAICompactionClient extends Context.Service<
     return Layer.effect(
       this,
       Effect.gen(function* () {
-        const http = yield* StreamingHttpClient;
+        const http = yield* JsonHttpClient;
         const compact: OpenAICompactionClientContract["compact"] = Effect.fn(
           "OpenAICompactionClient.compact",
         )(function* (request) {
@@ -157,49 +146,38 @@ export class OpenAICompactionClient extends Context.Service<
           if (request.instructions) body.instructions = request.instructions;
           if (request.serviceTier) body.service_tier = request.serviceTier;
           const response = yield* http
-            .requestJsonRawBytes(
+            .requestJson(
               {
                 url: `${request.model.baseUrl.replace(/\/$/, "")}/responses/compact`,
                 method: "POST",
                 headers,
+                responseSchema: CompactedResponseSchema,
+                maxResponseBytes: MAX_COMPACTION_RESPONSE_BYTES,
               },
               CompactRequestSchema,
               body,
             )
             .pipe(
-              Effect.mapError(() => boundaryError("request", "OpenAI compaction request failed.")),
+              Effect.mapError((error) =>
+                error.operation === "encode"
+                  ? boundaryError("encode", "OpenAI compaction request was invalid.")
+                  : error.operation === "decode"
+                    ? boundaryError("decode", "OpenAI compaction response was invalid.")
+                    : error.operation === "response"
+                      ? boundaryError("response", "Unable to read the OpenAI compaction response.")
+                      : boundaryError("request", "OpenAI compaction request failed."),
+              ),
               Effect.withSpan("pi-better-openai.compaction.request", {
                 attributes: { "http.request.method": "POST" },
               }),
             );
-          if (response.status < 200 || response.status >= 300) {
-            yield* response.discardRawBody.pipe(Effect.catch(() => Effect.void));
+          if (response._tag === "Rejected")
             return yield* boundaryError(
               "response",
               `OpenAI compaction failed (${response.status}).`,
               response.status,
             );
-          }
-          const chunks = yield* response.rawBody.pipe(
-            Stream.runCollect,
-            Effect.mapError(() =>
-              boundaryError("response", "Unable to read the OpenAI compaction response."),
-            ),
-          );
-          const text = yield* Effect.try({
-            try: () => new TextDecoder().decode(concatenateBytes(chunks)),
-            catch: () => boundaryError("decode", "OpenAI compaction response was not text."),
-          });
-          const decoded = yield* Schema.decodeUnknownEffect(
-            Schema.fromJsonString(CompactedResponseSchema),
-          )(text).pipe(
-            Effect.mapError(() =>
-              boundaryError("decode", "OpenAI compaction response was invalid."),
-            ),
-            Effect.withSpan("pi-better-openai.compaction.decode", {
-              attributes: { "http.response.status_code": response.status },
-            }),
-          );
+          const decoded = response.body;
           if (!decoded.output.some((item) => item.type === "compaction"))
             return yield* boundaryError(
               "decode",

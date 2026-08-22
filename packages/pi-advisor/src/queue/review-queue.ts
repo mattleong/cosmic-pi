@@ -6,7 +6,7 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
+import * as FiberHandle from "effect/FiberHandle";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -79,7 +79,22 @@ export interface AdvisorReviewQueueOptions {
   getReprimeState?: (() => AdvisorReprimeState) | undefined;
 }
 
-export class AdvisorReviewQueue {
+export interface AdvisorReviewQueue {
+  readonly processedThrough: number;
+  readonly sequence: number;
+  readonly backlog: number;
+  readonly pendingCheckpoints: number;
+  readonly hasActiveCheckpoint: boolean;
+  readonly activeToolNames: readonly string[];
+  readonly ingest: (parentTurnId: number, input: AdvisorObservationInput) => AdvisorObservation;
+  readonly checkpointEffect: (
+    request: ReviewQueueCheckpointRequest,
+  ) => Effect.Effect<AdvisorCheckpoint, AdvisorReviewQueueError>;
+  readonly disposeEffect: () => Effect.Effect<void>;
+  readonly cancelCheckpointEffect: (checkpointId: string) => Effect.Effect<void>;
+}
+
+class AdvisorReviewQueueImpl implements AdvisorReviewQueue {
   private readonly runtime: AdvisorRuntimeServiceContract;
   private readonly options: AdvisorReviewQueueOptions;
   private readonly resourceScope: Scope.Closeable;
@@ -88,7 +103,7 @@ export class AdvisorReviewQueue {
   private readonly observations = new AdvisorObservationBuffer();
   private readonly requests = new Set<QueuedCheckpoint>();
   private readonly stateProjection: MutableRef.MutableRef<ReviewQueueState>;
-  private checkpointFiber: Fiber.Fiber<void, never> | undefined;
+  private readonly checkpointWorker: FiberHandle.FiberHandle<void, never>;
   private steeringIngress: SynchronousIngress<void> | undefined;
   private initialized = false;
 
@@ -98,12 +113,14 @@ export class AdvisorReviewQueue {
     resourceScope: Scope.Closeable,
     state: SynchronizedRef.SynchronizedRef<ReviewQueueState>,
     requestQueue: Queue.Queue<QueuedCheckpoint>,
+    checkpointWorker: FiberHandle.FiberHandle<void, never>,
   ) {
     this.runtime = runtime;
     this.options = options;
     this.resourceScope = resourceScope;
     this.state = state;
     this.requestQueue = requestQueue;
+    this.checkpointWorker = checkpointWorker;
     this.stateProjection = MutableRef.make(initialReviewQueueState());
   }
 
@@ -175,8 +192,7 @@ export class AdvisorReviewQueue {
         new AdvisorQueueDisposedError({ message: "Advisor review queue was disposed." }),
       );
       yield* self.clearRequestQueue();
-      if (self.checkpointFiber) yield* Fiber.interrupt(self.checkpointFiber);
-      self.checkpointFiber = undefined;
+      yield* FiberHandle.clear(self.checkpointWorker);
       if (active) self.requests.delete(active);
       const steeringIngress = self.steeringIngress;
       self.steeringIngress = undefined;
@@ -232,9 +248,7 @@ export class AdvisorReviewQueue {
         );
         if (disposition !== "active") return;
 
-        const worker = self.checkpointFiber;
-        self.checkpointFiber = undefined;
-        if (worker) yield* Fiber.interrupt(worker);
+        yield* FiberHandle.clear(self.checkpointWorker);
         self.observations.releaseBarrier(waiter.target);
         yield* self.transition((state) => settleCheckpoint(state, checkpointId));
         isolate(() => self.options.onCheckpointSettled?.(waiter.request));
@@ -269,13 +283,14 @@ export class AdvisorReviewQueue {
   private startCheckpointWorker() {
     const self = this;
     return Effect.gen(function* () {
-      if (self.checkpointFiber || MutableRef.get(self.stateProjection).disposed) return;
-      self.checkpointFiber = yield* Effect.forkIn(
+      if (MutableRef.get(self.stateProjection).disposed) return;
+      yield* FiberHandle.run(self.checkpointWorker, {
+        onlyIfMissing: true,
+        startImmediately: true,
+      })(
         Effect.forever(
           Queue.take(self.requestQueue).pipe(Effect.flatMap((item) => self.consume(item))),
         ),
-        self.resourceScope,
-        { startImmediately: true },
       );
     });
   }
@@ -577,6 +592,29 @@ export class AdvisorReviewQueue {
     });
   }
 }
+
+export const makeAdvisorReviewQueue = Effect.fn("AdvisorReviewQueue.make")(function* (
+  runtime: AdvisorRuntimeServiceContract,
+  options: AdvisorReviewQueueOptions = {},
+) {
+  const parentScope = yield* Effect.scope;
+  const resourceScope = yield* Scope.fork(parentScope);
+  const state = yield* SynchronizedRef.make(initialReviewQueueState());
+  const requestQueue = yield* Queue.dropping<QueuedCheckpoint>(MAX_PENDING_CHECKPOINTS + 1);
+  const checkpointWorker = yield* FiberHandle.make<void, never>().pipe(
+    Effect.provideService(Scope.Scope, resourceScope),
+  );
+  const queue = new AdvisorReviewQueueImpl(
+    runtime,
+    options,
+    resourceScope,
+    state,
+    requestQueue,
+    checkpointWorker,
+  );
+  yield* queue.initializeEffect();
+  return queue satisfies AdvisorReviewQueue;
+});
 
 const toQueueError =
   (fallback: string) =>

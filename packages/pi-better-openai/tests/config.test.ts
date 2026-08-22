@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { JsonDocumentStore, nodePlatformLayer } from "pi-cosmic-core";
 import {
+  InvalidSettingError,
   SETTINGS_OPTION_DESCRIPTORS,
   prepareSettingUpdate,
   configPaths,
@@ -111,6 +112,13 @@ describe("config helpers", () => {
     ] as const) {
       await expect(Effect.runPromise(prepareSettingUpdate(id, value))).rejects.toBeDefined();
     }
+  });
+
+  test("rejects unknown setting ids with the typed error", async () => {
+    const failure = await Effect.runPromise(
+      prepareSettingUpdate("usage.nonexistent", "true").pipe(Effect.flip),
+    );
+    expect(failure).toBeInstanceOf(InvalidSettingError);
   });
 
   test("settings patches preserve unknown shapes", async () => {

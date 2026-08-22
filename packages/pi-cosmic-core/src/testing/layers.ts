@@ -20,6 +20,7 @@ import {
   type JsonHttpRequestInput,
 } from "../platform/json-http.ts";
 import { JsonDocumentError, JsonHttpError, StreamingHttpError } from "../platform/errors.ts";
+import { encodeJsonBody } from "../platform/json-body.ts";
 import {
   encodeStreamingJsonBody,
   StreamingHttpClient,
@@ -254,7 +255,10 @@ export type JsonHttpTestResponse =
 export type JsonHttpTestRequest = Omit<
   JsonHttpRequest<Schema.ConstraintDecoder<unknown, unknown>>,
   "responseSchema"
-> & { readonly responseSchema: Schema.Constraint };
+> & {
+  readonly responseSchema: Schema.Constraint;
+  readonly encodedJsonBody?: JsonValue;
+};
 
 const jsonHttpError = (operation: JsonHttpError["operation"], message: string) => () =>
   new JsonHttpError({ operation, message });
@@ -262,10 +266,11 @@ const jsonHttpError = (operation: JsonHttpError["operation"], message: string) =
 export const jsonHttpTestLayer = (
   handle: (input: JsonHttpTestRequest) => Effect.Effect<JsonHttpTestResponse, JsonHttpError>,
 ): Layer.Layer<JsonHttpClient> => {
-  const request: JsonHttpClientContract["request"] = <A, R>(input: JsonHttpRequestInput<A, R>) =>
+  const execute = <A, R>(input: JsonHttpRequestInput<A, R>, encodedJsonBody?: JsonValue) =>
     Effect.gen(function* () {
-      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-      const response = yield* handle(input as JsonHttpTestRequest);
+      const requestInput = encodedJsonBody === undefined ? input : { ...input, encodedJsonBody };
+      // SAFETY: The typed owner constructs the request on this test-only boundary.
+      const response = yield* handle(requestInput as JsonHttpTestRequest);
       const accepted = (input.acceptStatus ?? ((status) => status >= 200 && status < 300))(
         response.status,
       );
@@ -276,11 +281,7 @@ export const jsonHttpTestLayer = (
             : yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(response.body).pipe(
                 Effect.mapError(jsonHttpError("response", "Unable to read HTTP response.")),
               );
-        return {
-          _tag: "Rejected",
-          status: response.status,
-          errorBody,
-        } as const;
+        return { _tag: "Rejected", status: response.status, errorBody } as const;
       }
       const rawBody =
         "body" in response
@@ -295,7 +296,15 @@ export const jsonHttpTestLayer = (
       );
       return { _tag: "Accepted", status: response.status, body } as const;
     });
-  return Layer.succeed(JsonHttpClient, JsonHttpClient.of({ request }));
+  const request: JsonHttpClientContract["request"] = (input) => execute(input);
+  const requestJson: JsonHttpClientContract["requestJson"] = (input, bodySchema, body) =>
+    encodeJsonBody(bodySchema, body).pipe(
+      Effect.mapError(
+        jsonHttpError("encode", "HTTP request body did not match the expected schema."),
+      ),
+      Effect.flatMap((encodedJsonBody) => execute(input, encodedJsonBody)),
+    );
+  return Layer.succeed(JsonHttpClient, JsonHttpClient.of({ request, requestJson }));
 };
 
 export interface StreamingHttpTestRequest extends StreamingHttpRequest {

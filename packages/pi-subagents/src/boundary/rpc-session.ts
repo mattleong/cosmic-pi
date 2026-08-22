@@ -1,12 +1,12 @@
 // NDJSON request/response RPC sessions over spawned helper processes live at this boundary.
 // @effect-diagnostics effect/nodeBuiltinImport:off
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
+import { awaitProcessClose } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Latch from "effect/Latch";
-import * as MutableRef from "effect/MutableRef";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -108,7 +108,7 @@ const makeNdjsonRpcSession = <Reply>(
 ): Effect.Effect<NdjsonRpcSession<Reply>, RpcSessionTransportError, Scope.Scope> =>
   Effect.gen(function* () {
     const alive = yield* Latch.make(true);
-    const pending = MutableRef.make<ReadonlyMap<string, PendingEntry<Reply>>>(new Map());
+    const pending = new Map<string, PendingEntry<Reply>>();
     const frames = yield* Queue.bounded<OutboundFrame>(options.writeQueueCapacity);
     const sessionFailed = Deferred.makeUnsafe<RpcSessionTransportError>();
     const cleanupDone = Deferred.makeUnsafe<void, RpcSessionTransportError>();
@@ -118,18 +118,15 @@ const makeNdjsonRpcSession = <Reply>(
     let detachParser: (() => void) | undefined;
 
     const extractEntry = (id: string): PendingEntry<Reply> | undefined => {
-      const current = MutableRef.get(pending);
-      const entry = current.get(id);
+      const entry = pending.get(id);
       if (!entry) return undefined;
-      const next = new Map(current);
-      next.delete(id);
-      MutableRef.set(pending, next);
+      pending.delete(id);
       return entry;
     };
 
     const settlePendingWith = (settle: (entry: PendingEntry<Reply>) => void): void => {
-      const current = MutableRef.getAndSet(pending, new Map<string, PendingEntry<Reply>>());
-      for (const entry of current.values()) settle(entry);
+      for (const entry of pending.values()) settle(entry);
+      pending.clear();
     };
 
     // Runs from both fiber and Node-callback contexts, so every step is synchronous.
@@ -199,20 +196,10 @@ const makeNdjsonRpcSession = <Reply>(
           if (process.platform !== "win32") yield* terminateTreeFor(process_);
           return;
         }
-        const closed = Deferred.makeUnsafe<boolean>();
-        const onClose = () => {
-          Deferred.doneUnsafe(closed, Effect.succeed(true));
-        };
-        process_.once("close", onClose);
+        const closeConfirmation = awaitProcessClose(process_, 2_000);
         if (process.platform !== "win32" || process_.signalCode === null)
           yield* terminateTreeFor(process_);
-        if (process_.exitCode !== null) Deferred.doneUnsafe(closed, Effect.succeed(true));
-        const confirmed = yield* Effect.raceFirst(
-          Deferred.await(closed),
-          Effect.as(Effect.sleep(2_000), false),
-        );
-        process_.off("close", onClose);
-        if (!confirmed) return yield* cleanupUnconfirmed();
+        if (!(yield* closeConfirmation)) return yield* cleanupUnconfirmed();
       });
 
     const closeOwnedProcess = (process_: NodeChildProcess) =>
@@ -428,15 +415,14 @@ const makeNdjsonRpcSession = <Reply>(
             const failure = transportClosed();
             return Effect.fail(failure);
           }
-          const current = MutableRef.get(pending);
-          if (current.has(id)) {
+          if (pending.has(id)) {
             return Effect.fail(
               new RpcSessionCapacityError({
                 message: "A call with this identifier is already in flight.",
               }),
             );
           }
-          if (current.size >= options.maxPendingCalls) {
+          if (pending.size >= options.maxPendingCalls) {
             return Effect.fail(
               new RpcSessionCapacityError({
                 message: "The helper process session is at its concurrent-call bound.",
@@ -444,9 +430,7 @@ const makeNdjsonRpcSession = <Reply>(
             );
           }
           const reply = Deferred.makeUnsafe<Reply, RpcSessionError>();
-          const next = new Map(current);
-          next.set(id, { reply });
-          MutableRef.set(pending, next);
+          pending.set(id, { reply });
 
           const awaitReply = Deferred.await(reply).pipe(
             // Interruption (caller abort or timeout) still runs this finalizer; success skips it.

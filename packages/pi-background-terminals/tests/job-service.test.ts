@@ -142,6 +142,32 @@ const awaitState = (state: BackgroundJobState) => {
 };
 
 describe("BackgroundTerminalService", () => {
+  it.effect("coalesces output publications onto one leading and trailing interval", () => {
+    const projections: BackgroundTerminalProjection[] = [];
+    const trailing = Deferred.makeUnsafe<void>();
+    const harness = serviceHarness({}, (projection) => {
+      projections.push(projection);
+      const text = projection.jobs[0]?.logs.map((entry) => entry.text).join("") ?? "";
+      if (text === "abc") Deferred.doneUnsafe(trailing, Effect.void);
+    });
+    return Effect.gen(function* () {
+      yield* BackgroundTerminalService.use((service) =>
+        service.start({ command: "watch", cwd: "." }),
+      );
+      yield* Deferred.await(harness.spawned);
+      harness.controls[0]?.offer("stdout", "a");
+      harness.controls[0]?.offer("stdout", "b");
+      harness.controls[0]?.offer("stdout", "c");
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("1 second");
+      yield* Deferred.await(trailing);
+      const outputPublications = projections.filter((projection) =>
+        projection.jobs.some((job) => job.logs.length > 0),
+      );
+      expect(outputPublications.length).toBeLessThanOrEqual(2);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
   it.effect("starts, long-polls logs, and publishes process exit", () => {
     const terminal = awaitState("exited");
     const harness = serviceHarness({}, terminal.publish);

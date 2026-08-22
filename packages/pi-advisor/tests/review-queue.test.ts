@@ -32,8 +32,8 @@ import {
   AdvisorQueueResetRequiredError,
 } from "../src/queue/errors.ts";
 import {
-  AdvisorReviewQueue,
   AdvisorReviewQueueService,
+  type AdvisorReviewQueue,
   MAX_PENDING_CHECKPOINTS,
   advisorReviewQueueServiceLayer,
   type AdvisorReviewQueueOptions,

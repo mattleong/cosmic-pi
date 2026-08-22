@@ -244,7 +244,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       return record ? Effect.succeed(record) : Effect.fail(notFound(id));
     });
 
-  const delivery = makeRunNotificationDelivery({
+  const delivery = yield* makeRunNotificationDelivery({
     ownerScope,
     records,
     withLock,

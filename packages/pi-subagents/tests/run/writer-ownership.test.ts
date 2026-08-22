@@ -7,7 +7,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as TestClock from "effect/testing/TestClock";
 import type { BackendDriver } from "../../src/backend/model.ts";
 import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "../../src/backend/service.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
@@ -538,7 +537,6 @@ describe("SubagentService", () => {
         const stopping = yield* service.stop(id!).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         yield* Deferred.succeed(gate, undefined);
-        yield* TestClock.adjust("25 millis");
         expect((yield* Fiber.join(stopping)).state).toBe("stopped");
         expect(Exit.isFailure(yield* Fiber.join(starting))).toBe(true);
         expect(fake.controls).toHaveLength(0);

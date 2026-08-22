@@ -132,13 +132,10 @@ interface TrustInput {
 const decodeInboundOption = Schema.decodeUnknownOption;
 
 const classifyRpcLine = (line: string): InboundClassification<RpcResponse> => {
-  let value: unknown;
-  try {
-    // SAFETY: The parsed representation stays unknown until the strict RPC schemas below decode it.
-    value = JSON.parse(line) as unknown;
-  } catch {
+  const parsed = decodeInboundOption(Schema.fromJsonString(Schema.Unknown))(line);
+  if (Option.isNone(parsed))
     return { kind: "protocol-error", reason: "Codex hook session returned malformed JSON." };
-  }
+  const value = parsed.value;
   const success = decodeInboundOption(RpcSuccessSchema)(value);
   if (Option.isSome(success)) {
     return { kind: "reply", id: success.value.id, value: success.value };

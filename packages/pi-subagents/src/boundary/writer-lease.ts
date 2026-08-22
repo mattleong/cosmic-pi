@@ -277,14 +277,15 @@ const readEvidence = (
           ),
   }).pipe(
     Effect.flatMap((stable) =>
-      Effect.try({
-        try: () => ({ stable, value: JSON.parse(stable.source) as unknown }),
-        catch: () =>
+      Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(stable.source).pipe(
+        Effect.map((value) => ({ stable, value })),
+        Effect.mapError(() =>
           conflict(
             "corrupt",
             "A writer lease contains malformed ownership evidence; ownership is uncertain and remains locked.",
           ),
-      }),
+        ),
+      ),
     ),
     Effect.flatMap(({ stable, value }) =>
       Schema.decodeUnknownEffect(WriterLeaseEvidenceSchema)(value).pipe(

@@ -6,6 +6,7 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { StreamingHttpError } from "./errors.ts";
+import { encodeJsonBody } from "./json-body.ts";
 
 export interface StreamingHttpRequest {
   readonly url: string;
@@ -48,8 +49,7 @@ export const encodeStreamingJsonBody = <A, E, R>(
   bodySchema: StreamingJsonBodyCodec<A, E, R>,
   body: A,
 ): Effect.Effect<Schema.Json, StreamingHttpError, R> =>
-  Schema.encodeEffect(bodySchema)(body).pipe(
-    Effect.flatMap((encodedBody) => Schema.decodeUnknownEffect(Schema.Json)(encodedBody)),
+  encodeJsonBody(bodySchema, body).pipe(
     Effect.mapError(
       streamingHttpError(
         "encode",

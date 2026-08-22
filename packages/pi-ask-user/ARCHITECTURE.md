@@ -8,7 +8,7 @@
 - `src/layer.ts` — session Layer composition.
 - `src/application.ts` — session lifecycle, deferred tool registration, and `/ask-user` wiring.
 - `src/boundary/host-dialogs.ts` — TUI and RPC dialog boundary with abort-aware Promise adaptation.
-- `src/boundary/host-external-editor.ts` — narrow Pi settings, temporary-file, inherited-terminal process, and cleanup boundary.
+- `src/boundary/host-external-editor.ts` — narrow Pi settings plus scoped Effect temporary-directory and inherited-terminal child-process ownership.
 - `src/boundary/host-ui.ts` — synchronous active-dialog/status bridge used to resume a hidden overlay without a raw terminal listener.
 - `src/boundary/host-commands.ts` — `/ask-user` host command registration.
 - `src/questionnaire/` — immutable answer/state contracts, semantic validation, pure reducer, typed errors, and serialized Effect service.
@@ -24,7 +24,7 @@ The dialog component owns only in-progress presentation state. Its reducer is pu
 
 The active-dialog bridge exposes only resume behavior and a status projection. Pressing `b` temporarily hides and unfocuses the mounted overlay. `/ask-user` restores and focuses the same component. The extension never registers a hidden raw terminal listener, so it cannot steal keys from unrelated overlays.
 
-The external-editor adapter is the sole Node process/filesystem boundary. It passes the temporary filename separately from the trusted configured shell command, inherits the terminal, reacts to cancellation, removes the temporary directory, and restarts the TUI in a finalizer.
+The external-editor adapter is the sole Node process/filesystem boundary. It passes the temporary filename separately from the trusted configured shell command, inherits the terminal, reacts to cancellation through Effect interruption, removes the scoped temporary directory, and restarts the TUI in a finalizer.
 
 ## Lifecycle and modes
 

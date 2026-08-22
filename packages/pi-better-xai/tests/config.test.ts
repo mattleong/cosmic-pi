@@ -39,10 +39,11 @@ describe("xAI setting updates", () => {
     expect(update({ footer: "corrupt" })).toEqual({ footer: { mode: "off" } });
   });
 
-  it("returns an identity patch for an unknown option id", async () => {
-    const update = await runUpdate("usage.nonexistent", "true");
-    const raw: JsonObject = { usage: { enabled: true } };
-    expect(update(raw)).toEqual(raw);
+  it("rejects unknown option ids with the typed error", async () => {
+    const failure = await Effect.runPromise(
+      decodeSettingUpdate("usage.nonexistent", "true").pipe(Effect.flip),
+    );
+    expect(failure).toBeInstanceOf(InvalidSettingError);
   });
 
   it("rejects invalid values with the typed error", async () => {

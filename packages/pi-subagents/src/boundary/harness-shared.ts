@@ -2,7 +2,9 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { constants, promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -126,15 +128,14 @@ const readValidatedCodexAuthFromHome = async (sourceHome: string): Promise<strin
     return undefined;
   }
   if (bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES) return undefined;
-  try {
-    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-    const value = JSON.parse(bytes.toString("utf8")) as unknown;
-    if (!value || !hasObjectRuntimeType(value) || Array.isArray(value) || !boundedJsonValue(value))
-      return undefined;
-    return `${JSON.stringify(value)}\n`;
-  } catch {
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(
+    bytes.toString("utf8"),
+  );
+  if (Option.isNone(decoded)) return undefined;
+  const value = decoded.value;
+  if (!value || !hasObjectRuntimeType(value) || Array.isArray(value) || !boundedJsonValue(value))
     return undefined;
-  }
+  return `${JSON.stringify(value)}\n`;
 };
 
 export const readValidatedCodexAuth = async (

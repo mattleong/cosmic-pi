@@ -6,7 +6,6 @@ import { vi } from "vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -18,13 +17,7 @@ import { standaloneAdvisorExecutor } from "./support/executor.ts";
 import { agentSessionFixture } from "./support/agent-session.ts";
 import { ADVISOR_CATCH_UP_TIMEOUT_MS, awaitAdvisorCatchUpEffect } from "../src/extension.ts";
 import { LONG_TURN_REVIEW_MS } from "../src/review/trajectory.ts";
-import {
-  AdvisorReviewQueue,
-  MAX_PENDING_CHECKPOINTS,
-  type AdvisorReviewQueueOptions,
-  type QueuedCheckpoint,
-} from "../src/queue/service.ts";
-import { initialReviewQueueState } from "../src/queue/state.ts";
+import { makeAdvisorReviewQueue, type AdvisorReviewQueueOptions } from "../src/queue/service.ts";
 import {
   AdvisorRuntime,
   AdvisorRuntimeResetRequiredError,
@@ -126,8 +119,6 @@ describe("advisor Effect clock boundaries", () => {
 
   it.effect("interrupts the real queue checkpoint at catch-up timeout and advances", () =>
     Effect.gen(function* () {
-      const parentScope = yield* Effect.scope;
-      const scope = yield* Scope.fork(parentScope);
       let attempts = 0;
       let interrupted = false;
       const effects: AdvisorRuntimeServiceContract = {
@@ -158,14 +149,7 @@ describe("advisor Effect clock boundaries", () => {
         abort: () => Effect.void,
         dispose: () => Effect.void,
       };
-      const queue = new AdvisorReviewQueue(
-        effects,
-        {} satisfies AdvisorReviewQueueOptions,
-        scope,
-        yield* SynchronizedRef.make(initialReviewQueueState()),
-        yield* Queue.dropping<QueuedCheckpoint>(MAX_PENDING_CHECKPOINTS + 1),
-      );
-      yield* queue.initializeEffect();
+      const queue = yield* makeAdvisorReviewQueue(effects, {} satisfies AdvisorReviewQueueOptions);
       queue.ingest(1, { type: "user", text: "first" });
       const first = yield* queue
         .checkpointEffect({ checkpointId: "first", focus: "standard", parentTurnId: 1 })
@@ -544,8 +528,6 @@ describe("advisor Effect clock boundaries", () => {
 
   it.effect("keeps queue disposal blocked until the owned abort settles", () =>
     Effect.gen(function* () {
-      const parentScope = yield* Effect.scope;
-      const scope = yield* Scope.fork(parentScope);
       const abortGate = yield* Deferred.make<void>();
       let disposed = 0;
       const effects: AdvisorRuntimeServiceContract = {
@@ -560,14 +542,7 @@ describe("advisor Effect clock boundaries", () => {
             disposed += 1;
           }),
       };
-      const queue = new AdvisorReviewQueue(
-        effects,
-        {},
-        scope,
-        yield* SynchronizedRef.make(initialReviewQueueState()),
-        yield* Queue.dropping<QueuedCheckpoint>(MAX_PENDING_CHECKPOINTS + 1),
-      );
-      yield* queue.initializeEffect();
+      const queue = yield* makeAdvisorReviewQueue(effects);
       queue.ingest(1, { type: "user", text: "pending" });
       const checkpoint = yield* queue
         .checkpointEffect({ checkpointId: "hung", focus: "standard", parentTurnId: 1 })
