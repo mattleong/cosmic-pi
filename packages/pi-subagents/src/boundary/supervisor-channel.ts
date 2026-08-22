@@ -1,15 +1,12 @@
-// Private loopback supervisor transport and agent-directory state are isolated at this boundary.
+// Private loopback supervisor RPC transport and agent-directory state live at this boundary.
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/cryptoRandomBytes:off
 // @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Cause from "effect/Cause";
@@ -17,17 +14,17 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
-import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { MAX_BACKEND_REPORT_EVIDENCE_CHARS, type BackendReport } from "../backend/model.ts";
 import {
-  authenticateSupervisorServerPayload,
-  decodeSupervisorClientMessage,
   isSupervisorRunId,
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
   MAX_SUPERVISOR_CONFIG_BYTES,
@@ -38,16 +35,17 @@ import {
   SupervisorChannelIdSchema,
   type SupervisorAuthToken,
   type SupervisorChannelId,
+  type SupervisorChannelConfig,
   type SupervisorDeliveryId,
   type SupervisorEvent,
   type SupervisorRunId,
-  type SupervisorServerMessage,
-  type SupervisorServerPayload,
+  SupervisorOpenSessionRpc,
+  SupervisorRpcFailure,
+  SupervisorRpcGroup,
   validSupervisorMessage,
   validSupervisorReply,
   validSupervisorReport,
 } from "../supervisor/protocol.ts";
-import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import {
   ensurePrivateDirectory,
   nodeErrorCode,
@@ -55,15 +53,19 @@ import {
   tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
+import {
+  makeSupervisorRpcServerProtocol,
+  SupervisorRpcConnection,
+  type SupervisorRpcConnectionContract,
+} from "./supervisor-rpc-protocol.ts";
 
 const LOOPBACK_HOST = "127.0.0.1" as const;
-const CHANNEL_ROOT = "supervisor-channels-v1";
+const CHANNEL_ROOT = "supervisor-channels-v2";
 const CONNECTION_CONFIG_FILE = "connection.json";
 const EVENT_CAPACITY = 64;
-// One slot remains reserved for exact pending-question cancellation.
 const CONTACT_EVENT_CAPACITY = EVENT_CAPACITY - 1;
 const MAX_CONNECTIONS = 4;
-const MAX_PENDING_WRITES = 32;
+const MAX_ACTIVE_RPC_REQUESTS = 32;
 const MAX_TRACKED_ASSIGNMENTS = 256;
 const MAX_REPORT_DELIVERIES = 128;
 const AUTH_TIMEOUT_MILLIS = 5_000;
@@ -112,27 +114,17 @@ export interface SupervisorChannelHandle {
   readonly runId: string;
   readonly metadata: SupervisorConnectionMetadata;
   readonly events: Queue.Dequeue<SupervisorEvent, Cause.Done>;
-  /** Confirm at least one authenticated packaged helper/bridge before runtime selection is usable. */
   readonly awaitReady: Effect.Effect<void, SupervisorChannelError>;
-  /** Monotonic per run. Call before the adapter issues the corresponding assignment. */
   readonly setAssignmentEpoch: (epoch: number) => Effect.Effect<void, SupervisorChannelError>;
-  /**
-   * Causal evidence recorded before the MCP report call is acknowledged. This does not depend on
-   * the adapter draining the event queue and is safe to query at native turn completion.
-   */
   readonly hasAcceptedReport: (epoch: number) => Effect.Effect<boolean, SupervisorChannelError>;
-  /** Return exact accepted report evidence so adapters can preserve it across transport shutdown. */
   readonly acceptedReportForEpoch: (
     epoch: number,
   ) => Effect.Effect<BackendReport | undefined, SupervisorChannelError>;
-  /** Settle only the exact pending question owned by this channel and current assignment. */
   readonly reply: (
     requestId: string,
     message: string,
   ) => Effect.Effect<void, SupervisorChannelError>;
-  /** Settle pending calls without accepting additional transport input. */
   readonly cancelPending: (reason?: string) => void;
-  /** Idempotently close sockets/server/queue and remove this run's private state. */
   readonly close: Effect.Effect<void, SupervisorChannelError>;
 }
 
@@ -148,18 +140,36 @@ export interface SupervisorChannelOpenRequest {
 
 export interface SupervisorChannelLayerOptions {
   readonly agentDirectory: string;
-  /** Deterministic boundary seam for proving interrupted late acquisition cleanup. */
   readonly beforeAcquireComplete?:
     | ((metadata: SupervisorConnectionMetadata) => Promise<void>)
     | undefined;
-  /** Test seam; production uses the fixed five-second authentication deadline. */
+  /** Test seam for proving the private config commit masks interruption until settlement. */
+  readonly beforeConfigCommit?:
+    | ((metadata: SupervisorConnectionMetadata) => Promise<void>)
+    | undefined;
   readonly authTimeoutMillis?: number | undefined;
+}
+
+interface AssignmentUpdate {
+  readonly updateId: SupervisorChannelId;
+  readonly assignmentEpoch: number;
+}
+
+interface RpcPeer {
+  readonly clientId: number;
+  readonly guard: SupervisorRpcConnectionContract;
+  readonly assignments: Queue.Queue<AssignmentUpdate, Cause.Done>;
+  watching: boolean;
 }
 
 interface PendingQuestion {
   readonly requestId: SupervisorChannelId;
   readonly epoch: number;
-  readonly peer: AuthenticatedPeer;
+  readonly peerId: number;
+  readonly response: Deferred.Deferred<
+    { readonly questionId: SupervisorChannelId; readonly message: string },
+    SupervisorRpcFailure
+  >;
   readonly acknowledgement: Deferred.Deferred<void, SupervisorChannelError>;
   replyStarted: boolean;
 }
@@ -173,23 +183,14 @@ interface AcceptedReport {
 
 interface PendingEpochAcknowledgement {
   readonly epoch: number;
-  readonly peer: AuthenticatedPeer;
-  readonly deferred: Deferred.Deferred<void, SupervisorChannelError>;
+  readonly peerId: number;
   readonly firstAcknowledgement: Deferred.Deferred<void, SupervisorChannelError>;
-}
-
-interface AuthenticatedPeer {
-  readonly socket: Socket;
-  readonly send: (message: SupervisorServerMessage) => Promise<void>;
-  readonly authenticatedSignal: Deferred.Deferred<void>;
-  authenticated: boolean;
-  detach: () => void;
 }
 
 interface NodeChannelState {
   readonly runId: SupervisorRunId;
-  readonly server: Server;
-  readonly peers: Set<AuthenticatedPeer>;
+  readonly scope: Scope.Closeable;
+  readonly peers: Map<number, RpcPeer>;
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
   readonly metadata: SupervisorConnectionMetadata;
   readonly stateDirectory: string;
@@ -212,8 +213,7 @@ interface NodeChannelState {
 const channelError = (operation: string, code: string, message: string) =>
   new SupervisorChannelError({ operation, code, message });
 
-const isLoopbackPeer = (address: string | undefined): boolean =>
-  address === LOOPBACK_HOST || address === "::ffff:127.0.0.1";
+const rpcFailure = (code: string, message: string) => new SupervisorRpcFailure({ code, message });
 
 const authenticatedToken = <ValueInput>(
   expected: Redacted.Redacted<SupervisorAuthToken>,
@@ -222,18 +222,10 @@ const authenticatedToken = <ValueInput>(
   const expectedBytes = Buffer.from(Redacted.value(expected), "utf8");
   const supplied = Predicate.isString(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
   if (supplied.length !== expectedBytes.length) {
-    // Keep malformed-token work on the same constant-time primitive without accepting it.
     timingSafeEqual(expectedBytes, expectedBytes);
     return false;
   }
   return timingSafeEqual(expectedBytes, supplied);
-};
-
-const exactConfig = <ValueInput>(value: ValueInput) => {
-  const decoded = Schema.decodeUnknownOption(SupervisorChannelConfigSchema, {
-    onExcessProperty: "error",
-  })(value);
-  return Option.isSome(decoded) ? decoded.value : undefined;
 };
 
 const makeMetadata = (
@@ -251,31 +243,6 @@ const makeMetadata = (
     "supervisor_question",
     "supervisor_submit_report",
   ] as const;
-  const claudeMcp: ClaudeSupervisorMcpMetadata = {
-    mcpServers: {
-      [SUPERVISOR_MCP_SERVER_NAME]: {
-        type: "stdio",
-        command,
-        args,
-        // No user environment, credentials, or arbitrary launch configuration is copied here.
-        env: {},
-      },
-    },
-  };
-  const codexMcp: CodexSupervisorMcpMetadata = {
-    serverName: SUPERVISOR_MCP_SERVER_NAME,
-    command,
-    args,
-    enabledTools,
-    tomlFragment: [
-      `[mcp_servers.${SUPERVISOR_MCP_SERVER_NAME}]`,
-      `command = ${tomlString(command)}`,
-      `args = [${args.map(tomlString).join(", ")}]`,
-      "required = true",
-      `enabled_tools = [${enabledTools.map(tomlString).join(", ")}]`,
-      'default_tools_approval_mode = "approve"',
-    ].join("\n"),
-  };
   return {
     runId,
     host: LOOPBACK_HOST,
@@ -283,8 +250,30 @@ const makeMetadata = (
     stateDirectory,
     connectionConfigPath,
     helperPath,
-    claudeMcp,
-    codexMcp,
+    claudeMcp: {
+      mcpServers: {
+        [SUPERVISOR_MCP_SERVER_NAME]: {
+          type: "stdio",
+          command,
+          args,
+          env: {},
+        },
+      },
+    },
+    codexMcp: {
+      serverName: SUPERVISOR_MCP_SERVER_NAME,
+      command,
+      args,
+      enabledTools,
+      tomlFragment: [
+        `[mcp_servers.${SUPERVISOR_MCP_SERVER_NAME}]`,
+        `command = ${tomlString(command)}`,
+        `args = [${args.map(tomlString).join(", ")}]`,
+        "required = true",
+        `enabled_tools = [${enabledTools.map(tomlString).join(", ")}]`,
+        'default_tools_approval_mode = "approve"',
+      ].join("\n"),
+    },
   };
 };
 
@@ -293,259 +282,160 @@ interface PreparedStateDirectory {
   readonly connectionConfigPath: string;
 }
 
-const prepareStateDirectory = async (
+class SupervisorPrivateStateError extends Schema.TaggedError<SupervisorPrivateStateError>()(
+  "SupervisorPrivateStateError",
+  {
+    operation: Schema.String,
+    code: Schema.String,
+  },
+) {}
+
+const privateStateError = <ErrorInput>(operation: string, error: ErrorInput) =>
+  new SupervisorPrivateStateError({
+    operation,
+    code: nodeErrorCode(error) ?? "UNKNOWN",
+  });
+
+const privateStateOperation = <Value>(
+  operation: string,
+  evaluate: () => PromiseLike<Value>,
+): Effect.Effect<Value, SupervisorPrivateStateError> =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (error) => privateStateError(operation, error),
+  });
+
+const prepareStateDirectory = (
   agentDirectory: string,
   runId: string,
-  signal: AbortSignal,
   onPrepared: (prepared: PreparedStateDirectory) => void,
-): Promise<PreparedStateDirectory> => {
-  const canonicalAgentDirectory = await safeAgentDirectory(agentDirectory);
-  const packageRoot = join(canonicalAgentDirectory, "subagents");
-  const channelRoot = join(packageRoot, CHANNEL_ROOT);
-  await ensurePrivateDirectory(packageRoot);
-  await ensurePrivateDirectory(channelRoot);
-  if (signal.aborted) throw new Error("state-directory-acquisition-interrupted");
-  const stateDirectory = join(channelRoot, `${runId}-${randomBytes(12).toString("hex")}`);
-  const prepared = {
-    stateDirectory,
-    connectionConfigPath: join(stateDirectory, CONNECTION_CONFIG_FILE),
-  } satisfies PreparedStateDirectory;
-  // Publish the unique cleanup identity before the non-cancelable mkdir can establish ownership.
-  onPrepared(prepared);
-  try {
-    await fs.mkdir(stateDirectory, { mode: 0o700 });
-    if (signal.aborted) throw new Error("state-directory-acquisition-interrupted");
-    const stateStat = await fs.lstat(stateDirectory);
-    if (signal.aborted || !stateStat.isDirectory() || stateStat.isSymbolicLink())
-      throw new Error("unsafe-run-dir");
-    return prepared;
-  } catch (error) {
-    await fs.rmdir(stateDirectory).catch(() => undefined);
-    throw error;
-  }
-};
+  onCreated: () => void,
+): Effect.Effect<PreparedStateDirectory, SupervisorPrivateStateError> =>
+  Effect.gen(function* () {
+    const canonicalAgentDirectory = yield* privateStateOperation("resolve-agent-directory", () =>
+      safeAgentDirectory(agentDirectory),
+    );
+    const packageRoot = join(canonicalAgentDirectory, "subagents");
+    const channelRoot = join(packageRoot, CHANNEL_ROOT);
+    yield* privateStateOperation("prepare-package-root", () => ensurePrivateDirectory(packageRoot));
+    yield* privateStateOperation("prepare-channel-root", () => ensurePrivateDirectory(channelRoot));
+    const stateDirectory = join(channelRoot, `${runId}-${randomBytes(12).toString("hex")}`);
+    const prepared = {
+      stateDirectory,
+      connectionConfigPath: join(stateDirectory, CONNECTION_CONFIG_FILE),
+    } satisfies PreparedStateDirectory;
+    onPrepared(prepared);
+    let directoryCreated = false;
+    const removeLateDirectory = () =>
+      directoryCreated ? fs.rmdir(stateDirectory).catch(() => undefined) : Promise.resolve();
+    return yield* Effect.tryPromise({
+      try: async (signal) => {
+        await fs.mkdir(stateDirectory, { mode: 0o700 });
+        directoryCreated = true;
+        onCreated();
+        if (signal.aborted) {
+          await removeLateDirectory();
+          throw new Error("state-directory-acquisition-interrupted");
+        }
+        const stateStat = await fs.lstat(stateDirectory);
+        if (signal.aborted || !stateStat.isDirectory() || stateStat.isSymbolicLink())
+          throw new Error("unsafe-run-dir");
+        return prepared;
+      },
+      catch: (error) => privateStateError("prepare-state-directory", error),
+    }).pipe(Effect.onError(() => Effect.promise(removeLateDirectory)));
+  });
 
-const writePrivateConfig = async <ValueInput>(path: string, value: ValueInput): Promise<void> => {
+const writePrivateConfig = async (path: string, value: SupervisorChannelConfig): Promise<void> => {
   const source = `${JSON.stringify(value)}\n`;
   if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
     throw new Error("config-size");
   await writeExclusive(path, source);
 };
 
-const removePrivateState = async (
+const removePrivateState = (
   stateDirectory: string,
   connectionConfigPath: string,
-): Promise<void> => {
-  try {
-    const stat = await fs.lstat(connectionConfigPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("unsafe-config-cleanup");
-    await fs.unlink(connectionConfigPath);
-  } catch (error) {
-    if (nodeErrorCode(error) !== "ENOENT") throw error;
-  }
-  const entries = await fs.readdir(stateDirectory);
-  if (entries.length !== 0) throw new Error("unexpected-channel-state");
-  await fs.rmdir(stateDirectory);
-};
-
-const listenEffect = (server: Server) =>
-  Effect.callback<number, SupervisorChannelError>((resume) => {
-    let settled = false;
-    const detach = () => {
-      server.off("error", onError);
-      server.off("listening", onListening);
-    };
-    const onError = () => {
-      if (settled) return;
-      settled = true;
-      detach();
-      resume(
-        Effect.fail(
-          channelError("listen", "listen_failed", "The supervisor listener failed to start."),
-        ),
-      );
-    };
-    const onListening = () => {
-      if (settled) return;
-      settled = true;
-      detach();
-      const address = server.address();
-      if (!address || Predicate.isString(address)) {
-        resume(
-          Effect.fail(
-            channelError(
-              "listen",
-              "invalid_listener_address",
-              "The supervisor listener address is invalid.",
-            ),
-          ),
-        );
-        return;
-      }
-      resume(Effect.succeed(address.port));
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen({ host: LOOPBACK_HOST, port: 0, exclusive: true });
-    return Effect.sync(() => {
-      if (settled) return;
-      settled = true;
-      detach();
-      try {
-        server.close();
-      } catch {
-        // Interrupted acquisition owns the listener even when Node has not begun listening yet.
-      }
-    });
-  });
-
-const closeServerEffect = (server: Server) =>
-  Effect.callback<void, SupervisorChannelError>((resume) => {
-    if (!server.listening) {
-      resume(Effect.void);
-      return;
-    }
-    server.close((closeError) =>
-      closeError
-        ? resume(
-            Effect.fail(
-              channelError("listen", "close_failed", "The supervisor listener failed to close."),
-            ),
-          )
-        : resume(Effect.void),
+): Effect.Effect<void, SupervisorPrivateStateError> =>
+  Effect.gen(function* () {
+    const configStat = yield* privateStateOperation("stat-channel-config", () =>
+      fs.lstat(connectionConfigPath),
+    ).pipe(
+      Effect.map(Option.some),
+      Effect.catch((error) => (error.code === "ENOENT" ? Effect.succeedNone : Effect.fail(error))),
     );
-  });
-
-/**
- * A peer send rejected before any bytes were handed to the socket, so the message
- * definitively never reached the transport and resending it is safe. Constructed as a
- * Promise rejection reason at this boundary and discriminated by its tag there.
- */
-export class PeerSendNotAttemptedError extends Schema.TaggedError<PeerSendNotAttemptedError>()(
-  "PeerSendNotAttemptedError",
-  { reason: Schema.Literals(["unavailable", "oversized"]) },
-) {}
-
-// The write tail stays a promise chain on purpose: sends are issued from synchronous Node
-// callbacks where no fiber exists, the chain preserves strict frame order, and the pending
-// counter bounds queued frames. Effect queue/fiber machinery would add a writer fiber without
-// changing either guarantee.
-const makePeerSender = (socket: Socket, onFailure: () => void) => {
-  let writeTail: Promise<void> = Promise.resolve();
-  let pendingWrites = 0;
-  return (message: SupervisorServerMessage): Promise<void> => {
-    if (socket.destroyed) {
-      onFailure();
-      return Promise.reject(new PeerSendNotAttemptedError({ reason: "unavailable" }));
+    if (Option.isSome(configStat)) {
+      if (!configStat.value.isFile() || configStat.value.isSymbolicLink())
+        return yield* new SupervisorPrivateStateError({
+          operation: "validate-channel-config",
+          code: "UNSAFE_ENTRY",
+        });
+      yield* privateStateOperation("remove-channel-config", () => fs.unlink(connectionConfigPath));
     }
-    if (pendingWrites >= MAX_PENDING_WRITES)
-      return Promise.reject(new PeerSendNotAttemptedError({ reason: "unavailable" }));
-    const line = `${JSON.stringify(message)}\n`;
-    if (Buffer.byteLength(line, "utf8") > MAX_SUPERVISOR_CHANNEL_LINE_BYTES)
-      return Promise.reject(new PeerSendNotAttemptedError({ reason: "oversized" }));
-    pendingWrites += 1;
-    const write = writeTail.then(
-      () =>
-        new Promise<void>((resolveWrite, rejectWrite) => {
-          socket.write(line, "utf8", (error) =>
-            error ? rejectWrite(error) : resolveWrite(undefined),
-          );
-        }),
+    const entries = yield* privateStateOperation("read-channel-state", () =>
+      fs.readdir(stateDirectory),
     );
-    writeTail = write
-      .catch(() => undefined)
-      .then(() => {
-        pendingWrites = Math.max(0, pendingWrites - 1);
+    if (entries.length !== 0)
+      return yield* new SupervisorPrivateStateError({
+        operation: "validate-channel-state",
+        code: "UNEXPECTED_ENTRIES",
       });
-    void write.catch(() => onFailure());
-    return write;
-  };
-};
-
-export const supervisorChannelTesting = { makePeerSender } as const;
-
-const authenticatedServerMessage = (
-  state: NodeChannelState,
-  payload: SupervisorServerPayload,
-): SupervisorServerMessage =>
-  authenticateSupervisorServerPayload(
-    {
-      version: SUPERVISOR_CHANNEL_VERSION,
-      runId: state.runId,
-      token: Redacted.value(state.token),
-    },
-    payload,
-  );
-
-const failPendingQuestion = (state: NodeChannelState, code: string, message: string): void => {
-  const pending = state.pendingQuestion;
-  if (!pending) return;
-  state.pendingQuestion = undefined;
-  void pending.peer
-    .send(authenticatedServerMessage(state, { type: "cancelled", id: pending.requestId }))
-    .catch(() => undefined);
-  Deferred.doneUnsafe(pending.acknowledgement, Effect.fail(channelError("reply", code, message)));
-};
-
-/**
- * Cancel one accepted question only after its correlated orchestration event is durably queued.
- * Contact/report admission keeps one queue slot reserved while a question is pending.
- */
-const cancelPendingQuestion = (state: NodeChannelState, code: string, message: string): boolean => {
-  const pending = state.pendingQuestion;
-  if (!pending) return false;
-  const offered = Queue.offerUnsafe(state.events, {
-    type: "supervisor_question_cancelled",
-    assignmentEpoch: pending.epoch,
-    requestId: pending.requestId,
+    yield* privateStateOperation("remove-channel-state", () => fs.rmdir(stateDirectory));
   });
-  if (!offered) return false;
-  failPendingQuestion(state, code, message);
-  return true;
-};
 
-const liveAuthenticatedPeers = (state: NodeChannelState): ReadonlyArray<AuthenticatedPeer> =>
-  [...state.peers].filter((peer) => peer.authenticated && !peer.socket.destroyed);
+const hasReadyPeer = (state: NodeChannelState): boolean =>
+  [...state.peers.values()].some((peer) => peer.watching);
 
 const publishReadyGeneration = (state: NodeChannelState): void => {
-  if (liveAuthenticatedPeers(state).length === 0) return;
+  if (!hasReadyPeer(state)) return;
   for (const waiter of state.readinessWaiters) Deferred.doneUnsafe(waiter, Effect.void);
   state.readinessWaiters.clear();
 };
 
-const sendAuthenticated = (
+const failPendingQuestion = (
   state: NodeChannelState,
-  peer: AuthenticatedPeer,
-  payload: SupervisorServerPayload,
+  code: string,
+  message: string,
+  publishCancellation: boolean,
 ): void => {
-  void peer.send(authenticatedServerMessage(state, payload)).catch(() => undefined);
+  const pending = state.pendingQuestion;
+  if (!pending) return;
+  if (
+    publishCancellation &&
+    !Queue.offerUnsafe(state.events, {
+      type: "supervisor_question_cancelled",
+      assignmentEpoch: pending.epoch,
+      requestId: pending.requestId,
+    })
+  )
+    return;
+  state.pendingQuestion = undefined;
+  Deferred.doneUnsafe(pending.response, Effect.fail(rpcFailure(code, message)));
+  Deferred.doneUnsafe(pending.acknowledgement, Effect.fail(channelError("reply", code, message)));
 };
 
-const closePeer = (state: NodeChannelState, peer: AuthenticatedPeer): void => {
-  if (!state.peers.delete(peer)) return;
-  peer.detach();
-  peer.socket.destroy();
-  const affectedEpochUpdates = new Set<Deferred.Deferred<void, SupervisorChannelError>>();
+const cancelPendingQuestion = (state: NodeChannelState, code: string, message: string): boolean => {
+  if (!state.pendingQuestion) return false;
+  failPendingQuestion(state, code, message, true);
+  return state.pendingQuestion === undefined;
+};
+
+const removePeer = (state: NodeChannelState, clientId: number): void => {
+  const peer = state.peers.get(clientId);
+  if (!peer) return;
+  state.peers.delete(clientId);
+  Queue.endUnsafe(peer.assignments);
+  const affected = new Set<Deferred.Deferred<void, SupervisorChannelError>>();
   for (const [id, acknowledgement] of state.epochAcknowledgements) {
-    if (acknowledgement.peer !== peer) continue;
+    if (acknowledgement.peerId !== clientId) continue;
     state.epochAcknowledgements.delete(id);
-    affectedEpochUpdates.add(acknowledgement.firstAcknowledgement);
-    Deferred.doneUnsafe(
-      acknowledgement.deferred,
-      Effect.fail(
-        channelError(
-          "set assignment epoch",
-          "assignment_epoch_outcome_uncertain",
-          "Assignment epoch acknowledgement transport closed.",
-        ),
-      ),
-    );
+    affected.add(acknowledgement.firstAcknowledgement);
   }
-  for (const firstAcknowledgement of affectedEpochUpdates) {
-    const hasLiveUpdate = [...state.epochAcknowledgements.values()].some(
-      (acknowledgement) => acknowledgement.firstAcknowledgement === firstAcknowledgement,
+  for (const firstAcknowledgement of affected) {
+    const hasLive = [...state.epochAcknowledgements.values()].some(
+      (entry) => entry.firstAcknowledgement === firstAcknowledgement,
     );
-    if (!hasLiveUpdate)
+    if (!hasLive)
       Deferred.doneUnsafe(
         firstAcknowledgement,
         Effect.fail(
@@ -557,607 +447,558 @@ const closePeer = (state: NodeChannelState, peer: AuthenticatedPeer): void => {
         ),
       );
   }
-  if (state.pendingQuestion?.peer === peer)
+  if (state.pendingQuestion?.peerId === clientId)
     cancelPendingQuestion(
       state,
       "question_transport_closed",
-      "The private supervisor question transport closed before its exact reply was confirmed.",
+      "The supervisor question transport closed before settlement was confirmed.",
     );
 };
+
+const authorize = (
+  state: NodeChannelState,
+  guard: SupervisorRpcConnectionContract,
+  clientId: number,
+  payload: { readonly version: number; readonly runId: string; readonly token: string },
+): Effect.Effect<void, SupervisorRpcFailure> =>
+  Effect.suspend(() => {
+    if (
+      state.closed ||
+      payload.version !== SUPERVISOR_CHANNEL_VERSION ||
+      payload.runId !== state.runId ||
+      !authenticatedToken(state.token, payload.token) ||
+      guard.clientId !== clientId
+    ) {
+      guard.close();
+      return Effect.fail(rpcFailure("authentication_failed", "Supervisor authentication failed."));
+    }
+    if (!guard.accepted) {
+      guard.accepted = true;
+      Deferred.doneUnsafe(guard.authenticated, Effect.void);
+    }
+    return Effect.void;
+  });
+
+const currentConnectionGuard = Effect.serviceOption(SupervisorRpcConnection).pipe(
+  Effect.flatMap((guard) =>
+    Option.isSome(guard)
+      ? Effect.succeed(guard.value)
+      : Effect.fail(
+          rpcFailure("connection_context_missing", "Supervisor connection context is missing."),
+        ),
+  ),
+);
+
+const requirePeer = (
+  state: NodeChannelState,
+  clientId: number,
+): Effect.Effect<RpcPeer, SupervisorRpcFailure> => {
+  const peer = state.peers.get(clientId);
+  return peer
+    ? Effect.succeed(peer)
+    : Effect.fail(rpcFailure("session_not_open", "The supervisor RPC session is not open."));
+};
+
+const requireAssignedEpoch = (
+  state: NodeChannelState,
+  epoch: number,
+): Effect.Effect<void, SupervisorRpcFailure> =>
+  state.assignmentEpochs.has(epoch)
+    ? Effect.void
+    : Effect.fail(
+        rpcFailure(
+          "unknown_assignment_epoch",
+          "Supervisor event did not name an assignment epoch issued by this channel.",
+        ),
+      );
 
 const offerContact = (
   state: NodeChannelState,
-  peer: AuthenticatedPeer,
-  message: Extract<
-    ReturnType<typeof decodeSupervisorClientMessage>,
-    { readonly type: "progress" | "warning" }
-  >,
-): void => {
-  if (!validSupervisorMessage(message.message)) {
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "invalid_message",
-      message: "Supervisor message must be non-empty and bounded.",
-    });
-    return;
-  }
-  const offered =
-    Queue.sizeUnsafe(state.events) < CONTACT_EVENT_CAPACITY &&
-    Queue.offerUnsafe(state.events, {
-      type: "supervisor_contact",
-      assignmentEpoch: message.assignmentEpoch,
-      requestId: message.id,
-      kind: message.type,
-      message: message.message,
-    });
-  sendAuthenticated(
-    state,
-    peer,
-    offered
-      ? { type: "result", id: message.id, accepted: true }
-      : {
-          type: "error",
-          id: message.id,
-          code: "event_queue_full",
-          message: "Supervisor event queue is full; delivery was not accepted.",
-        },
-  );
-};
+  requestId: SupervisorChannelId,
+  epoch: number,
+  kind: "progress" | "warning",
+  message: string,
+): Effect.Effect<string, SupervisorRpcFailure> =>
+  Effect.suspend(() => {
+    if (!validSupervisorMessage(message))
+      return Effect.fail(rpcFailure("invalid_message", "Supervisor message is invalid."));
+    const offered =
+      Queue.sizeUnsafe(state.events) < CONTACT_EVENT_CAPACITY &&
+      Queue.offerUnsafe(state.events, {
+        type: "supervisor_contact",
+        assignmentEpoch: epoch,
+        requestId,
+        kind,
+        message,
+      });
+    return offered
+      ? Effect.succeed(
+          kind === "progress"
+            ? "Progress delivered to the parent projection."
+            : "Warning recorded in parent-visible run status.",
+        )
+      : Effect.fail(rpcFailure("event_queue_full", "Supervisor event queue is full."));
+  });
 
-const offerQuestion = (
-  state: NodeChannelState,
-  peer: AuthenticatedPeer,
-  message: Extract<ReturnType<typeof decodeSupervisorClientMessage>, { readonly type: "question" }>,
-): void => {
-  if (!validSupervisorMessage(message.message)) {
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "invalid_question",
-      message: "Supervisor question must be non-empty and bounded.",
-    });
-    return;
-  }
-  if (state.pendingQuestion) {
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "question_pending",
-      message: "A blocking supervisor question is already pending for this run.",
-    });
-    return;
-  }
-  if (state.questionEpochs.has(message.assignmentEpoch)) {
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "question_already_used",
-      message: "This assignment already used its one blocking supervisor question.",
-    });
-    return;
-  }
-  const acknowledgement = Deferred.makeUnsafe<void, SupervisorChannelError>();
-  state.pendingQuestion = {
-    requestId: message.id,
-    epoch: message.assignmentEpoch,
-    peer,
-    acknowledgement,
-    replyStarted: false,
-  };
-  const offered =
-    Queue.sizeUnsafe(state.events) < CONTACT_EVENT_CAPACITY &&
-    Queue.offerUnsafe(state.events, {
-      type: "supervisor_contact",
-      assignmentEpoch: message.assignmentEpoch,
-      requestId: message.id,
-      kind: "question",
-      message: message.message,
-    });
-  if (!offered) {
-    state.pendingQuestion = undefined;
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "event_queue_full",
-      message: "Supervisor event queue is full; the question was not accepted.",
-    });
-    return;
-  }
-  state.questionEpochs.add(message.assignmentEpoch);
-  // A question intentionally receives no result until the exact parent reply arrives.
-};
-
-const offerReport = (
-  state: NodeChannelState,
-  peer: AuthenticatedPeer,
-  message: Extract<ReturnType<typeof decodeSupervisorClientMessage>, { readonly type: "report" }>,
-): void => {
-  if (!validSupervisorReport(message.text)) {
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "invalid_report",
-      message: "Final report text must be non-empty and bounded.",
-    });
-    return;
-  }
-  const previous = state.reports.get(message.deliveryId);
-  if (previous) {
-    sendAuthenticated(
-      state,
-      peer,
-      previous.epoch === message.assignmentEpoch && previous.text === message.text
-        ? {
-            type: "result",
-            id: message.id,
-            accepted: true,
-            duplicate: true,
-            sequence: previous.sequence,
-            assignmentEpoch: previous.epoch,
+const makeRpcHandlers = (state: NodeChannelState) =>
+  SupervisorRpcGroup.toHandlers(
+    SupervisorRpcGroup.of({
+      SupervisorOpenSession: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          if (!state.peers.has(options.client.id)) {
+            const assignments = yield* Queue.bounded<AssignmentUpdate, Cause.Done>(4);
+            state.peers.set(options.client.id, {
+              clientId: options.client.id,
+              guard,
+              assignments,
+              watching: false,
+            });
           }
-        : {
-            type: "error",
-            id: message.id,
-            code: "delivery_identity_conflict",
-            message:
-              "The report delivery identity was already used in another epoch or for different content.",
-          },
-    );
-    return;
-  }
-  if (state.reports.size >= MAX_REPORT_DELIVERIES) {
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "report_identity_capacity",
-      message: "The bounded report delivery-identity map is full.",
-    });
-    return;
-  }
-  const sequence = state.nextReportSequence;
-  const report: BackendReport & { readonly type: "report" } = {
-    type: "report",
-    runId: state.metadata.runId,
-    assignmentEpoch: message.assignmentEpoch,
-    sequence,
-    deliveryId: message.deliveryId,
-    text: message.text,
-    evidence: `supervisor-channel-v${SUPERVISOR_CHANNEL_VERSION}`.slice(
-      0,
-      MAX_BACKEND_REPORT_EVIDENCE_CHARS,
-    ),
-  };
-  const cancelsQuestion =
-    state.pendingQuestion !== undefined && state.pendingQuestion.epoch <= message.assignmentEpoch;
-  const requiredSlots = state.pendingQuestion === undefined ? 1 : 2;
-  if (
-    Queue.sizeUnsafe(state.events) > EVENT_CAPACITY - requiredSlots ||
-    !Queue.offerUnsafe(state.events, report)
-  ) {
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "event_queue_full",
-      message: "Supervisor event queue is full; report delivery was not accepted.",
-    });
-    return;
-  }
-  if (cancelsQuestion)
-    cancelPendingQuestion(
-      state,
-      "question_cancelled_by_report",
-      "The pending supervisor question was cancelled because its assignment report was accepted.",
-    );
-  state.reports.set(message.deliveryId, {
-    epoch: message.assignmentEpoch,
-    sequence,
-    text: message.text,
-    report,
-  });
-  state.nextReportSequence += 1;
-  sendAuthenticated(state, peer, {
-    type: "result",
-    id: message.id,
-    accepted: true,
-    duplicate: false,
-    sequence,
-    assignmentEpoch: message.assignmentEpoch,
-  });
-};
+          return { assignmentEpoch: state.currentAssignmentEpoch };
+        }),
 
-const dispatchAuthenticated = (
-  state: NodeChannelState,
-  peer: AuthenticatedPeer,
-  message: Exclude<
-    NonNullable<ReturnType<typeof decodeSupervisorClientMessage>>,
-    { readonly type: "hello" }
-  >,
-): void => {
-  if (message.type === "cancel") {
-    const pending = state.pendingQuestion;
-    const ownsQuestion =
-      pending !== undefined &&
-      pending.requestId === message.targetRequestId &&
-      pending.peer === peer;
-    const cancelled =
-      ownsQuestion &&
-      cancelPendingQuestion(
-        state,
-        "question_cancelled",
-        "The exact pending supervisor question was cancelled by its MCP caller.",
-      );
-    if (cancelled)
-      sendAuthenticated(state, peer, {
-        type: "cancelled",
-        id: message.targetRequestId,
-      });
-    sendAuthenticated(state, peer, {
-      type: "cancel_result",
-      id: message.id,
-      targetRequestId: message.targetRequestId,
-      cancelled,
-    });
-    return;
-  }
-  if (message.type === "assignment_epoch_ack") {
-    const acknowledgement = state.epochAcknowledgements.get(message.id);
-    if (
-      !acknowledgement ||
-      acknowledgement.peer !== peer ||
-      acknowledgement.epoch !== message.assignmentEpoch
-    ) {
-      sendAuthenticated(state, peer, {
-        type: "error",
-        id: message.id,
-        code: "assignment_epoch_ack_mismatch",
-        message: "Assignment epoch acknowledgement did not match an issued update.",
-      });
-      return;
-    }
-    state.epochAcknowledgements.delete(message.id);
-    if (state.pendingAssignmentEpoch === acknowledgement.epoch) {
-      if (state.pendingQuestion && state.pendingQuestion.epoch < acknowledgement.epoch)
-        cancelPendingQuestion(
-          state,
-          "question_assignment_advanced",
-          "The pending supervisor question belonged to a prior assignment and was cancelled.",
-        );
-      state.currentAssignmentEpoch = acknowledgement.epoch;
-      state.assignmentEpochs.add(acknowledgement.epoch);
-    }
-    Deferred.doneUnsafe(acknowledgement.deferred, Effect.void);
-    Deferred.doneUnsafe(acknowledgement.firstAcknowledgement, Effect.void);
-    return;
-  }
-  if (message.type === "question_reply_ack") {
-    const pending = state.pendingQuestion;
-    if (
-      !pending ||
-      pending.requestId !== message.questionId ||
-      pending.peer !== peer ||
-      !pending.replyStarted
-    ) {
-      sendAuthenticated(state, peer, {
-        type: "error",
-        id: message.id,
-        code: "reply_ack_mismatch",
-        message: "Question reply acknowledgement did not match an owned pending reply.",
-      });
-      return;
-    }
-    state.pendingQuestion = undefined;
-    Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
-    sendAuthenticated(state, peer, { type: "result", id: message.id, accepted: true });
-    return;
-  }
-  if (!state.assignmentEpochs.has(message.assignmentEpoch)) {
-    sendAuthenticated(state, peer, {
-      type: "error",
-      id: message.id,
-      code: "unknown_assignment_epoch",
-      message: "Supervisor event did not name an assignment epoch issued by this channel.",
-    });
-    return;
-  }
-  switch (message.type) {
-    case "progress":
-    case "warning":
-      offerContact(state, peer, message);
-      return;
-    case "question":
-      offerQuestion(state, peer, message);
-      return;
-    case "report":
-      offerReport(state, peer, message);
-      return;
-  }
-};
+      SupervisorWatchAssignments: (payload, options) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const guard = yield* currentConnectionGuard;
+            yield* authorize(state, guard, options.client.id, payload);
+            const peer = yield* requirePeer(state, options.client.id);
+            if (peer.watching)
+              return yield* rpcFailure(
+                "assignment_watch_active",
+                "This supervisor session already has an assignment stream.",
+              );
+            peer.watching = true;
+            publishReadyGeneration(state);
+            return Stream.fromQueue(peer.assignments).pipe(
+              Stream.ensuring(Effect.sync(() => void (peer.watching = false))),
+            );
+          }),
+        ),
 
-const acceptSocket = (
-  state: NodeChannelState,
-  socket: Socket,
-  scope: Scope.Scope,
-  authTimeoutMillis: number,
-): void => {
-  if (
-    state.closed ||
-    state.peers.size >= MAX_CONNECTIONS ||
-    !isLoopbackPeer(socket.remoteAddress)
-  ) {
-    socket.destroy();
-    return;
-  }
-  socket.setNoDelay(true);
-  const authenticatedSignal = Deferred.makeUnsafe<void>();
-  let peer!: AuthenticatedPeer;
-  const destroy = () => closePeer(state, peer);
-  const send = makePeerSender(socket, destroy);
-  const detachParser = attachBoundedLineParser(socket, {
-    maxLineBytes: MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
-    maxQueuedBytes: MAX_SUPERVISOR_CHANNEL_LINE_BYTES * 2,
-    onLine: (line) => {
-      let value: unknown;
-      try {
-        // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-        value = JSON.parse(line) as unknown;
-      } catch {
-        destroy();
-        return;
-      }
-      const token =
-        value && hasObjectRuntimeType(value) && "token" in value ? value.token : undefined;
-      if (!authenticatedToken(state.token, token)) {
-        destroy();
-        return;
-      }
-      const message = decodeSupervisorClientMessage(value);
-      if (!message || message.runId !== state.runId) {
-        if (peer.authenticated)
-          sendAuthenticated(state, peer, {
-            type: "error",
-            id: null,
-            code: "invalid_protocol_message",
-            message: "Supervisor protocol message was malformed, excessive, or unsupported.",
-          });
-        destroy();
-        return;
-      }
-      if (!peer.authenticated) {
-        if (message.type !== "hello") {
-          destroy();
-          return;
-        }
-        peer.authenticated = true;
-        Deferred.doneUnsafe(peer.authenticatedSignal, Effect.void);
-        sendAuthenticated(state, peer, {
-          type: "hello_ok",
-          id: message.id,
-          assignmentEpoch: state.currentAssignmentEpoch,
-        });
-        publishReadyGeneration(state);
-        return;
-      }
-      if (message.type === "hello") {
-        destroy();
-        return;
-      }
-      dispatchAuthenticated(state, peer, message);
-    },
-    onOverflow: destroy,
-  });
-  peer = {
-    socket,
-    send,
-    authenticatedSignal,
-    authenticated: false,
-    detach: () => {
-      Deferred.doneUnsafe(authenticatedSignal, Effect.void);
-      detachParser();
-      socket.off("error", destroy);
-      socket.off("close", destroy);
-    },
-  };
-  state.peers.add(peer);
-  socket.once("error", destroy);
-  socket.once("close", destroy);
-  try {
-    Fiber.runIn(
-      Effect.runFork(
-        Effect.raceFirst(
-          Deferred.await(authenticatedSignal),
-          Effect.sleep(authTimeoutMillis).pipe(
-            Effect.andThen(
+      SupervisorAcknowledgeAssignment: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          yield* requirePeer(state, options.client.id);
+          const acknowledgement = state.epochAcknowledgements.get(payload.updateId);
+          if (
+            !acknowledgement ||
+            acknowledgement.peerId !== options.client.id ||
+            acknowledgement.epoch !== payload.assignmentEpoch
+          )
+            return yield* rpcFailure(
+              "assignment_epoch_ack_mismatch",
+              "Assignment epoch acknowledgement did not match an issued update.",
+            );
+          state.epochAcknowledgements.delete(payload.updateId);
+          if (state.pendingAssignmentEpoch === acknowledgement.epoch) {
+            if (state.pendingQuestion && state.pendingQuestion.epoch < acknowledgement.epoch)
+              cancelPendingQuestion(
+                state,
+                "question_assignment_advanced",
+                "The pending supervisor question belonged to a prior assignment.",
+              );
+            state.currentAssignmentEpoch = acknowledgement.epoch;
+            state.assignmentEpochs.add(acknowledgement.epoch);
+          }
+          Deferred.doneUnsafe(acknowledgement.firstAcknowledgement, Effect.void);
+        }),
+
+      SupervisorProgress: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          yield* requirePeer(state, options.client.id);
+          yield* requireAssignedEpoch(state, payload.assignmentEpoch);
+          return yield* offerContact(
+            state,
+            payload.requestId,
+            payload.assignmentEpoch,
+            "progress",
+            payload.message,
+          );
+        }),
+
+      SupervisorWarning: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          yield* requirePeer(state, options.client.id);
+          yield* requireAssignedEpoch(state, payload.assignmentEpoch);
+          return yield* offerContact(
+            state,
+            payload.requestId,
+            payload.assignmentEpoch,
+            "warning",
+            payload.message,
+          );
+        }),
+
+      SupervisorQuestion: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          yield* requirePeer(state, options.client.id);
+          yield* requireAssignedEpoch(state, payload.assignmentEpoch);
+          if (!validSupervisorMessage(payload.message))
+            return yield* rpcFailure("invalid_question", "Supervisor question is invalid.");
+          if (state.pendingQuestion)
+            return yield* rpcFailure(
+              "question_pending",
+              "A blocking supervisor question is already pending.",
+            );
+          if (state.questionEpochs.has(payload.assignmentEpoch))
+            return yield* rpcFailure(
+              "question_already_used",
+              "This assignment already used its blocking supervisor question.",
+            );
+          const response = Deferred.makeUnsafe<
+            { readonly questionId: SupervisorChannelId; readonly message: string },
+            SupervisorRpcFailure
+          >();
+          const acknowledgement = Deferred.makeUnsafe<void, SupervisorChannelError>();
+          const pending: PendingQuestion = {
+            requestId: payload.requestId,
+            epoch: payload.assignmentEpoch,
+            peerId: options.client.id,
+            response,
+            acknowledgement,
+            replyStarted: false,
+          };
+          state.pendingQuestion = pending;
+          const offered =
+            Queue.sizeUnsafe(state.events) < CONTACT_EVENT_CAPACITY &&
+            Queue.offerUnsafe(state.events, {
+              type: "supervisor_contact",
+              assignmentEpoch: payload.assignmentEpoch,
+              requestId: payload.requestId,
+              kind: "question",
+              message: payload.message,
+            });
+          if (!offered) {
+            state.pendingQuestion = undefined;
+            return yield* rpcFailure("event_queue_full", "Supervisor event queue is full.");
+          }
+          state.questionEpochs.add(payload.assignmentEpoch);
+          return yield* Deferred.await(response).pipe(
+            Effect.onExit((exit) =>
               Effect.sync(() => {
-                if (!peer.authenticated) destroy();
+                if (
+                  Exit.isFailure(exit) &&
+                  state.pendingQuestion === pending &&
+                  !pending.replyStarted
+                )
+                  cancelPendingQuestion(
+                    state,
+                    "question_cancelled",
+                    "The supervisor question call was cancelled.",
+                  );
               }),
             ),
-          ),
-        ),
-      ),
-      scope,
-    );
-  } catch {
-    destroy();
-  }
-};
+          );
+        }),
+
+      SupervisorAcknowledgeQuestionReply: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          const pending = state.pendingQuestion;
+          if (
+            !pending ||
+            pending.peerId !== options.client.id ||
+            pending.requestId !== payload.questionId ||
+            pending.epoch !== payload.assignmentEpoch ||
+            !pending.replyStarted
+          )
+            return yield* rpcFailure(
+              "reply_ack_mismatch",
+              "Question reply acknowledgement did not match the pending reply.",
+            );
+          state.pendingQuestion = undefined;
+          Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
+        }),
+
+      SupervisorReport: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          yield* requirePeer(state, options.client.id);
+          yield* requireAssignedEpoch(state, payload.assignmentEpoch);
+          if (!validSupervisorReport(payload.text))
+            return yield* rpcFailure("invalid_report", "Supervisor report is invalid.");
+          const previous = state.reports.get(payload.deliveryId);
+          if (previous) {
+            if (previous.epoch !== payload.assignmentEpoch || previous.text !== payload.text)
+              return yield* rpcFailure(
+                "delivery_identity_conflict",
+                "The report delivery identity was already used for different evidence.",
+              );
+            return {
+              duplicate: true,
+              sequence: previous.sequence,
+              assignmentEpoch: previous.epoch,
+            };
+          }
+          if (state.reports.size >= MAX_REPORT_DELIVERIES)
+            return yield* rpcFailure(
+              "report_identity_capacity",
+              "The report delivery identity map is full.",
+            );
+          const sequence = state.nextReportSequence;
+          const report: BackendReport & { readonly type: "report" } = {
+            type: "report",
+            runId: state.metadata.runId,
+            assignmentEpoch: payload.assignmentEpoch,
+            sequence,
+            deliveryId: payload.deliveryId,
+            text: payload.text,
+            evidence: `supervisor-effect-rpc-v${SUPERVISOR_CHANNEL_VERSION}`.slice(
+              0,
+              MAX_BACKEND_REPORT_EVIDENCE_CHARS,
+            ),
+          };
+          const cancelsQuestion =
+            state.pendingQuestion !== undefined &&
+            state.pendingQuestion.epoch <= payload.assignmentEpoch;
+          const requiredSlots = state.pendingQuestion === undefined ? 1 : 2;
+          if (
+            Queue.sizeUnsafe(state.events) > EVENT_CAPACITY - requiredSlots ||
+            !Queue.offerUnsafe(state.events, report)
+          )
+            return yield* rpcFailure("event_queue_full", "Supervisor event queue is full.");
+          if (cancelsQuestion)
+            cancelPendingQuestion(
+              state,
+              "question_cancelled_by_report",
+              "The pending question was cancelled because its assignment report was accepted.",
+            );
+          state.reports.set(payload.deliveryId, {
+            epoch: payload.assignmentEpoch,
+            sequence,
+            text: payload.text,
+            report,
+          });
+          state.nextReportSequence += 1;
+          return { duplicate: false, sequence, assignmentEpoch: payload.assignmentEpoch };
+        }),
+    }),
+  );
 
 const closeNodeChannelEffect = (state: NodeChannelState) =>
   Effect.uninterruptibleMask((restore) =>
     Effect.suspend(() => {
       if (state.cleanupStarted) return restore(Deferred.await(state.cleanupDone));
       state.cleanupStarted = true;
-      state.closed = true;
-      for (const waiter of state.readinessWaiters)
-        Deferred.doneUnsafe(
-          waiter,
-          Effect.fail(
+      return Effect.gen(function* () {
+        state.closed = true;
+        for (const waiter of state.readinessWaiters)
+          Deferred.doneUnsafe(
+            waiter,
+            Effect.fail(
+              channelError("await ready", "channel_closed", "Supervisor channel closed."),
+            ),
+          );
+        state.readinessWaiters.clear();
+        failPendingQuestion(
+          state,
+          "channel_closed",
+          "Supervisor channel closed before the pending question settled.",
+          false,
+        );
+        for (const acknowledgement of state.epochAcknowledgements.values())
+          Deferred.doneUnsafe(
+            acknowledgement.firstAcknowledgement,
+            Effect.fail(
+              channelError(
+                "set assignment epoch",
+                "channel_closed",
+                "Supervisor channel closed before epoch acknowledgement.",
+              ),
+            ),
+          );
+        state.epochAcknowledgements.clear();
+        for (const peer of state.peers.values()) Queue.endUnsafe(peer.assignments);
+        state.peers.clear();
+        yield* Queue.shutdown(state.events);
+        yield* Scope.close(state.scope, Exit.void);
+        yield* removePrivateState(state.stateDirectory, state.connectionConfigPath).pipe(
+          Effect.mapError(() =>
             channelError(
-              "await helper readiness",
-              "supervisor_helper_unavailable",
-              "The private supervisor channel closed before a live helper became ready.",
+              "cleanup",
+              "cleanup_failed",
+              "Supervisor private state cleanup could not be confirmed.",
             ),
           ),
         );
-      state.readinessWaiters.clear();
-      failPendingQuestion(
-        state,
-        "channel_closed",
-        "The private supervisor channel closed before the pending question settled.",
-      );
-      Queue.endUnsafe(state.events);
-      for (const peer of state.peers) {
-        sendAuthenticated(state, peer, { type: "closed" });
-        closePeer(state, peer);
-      }
-      return Effect.gen(function* () {
-        yield* closeServerEffect(state.server);
-        yield* Effect.tryPromise({
-          try: () => removePrivateState(state.stateDirectory, state.connectionConfigPath),
-          catch: () =>
-            channelError(
-              "close",
-              "channel_close_failed",
-              "Private supervisor transport closed, but its bounded state cleanup was not confirmed.",
-            ),
-        });
       }).pipe(Effect.onExit((exit) => Deferred.done(state.cleanupDone, exit).pipe(Effect.asVoid)));
     }),
   );
-
-const closeNodeChannel = (state: NodeChannelState): Promise<void> =>
-  Effect.runPromise(closeNodeChannelEffect(state));
 
 const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
-): Effect.Effect<NodeChannelState, SupervisorChannelError, Scope.Scope> =>
+): Effect.Effect<NodeChannelState, SupervisorChannelError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      const scope = yield* Effect.scope;
       let stateDirectory: string | undefined;
       let connectionConfigPath: string | undefined;
+      let internalScope: Scope.Closeable | undefined;
       let state: NodeChannelState | undefined;
-      const token = Redacted.make(SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")), {
-        label: "Supervisor auth token",
-      });
-      const server = createServer();
+      let ownsStateDirectory = false;
       const requestedAuthTimeout = options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS;
       const authTimeoutMillis = Number.isFinite(requestedAuthTimeout)
         ? Math.max(1, Math.min(60_000, Math.floor(requestedAuthTimeout)))
         : AUTH_TIMEOUT_MILLIS;
-      server.on("error", () => {
-        if (state) void closeNodeChannel(state).catch(() => undefined);
-      });
-      server.on("connection", (socket) => {
-        if (!state) {
-          socket.destroy();
-          return;
+
+      const cleanupPartial = Effect.gen(function* () {
+        if (state)
+          return yield* closeNodeChannelEffect(state).pipe(Effect.catchCause(() => Effect.void));
+        if (internalScope)
+          yield* Scope.close(internalScope, Exit.void).pipe(Effect.catchCause(() => Effect.void));
+        if (ownsStateDirectory && stateDirectory && connectionConfigPath)
+          yield* removePrivateState(stateDirectory, connectionConfigPath).pipe(Effect.ignore);
+        else if (ownsStateDirectory && stateDirectory) {
+          const directory = stateDirectory;
+          yield* privateStateOperation("remove-partial-channel-state", () =>
+            fs.rmdir(directory),
+          ).pipe(Effect.ignore);
         }
-        acceptSocket(state, socket, scope, authTimeoutMillis);
       });
 
-      const cleanupPartial = Effect.suspend(() => {
-        if (state) return closeNodeChannelEffect(state).pipe(Effect.catchCause(() => Effect.void));
-        const directory = stateDirectory;
-        const configPath = connectionConfigPath;
-        return Effect.gen(function* () {
-          yield* closeServerEffect(server).pipe(Effect.catchCause(() => Effect.void));
-          if (directory && configPath)
-            yield* Effect.promise(() =>
-              removePrivateState(directory, configPath).catch(() => undefined),
-            );
-          else if (directory)
-            yield* Effect.promise(() => fs.rmdir(directory).catch(() => undefined));
+      return yield* Effect.gen(function* () {
+        const prepared = yield* restore(
+          prepareStateDirectory(
+            options.agentDirectory,
+            runId,
+            (candidate) => {
+              stateDirectory = candidate.stateDirectory;
+              connectionConfigPath = candidate.connectionConfigPath;
+            },
+            () => {
+              ownsStateDirectory = true;
+            },
+          ).pipe(
+            Effect.mapError(() =>
+              channelError(
+                "open channel",
+                "channel_open_failed",
+                "Unable to prepare private supervisor state.",
+              ),
+            ),
+          ),
+        );
+        stateDirectory = prepared.stateDirectory;
+        connectionConfigPath = prepared.connectionConfigPath;
+        internalScope = yield* Scope.make();
+        const baseServer = yield* restore(
+          NodeSocketServer.make({ host: LOOPBACK_HOST, port: 0, exclusive: true }).pipe(
+            Scope.provide(internalScope),
+            Effect.mapError(() =>
+              channelError("listen", "listen_failed", "The supervisor listener failed to start."),
+            ),
+          ),
+        );
+        if (baseServer.address._tag !== "TcpAddress")
+          return yield* channelError(
+            "listen",
+            "invalid_listener_address",
+            "The supervisor listener address is invalid.",
+          );
+        const metadata = makeMetadata(
+          runId,
+          baseServer.address.port,
+          stateDirectory,
+          connectionConfigPath,
+        );
+        const token = Redacted.make(
+          SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")),
+        );
+        state = {
+          runId,
+          scope: internalScope,
+          peers: new Map(),
+          events,
+          metadata,
+          stateDirectory,
+          connectionConfigPath,
+          token,
+          assignmentEpochs: new Set(),
+          questionEpochs: new Set(),
+          reports: new Map(),
+          epochAcknowledgements: new Map(),
+          readinessWaiters: new Set(),
+          pendingAssignmentEpoch: undefined,
+          currentAssignmentEpoch: 0,
+          nextReportSequence: 1,
+          pendingQuestion: undefined,
+          cleanupStarted: false,
+          cleanupDone: Deferred.makeUnsafe<void, SupervisorChannelError>(),
+          closed: false,
+        };
+        const serialization = RpcSerialization.makeNdjson({
+          maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
         });
-      });
-
-      return yield* restore(
-        Effect.gen(function* () {
-          const prepared = yield* Effect.tryPromise({
-            try: (signal) =>
-              prepareStateDirectory(options.agentDirectory, runId, signal, (candidate) => {
-                stateDirectory = candidate.stateDirectory;
-                connectionConfigPath = candidate.connectionConfigPath;
-              }),
-            catch: () =>
-              channelError(
-                "open",
-                "channel_open_failed",
-                "Unable to create the private loopback supervisor channel.",
-              ),
-          });
-          stateDirectory = prepared.stateDirectory;
-          connectionConfigPath = prepared.connectionConfigPath;
-          const port = yield* listenEffect(server);
-          const config = {
-            version: SUPERVISOR_CHANNEL_VERSION,
-            runId,
-            host: LOOPBACK_HOST,
-            port,
-            token: Redacted.value(token),
-          };
-          if (!exactConfig(config))
-            return yield* channelError(
-              "open",
-              "channel_open_failed",
-              "Unable to create the private loopback supervisor channel.",
-            );
-          yield* Effect.tryPromise({
-            try: () => writePrivateConfig(connectionConfigPath!, config),
-            catch: () =>
-              channelError(
-                "open",
-                "channel_open_failed",
-                "Unable to create the private loopback supervisor channel.",
-              ),
-          });
-          const metadata = makeMetadata(runId, port, stateDirectory, connectionConfigPath);
-          state = {
-            runId,
-            server,
-            peers: new Set(),
-            events,
-            metadata,
-            stateDirectory,
-            connectionConfigPath,
-            token,
-            assignmentEpochs: new Set(),
-            questionEpochs: new Set(),
-            reports: new Map(),
-            epochAcknowledgements: new Map(),
-            readinessWaiters: new Set(),
-            pendingAssignmentEpoch: undefined,
-            currentAssignmentEpoch: 0,
-            nextReportSequence: 1,
-            pendingQuestion: undefined,
-            cleanupStarted: false,
-            cleanupDone: Deferred.makeUnsafe<void, SupervisorChannelError>(),
-            closed: false,
-          };
-          if (options.beforeAcquireComplete)
-            yield* Effect.tryPromise({
+        const protocol = yield* makeSupervisorRpcServerProtocol({
+          server: baseServer,
+          authTimeoutMillis,
+          maxConnections: MAX_CONNECTIONS,
+          openSessionTag: SupervisorOpenSessionRpc._tag,
+          onDisconnect: (clientId) => {
+            if (state) removePeer(state, clientId);
+          },
+        }).pipe(
+          Effect.provideService(RpcSerialization.RpcSerialization, serialization),
+          Scope.provide(internalScope),
+        );
+        const handlers = yield* makeRpcHandlers(state);
+        yield* RpcServer.make(SupervisorRpcGroup, {
+          concurrency: MAX_ACTIVE_RPC_REQUESTS,
+          disableTracing: true,
+        }).pipe(
+          Effect.provide(handlers),
+          Effect.provideService(RpcServer.Protocol, protocol),
+          Effect.forkScoped,
+          Scope.provide(internalScope),
+        );
+        const config = SupervisorChannelConfigSchema.make({
+          version: SUPERVISOR_CHANNEL_VERSION,
+          runId,
+          host: LOOPBACK_HOST,
+          port: metadata.port,
+          token: Redacted.value(token),
+        });
+        if (options.beforeConfigCommit)
+          yield* Effect.promise(() => options.beforeConfigCommit!(metadata));
+        yield* Effect.tryPromise({
+          try: () => writePrivateConfig(connectionConfigPath!, config),
+          catch: () =>
+            channelError(
+              "write channel config",
+              "config_write_failed",
+              "Unable to publish private supervisor configuration.",
+            ),
+        });
+        // Deliver interruption only after the config writer has settled, while acquisition still
+        // owns failure cleanup for the listener, token document, and private state directory.
+        yield* restore(Effect.void);
+        if (options.beforeAcquireComplete)
+          yield* restore(
+            Effect.tryPromise({
               try: () => options.beforeAcquireComplete!(metadata),
               catch: () =>
                 channelError(
-                  "open",
+                  "open channel",
                   "channel_open_failed",
-                  "Unable to create the private loopback supervisor channel.",
+                  "Unable to complete supervisor channel acquisition.",
                 ),
-            });
-          return state;
-        }).pipe(
-          Effect.mapError(() =>
-            channelError(
-              "open",
-              "channel_open_failed",
-              "Unable to create the private loopback supervisor channel.",
-            ),
-          ),
-          Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : cleanupPartial)),
-        ),
-      );
+            }),
+          );
+        return state;
+      }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : cleanupPartial)));
     }),
   );
 
@@ -1168,9 +1009,9 @@ export const makeSupervisorChannel = (
     Effect.gen(function* () {
       if (!isSupervisorRunId(request.runId))
         return yield* channelError(
-          "open",
+          "open channel",
           "invalid_run_id",
-          "Private supervisor channel run identity is invalid or exceeds its bound.",
+          "Supervisor channel run identity is invalid.",
         );
       const runId: SupervisorRunId = request.runId;
       const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
@@ -1181,31 +1022,27 @@ export const makeSupervisorChannel = (
       );
       const close = closeNodeChannelEffect(state);
 
-      const awaitReady = Effect.suspend(() => {
+      const awaitReady: Effect.Effect<void, SupervisorChannelError> = Effect.suspend(() => {
         if (state.closed)
           return Effect.fail(
-            channelError(
-              "await helper readiness",
-              "supervisor_helper_unavailable",
-              "The private supervisor channel is closed.",
-            ),
+            channelError("await ready", "channel_closed", "Supervisor channel is closed."),
           );
-        if (liveAuthenticatedPeers(state).length > 0) return Effect.void;
-        // This thunk runs synchronously, so no handshake can interleave between the peer check
-        // above and waiter installation; only a new live handshake completes this waiter.
+        if (hasReadyPeer(state)) return Effect.void;
         const waiter = Deferred.makeUnsafe<void, SupervisorChannelError>();
         state.readinessWaiters.add(waiter);
         return Deferred.await(waiter).pipe(
           Effect.timeoutOption(REPLY_TIMEOUT),
           Effect.ensuring(Effect.sync(() => void state.readinessWaiters.delete(waiter))),
-          Effect.flatMap((ready) =>
-            Option.isSome(ready) && liveAuthenticatedPeers(state).length > 0
-              ? Effect.void
+          Effect.flatMap((outcome) =>
+            Option.isSome(outcome)
+              ? hasReadyPeer(state)
+                ? Effect.void
+                : awaitReady
               : Effect.fail(
                   channelError(
-                    "await helper readiness",
+                    "await ready",
                     "supervisor_helper_unavailable",
-                    "No live authenticated packaged supervisor helper became ready in time.",
+                    "No authenticated supervisor helper became ready.",
                   ),
                 ),
           ),
@@ -1214,85 +1051,98 @@ export const makeSupervisorChannel = (
 
       const setAssignmentEpoch: SupervisorChannelHandle["setAssignmentEpoch"] = (epoch) =>
         Effect.gen(function* () {
-          const peers = liveAuthenticatedPeers(state);
           if (
             state.closed ||
             !Number.isSafeInteger(epoch) ||
             epoch <= state.currentAssignmentEpoch ||
-            state.pendingAssignmentEpoch !== undefined ||
-            state.assignmentEpochs.size >= MAX_TRACKED_ASSIGNMENTS
+            state.assignmentEpochs.size >= MAX_TRACKED_ASSIGNMENTS ||
+            state.pendingAssignmentEpoch !== undefined
           )
             return yield* channelError(
               "set assignment epoch",
               "invalid_assignment_epoch",
-              "Supervisor assignment epoch must be positive, monotonic, singular, and within the channel bound.",
+              "Assignment epoch cannot advance in the current channel state.",
             );
+          const peers = [...state.peers.values()].filter((peer) => peer.watching);
           if (peers.length === 0)
             return yield* channelError(
               "set assignment epoch",
               "supervisor_helper_unavailable",
-              "Assignment epoch cannot advance without a live authenticated supervisor helper.",
+              "Assignment epoch cannot advance without an authenticated helper.",
             );
           const firstAcknowledgement = Deferred.makeUnsafe<void, SupervisorChannelError>();
           state.pendingAssignmentEpoch = epoch;
-          const updates = peers.map((peer) => {
-            const id = SupervisorChannelIdSchema.make(`epoch-${randomBytes(16).toString("hex")}`);
-            const deferred = Deferred.makeUnsafe<void, SupervisorChannelError>();
-            state.epochAcknowledgements.set(id, {
-              epoch,
-              peer,
-              deferred,
-              firstAcknowledgement,
-            });
-            void peer
-              .send(
-                authenticatedServerMessage(state, {
-                  type: "assignment_epoch",
-                  id,
+          return yield* Effect.gen(function* () {
+            let delivered = 0;
+            for (const peer of peers) {
+              const updateId = SupervisorChannelIdSchema.make(
+                `epoch-${randomBytes(16).toString("hex")}`,
+              );
+              state.epochAcknowledgements.set(updateId, {
+                epoch,
+                peerId: peer.clientId,
+                firstAcknowledgement,
+              });
+              if (
+                Queue.offerUnsafe(peer.assignments, {
+                  updateId,
                   assignmentEpoch: epoch,
-                }),
-              )
-              .catch(() => closePeer(state, peer));
-            return { id, deferred };
-          });
-          const acknowledged = yield* Deferred.await(firstAcknowledgement).pipe(
-            Effect.timeoutOption(REPLY_TIMEOUT),
-            Effect.ensuring(
+                })
+              ) {
+                delivered += 1;
+              } else {
+                state.epochAcknowledgements.delete(updateId);
+                peer.guard.close();
+              }
+            }
+            if (delivered === 0)
+              return yield* channelError(
+                "set assignment epoch",
+                "supervisor_helper_unavailable",
+                "No authenticated helper accepted the assignment update.",
+              );
+            const outcome = yield* Deferred.await(firstAcknowledgement).pipe(
+              Effect.timeoutOption(REPLY_TIMEOUT),
+            );
+            if (Option.isNone(outcome))
+              return yield* channelError(
+                "set assignment epoch",
+                "assignment_epoch_outcome_uncertain",
+                "Assignment epoch acknowledgement timed out.",
+              );
+          }).pipe(
+            Effect.onExit((exit) =>
               Effect.sync(() => {
-                for (const update of updates) state.epochAcknowledgements.delete(update.id);
-                if (state.pendingAssignmentEpoch === epoch)
-                  state.pendingAssignmentEpoch = undefined;
+                state.pendingAssignmentEpoch = undefined;
+                if (Exit.isSuccess(exit)) return;
+                for (const [id, acknowledgement] of state.epochAcknowledgements)
+                  if (acknowledgement.firstAcknowledgement === firstAcknowledgement)
+                    state.epochAcknowledgements.delete(id);
               }),
             ),
           );
-          if (Option.isNone(acknowledged))
-            return yield* channelError(
-              "set assignment epoch",
-              "assignment_epoch_outcome_uncertain",
-              "Assignment epoch was sent but no live authenticated helper acknowledged it within the bound; the task was not issued.",
-            );
         });
 
       const acceptedReportForEpoch: SupervisorChannelHandle["acceptedReportForEpoch"] = (epoch) =>
-        Effect.suspend(() =>
-          state.closed ||
-          !Number.isSafeInteger(epoch) ||
-          epoch <= 0 ||
-          !state.assignmentEpochs.has(epoch)
-            ? Effect.fail(
-                channelError(
-                  "query accepted report",
-                  "report_epoch_ownership_mismatch",
-                  "Accepted-report evidence requires an assignment epoch owned by this open channel.",
-                ),
-              )
-            : Effect.succeed(
-                [...state.reports.values()].find((report) => report.epoch === epoch)?.report,
+        Effect.suspend(() => {
+          if (
+            state.closed ||
+            !Number.isSafeInteger(epoch) ||
+            epoch < 1 ||
+            !state.assignmentEpochs.has(epoch)
+          )
+            return Effect.fail(
+              channelError(
+                "read report evidence",
+                "invalid_assignment_epoch",
+                "Report evidence epoch is invalid.",
               ),
-        );
-
-      const hasAcceptedReport: SupervisorChannelHandle["hasAcceptedReport"] = (epoch) =>
-        acceptedReportForEpoch(epoch).pipe(Effect.map((report) => report !== undefined));
+            );
+          const reports = [...state.reports.values()]
+            .filter((entry) => entry.epoch === epoch)
+            .sort((left, right) => left.sequence - right.sequence);
+          return Effect.succeed(reports[0]?.report);
+        });
 
       const reply: SupervisorChannelHandle["reply"] = (requestId, message) =>
         Effect.gen(function* () {
@@ -1302,104 +1152,61 @@ export const makeSupervisorChannel = (
             !pending ||
             pending.requestId !== requestId ||
             pending.epoch !== state.currentAssignmentEpoch ||
-            pending.replyStarted ||
-            !validSupervisorReply(message)
+            pending.replyStarted
           )
             return yield* channelError(
               "reply",
               "question_ownership_mismatch",
-              "No current, exact, replyable supervisor question matched this request.",
+              "No exact pending supervisor question owns this reply.",
+            );
+          if (!validSupervisorReply(message))
+            return yield* channelError(
+              "reply",
+              "invalid_reply",
+              "Supervisor reply must be non-empty and bounded.",
             );
           pending.replyStarted = true;
-          yield* Effect.tryPromise({
-            try: () =>
-              pending.peer.send(
-                authenticatedServerMessage(state, {
-                  type: "question_reply",
-                  id: pending.requestId,
-                  message,
-                }),
-              ),
-            catch: (error) => {
-              // Only a pre-write rejection proves nothing reached the transport; release
-              // the question for a later retry instead of leaving it installed but
-              // permanently unrepliable.
-              if (
-                error &&
-                hasObjectRuntimeType(error) &&
-                "_tag" in error &&
-                error._tag === "PeerSendNotAttemptedError"
-              ) {
-                if (state.pendingQuestion === pending && !pending.peer.socket.destroyed) {
-                  pending.replyStarted = false;
-                  const oversized = "reason" in error && error.reason === "oversized";
-                  return channelError(
-                    "reply",
-                    oversized ? "reply_too_large" : "reply_send_failed",
-                    oversized
-                      ? "The parent reply was too large; the question remains open for a shorter reply."
-                      : "The parent reply was not sent; the question remains open for retry.",
-                  );
-                }
-                return pending.peer.socket.destroyed
-                  ? channelError(
-                      "reply",
-                      "question_transport_closed",
-                      "The supervisor helper transport closed before the reply was sent; the question was cancelled.",
-                    )
-                  : channelError(
-                      "reply",
-                      "question_ownership_mismatch",
-                      "The pending question changed before the reply could be sent.",
-                    );
-              }
-              // A write-callback failure may race bytes already handed to the OS socket,
-              // so delivery is genuinely uncertain and the reply must not be retried.
-              return channelError(
-                "reply",
-                "reply_outcome_uncertain",
-                "The exact parent reply may have been delivered despite the send failure; it will not be retried automatically.",
-              );
-            },
-          });
+          Deferred.doneUnsafe(
+            pending.response,
+            Effect.succeed({ questionId: pending.requestId, message: message.trim() }),
+          );
           const acknowledged = yield* Deferred.await(pending.acknowledgement).pipe(
             Effect.timeoutOption(REPLY_TIMEOUT),
           );
           if (Option.isNone(acknowledged)) {
             if (state.pendingQuestion === pending)
-              cancelPendingQuestion(
+              failPendingQuestion(
                 state,
                 "reply_outcome_uncertain",
-                "The exact parent reply was sent but not acknowledged; the question was closed without retry.",
+                "Parent reply acknowledgement timed out.",
+                false,
               );
             return yield* channelError(
               "reply",
               "reply_outcome_uncertain",
-              "The exact parent reply was sent but not acknowledged; it will not be retried automatically.",
+              "Parent reply delivery could not be confirmed.",
             );
           }
         });
 
       const cancelPending = (reason?: string): void => {
-        if (!state.pendingQuestion) return;
-        const trimmedReason = reason?.trim();
+        const trimmed = reason?.trim();
         cancelPendingQuestion(
           state,
           "question_cancelled",
-          trimmedReason
-            ? `The pending supervisor question was cancelled by its owning adapter: ${trimmedReason}`
-            : "The pending supervisor question was cancelled.",
+          trimmed ? trimmed.slice(0, 512) : "The pending supervisor question was cancelled.",
         );
       };
 
       return {
-        runId,
+        runId: state.metadata.runId,
         metadata: state.metadata,
-        events,
+        events: state.events,
         awaitReady,
         setAssignmentEpoch,
-        hasAcceptedReport,
         acceptedReportForEpoch,
+        hasAcceptedReport: (epoch) =>
+          acceptedReportForEpoch(epoch).pipe(Effect.map((report) => report !== undefined)),
         reply,
         cancelPending,
         close,

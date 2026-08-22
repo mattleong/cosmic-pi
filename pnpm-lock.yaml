@@ -515,9 +515,15 @@ importers:
 
   packages/pi-subagents:
     dependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(ioredis@5.11.1)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.108
+      jiti:
+        specifier: 2.7.0
+        version: 2.7.0
       pi-better-openai:
         specifier: workspace:*
         version: link:../pi-better-openai

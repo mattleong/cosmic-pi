@@ -17,6 +17,7 @@ import {
   type SupervisorToolArgumentsByName,
 } from "../src/boundary/pi-supervisor-bridge-client.ts";
 import { makeSupervisorChannel } from "../src/boundary/supervisor-channel.ts";
+import { MAX_PARENT_MESSAGE_CHARS } from "../src/run/limits.ts";
 
 const directories: string[] = [];
 const openFixture = fileURLToPath(
@@ -129,6 +130,83 @@ describe("packaged delegated-Pi supervisor bridge", () => {
             text: "Complete report",
           });
           expect(yield* Fiber.join(reportCall)).toContain("Final report accepted");
+        }),
+      ),
+    );
+  });
+
+  it("preserves the maximum parent reply through the MCP bridge envelope", async () => {
+    const directory = await fs.mkdtemp(join(tmpdir(), "pi-subagents-pi-bridge-max-reply-"));
+    directories.push(directory);
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* makeSupervisorChannel({ agentDirectory: directory }).open({
+            runId: "agent-pi-max-reply",
+          });
+          const client = yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath);
+          yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
+          yield* channel.awaitReady;
+          yield* channel.setAssignmentEpoch(1);
+
+          const question = yield* Effect.tryPromise(() =>
+            client.call("supervisor_question", { message: "Return the maximum reply" }),
+          ).pipe(Effect.forkScoped);
+          const questionEvent = yield* Queue.take(channel.events);
+          if (questionEvent.type !== "supervisor_contact")
+            return yield* Effect.die("missing maximum-reply question");
+          const reply = "x".repeat(MAX_PARENT_MESSAGE_CHARS);
+          yield* channel.reply(questionEvent.requestId, reply);
+          const delivered = yield* Fiber.join(question);
+          expect(delivered).toBe(`Parent reply: ${reply}`);
+        }),
+      ),
+    );
+  });
+
+  it("propagates question cancellation without failing the bridge session", async () => {
+    const directory = await fs.mkdtemp(join(tmpdir(), "pi-subagents-pi-bridge-cancel-"));
+    directories.push(directory);
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* makeSupervisorChannel({ agentDirectory: directory }).open({
+            runId: "agent-pi-cancel",
+          });
+          const client = yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath);
+          yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
+          yield* channel.awaitReady;
+          yield* channel.setAssignmentEpoch(1);
+
+          const controller = new AbortController();
+          const question = client.call(
+            "supervisor_question",
+            { message: "Cancel this exact question" },
+            controller.signal,
+          );
+          const questionEvent = yield* Queue.take(channel.events);
+          expect(questionEvent).toMatchObject({
+            type: "supervisor_contact",
+            kind: "question",
+            assignmentEpoch: 1,
+          });
+          controller.abort();
+          yield* Effect.tryPromise(() => question).pipe(Effect.flip);
+          expect(yield* Queue.take(channel.events)).toMatchObject({
+            type: "supervisor_question_cancelled",
+            assignmentEpoch: 1,
+          });
+
+          expect(
+            yield* Effect.tryPromise(() =>
+              client.call("supervisor_progress", { message: "Bridge remains live" }),
+            ),
+          ).toContain("Progress delivered");
+          expect(yield* Queue.take(channel.events)).toMatchObject({
+            type: "supervisor_contact",
+            kind: "progress",
+            message: "Bridge remains live",
+          });
         }),
       ),
     );

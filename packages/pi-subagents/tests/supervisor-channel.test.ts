@@ -4,11 +4,11 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import * as Predicate from "effect/Predicate";
+import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { hasObjectRuntimeType, runtimeTypeName } from "pi-cosmic-core";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { connect, type Socket } from "node:net";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
@@ -16,19 +16,25 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import {
+  RpcClient as EffectRpcClient,
+  RpcClientError,
+  RpcSerialization,
+} from "effect/unstable/rpc";
+import { Socket as EffectSocket } from "effect/unstable/socket";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   makeSupervisorChannel,
-  PeerSendNotAttemptedError,
   type SupervisorChannelHandle,
   type SupervisorChannelLayerOptions,
 } from "../src/boundary/supervisor-channel.ts";
 import {
-  authenticateSupervisorServerPayload,
-  SUPERVISOR_CHANNEL_VERSION,
   SupervisorAuthTokenSchema,
-  SupervisorRunIdSchema,
-  type SupervisorServerPayload,
+  SupervisorChannelIdSchema,
+  type SupervisorChannelConfig,
+  SupervisorDeliveryIdSchema,
+  SupervisorRpcGroup,
 } from "../src/supervisor/protocol.ts";
 
 type JsonRpcValue = string | number | boolean | null | JsonRpcValue[] | JsonRpcObject;
@@ -194,114 +200,66 @@ const waitForExit = (child: ChildProcessWithoutNullStreams) =>
     ),
   );
 
-interface RawChannelClient {
-  readonly socket: Socket;
-  readonly send: (value: JsonRpcObject) => void;
-  readonly request: <Request extends JsonRpcObject & { readonly id: string }>(
-    value: Request,
-  ) => Promise<JsonRpcValue>;
-  readonly next: (predicate: (value: JsonRpcValue) => boolean) => Promise<JsonRpcValue>;
+type DirectSupervisorClient = EffectRpcClient.FromGroup<
+  typeof SupervisorRpcGroup,
+  RpcClientError.RpcClientError
+>;
+
+interface DirectRpcChannel {
+  readonly scope: Scope.Closeable;
+  readonly client: DirectSupervisorClient;
+  readonly auth: SupervisorChannelConfig;
+  readonly close: () => Promise<void>;
 }
 
-const connectRawChannel = async (handle: SupervisorChannelHandle): Promise<RawChannelClient> => {
-  const socket = connect({ host: handle.metadata.host, port: handle.metadata.port });
-  await withTimeout(
-    new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.once("error", reject);
-    }),
+const connectDirectRpc = async (
+  handle: SupervisorChannelHandle,
+  auth: SupervisorChannelConfig,
+): Promise<DirectRpcChannel> => {
+  const scope = await Effect.runPromise(Scope.make());
+  const socket = await Effect.runPromise(
+    NodeSocket.makeNet({ host: handle.metadata.host, port: handle.metadata.port }).pipe(
+      Scope.provide(scope),
+    ),
   );
-  let buffer = "";
-  const messages: JsonRpcValue[] = [];
-  const pending = new Map<string, (value: JsonRpcValue) => void>();
-  const waiters: Array<{
-    readonly predicate: (value: JsonRpcValue) => boolean;
-    readonly resolve: (value: JsonRpcValue) => void;
-  }> = [];
-  socket.on("data", (chunk) => {
-    buffer += chunk.toString("utf8");
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
-      const value = JSON.parse(buffer.slice(0, newline)) as JsonRpcValue;
-      buffer = buffer.slice(newline + 1);
-      messages.push(value);
-      if (value && hasObjectRuntimeType(value) && "id" in value && Predicate.isString(value.id)) {
-        pending.get(value.id)?.(value);
-        pending.delete(value.id);
-      }
-      for (let index = waiters.length - 1; index >= 0; index -= 1) {
-        const waiter = waiters[index];
-        if (!waiter?.predicate(value)) continue;
-        waiters.splice(index, 1);
-        waiter.resolve(value);
-      }
-      newline = buffer.indexOf("\n");
-    }
+  const serialization = RpcSerialization.makeNdjson({
+    maxBufferSize: 512 * 1024,
   });
-  const send = (value: JsonRpcObject) => {
-    socket.write(`${JSON.stringify(value)}\n`);
+  const protocol = await Effect.runPromise(
+    EffectRpcClient.makeProtocolSocket().pipe(
+      Effect.provideService(RpcSerialization.RpcSerialization, serialization),
+      Effect.provideService(EffectSocket.Socket, socket),
+      Scope.provide(scope),
+    ),
+  );
+  const client = await Effect.runPromise(
+    EffectRpcClient.make(SupervisorRpcGroup).pipe(
+      Effect.provideService(EffectRpcClient.Protocol, protocol),
+      Scope.provide(scope),
+    ),
+  );
+  return {
+    scope,
+    client,
+    auth,
+    close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
   };
-  const request = <Request extends JsonRpcObject & { readonly id: string }>(value: Request) => {
-    const response = new Promise<JsonRpcValue>((resolve) => pending.set(value.id, resolve));
-    send(value);
-    return withTimeout(response);
-  };
-  const next = (predicate: (value: JsonRpcValue) => boolean) => {
-    const existing = messages.find(predicate);
-    return existing
-      ? Promise.resolve(existing)
-      : withTimeout(new Promise<JsonRpcValue>((resolve) => waiters.push({ predicate, resolve })));
-  };
-  return { socket, send, request, next };
 };
 
+const nextAssignment = (channel: DirectRpcChannel) =>
+  Effect.runPromise(Stream.runHead(channel.client.SupervisorWatchAssignments(channel.auth))).then(
+    (update) => Option.getOrThrow(update),
+  );
+
 // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
-const connectionConfig = async (handle: SupervisorChannelHandle) =>
-  JSON.parse(await readFile(handle.metadata.connectionConfigPath, "utf8")) as {
-    readonly version: 1;
-    readonly runId: string;
-    readonly host: "127.0.0.1";
-    readonly port: number;
-    readonly token: string;
-  };
+const connectionConfig = async (
+  handle: SupervisorChannelHandle,
+): Promise<SupervisorChannelConfig> =>
+  JSON.parse(
+    await readFile(handle.metadata.connectionConfigPath, "utf8"),
+  ) as SupervisorChannelConfig;
 
 describe("private supervisor channel", () => {
-  it("discriminates pre-write peer send failures from write-callback failures", () => {
-    const unsent = new PeerSendNotAttemptedError({ reason: "oversized" });
-    expect(unsent._tag).toBe("PeerSendNotAttemptedError");
-    expect(unsent.reason).toBe("oversized");
-    expect(unsent instanceof PeerSendNotAttemptedError).toBe(true);
-    // A write-callback failure may race bytes already handed to the OS socket, so it is
-    // deliberately NOT classified as unsent.
-    expect(new Error("write after end") instanceof PeerSendNotAttemptedError).toBe(false);
-  });
-
-  it("constructs authenticated server messages with reserved fields authoritative", () => {
-    expect(Option.isSome(SupervisorAuthTokenSchema.makeOption("a".repeat(64)))).toBe(true);
-    expect(Option.isNone(SupervisorAuthTokenSchema.makeOption("short"))).toBe(true);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const authenticated = authenticateSupervisorServerPayload(
-      {
-        version: SUPERVISOR_CHANNEL_VERSION,
-        runId: SupervisorRunIdSchema.make("authoritative-run"),
-        token: SupervisorAuthTokenSchema.make("a".repeat(64)),
-      },
-      {
-        type: "closed",
-        version: 999,
-        runId: "forged-run",
-        token: "b".repeat(64),
-      } as SupervisorServerPayload,
-    );
-    expect(authenticated).toMatchObject({
-      version: SUPERVISOR_CHANNEL_VERSION,
-      runId: "authoritative-run",
-      token: "a".repeat(64),
-      type: "closed",
-    });
-  });
-
   it("rejects invalid run identities, relative state roots, and symlink state roots", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-subagents-supervisor-paths-"));
     temporaryDirectories.push(root);
@@ -394,6 +352,52 @@ describe("private supervisor channel", () => {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   });
 
+  it("waits for private config publication to settle before interrupted cleanup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-subagents-supervisor-config-commit-"));
+    temporaryDirectories.push(root);
+    const agentDirectory = join(root, "agent-home");
+    await mkdir(agentDirectory, { mode: 0o700 });
+    const scope = await Effect.runPromise(Scope.make());
+    let entered!: () => void;
+    const commitEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let complete!: () => void;
+    const commitGate = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    let metadata: SupervisorChannelHandle["metadata"] | undefined;
+    const channel = makeSupervisorChannel({
+      agentDirectory,
+      beforeConfigCommit: (acquired) => {
+        metadata = acquired;
+        entered();
+        return commitGate;
+      },
+    });
+    const abort = new AbortController();
+    let settled = false;
+    const opening = Effect.runPromise(
+      channel
+        .open({ runId: "agent-supervisor-config-commit" })
+        .pipe(Effect.provideService(Scope.Scope, scope)),
+      { signal: abort.signal },
+    ).finally(() => {
+      settled = true;
+    });
+
+    await withTimeout(commitEntered);
+    abort.abort();
+    await wait(20);
+    expect(settled).toBe(false);
+    complete();
+    await expect(withTimeout(opening)).rejects.toBeDefined();
+    const acquired = metadata;
+    if (!acquired) throw new Error("config commit metadata was not captured");
+    await expect(stat(acquired.stateDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
   it("closes an unauthenticated peer at the scoped authentication deadline", async () => {
     const opened = await openChannel("agent-supervisor-auth-deadline", {
       authTimeoutMillis: 10,
@@ -413,13 +417,29 @@ describe("private supervisor channel", () => {
     await Effect.runPromise(Scope.close(opened.scope, Exit.void));
   });
 
+  it("closes malformed private RPC frames before authentication", async () => {
+    const opened = await openChannel("agent-supervisor-malformed-rpc");
+    const socket = connect({
+      host: opened.handle.metadata.host,
+      port: opened.handle.metadata.port,
+    });
+    const closed = new Promise<void>((resolve) => {
+      socket.once("close", () => resolve());
+      socket.once("error", () => resolve());
+    });
+    socket.write("{not-effect-rpc}\n");
+    await withTimeout(closed);
+    expect(socket.destroyed).toBe(true);
+    await Effect.runPromise(Scope.close(opened.scope, Exit.void));
+  });
+
   it("spawns the helper and keeps blocked questions concurrent, correlated, cancellable, and epoch-safe", async () => {
     const opened = await openChannel();
     const { handle, scope, projectDirectory } = opened;
 
     const config = await connectionConfig(handle);
     expect(config).toMatchObject({
-      version: 1,
+      version: 2,
       runId: handle.runId,
       host: "127.0.0.1",
       port: handle.metadata.port,
@@ -557,6 +577,23 @@ describe("private supervisor channel", () => {
     });
     expect(conflict).toMatchObject({ error: { code: -32000 } });
 
+    const laterReport = await toolCall(rpc, "report-later", "supervisor_submit_report", {
+      delivery_id: "delivery-later",
+      report: "Later evidence for the same assignment.",
+    });
+    expect(laterReport).toMatchObject({
+      result: { content: [{ text: expect.stringContaining("sequence 2") }] },
+    });
+    expect(await takeEvent(handle)).toMatchObject({
+      type: "report",
+      sequence: 2,
+      deliveryId: "delivery-later",
+    });
+    expect(await Effect.runPromise(handle.acceptedReportForEpoch(1))).toMatchObject({
+      sequence: 1,
+      deliveryId: "delivery-main",
+    });
+
     await Effect.runPromise(handle.setAssignmentEpoch(2));
     const crossEpochRetry = await toolCall(rpc, "report-cross-epoch", "supervisor_submit_report", {
       delivery_id: "delivery-main",
@@ -593,54 +630,32 @@ describe("private supervisor channel", () => {
       await rpc.request({ jsonrpc: "2.0", id: "ping-after-cancel", method: "ping", params: {} }),
     ).toMatchObject({ result: {} });
 
-    const raw = await connectRawChannel(handle);
-    await raw.request({
-      version: 1,
-      runId: handle.runId,
-      token: config.token,
-      type: "hello",
-      id: "raw-hello",
-    });
-    await raw.request({
-      version: 1,
-      runId: handle.runId,
-      token: config.token,
-      type: "progress",
-      id: "late-progress",
-      assignmentEpoch: 1,
-      message: "Late event from assignment one.",
-    });
+    const direct = await connectDirectRpc(handle, config);
+    await Effect.runPromise(direct.client.SupervisorOpenSession(config));
+    await Effect.runPromise(
+      direct.client.SupervisorProgress({
+        ...config,
+        requestId: SupervisorChannelIdSchema.make("late-progress"),
+        assignmentEpoch: 1,
+        message: "Late event from assignment one.",
+      }),
+    );
     expect(await takeEvent(handle)).toMatchObject({
       type: "supervisor_contact",
       requestId: "late-progress",
       assignmentEpoch: 1,
       message: "Late event from assignment one.",
     });
-    raw.socket.destroy();
+    await direct.close();
 
-    const authenticatedThenForged = await connectRawChannel(handle);
-    await authenticatedThenForged.request({
-      version: 1,
-      runId: handle.runId,
-      token: config.token,
-      type: "hello",
-      id: "auth-then-forge",
+    const forged = await connectDirectRpc(handle, {
+      ...config,
+      token: SupervisorAuthTokenSchema.make("0".repeat(64)),
     });
-    const forgedClosed = new Promise<void>((resolve) =>
-      authenticatedThenForged.socket.once("close", resolve),
-    );
-    authenticatedThenForged.socket.write(
-      `${JSON.stringify({
-        version: 1,
-        runId: handle.runId,
-        token: "0".repeat(64),
-        type: "progress",
-        id: "forged-progress",
-        assignmentEpoch: 2,
-        message: "Must not be accepted.",
-      })}\n`,
-    );
-    await withTimeout(forgedClosed);
+    await expect(
+      Effect.runPromise(forged.client.SupervisorOpenSession(forged.auth)),
+    ).rejects.toBeDefined();
+    await forged.close();
     expect(Option.isNone(await Effect.runPromise(Queue.poll(handle.events)))).toBe(true);
 
     const many = Array.from({ length: 12 }, (_, index) =>
@@ -667,41 +682,72 @@ describe("private supervisor channel", () => {
     const opened = await openChannel("agent-supervisor-delayed-ack");
     const { handle, scope } = opened;
     const config = await connectionConfig(handle);
-    const raw = await connectRawChannel(handle);
-    await raw.request({
-      version: 1,
-      runId: handle.runId,
-      token: config.token,
-      type: "hello",
-      id: "delayed-hello",
-    });
+    const direct = await connectDirectRpc(handle, config);
+    await Effect.runPromise(direct.client.SupervisorOpenSession(config));
+    const updatePromise = nextAssignment(direct);
     await Effect.runPromise(handle.awaitReady);
     let settled = false;
     const setting = Effect.runPromise(handle.setAssignmentEpoch(1)).finally(() => {
       settled = true;
     });
-    const update = await raw.next((value) =>
-      Boolean(
-        value &&
-        hasObjectRuntimeType(value) &&
-        "type" in value &&
-        value.type === "assignment_epoch",
-      ),
-    );
+    const update = await updatePromise;
     await wait(50);
     expect(settled).toBe(false);
-    if (!update || !hasObjectRuntimeType(update) || !("id" in update))
-      throw new Error("missing assignment update");
-    raw.send({
-      version: 1,
-      runId: handle.runId,
-      token: config.token,
-      type: "assignment_epoch_ack",
-      id: update.id,
-      assignmentEpoch: 1,
-    });
+    await Effect.runPromise(
+      direct.client.SupervisorAcknowledgeAssignment({
+        ...config,
+        updateId: update.updateId,
+        assignmentEpoch: update.assignmentEpoch,
+      }),
+    );
     await setting;
-    raw.socket.destroy();
+    await direct.close();
+    await Effect.runPromise(handle.close);
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
+  it("does not let an authenticated non-watching peer block healthy assignment delivery", async () => {
+    const { handle, scope } = await openChannel("agent-supervisor-stalled-peer");
+    const config = await connectionConfig(handle);
+    const idle = await connectDirectRpc(handle, config);
+    await Effect.runPromise(idle.client.SupervisorOpenSession(config));
+    expect(
+      Option.isNone(
+        await Effect.runPromise(handle.awaitReady.pipe(Effect.timeoutOption("20 millis"))),
+      ),
+    ).toBe(true);
+
+    const healthy = spawnHelper(handle);
+    await initialize(healthy.rpc);
+    await Effect.runPromise(handle.awaitReady);
+    for (let epoch = 1; epoch <= 6; epoch += 1)
+      await Effect.runPromise(handle.setAssignmentEpoch(epoch));
+    expect(
+      await healthy.rpc.request({ jsonrpc: "2.0", id: "healthy-ping", method: "ping", params: {} }),
+    ).toMatchObject({ result: {} });
+
+    await idle.close();
+    await Effect.runPromise(handle.close);
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
+  it("keeps every healthy helper alive after the first assignment acknowledgement", async () => {
+    const { handle, scope } = await openChannel("agent-supervisor-multiple-helpers");
+    const first = spawnHelper(handle);
+    const second = spawnHelper(handle);
+    await Promise.all([initialize(first.rpc), initialize(second.rpc)]);
+    await Effect.runPromise(handle.awaitReady);
+    await Effect.runPromise(handle.setAssignmentEpoch(1));
+    await wait(50);
+    const pings = await Promise.all([
+      first.rpc.request({ jsonrpc: "2.0", id: "first-ping", method: "ping", params: {} }),
+      second.rpc.request({ jsonrpc: "2.0", id: "second-ping", method: "ping", params: {} }),
+    ]);
+    expect(pings).toEqual([
+      expect.objectContaining({ result: {} }),
+      expect.objectContaining({ result: {} }),
+    ]);
+
     await Effect.runPromise(handle.close);
     await Effect.runPromise(Scope.close(scope, Exit.void));
   });
@@ -709,25 +755,13 @@ describe("private supervisor channel", () => {
   it("fails epoch advancement immediately when every acknowledging helper disconnects", async () => {
     const { handle, scope } = await openChannel("agent-supervisor-epoch-disconnect");
     const config = await connectionConfig(handle);
-    const raw = await connectRawChannel(handle);
-    await raw.request({
-      version: 1,
-      runId: handle.runId,
-      token: config.token,
-      type: "hello",
-      id: "epoch-disconnect-hello",
-    });
+    const direct = await connectDirectRpc(handle, config);
+    await Effect.runPromise(direct.client.SupervisorOpenSession(config));
+    const updatePromise = nextAssignment(direct);
     await Effect.runPromise(handle.awaitReady);
     const setting = Effect.runPromise(handle.setAssignmentEpoch(1));
-    await raw.next((value) =>
-      Boolean(
-        value &&
-        hasObjectRuntimeType(value) &&
-        "type" in value &&
-        value.type === "assignment_epoch",
-      ),
-    );
-    raw.socket.destroy();
+    await updatePromise;
+    await direct.close();
     await expect(withTimeout(setting, 500)).rejects.toMatchObject({
       code: "assignment_epoch_outcome_uncertain",
     });
@@ -830,41 +864,33 @@ describe("private supervisor channel", () => {
     await Effect.runPromise(handle.setAssignmentEpoch(1));
     await Effect.runPromise(handle.setAssignmentEpoch(2));
 
-    const raw = await connectRawChannel(handle);
-    await raw.request({
-      version: 1,
-      runId: handle.runId,
-      token: config.token,
-      type: "hello",
-      id: "raw-saturation-hello",
-    });
+    const direct = await connectDirectRpc(handle, config);
+    await Effect.runPromise(direct.client.SupervisorOpenSession(config));
     for (let index = 0; index < 62; index += 1)
-      await raw.request({
-        version: 1,
-        runId: handle.runId,
-        token: config.token,
-        type: "progress",
-        id: `saturation-progress-${index}`,
-        assignmentEpoch: 2,
-        message: `Progress ${index}`,
-      });
+      await Effect.runPromise(
+        direct.client.SupervisorProgress({
+          ...config,
+          requestId: SupervisorChannelIdSchema.make(`saturation-progress-${index}`),
+          assignmentEpoch: 2,
+          message: `Progress ${index}`,
+        }),
+      );
 
     const pending = toolCall(rpc, "saturated-question", "supervisor_question", {
       message: "Question at the reserved boundary?",
     });
     await wait(10);
-    expect(
-      await raw.request({
-        version: 1,
-        runId: handle.runId,
-        token: config.token,
-        type: "report",
-        id: "older-report-at-saturation",
-        assignmentEpoch: 1,
-        deliveryId: "older-report-at-saturation",
-        text: "Older assignment report.",
-      }),
-    ).toMatchObject({ type: "error", code: "event_queue_full" });
+    await expect(
+      Effect.runPromise(
+        direct.client.SupervisorReport({
+          ...config,
+          requestId: SupervisorChannelIdSchema.make("older-report-at-saturation"),
+          assignmentEpoch: 1,
+          deliveryId: SupervisorDeliveryIdSchema.make("older-report-at-saturation"),
+          text: "Older assignment report.",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "event_queue_full" });
     rpc.send({
       jsonrpc: "2.0",
       method: "notifications/cancelled",
@@ -891,7 +917,7 @@ describe("private supervisor channel", () => {
       requestId: saturatedQuestion.requestId,
     });
 
-    raw.socket.destroy();
+    await direct.close();
     await Effect.runPromise(handle.close);
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }, 20_000);
@@ -901,18 +927,14 @@ describe("private supervisor channel", () => {
     const { handle, scope } = opened;
     const config = await connectionConfig(handle);
 
-    const bad = await connectRawChannel(handle);
-    const badClosed = new Promise<void>((resolve) => bad.socket.once("close", resolve));
-    bad.socket.write(
-      `${JSON.stringify({
-        version: 1,
-        runId: handle.runId,
-        token: "0".repeat(64),
-        type: "hello",
-        id: "bad-auth",
-      })}\n`,
-    );
-    await withTimeout(badClosed);
+    const bad = await connectDirectRpc(handle, {
+      ...config,
+      token: SupervisorAuthTokenSchema.make("0".repeat(64)),
+    });
+    await expect(
+      Effect.runPromise(bad.client.SupervisorOpenSession(bad.auth)),
+    ).rejects.toBeDefined();
+    await bad.close();
     expect(await Effect.runPromise(Queue.poll(handle.events))).toEqual(Option.none());
     expect(handle.metadata.host).toBe("127.0.0.1");
     expect(config.host).toBe("127.0.0.1");

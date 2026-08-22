@@ -1,10 +1,10 @@
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import type { BackendEvent } from "../backend/model.ts";
 import { MAX_BACKEND_REPORT_ID_CHARS, MAX_BACKEND_REPORT_TEXT_CHARS } from "../backend/model.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
 
-export const SUPERVISOR_CHANNEL_VERSION = 1 as const;
+export const SUPERVISOR_CHANNEL_VERSION = 2 as const;
 export const SUPERVISOR_MCP_SERVER_NAME = "pi_subagents_supervisor" as const;
 export const MAX_SUPERVISOR_MESSAGE_CHARS = 16 * 1024;
 export const MAX_SUPERVISOR_CHANNEL_ID_CHARS = 128;
@@ -34,41 +34,37 @@ export type SupervisorChannelId = Schema.Schema.Type<typeof SupervisorChannelIdS
 
 export const isSupervisorRunId = (value: string): value is SupervisorRunId =>
   RUN_ID_PATTERN.test(value);
+
 export const SupervisorAuthTokenSchema = Schema.String.check(
   Schema.isMinLength(SUPERVISOR_AUTH_TOKEN_CHARS),
   Schema.isMaxLength(SUPERVISOR_AUTH_TOKEN_CHARS),
   Schema.isPattern(TOKEN_PATTERN),
 ).pipe(Schema.brand("SupervisorAuthToken"));
 export type SupervisorAuthToken = Schema.Schema.Type<typeof SupervisorAuthTokenSchema>;
+
 export const SupervisorDeliveryIdSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_BACKEND_REPORT_ID_CHARS),
   Schema.isPattern(DELIVERY_ID_PATTERN),
 ).pipe(Schema.brand("SupervisorDeliveryId"));
 export type SupervisorDeliveryId = Schema.Schema.Type<typeof SupervisorDeliveryIdSchema>;
-const AssignmentEpochSchema = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0));
-const MessageSchema = Schema.String.check(
+
+export const SupervisorAssignmentEpochSchema = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isGreaterThan(0),
+);
+export const SupervisorMessageSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_SUPERVISOR_MESSAGE_CHARS),
 );
-const ReportTextSchema = Schema.String.check(
+export const SupervisorReplySchema = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS),
+);
+export const SupervisorReportTextSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_BACKEND_REPORT_TEXT_CHARS),
 );
-
-const AuthenticatedFields = {
-  version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
-  runId: SupervisorRunIdSchema,
-  token: SupervisorAuthTokenSchema,
-};
-const RequestFields = {
-  ...AuthenticatedFields,
-  id: SupervisorChannelIdSchema,
-};
-const AssignmentFields = {
-  ...RequestFields,
-  assignmentEpoch: AssignmentEpochSchema,
-};
 
 export const SupervisorChannelConfigSchema = Schema.Struct({
   version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
@@ -81,131 +77,121 @@ export const SupervisorChannelConfigSchema = Schema.Struct({
   ),
   token: SupervisorAuthTokenSchema,
 });
-
 export type SupervisorChannelConfig = Schema.Schema.Type<typeof SupervisorChannelConfigSchema>;
 
-export interface SupervisorServerAuthentication {
-  readonly version: typeof SUPERVISOR_CHANNEL_VERSION;
-  readonly runId: SupervisorRunId;
-  readonly token: SupervisorAuthToken;
-}
-
-export type SupervisorServerPayload =
-  | {
-      readonly type: "hello_ok";
-      readonly id: SupervisorChannelId;
-      readonly assignmentEpoch: number;
-    }
-  | {
-      readonly type: "assignment_epoch";
-      readonly id: SupervisorChannelId;
-      readonly assignmentEpoch: number;
-    }
-  | {
-      readonly type: "result";
-      readonly id: SupervisorChannelId;
-      readonly accepted: true;
-      readonly duplicate?: boolean | undefined;
-      readonly sequence?: number | undefined;
-      readonly assignmentEpoch?: number | undefined;
-    }
-  | {
-      readonly type: "error";
-      readonly id: SupervisorChannelId | null;
-      readonly code: string;
-      readonly message: string;
-    }
-  | {
-      readonly type: "question_reply";
-      readonly id: SupervisorChannelId;
-      readonly message: string;
-    }
-  | { readonly type: "cancelled"; readonly id: SupervisorChannelId }
-  | {
-      readonly type: "cancel_result";
-      readonly id: SupervisorChannelId;
-      readonly targetRequestId: SupervisorChannelId;
-      readonly cancelled: boolean;
-    }
-  | { readonly type: "closed" };
-
-export type SupervisorServerMessage = SupervisorServerPayload & SupervisorServerAuthentication;
-
-export const authenticateSupervisorServerPayload = <Payload extends SupervisorServerPayload>(
-  authentication: SupervisorServerAuthentication,
-  payload: Payload,
-): Payload & SupervisorServerAuthentication => ({
-  ...payload,
-  version: authentication.version,
-  runId: authentication.runId,
-  token: authentication.token,
-});
-
-const HelloSchema = Schema.Struct({
-  ...RequestFields,
-  type: Schema.Literal("hello"),
-});
-const ProgressSchema = Schema.Struct({
-  ...AssignmentFields,
-  type: Schema.Literal("progress"),
-  message: MessageSchema,
-});
-const WarningSchema = Schema.Struct({
-  ...AssignmentFields,
-  type: Schema.Literal("warning"),
-  message: MessageSchema,
-});
-const QuestionSchema = Schema.Struct({
-  ...AssignmentFields,
-  type: Schema.Literal("question"),
-  message: MessageSchema,
-});
-const ReportSchema = Schema.Struct({
-  ...AssignmentFields,
-  type: Schema.Literal("report"),
-  deliveryId: SupervisorDeliveryIdSchema,
-  text: ReportTextSchema,
-});
-const CancelSchema = Schema.Struct({
-  ...RequestFields,
-  type: Schema.Literal("cancel"),
-  targetRequestId: SupervisorChannelIdSchema,
-});
-const QuestionReplyAckSchema = Schema.Struct({
-  ...RequestFields,
-  type: Schema.Literal("question_reply_ack"),
-  questionId: SupervisorChannelIdSchema,
-});
-const AssignmentEpochAckSchema = Schema.Struct({
-  ...RequestFields,
-  type: Schema.Literal("assignment_epoch_ack"),
-  assignmentEpoch: AssignmentEpochSchema,
-});
-
-export const SupervisorClientMessageSchema = Schema.Union([
-  HelloSchema,
-  ProgressSchema,
-  WarningSchema,
-  QuestionSchema,
-  ReportSchema,
-  CancelSchema,
-  QuestionReplyAckSchema,
-  AssignmentEpochAckSchema,
-]);
-
-export type SupervisorClientMessage = Schema.Schema.Type<typeof SupervisorClientMessageSchema>;
-
-const exactDecodeOptions = { onExcessProperty: "error" as const };
-
-export const decodeSupervisorClientMessage = <ValueInput>(
-  value: ValueInput,
-): SupervisorClientMessage | undefined => {
-  const decoded = Schema.decodeUnknownOption(
-    SupervisorClientMessageSchema,
-    exactDecodeOptions,
-  )(value);
-  return Option.isSome(decoded) ? decoded.value : undefined;
+const AuthenticatedPayload = {
+  version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
+  runId: SupervisorRunIdSchema,
+  token: SupervisorAuthTokenSchema,
 };
+const AssignedPayload = {
+  ...AuthenticatedPayload,
+  assignmentEpoch: SupervisorAssignmentEpochSchema,
+};
+
+export class SupervisorRpcFailure extends Schema.TaggedError<SupervisorRpcFailure>()(
+  "SupervisorRpcFailure",
+  {
+    code: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+    message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  },
+) {}
+
+export const SupervisorOpenSessionRpc = Rpc.make("SupervisorOpenSession", {
+  payload: AuthenticatedPayload,
+  success: Schema.Struct({
+    assignmentEpoch: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  }),
+  error: SupervisorRpcFailure,
+});
+
+export const SupervisorWatchAssignmentsRpc = Rpc.make("SupervisorWatchAssignments", {
+  payload: AuthenticatedPayload,
+  success: Schema.Struct({
+    updateId: SupervisorChannelIdSchema,
+    assignmentEpoch: SupervisorAssignmentEpochSchema,
+  }),
+  error: SupervisorRpcFailure,
+  stream: true,
+});
+
+export const SupervisorAcknowledgeAssignmentRpc = Rpc.make("SupervisorAcknowledgeAssignment", {
+  payload: {
+    ...AssignedPayload,
+    updateId: SupervisorChannelIdSchema,
+  },
+  error: SupervisorRpcFailure,
+});
+
+export const SupervisorProgressRpc = Rpc.make("SupervisorProgress", {
+  payload: {
+    ...AssignedPayload,
+    requestId: SupervisorChannelIdSchema,
+    message: SupervisorMessageSchema,
+  },
+  success: Schema.String,
+  error: SupervisorRpcFailure,
+});
+
+export const SupervisorWarningRpc = Rpc.make("SupervisorWarning", {
+  payload: {
+    ...AssignedPayload,
+    requestId: SupervisorChannelIdSchema,
+    message: SupervisorMessageSchema,
+  },
+  success: Schema.String,
+  error: SupervisorRpcFailure,
+});
+
+export const SupervisorQuestionRpc = Rpc.make("SupervisorQuestion", {
+  payload: {
+    ...AssignedPayload,
+    requestId: SupervisorChannelIdSchema,
+    message: SupervisorMessageSchema,
+  },
+  success: Schema.Struct({
+    questionId: SupervisorChannelIdSchema,
+    message: SupervisorReplySchema,
+  }),
+  error: SupervisorRpcFailure,
+});
+
+export const SupervisorAcknowledgeQuestionReplyRpc = Rpc.make(
+  "SupervisorAcknowledgeQuestionReply",
+  {
+    payload: {
+      ...AssignedPayload,
+      questionId: SupervisorChannelIdSchema,
+    },
+    error: SupervisorRpcFailure,
+  },
+);
+
+export const SupervisorReportRpc = Rpc.make("SupervisorReport", {
+  payload: {
+    ...AssignedPayload,
+    requestId: SupervisorChannelIdSchema,
+    deliveryId: SupervisorDeliveryIdSchema,
+    text: SupervisorReportTextSchema,
+  },
+  success: Schema.Struct({
+    duplicate: Schema.Boolean,
+    sequence: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+    assignmentEpoch: SupervisorAssignmentEpochSchema,
+  }),
+  error: SupervisorRpcFailure,
+});
+
+export const SupervisorRpcGroup = RpcGroup.make(
+  SupervisorOpenSessionRpc,
+  SupervisorWatchAssignmentsRpc,
+  SupervisorAcknowledgeAssignmentRpc,
+  SupervisorProgressRpc,
+  SupervisorWarningRpc,
+  SupervisorQuestionRpc,
+  SupervisorAcknowledgeQuestionReplyRpc,
+  SupervisorReportRpc,
+);
 
 export type SupervisorEvent = Extract<
   BackendEvent,

@@ -19,6 +19,7 @@ import {
 } from "./rpc-session.ts";
 
 const MAX_LINE_BYTES = 512 * 1024;
+const MAX_BRIDGE_TEXT_CHARS = 64 * 1024 + 128;
 const MAX_PENDING = 16;
 const WRITE_QUEUE_CAPACITY = 32;
 const CALL_TIMEOUT_MILLIS = 15_000;
@@ -103,7 +104,7 @@ const BridgeInitializeResult = Schema.Struct({
 });
 const BridgeTextContent = Schema.Struct({
   type: Schema.Literal("text"),
-  text: Schema.String.check(Schema.isMaxLength(64 * 1024)),
+  text: Schema.String.check(Schema.isMaxLength(MAX_BRIDGE_TEXT_CHARS)),
 });
 const BridgeToolResult = Schema.Struct({
   content: Schema.Array(BridgeTextContent),

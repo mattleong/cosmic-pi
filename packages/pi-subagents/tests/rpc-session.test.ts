@@ -85,6 +85,34 @@ describe("NDJSON RPC session", () => {
     );
   });
 
+  it("isolates a timed-out call without failing concurrent or later calls", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* makeNdjsonRpcSession<string>(options("delay-first"));
+          const slow = yield* session
+            .call("slow", `${JSON.stringify({ id: "slow", value: "late" })}\n`, 25)
+            .pipe(Effect.result, Effect.forkScoped);
+          expect(
+            yield* session.call(
+              "fast",
+              `${JSON.stringify({ id: "fast", value: "concurrent" })}\n`,
+              1_000,
+            ),
+          ).toBe("concurrent");
+          expect((yield* Fiber.join(slow))._tag).toBe("Failure");
+          expect(
+            yield* session.call(
+              "later",
+              `${JSON.stringify({ id: "later", value: "still-live" })}\n`,
+              1_000,
+            ),
+          ).toBe("still-live");
+        }),
+      ),
+    );
+  });
+
   it("force-cleans a failed session whose child ignores direct SIGTERM", async () => {
     const directory = await fs.mkdtemp(join(tmpdir(), "pi-subagents-rpc-session-"));
     directories.push(directory);

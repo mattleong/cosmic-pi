@@ -181,6 +181,23 @@ try {
   `;
   run(process.execPath, ["--input-type=module", "--eval", sourceImportSmoke], temporaryDirectory);
 
+  const packedSupervisorHelper = join(
+    temporaryDirectory,
+    "node_modules/pi-subagents/src/boundary/supervisor-mcp-helper.mjs",
+  );
+  const helperSmoke = spawnSync(process.execPath, [packedSupervisorHelper], {
+    cwd: temporaryDirectory,
+    encoding: "utf8",
+  });
+  if (
+    helperSmoke.status !== 2 ||
+    !helperSmoke.stderr.includes("Private supervisor helper configuration argument is invalid.")
+  ) {
+    throw new Error(
+      `Packed supervisor helper did not execute its typed source through the package launcher:\n${helperSmoke.stdout ?? ""}${helperSmoke.stderr ?? ""}`,
+    );
+  }
+
   // Pi and the clean-consumer smoke load TypeScript source directly through Jiti.
   for (const source of [
     "pi-cosmic-core/index.ts",
