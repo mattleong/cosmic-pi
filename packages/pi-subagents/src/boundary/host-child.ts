@@ -6,19 +6,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-import { Type } from "typebox";
-import {
-  MAX_PARENT_MESSAGE_CHARS,
-  MAX_PROTOCOL_ID_CHARS,
-  MAX_TOOL_OUTPUT_CHARS,
-} from "../run/limits.ts";
-import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
-import { isSubagentChildProcess } from "./host-environment.ts";
 
-const ProtocolIdSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS));
-const ParentMessageSchema = Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS));
+import { Type } from "typebox";
+import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
+import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
+import { isSubagentChildProcess } from "./host-environment.ts";
+import {
+  openLocalPiChildIpc,
+  ParentContactError,
+  type LocalPiChildIpcChannel,
+} from "./local-pi-ipc.ts";
 const PARENT_REPLY_PREFIX = "Parent replied: ";
 const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
@@ -35,38 +33,8 @@ const consumeRuntimeApiCredentials = (environment: NodeJS.ProcessEnv) => {
   return { apiKey, provider };
 };
 
-interface ContactParentEnvelope {
-  readonly channel: "pi-subagents";
-  readonly type: "contact_parent";
-  readonly requestId: string;
-  readonly kind: "progress" | "question" | "warning";
-  readonly message: string;
-}
-
-interface ContactCancelEnvelope {
-  readonly channel: "pi-subagents";
-  readonly type: "contact_cancel";
-  readonly requestId: string;
-}
-
-export class ParentContactError extends Schema.TaggedError<ParentContactError>()(
-  "ParentContactError",
-  { message: Schema.String },
-) {}
-
-const ParentControlSchema = Schema.Union([
-  Schema.Struct({
-    channel: Schema.Literal("pi-subagents"),
-    type: Schema.Literal("parent_reply"),
-    requestId: ProtocolIdSchema,
-    message: ParentMessageSchema,
-  }),
-  Schema.Struct({
-    channel: Schema.Literal("pi-subagents"),
-    type: Schema.Literal("peer_notice"),
-    message: ParentMessageSchema,
-  }),
-]);
+type ContactParentEnvelope = Extract<LocalPiContact, { readonly type: "contact_parent" }>;
+type ContactCancelEnvelope = Extract<LocalPiContact, { readonly type: "contact_cancel" }>;
 
 const ContactParentParameters = Type.Object(
   {
@@ -80,33 +48,6 @@ const ContactParentParameters = Type.Object(
   { additionalProperties: false },
 );
 
-type IpcMessage = Parameters<NonNullable<typeof process.send>>[0];
-
-const sendIpcEffect = (message: IpcMessage): Effect.Effect<void, ParentContactError> =>
-  Effect.callback((resume) => {
-    if (!process.send || !process.connected) {
-      resume(
-        Effect.fail(
-          new ParentContactError({
-            message: "The parent subagent supervisor is unavailable.",
-          }),
-        ),
-      );
-      return;
-    }
-    process.send(message, (error) => {
-      resume(
-        error
-          ? Effect.fail(
-              new ParentContactError({
-                message: "Unable to contact the parent subagent supervisor.",
-              }),
-            )
-          : Effect.void,
-      );
-    });
-  });
-
 export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (!isSubagentChildProcess()) return;
   pi.registerFlag("pi-subagents-fast-mode", {
@@ -119,11 +60,10 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (runtimeApi.apiKey && runtimeApi.provider)
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
   const pending = new Map<string, Deferred.Deferred<string, ParentContactError>>();
-  let listening = false;
+  const ipc: LocalPiChildIpcChannel = openLocalPiChildIpc();
+  let detachIpc: (() => void) | undefined;
 
-  const onMessage = <RawInput>(raw: RawInput) => {
-    const message = Option.getOrUndefined(Schema.decodeUnknownOption(ParentControlSchema)(raw));
-    if (!message) return;
+  const onControl = (message: LocalPiParentControl) => {
     if (message.type === "parent_reply") {
       const waiter = pending.get(message.requestId);
       if (!waiter) return;
@@ -176,17 +116,13 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", () => {
-    if (listening) return;
-    listening = true;
-    process.on("message", onMessage);
-    process.on("disconnect", rejectPending);
+    if (detachIpc) return;
+    detachIpc = ipc.listen({ onControl, onDisconnect: rejectPending });
   });
 
   pi.on("session_shutdown", () => {
-    if (!listening) return;
-    listening = false;
-    process.off("message", onMessage);
-    process.off("disconnect", rejectPending);
+    detachIpc?.();
+    detachIpc = undefined;
     rejectPending();
   });
 
@@ -207,7 +143,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
         message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),
       };
       if (params.kind !== "question") {
-        return Effect.runPromise(sendIpcEffect(envelope)).then(() => ({
+        return Effect.runPromise(ipc.sendContact(envelope)).then(() => ({
           content: [{ type: "text" as const, text: `Parent received ${params.kind}.` }],
           details: {},
         }));
@@ -217,11 +153,13 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
         Effect.gen(function* () {
           const waiter = Deferred.makeUnsafe<string, ParentContactError>();
           pending.set(requestId, waiter);
-          yield* sendIpcEffect(envelope).pipe(
+          yield* ipc.sendContact(envelope).pipe(
             Effect.catch((error) =>
-              Effect.sync(() => {
-                if (pending.get(requestId) === waiter) pending.delete(requestId);
-              }).pipe(Effect.andThen(() => Effect.fail(error))),
+              error.code === "transport_not_sent"
+                ? Effect.sync(() => {
+                    if (pending.get(requestId) === waiter) pending.delete(requestId);
+                  }).pipe(Effect.andThen(Effect.fail(error)))
+                : Effect.fail(error),
             ),
           );
           return yield* Deferred.await(waiter);
@@ -247,7 +185,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
                     type: "contact_cancel",
                     requestId,
                   };
-                  void Effect.runPromise(sendIpcEffect(cancel).pipe(Effect.ignore));
+                  void Effect.runPromise(ipc.sendContact(cancel).pipe(Effect.ignore));
                 }),
           ),
         ),

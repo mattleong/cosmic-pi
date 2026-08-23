@@ -249,7 +249,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.effect("does not accept RPC lifecycle events from child IPC", () => {
+  it.effect("fails when the IPC boundary rejects a malformed contact event", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
     const layer = serviceLayer({
@@ -258,7 +258,7 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "ipc-boundary" }));
-      fake.controls[0]?.offerIpc({ type: "agent_settled" });
+      fake.controls[0]?.offerProtocolError("Subagent emitted an invalid parent-contact event.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       expect((yield* service.status(run.id)).state).toBe("failed");
     }).pipe(Effect.scoped, provideBuiltLayer(layer));

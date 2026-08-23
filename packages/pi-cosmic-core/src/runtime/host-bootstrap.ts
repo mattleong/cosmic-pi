@@ -16,7 +16,7 @@ export const bestEffortHostBootstrap = <Value>(
   load: (signal: AbortSignal) => PromiseLike<Value>,
 ): Effect.Effect<void> =>
   Effect.tryPromise({
-    // Keep the explicit parameter: RC.108 allocates the interruption signal from function arity.
+    // Keep the explicit parameter: Effect allocates the interruption signal from function arity.
     try: (signal) => load(signal),
     catch: () =>
       new HostBootstrapError({

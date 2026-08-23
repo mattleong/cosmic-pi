@@ -25,8 +25,13 @@ import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT, piToolsForWriteIntent } from "../
 import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
 import type { RuntimeApiKey } from "../run/model.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
+import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
 import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
-import type { ParentReply, PeerNotice, RpcCommand } from "../backend/local-pi-protocol.ts";
+import type {
+  LocalPiContact,
+  LocalPiParentControl,
+  RpcCommand,
+} from "../backend/local-pi-protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../domain/routing.ts";
 
 const { mkdir, rm, rmdir, writeFile } = nodeFsPromises;
@@ -69,7 +74,7 @@ export interface ChildLaunchRequest {
 
 export type ChildWireEvent =
   | { readonly type: "rpc_message"; readonly value: unknown }
-  | { readonly type: "ipc_message"; readonly value: unknown }
+  | { readonly type: "parent_contact"; readonly value: LocalPiContact }
   | { readonly type: "protocol_error"; readonly message: string }
   | {
       readonly type: "exit";
@@ -88,8 +93,8 @@ export interface ChildProcessHandle {
     SubagentProcessError
   >;
   readonly send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>;
-  readonly sendIpc: (
-    message: ParentReply | PeerNotice,
+  readonly sendContactControl: (
+    control: LocalPiParentControl,
   ) => Effect.Effect<void, SubagentProcessError>;
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
 }
@@ -429,8 +434,11 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         spawned = true;
         Deferred.doneUnsafe(ready, Effect.void);
       };
-      const onMessage = <MessageInput>(message: MessageInput) =>
-        offer({ type: "ipc_message", value: message });
+      const ipc = attachLocalPiParentIpc(child, {
+        onContact: (contact) => offer({ type: "parent_contact", value: contact }),
+        onProtocolError: (message) => offer({ type: "protocol_error", message }),
+        onDisconnect: () => {},
+      });
       const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
         if (settled) return;
         settled = true;
@@ -457,7 +465,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         child.stderr?.off("error", onStderrError);
         child.stdin?.off("error", onStdinError);
         child.off("spawn", onSpawn);
-        child.off("message", onMessage);
+        ipc.detach();
         child.off("error", onError);
         child.off("close", onClose);
         child.stdin?.destroy();
@@ -470,7 +478,6 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       child.stderr?.on("error", onStderrError);
       child.stdin?.on("error", onStdinError);
       child.once("spawn", onSpawn);
-      child.on("message", onMessage);
       child.once("error", onError);
       child.once("close", onClose);
       yield* Deferred.await(ready).pipe(Effect.onError(() => Effect.sync(cleanup)));
@@ -534,37 +541,6 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
           }),
           "send RPC command to",
         );
-      const sendIpc = (message: ParentReply | PeerNotice) =>
-        withWriteTimeout(
-          Effect.callback<void, SubagentProcessError>((resume) => {
-            if (!child.connected) {
-              resume(
-                Effect.fail(
-                  processError(
-                    "send IPC message to",
-                    "Subagent IPC is closed.",
-                    "transport_not_sent",
-                  ),
-                ),
-              );
-              return;
-            }
-            try {
-              child.send(message, (error) =>
-                resume(
-                  error
-                    ? Effect.fail(
-                        processError("send IPC message to", error, "transport_outcome_uncertain"),
-                      )
-                    : Effect.void,
-                ),
-              );
-            } catch (error) {
-              resume(Effect.fail(processError("send IPC message to", error, "transport_not_sent")));
-            }
-          }),
-          "send IPC message to",
-        );
       const terminate = (mode: "graceful" | "force") =>
         terminateProcessTreeEffect(child, mode).pipe(
           Effect.mapError((error) => processError("terminate", error)),
@@ -583,7 +559,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         acknowledge: transportRoom.acknowledge,
         awaitExit: Deferred.await(exited),
         send,
-        sendIpc,
+        sendContactControl: ipc.sendControl,
         terminate,
         release,
       };

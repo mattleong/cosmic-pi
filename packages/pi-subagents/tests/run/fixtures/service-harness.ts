@@ -40,7 +40,7 @@ import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "../../../src/run/service.ts";
 
 type RpcWireValue = Extract<ChildWireEvent, { readonly type: "rpc_message" }>["value"];
-type IpcWireValue = Extract<ChildWireEvent, { readonly type: "ipc_message" }>["value"];
+type IpcWireValue = Extract<ChildWireEvent, { readonly type: "parent_contact" }>["value"];
 
 export interface FakeChildControl {
   readonly launch: ChildLaunchRequest;
@@ -58,6 +58,7 @@ export interface FakeChildControl {
   readonly beforeNextResponse: (type: RpcCommand["type"], value: RpcWireValue) => void;
   readonly offer: (value: RpcWireValue) => void;
   readonly offerIpc: (value: IpcWireValue) => void;
+  readonly offerProtocolError: (message: string) => void;
   readonly exit: (exitCode?: number | null) => void;
   readonly failExit: (message: string) => void;
 }
@@ -165,7 +166,9 @@ export function fakeChildLayer(
           const offer = (value: RpcWireValue) =>
             Queue.offerUnsafe(events, { type: "rpc_message", value });
           const offerIpc = (value: IpcWireValue) =>
-            Queue.offerUnsafe(events, { type: "ipc_message", value });
+            Queue.offerUnsafe(events, { type: "parent_contact", value });
+          const offerProtocolError = (message: string) =>
+            Queue.offerUnsafe(events, { type: "protocol_error", message });
           const exit = (exitCode: number | null = 0) => {
             Queue.endUnsafe(events);
             Deferred.doneUnsafe(exited, Effect.succeed({ type: "exit", exitCode, stderr: "" }));
@@ -262,7 +265,7 @@ export function fakeChildLayer(
                       },
                 );
               }),
-            sendIpc: (message) =>
+            sendContactControl: (message) =>
               Effect.gen(function* () {
                 // Model Node child.send handing the envelope to the child before
                 // its acknowledgement callback settles.
@@ -295,6 +298,7 @@ export function fakeChildLayer(
             beforeNextResponse,
             offer,
             offerIpc,
+            offerProtocolError,
             exit,
             failExit,
           });

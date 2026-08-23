@@ -86,6 +86,27 @@ const ContactCancelSchema = Schema.Struct({
   type: Schema.Literal("contact_cancel"),
   requestId: ProtocolIdSchema,
 });
+const ParentReplySchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("parent_reply"),
+  requestId: ProtocolIdSchema,
+  message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
+});
+const PeerNoticeSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("peer_notice"),
+  message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
+});
+export const LocalPiContactSchema = Schema.Union([ContactParentSchema, ContactCancelSchema]);
+export const LocalPiParentControlSchema = Schema.Union([ParentReplySchema, PeerNoticeSchema]);
+export type LocalPiContact = Schema.Schema.Type<typeof LocalPiContactSchema>;
+export type LocalPiParentControl = Schema.Schema.Type<typeof LocalPiParentControlSchema>;
+export type ParentReply = Schema.Schema.Type<typeof ParentReplySchema>;
+export type PeerNotice = Schema.Schema.Type<typeof PeerNoticeSchema>;
+export const decodeLocalPiContactOption = Schema.decodeUnknownOption(LocalPiContactSchema);
+export const decodeLocalPiParentControlOption = Schema.decodeUnknownOption(
+  LocalPiParentControlSchema,
+);
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
 const RpcDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
 export type RpcResponse = Schema.Schema.Type<typeof RpcResponseSchema>;
@@ -102,12 +123,6 @@ export type RpcChildEnvelope =
   | Schema.Schema.Type<typeof ExtensionErrorSchema>
   | Schema.Schema.Type<typeof ExtensionUiRequestSchema>
   | { readonly type: "ignored"; readonly eventType: string };
-
-export const decodeContactParentEnvelope = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(ContactParentSchema)(value);
-
-export const decodeContactCancelEnvelope = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(ContactCancelSchema)(value);
 
 export function decodeRpcEnvelope<ValueInput>(
   value: ValueInput,
@@ -238,16 +253,3 @@ type CorrelatedRpcCommand =
 export type RpcCommand =
   | CorrelatedRpcCommand
   | { readonly type: "extension_ui_response"; readonly id: string; readonly cancelled: true };
-
-export interface PeerNotice {
-  readonly channel: "pi-subagents";
-  readonly type: "peer_notice";
-  readonly message: string;
-}
-
-export interface ParentReply {
-  readonly channel: "pi-subagents";
-  readonly type: "parent_reply";
-  readonly requestId: string;
-  readonly message: string;
-}

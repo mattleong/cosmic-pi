@@ -25,8 +25,6 @@ import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 import {
   assistantText,
   decodeAssistantMessage,
-  decodeContactCancelEnvelope,
-  decodeContactParentEnvelope,
   decodeRpcEnvelope,
   decodeRpcStateData,
   decodeRpcUsageOption,
@@ -154,35 +152,6 @@ const normalizeRpcEvent = <ValueInput>(value: ValueInput, assignmentEpoch: numbe
         type: "protocol_error",
         message: "Subagent emitted an invalid protocol event.",
       }),
-    ),
-  );
-
-const normalizeIpcEvent = <ValueInput>(
-  value: ValueInput,
-  assignmentEpoch: number,
-): Effect.Effect<BackendEvent> =>
-  decodeContactParentEnvelope(value).pipe(
-    Effect.map((envelope) => ({
-      type: "supervisor_contact" as const,
-      assignmentEpoch,
-      requestId: envelope.requestId,
-      kind: envelope.kind,
-      message: envelope.message,
-    })),
-    Effect.catch(() =>
-      decodeContactCancelEnvelope(value).pipe(
-        Effect.map((envelope) => ({
-          type: "supervisor_question_cancelled" as const,
-          assignmentEpoch,
-          requestId: envelope.requestId,
-        })),
-        Effect.catch(() =>
-          Effect.succeed<BackendEvent>({
-            type: "protocol_error",
-            message: "Subagent emitted an invalid parent-contact event.",
-          }),
-        ),
-      ),
     ),
   );
 
@@ -318,11 +287,23 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   const consumeChildEvent = (event: ChildWireEvent): Effect.Effect<void> => {
     if (event.type === "protocol_error")
       return offerEvent(event, { type: "protocol_error", message: event.message });
-    if (event.type === "ipc_message") {
-      const eventAssignmentEpoch = assignmentEpoch;
-      return normalizeIpcEvent(event.value, eventAssignmentEpoch).pipe(
-        Effect.flatMap((normalized) => offerEvent(event, normalized)),
-      );
+    if (event.type === "parent_contact") {
+      const contact = event.value;
+      const normalized: BackendEvent =
+        contact.type === "contact_parent"
+          ? {
+              type: "supervisor_contact",
+              assignmentEpoch,
+              requestId: contact.requestId,
+              kind: contact.kind,
+              message: contact.message,
+            }
+          : {
+              type: "supervisor_question_cancelled",
+              assignmentEpoch,
+              requestId: contact.requestId,
+            };
+      return offerEvent(event, normalized);
     }
     if (event.type === "exit")
       return Effect.sync(() => {
@@ -445,14 +426,14 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     interrupt: rpc({ type: "abort" }).pipe(Effect.asVoid),
     renameDisplay: (name: string) => rpc({ type: "set_session_name", name }).pipe(Effect.asVoid),
     reply: (requestId: string, message: string) =>
-      child.sendIpc({
+      child.sendContactControl({
         channel: "pi-subagents",
         type: "parent_reply",
         requestId,
         message,
       }),
     notifyPeers: (message: string) =>
-      child.sendIpc({ channel: "pi-subagents", type: "peer_notice", message }),
+      child.sendContactControl({ channel: "pi-subagents", type: "peer_notice", message }),
   };
 
   return {
