@@ -18,11 +18,7 @@ import {
 } from "../domain/routing.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
-import {
-  isHarnessCleanupUnconfirmed,
-  readValidatedCodexAuth,
-  safeAgentDirectory,
-} from "./harness-shared.ts";
+import { readValidatedCodexAuth, safeAgentDirectory } from "./harness-shared.ts";
 import {
   approvedCodexApiKey,
   claudeAuthLoggedIn,
@@ -84,41 +80,32 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   options: LocalCliProcessLayerOptions,
   request: LocalCliSpawnRequest,
 ) {
-  const harness = yield* Effect.tryPromise({
-    try: () => prepareLocalCliHarness(options, request),
-    catch: (error) =>
-      processError(
-        "prepare private local CLI harness",
-        error,
-        isHarnessCleanupUnconfirmed(error)
-          ? "harness_cleanup_unconfirmed"
-          : "harness_prepare_failed",
+  // Keep acquisition masked through finalizer registration. Preparation owns a unique private
+  // directory before its final writes, so exposing interruption between return and registration
+  // could abandon credential-bearing state.
+  const harness = yield* Effect.acquireRelease(
+    prepareLocalCliHarness(options, request).pipe(
+      Effect.mapError((error) =>
+        processError(
+          "prepare private local CLI harness",
+          error,
+          error.reason === "cleanup_unconfirmed"
+            ? "harness_cleanup_unconfirmed"
+            : "harness_prepare_failed",
+        ),
       ),
-  });
-  let harnessOwned = true;
-  const releaseHarness = (operation: string) =>
-    Effect.suspend(() => {
-      if (!harnessOwned) return Effect.void;
-      harnessOwned = false;
-      return Effect.tryPromise({
-        try: () => removeLocalCliHarness(harness.directory),
-        catch: (error) => processError(operation, error),
-      }).pipe(Effect.orDie);
-    });
-  return yield* acquireLocalCliTransport({
-    executable: harness.executable,
-    args: harness.args,
-    env: harness.env,
-    cwd: request.launch.cwd,
-    platform: options.platform,
-  }).pipe(
-    Effect.map((transport) => ({
-      ...transport,
-      release: transport.release.pipe(
-        Effect.ensuring(releaseHarness("remove private local CLI harness")),
-      ),
-    })),
-    Effect.onError(() => releaseHarness("remove failed local CLI acquisition harness")),
+    ),
+    (owned) => removeLocalCliHarness(owned.directory).pipe(Effect.orDie),
+  );
+  return yield* Effect.acquireRelease(
+    acquireLocalCliTransport({
+      executable: harness.executable,
+      args: harness.args,
+      env: harness.env,
+      cwd: request.launch.cwd,
+      platform: options.platform,
+    }),
+    (transport) => transport.release.pipe(Effect.orDie),
   );
 });
 
@@ -202,10 +189,13 @@ export const makeLocalCliProcess = (
       const probeEnvironment = sanitizeLocalCliEnvironment(environment, request.runtime);
       let result: ProbeResult;
       if (request.runtime === "codex" && !codexApiKeyFallback) {
-        result = yield* Effect.tryPromise({
-          try: () => runIsolatedCodexAuthProbe(executable, options.agentDirectory, environment),
-          catch: (error) =>
-            isHarnessCleanupUnconfirmed(error)
+        result = yield* runIsolatedCodexAuthProbe(
+          executable,
+          options.agentDirectory,
+          environment,
+        ).pipe(
+          Effect.mapError((error) =>
+            error.reason === "cleanup_unconfirmed"
               ? preflightError(
                   `${request.runtime}_preflight_cleanup_unconfirmed`,
                   `${request.runtime} readiness probe private harness cleanup could not be confirmed; no later candidate will be attempted.`,
@@ -214,7 +204,8 @@ export const makeLocalCliProcess = (
                   `${request.runtime}_preflight_failed`,
                   `Unable to run bounded ${request.runtime} readiness preflight.`,
                 ),
-        });
+          ),
+        );
       } else {
         // The bounded probe is total: it always resolves an outcome record.
         result = yield* runProbeEffect(executable, args, probeEnvironment);
@@ -252,9 +243,9 @@ export const makeLocalCliProcess = (
       return yield* Effect.void;
     }),
   spawn: (request) =>
-    Effect.acquireRelease(acquireLocalCli(options, request), (handle) =>
-      handle.release.pipe(Effect.orDie),
-    ).pipe(Effect.map(({ release: _release, ...handle }) => handle)),
+    acquireLocalCli(options, request).pipe(
+      Effect.map(({ release: _release, ...handle }) => handle),
+    ),
 });
 
 export class LocalCliProcess extends Context.Service<LocalCliProcess, LocalCliProcessContract>()(

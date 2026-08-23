@@ -15,7 +15,7 @@ Cosmic-pi will be rearchitected around Effect v4 prereleases through the release
 2. Pure deterministic code may remain pure. Effect is permitted everywhere, but fake effects are not required around arithmetic, formatting, or other total calculations.
 3. Effect Schema is the data boundary for configuration, persistence, protocol payloads, auth data, and HTTP responses.
 4. Services use `Context.Service`; implementations use explicit Layers; resources are scoped.
-5. A Pi-hosted `ManagedRuntime` is created once per started session and disposed by the Pi lifecycle boundary. `NodeRuntime.runMain` is not used because Pi owns the process.
+5. A Pi-hosted `ManagedRuntime` is created once per started session and disposed by the Pi lifecycle boundary. Pi-hosted extensions do not use `NodeRuntime.runMain` because Pi owns the process. Standalone package executables that own their Node process may use one scoped `NodeRuntime.runMain` entrypoint.
 6. TypeBox or literal JSON Schema remains only where a Pi tool API requires `TSchema`-compatible parameters.
 7. A publishable `pi-cosmic-core` package owns shared services, schemas, runtime boundaries, and test layers.
 8. Breaking changes are allowed when they produce a better Effect-native design. They must be intentional, tested, versioned where relevant, and documented.

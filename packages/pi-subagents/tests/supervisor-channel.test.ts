@@ -3,6 +3,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { hasObjectRuntimeType, runtimeTypeName } from "pi-cosmic-core";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -183,6 +184,10 @@ class RpcClient {
   }
 }
 
+const helperExecutable = fileURLToPath(
+  new URL("../src/boundary/supervisor-mcp-helper.mjs", import.meta.url),
+);
+
 const spawnHelper = (handle: SupervisorChannelHandle) => {
   const child = spawn(
     process.execPath,
@@ -288,6 +293,25 @@ const connectionConfig = (handle: SupervisorChannelHandle): Promise<SupervisorCh
   );
 
 describe("private supervisor channel", () => {
+  effectTest("reports bounded startup failure and exits with code 2", function* () {
+    const child = spawn(process.execPath, [helperExecutable], {
+      env: {},
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    children.push(child);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    expect(yield* step(() => waitForExit(child))).toEqual({ code: 2, signal: null });
+    expect(stdout).toBe("");
+    expect(stderr).toBe("Private supervisor helper configuration argument is invalid.\n");
+  });
+
   effectTest(
     "rejects invalid run identities, relative state roots, and symlink state roots",
     function* () {

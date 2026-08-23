@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect } from "vitest";
 import { makeHerdrCli } from "../src/boundary/herdr-cli.ts";
-import { runProbeEffect } from "../src/boundary/local-cli-harness.ts";
+import { runIsolatedCodexAuthProbe, runProbeEffect } from "../src/boundary/local-cli-harness.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
@@ -15,6 +15,7 @@ const { join } = nodePath;
 const fixture = fileURLToPath(new URL("./fixtures/hanging-probe-fixture.mjs", import.meta.url));
 const directories: string[] = [];
 const ownedPids = new Set<number>();
+const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
 const processAlive = (pid: number): boolean => {
   try {
@@ -104,5 +105,33 @@ describe("probe interruption cleanup", () => {
     yield* step(() => waitForDead(pid));
     expect(processAlive(pid)).toBe(false);
     ownedPids.delete(pid);
+  });
+
+  effectTest("interrupts an isolated Codex probe and removes its private harness", function* () {
+    const test = yield* step(executableFixture);
+    const agentDirectory = join(test.directory, "agent");
+    yield* step(() => fs.mkdir(agentDirectory, { mode: 0o700 }));
+    const fiber = Effect.runFork(
+      runIsolatedCodexAuthProbe(test.executable, agentDirectory, {
+        HOME: test.directory,
+        PATH: inheritedPath(process.env),
+        OPENAI_API_KEY: "fixture-key",
+      }),
+    );
+    const pid = yield* step(() => waitForPid(test.pidPath));
+    ownedPids.add(pid);
+
+    yield* step(() => Effect.runPromise(Fiber.interrupt(fiber)));
+    yield* step(() => waitForDead(pid));
+    expect(processAlive(pid)).toBe(false);
+    ownedPids.delete(pid);
+    const harnessRoot = join(agentDirectory, "subagents", "native-model-catalog-v1");
+    const entries = yield* step(() =>
+      fs.readdir(harnessRoot).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      }),
+    );
+    expect(entries).toEqual([]);
   });
 });

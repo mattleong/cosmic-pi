@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 // The executable MCP edge deliberately owns native stdio and no-follow config reads.
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as FiberMap from "effect/FiberMap";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
+import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { RpcClient, RpcClientError, RpcSerialization } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
@@ -49,6 +49,15 @@ class McpToolCallFailure extends Data.TaggedError("McpToolCallFailure")<{
 class McpWriteFailure extends Data.TaggedError("McpWriteFailure")<{
   readonly reason: "capacity" | "closed" | "size" | "stream";
 }> {}
+
+class HelperStartupFailure extends Data.TaggedError("HelperStartupFailure")<{
+  readonly diagnostic: string;
+}> {
+  override readonly [Runtime.errorExitCode] = 2;
+  override readonly [Runtime.errorReported] = false;
+}
+
+const startupFailure = (diagnostic: string) => new HelperStartupFailure({ diagnostic });
 const SERVER_VERSION = "2.0.0";
 const MAX_CONFIG_BYTES = 4 * 1024;
 const MAX_LINE_BYTES = 512 * 1024;
@@ -331,40 +340,22 @@ const attachLineReader = (
   };
 };
 
-const configPath = configArgument();
-if (!configPath) {
-  fixedDiagnostic("Private supervisor helper configuration argument is invalid.");
-  process.exit(2);
-}
-
-const configExit = await Effect.runPromiseExit(readConfig(configPath));
-if (Exit.isFailure(configExit)) {
-  fixedDiagnostic("Private supervisor helper could not open its bounded channel configuration.");
-  process.exit(2);
-}
-const config: SupervisorChannelConfig = configExit.value;
-
-const rpcScope = await Effect.runPromise(Scope.make());
-const stdout = await Effect.runPromise(
-  makeSerializedWriter(process.stdout).pipe(Scope.provide(rpcScope)),
-);
-const activeCalls = await Effect.runPromise(FiberMap.make<string>().pipe(Scope.provide(rpcScope)));
+let config: SupervisorChannelConfig;
+let stdout: SerializedWriter;
+let activeCalls: FiberMap.FiberMap<string>;
 let assignmentEpoch = 0;
 let channelClosed = false;
 let initialized = false;
+let requestMainShutdown = (): void => {};
 let supervisorClient:
   | RpcClient.FromGroup<typeof SupervisorRpcGroup, RpcClientError.RpcClientError>
   | undefined;
 
-const closeRpcScope = (): void => {
-  void Effect.runPromise(Scope.close(rpcScope, Exit.void).pipe(Effect.ignore));
-};
-
 const failChannel = (): void => {
   if (channelClosed) return;
   channelClosed = true;
-  closeRpcScope();
   process.stdin.destroy();
+  requestMainShutdown();
 };
 
 const sendRpc = <MessageInput>(message: MessageInput): Promise<void> =>
@@ -403,58 +394,6 @@ const runSupervisor = <Success, Error>(
       message: "Supervisor RPC delivery did not settle within its bound.",
     };
   });
-
-const clientOpenExit = await Effect.runPromiseExit(
-  Effect.gen(function* () {
-    const socket = yield* NodeSocket.makeNet({
-      host: config.host,
-      port: config.port,
-      openTimeout: CONNECT_TIMEOUT_MILLIS,
-    });
-    const serialization = RpcSerialization.makeNdjson({
-      maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
-    });
-    const protocol = yield* RpcClient.makeProtocolSocket().pipe(
-      Effect.provideService(RpcSerialization.RpcSerialization, serialization),
-      Effect.provideService(Socket.Socket, socket),
-    );
-    const client = yield* RpcClient.make(SupervisorRpcGroup).pipe(
-      Effect.provideService(RpcClient.Protocol, protocol),
-    );
-    const opened = yield* client
-      .SupervisorOpenSession(authenticatedPayload())
-      .pipe(Effect.timeout(CONNECT_TIMEOUT_MILLIS));
-    return { client, opened } as const;
-  }).pipe(Scope.provide(rpcScope)),
-);
-if (Exit.isFailure(clientOpenExit)) {
-  fixedDiagnostic("Private supervisor helper authentication failed or parent channel closed.");
-  closeRpcScope();
-  process.exit(2);
-}
-const { client, opened } = clientOpenExit.value;
-supervisorClient = client;
-assignmentEpoch = opened.assignmentEpoch;
-Fiber.runIn(
-  Effect.runFork(
-    client.SupervisorWatchAssignments(authenticatedPayload()).pipe(
-      Stream.runForEach((update) =>
-        Effect.gen(function* () {
-          if (update.assignmentEpoch <= assignmentEpoch)
-            return yield* Effect.die(new Error("non-monotonic-assignment-epoch"));
-          assignmentEpoch = update.assignmentEpoch;
-          yield* client.SupervisorAcknowledgeAssignment({
-            ...authenticatedPayload(),
-            assignmentEpoch,
-            updateId: update.updateId,
-          });
-        }),
-      ),
-      Effect.onExit((exit) => (Exit.isFailure(exit) ? Effect.sync(failChannel) : Effect.void)),
-    ),
-  ),
-  rpcScope,
-);
 
 const liveClient = (): RpcClient.FromGroup<
   typeof SupervisorRpcGroup,
@@ -830,9 +769,77 @@ const dispatchMcp = (request: DecodedMcpMessage): void => {
   }
 };
 
-const detachStdin = attachLineReader(
-  process.stdin,
-  (line) => {
+const main = Effect.gen(function* () {
+  const configPath = configArgument();
+  if (!configPath)
+    return yield* startupFailure("Private supervisor helper configuration argument is invalid.");
+  config = yield* readConfig(configPath).pipe(
+    Effect.mapError(() =>
+      startupFailure("Private supervisor helper could not open its bounded channel configuration."),
+    ),
+  );
+  stdout = yield* makeSerializedWriter(process.stdout);
+  activeCalls = yield* FiberMap.make<string>();
+  const done = yield* Deferred.make<void>();
+  requestMainShutdown = () => {
+    Deferred.doneUnsafe(done, Effect.void);
+  };
+
+  const openedClient = yield* Effect.gen(function* () {
+    const socket = yield* NodeSocket.makeNet({
+      host: config.host,
+      port: config.port,
+      openTimeout: CONNECT_TIMEOUT_MILLIS,
+    });
+    const serialization = RpcSerialization.makeNdjson({
+      maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
+    });
+    const protocol = yield* RpcClient.makeProtocolSocket().pipe(
+      Effect.provideService(RpcSerialization.RpcSerialization, serialization),
+      Effect.provideService(Socket.Socket, socket),
+    );
+    const client = yield* RpcClient.make(SupervisorRpcGroup).pipe(
+      Effect.provideService(RpcClient.Protocol, protocol),
+    );
+    const opened = yield* client
+      .SupervisorOpenSession(authenticatedPayload())
+      .pipe(Effect.timeout(CONNECT_TIMEOUT_MILLIS));
+    return { client, opened } as const;
+  }).pipe(
+    Effect.mapError(() =>
+      startupFailure("Private supervisor helper authentication failed or parent channel closed."),
+    ),
+  );
+  const { client, opened } = openedClient;
+  supervisorClient = client;
+  assignmentEpoch = opened.assignmentEpoch;
+  yield* client.SupervisorWatchAssignments(authenticatedPayload()).pipe(
+    Stream.runForEach((update) =>
+      Effect.gen(function* () {
+        if (update.assignmentEpoch <= assignmentEpoch)
+          return yield* Effect.die(new Error("non-monotonic-assignment-epoch"));
+        assignmentEpoch = update.assignmentEpoch;
+        yield* client.SupervisorAcknowledgeAssignment({
+          ...authenticatedPayload(),
+          assignmentEpoch,
+          updateId: update.updateId,
+        });
+      }),
+    ),
+    Effect.onExit((exit) => (Exit.isFailure(exit) ? Effect.sync(failChannel) : Effect.void)),
+    Effect.forkScoped({ startImmediately: true }),
+  );
+
+  let inputClosed = false;
+  let detachStdin = (): void => {};
+  const closeInput = (): void => {
+    if (inputClosed) return;
+    inputClosed = true;
+    detachStdin();
+    stdout.close();
+    requestMainShutdown();
+  };
+  const onLine = (line: string): void => {
     const decoded = Schema.decodeUnknownOption(unknownFromJson)(line);
     if (Option.isNone(decoded)) {
       void rpcError(null, -32700, "Parse error.");
@@ -846,20 +853,34 @@ const detachStdin = attachLineReader(
       return;
     }
     dispatchMcp(request);
-  },
-  () => {
+  };
+  const onInputFailure = (): void => {
     void rpcError(null, -32600, "JSON-RPC input exceeds the bounded line limit.");
     process.stdin.destroy();
-  },
-);
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      detachStdin = attachLineReader(process.stdin, onLine, onInputFailure);
+      process.stdin.once("end", closeInput);
+      process.stdin.once("close", closeInput);
+    }),
+    () =>
+      Effect.sync(() => {
+        detachStdin();
+        process.stdin.off("end", closeInput);
+        process.stdin.off("close", closeInput);
+      }),
+  );
+  // Register last so the writer closes before FiberMap and socket finalizers interrupt calls.
+  yield* Effect.addFinalizer(() => Effect.sync(closeInput));
+  yield* Deferred.await(done);
+});
 
-let inputClosed = false;
-const closeInput = (): void => {
-  if (inputClosed) return;
-  inputClosed = true;
-  detachStdin();
-  stdout.close();
-  closeRpcScope();
-};
-process.stdin.once("end", closeInput);
-process.stdin.once("close", closeInput);
+NodeRuntime.runMain(
+  main.pipe(
+    Effect.scoped,
+    Effect.tapError((error) => Effect.sync(() => fixedDiagnostic(error.diagnostic))),
+    Effect.tapDefect(() => Effect.sync(() => fixedDiagnostic("Private supervisor helper failed."))),
+  ),
+  { disableErrorReporting: true },
+);

@@ -1,8 +1,10 @@
 // Test harness boundary: real Node filesystem and process primitives exercise tool safety.
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { vi } from "vitest";
 import {
   ADVISOR_TOOL_LIMITS,
@@ -10,9 +12,9 @@ import {
   createAdvisorToolsEffect,
 } from "../src/runtime/tools.ts";
 import { provideBuiltLayer } from "pi-cosmic-core";
-import { _readOnlyFileSystemTest } from "../src/boundary/read-only-fs.ts";
+import { _readOnlyFileSystemTest, ReadOnlyFileSystem } from "../src/boundary/read-only-fs.ts";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
-import { standaloneAdvisorExecutor } from "./support/executor.ts";
+import { makeStandaloneAdvisorExecutor, standaloneAdvisorExecutor } from "./support/executor.ts";
 import { nodeChildProcess, nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 
 const { link, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } = nodeFsPromises;
@@ -41,10 +43,8 @@ const tempDir = (prefix: string) =>
     }),
   );
 
-const toolsFor = (root: string) =>
-  createAdvisorToolsEffect(root, standaloneAdvisorExecutor).pipe(
-    provideBuiltLayer(advisorPlatformLayer),
-  );
+const toolsFor = (root: string, executor = standaloneAdvisorExecutor) =>
+  createAdvisorToolsEffect(root, executor).pipe(provideBuiltLayer(advisorPlatformLayer));
 
 const executePromise = <ParamsInput>(
   tools: Effect.Success<ReturnType<typeof toolsFor>>,
@@ -133,17 +133,23 @@ describe("package-owned Advisor tools", () => {
           .then(() => writeFile(join(outside, "outside-only-secret.txt"), "outside")),
       );
       const saved = `${scan}-saved`;
-      _readOnlyFileSystemTest.setDirectoryHooks({
-        beforeOpen: (path) => rename(path, saved).then(() => symlink(outside, path, "dir")),
-        afterRead: (path) => rm(path).then(() => rename(saved, path)),
-      });
-      yield* Effect.ensuring(
-        Effect.gen(function* () {
-          const result = yield* execute(root, "ls", { path: "scan" });
-          expect(resultText(result)).not.toContain("outside-only-secret.txt");
-        }),
-        Effect.sync(() => _readOnlyFileSystemTest.setDirectoryHooks()),
-      );
+      let beforeOpenCalls = 0;
+      let afterReadCalls = 0;
+      const readOnlyFileSystem = ReadOnlyFileSystem.layerWith({
+        beforeOpen: (path) => {
+          beforeOpenCalls += 1;
+          return rename(path, saved).then(() => symlink(outside, path, "dir"));
+        },
+        afterRead: (path) => {
+          afterReadCalls += 1;
+          return rm(path).then(() => rename(saved, path));
+        },
+      }).pipe(Layer.provide(NodePath.layer));
+      const tools = yield* toolsFor(root, makeStandaloneAdvisorExecutor(readOnlyFileSystem));
+      const result = yield* Effect.promise(() => executePromise(tools, "ls", { path: "scan" }));
+      expect(resultText(result)).not.toContain("outside-only-secret.txt");
+      expect(beforeOpenCalls).toBe(1);
+      expect(afterReadCalls).toBe(1);
     }),
   );
 

@@ -97,8 +97,15 @@ const closeResourceBestEffort = (
   close: () => Promise<void>,
 ) => closeResource(operation, path, close).pipe(Effect.ignore);
 
-let beforeDirectoryOpenHook: ((path: string) => void | Promise<void>) | undefined;
-let afterDirectoryReadHook: ((path: string) => void | Promise<void>) | undefined;
+export interface DirectoryScanHooks {
+  readonly beforeOpen?: ((path: string) => void | Promise<void>) | undefined;
+  readonly afterRead?: ((path: string) => void | Promise<void>) | undefined;
+}
+
+const DirectoryScanHooksReference = Context.Reference<DirectoryScanHooks>(
+  "pi-advisor/boundary/read-only-fs/DirectoryScanHooks",
+  { defaultValue: () => ({}) },
+);
 
 const sameIdentity = (
   expected: { readonly dev: bigint; readonly ino: bigint },
@@ -127,6 +134,7 @@ export class ReadOnlyFileSystem extends Context.Service<
   static readonly layer = Layer.effect(
     this,
     Effect.gen(function* () {
+      const hooks = yield* DirectoryScanHooksReference;
       const paths = yield* Path.Path;
       return ReadOnlyFileSystem.of({
         pinRoot: (path) =>
@@ -174,7 +182,7 @@ export class ReadOnlyFileSystem extends Context.Service<
             const listing = yield* Effect.acquireUseRelease(
               Effect.tryPromise({
                 try: () =>
-                  Promise.resolve(beforeDirectoryOpenHook?.(prepared.beforePath)).then(() =>
+                  Promise.resolve(hooks.beforeOpen?.(prepared.beforePath)).then(() =>
                     fs.opendir(prepared.beforePath),
                   ),
                 catch: failure("open-directory", path, "Unable to open project directory."),
@@ -199,7 +207,7 @@ export class ReadOnlyFileSystem extends Context.Service<
             );
             yield* verifyPinnedRoot(root);
             yield* Effect.tryPromise({
-              try: () => Promise.resolve(afterDirectoryReadHook?.(prepared.beforePath)),
+              try: () => Promise.resolve(hooks.afterRead?.(prepared.beforePath)),
               catch: failure("directory-hook", path, "Project directory changed during scan."),
             });
             const verifyDirectory = Effect.tryPromise({
@@ -307,6 +315,13 @@ export class ReadOnlyFileSystem extends Context.Service<
       });
     }),
   );
+
+  static readonly layerWith = (hooks: DirectoryScanHooks) =>
+    Layer.fresh(
+      this.layer.pipe(
+        Layer.provide(Layer.succeed(DirectoryScanHooksReference, Object.freeze({ ...hooks }))),
+      ),
+    );
 }
 
 export const _readOnlyFileSystemTest = {
@@ -314,11 +329,4 @@ export const _readOnlyFileSystemTest = {
   closeResourceBestEffort,
   isContainedPath,
   isContainedPathWith,
-  setDirectoryHooks(hooks?: {
-    beforeOpen?: (path: string) => void | Promise<void>;
-    afterRead?: (path: string) => void | Promise<void>;
-  }) {
-    beforeDirectoryOpenHook = hooks?.beforeOpen;
-    afterDirectoryReadHook = hooks?.afterRead;
-  },
 };

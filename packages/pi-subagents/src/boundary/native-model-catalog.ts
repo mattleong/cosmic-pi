@@ -462,15 +462,14 @@ const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
       timeoutMillis,
     );
   return yield* Effect.acquireUseRelease(
-    Effect.tryPromise({
-      try: () =>
-        prepareCodexCatalogHarness({
-          agentDirectory: options.agentDirectory!,
-          environment: sourceEnvironment,
-        }),
-      catch: () =>
+    prepareCodexCatalogHarness({
+      agentDirectory: options.agentDirectory,
+      environment: sourceEnvironment,
+    }).pipe(
+      Effect.mapError(() =>
         catalogError(runtime, "catalog_failed", "Unable to prepare the Codex model catalog."),
-    }),
+      ),
+    ),
     (harness) =>
       runCatalogProcess(
         runtime,
@@ -482,15 +481,15 @@ const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
         timeoutMillis,
       ),
     (harness) =>
-      Effect.tryPromise({
-        try: () => harness.release(),
-        catch: () =>
+      harness.release.pipe(
+        Effect.mapError(() =>
           catalogError(
             runtime,
             "catalog_cleanup_unconfirmed",
             "Codex model catalog private harness cleanup could not be confirmed.",
           ),
-      }),
+        ),
+      ),
   );
 });
 
