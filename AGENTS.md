@@ -25,9 +25,9 @@ Keep these names aligned across extension packages so the same role is discovera
 
 ```text
 src/
-  extension.ts          # Pi registration only
-  layer.ts              # Effect composition root
-  application.ts        # session coord + command/event wiring
+  extension.ts          # Pi registration
+  layer.ts              # Effect composition root; omit when trivial
+  application.ts        # orchestration; omit when registration-only
   config/
     schema.ts           # shape + defaults
     options.ts          # optional resolve/normalize
@@ -69,9 +69,9 @@ ARCHITECTURE.md
 
 ### Hard rules
 
-1. **Entry / composition:** `extension.ts` (Pi registration) and `layer.ts` (Effect composition root).
+1. **Entry / composition:** `extension.ts` is required. Add `layer.ts` only for real Effect composition; registration-only extensions may omit `layer.ts` and `application.ts`.
 2. **Application orchestration:**
-   - Small packages: a single `application.ts` (split early if it gets heavy).
+   - Small packages with orchestration use one `application.ts` (split early if it gets heavy).
    - Larger packages: an `application/` folder with explicit roles (`register.ts`, `lifecycle.ts`, `state.ts`).
    - `controller.ts` only when there is a real Context/service API — not a re-export hub.
 3. **Config doors:** one public persistence entry — prefer `config/store.ts`.
@@ -86,17 +86,17 @@ ARCHITECTURE.md
    - Settings chrome under `settings/ui/` when needed.
    - Feature-local presentation (`preview/`, `tools/renderers/`, footer components) is fine; document it in `ARCHITECTURE.md`.
    - Effect status/resources stay in feature modules, not under `ui/`.
-6. **Boundaries:** package-local `boundary/` adapters for I/O and third-party APIs only. No pure classifiers or helpers.
-   - **All** Pi host adapters live under `boundary/` with the `host-*` prefix (`host-context`, `host-ui`, `host-callback`, `host-bindings`, `host-notifier`, `host-commands`). Never under `application/`.
+6. **Boundaries:** package-local `boundary/` adapters are for I/O and third-party APIs only. No pure helpers.
+   - Dedicated Pi host adapters live under `boundary/` with the `host-*` prefix. Keep direct stateless host calls at their call site; do not wrap them only for placement.
 7. **Doors vs rooms:** prefer one public entrypoint per role; keep implementation in small files. Collapse duplicate APIs, not file count. Nest peer-soup directories instead of merging into giant files. Soft guide: split before ~400–500 LOC of hard logic accumulates in one file.
 8. **Extension `src/` root allowlist:** `extension.ts`, `layer.ts`, `application.ts`, and an optional package `protocol.ts` re-export. Nest everything else (`auth/`, features, etc.).
 9. **Provider feature modules:** nest multi-file features (`usage/`, `footer/`, `image/`, `auth/`) rather than scattering `*-controller.ts` at `src/` root.
 10. **Tests:** package-root `tests/` (not colocated under `src/`). File suffix is always `*.test.ts` (never `*.spec.ts`). Large packages should mirror `src/`; smaller packages may use flat names without package-name prefixes.
-11. **Docs:** every package keeps `ARCHITECTURE.md` with a source map. Package-level `AGENTS.md` is optional and must not contradict this file.
+11. **Docs:** each package keeps a concise `ARCHITECTURE.md` covering ownership, boundaries, and lifecycle, not a full file tree. Package-level `AGENTS.md` is optional and must not conflict with this file.
 12. **Compat:** temporary legacy call shapes go under an explicit `compat/` file or folder, not a second architectural door.
-13. **Tool rendering:** every new extension-owned agent tool must render through `pi-code-previews` using `withCodePreviewShell`.
+13. **Tool rendering:** tools with previewable code, file, diff, or command output use `withCodePreviewShell`. Other tools need no `pi-code-previews` dependency.
 
-- List `pi-code-previews` as a runtime dependency.
+- When used, list `pi-code-previews` as a runtime dependency.
 - When trusted project settings apply, call `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())` before wrapping and registering tools inside `session_start`; the wrapper captures its shell mode at registration time.
 - Wrap only tools owned by the extension, never tools registered by another extension.
 
@@ -127,12 +127,12 @@ src/
 - [ ] Config has one persistence door (`store`); no peer `persistence`/façade APIs
 - [ ] Config persistence named store/service (not repository)
 - [ ] New `boundary/` files are real I/O or third-party adapters
-- [ ] All `host-*` adapters live under `boundary/`
+- [ ] Dedicated `host-*` adapters live under `boundary/`
 - [ ] `ui/` stays pure; Effect services stay in features
 - [ ] No new re-export hub files; no giant-file merges to “simplify”
 - [ ] Tests are `tests/**/*.test.ts`
-- [ ] `ARCHITECTURE.md` source map updated when layout changed
-- [ ] Every new extension-owned agent tool uses the `pi-code-previews` cooperative shell
+- [ ] `ARCHITECTURE.md` reflects ownership, boundary, or lifecycle changes
+- [ ] Tools with useful details use the `pi-code-previews` cooperative shell
 
 ## Testing policy
 
@@ -140,9 +140,9 @@ Tests must protect durable behavior, not implementation details or third-party a
 
 Keep tests for domain logic, persistence, security, lifecycle, concurrency, cancellation, cleanup, and failure recovery.
 
-Do not test:
+Do not test implementation details or upstream contracts:
 
-- Feature, export, command, tool, or renderer existence/registration.
+- Bare symbol existence. Test registration only when discovery or conditional wiring can fail outside TypeScript.
 - Contracts already enforced by TypeScript or schemas.
 - Exact provider payloads, endpoints, headers, events, or model catalogs.
 - Exact UI copy, layout, colors, icons, ANSI output, or key hints.
@@ -154,7 +154,7 @@ Mock owned domain boundaries, not external provider protocols. Test command hand
 
 - The workspace is being rearchitected around the exact Effect v4 prerelease versions in `pnpm-workspace.yaml`.
 - Read `docs/adr/0001-effect-v4-beta.md` and `docs/architecture/` before changing application architecture.
-- Treat the pinned Effect declarations as authoritative when older documentation differs.
+- Treat pinned Effect declarations as authoritative over older docs. Reassess this policy when the pin changes or Effect v4 becomes stable.
 - New or migrated packages must extend `tsconfig.effect.json`; all packages must inherit the Effect language-service plugin.
 - Keep Effect runners at named Pi host boundaries, scope every resource and background fiber, use Effect Schema at unknown boundaries, and model expected failures with typed tagged errors.
 - Do not add Zod. TypeBox or literal JSON Schema is allowed only where Pi requires tool parameter schemas.
