@@ -152,18 +152,8 @@ export const invokeURLStatic = (name: string, args: InterpreterArray, node: AstN
     throw new InterpreterRuntimeError(`URL.${name} requires a URL argument.`, node).as("TypeError");
   const input = urlArgument(args[0], `URL.${name} input`);
   const base = args[1] === undefined ? undefined : urlArgument(args[1], `URL.${name} base`);
-  // Confinement preflight: URL normalization percent-encodes, so the worst-case href length
-  // is charged before the native constructor materializes it.
-  assertBoundedStringLength(
-    uriEncodedLengthUpperBound(input) + (base === undefined ? 0 : uriEncodedLengthUpperBound(base)),
-    `URL.${name}`,
-    node,
-  );
-  // Confinement preflight: the query segment's projected pair count is charged before the
-  // native URL parses it (an over-cap query is refused with a diagnostic, for canParse too,
-  // rather than reported as unparseable).
-  assertBoundedUrlQueryPairs(input, `URL.${name}`, node);
-  if (base !== undefined) assertBoundedUrlQueryPairs(base, `URL.${name}`, node);
+  // Confinement failures remain diagnostics for canParse rather than becoming false.
+  assertBoundedUrlConstructionInputs(input, base, `URL.${name}`, node);
   try {
     const url = new URL(input, base);
     return name === "canParse" ? true : new SandboxURL(url);
@@ -178,7 +168,7 @@ export const invokeURLMethod = (value: SandboxURL, name: string, node: AstNode):
 };
 import {
   assertBoundedStringLength,
-  assertBoundedUrlQueryPairs,
+  assertBoundedUrlConstructionInputs,
   uriEncodedLengthUpperBound,
 } from "../interpreter/confinement.js";
 import {

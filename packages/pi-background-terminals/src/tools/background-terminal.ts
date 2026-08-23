@@ -11,12 +11,14 @@ import { getKeybindings, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { withCodePreviewShell } from "pi-code-previews";
-import { Type, type Static } from "typebox";
+import {
+  sanitizeTerminalLine,
+  stripTerminalControls as sanitizeTerminalText,
+} from "pi-cosmic-core";
+import { Type } from "typebox";
 import { BackgroundTerminalService, type BackgroundJobFilter } from "../job/service.ts";
 import { InvalidBackgroundCommandError } from "../job/errors.ts";
 import type { BackgroundJobSnapshot, BackgroundLogSlice } from "../job/model.ts";
-import { selectBackgroundLogPreview } from "../ui/log-preview.ts";
-import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 
 const ACTIONS = ["start", "list", "status", "logs", "stop", "stop_all", "clear"] as const;
 
@@ -54,8 +56,6 @@ const parameters = Type.Object({
   ),
   force: Type.Optional(Type.Boolean({ description: "Force immediate process-tree termination" })),
 });
-
-export type BackgroundTerminalToolInput = Static<typeof parameters>;
 
 export interface BackgroundTerminalToolDetails {
   readonly action: (typeof ACTIONS)[number];
@@ -252,13 +252,23 @@ export function registerBackgroundTerminalTool(
       const details = result.details as BackgroundTerminalToolDetails | undefined;
       let collapsedLogFooter: string | undefined;
       if (details?.action === "logs") {
-        const preview = selectBackgroundLogPreview(text, expanded);
-        text = preview.text;
-        if (preview.hidden > 0) {
+        const normalized = text.endsWith("\r\n")
+          ? text.slice(0, -2)
+          : text.endsWith("\n")
+            ? text.slice(0, -1)
+            : text;
+        const lines = normalized.split("\n");
+        if (!expanded && lines.length > 12) {
+          const hidden = lines.length - 12;
+          text = [
+            ...lines.slice(0, 8),
+            `      --- ${hidden} lines hidden ---`,
+            ...lines.slice(-4),
+          ].join("\n");
           const expandKeys = getKeybindings().getKeys("app.tools.expand").join("/");
           const expandHint = expandKeys ? `${expandKeys} expand` : "expand";
-          collapsedLogFooter = `Showing ${preview.shown} of ${preview.total} log lines · ${expandHint}`;
-        }
+          collapsedLogFooter = `Showing 12 of ${lines.length} log lines · ${expandHint}`;
+        } else text = normalized;
       }
       if (expanded && details?.snapshot) {
         const snapshot = details.snapshot;

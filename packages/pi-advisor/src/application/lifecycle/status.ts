@@ -11,20 +11,15 @@ import {
   STATUS_SPINNER_FRAMES,
   STATUS_SPINNER_INTERVAL_MS,
 } from "../controller-types.ts";
-import { setAdvisorSpinnerOwner, type AdvisorApplicationState } from "../state.ts";
 
 export const makeLifecycleStatusControls = (options: {
   readonly statusService: AdvisorStatusServiceContract;
   readonly currentConfig: () => ResolvedAdvisorConfig;
-  readonly updateApplicationState: (
-    update: (state: AdvisorApplicationState) => AdvisorApplicationState,
-  ) => void;
 }) => {
-  const { statusService, currentConfig, updateApplicationState } = options;
+  const { statusService, currentConfig } = options;
 
   const stopStatusSpinner = (): void => {
     statusService.clear();
-    updateApplicationState((state) => setAdvisorSpinnerOwner(state));
   };
 
   const setAdvisorStatus = (ctx: ExtensionContext, text?: string): void => {
@@ -50,26 +45,18 @@ export const makeLifecycleStatusControls = (options: {
   };
 
   const startStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
-    updateApplicationState((state) => setAdvisorSpinnerOwner(state, owner));
     statusService.start({
       owner,
       delayMs: STATUS_SPINNER_DELAY_MS,
       intervalMs: STATUS_SPINNER_INTERVAL_MS,
       animated: advisorStatusIsAnimatedAtHostBoundary(ctx),
       frameCount: STATUS_SPINNER_FRAMES.length,
-      render: (frame) => {
-        updateApplicationState((state) => ({
-          ...state,
-          spinner: { ...state.spinner, frame },
-        }));
-        renderReviewStatus(ctx, frame);
-      },
+      render: (frame) => renderReviewStatus(ctx, frame),
     });
   };
 
   const settleStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
     if (!statusService.settle(owner)) return;
-    updateApplicationState((state) => setAdvisorSpinnerOwner(state));
     setAdvisorStatusAtHostBoundary(ctx, STATUS_KEY, undefined);
   };
 

@@ -12,10 +12,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, vi } from "vitest";
-import {
-  registerDirectoryModelsWithDependencies,
-  type DirectoryModelsApplicationDependencies,
-} from "../src/application.ts";
+import { registerDirectoryModelsApplication } from "../src/application.ts";
 import { preferenceFilename } from "../src/boundary/path-key.ts";
 import {
   DirectoryModelPreferenceSchema,
@@ -155,10 +152,7 @@ const harness = (
     };
     // SAFETY: Tests invoke only the ExtensionContext members implemented by this fixture.
     ctx = contextFixture as typeof contextFixture & ExtensionContext;
-    const dependencies: DirectoryModelsApplicationDependencies = {
-      hasExplicitModel: () => options.explicitModel ?? false,
-    };
-    registerDirectoryModelsWithDependencies(pi, dependencies);
+    registerDirectoryModelsApplication(pi, () => options.explicitModel ?? false);
 
     const emit = <Event>(name: string, event: Event): Effect.Effect<void> =>
       Effect.promise(() => Promise.resolve(handlers.get(name)?.(event, ctx)).then(() => undefined));

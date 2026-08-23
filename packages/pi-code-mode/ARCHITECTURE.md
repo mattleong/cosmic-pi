@@ -61,8 +61,8 @@ external dependencies.
   influence on model-visible text or any execution limit.
 - `src/boundary/codemode-runtime.ts` — the single computed relative-path import door for the
   nested private runtime TypeScript source (`runtime/src/`). Its small owned structural contract
-  keeps the vendored tree under its separately checked relaxed TypeScript project while the Pi
-  extension retains strict workspace compiler and Effect diagnostics.
+  names only fields consumed by the integration while the vendored tree stays under its separately
+  checked workspace project.
 - `src/boundary/host-deactivation-handoff.ts` — process-memory bridge (globalThis symbol slot)
   that preserves a deliberate `code_mode` deactivation across Pi recreating the extension
   module on reload/new/resume/fork, keyed **only** by the stable Pi session id (no cwd or
@@ -77,14 +77,11 @@ external dependencies.
   sync throws, and rejecting thenables are contained; latest pending snapshot flushes on settle;
   each publisher owns a closeable scope for pending frame fibers, and no updates survive settle or
   replacement).
-- `src/boundary/native-clock.ts` — synchronous host clock door for TUI animation frames.
 - `src/config/schema.ts` — configuration shape, locked defaults, documented bounds, field codecs.
 - `src/config/options.ts` — field-wise project/global/default resolution with provenance, and
   the setting descriptors (labels, descriptions, bounded integer parsing).
 - `src/config/store.ts` — the single persistence door: `CodeModeConfigStore` Effect service over
   the shared scoped JSON document store, plus the published immutable `CodeModeState`.
-- `src/boundary/host-notifier.ts` — best-effort Pi notification boundary (core-owned).
-- `src/boundary/host-session.ts` — pure Pi cwd/trust/abort-signal capture (core-owned).
 - `src/boundary/host-ui.ts` — package-local guarded adapters for `ctx.ui.select`,
   `ctx.ui.input`, `ctx.ui.custom`, and synchronous render/list callbacks; hostile or
   rejecting host callbacks resolve to bounded outcomes and never escape or hang. The

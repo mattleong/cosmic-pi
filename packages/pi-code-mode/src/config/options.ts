@@ -75,9 +75,6 @@ export function resolveCodeModeConfig(
     } else if (globalValue !== undefined) {
       setConfigField(field, globalValue);
       provenance[field] = "global";
-    } else {
-      setConfigField(field, DEFAULT_CODE_MODE_CONFIG[field]);
-      provenance[field] = "default";
     }
   }
   return {

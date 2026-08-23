@@ -13,7 +13,7 @@
 - `src/boundary/host-notifier.ts` — best-effort Pi notification boundary.
 - `src/fork/errors.ts` — schema-backed expected failures and outcome classification.
 - `src/fork/policy.ts` — pure split, agent-name, and initial-prompt policies.
-- `src/fork/service.ts` — preflight, launch sequencing, ownership validation, focus, and user handoff.
+- `src/fork/service.ts` — preflight, launch sequencing, ownership validation, retained-pane failure decoration, focus, and user handoff.
 - `tests/` — command, policy, sequencing, topology, and uncertain-outcome coverage.
 
 ## Lifecycle

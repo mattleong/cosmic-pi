@@ -1,6 +1,6 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
 import { collectChangedDiffBlock } from "../diff/changed-blocks";
-import { renderSyntaxHighlightedDiff } from "../diff/index";
+import { renderSyntaxHighlightedDiff } from "../diff/render";
 import { isChangedDiffLine, parseDiffLine } from "../diff/parse";
 import { analyzeChangedLineBlock } from "../diff/word/change-block";
 import { shouldEmphasizeChangedPair } from "../diff/word/emphasis";

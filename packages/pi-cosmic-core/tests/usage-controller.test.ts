@@ -4,14 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import {
-  makeUsageRefreshController,
-  type UsageControllerConfig,
-  type UsageProviderRequirements,
-} from "../src/usage-controller.ts";
+import { makeUsageRefreshController, type UsageControllerConfig } from "../src/usage-controller.ts";
 import { AgentDirectory } from "../src/platform/agent-directory.ts";
-import { provideBuiltLayer } from "../src/runtime/layers.ts";
-import { JsonDocumentStore } from "../src/platform/json-document.ts";
+import { provideBuiltLayer } from "../index.ts";
 import { JsonHttpClient } from "../src/platform/json-http.ts";
 import { initialUsageProjection } from "../src/usage-projection.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
@@ -61,18 +56,13 @@ it.effect("usage controller treats omitted project trust as untrusted", () => {
   };
 
   return Effect.gen(function* () {
-    const path = yield* Path.Path;
-    const documents = yield* JsonDocumentStore;
-    const http = yield* JsonHttpClient;
-    const provideDependencies = <A, E>(
-      effect: Effect.Effect<A, E, UsageProviderRequirements>,
-    ): Effect.Effect<A, E> =>
-      effect.pipe(
-        Effect.provideService(Path.Path, path),
-        Effect.provideService(JsonDocumentStore, documents),
-        Effect.provideService(JsonHttpClient, http),
-      );
-    yield* makeUsageRefreshController<TestProjection, TestConfig, never, never, never>({
+    const controller = yield* makeUsageRefreshController<
+      TestProjection,
+      TestConfig,
+      never,
+      never,
+      never
+    >({
       spanPrefix: "test.usage",
       logLabel: "Test",
       context,
@@ -92,8 +82,9 @@ it.effect("usage controller treats omitted project trust as untrusted", () => {
       fetchOutcome: () => Effect.succeed({ _tag: "Missing" }),
       formatStatusLine: () => "",
       formatStatusText: () => "",
-      provideDependencies,
+      provideDependencies: (effect) => effect,
     });
+    yield* controller.refresh();
     expect(observedTrust).toBe(false);
   }).pipe(provideBuiltLayer(dependencies));
 });

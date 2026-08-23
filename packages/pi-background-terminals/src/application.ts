@@ -40,7 +40,6 @@ export function registerBackgroundTerminalsApplication(
   boundaries: BackgroundTerminalsApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
   const bridge = makeProjectionBridge(pi.events);
-  let currentContext: ExtensionContext | undefined;
   let preparationGeneration = 0;
 
   const slot = makePiSessionRuntimeSlot<
@@ -68,15 +67,11 @@ export function registerBackgroundTerminalsApplication(
         };
       }),
     onActivated: ({ ctx }, _token, prepared) => {
-      currentContext = ctx;
       bridge.setFooterEnabled(prepared.showFooterStatus);
       bridge.publish(prepared.projection);
       bridge.setContext(ctx);
     },
-    onDeactivated: () => {
-      currentContext = undefined;
-      bridge.clear();
-    },
+    onDeactivated: () => bridge.clear(),
   });
 
   const run = <A, E>(
@@ -93,7 +88,6 @@ export function registerBackgroundTerminalsApplication(
 
   const prepareActivation = (ctx: ExtensionContext): Promise<void> => {
     const generation = ++preparationGeneration;
-    currentContext = undefined;
     bridge.clear();
     // Replacement begins before the settings boundary so no tool call can target the prior
     // session while a newer activation is still being prepared.
@@ -152,15 +146,11 @@ export function registerBackgroundTerminalsApplication(
   pi.on("session_start", (_event, ctx) => prepareActivation(ctx));
 
   pi.on("turn_end", (_event, ctx) => {
-    if (currentContext) {
-      currentContext = ctx;
-      bridge.setContext(ctx);
-    }
+    if (slot.isActive()) bridge.setContext(ctx);
   });
 
   pi.on("session_shutdown", () => {
     ++preparationGeneration;
-    currentContext = undefined;
     bridge.clear();
     return slot.shutdown();
   });

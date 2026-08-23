@@ -5,8 +5,8 @@ import { StringDecoder } from "node:string_decoder";
 import { effectProcessExit, nodeProcessLayer } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -203,7 +203,6 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
   yield* verifyCwd(request.cwd);
   const ingressBufferBytes = Math.max(1, Math.floor(request.ingressBufferBytes));
   const outputQueue = yield* Queue.dropping<LocalProcessOutput, Cause.Done>(INGRESS_CHUNKS);
-  const exited = yield* Deferred.make<LocalProcessExit>();
   const stdoutDecoder = new StringDecoder("utf8");
   const stderrDecoder = new StringDecoder("utf8");
   let queuedBytes = 0;
@@ -291,19 +290,13 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     ],
     { concurrency: 2, discard: true },
   ).pipe(Effect.ensuring(Effect.sync(closeOutput)), Effect.forkScoped({ startImmediately: true }));
-  yield* Effect.exit(child.exitCode).pipe(
-    Effect.flatMap((exit) =>
-      terminateLingeringGroup(pid).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            const observed = effectProcessExit(exit);
-            const baseExit = { exitCode: observed.code };
-            const result = observed.signal ? { ...baseExit, signal: observed.signal } : baseExit;
-            Deferred.doneUnsafe(exited, Effect.succeed(result));
-          }),
-        ),
-      ),
-    ),
+  const exitFiber = yield* Effect.exit(child.exitCode).pipe(
+    Effect.flatMap((exit) => {
+      const observed = effectProcessExit(exit);
+      const baseExit = { exitCode: observed.code };
+      const result = observed.signal ? { ...baseExit, signal: observed.signal } : baseExit;
+      return terminateLingeringGroup(pid).pipe(Effect.as(result));
+    }),
     Effect.forkScoped({ startImmediately: true }),
   );
 
@@ -348,7 +341,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
   return {
     pid,
     output,
-    awaitExit: Deferred.await(exited),
+    awaitExit: Fiber.join(exitFiber),
     droppedOutputBytes: () => totalDroppedBytes,
     terminate,
     release: child.unref.pipe(

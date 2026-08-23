@@ -27,7 +27,7 @@ Adds OpenAI subscription usage, fast-mode request injection, provider-native com
 
 ## State and resources
 
-Usage, fast mode, compaction, and image work are scoped services. They publish immutable projections for synchronous request injection and rendering. Omitted project-trust input is treated as untrusted; project-local configuration is read only after literal-true trust. OpenAI checkpoints live in normal branch-local Pi compaction entries under typed extension details; their kept boundary preserves the original Pi transcript for tree navigation. Image streaming, file handles, and background refresh work are owned by the session runtime.
+Usage, fast mode, compaction, and image work are scoped services. They publish immutable projections for synchronous request injection and rendering. Fast-mode startup returns its scoped injection ingress through the session slot, so only the current activation can install it and deactivation immediately restores a no-op boundary. Omitted project-trust input is treated as untrusted; project-local configuration is read only after literal-true trust. OpenAI checkpoints live in normal branch-local Pi compaction entries under typed extension details; their kept boundary preserves the original Pi transcript for tree navigation. Image streaming, file handles, and background refresh work are owned by the session runtime.
 
 ## Lifecycle
 

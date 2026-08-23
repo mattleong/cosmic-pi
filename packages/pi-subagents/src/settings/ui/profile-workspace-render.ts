@@ -9,7 +9,7 @@ import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
-import { PROFILE_IDS, type ProfileId } from "../../profiles/model.ts";
+import { PROFILE_IDS, sameProfileCandidates, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import type {
   ProfileRouteDraft,
@@ -103,7 +103,7 @@ const persistentRouteDiffersFromActiveBase = (state: ProfileWorkspaceRenderState
   return (
     state.inspection.config.profileSources[profile] !==
       state.inspection.session.baseConfig.profileSources[profile] ||
-    !sameCandidates(
+    !sameProfileCandidates(
       state.inspection.config.profiles[profile].candidates,
       state.inspection.session.baseConfig.profiles[profile].candidates,
     )
@@ -251,26 +251,6 @@ const candidateSummary = (
   );
 };
 
-const sameCandidates = (
-  left: ProfileRouteDraft["candidates"],
-  right: ProfileRouteDraft["candidates"],
-): boolean =>
-  left.length === right.length &&
-  left.every((candidate, index) => {
-    const other = right[index];
-    return (
-      other !== undefined &&
-      candidate.host === other.host &&
-      candidate.runtime === other.runtime &&
-      candidate.model === other.model &&
-      candidate.effort === other.effort &&
-      candidate.context === other.context &&
-      candidate.writeIntent === other.writeIntent &&
-      candidate.fastMode === other.fastMode &&
-      candidate.closeOnReport === other.closeOnReport
-    );
-  });
-
 const routeActions = (state: ProfileWorkspaceRenderState) => {
   const count = state.draft.candidates.length;
   return {
@@ -345,7 +325,7 @@ const routePage = (
   const candidates = state.draft.candidates;
   const notices = commonNotices(state, theme, width, cancelKey);
   const hasPreview =
-    !projectOverrideActive(state) && !sameCandidates(effective.candidates, candidates);
+    !projectOverrideActive(state) && !sameProfileCandidates(effective.candidates, candidates);
   const reserved = 16 + (hasPreview ? 1 : 0) + notices.length;
   const visibleCount = Math.max(1, availableHeight - reserved);
   const start = windowStart(candidates.length, state.candidateIndex, visibleCount);

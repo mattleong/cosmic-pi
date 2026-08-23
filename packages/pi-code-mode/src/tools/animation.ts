@@ -1,6 +1,5 @@
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { synchronousNow } from "../boundary/native-clock.ts";
+import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
 import { MAX_PROGRESS_ENTRIES } from "./format.ts";
 
 export const CODE_MODE_SPINNER_INTERVAL_MS = 160;

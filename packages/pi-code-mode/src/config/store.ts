@@ -130,7 +130,6 @@ export interface CodeModeConfigStoreOptions {
 }
 
 export interface CodeModeConfigStoreContract {
-  readonly state: Effect.Effect<CodeModeState>;
   readonly snapshot: () => CodeModeState;
   readonly setSetting: (
     scope: CodeModeSettingScope,
@@ -341,9 +340,6 @@ export class CodeModeConfigStore extends Context.Service<
           });
 
         return CodeModeConfigStore.of({
-          // The frozen snapshot and the authoritative state project the same plain data;
-          // exposing the frozen clone keeps every published value immutable.
-          state: Effect.sync(() => projection.getSnapshot()),
           snapshot: projection.getSnapshot,
           setSetting,
           clearSetting,

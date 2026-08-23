@@ -1,5 +1,4 @@
 // Fixed Node process and Herdr protocol boundary for the /herdr-fork command.
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -288,14 +287,13 @@ export const makeHerdrCommandRunner = (
         args: [...request.args],
         environment,
         maximumOutputBytes,
-      }).pipe(Effect.timeoutOption(Duration.millis(timeoutMillis))),
+      }).pipe(Effect.timeoutOption(timeoutMillis)),
     );
 
     return process.pipe(
       Effect.mapError(() => herdrTransportFailure(request)),
-      Effect.flatMap((result) => {
-        if (Option.isNone(result)) return Effect.fail(herdrTransportFailure(request));
-        const output = result.value;
+      Effect.flatMap(Effect.fromOption(() => herdrTransportFailure(request))),
+      Effect.flatMap((output) => {
         if (
           output.overflowed ||
           Buffer.byteLength(output.stdout, "utf8") > maximumOutputBytes ||

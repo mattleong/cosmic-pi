@@ -12,7 +12,6 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
-import { provideBuiltLayer } from "../runtime/layers.ts";
 
 /** Opt-in process authority. It is intentionally excluded from nodeFilePlatformLayer. */
 export const nodeProcessLayer = NodeChildProcessSpawner.layer.pipe(
@@ -287,7 +286,8 @@ export const runBoundedProcessScoped = (
 > => Effect.scoped(runBoundedProcess(request));
 
 /** Named Node boundary for consumers that do not own a larger platform Layer. */
-export const provideNodeProcess = provideBuiltLayer(nodeProcessLayer);
+const provideLayer = Effect.provide;
+export const provideNodeProcess = provideLayer(nodeProcessLayer);
 
 export const runBoundedProcessNode = (
   request: BoundedProcessRequest,

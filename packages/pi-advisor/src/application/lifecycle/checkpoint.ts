@@ -68,13 +68,7 @@ export interface CheckpointDeps {
   readonly applicationScope: Scope.Scope;
   readonly checkpointOrchestrator: CheckpointOrchestratorContract;
   readonly parentExecutor: AdvisorEffectExecutor;
-  readonly runSessionEffect: <A, E>(
-    effect: Effect.Effect<
-      A,
-      E,
-      AdvisorPlatform | import("../../boundary/host-commands.ts").PiCommandAdapter
-    >,
-  ) => Promise<A>;
+  readonly runSessionEffect: <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) => Promise<A>;
   readonly startRuntimeEffect: (
     ctx: ExtensionContext,
     restoration?: "preserve-live" | "restore-branch",

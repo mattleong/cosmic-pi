@@ -6,14 +6,17 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
-import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
+import {
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+  notifyAtHostBoundary,
+} from "pi-cosmic-core";
 import { captureExplicitModelArgument } from "./boundary/host-cli.ts";
 import {
   captureContextModel,
   captureSelectedModel,
   captureThinkingLevel,
 } from "./boundary/host-model.ts";
-import { notifyDirectoryModelWarning } from "./boundary/host-notifier.ts";
 import { captureDirectorySession } from "./boundary/host-session.ts";
 import {
   makeDirectoryModelsLayer,
@@ -26,26 +29,13 @@ import {
   type DirectoryModelSessionInput,
 } from "./preference/service.ts";
 
-export interface DirectoryModelsApplicationDependencies {
-  readonly hasExplicitModel: () => boolean;
-}
-
-const defaultDependencies: DirectoryModelsApplicationDependencies = {
-  hasExplicitModel: captureExplicitModelArgument,
-};
-
-export function registerDirectoryModelsApplication(pi: ExtensionAPI): void {
-  registerDirectoryModelsWithDependencies(pi, defaultDependencies);
-}
-
-/** Internal seam for deterministic startup-precedence tests. */
-export function registerDirectoryModelsWithDependencies(
+export function registerDirectoryModelsApplication(
   pi: ExtensionAPI,
-  dependencies: DirectoryModelsApplicationDependencies,
+  hasExplicitModel: () => boolean = captureExplicitModelArgument,
 ): void {
   const restoreEvents = MutableRef.make(INITIAL_RESTORE_EVENT_STATE);
   const warn = (ctx: ExtensionContext, message: string) =>
-    notifyDirectoryModelWarning(ctx, message);
+    notifyAtHostBoundary(ctx, message, "warning");
 
   const slot = makePiSessionRuntimeSlot<
     DirectoryModelSessionInput,
@@ -85,7 +75,7 @@ export function registerDirectoryModelsWithDependencies(
     }
     let explicitModel = false;
     try {
-      explicitModel = dependencies.hasExplicitModel();
+      explicitModel = hasExplicitModel();
     } catch {
       // Host CLI inspection is best effort; ordinary directory preference behavior remains safe.
     }

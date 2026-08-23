@@ -132,6 +132,38 @@ describe("session profile overrides", () => {
       }),
   );
 
+  it.effect("compares every candidate field when suppressing no-op revisions", () =>
+    Effect.gen(function* () {
+      const original = candidate("openai/base");
+      const variants: ReadonlyArray<ProfileCandidate> = [
+        { ...original, host: "herdr" },
+        { ...original, runtime: "codex" },
+        { ...original, model: "openai/other" },
+        { ...original, effort: "off" },
+        { ...original, context: "fork" },
+        { ...original, writeIntent: "writer" },
+        { ...original, fastMode: true },
+        { ...original, closeOnReport: false },
+      ];
+
+      for (const changed of variants) {
+        const initial = makeSessionProfileSnapshot(baseConfig());
+        const committed = yield* patchSessionProfileSnapshot(initial, {
+          profile: "reviewer",
+          route: { candidates: [changed] },
+          expectedRevision: 0,
+        });
+        expect(committed.revision).toBe(1);
+        const unchanged = yield* patchSessionProfileSnapshot(committed, {
+          profile: "reviewer",
+          route: { candidates: [{ ...changed }] },
+          expectedRevision: 1,
+        });
+        expect(unchanged.revision).toBe(1);
+      }
+    }),
+  );
+
   it.effect("linearizes racing same-revision patches so exactly one commits", () =>
     Effect.gen(function* () {
       const service = yield* makeSubagentProfileService(baseConfig());

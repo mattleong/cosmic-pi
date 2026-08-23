@@ -7,10 +7,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, vi } from "vitest";
-import betterXai, {
-  betterXaiWithDependencies,
+import {
+  registerBetterXaiApplication,
   type BetterXaiExtensionDependencies,
-} from "../src/extension.ts";
+} from "../src/application.ts";
+import betterXai from "../src/extension.ts";
 import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 afterEach(() => {
@@ -78,7 +79,7 @@ const harness = (dependencies?: BetterXaiExtensionDependencies) =>
       isProjectTrusted: vi.fn(() => true),
     });
 
-    if (dependencies) betterXaiWithDependencies(pi, dependencies);
+    if (dependencies) registerBetterXaiApplication(pi, dependencies);
     else betterXai(pi);
     return { handlers, commands, ctx, cwd, notify, setStatus, setFooter };
   });
@@ -355,8 +356,9 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
   it.effect("replacement immediately interrupts a stalled session startup", () =>
     Effect.gen(function* () {
       const stalled = stalledStartup();
+      let starts = 0;
       const h = yield* harness({
-        startupEffect: (generation) => (generation === 1 ? stalled.effect : Effect.void),
+        startupEffect: () => (++starts === 1 ? stalled.effect : Effect.void),
       });
       const first = h.handlers.get("session_start")?.({}, h.ctx);
       yield* Deferred.await(stalled.started);

@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import * as PlatformError from "effect/PlatformError";
 import { JsonDocumentStore } from "../src/platform/json-document.ts";
 import { ProcessCoordinator } from "../src/platform/process-coordinator.ts";
-import { provideBuiltLayer } from "../src/runtime/layers.ts";
+import { provideBuiltLayer } from "../index.ts";
 
 function documentLayer(initial: Readonly<Record<string, string>>) {
   const files = new Map(Object.entries(initial));

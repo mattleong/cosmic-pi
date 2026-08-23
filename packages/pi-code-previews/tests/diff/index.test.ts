@@ -4,12 +4,9 @@ import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, test } from "vitest";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { renderComponent, stripAnsi, testTheme } from "../../src/testing/render";
-import {
-  FullWidthDiffText,
-  renderPlainDiff,
-  renderSyntaxHighlightedDiff,
-  summarizeDiff,
-} from "../../src/diff/index";
+import { FullWidthDiffText } from "../../src/diff/full-width-text";
+import { renderPlainDiff, renderSyntaxHighlightedDiff } from "../../src/diff/render";
+import { summarizeDiff } from "../../src/diff/summary";
 import { createDiffBackgroundResolver, diffLineBg } from "../../src/diff/background";
 import { parseDiffLine } from "../../src/diff/parse";
 import { wordEmphasisTelemetry } from "../../src/testing/word-emphasis-telemetry";

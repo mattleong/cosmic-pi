@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, SelectItem } from "@earendil-works/pi-tui";
+import type { SelectItem } from "@earendil-works/pi-tui";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import type { ProfileId } from "../../profiles/model.ts";
 import { SUBAGENT_FAST_SERVICE_TIER, supportsSubagentFastMode } from "../../run/fast-mode.ts";
@@ -142,64 +142,35 @@ const runtimeLabel = (runtime: SubagentRuntime): string =>
   runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude Code" : "Codex";
 
 /** Full-page searchable model dropdown used inside the profile workspace. */
-export class ProfileModelPickerPage implements Component {
-  private readonly page: SearchableSelectPage<ProfileModelChoice>;
-
-  constructor(options: ProfileModelPickerPageOptions) {
-    const context = options.context;
-    const host = context.host === "local" ? "Local" : "Herdr";
-    const source =
-      context.runtime === "pi"
-        ? `authenticated canonical models${context.host === "local" ? " · parent allowed" : ""}`
-        : "native advertised models";
-    this.page = new SearchableSelectPage(
-      (() => {
-        const baseResult = {
-          theme: options.theme,
-          breadcrumb: `/subagents profiles › ${context.profile} › candidate ${context.candidateIndex + 1} › Model`,
-          title: `Choose model · ${context.profile} · candidate ${context.candidateIndex + 1}`,
-          subtitle: `${host} ${runtimeLabel(context.runtime)} · ${source}`,
-          choices: options.choices.map((choice) => ({
-            value: choiceValue(choice.choice),
-            item: choice.item,
-            searchText: choice.searchText,
-            payload: choice.choice,
-          })),
-          current: options.current,
-        };
-        const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
-        const withEmptyTextAndAdditionalFields = {
-          ...withNotice,
-          emptyText: "No matching models",
-          getHeight: options.getHeight,
-          requestRender: options.requestRender,
-          matchesKeybinding: options.matchesKeybinding,
-          keybindingLabel: options.keybindingLabel,
-          select: options.select,
-          cancel: options.cancel,
-        };
-        return withEmptyTextAndAdditionalFields;
-      })(),
-    );
-  }
-
-  get focused(): boolean {
-    return this.page.focused;
-  }
-
-  set focused(value: boolean) {
-    this.page.focused = value;
-  }
-
-  handleInput(data: string): void {
-    this.page.handleInput(data);
-  }
-
-  render(width: number): string[] {
-    return this.page.render(width);
-  }
-
-  invalidate(): void {
-    this.page.invalidate();
-  }
-}
+export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOptions) => {
+  const context = options.context;
+  const host = context.host === "local" ? "Local" : "Herdr";
+  const source =
+    context.runtime === "pi"
+      ? `authenticated canonical models${context.host === "local" ? " · parent allowed" : ""}`
+      : "native advertised models";
+  const baseResult = {
+    theme: options.theme,
+    breadcrumb: `/subagents profiles › ${context.profile} › candidate ${context.candidateIndex + 1} › Model`,
+    title: `Choose model · ${context.profile} · candidate ${context.candidateIndex + 1}`,
+    subtitle: `${host} ${runtimeLabel(context.runtime)} · ${source}`,
+    choices: options.choices.map((choice) => ({
+      value: choiceValue(choice.choice),
+      item: choice.item,
+      searchText: choice.searchText,
+      payload: choice.choice,
+    })),
+    current: options.current,
+  };
+  const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
+  return new SearchableSelectPage<ProfileModelChoice>({
+    ...withNotice,
+    emptyText: "No matching models",
+    getHeight: options.getHeight,
+    requestRender: options.requestRender,
+    matchesKeybinding: options.matchesKeybinding,
+    keybindingLabel: options.keybindingLabel,
+    select: options.select,
+    cancel: options.cancel,
+  });
+};

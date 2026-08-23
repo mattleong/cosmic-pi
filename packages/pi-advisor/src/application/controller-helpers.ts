@@ -15,7 +15,6 @@ import {
 import {
   AdvisorReviewParseError,
   canonicalAdvisorFindingFingerprint,
-  sanitizeAdvisorReview,
   type AdvisorFinding,
   type AdvisorReview,
 } from "../review/index.ts";
@@ -133,7 +132,7 @@ export function sendAdvisorAdvice(
   pi: ExtensionAPI,
   review: AdvisorReview,
 ): AdvisorReviewCardPublishResult {
-  return appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
+  return appendAdvisorReviewCardAtHostBoundary(pi, review);
 }
 
 /** Automatic perspectives are local cards plus compact, non-waking guidance. */
@@ -141,7 +140,7 @@ export function sendAdvisorPerspective(
   pi: ExtensionAPI,
   review: AdvisorReview,
 ): AdvisorGuidancePublishResult {
-  const published = appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
+  const published = appendAdvisorReviewCardAtHostBoundary(pi, review);
   return {
     ...published,
     guidanceSent:
@@ -157,7 +156,7 @@ export function sendCorrection(
   review: AdvisorReview,
   triggerTurn: boolean,
 ): AdvisorGuidancePublishResult {
-  const published = appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
+  const published = appendAdvisorReviewCardAtHostBoundary(pi, review);
   return {
     ...published,
     guidanceSent: published.card

@@ -1,8 +1,6 @@
-import * as Predicate from "effect/Predicate";
-
 import * as Context from "effect/Context";
+import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import {
   AgentEnvelopeSchema,
   LayoutEnvelopeSchema,
@@ -22,12 +20,26 @@ import {
   type HerdrForkSessionInput,
 } from "../boundary/host-session.ts";
 import { HerdrForkError, herdrForkError } from "./errors.ts";
-import { retainPaneFailure, withRetainedPane } from "./ownership.ts";
 import { initialForkPrompt, makeAgentName, selectSplitDirection } from "./policy.ts";
 
 const MINIMUM_HERDR_PROTOCOL = 17;
 const START_TIMEOUT_MILLIS = 70_000;
 const MAX_PROMPT_BYTES = 32 * 1024;
+
+const retainPaneFailure = (
+  failure: HerdrForkError,
+  paneId: string,
+  guidance: string = `Pane ${paneId} was retained for manual inspection.`,
+): HerdrForkError =>
+  failure.paneId === paneId
+    ? failure
+    : new HerdrForkError({
+        ...failure,
+        paneId,
+        message: failure.message.includes(guidance)
+          ? failure.message
+          : `${failure.message} ${guidance}`,
+      });
 const SHELL_READINESS_ATTEMPTS = 31;
 const SHELL_READINESS_DELAY_MILLIS = 200;
 const REQUIRED_STABLE_SHELL_READINGS = 6;
@@ -358,7 +370,7 @@ export const makeHerdrForkService = (
           direction,
           prompted: prompt !== undefined,
         };
-      }).pipe(withRetainedPane(forkPane.pane_id));
+      }).pipe(Effect.mapError((failure) => retainPaneFailure(failure, forkPane.pane_id)));
     });
 
   return { open };
@@ -366,9 +378,4 @@ export const makeHerdrForkService = (
 
 export class HerdrForkService extends Context.Service<HerdrForkService, HerdrForkServiceContract>()(
   "pi-herdr-fork/fork/service/HerdrForkService",
-) {
-  static readonly layer = (
-    input: HerdrForkSessionInput,
-    options: HerdrForkServiceOptions = {},
-  ): Layer.Layer<HerdrForkService> => Layer.succeed(this, makeHerdrForkService(input, options));
-}
+) {}

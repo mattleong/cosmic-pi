@@ -33,7 +33,7 @@ import type {
   BackgroundTerminalProjection,
 } from "../job/model.ts";
 import { isActiveJobState } from "../job/model.ts";
-import { sanitizeTerminalLine } from "./sanitize.ts";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { styledBackgroundLogLines } from "./styled-log.ts";
 
 export interface ProcessManagerOptions {

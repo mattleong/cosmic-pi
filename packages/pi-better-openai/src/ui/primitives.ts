@@ -1,35 +1,15 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedConfig } from "../config/index.ts";
-import { isFastActive, supportsFast, type FastSnapshot } from "../fast/controller.ts";
 import type * as MutableRef from "effect/MutableRef";
-import { visibleStatusLine, type OpenAIProjection } from "../usage/index.ts";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
+import type { ResolvedConfig } from "../config/index.ts";
+import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
+import { visibleStatusLine, type OpenAIProjection } from "../usage/index.ts";
 
-export interface FastModeUiState {
-  desired: boolean;
-  active: boolean;
-  supported: boolean;
-  modelId?: string;
-}
-
-export interface OpenAIUsageUiState {
-  visible: boolean;
-  text?: string;
-  updatedAt?: number;
-}
-
-export function fastModeUiState(ctx: ExtensionContext, snapshot: FastSnapshot): FastModeUiState {
-  const state: FastModeUiState = {
-    desired: snapshot.desiredActive,
-    active: isFastActive(ctx, snapshot),
-    supported: supportsFast(ctx),
-  };
-  if (ctx.model?.id) state.modelId = ctx.model.id;
-  return state;
-}
-
-export function fastModeFooterPrimitive(state: FastModeUiState): FooterTextPrimitive | undefined {
-  if (!state.active) return undefined;
+export function fastModeFooterPrimitive(
+  ctx: ExtensionContext,
+  snapshot: FastSnapshot,
+): FooterTextPrimitive | undefined {
+  if (!isFastActive(ctx, snapshot)) return undefined;
   return {
     kind: "text",
     id: "openai.fast",
@@ -45,25 +25,19 @@ export function fastModeFooterPrimitive(state: FastModeUiState): FooterTextPrimi
   };
 }
 
-export function openAIUsageUiState(
+export function openAIUsageFooterPrimitive(
   ctx: ExtensionContext,
   cfg: ResolvedConfig,
   projection: MutableRef.MutableRef<OpenAIProjection>,
-): OpenAIUsageUiState {
-  const text = visibleStatusLine(ctx, cfg, projection);
-  return text ? { visible: true, text } : { visible: false };
-}
-
-export function openAIUsageFooterPrimitive(
-  state: OpenAIUsageUiState,
 ): FooterTextPrimitive | undefined {
-  if (!state.visible || !state.text) return undefined;
+  const text = visibleStatusLine(ctx, cfg, projection);
+  if (!text) return undefined;
   return {
     kind: "text",
     id: "openai.usage",
     region: "details",
-    text: state.text,
-    compactText: state.text.replace(/\s*\([^)]*\)/g, ""),
+    text,
+    compactText: text.replace(/\s*\([^)]*\)/g, ""),
     label: "OpenAI",
     tone: "dim",
     priority: 60,

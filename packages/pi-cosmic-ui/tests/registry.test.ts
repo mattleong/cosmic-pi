@@ -142,15 +142,15 @@ describe("FooterRegistryService", () => {
         expect(second.attach).toHaveBeenCalledOnce();
         yield* registry.setRenderRequest(undefined);
         expect(second.detach).toHaveBeenCalledOnce();
-        yield* registry.clear;
-        yield* registry.clear;
+        yield* registry.remove("owner");
+        yield* registry.remove("owner");
         expect(second.dispose).toHaveBeenCalledOnce();
       }),
     );
   });
 
   it.effect("does not let a stale owner clear a replacement render request", () => {
-    const { layer } = registryLayer();
+    const { bridge, layer } = registryLayer();
     const active = surface();
     const first = vi.fn();
     const second = vi.fn();
@@ -164,7 +164,7 @@ describe("FooterRegistryService", () => {
 
         yield* registry.setRenderRequest(undefined, first);
         expect(active.detach).not.toHaveBeenCalled();
-        registry.requestRenderNow();
+        bridge.requestRenderNow();
         expect(second).toHaveBeenCalledOnce();
       }),
     );
@@ -353,7 +353,7 @@ describe("FooterRegistryService", () => {
           throw new Error("secret render payload");
         });
         yield* registry.invalidate();
-        yield* registry.clear;
+        yield* registry.remove("owner");
         const diagnostics = callbacks.diagnostics();
         expect(diagnostics).toHaveLength(2);
         expect(diagnostics.every((entry) => Object.keys(entry).join() === "operation")).toBe(true);

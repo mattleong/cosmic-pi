@@ -19,7 +19,7 @@ const makeService = Effect.fn("AskUserService.make")(function* () {
   // Open while the runtime admits requests; the scope finalizer closes it atomically.
   const admissions = yield* Latch.make(true);
   const ask: AskUserServiceContract["ask"] = (request) =>
-    lock.withPermits(1)(
+    lock.withPermit(
       Effect.gen(function* () {
         if (!admissions.isOpen()) {
           return yield* new AskUserRuntimeClosedError({
@@ -40,8 +40,4 @@ export class AskUserService extends Context.Service<AskUserService, AskUserServi
   "pi-ask-user/questionnaire/service/AskUserService",
 ) {
   static readonly layer = Layer.effect(this, makeService());
-
-  static override readonly use = <A, E>(
-    f: (service: AskUserServiceContract) => Effect.Effect<A, E>,
-  ) => Effect.flatMap(this, f);
 }

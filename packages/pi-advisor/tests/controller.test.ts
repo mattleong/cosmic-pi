@@ -15,8 +15,6 @@ import { advisorControllerApplicationLayer } from "../src/application/lifecycle.
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import { makeAdvisorHostBindings } from "../src/boundary/host-bindings.ts";
 import { captureAdvisorSessionInputEffect } from "../src/boundary/host-context.ts";
-import { PiCommandAdapter } from "../src/boundary/host-commands.ts";
-import { hostNotifierLayer } from "../src/boundary/host-notifier.ts";
 import { failureLoggerLayer } from "../src/logging/logger.ts";
 import { standaloneAdvisorExecutor } from "./support/executor.ts";
 import { configStoreLayerFromLoad } from "./support/layers.ts";
@@ -138,10 +136,8 @@ describe("AdvisorController", () => {
     const dependencies = Layer.mergeAll(
       runtimeServiceStub,
       advisorReviewQueueServiceLayer,
-      PiCommandAdapter.layer,
       configStore,
       failureLoggerLayer,
-      hostNotifierLayer,
     ).pipe(Layer.provideMerge(advisorPlatformLayer));
     const application = advisorControllerApplicationLayer(options).pipe(
       Layer.provideMerge(dependencies),

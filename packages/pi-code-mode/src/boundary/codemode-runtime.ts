@@ -2,57 +2,35 @@
  * The single import door for the private, vendored Code Mode runtime.
  *
  * The runtime TypeScript source ships by value under `runtime/src/` and Pi/Jiti loads it
- * directly. The computed import keeps the foreign vendored tree under its own relaxed TypeScript
- * project while this extension retains the workspace's strict compiler and Effect diagnostics.
- * This owned structural contract is intentionally limited to the surface the Pi integration uses.
+ * directly. The computed import keeps the vendored tree under its own TypeScript project while
+ * this extension retains the workspace's strict compiler and Effect diagnostics. This structural
+ * contract names only fields consumed by the Pi integration.
  */
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType, type JsonObject } from "pi-cosmic-core";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 
 export interface ToolError {
   readonly _tag: "ToolError";
   readonly message: string;
-  readonly cause?: unknown;
 }
 
 export type CodeModeToolCallLifecycleEvent =
   | { readonly id: number; readonly name: string; readonly status: "queued" }
-  | {
-      readonly id: number;
-      readonly name: string;
-      readonly status: "running";
-      readonly queueDurationMs: number;
-    }
+  | { readonly id: number; readonly name: string; readonly status: "running" }
   | {
       readonly id: number;
       readonly name: string;
       readonly status: "succeeded" | "failed" | "cancelled";
-      readonly started: boolean;
       readonly durationMs: number;
-      readonly queueDurationMs: number;
     };
 
 export interface CodeModeDiagnostic {
-  readonly kind:
-    | "ParseError"
-    | "UnsupportedSyntax"
-    | "UnknownTool"
-    | "InvalidToolInput"
-    | "InvalidToolOutput"
-    | "InvalidDataValue"
-    | "ToolCallLimitExceeded"
-    | "TimeoutExceeded"
-    | "ToolFailure"
-    | "ExecutionFailure";
+  readonly kind: string;
   readonly message: string;
   readonly location?: { readonly line: number; readonly column: number };
   readonly suggestions?: ReadonlyArray<string>;
-}
-
-interface CodeModeToolCall {
-  readonly name: string;
 }
 
 export interface CodeModeSuccess {
@@ -60,7 +38,6 @@ export interface CodeModeSuccess {
   readonly value: Schema.Json;
   readonly logs?: ReadonlyArray<string>;
   readonly truncated?: boolean;
-  readonly toolCalls: ReadonlyArray<CodeModeToolCall>;
 }
 
 export interface CodeModeFailure {
@@ -68,7 +45,6 @@ export interface CodeModeFailure {
   readonly error: CodeModeDiagnostic;
   readonly logs?: ReadonlyArray<string>;
   readonly truncated?: boolean;
-  readonly toolCalls: ReadonlyArray<CodeModeToolCall>;
 }
 
 export type CodeModeResult = CodeModeSuccess | CodeModeFailure;
@@ -95,43 +71,25 @@ interface CodeModeExecuteOptions {
   readonly onToolCallEnd?: (call: {
     readonly index: number;
     readonly lifecycleId?: number;
-    readonly name: string;
-    readonly input: unknown;
     readonly durationMs: number;
     readonly outcome: "success" | "failure";
-    readonly message?: string;
   }) => Effect.Effect<void, never>;
 }
 
 interface CodeModeApi {
   readonly execute: (options: CodeModeExecuteOptions) => Effect.Effect<CodeModeResult>;
-  readonly make: (
-    options?: Omit<CodeModeExecuteOptions, "code"> & {
-      readonly discovery?: { readonly catalogBudget?: number };
-    },
-  ) => {
-    readonly catalog: () => ReadonlyArray<{
-      readonly path: string;
-      readonly description: string;
-      readonly signature: string;
-    }>;
-    readonly instructions: () => string;
-    readonly execute: (code: string) => Effect.Effect<CodeModeResult>;
-  };
+  readonly make: (options?: {
+    readonly tools?: CodeModeToolNamespace;
+    readonly discovery?: { readonly catalogBudget?: number };
+  }) => { readonly instructions: () => string };
 }
 
-type JsonSchema = JsonObject;
-
-type ToolSchema = Schema.Decoder<unknown> | JsonSchema;
+type ToolSchema = Schema.Decoder<unknown>;
 type ToolInput<Decoder> = Decoder extends Schema.Decoder<unknown> ? Decoder["Type"] : unknown;
 type ToolOutput<Decoder> = Decoder extends Schema.Decoder<unknown> ? Decoder["Encoded"] : unknown;
 
-interface ToolDefinition<Requirements = never> {
+interface ToolDefinition {
   readonly _tag: "CodeModeTool";
-  readonly description: string;
-  readonly input: ToolSchema;
-  readonly output: ToolSchema | undefined;
-  readonly run: <Input>(input: Input) => Effect.Effect<unknown, unknown, Requirements>;
 }
 
 interface CodeModeToolNamespace {
@@ -150,17 +108,14 @@ interface ToolApi {
     readonly run: (
       input: ToolInput<Input>,
     ) => Effect.Effect<ToolOutput<Output>, unknown, Requirements>;
-  }) => ToolDefinition<Requirements>;
+  }) => ToolDefinition;
 }
 
 interface RuntimeModule {
   readonly CodeMode: CodeModeApi;
   readonly Tool: ToolApi;
-  readonly ToolError: new (args: {
-    readonly message: string;
-    readonly cause?: unknown;
-  }) => ToolError;
-  readonly toolError: (message: string, cause?: unknown) => ToolError;
+  readonly ToolError: new (args: { readonly message: string }) => ToolError;
+  readonly toolError: (message: string) => ToolError;
 }
 
 const runtimeSource: string = "../../runtime/src/index.ts";

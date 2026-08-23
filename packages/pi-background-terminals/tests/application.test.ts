@@ -94,6 +94,35 @@ describe("background-terminal Pi lifecycle", () => {
     }),
   );
 
+  it.effect("ignores turn_end while the runtime slot is inactive", () =>
+    Effect.gen(function* () {
+      const handlers = new Map<string, Handler>();
+      const settings = deferred<void>();
+      const setStatus = vi.fn();
+      const pi = extensionApiFixture({
+        events: undefined,
+        registerCommand: vi.fn(),
+        registerTool: vi.fn(),
+        on: vi.fn((name: string, handler: Handler) => handlers.set(name, handler)),
+      });
+      registerBackgroundTerminalsApplication(pi, { loadSettings: () => settings.promise });
+      const ctx = extensionContextFixture({
+        ...context(process.cwd()),
+        hasUI: true,
+        mode: "tui",
+        ui: { setStatus },
+      });
+
+      const starting = Promise.resolve(handlers.get("session_start")?.({}, ctx));
+      handlers.get("turn_end")?.({}, ctx);
+      expect(setStatus).not.toHaveBeenCalled();
+
+      settings.resolve();
+      yield* Effect.promise(() => starting);
+      yield* Effect.promise(() => Promise.resolve(handlers.get("session_shutdown")?.({}, ctx)));
+    }),
+  );
+
   it.effect(
     "deactivates the prior runtime immediately while replacement settings are pending",
     () =>

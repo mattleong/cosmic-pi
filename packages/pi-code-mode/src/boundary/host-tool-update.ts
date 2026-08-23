@@ -7,14 +7,13 @@
  * stale progress ever reaches a replaced session.
  */
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import { synchronousNow } from "./native-clock.ts";
 import type { CodeModeToolDetails } from "../tools/format.ts";
 
 /** Pi's TUI renders at most once per 16 ms frame; match that cadence at the host boundary. */

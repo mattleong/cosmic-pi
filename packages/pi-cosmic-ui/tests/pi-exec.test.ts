@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { PiApi, provideBuiltLayer } from "pi-cosmic-core";
-import { PiExec } from "../src/probe/pi-exec.ts";
+import { PiExec } from "../src/boundary/host-exec.ts";
 
 describe("Pi exec", () => {
   it.effect("disables optional locks for Git probes without changing gh arguments", () => {

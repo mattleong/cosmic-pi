@@ -4,7 +4,14 @@ import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { decodeProfileCandidate, MAX_PROFILE_CANDIDATES } from "../config/schema.ts";
-import { PROFILE_IDS, type ProfileCandidate, type ProfileId, type ProfileRoute } from "./model.ts";
+import {
+  cloneProfileRoute,
+  PROFILE_IDS,
+  sameProfileRoute,
+  type ProfileCandidate,
+  type ProfileId,
+  type ProfileRoute,
+} from "./model.ts";
 
 export type SessionProfileOverrides = Partial<Readonly<Record<ProfileId, ProfileRoute>>>;
 
@@ -56,27 +63,6 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
 });
 const exactDecodeOptions = { onExcessProperty: "error" as const };
 
-const cloneRoute = (route: ProfileRoute): ProfileRoute => ({
-  candidates: route.candidates.map((candidate) => ({ ...candidate })),
-});
-
-const sameRoute = (left: ProfileRoute, right: ProfileRoute): boolean =>
-  left.candidates.length === right.candidates.length &&
-  left.candidates.every((candidate, index) => {
-    const other = right.candidates[index];
-    return (
-      other !== undefined &&
-      candidate.host === other.host &&
-      candidate.runtime === other.runtime &&
-      candidate.model === other.model &&
-      candidate.effort === other.effort &&
-      candidate.context === other.context &&
-      candidate.writeIntent === other.writeIntent &&
-      candidate.fastMode === other.fastMode &&
-      candidate.closeOnReport === other.closeOnReport
-    );
-  });
-
 export const emptySessionProfileOverrideSeed = (): SessionProfileOverrideSeed =>
   freezeSnapshot({ revision: 0, overrides: {} });
 
@@ -86,7 +72,7 @@ export const cloneSessionProfileOverrideSeed = (
   const overrides: Partial<Record<ProfileId, ProfileRoute>> = {};
   for (const profile of PROFILE_IDS) {
     const route = seed.overrides[profile];
-    if (route) overrides[profile] = cloneRoute(route);
+    if (route) overrides[profile] = cloneProfileRoute(route);
   }
   return freezeSnapshot({ revision: Math.max(0, Math.floor(seed.revision)), overrides });
 };
@@ -125,7 +111,7 @@ export const applySessionProfileOverrides = (
   const profileSources = { ...baseConfig.profileSources };
   for (const profile of PROFILE_IDS) {
     const route = overrides[profile];
-    profiles[profile] = cloneRoute(route ?? baseConfig.profiles[profile]);
+    profiles[profile] = cloneProfileRoute(route ?? baseConfig.profiles[profile]);
     if (route) profileSources[profile] = "session";
   }
   return freezeSnapshot({ ...baseConfig, profiles, profileSources });
@@ -162,11 +148,11 @@ export const patchSessionProfileSnapshot = (
     );
   const current = snapshot.overrides[patch.profile];
   if (patch.route === undefined && current === undefined) return Effect.succeed(snapshot);
-  if (patch.route !== undefined && current !== undefined && sameRoute(current, patch.route))
+  if (patch.route !== undefined && current !== undefined && sameProfileRoute(current, patch.route))
     return Effect.succeed(snapshot);
   const overrides = { ...snapshot.overrides } satisfies Partial<Record<ProfileId, ProfileRoute>>;
   if (patch.route === undefined) delete overrides[patch.profile];
-  else overrides[patch.profile] = cloneRoute(patch.route);
+  else overrides[patch.profile] = cloneProfileRoute(patch.route);
   return Effect.succeed(
     makeSessionProfileSnapshot(snapshot.baseConfig, {
       revision: snapshot.revision + 1,

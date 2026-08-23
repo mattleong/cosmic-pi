@@ -12,16 +12,13 @@ import {
 
 describe("formatCodeModeSuccess", () => {
   it("returns string values verbatim and appends logs", () => {
-    expect(
-      formatCodeModeSuccess(
-        { ok: true, value: "hello", logs: ["one", "two"], toolCalls: [] },
-        51_200,
-      ),
-    ).toBe("hello\n\nLogs:\none\ntwo");
+    expect(formatCodeModeSuccess({ ok: true, value: "hello", logs: ["one", "two"] }, 51_200)).toBe(
+      "hello\n\nLogs:\none\ntwo",
+    );
   });
 
   it("pretty-prints structured values while they fit maxOutputBytes", () => {
-    expect(formatCodeModeSuccess({ ok: true, value: { a: 1 }, toolCalls: [] }, 51_200)).toBe(
+    expect(formatCodeModeSuccess({ ok: true, value: { a: 1 } }, 51_200)).toBe(
       JSON.stringify({ a: 1 }, null, 2),
     );
   });
@@ -32,7 +29,7 @@ describe("formatCodeModeSuccess", () => {
     const compact = JSON.stringify(value);
     const limit = compact.length + 8;
     expect(JSON.stringify(value, null, 2).length).toBeGreaterThan(limit);
-    expect(formatCodeModeSuccess({ ok: true, value, toolCalls: [] }, limit)).toBe(compact);
+    expect(formatCodeModeSuccess({ ok: true, value }, limit)).toBe(compact);
   });
 });
 
@@ -47,7 +44,6 @@ describe("formatCodeModeFailure", () => {
         suggestions: ["Use tools.$codemode.search({ query }) to find available described tools."],
       },
       logs: ["probe"],
-      toolCalls: [],
     });
     expect(message).toContain("[UnknownTool]");
     expect(message).toContain("(line 2, column 7)");
@@ -64,7 +60,6 @@ describe("formatCodeModeFailure", () => {
         message: "refused: narrow the call",
         suggestions: ["narrow the call"],
       },
-      toolCalls: [],
     });
     expect(message).toBe("[ToolFailure] refused: narrow the call");
   });

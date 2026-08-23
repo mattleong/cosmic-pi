@@ -1,6 +1,6 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
 import type { DiffWordEmphasis } from "../src/config/schema";
-import { renderSyntaxHighlightedDiff } from "../src/diff/index";
+import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";
 import { changedRanges, changedRangesWithConfidence } from "../src/diff/word/emphasis";
 import { profileLine, profilePlacement } from "../src/diff/word/fixtures/profile-lines";

@@ -41,6 +41,7 @@ import {
   assertBoundedCollectionSize,
   assertBoundedQueryPairs,
   assertBoundedStringLength,
+  assertBoundedUrlConstructionInputs,
   assertBoundedUrlQueryPairs,
   assertConfinedRegExp,
   assertConfinedRegExpOperation,
@@ -1936,18 +1937,7 @@ class Interpreter<R> {
     }
     const input = urlArgument(args[0], "new URL input");
     const base = args[1] === undefined ? undefined : urlArgument(args[1], "new URL base");
-    // Confinement preflight: URL normalization percent-encodes, so the worst-case href
-    // length is charged before the native constructor materializes it.
-    assertBoundedStringLength(
-      uriEncodedLengthUpperBound(input) +
-        (base === undefined ? 0 : uriEncodedLengthUpperBound(base)),
-      "new URL(...)",
-      node,
-    );
-    // Confinement preflight: the query segment's projected pair count is charged before the
-    // native URL - whose searchParams the SandboxURL wrapper accesses eagerly - parses it.
-    assertBoundedUrlQueryPairs(input, "new URL(...)", node);
-    if (base !== undefined) assertBoundedUrlQueryPairs(base, "new URL(...)", node);
+    assertBoundedUrlConstructionInputs(input, base, "new URL(...)", node);
     try {
       return new SandboxURL(new URL(input, base));
     } catch {

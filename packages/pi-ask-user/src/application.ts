@@ -17,7 +17,6 @@ import {
   type AskUserSessionInput,
 } from "./layer.ts";
 import { AskUserRuntimeClosedError } from "./questionnaire/errors.ts";
-import { AskUserService } from "./questionnaire/service.ts";
 import { registerAskUserTool } from "./tools/ask-user.ts";
 
 export interface AskUserApplicationDependencies {
@@ -27,10 +26,6 @@ export interface AskUserApplicationDependencies {
     signal?: AbortSignal,
   ) => PromiseLike<CodePreviewSettings | void>;
   readonly startupEffect?: Effect.Effect<void>;
-}
-
-export function registerAskUserApplication(pi: ExtensionAPI): void {
-  askUserWithDependencies(pi, {});
 }
 
 /** Internal seam for lifecycle and startup-order tests. */
@@ -56,7 +51,7 @@ export function askUserWithDependencies(
     startup: ({ cwd, projectTrusted }) =>
       bestEffortHostBootstrap("pi-ask-user.preview-settings", (signal) =>
         loadPreviewSettings(cwd, projectTrusted, signal),
-      ).pipe(Effect.andThen(startupEffect), Effect.andThen(AskUserService.use(() => Effect.void))),
+      ).pipe(Effect.andThen(startupEffect)),
     onActivated: ({ ctx }, token) => {
       bridge.setContext(ctx);
       registerAskUserTool(pi, {

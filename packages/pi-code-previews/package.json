@@ -23,7 +23,6 @@
     "index.ts",
     "src/**/*.ts",
     "!src/**/fixtures/**",
-    "!src/**/testing.ts",
     "!src/testing/**",
     "docs",
     "README.md",

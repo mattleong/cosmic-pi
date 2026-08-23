@@ -69,7 +69,7 @@ describe("code mode config store", () => {
   it.effect("resolves locked defaults, seeds an empty global document, and freezes the state", () =>
     Effect.gen(function* () {
       const h = harness(true);
-      const state = yield* Effect.promise(() => h.use((store) => store.state));
+      const state = yield* Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
       expect(state.config).toEqual(DEFAULT_CODE_MODE_CONFIG);
       expect(state.available).toBe(true);
       expect(state.projectTrusted).toBe(true);
@@ -86,7 +86,7 @@ describe("code mode config store", () => {
       const h = harness(true);
       h.writeDoc(h.globalPath, { timeoutMs: 60_000, enabled: false, maxOutputBytes: 1_024 });
       h.writeDoc(h.projectPath, { enabled: true, maxToolCalls: 64 });
-      const state = yield* Effect.promise(() => h.use((store) => store.state));
+      const state = yield* Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
       expect(state.config.enabled).toBe(true);
       expect(state.provenance.enabled).toBe("project");
       expect(state.config.timeoutMs).toBe(60_000);
@@ -107,7 +107,7 @@ describe("code mode config store", () => {
         catalogBudget: 999_999_999,
       });
       h.writeDoc(h.projectPath, { enabled: "yes", maxOutputBytes: 2_048 });
-      const state = yield* Effect.promise(() => h.use((store) => store.state));
+      const state = yield* Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
       expect(state.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
       expect(state.config.catalogBudget).toBe(DEFAULT_CODE_MODE_CONFIG.catalogBudget);
       expect(state.config.maxToolCalls).toBe(64);
@@ -130,7 +130,7 @@ describe("code mode config store", () => {
       const h = harness(false);
       h.writeDoc(h.globalPath, { timeoutMs: 45_000 });
       h.writeDoc(h.projectPath, { enabled: true, timeoutMs: 1_000 });
-      const state = yield* Effect.promise(() => h.use((store) => store.state));
+      const state = yield* Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
       expect(state.config.timeoutMs).toBe(45_000);
       expect(state.projectValues).toEqual({});
       expect(state.provenance.enabled).toBe("default");
@@ -141,7 +141,7 @@ describe("code mode config store", () => {
   it.effect("computes availability as trusted AND enabled across the matrix", () =>
     Effect.gen(function* () {
       const stateOf = (h: ReturnType<typeof harness>) =>
-        Effect.promise(() => h.use((store) => store.state));
+        Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
 
       const trustedDefault = harness(true);
       expect((yield* stateOf(trustedDefault)).available).toBe(true);

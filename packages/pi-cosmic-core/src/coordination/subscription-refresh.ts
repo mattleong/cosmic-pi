@@ -1,10 +1,9 @@
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as MutableRef from "effect/MutableRef";
 import * as Ref from "effect/Ref";
-import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as TxReentrantLock from "effect/TxReentrantLock";
 import { makeRefreshCoordinatorWith } from "./refresh-coordinator.ts";
 
 export interface SubscriptionRefreshOptions<Request, Key, Value, E, R> {
@@ -35,31 +34,16 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
   Effect.gen(function* () {
     const coordinator = yield* makeRefreshCoordinatorWith<Request, E>(options.mergeRequest);
     const revisionRef = yield* Ref.make(0);
-    const commitGate = yield* Semaphore.make(1);
-    const commitOwner = MutableRef.make<number | undefined>(undefined);
+    const commitGate = yield* TxReentrantLock.make();
     const initialWake = yield* Deferred.make<void>();
     const wakeRef = yield* SynchronizedRef.make(initialWake);
     const equals = options.equals ?? Object.is;
     const spanName = options.spanName ?? "pi-cosmic-core.subscription.refresh";
 
-    // Validation and commit share one gate with external invalidation. A commit may deliberately
-    // invalidate its own result, so same-fiber re-entry bypasses the semaphore instead of waiting
-    // on itself; invalidation from every other fiber remains serialized after the commit.
+    // Validation and commit share one reentrant gate with external invalidation so a commit may
+    // deliberately invalidate its own result without admitting any other fiber.
     const withCommitPermit = <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
-      Effect.gen(function* () {
-        const fiberId = yield* Effect.fiberId;
-        if (MutableRef.get(commitOwner) === fiberId) return yield* effect;
-        return yield* commitGate.withPermits(1)(
-          Effect.acquireUseRelease(
-            Effect.sync(() => MutableRef.set(commitOwner, fiberId)),
-            () => effect,
-            () =>
-              Effect.sync(() => {
-                if (MutableRef.get(commitOwner) === fiberId) MutableRef.set(commitOwner, undefined);
-              }),
-          ),
-        );
-      });
+      TxReentrantLock.withLock(commitGate, effect);
 
     const wake = Effect.gen(function* () {
       const previous = yield* SynchronizedRef.modifyEffect(wakeRef, (current) =>

@@ -10,7 +10,6 @@ import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/te
 import {
   disposeShikiHighlighter,
   disposeShikiHighlighterSafely,
-  shikiBoundaryTest,
   ShikiAdapter,
   ShikiBoundaryError,
   type ShikiHighlighter,
@@ -20,11 +19,6 @@ import { getShikiStatus } from "../../src/syntax/render";
 import { disposeShikiEffect, initializeShikiEffect } from "../../src/syntax/shiki";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
 
-const abortSignalFixture = <Fixture extends object>(fixture: Fixture): Fixture & AbortSignal => {
-  // SAFETY: Each scenario invokes only the AbortSignal members implemented by its fixture.
-  return fixture as Fixture & AbortSignal;
-};
-
 const highlighterFixture = <Fixture extends object>(
   fixture: Fixture,
 ): Fixture & ShikiHighlighter => {
@@ -33,50 +27,6 @@ const highlighterFixture = <Fixture extends object>(
 };
 
 describe("Shiki adapter lifecycle", () => {
-  it.effect("contains hostile AbortSignal listener setup and removal", () =>
-    Effect.sync(() => {
-      const addThrows = abortSignalFixture({
-        addEventListener: () => {
-          throw new Error("host add failed");
-        },
-        removeEventListener: () => undefined,
-      });
-      assert.equal(
-        shikiBoundaryTest.registerAbortListener(addThrows, () => undefined),
-        undefined,
-      );
-
-      let removeAttempts = 0;
-      const removeThrows = abortSignalFixture({
-        aborted: false,
-        addEventListener: () => undefined,
-        removeEventListener: () => {
-          removeAttempts++;
-          throw new Error("host remove failed");
-        },
-      });
-      const registration = shikiBoundaryTest.registerAbortListener(removeThrows, () => undefined);
-      assert.ok(registration);
-      assert.doesNotThrow(registration.remove);
-      assert.doesNotThrow(registration.remove);
-      assert.equal(removeAttempts, 1);
-
-      let getterCleanup = 0;
-      const getterThrows = abortSignalFixture({
-        get aborted() {
-          throw new Error("host getter failed");
-        },
-        addEventListener: () => undefined,
-        removeEventListener: () => getterCleanup++,
-      });
-      assert.equal(
-        shikiBoundaryTest.registerAbortListener(getterThrows, () => undefined),
-        undefined,
-      );
-      assert.equal(getterCleanup, 1);
-    }),
-  );
-
   it.effect("defers disposal until a cancelled live language Promise settles", () => {
     const pendingGate = Deferred.makeUnsafe<void>();
     const pending = Effect.runPromise(Deferred.await(pendingGate));

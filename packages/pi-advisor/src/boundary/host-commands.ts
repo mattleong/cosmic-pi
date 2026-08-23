@@ -1,6 +1,4 @@
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 export class PiCommandError extends Schema.TaggedError<PiCommandError>()("PiCommandError", {
@@ -8,26 +6,15 @@ export class PiCommandError extends Schema.TaggedError<PiCommandError>()("PiComm
   message: Schema.String,
 }) {}
 
-export interface PiCommandAdapterContract {
-  readonly fromPromise: <A>(operation: () => Promise<A>) => Effect.Effect<A, PiCommandError>;
-}
-
-/** The sole adapter for Pi's Promise-returning command UI. */
-export class PiCommandAdapter extends Context.Service<PiCommandAdapter, PiCommandAdapterContract>()(
-  "pi-advisor/boundary/host-commands/PiCommandAdapter",
-) {
-  static readonly layer = Layer.succeed(
-    PiCommandAdapter,
-    PiCommandAdapter.of({
-      fromPromise: (operation) =>
-        Effect.tryPromise({
-          try: operation,
-          catch: () =>
-            new PiCommandError({
-              operation: "handler",
-              message: "Advisor command failed.",
-            }),
-        }),
-    }),
-  );
-}
+/** Adapt one Promise-returning Pi command handler at the host boundary. */
+export const fromHostCommandPromise = <A>(
+  operation: () => Promise<A>,
+): Effect.Effect<A, PiCommandError> =>
+  Effect.tryPromise({
+    try: operation,
+    catch: () =>
+      new PiCommandError({
+        operation: "handler",
+        message: "Advisor command failed.",
+      }),
+  });

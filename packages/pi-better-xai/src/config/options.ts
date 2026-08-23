@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { sectionSettingValue, type JsonObject } from "pi-cosmic-core";
+import { sectionSettingValue } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
 import { FiniteNumberSchema, FOOTER_MODES, FooterModeSchema } from "./schema.ts";
 
@@ -87,8 +87,6 @@ export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = 
 const SETTINGS_OPTION_BY_ID = new Map(
   SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
 );
-
-export type RawConfigUpdate = (current: JsonObject) => JsonObject;
 
 export const decodeSettingUpdate = Effect.fn("XaiConfig.decodeSettingUpdate")(function* (
   id: string,

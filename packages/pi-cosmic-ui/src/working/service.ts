@@ -51,7 +51,6 @@ export const formatWorkingMessage = (
 
 export interface WorkingTimerServiceContract {
   readonly start: Effect.Effect<void>;
-  readonly recordOutputCharacters: (characters: number) => Effect.Effect<void>;
   readonly noteOutputCharacters: (characters: number) => void;
   readonly pauseOutput: Effect.Effect<void>;
   readonly stop: Effect.Effect<void>;
@@ -156,14 +155,6 @@ export class WorkingTimerService extends Context.Service<
         Effect.asVoid,
       );
 
-      const recordOutputCharacters = (characters: number): Effect.Effect<void> => {
-        const increment = Math.max(0, Math.floor(characters));
-        if (increment === 0) return Effect.void;
-        return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) => applyOutputCharacters(increment, now)),
-        );
-      };
-
       const noteOutputCharacters = (characters: number): void => {
         const increment = Math.max(0, Math.floor(characters));
         if (increment === 0) return;
@@ -201,7 +192,6 @@ export class WorkingTimerService extends Context.Service<
       yield* Effect.addFinalizer(() => stop);
       return WorkingTimerService.of({
         start,
-        recordOutputCharacters,
         noteOutputCharacters,
         pauseOutput,
         stop,

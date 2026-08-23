@@ -108,39 +108,6 @@ export function disposeShikiHighlighter(
   });
 }
 
-type AbortRegistration = {
-  readonly aborted: boolean;
-  readonly remove: () => void;
-};
-
-function registerAbortListener(
-  signal: AbortSignal,
-  onAbort: () => void,
-): AbortRegistration | undefined {
-  let registered = false;
-  const remove = () => {
-    if (!registered) return;
-    registered = false;
-    try {
-      signal.removeEventListener("abort", onAbort);
-    } catch {
-      // AbortSignal is a host boundary; cleanup must remain no-fail.
-    }
-  };
-  try {
-    signal.addEventListener("abort", onAbort, { once: true });
-    registered = true;
-    const aborted = signal.aborted;
-    if (aborted) onAbort();
-    return { aborted, remove };
-  } catch {
-    remove();
-    return undefined;
-  }
-}
-
-export const shikiBoundaryTest = { registerAbortListener };
-
 export interface ShikiAdapterContract {
   readonly create: (
     theme: string,
@@ -168,26 +135,9 @@ function createShikiHighlighter(
   theme: string,
   languages: readonly string[],
 ): Effect.Effect<ShikiHighlighter, ShikiBoundaryError> {
-  return Effect.callback<ShikiHighlighter, ShikiBoundaryError>((resume, signal) => {
+  return Effect.callback<ShikiHighlighter, ShikiBoundaryError>((resume) => {
     let cancelled = false;
-    const abort = () => {
-      cancelled = true;
-    };
-    const registration = registerAbortListener(signal, abort);
-    if (!registration) {
-      resume(
-        Effect.fail(
-          new ShikiBoundaryError({
-            operation: "initialize",
-            message: "Unable to initialize syntax highlighting.",
-          }),
-        ),
-      );
-      return Effect.void;
-    }
-    if (registration.aborted || cancelled) return Effect.sync(registration.remove);
     const failInitialization = () => {
-      registration.remove();
       if (!cancelled)
         resume(
           Effect.fail(
@@ -202,12 +152,8 @@ function createShikiHighlighter(
       // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
       void createHighlighter({ themes: [theme], langs: [...languages] as never[] })
         .then((highlighter) => {
-          try {
-            if (cancelled) disposeShikiHighlighterSafely(highlighter);
-            else resume(Effect.succeed(highlighter));
-          } finally {
-            registration.remove();
-          }
+          if (cancelled) disposeShikiHighlighterSafely(highlighter);
+          else resume(Effect.succeed(highlighter));
         }, failInitialization)
         .catch(() => undefined);
     } catch {
@@ -215,7 +161,6 @@ function createShikiHighlighter(
     }
     return Effect.sync(() => {
       cancelled = true;
-      registration.remove();
     });
   });
 }

@@ -8,13 +8,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import { completeSettingsArguments } from "pi-cosmic-core";
+import {
+  completeSettingsArguments,
+  notifyAtHostBoundary,
+  type CapturedHostSignal,
+  type HostNotificationLevel,
+} from "pi-cosmic-core";
 import {
   createSettingsListSurface,
   type SettingsSurfaceItem,
 } from "pi-cosmic-ui/manager/settings-surface";
-import { notifyAtHostBoundary, type HostNotificationLevel } from "../boundary/host-notifier.ts";
-import { type CapturedHostSignal } from "../boundary/host-session.ts";
 import {
   hasCustomSurface,
   inputAtHostBoundary,

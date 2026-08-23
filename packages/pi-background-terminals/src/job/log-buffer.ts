@@ -138,26 +138,6 @@ export class LogBuffer {
   }
 }
 
-export const emptyLogBuffer = (): LogBuffer => LogBuffer.empty();
-
-export function appendLog(
-  current: LogBuffer,
-  stream: BackgroundLogStream,
-  text: string,
-  timestamp: number,
-  maxBytes: number,
-): LogBuffer {
-  return current.append(stream, text, timestamp, maxBytes);
-}
-
-export function addDroppedLogBytes(current: LogBuffer, droppedBytes: number): LogBuffer {
-  return current.addDropped(droppedBytes);
-}
-
-export function dropOldestLogEvent(current: LogBuffer): LogBuffer {
-  return current.dropOldest();
-}
-
 function tailEvents(
   events: ReadonlyArray<BackgroundLogEvent>,
   lineLimit: number,

@@ -11,9 +11,9 @@ import { CosmicUiConfigStore } from "./config/store.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import { FooterRegistryService, type FooterRegistryBridge } from "./footer/registry.ts";
 import { CosmicUiService, type CosmicUiProjection } from "./protocol/service.ts";
-import { PiExec } from "./probe/pi-exec.ts";
+import { PiExec } from "./boundary/host-exec.ts";
 import { RepositoryProbe } from "./probe/repository-probe.ts";
-import { FooterProtocolHost, type FooterProtocolBuffer } from "./protocol/host.ts";
+import { makeFooterProtocolHostLayer, type FooterProtocolBuffer } from "./protocol/host.ts";
 import { WorkingTimerService } from "./working/service.ts";
 
 /** Plain session values captured by the Pi adapter before runtime construction. */
@@ -58,7 +58,7 @@ export const makeCosmicUiApplicationLayer = (
   const registry = FooterRegistryService.layer({ bridge: options.bridge }).pipe(
     Layer.provide(callbackBoundary),
   );
-  const protocol = FooterProtocolHost.layer({ buffer: options.protocolBuffer }).pipe(
+  const protocol = makeFooterProtocolHostLayer({ buffer: options.protocolBuffer }).pipe(
     Layer.provideMerge(registry),
   );
   const workingMessageHost = WorkingMessageHost.layer({ context }).pipe(

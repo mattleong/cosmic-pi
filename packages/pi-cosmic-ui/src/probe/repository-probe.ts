@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { applyGitNumstat, parseGitStatus, type FooterGitStatus } from "../footer/git.ts";
-import { PiExec, type PiExecError } from "./pi-exec.ts";
+import { PiExec, type PiExecError } from "../boundary/host-exec.ts";
 
 export interface RepositoryProbeContract {
   readonly git: (

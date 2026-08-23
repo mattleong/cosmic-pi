@@ -3,13 +3,9 @@ import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { createEditToolDefinition, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import {
-  createSimpleDiff,
-  diffSummarySeparator,
-  FullWidthDiffText,
-  summarizeDiff,
-  type DiffSummary,
-} from "../../diff/index";
+import { FullWidthDiffText } from "../../diff/full-width-text";
+import { createSimpleDiff } from "../../diff/structured";
+import { diffSummarySeparator, summarizeDiff, type DiffSummary } from "../../diff/summary";
 import { renderDisplayPath } from "../../paths/display";
 import { showingFooter } from "../../preview/format";
 import {

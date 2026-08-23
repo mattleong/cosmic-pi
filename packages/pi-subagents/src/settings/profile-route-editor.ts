@@ -3,12 +3,14 @@ import type { SubagentConfigInspection, SubagentConfigScope } from "../config/st
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
-import type {
-  DeclaredProfileCandidate,
-  DeclaredProfileRoute,
-  ProfileCandidate,
-  ProfileCandidateEffort,
-  ProfileId,
+import {
+  cloneProfileCandidates as cloneCandidates,
+  normalizeProfileCandidate as cloneCandidate,
+  type DeclaredProfileCandidate,
+  type DeclaredProfileRoute,
+  type ProfileCandidate,
+  type ProfileCandidateEffort,
+  type ProfileId,
 } from "../profiles/model.ts";
 import {
   subagentRuntimeEfforts,
@@ -58,18 +60,6 @@ export const runtimeEfforts = (
     ? supportedModelEfforts.filter((effort) => supportedByRuntime.includes(effort))
     : supportedByRuntime;
 };
-
-const cloneCandidate = (
-  candidate: DeclaredProfileCandidate | ProfileCandidate,
-): ProfileCandidate => ({
-  ...candidate,
-  fastMode: candidate.fastMode ?? false,
-  closeOnReport: candidate.closeOnReport ?? true,
-});
-
-const cloneCandidates = (
-  candidates: ReadonlyArray<DeclaredProfileCandidate | ProfileCandidate>,
-): ReadonlyArray<ProfileCandidate> => candidates.map(cloneCandidate);
 
 // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 const candidatesFromDeclaration = (

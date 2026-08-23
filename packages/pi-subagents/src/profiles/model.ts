@@ -1,3 +1,4 @@
+import * as Equivalence from "effect/Equivalence";
 import type {
   SubagentContextMode,
   SubagentEffort,
@@ -63,6 +64,42 @@ export type DeclaredProfileRoute =
   | DeclaredProfileCandidate
   | ReadonlyArray<DeclaredProfileCandidate>
   | "disabled";
+
+export const normalizeProfileCandidate = (
+  candidate: DeclaredProfileCandidate,
+): ProfileCandidate => ({
+  ...candidate,
+  fastMode: candidate.fastMode ?? false,
+  closeOnReport: candidate.closeOnReport ?? true,
+});
+
+export const cloneProfileCandidates = (
+  candidates: ReadonlyArray<DeclaredProfileCandidate>,
+): ReadonlyArray<ProfileCandidate> => candidates.map(normalizeProfileCandidate);
+
+export const cloneProfileRoute = (route: ProfileRoute): ProfileRoute => ({
+  candidates: cloneProfileCandidates(route.candidates),
+});
+
+const candidateEquivalences = {
+  host: Equivalence.strictEqual<SubagentHost>(),
+  runtime: Equivalence.strictEqual<SubagentRuntime>(),
+  model: Equivalence.strictEqual<string>(),
+  effort: Equivalence.strictEqual<ProfileCandidateEffort>(),
+  context: Equivalence.strictEqual<SubagentContextMode>(),
+  writeIntent: Equivalence.strictEqual<SubagentWriteIntent>(),
+  fastMode: Equivalence.strictEqual<boolean>(),
+  closeOnReport: Equivalence.strictEqual<boolean>(),
+} satisfies {
+  readonly [Key in keyof ProfileCandidate]: Equivalence.Equivalence<ProfileCandidate[Key]>;
+};
+
+export const sameProfileCandidate = Equivalence.Struct(candidateEquivalences);
+export const sameProfileCandidates = Equivalence.Array(sameProfileCandidate);
+export const sameProfileRoute = Equivalence.mapInput(
+  sameProfileCandidates,
+  (route: ProfileRoute) => route.candidates,
+);
 export type ProfileRouteSource =
   | "session"
   | "project"

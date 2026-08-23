@@ -28,8 +28,8 @@ export class ModelRegistryAuth extends Context.Service<
   ModelRegistryAuth,
   ModelRegistryAuthContract
 >()("pi-better-xai/boundary/model-registry-auth/ModelRegistryAuth") {
-  static make(getRegistry: () => Registry): ModelRegistryAuthContract {
-    return this.of({
+  static layer(getRegistry: () => Registry): Layer.Layer<ModelRegistryAuth> {
+    return Layer.succeed(this, {
       getApiKey: Effect.tryPromise({
         try: () => getRegistry().getApiKeyForProvider("xai"),
         catch: () =>
@@ -48,9 +48,5 @@ export class ModelRegistryAuth extends Context.Service<
             }),
         }),
     });
-  }
-
-  static layer(getRegistry: () => Registry): Layer.Layer<ModelRegistryAuth> {
-    return Layer.succeed(this, this.make(getRegistry));
   }
 }

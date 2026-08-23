@@ -44,7 +44,6 @@ type SyntaxState = {
   readonly initialization: InitializationFlight | undefined;
   readonly loadedLanguages: ReadonlySet<string>;
   readonly pendingLanguages: ReadonlySet<string>;
-  readonly languageCallbacks: ReadonlyMap<string, readonly (() => void)[]>;
   readonly statusVersion: number;
 };
 type InitializeDecision =
@@ -53,11 +52,9 @@ type InitializeDecision =
   | { readonly tag: "Start"; readonly flight: InitializationFlight };
 type LanguageDecision =
   | {
-      readonly kind: "Load";
       readonly highlighter: ShikiHighlighter;
       readonly generation: number;
     }
-  | { readonly kind: "Notify"; readonly callbacks: readonly (() => void)[] }
   | undefined;
 
 export interface CodePreviewSyntaxServiceContract {
@@ -65,13 +62,6 @@ export interface CodePreviewSyntaxServiceContract {
   readonly status: Effect.Effect<Omit<ShikiStatus, "cacheSize">>;
   readonly dispose: Effect.Effect<void>;
 }
-
-const invokeCallbacks = (callbacks: readonly (() => void)[]) =>
-  Effect.forEach(
-    callbacks,
-    (callback) => Effect.try({ try: callback, catch: () => undefined }).pipe(Effect.ignore),
-    { discard: true },
-  );
 
 const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
   Object.freeze({
@@ -104,7 +94,6 @@ export class CodePreviewSyntaxService extends Context.Service<
         initialization: undefined,
         loadedLanguages: new Set(),
         pendingLanguages: new Set(),
-        languageCallbacks: new Map(),
         statusVersion: 0,
       };
       const state = yield* SynchronizedRef.make(initial);
@@ -207,9 +196,8 @@ export class CodePreviewSyntaxService extends Context.Service<
                 highlighterLifecycle.withPermits(1)(
                   modify((current) => {
                     if (current.initVersion !== flight.version)
-                      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
                       return disposeShikiHighlighter(next).pipe(
-                        Effect.as([[] as readonly (() => void)[], current] as const),
+                        Effect.as([undefined, current] as const),
                       );
                     return disposeShikiHighlighter(current.highlighter).pipe(
                       Effect.as([
@@ -222,7 +210,6 @@ export class CodePreviewSyntaxService extends Context.Service<
                           initialization: undefined,
                           loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
                           pendingLanguages: new Set(),
-                          languageCallbacks: new Map(),
                           statusVersion: current.statusVersion + 1,
                         },
                       ] as const),
@@ -242,38 +229,23 @@ export class CodePreviewSyntaxService extends Context.Service<
 
       const requestLanguage = Effect.fn("CodePreviewShiki.requestLanguage")(function* (
         language: string,
-        invalidate?: () => void,
       ) {
         const decision = yield* modify<LanguageDecision>((current) => {
-          if (current.loadedLanguages.has(language))
-            return Effect.succeed([
-              {
-                kind: "Notify" as const,
-                callbacks: invalidate ? [invalidate] : [],
-              },
-              current,
-            ] as const);
-          if (!current.highlighter) return Effect.succeed([undefined, current] as const);
-          const callbacks = new Map(current.languageCallbacks);
-          if (invalidate) callbacks.set(language, [...(callbacks.get(language) ?? []), invalidate]);
+          if (current.loadedLanguages.has(language) || !current.highlighter)
+            return Effect.succeed([undefined, current] as const);
           if (current.pendingLanguages.has(language))
-            return Effect.succeed([
-              undefined,
-              { ...current, languageCallbacks: callbacks },
-            ] as const);
+            return Effect.succeed([undefined, current] as const);
           const pending = new Set(current.pendingLanguages);
           pending.add(language);
           return Effect.succeed([
             {
-              kind: "Load" as const,
               highlighter: current.highlighter,
               generation: current.generation,
             },
-            { ...current, pendingLanguages: pending, languageCallbacks: callbacks },
+            { ...current, pendingLanguages: pending },
           ] as const);
         });
         if (!decision) return;
-        if (decision.kind === "Notify") return yield* invokeCallbacks(decision.callbacks);
         const loadCurrentGeneration = highlighterLifecycle.withPermits(1)(
           SynchronizedRef.get(state).pipe(
             Effect.flatMap((current) =>
@@ -292,14 +264,11 @@ export class CodePreviewSyntaxService extends Context.Service<
                   return Effect.succeed([undefined, current] as const);
                 const pending = new Set(current.pendingLanguages);
                 pending.delete(language);
-                const callbacks = new Map(current.languageCallbacks);
-                callbacks.delete(language);
                 return Effect.succeed([
                   undefined,
                   {
                     ...current,
                     pendingLanguages: pending,
-                    languageCallbacks: callbacks,
                     statusVersion: current.statusVersion + 1,
                   },
                 ] as const);
@@ -307,26 +276,21 @@ export class CodePreviewSyntaxService extends Context.Service<
             onSuccess: () =>
               modify((current) => {
                 if (current.generation !== decision.generation)
-                  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-                  return Effect.succeed([[] as readonly (() => void)[], current] as const);
+                  return Effect.succeed([undefined, current] as const);
                 const pending = new Set(current.pendingLanguages);
                 pending.delete(language);
                 const loaded = new Set(current.loadedLanguages);
                 loaded.add(language);
-                const callbacks = new Map(current.languageCallbacks);
-                const notify = callbacks.get(language) ?? [];
-                callbacks.delete(language);
                 return Effect.succeed([
-                  notify,
+                  undefined,
                   {
                     ...current,
                     loadedLanguages: loaded,
                     pendingLanguages: pending,
-                    languageCallbacks: callbacks,
                     statusVersion: current.statusVersion + 1,
                   },
                 ] as const);
-              }).pipe(Effect.flatMap(invokeCallbacks)),
+              }),
           }),
         );
       });

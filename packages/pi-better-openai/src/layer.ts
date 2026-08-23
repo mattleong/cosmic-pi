@@ -6,7 +6,6 @@ import { OpenAICompactionClient } from "./boundary/openai-compaction.ts";
 import { SharpAdapter } from "./boundary/sharp.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
 import { FastModeService } from "./fast/service.ts";
-import { FAST_SERVICE_TIER } from "./fast/models.ts";
 import { OpenAIImageService } from "./image/index.ts";
 import { OpenAIUsageService, type OpenAIProjection } from "./usage/index.ts";
 import type { FastSnapshot } from "./fast/controller.ts";
@@ -24,9 +23,6 @@ export interface OpenAIApplicationLayerOptions {
   readonly projection: MutableRef.MutableRef<OpenAIProjection>;
   readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
   readonly onUsageChange: (context: MutableRef.MutableRef<ExtensionContext>) => void;
-  readonly registerFastInjectionIngress: (
-    offer: (event: { readonly model: string; readonly tier: string }) => void,
-  ) => void;
 }
 
 /** Compose the complete Better OpenAI dependency graph for one Pi session. */
@@ -41,11 +37,9 @@ export const makeOpenAIApplicationLayer = (
     projectTrusted,
     onChange: () => options.onUsageChange(context),
   });
-  const fast = FastModeService.layer({
-    serviceTier: FAST_SERVICE_TIER,
-    projection: options.fastProjection,
-    registerInjectionIngress: options.registerFastInjectionIngress,
-  }).pipe(Layer.provide(usage));
+  const fast = FastModeService.layer({ projection: options.fastProjection }).pipe(
+    Layer.provideMerge(usage),
+  );
   const image = OpenAIImageService.layer({ context, projection: options.projection }).pipe(
     Layer.provide(Layer.merge(SharpAdapter.layer, SafeFile.layer)),
   );
@@ -58,7 +52,7 @@ export const makeOpenAIApplicationLayer = (
     nodePlatformLayer,
     AgentDirectory.layerFromHost(() => getAgentDir()),
   );
-  return Layer.mergeAll(usage, fast, image, compaction).pipe(Layer.provide(platform));
+  return Layer.mergeAll(fast, image, compaction).pipe(Layer.provide(platform));
 };
 
 export type OpenAIApplicationLayer = ReturnType<typeof makeOpenAIApplicationLayer>;

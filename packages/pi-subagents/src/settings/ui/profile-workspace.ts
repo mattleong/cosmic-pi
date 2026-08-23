@@ -7,7 +7,12 @@ import {
   pageSteps,
 } from "pi-cosmic-ui/manager/keymap";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
-import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
+import {
+  PROFILE_IDS,
+  sameProfileCandidate,
+  type ProfileCandidate,
+  type ProfileId,
+} from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   declaredRouteForDraft,
@@ -25,7 +30,7 @@ import {
   updateCandidateFromModelChoice,
   type CandidateModelPickerData,
 } from "./candidate-editor.ts";
-import { ProfileModelPickerPage, type ProfileModelChoice } from "./model-picker.ts";
+import { makeProfileModelPickerPage, type ProfileModelChoice } from "./model-picker.ts";
 import {
   PROFILE_WORKSPACE_FIELDS,
   PROFILE_WORKSPACE_SHORTCUTS,
@@ -103,16 +108,6 @@ const confirmationKey = (action: PendingAction): string =>
 const saveScopeLabel = (scope: ProfileSettingsScope): string =>
   scope === "session" ? "to this session" : scope === "global" ? "globally" : "to project";
 
-const sameCandidate = (left: ProfileCandidate, right: ProfileCandidate): boolean =>
-  left.host === right.host &&
-  left.runtime === right.runtime &&
-  left.model === right.model &&
-  left.effort === right.effort &&
-  left.context === right.context &&
-  left.writeIntent === right.writeIntent &&
-  left.fastMode === right.fastMode &&
-  left.closeOnReport === right.closeOnReport;
-
 export class ProfileWorkspaceComponent implements Component, Focusable {
   private inspection: ProfileSettingsInspection;
   private scope: ProfileSettingsScope;
@@ -130,7 +125,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private alternateHelp = false;
   private pendingAction: PendingAction | undefined;
   private catalogLoad: AbortController | undefined;
-  private modelPicker: ProfileModelPickerPage | undefined;
+  private modelPicker: ReturnType<typeof makeProfileModelPickerPage> | undefined;
   private selectPage: SearchableSelectPage<string> | undefined;
   private _focused = false;
   private readonly keymap = new FullScreenKeymap();
@@ -376,7 +371,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       return;
     }
     const current = this.draft().candidates[this.candidateIndex];
-    if (current && sameCandidate(current, update.candidate)) {
+    if (current && sameProfileCandidate(current, update.candidate)) {
       this.setMessage("info", "No profile change was needed.");
       this.renderSoon();
       return;
@@ -590,7 +585,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           this.renderSoon();
           return;
         }
-        this.modelPicker = new ProfileModelPickerPage(
+        this.modelPicker = makeProfileModelPickerPage(
           (() => {
             const baseResult = {
               theme: this.options.theme,

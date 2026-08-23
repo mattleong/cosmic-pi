@@ -184,6 +184,22 @@ export const assertBoundedUrlQueryPairs = (url: string, label: string, node?: As
   );
 };
 
+/** Charges URL normalization and eager search-parameter parsing before native construction. */
+export const assertBoundedUrlConstructionInputs = (
+  input: string,
+  base: string | undefined,
+  label: string,
+  node?: AstNode,
+): void => {
+  assertBoundedStringLength(
+    uriEncodedLengthUpperBound(input) + (base === undefined ? 0 : uriEncodedLengthUpperBound(base)),
+    label,
+    node,
+  );
+  assertBoundedUrlQueryPairs(input, label, node);
+  if (base !== undefined) assertBoundedUrlQueryPairs(base, label, node);
+};
+
 /**
  * Wall-clock source shared by every `ExecutionDeadline`. Production always uses `Date.now`;
  * tests may install a deterministic clock so deadline expiry inside synchronous native work

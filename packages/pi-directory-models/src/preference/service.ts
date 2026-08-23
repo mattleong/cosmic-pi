@@ -1,9 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import { PiApi } from "pi-cosmic-core";
 import {
@@ -63,32 +62,26 @@ export class DirectoryModelPreferenceService extends Context.Service<
         const pi = yield* PiApi;
         const store = yield* DirectoryModelStore;
         const gate = yield* Semaphore.make(1);
-        const identityRef = yield* Ref.make<DirectoryIdentity | undefined>(undefined);
-        const warnedRef = yield* Ref.make<ReadonlySet<string>>(new Set());
+        // Every access to these session-local values occurs under the single-permit gate.
+        let cachedIdentity: DirectoryIdentity | undefined;
+        const warned = new Set<string>();
 
         const warnOnce = (key: string, message: string) =>
-          Ref.modify(warnedRef, (warned) => {
-            if (warned.has(key)) return [false, warned] as const;
-            const next = new Set(warned);
-            next.add(key);
-            return [true, next] as const;
-          }).pipe(
-            Effect.flatMap((shouldWarn) =>
-              shouldWarn
-                ? Effect.try({
-                    try: () => options.warn(message),
-                    catch: () => "notification-failed" as const,
-                  }).pipe(Effect.catch(() => Effect.void))
-                : Effect.void,
+          Effect.suspend(() => {
+            if (warned.has(key)) return Effect.void;
+            warned.add(key);
+            return Effect.try(() => options.warn(message)).pipe(Effect.ignore);
+          });
+
+        const identity = Effect.suspend(() => {
+          if (cachedIdentity) return Effect.succeed(cachedIdentity);
+          return store.identify(input.cwd).pipe(
+            Effect.tap((identified) =>
+              Effect.sync(() => {
+                cachedIdentity = identified;
+              }),
             ),
           );
-
-        const identity = Effect.gen(function* () {
-          const current = yield* Ref.get(identityRef);
-          if (current) return current;
-          const identified = yield* store.identify(input.cwd);
-          yield* Ref.set(identityRef, identified);
-          return identified;
         });
 
         const write = (
@@ -108,9 +101,8 @@ export class DirectoryModelPreferenceService extends Context.Service<
                 ),
               );
               if (!identified) return;
-              // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
               const preference = yield* preferenceFromSelectedModel(
-                pi as ExtensionAPI,
+                pi,
                 identified.canonicalCwd,
                 selected,
                 thinkingOverride,
@@ -143,9 +135,8 @@ export class DirectoryModelPreferenceService extends Context.Service<
             if (loaded._tag === "Failed") return;
             const loadedPreference = loaded.preference;
             if (!loadedPreference) {
-              // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
               const current = yield* captureCurrentPreference(
-                pi as ExtensionAPI,
+                pi,
                 input.ctx,
                 identified.canonicalCwd,
               ).pipe(
@@ -168,7 +159,7 @@ export class DirectoryModelPreferenceService extends Context.Service<
                 }),
               ),
               () =>
-                applyHostPreference(pi as ExtensionAPI, input.ctx, loadedPreference).pipe(
+                applyHostPreference(pi, input.ctx, loadedPreference).pipe(
                   Effect.matchEffect({
                     onFailure: (error) =>
                       warnOnce(`restore:${error.operation}`, error.message).pipe(

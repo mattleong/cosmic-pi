@@ -9,7 +9,6 @@ export interface XaiSessionInput {
   readonly ctx: ExtensionContext;
   readonly cwd: string;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
-  readonly generation: number;
   readonly projectTrusted: boolean;
 }
 

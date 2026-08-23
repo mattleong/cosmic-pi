@@ -1,8 +1,6 @@
 // Promise-shaped Pi command handlers are an explicit host boundary.
-import * as Effect from "effect/Effect";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { completeSettingsArguments } from "pi-cosmic-core";
-import { PiCommandAdapter, type PiCommandError } from "../boundary/host-commands.ts";
 import {
   openAdvisorDashboard,
   openAdvisorSetup,
@@ -36,17 +34,7 @@ export function registerAdvisorCommands(
   pi: AdvisorCommandRegistrar,
   state: AdvisorConfigState,
   actions: AdvisorCommandActions,
-  runCommand?: <A>(effect: Effect.Effect<A, PiCommandError, PiCommandAdapter>) => Promise<A>,
 ): void {
-  const execute = (operation: () => Promise<void>): Promise<void> =>
-    runCommand
-      ? runCommand(
-          Effect.gen(function* () {
-            const adapter = yield* PiCommandAdapter;
-            return yield* adapter.fromPromise(operation);
-          }),
-        ).catch(() => undefined)
-      : operation();
   pi.registerCommand(ADVISOR_COMMAND, {
     description: ADVISOR_COMMAND_DESCRIPTION,
     getArgumentCompletions: (prefix) =>
@@ -59,7 +47,7 @@ export function registerAdvisorCommands(
           description: SUBCOMMAND_DESCRIPTIONS[value],
         })),
       ),
-    handler: (args, ctx) => execute(() => handleAdvisorCommand(args, ctx, state, actions)),
+    handler: (args, ctx) => handleAdvisorCommand(args, ctx, state, actions),
   });
 }
 

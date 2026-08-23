@@ -35,7 +35,7 @@ import {
   isFastActive,
   unsupportedRequestMessage,
 } from "./fast/controller.ts";
-import { FastModeService } from "./fast/service.ts";
+import { FastModeService, type FastInjectionIngress } from "./fast/service.ts";
 import { FAST_SERVICE_TIER } from "./fast/models.ts";
 import {
   makeOpenAIApplicationLayer,
@@ -46,12 +46,7 @@ import {
 import { createFooterController } from "./footer/controller.ts";
 import { registerOpenAIImage } from "./image/index.ts";
 import { registerSettingsController } from "./settings/controller.ts";
-import {
-  fastModeFooterPrimitive,
-  fastModeUiState,
-  openAIUsageFooterPrimitive,
-  openAIUsageUiState,
-} from "./ui/primitives.ts";
+import { fastModeFooterPrimitive, openAIUsageFooterPrimitive } from "./ui/primitives.ts";
 import {
   OpenAIBoundaryError,
   OpenAIUsageService,
@@ -99,10 +94,7 @@ export function betterOpenAIWithDependencies(
   const resetProviderTransport =
     dependencies.resetOpenAICodexTransport ?? resetOpenAICodexTransport;
   const loadPreviewSettings = dependencies.loadPreviewSettings ?? loadCodePreviewSettings;
-  let recordFastInjection: (event: {
-    readonly model: string;
-    readonly tier: string;
-  }) => void = () => undefined;
+  let recordFastInjection: FastInjectionIngress = () => undefined;
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
@@ -111,8 +103,8 @@ export function betterOpenAIWithDependencies(
   const config = (_ctx: ExtensionContext) => requiredConfig(projection);
   const updateCosmicUi = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
     if (!cosmicUi.active) return;
-    const fast = fastModeFooterPrimitive(fastModeUiState(ctx, MutableRef.get(fastProjection)));
-    const usage = openAIUsageFooterPrimitive(openAIUsageUiState(ctx, cfg, projection));
+    const fast = fastModeFooterPrimitive(ctx, MutableRef.get(fastProjection));
+    const usage = openAIUsageFooterPrimitive(ctx, cfg, projection);
     if (fast) cosmicUi.upsert(fast);
     else cosmicUi.remove("openai.fast");
     if (usage) cosmicUi.upsert(usage);
@@ -138,7 +130,8 @@ export function betterOpenAIWithDependencies(
     OpenAISessionInput,
     OpenAIApplication,
     OpenAIConfigError,
-    OpenAIRuntimeError
+    OpenAIRuntimeError,
+    FastInjectionIngress
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
@@ -148,9 +141,6 @@ export function betterOpenAIWithDependencies(
           fastProjection,
           onUsageChange: (context) => {
             if (currentContext === context) updateFooter(MutableRef.get(context));
-          },
-          registerFastInjectionIngress: (offer) => {
-            recordFastInjection = offer;
           },
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-openai" },
@@ -162,12 +152,15 @@ export function betterOpenAIWithDependencies(
         Effect.andThen(dependencies.startupEffect(generation)),
         Effect.andThen(
           FastModeService.use((service) =>
-            service.initialize(ctx, config(ctx), pi.getFlag(FAST_ID) === true),
+            service
+              .initialize(ctx, config(ctx), pi.getFlag(FAST_ID) === true)
+              .pipe(Effect.as(service.recordInjection)),
           ),
         ),
       ),
-    onActivated: ({ ctx, context }) => {
+    onActivated: ({ ctx, context }, _token, injectionIngress) => {
       currentContext = context;
+      recordFastInjection = injectionIngress;
       registerOpenAIImage(pi, run, updateContext);
       if (hasTerminalUI(ctx)) cosmicUi.query();
       else cosmicUi.shutdown();
@@ -181,6 +174,7 @@ export function betterOpenAIWithDependencies(
     },
     onDeactivated: ({ context }) => {
       if (currentContext === context) currentContext = undefined;
+      recordFastInjection = () => undefined;
       cosmicUi.shutdown();
       resetProjection(projection);
       MutableRef.set(fastProjection, initialFastSnapshot());

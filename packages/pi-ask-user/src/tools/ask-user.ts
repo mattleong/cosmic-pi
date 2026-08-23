@@ -16,8 +16,6 @@ export interface AskUserToolRunner {
   ) => Promise<A>;
 }
 
-export type AskUserToolDetails = AskUserOutcome;
-
 export function registerAskUserTool(pi: ExtensionAPI, runner: AskUserToolRunner): void {
   const tool = defineTool({
     name: "ask_user",
@@ -44,7 +42,7 @@ export function registerAskUserTool(pi: ExtensionAPI, runner: AskUserToolRunner)
         )
         .then((outcome) => ({
           content: [{ type: "text" as const, text: formatAskUserOutcome(outcome) }],
-          details: outcome satisfies AskUserToolDetails,
+          details: outcome satisfies AskUserOutcome,
         }));
     },
     renderCall(args, theme) {

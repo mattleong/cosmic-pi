@@ -20,7 +20,7 @@ import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/
 import { extensionContextFixture } from "./support/host.ts";
 import { CosmicUiConfigStore } from "../src/config/store.ts";
 import { CosmicUiService, makeProjection } from "../src/protocol/service.ts";
-import { PiExec } from "../src/probe/pi-exec.ts";
+import { PiExec } from "../src/boundary/host-exec.ts";
 import { RepositoryProbe } from "../src/probe/repository-probe.ts";
 
 function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
@@ -126,11 +126,14 @@ describe("Cosmic UI host service", () => {
   });
 
   it.effect("handles Git/gh nonzero results, parses diffs, and throttles pull requests", () => {
-    let calls = 0;
+    let gitCalls = 0;
+    let pullRequestCalls = 0;
     const { layer, projection } = serviceLayer((command, args) => {
-      calls++;
-      if (command === "gh")
+      if (command === "gh") {
+        pullRequestCalls++;
         return Promise.resolve({ stdout: "42\n", stderr: "", code: 0, killed: false });
+      }
+      gitCalls++;
       if (args.includes("diff"))
         return Promise.resolve({ stdout: "10\t4\ta.ts\n", stderr: "", code: 0, killed: false });
       return Promise.resolve({
@@ -149,12 +152,15 @@ describe("Cosmic UI host service", () => {
         linesChanged: 4,
       });
       expect(MutableRef.get(projection).pullRequestNumber).toBe(42);
-      expect(calls).toBe(3);
-      yield* service.refreshPullRequest();
-      expect(calls).toBe(3);
+      expect(gitCalls).toBe(2);
+      expect(pullRequestCalls).toBe(1);
+      yield* service.refreshAll();
+      expect(gitCalls).toBe(4);
+      expect(pullRequestCalls).toBe(1);
       yield* TestClock.adjust("30 seconds");
-      yield* service.refreshPullRequest();
-      expect(calls).toBe(4);
+      yield* service.refreshAll();
+      expect(gitCalls).toBe(6);
+      expect(pullRequestCalls).toBe(2);
     }).pipe(provideBuiltLayer(layer));
   });
 

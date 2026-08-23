@@ -1,7 +1,6 @@
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as RcMap from "effect/RcMap";
 import * as Scope from "effect/Scope";
@@ -75,14 +74,11 @@ export class CodePreviewWriteService extends Context.Service<
           rememberBeforeWrite,
           acknowledgeBeforeWrite,
           withPathLock: (path, effect) =>
-            Effect.acquireUseRelease(
-              Scope.make(),
-              (leaseScope) =>
-                RcMap.get(pathLocks, path).pipe(
-                  Effect.provideService(Scope.Scope, leaseScope),
-                  Effect.flatMap((lock) => lock.withPermit(effect)),
-                ),
-              (leaseScope) => Scope.close(leaseScope, Exit.void),
+            Effect.scopedWith((leaseScope) =>
+              RcMap.get(pathLocks, path).pipe(
+                Effect.provideService(Scope.Scope, leaseScope),
+                Effect.flatMap((lock) => lock.withPermit(effect)),
+              ),
             ),
           cacheSize: projection.getState.pipe(Effect.map((state) => state.entries.length)),
         });

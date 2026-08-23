@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../../boundary/executor.ts";
-import type { PiCommandAdapter } from "../../boundary/host-commands.ts";
 import {
   appendAdvisorReviewActionAtHostBoundary,
   latestOpenAdvisorReviewCardAtHostBoundary,
@@ -31,9 +30,7 @@ export interface CommandWorkflowDeps {
   readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
   readonly checkpointOrchestrator: CheckpointOrchestratorContract;
   readonly startRuntimeEffect: EventsDeps["startRuntimeEffect"];
-  readonly runSessionEffect: <A, E>(
-    effect: Effect.Effect<A, E, AdvisorPlatform | PiCommandAdapter>,
-  ) => Promise<A>;
+  readonly runSessionEffect: <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) => Promise<A>;
   readonly runWithExplicitRuntimeEffect: EventsDeps["runWithExplicitRuntimeEffect"];
   readonly requestCheckpoint: EventsDeps["requestCheckpoint"];
   readonly parentExecutor: AdvisorEffectExecutor;

@@ -4,7 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { synchronousNow as previewNow } from "../src/boundary/clock";
-import { createSimpleDiff } from "../src/diff/index";
+import { createSimpleDiff } from "../src/diff/structured";
 import { DeferredPreview } from "../src/preview/deferred";
 import {
   clearCodePreviewSessionCapability,

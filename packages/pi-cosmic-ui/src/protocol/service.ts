@@ -6,7 +6,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, makeFrozenProjection, makeSubscriptionRefresh } from "pi-cosmic-core";
 import { HostCallbackBoundary } from "../boundary/host-callback.ts";
@@ -49,13 +48,8 @@ export const resetProjection = (
   projection: MutableRef.MutableRef<CosmicUiProjection>,
   totals = emptyTotals(),
 ): void => void MutableRef.set(projection, immutable(initialProjection(totals)));
-export class CosmicProbeError extends Schema.TaggedError<CosmicProbeError>()("CosmicProbeError", {
-  operation: Schema.String,
-  message: Schema.String,
-}) {}
 export interface CosmicUiServiceContract {
   readonly refreshGit: (force?: boolean) => Effect.Effect<void>;
-  readonly refreshPullRequest: (force?: boolean) => Effect.Effect<void>;
   readonly refreshAll: (force?: boolean) => Effect.Effect<void>;
   readonly invalidateProbes: Effect.Effect<void>;
   readonly setTotals: (totals: FooterTotals) => Effect.Effect<void>;
@@ -116,11 +110,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
               return Effect.succeed([next, next] as const);
             })
             .pipe(Effect.orDie);
-        const notifyChanged = Effect.try({
-          try: options.onChange,
-          catch: () =>
-            new CosmicProbeError({ operation: "render", message: "Unable to render Cosmic UI." }),
-        }).pipe(Effect.catch(() => Effect.void));
+        const notifyChanged = Effect.try(options.onChange).pipe(Effect.ignore);
         let lastKnownCwd = options.cwd;
         const currentCwd = () =>
           callbacks.invoke(
@@ -278,7 +268,6 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
         }
         return CosmicUiService.of({
           refreshGit,
-          refreshPullRequest,
           refreshAll,
           invalidateProbes: invalidate,
           setTotals,

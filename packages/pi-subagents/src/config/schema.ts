@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import {
+  normalizeProfileCandidate,
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_IDS,
   type DeclaredProfileRoute,
@@ -134,10 +135,8 @@ export const decodeProfileCandidate = <ValueInput>(
     return undefined;
   const decoded = Schema.decodeUnknownOption(CandidateContractSchema)(record);
   if (Option.isNone(decoded)) return undefined;
-  const candidate = decoded.value;
-  const model = candidate.model;
-  const fastMode = candidate.fastMode ?? false;
-  const closeOnReport = candidate.closeOnReport ?? true;
+  const candidate = normalizeProfileCandidate(decoded.value);
+  const { closeOnReport, fastMode, model } = candidate;
   if (!isNativeProfileModelSelector(candidate.runtime, model)) return undefined;
   if (
     candidate.effort !== "default" &&
@@ -152,7 +151,7 @@ export const decodeProfileCandidate = <ValueInput>(
     return undefined;
   if (fastMode && model !== "parent" && !supportsSubagentFastMode(candidate.runtime, model))
     return undefined;
-  return { ...candidate, model, fastMode, closeOnReport };
+  return candidate;
 };
 
 const decodeRoute = <ValueInput>(

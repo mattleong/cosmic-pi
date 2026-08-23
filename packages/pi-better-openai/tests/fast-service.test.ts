@@ -78,11 +78,7 @@ describe("FastModeService", () => {
       agentDir: "/agent",
       projectTrusted: true,
     });
-    const fastLayer = FastModeService.layer({
-      serviceTier: "priority",
-      projection: fastProjection,
-      registerInjectionIngress: () => undefined,
-    }).pipe(
+    const fastLayer = FastModeService.layer({ projection: fastProjection }).pipe(
       Layer.provide(usageLayer),
       Layer.provide(
         Layer.mergeAll(
@@ -131,18 +127,13 @@ describe("FastModeService", () => {
     const projection = MutableRef.make<FastSnapshot>(initialFastSnapshot());
     const current = makeContext("gpt-5.5");
     let offer: ((event: { readonly model: string; readonly tier: string }) => void) | undefined;
-    const fastLayer = FastModeService.layer({
-      serviceTier: "priority",
-      projection,
-      registerInjectionIngress: (registered) => {
-        offer = registered;
-      },
-    }).pipe(Layer.provide(fakeUsageLayer));
+    const fastLayer = FastModeService.layer({ projection }).pipe(Layer.provide(fakeUsageLayer));
 
     return Effect.gen(function* () {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const fast = yield* FastModeService;
+          offer = fast.recordInjection;
           yield* fast.initialize(current.ctx, makeResolvedConfig(), true);
           expect(MutableRef.get(projection)).toMatchObject({
             active: true,

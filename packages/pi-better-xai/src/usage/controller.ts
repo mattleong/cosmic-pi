@@ -5,12 +5,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Tracer from "effect/Tracer";
 import {
-  JsonDocumentStore,
-  JsonHttpClient,
   makeUsageRefreshController,
   sanitizeDiagnosticError,
   withUsageEligibility,
@@ -74,19 +70,9 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
     return Layer.effect(
       this,
       Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const documents = yield* JsonDocumentStore;
-        const http = yield* JsonHttpClient;
         const registryAuth = yield* ModelRegistryAuth;
-        const tracer = yield* Tracer.Tracer;
-        const provideDependencies = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-          effect.pipe(
-            Effect.provideService(Path.Path, path),
-            Effect.provideService(JsonDocumentStore, documents),
-            Effect.provideService(JsonHttpClient, http),
-            Effect.provideService(ModelRegistryAuth, registryAuth),
-            Effect.provideService(Tracer.Tracer, tracer),
-          );
+        const provideDependencies = <A, E>(effect: Effect.Effect<A, E, ModelRegistryAuth>) =>
+          Effect.provideService(effect, ModelRegistryAuth, registryAuth);
         const requestUsage = options.requestUsage ?? requestXaiUsage;
         const subscriptionEligibility = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
           const model = ctx.model;

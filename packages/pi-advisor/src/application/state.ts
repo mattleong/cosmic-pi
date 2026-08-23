@@ -32,11 +32,6 @@ export interface AdvisorInterventionReceipt {
   readonly cancellationEpoch: number;
   readonly requestSequence: number;
 }
-export interface AdvisorSpinnerMetadata {
-  readonly owner?: string;
-  readonly frame: number;
-}
-
 export interface AdvisorResourceSummary {
   readonly activeToolNames: readonly string[];
   readonly backlog: number;
@@ -111,7 +106,6 @@ export interface AdvisorApplicationState {
   readonly emissionGuard: AdvisorEmissionGuardState;
   readonly routing: AdvisorRoutingStateSnapshot;
   readonly pendingReceipt: AdvisorInterventionReceipt | undefined;
-  readonly spinner: AdvisorSpinnerMetadata;
   readonly reportedFailures: readonly string[];
   readonly reportedDiagnostics: readonly string[];
 }
@@ -182,7 +176,6 @@ export const initialAdvisorApplicationState = (
   emissionGuard: createAdvisorEmissionGuardState(),
   routing: emptyAdvisorRoutingState(),
   pendingReceipt: undefined,
-  spinner: { frame: 0 },
   reportedFailures: [],
   reportedDiagnostics: [],
 });
@@ -218,11 +211,3 @@ export const recordAdvisorReceipt = (
     },
   };
 };
-
-export const setAdvisorSpinnerOwner = (
-  state: AdvisorApplicationState,
-  owner?: string,
-): AdvisorApplicationState => ({
-  ...state,
-  spinner: owner === undefined ? { frame: 0 } : { owner, frame: 0 },
-});

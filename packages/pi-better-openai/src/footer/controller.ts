@@ -41,28 +41,13 @@ function memo<Ctx, K, V>(
   };
 }
 
-export interface FooterController {
-  update(ctx: ExtensionContext): void;
-  resetTotals(): void;
-  refreshTotals(ctx: ExtensionContext): void;
-  addAssistantUsage(usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    cost: { total: number };
-  }): void;
-  invalidateContextUsage(): void;
-  invalidateSessionName(): void;
-}
-
 export function createFooterController(deps: {
   pi: ExtensionAPI;
   config(ctx: ExtensionContext): ResolvedConfig;
   fastProjection: MutableRef.MutableRef<FastSnapshot>;
   projection: MutableRef.MutableRef<OpenAIProjection>;
   hasTerminalUI(ctx: ExtensionContext): boolean;
-}): FooterController {
+}) {
   const { pi, config, fastProjection, projection, hasTerminalUI } = deps;
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   const contextUsageMemo = memo(

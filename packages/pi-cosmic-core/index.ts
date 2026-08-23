@@ -8,7 +8,13 @@ export {
   type PiManagedRuntime,
 } from "./src/runtime/runtime.ts";
 export { bestEffortHostBootstrap } from "./src/runtime/host-bootstrap.ts";
-export { provideBuiltLayer } from "./src/runtime/layers.ts";
+import * as Effect from "effect/Effect";
+import type * as Layer from "effect/Layer";
+
+export const provideBuiltLayer: <ROut, E2, RIn>(
+  layer: Layer.Layer<ROut, E2, RIn>,
+) => <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E | E2, RIn | Exclude<R, ROut>> =
+  Effect.provide;
 export {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,

@@ -10,7 +10,15 @@ import type { OpenAIConfigError, ResolvedConfig } from "../config/index.ts";
 import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
 import { OpenAIUsageService } from "../usage/index.ts";
 
+export interface FastInjectionEvent {
+  readonly model: string;
+  readonly tier: string;
+}
+
+export type FastInjectionIngress = (event: FastInjectionEvent) => void;
+
 export interface FastModeServiceContract {
+  readonly recordInjection: FastInjectionIngress;
   readonly initialize: (
     ctx: ExtensionContext,
     config: ResolvedConfig,
@@ -27,11 +35,7 @@ export class FastModeService extends Context.Service<FastModeService, FastModeSe
   "pi-better-openai/fast/service/FastModeService",
 ) {
   static layer(options: {
-    readonly serviceTier: string;
     readonly projection: MutableRef.MutableRef<FastSnapshot>;
-    readonly registerInjectionIngress: (
-      offer: (event: { readonly model: string; readonly tier: string }) => void,
-    ) => void;
   }): Layer.Layer<FastModeService, never, OpenAIUsageService> {
     return Layer.effect(
       this,
@@ -77,16 +81,13 @@ export class FastModeService extends Context.Service<FastModeService, FastModeSe
         const ingress = yield* makeSynchronousIngress({
           capacity: 16,
           overflow: "coalesce-latest",
-          handle: (event: { readonly model: string; readonly tier: string }) =>
+          handle: (event: FastInjectionEvent) =>
             commitInMemory((current) => ({
               ...current,
               lastInjectedModel: event.model,
               lastInjectedTier: event.tier,
             })).pipe(Effect.catchTag("ProjectionError", Effect.die)),
         }).pipe(Effect.orDie);
-        options.registerInjectionIngress((event) => {
-          ingress.offer(event);
-        });
         const transition = (ctx: ExtensionContext, desiredActive: boolean) =>
           persistTransition((current) => ({
             ...current,
@@ -95,6 +96,7 @@ export class FastModeService extends Context.Service<FastModeService, FastModeSe
           })).pipe(Effect.catchTag("ProjectionError", Effect.die));
 
         return FastModeService.of({
+          recordInjection: (event) => ingress.offer(event),
           initialize: (ctx, config, flagActive) => {
             const desiredActive =
               flagActive || (config.persistState ? config.desiredActive : false);

@@ -1,10 +1,11 @@
 import { freezeSnapshot } from "pi-cosmic-core";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import {
+  cloneProfileRoute,
+  normalizeProfileCandidate,
   PROFILE_IDS,
   type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
-  type ProfileCandidate,
   type ProfileId,
   type ProfileRoute,
   type ProfileRouteSource,
@@ -23,24 +24,14 @@ export interface ResolvedSubagentConfig {
   readonly diagnostics: ReadonlyArray<string>;
 }
 
-const normalizeCandidate = (candidate: DeclaredProfileCandidate): ProfileCandidate => ({
-  ...candidate,
-  fastMode: candidate.fastMode ?? false,
-  closeOnReport: candidate.closeOnReport ?? true,
-});
-
 export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
   if (route === "disabled") return { candidates: [] };
   // SAFETY: Configuration decoding validates the persisted value before this typed access.
   const candidates = Array.isArray(route)
     ? (route as ReadonlyArray<DeclaredProfileCandidate>)
     : [route as DeclaredProfileCandidate];
-  return { candidates: candidates.map(normalizeCandidate) };
+  return { candidates: candidates.map(normalizeProfileCandidate) };
 };
-
-const cloneRoute = (route: ProfileRoute): ProfileRoute => ({
-  candidates: route.candidates.map((candidate) => ({ ...candidate })),
-});
 
 export interface ResolveSubagentConfigInput {
   readonly globalConfigPath: string;
@@ -73,7 +64,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
       profiles[id] = normalizeDeclaredProfileRoute(input.global.file.profiles[id]);
       profileSources[id] = "global";
     } else {
-      profiles[id] = cloneRoute(BUILTIN_PROFILE_ROUTES[id]);
+      profiles[id] = cloneProfileRoute(BUILTIN_PROFILE_ROUTES[id]);
       profileSources[id] = "builtin";
     }
   }

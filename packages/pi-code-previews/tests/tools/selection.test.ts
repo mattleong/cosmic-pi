@@ -8,11 +8,14 @@ import {
 } from "../../src/config/env";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { publishCodePreviewToolsEnvironment } from "../../src/tools/renderers/testing";
 import {
   formatEnabledCodePreviewTools,
   getEnabledCodePreviewTools,
 } from "../../src/tools/selection";
+
+const publishCodePreviewToolsEnvironment = (value: string | undefined): void => {
+  publishCodePreviewEnvironmentProjection(codePreviewPerformanceConfig, value);
+};
 
 let previousCodePreviewSettings = { ...codePreviewSettings };
 let previousCodePreviewTools: string | undefined;

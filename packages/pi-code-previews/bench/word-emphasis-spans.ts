@@ -1,6 +1,6 @@
 // Test/benchmark boundary intentionally reads stdin/file input through raw Node builtins.
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { renderSyntaxHighlightedDiff } from "../src/diff/index";
+import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { renderedWordEmphasisSpans } from "../src/testing/rendered-word-emphasis";
 import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";

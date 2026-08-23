@@ -16,7 +16,6 @@ const REPEATED_TOOL_THRESHOLD = 3;
 const OSCILLATION_WINDOW = 6;
 
 export const LONG_TURN_REVIEW_MS = 90_000;
-export const MIN_LOOP_REVIEW_MS = 15_000;
 export const MAX_TRAJECTORY_EVIDENCE_CHARS = 6_000;
 
 export type TrajectoryChannel = "thinking" | "text";

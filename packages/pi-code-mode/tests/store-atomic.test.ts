@@ -235,7 +235,7 @@ describe("code mode untrusted project I/O", () => {
     );
     return Effect.gen(function* () {
       const store = yield* CodeModeConfigStore;
-      const state = yield* store.state;
+      const state = store.snapshot();
       // The project path is calculated as inert metadata only.
       expect(state.projectConfigPath).toBe(PROJECT_PATH);
       expect(state.projectValues).toEqual({});

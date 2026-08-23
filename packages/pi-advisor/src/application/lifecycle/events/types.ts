@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type * as Effect from "effect/Effect";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../../../boundary/executor.ts";
 import type { AdvisorHostBindings } from "../../../boundary/host-bindings.ts";
-import type { PiCommandAdapter } from "../../../boundary/host-commands.ts";
 import type { CheckpointOrchestratorContract } from "../../../checkpoint/orchestrator.ts";
 import type { ResolvedAdvisorConfig } from "../../../config/options.ts";
 import type { ConfigStoreContract } from "../../../config/store.ts";
@@ -49,9 +48,7 @@ export interface EventsDeps {
     id: number,
     mutate: (next: AdvisorActiveTrajectoryState) => AdvisorActiveTrajectoryState,
   ) => AdvisorActiveTrajectoryState | undefined;
-  readonly runSessionEffect: <A, E>(
-    effect: Effect.Effect<A, E, AdvisorPlatform | PiCommandAdapter>,
-  ) => Promise<A>;
+  readonly runSessionEffect: <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) => Promise<A>;
   readonly parentExecutor: AdvisorEffectExecutor;
   readonly notifyBestEffort: (
     ctx: Pick<ExtensionContext, "ui">,

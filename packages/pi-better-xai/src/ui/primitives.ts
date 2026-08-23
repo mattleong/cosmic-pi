@@ -2,29 +2,18 @@ import * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type XaiProjection } from "../usage/index.ts";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
 
-export interface XaiUsageUiState {
-  visible: boolean;
-  text?: string;
-  updatedAt?: number;
-}
-
-/** Projection-only state used by production renderers after Effect-owned synchronization. */
-export function xaiUsageUiStateFromProjection(
+export function xaiUsageFooterPrimitive(
   projection: MutableRef.MutableRef<XaiProjection>,
-): XaiUsageUiState {
+): FooterTextPrimitive | undefined {
   const text = visibleStatusLine(projection);
-  return text ? { visible: true, text } : { visible: false };
-}
-
-export function xaiUsageFooterPrimitive(state: XaiUsageUiState): FooterTextPrimitive | undefined {
-  if (!state.visible || !state.text) return undefined;
+  if (!text) return undefined;
   return {
     kind: "text",
     id: "xai.usage",
     region: "details",
-    text: state.text,
+    text,
     // Drop reset suffixes in compact mode so bars stay readable.
-    compactText: state.text.replace(/\s*\|\s*(?:7d|mo)\s*↺[^|]*/g, "").trim(),
+    compactText: text.replace(/\s*\|\s*(?:7d|mo)\s*↺[^|]*/g, "").trim(),
     label: "xAI",
     tone: "dim",
     priority: 60,

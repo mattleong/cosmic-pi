@@ -27,14 +27,7 @@ import {
   InvalidBackgroundCwdError,
   type BackgroundTerminalError,
 } from "./errors.ts";
-import {
-  addDroppedLogBytes,
-  appendLog,
-  dropOldestLogEvent,
-  emptyLogBuffer,
-  readLogBuffer,
-  type LogBuffer,
-} from "./log-buffer.ts";
+import { LogBuffer, readLogBuffer } from "./log-buffer.ts";
 import {
   isActiveJobState,
   type BackgroundJobSnapshot,
@@ -171,7 +164,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       }
       const dropped = selected?.logs.oldestEvent;
       if (!selected || !dropped) break;
-      selected.logs = dropOldestLogEvent(selected.logs);
+      selected.logs = selected.logs.dropOldest();
       total -= dropped.bytes;
       selected.snapshot = {
         ...selected.snapshot,
@@ -234,13 +227,9 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         const record = jobs.get(id);
         if (!record || !isActiveJobState(record.snapshot.state)) return;
         const timestamp = yield* Clock.currentTimeMillis;
-        record.logs = appendLog(
-          addDroppedLogBytes(record.logs, droppedBytes),
-          stream,
-          text,
-          timestamp,
-          config.logBufferBytesPerJob,
-        );
+        record.logs = record.logs
+          .addDropped(droppedBytes)
+          .append(stream, text, timestamp, config.logBufferBytesPerJob);
         record.ingressDroppedObserved += droppedBytes;
         record.snapshot = {
           ...record.snapshot,
@@ -268,9 +257,8 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   ) => Effect.Effect<BackgroundJobSnapshot, BackgroundTerminalError>;
   let requestStop: RequestStop;
 
-  const monitor = (id: string, ownerRecord: JobRecord, request: StartBackgroundJob) => {
-    let handleAcquired = false;
-    return Effect.scoped(
+  const monitor = (id: string, ownerRecord: JobRecord, request: StartBackgroundJob) =>
+    Effect.scoped(
       Effect.gen(function* () {
         const spawnRequestBase = {
           command: request.command,
@@ -285,7 +273,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
             ? { ...spawnRequestBase, shellPath: config.shellPath }
             : spawnRequestBase,
         );
-        handleAcquired = true;
         const terminateLateHandle = yield* withLock(
           Effect.sync(() => {
             Deferred.doneUnsafe(ownerRecord.handleReady, Effect.succeed(handle));
@@ -333,7 +320,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
                 0,
                 handle.droppedOutputBytes() - record.ingressDroppedObserved,
               );
-              record.logs = addDroppedLogBytes(record.logs, unobservedDrops);
+              record.logs = record.logs.addDropped(unobservedDrops);
               record.ingressDroppedObserved += unobservedDrops;
               completeRecord(record, exit, endedAt);
             }
@@ -347,13 +334,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
             const record = jobs.get(id);
             Deferred.doneUnsafe(ownerRecord.handleReady, Effect.fail(spawnError));
             if (record !== ownerRecord || !isActiveJobState(ownerRecord.snapshot.state)) return;
-            // A stopping job remains active until awaitExit confirms process settlement. Boundary
-            // failure after acquisition cannot manufacture a terminal snapshot.
-            if (handleAcquired && ownerRecord.snapshot.state === "stopping") {
-              wake(ownerRecord);
-              publish();
-              return;
-            }
             const endedAt = yield* Clock.currentTimeMillis;
             ownerRecord.snapshot = {
               ...ownerRecord.snapshot,
@@ -369,7 +349,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         ),
       ),
     );
-  };
 
   const start: BackgroundTerminalServiceContract["start"] = (request) =>
     Effect.uninterruptibleMask((restore) =>
@@ -423,7 +402,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
               snapshot: request.name?.trim()
                 ? { ...snapshot, name: request.name.trim() }
                 : snapshot,
-              logs: emptyLogBuffer(),
+              logs: LogBuffer.empty(),
               wake: Deferred.makeUnsafe<void>(),
               completion: Deferred.makeUnsafe<BackgroundJobSnapshot>(),
               handleReady: Deferred.makeUnsafe<LocalProcessHandle, LocalProcessError>(),
@@ -630,8 +609,4 @@ export class BackgroundTerminalService extends Context.Service<
 >()("pi-background-terminals/job/service/BackgroundTerminalService") {
   static readonly layer = (options: BackgroundTerminalServiceOptions = {}) =>
     Layer.effect(this, makeService(options));
-
-  static override readonly use = <A, E>(
-    f: (service: BackgroundTerminalServiceContract) => Effect.Effect<A, E>,
-  ) => Effect.flatMap(this, f);
 }

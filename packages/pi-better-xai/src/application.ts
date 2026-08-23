@@ -13,9 +13,9 @@ import {
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
+  notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
-import { notifyAtHostBoundary } from "./boundary/host-notifier.ts";
 import type { ResolvedConfig } from "./config/index.ts";
 import { createFooterController } from "./footer/controller.ts";
 import { registerSettingsController } from "./settings/controller.ts";
@@ -25,7 +25,7 @@ import {
   type XaiRuntimeError,
   type XaiSessionInput,
 } from "./layer.ts";
-import { xaiUsageFooterPrimitive, xaiUsageUiStateFromProjection } from "./ui/primitives.ts";
+import { xaiUsageFooterPrimitive } from "./ui/primitives.ts";
 import {
   XaiBoundaryError,
   XaiUsageService,
@@ -39,7 +39,7 @@ import {
 const XAI_STATUS_COMMAND = "xai-usage";
 
 export interface BetterXaiExtensionDependencies {
-  readonly startupEffect: (generation: number) => Effect.Effect<void, never, XaiUsageService>;
+  readonly startupEffect: () => Effect.Effect<void, never, XaiUsageService>;
 }
 
 const defaultDependencies: BetterXaiExtensionDependencies = {
@@ -55,14 +55,9 @@ function requiredConfig(projection: MutableRef.MutableRef<XaiProjection>): Resol
   });
 }
 
-export function registerBetterXaiApplication(pi: ExtensionAPI): void {
-  betterXaiWithDependencies(pi, defaultDependencies);
-}
-
-/** Internal seam for deterministic lifecycle/finalizer tests. */
-export function betterXaiWithDependencies(
+export function registerBetterXaiApplication(
   pi: ExtensionAPI,
-  dependencies: BetterXaiExtensionDependencies,
+  dependencies: BetterXaiExtensionDependencies = defaultDependencies,
 ): void {
   const projection = makeProjection();
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
@@ -74,14 +69,13 @@ export function betterXaiWithDependencies(
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
     if (!MutableRef.get(projection).config) return;
     if (!cosmicUi.active) return footerController.update(ctx);
-    const usage = xaiUsageFooterPrimitive(xaiUsageUiStateFromProjection(projection));
+    const usage = xaiUsageFooterPrimitive(projection);
     if (usage) cosmicUi.upsert(usage);
     else cosmicUi.remove("xai.usage");
   };
 
   footerController = createFooterController({ config, projection, hasTerminalUI });
 
-  let startGeneration = 0;
   const slot = makePiSessionRuntimeSlot<XaiSessionInput, XaiApplication, never, XaiRuntimeError>({
     makeRuntime: (input) =>
       makePiManagedRuntime(
@@ -92,7 +86,7 @@ export function betterXaiWithDependencies(
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-xai" },
       ),
-    startup: ({ generation }) => dependencies.startupEffect(generation),
+    startup: () => dependencies.startupEffect(),
     onActivated: ({ ctx }) => {
       if (hasTerminalUI(ctx)) cosmicUi.query();
       else cosmicUi.shutdown();
@@ -154,7 +148,6 @@ export function betterXaiWithDependencies(
           ctx,
           cwd: capturedHost.cwd,
           context,
-          generation: ++startGeneration,
           projectTrusted: isProjectTrusted(ctx),
         },
         capturedHost.signal,

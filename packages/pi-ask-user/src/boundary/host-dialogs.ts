@@ -214,17 +214,14 @@ export class HostDialogs extends Context.Service<HostDialogs, HostDialogsContrac
   "pi-ask-user/boundary/host-dialogs/HostDialogs",
 ) {
   static layer(ctx: ExtensionContext, bridge: AskUserDialogBridge): Layer.Layer<HostDialogs> {
-    return Layer.succeed(
-      HostDialogs,
-      HostDialogs.of({
-        ask: (request) =>
-          ctx.mode === "tui"
-            ? Effect.tryPromise({
-                try: (signal) => runTui(ctx, bridge, request, signal),
-                catch: () => hostError("render"),
-              })
-            : runRpc(ctx, request),
-      }),
-    );
+    return Layer.succeed(HostDialogs, {
+      ask: (request) =>
+        ctx.mode === "tui"
+          ? Effect.tryPromise({
+              try: (signal) => runTui(ctx, bridge, request, signal),
+              catch: () => hostError("render"),
+            })
+          : runRpc(ctx, request),
+    });
   }
 }

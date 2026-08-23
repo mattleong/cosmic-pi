@@ -17,7 +17,7 @@ export const makeDirectoryModelsLayer = (
     AgentDirectory.layerFromHost(() => getAgentDir()),
   );
   const store = DirectoryModelStore.layer.pipe(Layer.provide(platform));
-  return DirectoryModelPreferenceService.layer(input, options).pipe(Layer.provideMerge(store));
+  return DirectoryModelPreferenceService.layer(input, options).pipe(Layer.provide(store));
 };
 
 export type DirectoryModelsLayer = ReturnType<typeof makeDirectoryModelsLayer>;

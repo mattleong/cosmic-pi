@@ -13,7 +13,7 @@ import {
   type BenchResult as SharedBenchResult,
 } from "./helpers";
 
-const { renderSyntaxHighlightedDiff } = await import("../src/diff/index");
+const { renderSyntaxHighlightedDiff } = await import("../src/diff/render");
 const { changedRanges } = await import("../src/diff/word/emphasis");
 const { codePreviewSettings, setCodePreviewSettings } = await import("../src/config/state");
 const { startBenchmarkShikiSession } = await import("./shiki-session");

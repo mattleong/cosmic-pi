@@ -8,7 +8,14 @@ import {
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
-import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
+import {
+  captureHostSignal,
+  captureSessionHost,
+  isProjectTrusted,
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+  notifyAtHostBoundary,
+} from "pi-cosmic-core";
 import {
   makeNestedPiToolDefinitions,
   type NestedPiToolDefinitions,
@@ -18,12 +25,6 @@ import {
   makeCodeModeDeactivationHandoff,
   type CodeModeSessionKey,
 } from "./boundary/host-deactivation-handoff.ts";
-import { notifyAtHostBoundary } from "./boundary/host-notifier.ts";
-import {
-  captureHostSignal,
-  captureSessionHost,
-  isProjectTrusted,
-} from "./boundary/host-session.ts";
 import { CodeModeConfigStore, type CodeModeState } from "./config/store.ts";
 import {
   makeCodeModeLayer,

@@ -20,7 +20,7 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
 ## Source map
 
 - `src/extension.ts` — thin public entrypoint.
-- `src/layer.ts` — outer Effect composition root.
+- `src/layer.ts` — outer Effect composition root; application services stay private while the executor's `AdvisorPlatform` remains in the session runtime.
 - `src/application/register.ts` — sole Pi command/event/entry-renderer registration boundary.
 - `src/application/controller-types.ts` — controller service and final wait contract.
 - `src/application/lifecycle/`:
@@ -33,7 +33,7 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
   - `runtime.ts`, `checkpoint.ts`, `ledger.ts`, `status.ts`, `parent-session.ts`, `metrics.ts`, `application-state.ts`, `session-refs.ts` — hidden trust/resource machinery.
 - `src/boundary/host-review-cards.ts` — Pi `appendEntry`, `registerEntryRenderer`, hidden guidance, tombstones, and active-branch restoration.
 - `src/boundary/host-onboarding.ts` — authenticated-model discovery and first-run setup UI.
-- Other `src/boundary/host-*` modules — guarded Pi command, context, notifier, status, and event adapters.
+- Other `src/boundary/host-*` modules — guarded Pi command, context, status, and event adapters; notifications use the shared synchronous host boundary directly.
 - `src/boundary/read-only-fs.ts` and `executor.ts` — capability-narrow raw Node reads for `O_NOFOLLOW` and bigint inode checks with Effect `Path.Path` normalization, composed without process authority. TOCTOU test hooks enter through an isolated Layer override rather than mutable module state; `node.ts` retains only pure synchronous configuration/log path arithmetic.
 - `src/ui/review-card.ts` — pure strict card/action decode, sanitization, compact projection, and renderer.
 - `src/ui/projection.ts` — frozen synchronous controller snapshot projection (the sole dashboard input).

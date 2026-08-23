@@ -19,11 +19,7 @@ import {
   captureAdvisorSessionInputAtHostBoundary,
   type AdvisorSessionInput,
 } from "../boundary/host-context.ts";
-import { PiCommandAdapter } from "../boundary/host-commands.ts";
-import { HostNotifier } from "../boundary/host-notifier.ts";
-import { ConfigStore } from "../config/store.ts";
 import { makeAdvisorApplicationLayer } from "../layer.ts";
-import { FailureLogger } from "../logging/logger.ts";
 import {
   AdvisorController,
   AdvisorExtensionError,
@@ -31,8 +27,6 @@ import {
   type AdvisorControllerContract,
   type AdvisorExtensionDependencies,
 } from "./controller-types.ts";
-import { AdvisorReviewQueueService } from "../queue/service.ts";
-import { AdvisorRuntimeService } from "../runtime/runtime.ts";
 import { ADVISOR_COMMAND_DESCRIPTION } from "../settings/controller.ts";
 
 export function createAdvisorExtension(dependencies: AdvisorExtensionDependencies = {}) {
@@ -47,14 +41,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     });
     let parentSlot!: PiSessionRuntimeSlot<
       AdvisorSessionInput,
-      | AdvisorPlatform
-      | AdvisorRuntimeService
-      | AdvisorReviewQueueService
-      | AdvisorController
-      | ConfigStore
-      | FailureLogger
-      | HostNotifier
-      | PiCommandAdapter,
+      AdvisorPlatform | AdvisorController,
       never
     >;
     const sessionExecutor: AdvisorEffectExecutor = {

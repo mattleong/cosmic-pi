@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
+import * as Tracer from "effect/Tracer";
 import { mergeRefreshRequest, type RefreshRequest } from "./coordination/refresh-coordinator.ts";
 import { makeSubscriptionRefresh } from "./coordination/subscription-refresh.ts";
 import type { ScopedConfigMetadata } from "./config/scoped-config-store.ts";
@@ -34,6 +35,11 @@ export type UsageControllerConfig = ScopedConfigMetadata & {
 
 /** Core services every provider usage stack depends on. */
 export type UsageProviderRequirements = Path.Path | JsonDocumentStore | JsonHttpClient;
+
+type UsageProviderRemainder<R> = Exclude<
+  Exclude<Exclude<R, Path.Path>, JsonDocumentStore>,
+  JsonHttpClient
+>;
 
 /** Provider fetch result. `patch` carries provider identity fields into the projection. */
 export type UsageFetchOutcome<Snapshot, Patch> =
@@ -145,9 +151,9 @@ export interface UsageRefreshControllerOptions<
   >;
   readonly formatStatusLine: (snapshot: Snapshot, cfg: Resolved, fetchedAt: number) => string;
   readonly formatStatusText: (snapshot: Snapshot, fetchedAt: number) => string;
-  /** Pins the package's service instances onto effects that escape the layer scope. */
+  /** Pins provider-specific services onto effects that escape the layer scope. */
   readonly provideDependencies: <A, E2>(
-    effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
+    effect: Effect.Effect<A, E2, UsageProviderRemainder<R>>,
   ) => Effect.Effect<A, E2>;
 }
 
@@ -198,8 +204,23 @@ export const makeUsageRefreshController = <
   options: UsageRefreshControllerOptions<P, Resolved, Snapshot, E, EI, R>,
 ) =>
   Effect.gen(function* () {
-    const { context, cwd, projection, onChange, logLabel, provideDependencies } = options;
+    const { context, cwd, projection, onChange, logLabel } = options;
+    const provideProviderDependencies = options.provideDependencies;
     const path = yield* Path.Path;
+    const documents = yield* JsonDocumentStore;
+    const http = yield* JsonHttpClient;
+    const tracer = yield* Tracer.Tracer;
+    const provideDependencies = <A, E2>(
+      effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
+    ): Effect.Effect<A, E2> =>
+      provideProviderDependencies(
+        effect.pipe(
+          Effect.provideService(Path.Path, path),
+          Effect.provideService(JsonDocumentStore, documents),
+          Effect.provideService(JsonHttpClient, http),
+          Effect.provideService(Tracer.Tracer, tracer),
+        ),
+      );
     const agentDir = options.agentDir ?? (yield* AgentDirectory);
     const authPath = path.join(agentDir, "auth.json");
     const projectTrusted = options.projectTrusted === true;

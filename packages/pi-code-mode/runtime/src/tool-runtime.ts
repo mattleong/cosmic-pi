@@ -457,9 +457,6 @@ const visibleDefinitions = <R>(tools: HostTools<R>) =>
     description: describeDefinition(path, definition),
   }));
 
-export const catalog = <R>(tools: HostTools<R>): ReadonlyArray<ToolDescription> =>
-  visibleDefinitions(tools).map(({ description }) => description);
-
 export type DiscoveryPlan = {
   readonly catalog: ReadonlyArray<ToolDescription>;
   readonly instructions: string;

@@ -21,7 +21,7 @@ export interface PiExecContract {
   ) => Effect.Effect<PiExecResult, PiExecError>;
 }
 export class PiExec extends Context.Service<PiExec, PiExecContract>()(
-  "pi-cosmic-ui/probe/pi-exec/PiExec",
+  "pi-cosmic-ui/boundary/host-exec/PiExec",
 ) {
   static readonly layer = Layer.effect(
     this,

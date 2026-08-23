@@ -50,9 +50,6 @@ export interface FooterRegistryServiceContract {
     requestRender: (() => void) | undefined,
     expectedCurrent?: () => void,
   ) => Effect.Effect<void>;
-  readonly clear: Effect.Effect<void>;
-  readonly snapshot: () => FooterRegistrySnapshot;
-  readonly requestRenderNow: () => void;
 }
 
 export interface FooterRegistryBridge {
@@ -320,9 +317,6 @@ export class FooterRegistryService extends Context.Service<
           remove,
           invalidate,
           setRenderRequest,
-          clear: clear.pipe(Effect.asVoid),
-          snapshot: () => options.bridge.snapshot,
-          requestRenderNow: renderNow,
         });
       }),
     );

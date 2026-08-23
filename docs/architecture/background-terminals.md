@@ -367,15 +367,12 @@ packages/pi-background-terminals/
     tools/
       background-terminal.ts
     ui/
-      log-preview.ts
       manager.ts
-      sanitize.ts
   tests/
     config.test.ts
     job-service.test.ts
     local-process.test.ts
     log-buffer.test.ts
-    sanitize.test.ts
 ```
 
 This follows the repository's small-extension conventions while nesting the multi-file job feature. `ui/` remains pure; Effect resources stay in `job/`; Node and Pi adapters stay in `boundary/`. Shared process utilities should move to `pi-cosmic-core` only if a second package needs the same abstraction.

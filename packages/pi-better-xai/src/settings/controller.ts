@@ -7,9 +7,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import { completeSettingsArguments, dispatchSettingsCommand } from "pi-cosmic-core";
+import {
+  completeSettingsArguments,
+  dispatchSettingsCommand,
+  notifyAtHostBoundary,
+  type HostNotificationLevel,
+} from "pi-cosmic-core";
 import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
-import { notifyAtHostBoundary, type HostNotificationLevel } from "../boundary/host-notifier.ts";
 import {
   hasSettingsSurface,
   invokeHostCallback,

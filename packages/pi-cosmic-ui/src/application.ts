@@ -32,7 +32,6 @@ import {
   resetProjection,
 } from "./protocol/service.ts";
 import {
-  FooterProtocolHost,
   makeFooterProtocolBuffer,
   protocolInvalidate,
   protocolRemove,
@@ -191,7 +190,6 @@ export function cosmicUiWithDependencies(
       Effect.gen(function* () {
         yield* CosmicUiService;
         yield* FooterRegistryService;
-        yield* FooterProtocolHost;
         return yield* WorkingTimerService;
       }),
     onActivated: ({ ctx, context, signal }, _token, activeWorkingTimer) => {
@@ -227,11 +225,7 @@ export function cosmicUiWithDependencies(
     return abort ? result.finally(abort.release) : result;
   };
   const forkFrom = <A, E>(
-    effect: Effect.Effect<
-      A,
-      E,
-      CosmicUiService | FooterRegistryService | FooterProtocolHost | WorkingTimerService
-    >,
+    effect: Effect.Effect<A, E, CosmicUiService | FooterRegistryService | WorkingTimerService>,
     ctx: ExtensionContext,
   ) => {
     const abort = snapshotHostAbortSignal(callbacks, () => ctx.signal);

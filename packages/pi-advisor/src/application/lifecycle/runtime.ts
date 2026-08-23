@@ -28,7 +28,6 @@ import {
 import { emptyAdvisorRoutingState, sanitizeAdvisorRoutingState } from "../../review/routing.ts";
 import type { AdvisorUsageTelemetry } from "../../runtime/client.ts";
 import type { AdvisorRuntimeServiceContract } from "../../runtime/runtime.ts";
-import { PiCommandAdapter } from "../../boundary/host-commands.ts";
 import { classifyFailure, incrementBounded, makeCancellationLatch } from "../controller-helpers.ts";
 import { AdvisorExtensionError, extensionError, type ParentAnchor } from "../controller-types.ts";
 import type { AdvisorApplicationState } from "../state.ts";
@@ -54,9 +53,7 @@ export interface RuntimeDeps {
   readonly publishControllerSnapshotNow: () => void;
   readonly startStatusSpinner: (ctx: ExtensionContext, owner: string) => void;
   readonly settleStatusSpinner: (ctx: ExtensionContext, owner: string) => void;
-  readonly runSessionEffect: <A, E>(
-    effect: Effect.Effect<A, E, AdvisorPlatform | PiCommandAdapter>,
-  ) => Promise<A>;
+  readonly runSessionEffect: <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) => Promise<A>;
   readonly parentExecutor: AdvisorEffectExecutor;
   readonly productionController: {
     readonly replaceChild: <A, E, R>(

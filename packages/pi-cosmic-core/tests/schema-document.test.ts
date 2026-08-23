@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { readSchemaDocument } from "../src/platform/schema-document.ts";
-import { provideBuiltLayer } from "../src/runtime/layers.ts";
+import { provideBuiltLayer } from "../index.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 
 const ConfigSchema = Schema.Struct({ enabled: Schema.Boolean });

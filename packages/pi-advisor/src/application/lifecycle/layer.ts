@@ -5,8 +5,7 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { advisorNow } from "../../boundary/clock.ts";
 import { type AdvisorEffectExecutor, type AdvisorPlatform } from "../../boundary/executor.ts";
 import type { AdvisorHostCommandDefinition } from "../../boundary/host-bindings.ts";
-import { PiCommandAdapter } from "../../boundary/host-commands.ts";
-import { HostNotifier } from "../../boundary/host-notifier.ts";
+import { fromHostCommandPromise } from "../../boundary/host-commands.ts";
 import { createLedgerFingerprint } from "../../checkpoint/ledger.ts";
 import { makeCheckpointOrchestrator } from "../../checkpoint/orchestrator.ts";
 import {
@@ -26,6 +25,7 @@ import { AdvisorRuntimeService } from "../../runtime/runtime.ts";
 import { makeAdvisorResourceState } from "../../runtime/resource-state.ts";
 import { registerAdvisorCommands } from "../../settings/controller.ts";
 import { makeAdvisorStatusService } from "../../status/service.ts";
+import { notifyAtHostBoundary } from "pi-cosmic-core";
 import { makeAdvisorProjection, type AdvisorControllerSnapshot } from "../../ui/projection.ts";
 import { activeContextMessages, incrementBounded } from "../controller-helpers.ts";
 import {
@@ -60,10 +60,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const { pi } = options;
       const productionRuntimeService = yield* AdvisorRuntimeService;
       const productionQueueService = yield* AdvisorReviewQueueService;
-      const commandAdapter = yield* PiCommandAdapter;
       const configStore = yield* ConfigStore;
       const failureLogger = yield* FailureLogger;
-      const hostNotifier = yield* HostNotifier;
       const applicationScope = yield* Effect.scope;
       const platformContext = yield* Effect.context<AdvisorPlatform>();
       const resources = yield* makeAdvisorResourceState();
@@ -111,19 +109,13 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         publish: productionController.publish,
         publishNow: productionController.publishNow,
       });
-      const runSessionEffect = <A, E>(
-        effect: Effect.Effect<A, E, AdvisorPlatform | PiCommandAdapter>,
-      ): Promise<A> =>
-        parentExecutor.run(effect.pipe(Effect.provideService(PiCommandAdapter, commandAdapter)));
+      const runSessionEffect = <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>): Promise<A> =>
+        parentExecutor.run(effect);
 
-      const notifyBestEffort = hostNotifier.notify;
+      const notifyBestEffort = notifyAtHostBoundary;
 
       const { stopStatusSpinner, setAdvisorStatus, startStatusSpinner, settleStatusSpinner } =
-        makeLifecycleStatusControls({
-          statusService,
-          currentConfig,
-          updateApplicationState,
-        });
+        makeLifecycleStatusControls({ statusService, currentConfig });
 
       const recordSkip = (reason: AdvisorSkipReason): void => {
         mutateMetrics((next) => {
@@ -323,7 +315,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             parentExecutor.run(configStore.patch(patch, path, applyCommittedConfigEffect)),
         },
         commandActions,
-        (effect) => runSessionEffect(effect),
       );
 
       const { sessionInitializeEffect, sessionShutdownEffect, compactEffect, treeEffect } =
@@ -386,7 +377,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           const handler = hostBindings.commandHandler(name);
           if (!handler) return Effect.void;
           return publishControllerSnapshot().pipe(
-            Effect.andThen(commandAdapter.fromPromise(() => Promise.resolve(handler(args, ctx)))),
+            Effect.andThen(fromHostCommandPromise(() => Promise.resolve(handler(args, ctx)))),
             Effect.mapError(extensionError(`command ${name}`)),
             Effect.ensuring(publishControllerSnapshot()),
           );
