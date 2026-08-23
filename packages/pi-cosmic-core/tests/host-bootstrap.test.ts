@@ -1,4 +1,3 @@
-// @effect-diagnostics effect/newPromise:off
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -16,13 +15,17 @@ it.effect("contains rejected and synchronously throwing host prerequisites", () 
       calls += 1;
       throw new Error("sensitive synchronous failure");
     });
-    const hostileThenable: PromiseLike<void> = {
-      // oxlint-disable-next-line unicorn/no-thenable -- Deliberately hostile PromiseLike fixture.
-      then: () => {
-        calls += 1;
-        throw new Error("sensitive thenable failure");
-      },
-    };
+    // Deliberately hostile PromiseLike fixture; a Proxy keeps the object non-thenable at rest.
+    // SAFETY: The Proxy handler below supplies the `then` member this assertion promises.
+    const hostileThenable = new Proxy({} as PromiseLike<void>, {
+      get: (_target, property) =>
+        property === "then"
+          ? () => {
+              calls += 1;
+              throw new Error("sensitive thenable failure");
+            }
+          : undefined,
+    });
     yield* bestEffortHostBootstrap("preview-settings.thenable", () => hostileThenable);
     expect(calls).toBe(3);
   }),
@@ -42,11 +45,11 @@ it.effect("waits for a successful host startup prerequisite", () =>
 
 it.effect("detaches a non-cancellable Promise when startup is interrupted", () =>
   Effect.gen(function* () {
+    const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
     const started = yield* Deferred.make<void>();
-    let settleLate!: () => void;
-    const lateSettlement = new Promise<void>((resolve) => {
-      settleLate = resolve;
-    });
+    const lateGate = yield* Deferred.make<void>();
+    // A non-cancellable host Promise that only settles after the interruption assertion.
+    const lateSettlement = runPromise(Deferred.await(lateGate));
     let cancellationSignal: AbortSignal | undefined;
     const bootstrap = yield* bestEffortHostBootstrap("preview-settings", (signal) => {
       cancellationSignal = signal;
@@ -57,6 +60,6 @@ it.effect("detaches a non-cancellable Promise when startup is interrupted", () =
     yield* Deferred.await(started);
     yield* Fiber.interrupt(bootstrap);
     expect(cancellationSignal?.aborted).toBe(true);
-    settleLate();
+    Deferred.doneUnsafe(lateGate, Effect.void);
   }),
 );

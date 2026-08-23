@@ -1,7 +1,5 @@
-// Node filesystem access is confined to this capability-narrow read-only adapter.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import { constants, promises as fs } from "node:fs";
-import { resolve } from "node:path";
+// Node filesystem access is confined to this capability-narrow read-only adapter whose
+// contract (O_NOFOLLOW opens and inode identity checks) the Effect FileSystem cannot express.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,6 +7,12 @@ import * as Schema from "effect/Schema";
 import { isContainedPath, isContainedPathWith } from "pi-cosmic-core";
 
 export { isContainedPath, isContainedPathWith };
+
+const nodeFsModule = process.getBuiltinModule("node:fs");
+const nodePathModule = process.getBuiltinModule("node:path");
+if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
+const { constants, promises: fs } = nodeFsModule;
+const { resolve } = nodePathModule;
 
 export class AdvisorFileError extends Schema.TaggedError<AdvisorFileError>()("AdvisorFileError", {
   operation: Schema.String,

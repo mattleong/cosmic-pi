@@ -39,7 +39,7 @@
  * All limits are fixed constants: they are deliberately not host or user configuration.
  */
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "../runtime-values.ts";
+import { hasObjectRuntimeType } from "../runtime-values.js";
 import { type AstNode, InterpreterRuntimeError, type InterpreterValue } from "./model.js";
 import {
   classFirst,

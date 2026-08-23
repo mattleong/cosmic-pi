@@ -1,5 +1,4 @@
 // Third-party AgentSession latch and explicit test entry-point Layer provision.
-// @effect-diagnostics effect/strictEffectProvide:off
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
@@ -10,6 +9,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { advisorDelayEffect } from "../src/boundary/clock.ts";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import { makeTestChildFactory, type TestChildFactoryOverrides } from "./support/child-factory.ts";
@@ -193,7 +193,7 @@ describe("advisor Effect clock boundaries", () => {
       const startup = yield* runtime
         .startEffect(runtimeOptions())
         .pipe(
-          Effect.provide(advisorPlatformLayer),
+          provideBuiltLayer(advisorPlatformLayer),
           Effect.flip,
           Effect.forkChild({ startImmediately: true }),
         );
@@ -203,7 +203,7 @@ describe("advisor Effect clock boundaries", () => {
       expect(failure.message).toContain("startup timed out");
       expect(createSession).not.toHaveBeenCalled();
       expect(runtime.childSession).toBeUndefined();
-      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
     }),
   );
 
@@ -237,7 +237,7 @@ describe("advisor Effect clock boundaries", () => {
       const firstStart = yield* runtime
         .startEffect(runtimeOptions())
         .pipe(
-          Effect.provide(advisorPlatformLayer),
+          provideBuiltLayer(advisorPlatformLayer),
           Effect.flip,
           Effect.forkChild({ startImmediately: true }),
         );
@@ -245,7 +245,7 @@ describe("advisor Effect clock boundaries", () => {
       yield* TestClock.adjust(ADVISOR_OPERATION_TIMEOUT_MS);
       expect((yield* Fiber.join(firstStart)).message).toContain("startup timed out");
 
-      yield* runtime.startEffect(runtimeOptions()).pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.startEffect(runtimeOptions()).pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(createCalls).toBe(2);
       expect(runtime.childSession).toBe(replacement);
       expect(first.dispose).not.toHaveBeenCalled();
@@ -256,7 +256,7 @@ describe("advisor Effect clock boundaries", () => {
       expect(first.dispose).toHaveBeenCalledOnce();
       expect(first.abort).not.toHaveBeenCalled();
       expect(runtime.childSession).toBe(replacement);
-      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(replacement.abort).toHaveBeenCalledOnce();
       expect(replacement.dispose).toHaveBeenCalledOnce();
     }),
@@ -285,14 +285,14 @@ describe("advisor Effect clock boundaries", () => {
       const startup = yield* runtime
         .startEffect(runtimeOptions())
         .pipe(
-          Effect.provide(advisorPlatformLayer),
+          provideBuiltLayer(advisorPlatformLayer),
           Effect.flip,
           Effect.forkChild({ startImmediately: true }),
         );
       yield* Deferred.await(createStarted);
       yield* TestClock.adjust(ADVISOR_OPERATION_TIMEOUT_MS);
       expect((yield* Fiber.join(startup)).message).toContain("startup timed out");
-      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(session.dispose).not.toHaveBeenCalled();
 
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
@@ -300,7 +300,7 @@ describe("advisor Effect clock boundaries", () => {
       yield* Deferred.await(lateDisposed);
       expect(session.abort).not.toHaveBeenCalled();
       expect(session.dispose).toHaveBeenCalledOnce();
-      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(session.dispose).toHaveBeenCalledOnce();
     }),
   );
@@ -329,14 +329,14 @@ describe("advisor Effect clock boundaries", () => {
       const startup = yield* runtime
         .startEffect(runtimeOptions())
         .pipe(
-          Effect.provide(advisorPlatformLayer),
+          provideBuiltLayer(advisorPlatformLayer),
           Effect.flip,
           Effect.forkChild({ startImmediately: true }),
         );
       yield* Deferred.await(createStarted);
       yield* TestClock.adjust(ADVISOR_OPERATION_TIMEOUT_MS);
       expect((yield* Fiber.join(startup)).message).toContain("startup timed out");
-      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
 
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       yield* Deferred.succeed(lateCreate, { session, extensionsResult: {} as never });
@@ -396,7 +396,7 @@ describe("advisor Effect clock boundaries", () => {
           },
           seed: "seed",
         })
-        .pipe(Effect.provide(advisorPlatformLayer));
+        .pipe(provideBuiltLayer(advisorPlatformLayer));
       let completed = false;
       const abort = yield* runtime.abortEffect().pipe(
         Effect.ensuring(
@@ -411,7 +411,7 @@ describe("advisor Effect clock boundaries", () => {
       yield* Deferred.succeed(abortGate, undefined);
       yield* Fiber.join(abort);
       expect(completed).toBe(true);
-      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(session.abort).toHaveBeenCalledOnce();
       expect(session.dispose).toHaveBeenCalledOnce();
     }),
@@ -474,7 +474,7 @@ describe("advisor Effect clock boundaries", () => {
         },
         seed: "seed",
       };
-      yield* runtime.startEffect(options).pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.startEffect(options).pipe(provideBuiltLayer(advisorPlatformLayer));
       let completed = false;
       const abort = yield* runtime.abortEffect().pipe(
         Effect.ensuring(
@@ -505,7 +505,7 @@ describe("advisor Effect clock boundaries", () => {
         .pipe(Effect.flip);
       expect(failure).toBeInstanceOf(AdvisorRuntimeResetRequiredError);
 
-      yield* runtime.reprimeEffect("fresh").pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.reprimeEffect("fresh").pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(runtime.childSession).toBe(fresh);
       const interruptedFreshAbort = yield* Deferred.make<void>();
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
@@ -520,7 +520,7 @@ describe("advisor Effect clock boundaries", () => {
       expect(runtime.childSession).toBeUndefined();
       expect(fresh.abort).toHaveBeenCalledOnce();
       expect(fresh.dispose).toHaveBeenCalledOnce();
-      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(stuck.dispose).toHaveBeenCalledOnce();
       expect(fresh.dispose).toHaveBeenCalledOnce();
     }),

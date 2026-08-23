@@ -1,6 +1,4 @@
 // Test-owned Node streams exercise the process boundary room.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/asyncFunction:off
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import * as Effect from "effect/Effect";
@@ -12,7 +10,7 @@ import {
 } from "../src/boundary/bounded-line-parser.ts";
 
 describe("bounded child line parser", () => {
-  it("flushes split UTF-8 and the final unterminated Pi RPC frame", async () => {
+  it("flushes split UTF-8 and the final unterminated Pi RPC frame", () => {
     const stream = new PassThrough();
     const lines: string[] = [];
     const overflow = vi.fn();
@@ -28,10 +26,10 @@ describe("bounded child line parser", () => {
     stream.write(frame.subarray(split));
     const ended = once(stream, "end");
     stream.end();
-    await ended;
-
-    expect(lines).toEqual(['{"type":"message_end","text":"café 🌌"}']);
-    expect(overflow).not.toHaveBeenCalled();
+    return ended.then(() => {
+      expect(lines).toEqual(['{"type":"message_end","text":"café 🌌"}']);
+      expect(overflow).not.toHaveBeenCalled();
+    });
   });
 
   it("bounds ordinary sequential line backlog until downstream acknowledgement", () => {

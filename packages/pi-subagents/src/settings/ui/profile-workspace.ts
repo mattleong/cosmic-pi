@@ -1,5 +1,4 @@
 // Profile settings are a Promise-shaped Pi host UI boundary.
-// @effect-diagnostics effect/asyncFunction:off
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import {

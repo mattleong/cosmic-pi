@@ -11,7 +11,7 @@
         "includeSuggestionsInTsc": true,
         "ignoreEffectWarningsInTscExitCode": false,
         "ignoreEffectErrorsInTscExitCode": false,
-        "ignoreEffectSuggestionsInTscExitCode": true,
+        "ignoreEffectSuggestionsInTscExitCode": false,
         "excludeExternalLibrariesWhenSkipLibCheck": true,
         "namespaceImportPackages": ["effect", "@effect/*"],
         "diagnosticSeverity": {

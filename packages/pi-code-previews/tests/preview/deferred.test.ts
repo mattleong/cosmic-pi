@@ -1,8 +1,4 @@
 // Test-only runner verifies the installed session capability contract.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/unsafeEffectTypeAssertion:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
 import assert from "node:assert/strict";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -16,6 +12,7 @@ import {
 import { previewScheduleEffect } from "../../src/application/scheduler";
 import { testTheme } from "../../src/testing/render";
 import { cachedDeferredPreview } from "../../src/tools/renderers/shared/cache";
+import { eventLoopTurn } from "../support/effect-test";
 
 afterEach(() => clearCodePreviewSessionCapability());
 
@@ -61,7 +58,7 @@ test("large previews remain synchronous before session acquisition", () => {
   assert.match(rendered.render(80).join("\n"), /ready/);
 });
 
-test("cache replacement cancels obsolete deferred publication and compares exact source", async () => {
+test("cache replacement cancels obsolete deferred publication and compares exact source", () => {
   installTestCapability();
   const state = {};
   let firstComputes = 0;
@@ -95,14 +92,15 @@ test("cache replacement cancels obsolete deferred publication and compares exact
     },
     () => invalidations++,
   );
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(firstComputes, 0);
-  assert.equal(secondComputes, 1);
-  assert.equal(invalidations, 1);
-  assert.match(current.render(80).join("\n"), /current/);
+  return eventLoopTurn().then(() => {
+    assert.equal(firstComputes, 0);
+    assert.equal(secondComputes, 1);
+    assert.equal(invalidations, 1);
+    assert.match(current.render(80).join("\n"), /current/);
+  });
 });
 
-test("deferred publication isolates a throwing host invalidation callback", async () => {
+test("deferred publication isolates a throwing host invalidation callback", () => {
   installTestCapability();
   const state = {};
   const current = cachedDeferredPreview(
@@ -118,6 +116,7 @@ test("deferred publication isolates a throwing host invalidation callback", asyn
       throw new Error("host invalidation failed");
     },
   );
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.match(current.render(80).join("\n"), /ready/);
+  return eventLoopTurn().then(() => {
+    assert.match(current.render(80).join("\n"), /ready/);
+  });
 });

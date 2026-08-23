@@ -2,13 +2,12 @@ import type { ESTree } from "@oxlint/plugins";
 
 type VisitorKeys = Readonly<Record<string, readonly string[]>>;
 
-function isNode(value: unknown): value is ESTree.Node {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"type" in value &&
-		typeof value.type === "string"
-	);
+function isObject<Value>(value: Value): value is Value & object {
+	return value !== null && Object(value) === value;
+}
+
+function isNode<Value>(value: Value): value is Value & ESTree.Node {
+	return isObject(value) && "type" in value && String(value.type) === value.type;
 }
 
 function collectInferTypeParameterNames(
@@ -17,7 +16,9 @@ function collectInferTypeParameterNames(
 	names: Set<string>,
 ): void {
 	if (node.type === "TSInferType") names.add(node.typeParameter.name.name);
-	const record = node as unknown as Readonly<Record<string, unknown>>;
+	// SAFETY: Oxlint visitor keys name only child-node or child-node-array properties.
+	const record = node as ESTree.Node &
+		Readonly<Record<string, ESTree.Node | readonly ESTree.Node[] | undefined>>;
 	for (const key of visitorKeys[node.type] ?? []) {
 		const value = record[key];
 		if (isNode(value)) {

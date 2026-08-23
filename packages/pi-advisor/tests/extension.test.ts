@@ -1,13 +1,11 @@
-// Test harness boundary: only the diagnostics used by this file are suppressed.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/globalDate:off
-// @effect-diagnostics effect/globalTimers:off
+// Test harness boundary: Pi callbacks and fake child sessions are Promise-shaped fixtures.
+import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { test, vi } from "vitest";
 import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
@@ -126,10 +124,11 @@ function harness(
     failureLogger: failureLoggerLayerFromLog(logFailure),
   })(pi);
   const emitWithContext = registry.emitWithContext;
-  const emitAwait = async <Event>(name: string, event: Event) => emitWithContext(name, event, ctx);
-  const emit = async <Event>(name: string, event: Event) => {
+  const emitAwait = <Event>(name: string, event: Event) => emitWithContext(name, event, ctx);
+  const emit = <Event>(name: string, event: Event): Promise<void> => {
     if (name !== "turn_end") return emitAwait(name, event);
     registry.emitDetachedWithContext(name, event, ctx);
+    return Promise.resolve();
   };
   return {
     appended,
@@ -191,802 +190,922 @@ function confidentBlocker(
   };
 }
 
-async function resolveVerifiedBlocker(
+const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
+  Effect.promise(() => Promise.resolve(value).then(() => undefined));
+
+/** Serialized snapshot for content-leak assertions at this Promise-shaped test boundary. */
+const serializedSnapshot = <ValueInput>(value: ValueInput): string => JSON.stringify(value);
+
+const resolveVerifiedBlocker = (
   runtime: ReturnType<typeof harness>["runtimes"][number],
   initialIndex: number,
   issue = "The answer is wrong.",
-): Promise<number> {
-  const initial = revise(runtime.requests[initialIndex]!, "blocker", issue);
-  runtime.pending[initialIndex]!.resolve(initial);
-  await tick();
-  const verificationIndex = runtime.requests.length - 1;
-  expect(runtime.requests[verificationIndex]?.focus).toBe("blocker-verification");
-  expect(runtime.requests[verificationIndex]?.verificationReview?.findings).toEqual(
-    initial.findings,
-  );
-  runtime.pending[verificationIndex]!.resolve(
-    revise(runtime.requests[verificationIndex]!, "blocker", issue),
-  );
-  await tick();
-  return verificationIndex;
-}
+): Effect.Effect<number> =>
+  Effect.gen(function* () {
+    const initial = revise(runtime.requests[initialIndex]!, "blocker", issue);
+    runtime.pending[initialIndex]!.resolve(initial);
+    yield* Effect.promise(() => tick());
+    const verificationIndex = runtime.requests.length - 1;
+    expect(runtime.requests[verificationIndex]?.focus).toBe("blocker-verification");
+    expect(runtime.requests[verificationIndex]?.verificationReview?.findings).toEqual(
+      initial.findings,
+    );
+    runtime.pending[verificationIndex]!.resolve(
+      revise(runtime.requests[verificationIndex]!, "blocker", issue),
+    );
+    yield* Effect.promise(() => tick());
+    return verificationIndex;
+  });
 
 describe("persistent extension cutover", () => {
-  test("completed turns await only their correlated Advisor settlement", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    let settled = false;
-    const turn = value.emitAwait("turn_end", finalTurn("held until review"));
-    void turn.then(() => {
-      settled = true;
-    });
-    await tick();
-    expect(settled).toBe(false);
-    const current = value.runtimes[0]!;
-    expect(current.requests).toHaveLength(1);
-    current.pending[0]!.resolve(pass(current.requests[0]!));
-    await turn;
-    expect(settled).toBe(true);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    expect((value.ctx as { waitForIdle?: unknown }).waitForIdle).toBeUndefined();
-  });
-
-  test("cursor rewrite restart and checkpoint both remain inside the same catch-up barrier", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
-      {
-        id: "replacement",
-        type: "message",
-        parentId: null,
-        timestamp: "now",
-        message: { role: "user", content: "replacement" },
-      },
-    ]);
-    let settled = false;
-    const turn = value.emitAwait("turn_end", finalTurn("must be reviewed after reseed"));
-    void turn.then(() => {
-      settled = true;
-    });
-    await tick();
-
-    expect(value.runtimes).toHaveLength(2);
-    expect(value.runtimes[1]!.requests).toHaveLength(1);
-    expect(settled).toBe(false);
-    value.runtimes[1]!.pending[0]!.resolve(pass(value.runtimes[1]!.requests[0]!));
-    await turn;
-    expect(settled).toBe(true);
-  });
-
-  test("provider failure, runtime reset, and parent cancellation release catch-up early", async () => {
-    const provider = harness();
-    await provider.emit("session_start", { type: "session_start" });
-    const providerTurn = provider.emitAwait("turn_end", finalTurn("provider failure"));
-    await tick();
-    provider.runtimes[0]!.pending[0]!.reject(new Error("provider unavailable"));
-    await providerTurn;
-
-    const reset = harness();
-    await reset.emit("session_start", { type: "session_start" });
-    const resetTurn = reset.emitAwait("turn_end", finalTurn("reset"));
-    await tick();
-    await reset.emit("session_tree", { type: "session_tree" });
-    await resetTurn;
-
-    const cancelled = harness();
-    const controller = new AbortController();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (cancelled.ctx as { signal: AbortSignal }).signal = controller.signal;
-    await cancelled.emit("session_start", { type: "session_start" });
-    const cancelledTurn = cancelled.emitAwait("turn_end", finalTurn("cancelled"));
-    await tick();
-    controller.abort();
-    await cancelledTurn;
-    const current = cancelled.runtimes[0]!;
-    current.pending[0]!.resolve(
-      revise(current.requests[0]!, "blocker", "must not surprise-resume"),
-    );
-    await tick();
-    expect(cancelled.sendMessage).not.toHaveBeenCalled();
-  });
-
-  test("abort dispatch synchronously defeats a same-tick provider completion", async () => {
-    const value = harness();
-    const controller = new AbortController();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx as { signal: AbortSignal }).signal = controller.signal;
-    await value.emit("session_start", { type: "session_start" });
-    const turn = value.emitAwait("turn_end", finalTurn("racy candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-
-    current.pending[0]!.resolve(revise(current.requests[0]!, "blocker", "racy blocker"));
-    controller.abort();
-    await turn;
-    await tick();
-
-    expect(value.sendMessage).not.toHaveBeenCalled();
-    expect(value.appended.at(-1)).toMatchObject({
-      routing: { cancellationLatched: true },
-    });
-  });
-
-  test("ingests thinking synchronously and serializes checkpoints without cancellation", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_start", { type: "turn_start", turnIndex: 1 });
-    for (let index = 0; index < 1_000; index += 1) {
-      await value.emit("message_update", {
-        type: "message_update",
-        assistantMessageEvent: { type: "thinking_delta", delta: `chunk-${index};` },
-      });
-    }
-    await value.emit("turn_end", finalTurn("first"));
-    await value.emit("turn_end", finalTurn("second"));
-    await tick();
-
-    const current = value.runtimes[0];
-    if (!current) throw new Error("runtime not created");
-    expect(current.requests).toHaveLength(1);
-    expect(current.requests[0]?.observations).toContain("assistant_thinking_delta");
-    expect(current.driver.abort).not.toHaveBeenCalled();
-    current.pending[0]?.resolve(pass(current.requests[0]!));
-    await tick();
-    expect(current.requests).toHaveLength(2);
-    current.pending[1]?.resolve(pass(current.requests[1]!));
-    await tick();
-    await tick();
-    expect(value.appended).toHaveLength(2);
-  });
-
-  test("keeps separately registered advisor factories runtime-isolated", async () => {
-    const first = harness();
-    const second = harness();
-    await Promise.all([
-      first.emit("session_start", { type: "session_start" }),
-      second.emit("session_start", { type: "session_start" }),
-    ]);
-    await first.emit("session_shutdown", { type: "session_shutdown" });
-    await second.emit("session_tree", { type: "session_tree" });
-
-    expect(first.runtimes).toHaveLength(1);
-    expect(first.runtimes[0]!.driver.dispose).toHaveBeenCalledOnce();
-    expect(second.runtimes).toHaveLength(2);
-    expect(second.runtimes[1]!.driver.start).toHaveBeenCalledOnce();
-  });
-
-  test("starts once per parent session and disposes on shutdown", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    const current = value.runtimes[0];
-    expect(current?.driver.start).toHaveBeenCalledOnce();
-    await value.emit("session_shutdown", { type: "session_shutdown" });
-    expect(current?.driver.dispose).toHaveBeenCalledOnce();
-  });
-
-  test("a failed replacement capture shuts down the prior application exactly once", async () => {
-    const value = harness();
-    const cancellation = trackedAbortSignal();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx as { signal: AbortSignal }).signal = cancellation.signal;
-    await value.emit("session_start", { type: "session_start" });
-    const current = value.runtimes[0]!;
-    expect(cancellation.liveListeners()).toHaveLength(2);
-
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const invalidContext = Object.create(value.ctx) as ExtensionContext;
-    Object.defineProperty(invalidContext, "cwd", {
-      configurable: true,
-      get: () => {
-        throw new Error("guarded cwd unavailable");
-      },
-    });
-    await expect(
-      value.emitWithContext("session_start", { type: "session_start" }, invalidContext),
-    ).resolves.toBeUndefined();
-    await expect(
-      value.emitWithContext("session_start", { type: "session_start" }, invalidContext),
-    ).resolves.toBeUndefined();
-
-    expect(value.runtimes).toHaveLength(1);
-    expect(current.driver.dispose).toHaveBeenCalledOnce();
-    expectAbortListenersReleasedExactlyOnce(cancellation);
-    await value.emit("turn_end", finalTurn("must not reach the disposed application"));
-    await tick();
-    expect(current.requests).toHaveLength(0);
-    cancellation.abort();
-    await tick();
-    expect(current.driver.dispose).toHaveBeenCalledOnce();
-  });
-
-  test("valid replacement disposes the old Layer and its committed abort listener", async () => {
-    const value = harness();
-    const firstCancellation = trackedAbortSignal();
-    const secondCancellation = trackedAbortSignal();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx as { signal: AbortSignal }).signal = firstCancellation.signal;
-    await value.emit("session_start", { type: "session_start" });
-    const firstRuntime = value.runtimes[0]!;
-    expect(firstCancellation.liveListeners()).toHaveLength(2);
-
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const replacementContext = Object.create(value.ctx) as ExtensionContext;
-    Object.defineProperty(replacementContext, "signal", {
-      configurable: true,
-      value: secondCancellation.signal,
-    });
-    await value.emitWithContext("session_start", { type: "session_start" }, replacementContext);
-
-    expect(value.runtimes).toHaveLength(2);
-    expect(firstRuntime.driver.dispose).toHaveBeenCalledOnce();
-    expectAbortListenersReleasedExactlyOnce(firstCancellation);
-    expect(secondCancellation.liveListeners()).toHaveLength(2);
-
-    firstCancellation.abort();
-    await tick();
-    expect(value.runtimes[1]!.driver.dispose).not.toHaveBeenCalled();
-
-    secondCancellation.abort();
-    await tick();
-    await tick();
-    expect(value.runtimes[1]!.driver.dispose).toHaveBeenCalledOnce();
-    expectAbortListenersReleasedExactlyOnce(secondCancellation);
-  });
-
-  test("throwing status UI cannot skip child shutdown disposal", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    const current = value.runtimes[0]!;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.ui.setStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      throw new Error("status failed");
-    });
-
-    await expect(
-      value.emit("session_shutdown", { type: "session_shutdown" }),
-    ).resolves.toBeUndefined();
-    expect(current.driver.dispose).toHaveBeenCalledOnce();
-  });
-
-  test("serializes overlapping child replacements behind prior disposal", async () => {
-    const disposal = deferred<void>();
-    const value = harness({}, { runtimeDisposePromises: [disposal.promise, undefined] });
-    await value.emit("session_start", { type: "session_start" });
-    const first = value.runtimes[0]!;
-
-    const tree = value.emitAwait("session_tree", { type: "session_tree" });
-    await tick();
-    const compact = value.emitAwait("session_compact", { type: "session_compact" });
-    await tick();
-    expect(value.runtimes).toHaveLength(1);
-    expect(first.driver.dispose).toHaveBeenCalledOnce();
-
-    disposal.resolve();
-    await Promise.all([tree, compact]);
-    expect(value.runtimes).toHaveLength(2);
-    expect(value.runtimes[1]!.driver.start).toHaveBeenCalledOnce();
-  });
-
-  test.each(["session_tree", "session_compact"])(
-    "%s invalidation discards an old-epoch completion and re-primes",
-    async (eventName) => {
+  it.effect("completed turns await only their correlated Advisor settlement", () =>
+    Effect.gen(function* () {
       const value = harness();
-      await value.emit("session_start", { type: "session_start" });
-      await value.emit("turn_end", finalTurn("old branch"));
-      await tick();
-      const old = value.runtimes[0];
-      if (!old?.requests[0]) throw new Error("missing checkpoint");
-      await value.emit(eventName, { type: eventName });
-      old.pending[0]?.resolve(pass(old.requests[0]));
-      await tick();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      let settled = false;
+      const turn = value.emitAwait("turn_end", finalTurn("held until review"));
+      void turn.then(() => {
+        settled = true;
+      });
+      yield* Effect.promise(() => tick());
+      expect(settled).toBe(false);
+      const current = value.runtimes[0]!;
+      expect(current.requests).toHaveLength(1);
+      current.pending[0]!.resolve(pass(current.requests[0]!));
+      yield* invoke(turn);
+      expect(settled).toBe(true);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      expect((value.ctx as { waitForIdle?: unknown }).waitForIdle).toBeUndefined();
+    }),
+  );
+
+  it.effect(
+    "cursor rewrite restart and checkpoint both remain inside the same catch-up barrier",
+    () =>
+      Effect.gen(function* () {
+        const value = harness();
+        yield* invoke(value.emit("session_start", { type: "session_start" }));
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
+          {
+            id: "replacement",
+            type: "message",
+            parentId: null,
+            timestamp: "now",
+            message: { role: "user", content: "replacement" },
+          },
+        ]);
+        let settled = false;
+        const turn = value.emitAwait("turn_end", finalTurn("must be reviewed after reseed"));
+        void turn.then(() => {
+          settled = true;
+        });
+        yield* Effect.promise(() => tick());
+
+        expect(value.runtimes).toHaveLength(2);
+        expect(value.runtimes[1]!.requests).toHaveLength(1);
+        expect(settled).toBe(false);
+        value.runtimes[1]!.pending[0]!.resolve(pass(value.runtimes[1]!.requests[0]!));
+        yield* invoke(turn);
+        expect(settled).toBe(true);
+      }),
+  );
+
+  it.effect("provider failure, runtime reset, and parent cancellation release catch-up early", () =>
+    Effect.gen(function* () {
+      const provider = harness();
+      yield* invoke(provider.emit("session_start", { type: "session_start" }));
+      const providerTurn = provider.emitAwait("turn_end", finalTurn("provider failure"));
+      yield* Effect.promise(() => tick());
+      provider.runtimes[0]!.pending[0]!.reject(new Error("provider unavailable"));
+      yield* invoke(providerTurn);
+
+      const reset = harness();
+      yield* invoke(reset.emit("session_start", { type: "session_start" }));
+      const resetTurn = reset.emitAwait("turn_end", finalTurn("reset"));
+      yield* Effect.promise(() => tick());
+      yield* invoke(reset.emit("session_tree", { type: "session_tree" }));
+      yield* invoke(resetTurn);
+
+      const cancelled = harness();
+      const controller = new AbortController();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (cancelled.ctx as { signal: AbortSignal }).signal = controller.signal;
+      yield* invoke(cancelled.emit("session_start", { type: "session_start" }));
+      const cancelledTurn = cancelled.emitAwait("turn_end", finalTurn("cancelled"));
+      yield* Effect.promise(() => tick());
+      controller.abort();
+      yield* invoke(cancelledTurn);
+      const current = cancelled.runtimes[0]!;
+      current.pending[0]!.resolve(
+        revise(current.requests[0]!, "blocker", "must not surprise-resume"),
+      );
+      yield* Effect.promise(() => tick());
+      expect(cancelled.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("abort dispatch synchronously defeats a same-tick provider completion", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const controller = new AbortController();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx as { signal: AbortSignal }).signal = controller.signal;
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const turn = value.emitAwait("turn_end", finalTurn("racy candidate"));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+
+      current.pending[0]!.resolve(revise(current.requests[0]!, "blocker", "racy blocker"));
+      controller.abort();
+      yield* invoke(turn);
+      yield* Effect.promise(() => tick());
+
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(value.appended.at(-1)).toMatchObject({
+        routing: { cancellationLatched: true },
+      });
+    }),
+  );
+
+  it.effect("ingests thinking synchronously and serializes checkpoints without cancellation", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_start", { type: "turn_start", turnIndex: 1 }));
+      for (let index = 0; index < 1_000; index += 1) {
+        yield* invoke(
+          value.emit("message_update", {
+            type: "message_update",
+            assistantMessageEvent: { type: "thinking_delta", delta: `chunk-${index};` },
+          }),
+        );
+      }
+      yield* invoke(value.emit("turn_end", finalTurn("first")));
+      yield* invoke(value.emit("turn_end", finalTurn("second")));
+      yield* Effect.promise(() => tick());
+
+      const current = value.runtimes[0];
+      if (!current) throw new Error("runtime not created");
+      expect(current.requests).toHaveLength(1);
+      expect(current.requests[0]?.observations).toContain("assistant_thinking_delta");
+      expect(current.driver.abort).not.toHaveBeenCalled();
+      current.pending[0]?.resolve(pass(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      expect(current.requests).toHaveLength(2);
+      current.pending[1]?.resolve(pass(current.requests[1]!));
+      yield* Effect.promise(() => tick());
+      yield* Effect.promise(() => tick());
+      expect(value.appended).toHaveLength(2);
+    }),
+  );
+
+  it.effect("keeps separately registered advisor factories runtime-isolated", () =>
+    Effect.gen(function* () {
+      const first = harness();
+      const second = harness();
+      yield* Effect.promise(() =>
+        Promise.all([
+          first.emit("session_start", { type: "session_start" }),
+          second.emit("session_start", { type: "session_start" }),
+        ]),
+      );
+      yield* invoke(first.emit("session_shutdown", { type: "session_shutdown" }));
+      yield* invoke(second.emit("session_tree", { type: "session_tree" }));
+
+      expect(first.runtimes).toHaveLength(1);
+      expect(first.runtimes[0]!.driver.dispose).toHaveBeenCalledOnce();
+      expect(second.runtimes).toHaveLength(2);
+      expect(second.runtimes[1]!.driver.start).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect("starts once per parent session and disposes on shutdown", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const current = value.runtimes[0];
+      expect(current?.driver.start).toHaveBeenCalledOnce();
+      yield* invoke(value.emit("session_shutdown", { type: "session_shutdown" }));
+      expect(current?.driver.dispose).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect("a failed replacement capture shuts down the prior application exactly once", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const cancellation = trackedAbortSignal();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx as { signal: AbortSignal }).signal = cancellation.signal;
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const current = value.runtimes[0]!;
+      expect(cancellation.liveListeners()).toHaveLength(2);
+
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const invalidContext = Object.create(value.ctx) as ExtensionContext;
+      Object.defineProperty(invalidContext, "cwd", {
+        configurable: true,
+        get: () => {
+          throw new Error("guarded cwd unavailable");
+        },
+      });
+      yield* Effect.promise(() =>
+        expect(
+          value.emitWithContext("session_start", { type: "session_start" }, invalidContext),
+        ).resolves.toBeUndefined(),
+      );
+      yield* Effect.promise(() =>
+        expect(
+          value.emitWithContext("session_start", { type: "session_start" }, invalidContext),
+        ).resolves.toBeUndefined(),
+      );
+
+      expect(value.runtimes).toHaveLength(1);
+      expect(current.driver.dispose).toHaveBeenCalledOnce();
+      expectAbortListenersReleasedExactlyOnce(cancellation);
+      yield* invoke(value.emit("turn_end", finalTurn("must not reach the disposed application")));
+      yield* Effect.promise(() => tick());
+      expect(current.requests).toHaveLength(0);
+      cancellation.abort();
+      yield* Effect.promise(() => tick());
+      expect(current.driver.dispose).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect("valid replacement disposes the old Layer and its committed abort listener", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const firstCancellation = trackedAbortSignal();
+      const secondCancellation = trackedAbortSignal();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx as { signal: AbortSignal }).signal = firstCancellation.signal;
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const firstRuntime = value.runtimes[0]!;
+      expect(firstCancellation.liveListeners()).toHaveLength(2);
+
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const replacementContext = Object.create(value.ctx) as ExtensionContext;
+      Object.defineProperty(replacementContext, "signal", {
+        configurable: true,
+        value: secondCancellation.signal,
+      });
+      yield* invoke(
+        value.emitWithContext("session_start", { type: "session_start" }, replacementContext),
+      );
 
       expect(value.runtimes).toHaveLength(2);
-      expect(old.driver.dispose).toHaveBeenCalled();
-      expect(value.sendMessage).not.toHaveBeenCalled();
-      expect(value.appended).toHaveLength(0);
-      if (eventName === "session_tree") {
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-        await value.commands.get("advisor")!.handler("review", value.ctx as never);
-        await tick();
-        expect(value.runtimes[1]?.requests).toHaveLength(0);
-      }
-    },
+      expect(firstRuntime.driver.dispose).toHaveBeenCalledOnce();
+      expectAbortListenersReleasedExactlyOnce(firstCancellation);
+      expect(secondCancellation.liveListeners()).toHaveLength(2);
+
+      firstCancellation.abort();
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes[1]!.driver.dispose).not.toHaveBeenCalled();
+
+      secondCancellation.abort();
+      yield* Effect.promise(() => tick());
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes[1]!.driver.dispose).toHaveBeenCalledOnce();
+      expectAbortListenersReleasedExactlyOnce(secondCancellation);
+    }),
   );
 
-  test("detects an unannounced parent-prefix replacement at a checkpoint boundary", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
-      {
-        id: "replacement",
+  it.effect("throwing status UI cannot skip child shutdown disposal", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const current = value.runtimes[0]!;
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.ui.setStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error("status failed");
+      });
+
+      yield* Effect.promise(() =>
+        expect(
+          value.emit("session_shutdown", { type: "session_shutdown" }),
+        ).resolves.toBeUndefined(),
+      );
+      expect(current.driver.dispose).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect("serializes overlapping child replacements behind prior disposal", () =>
+    Effect.gen(function* () {
+      const disposal = deferred<void>();
+      const value = harness({}, { runtimeDisposePromises: [disposal.promise, undefined] });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const first = value.runtimes[0]!;
+
+      const tree = value.emitAwait("session_tree", { type: "session_tree" });
+      yield* Effect.promise(() => tick());
+      const compact = value.emitAwait("session_compact", { type: "session_compact" });
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes).toHaveLength(1);
+      expect(first.driver.dispose).toHaveBeenCalledOnce();
+
+      disposal.resolve();
+      yield* Effect.promise(() => Promise.all([tree, compact]));
+      expect(value.runtimes).toHaveLength(2);
+      expect(value.runtimes[1]!.driver.start).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect.each(["session_tree", "session_compact"])(
+    "%s invalidation discards an old-epoch completion and re-primes",
+    (eventName) =>
+      Effect.gen(function* () {
+        const value = harness();
+        yield* invoke(value.emit("session_start", { type: "session_start" }));
+        yield* invoke(value.emit("turn_end", finalTurn("old branch")));
+        yield* Effect.promise(() => tick());
+        const old = value.runtimes[0];
+        if (!old?.requests[0]) throw new Error("missing checkpoint");
+        yield* invoke(value.emit(eventName, { type: eventName }));
+        old.pending[0]?.resolve(pass(old.requests[0]));
+        yield* Effect.promise(() => tick());
+
+        expect(value.runtimes).toHaveLength(2);
+        expect(old.driver.dispose).toHaveBeenCalled();
+        expect(value.sendMessage).not.toHaveBeenCalled();
+        expect(value.appended).toHaveLength(0);
+        if (eventName === "session_tree") {
+          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          yield* invoke(value.commands.get("advisor")!.handler("review", value.ctx as never));
+          yield* Effect.promise(() => tick());
+          expect(value.runtimes[1]?.requests).toHaveLength(0);
+        }
+      }),
+  );
+
+  it.effect("detects an unannounced parent-prefix replacement at a checkpoint boundary", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "replacement",
+          type: "message",
+          parentId: null,
+          timestamp: "now",
+          message: { role: "user", content: "replacement" },
+        },
+      ]);
+      yield* invoke(value.emit("turn_end", finalTurn("new prefix")));
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes).toHaveLength(2);
+      expect(value.runtimes[0]?.driver.dispose).toHaveBeenCalled();
+      expect(value.runtimes[0]?.requests).toHaveLength(0);
+      expect(value.runtimes[1]?.requests).toHaveLength(1);
+      value.runtimes[1]!.pending[0]!.resolve(pass(value.runtimes[1]!.requests[0]!));
+      yield* Effect.promise(() => tick());
+      expect(value.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("advances the processed anchor and detects a shared-prefix sibling rewrite", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const root = {
+        id: "root",
         type: "message",
         parentId: null,
         timestamp: "now",
-        message: { role: "user", content: "replacement" },
-      },
-    ]);
-    await value.emit("turn_end", finalTurn("new prefix"));
-    await tick();
-    expect(value.runtimes).toHaveLength(2);
-    expect(value.runtimes[0]?.driver.dispose).toHaveBeenCalled();
-    expect(value.runtimes[0]?.requests).toHaveLength(0);
-    expect(value.runtimes[1]?.requests).toHaveLength(1);
-    value.runtimes[1]!.pending[0]!.resolve(pass(value.runtimes[1]!.requests[0]!));
-    await tick();
-    expect(value.sendMessage).not.toHaveBeenCalled();
-  });
+        message: { role: "user", content: "root" },
+      };
+      const firstLeaf = {
+        id: "first-leaf",
+        type: "message",
+        parentId: "root",
+        timestamp: "now",
+        message: { role: "assistant", content: "first" },
+      };
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
+        root,
+        firstLeaf,
+      ]);
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("checkpoint on first sibling")));
+      yield* Effect.promise(() => tick());
+      const firstRuntime = value.runtimes[0]!;
+      firstRuntime.pending[0]!.resolve(pass(firstRuntime.requests[0]!));
+      yield* Effect.promise(() => tick());
 
-  test("advances the processed anchor and detects a shared-prefix sibling rewrite", async () => {
-    const value = harness();
-    const root = {
-      id: "root",
-      type: "message",
-      parentId: null,
-      timestamp: "now",
-      message: { role: "user", content: "root" },
-    };
-    const firstLeaf = {
-      id: "first-leaf",
-      type: "message",
-      parentId: "root",
-      timestamp: "now",
-      message: { role: "assistant", content: "first" },
-    };
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
-      root,
-      firstLeaf,
-    ]);
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("checkpoint on first sibling"));
-    await tick();
-    const firstRuntime = value.runtimes[0]!;
-    firstRuntime.pending[0]!.resolve(pass(firstRuntime.requests[0]!));
-    await tick();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
+        root,
+        { ...firstLeaf, id: "second-leaf", message: { role: "assistant", content: "second" } },
+      ]);
+      yield* invoke(value.emit("turn_end", finalTurn("checkpoint on sibling")));
+      yield* Effect.promise(() => tick());
 
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
-      root,
-      { ...firstLeaf, id: "second-leaf", message: { role: "assistant", content: "second" } },
-    ]);
-    await value.emit("turn_end", finalTurn("checkpoint on sibling"));
-    await tick();
-
-    expect(value.runtimes).toHaveLength(2);
-    expect(firstRuntime.driver.dispose).toHaveBeenCalledOnce();
-    expect(value.runtimes[1]!.requests).toHaveLength(1);
-    value.runtimes[1]!.pending[0]!.resolve(pass(value.runtimes[1]!.requests[0]!));
-    await tick();
-  });
-
-  test("discards a checkpoint completed after newer genuine user work", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("old answer"));
-    await tick();
-    const current = value.runtimes[0];
-    if (!current?.requests[0]) throw new Error("missing checkpoint");
-    await value.emit("message_end", {
-      type: "message_end",
-      message: { role: "user", content: "new request" },
-    });
-    current.pending[0]?.resolve(revise(current.requests[0]));
-    await tick();
-    expect(value.sendMessage).not.toHaveBeenCalled();
-    expect(value.ctx.abort).not.toHaveBeenCalled();
-  });
-
-  test("suppresses delivery when user input is queued", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0];
-    if (!current?.requests[0]) throw new Error("missing checkpoint");
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
-    current.pending[0]?.resolve(revise(current.requests[0]));
-    await tick();
-    expect(value.sendMessage).not.toHaveBeenCalled();
-  });
-
-  test("does not recursively observe an advisor review custom message as genuine user work", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("message_end", {
-      type: "message_end",
-      message: { role: "custom", customType: "advisor-review", content: "critique" },
-    });
-    await value.emit("turn_end", finalTurn("answer"));
-    await tick();
-    const request = value.runtimes[0]?.requests[0];
-    expect(request?.observations).not.toContain("critique");
-  });
-
-  test("steers an active parent without triggering a synthetic turn", async () => {
-    const value = harness();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    await resolveVerifiedBlocker(current, 0);
-    expect(value.sendMessage).toHaveBeenCalledWith(expect.anything(), { deliverAs: "steer" });
-    expect(value.ctx.abort).not.toHaveBeenCalled();
-  });
-
-  test("suppresses a late blocker after an external abort without waking the parent", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    await value.emit("turn_end", {
-      ...finalTurn(""),
-      message: { role: "assistant", content: [], stopReason: "aborted" },
-    });
-    current.pending[0]!.resolve(revise(current.requests[0]!));
-    await tick();
-    expect(value.ctx.abort).not.toHaveBeenCalled();
-    expect(value.sendMessage).not.toHaveBeenCalled();
-  });
-
-  test("drops a late completion after newer genuine user work", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    await value.emit("message_end", {
-      type: "message_end",
-      message: { role: "user", content: "newer work" },
-    });
-    current.pending[0]!.resolve(revise(current.requests[0]!));
-    await tick();
-    expect(value.sendMessage).not.toHaveBeenCalled();
-  });
-
-  test("cancel stops in-flight work without late delivery", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await value.commands.get("advisor")!.handler("cancel", value.ctx as never);
-    current.pending[0]!.resolve(revise(current.requests[0]!));
-    await tick();
-    expect(value.sendMessage).not.toHaveBeenCalled();
-  });
-
-  test("requires a correlated second pass before delivering a high-confidence blocker", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    const initial = confidentBlocker(current.requests[0]!);
-    current.pending[0]!.resolve(initial);
-    await tick();
-
-    expect(value.sendMessage).not.toHaveBeenCalled();
-    expect(current.requests[1]?.focus).toBe("blocker-verification");
-    expect(current.requests[1]?.verificationReview?.findings).toEqual(initial.findings);
-    current.pending[1]!.resolve(confidentBlocker(current.requests[1]!));
-    await tick();
-
-    expect(value.sendMessage).toHaveBeenCalledOnce();
-    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({
-      deliverAs: "steer",
-      triggerTurn: true,
-    });
-  });
-
-  test("drops an unconfirmed blocker without disturbing the primary response", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(confidentBlocker(current.requests[0]!));
-    await tick();
-    current.pending[1]!.resolve(pass(current.requests[1]!));
-    await tick();
-
-    expect(value.sendMessage).not.toHaveBeenCalled();
-    expect(value.ctx.abort).not.toHaveBeenCalled();
-  });
-
-  test("persists the reset intervention budget at a genuine request boundary", async () => {
-    const value = harness();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "budgeted issue"));
-    await tick();
-    expect(value.appended.at(-1)).toMatchObject({
-      routing: { interventionBudget: { delivered: 1 } },
-    });
-
-    await value.emit("message_end", {
-      type: "message_end",
-      message: { role: "user", content: "new request" },
-    });
-    expect(value.appended.at(-1)).toMatchObject({
-      routing: { interventionBudget: { delivered: 0, correctionUsed: false } },
-    });
-  });
-
-  test("keeps lifecycle identity stable across restart without a session ID", async () => {
-    const first = harness({}, { withoutSessionId: true });
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (first.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
-    await first.emit("session_start", { type: "session_start" });
-    await first.emit("turn_end", finalTurn("first candidate"));
-    await tick();
-    const initial = first.runtimes[0]!;
-    initial.pending[0]!.resolve(revise(initial.requests[0]!, "concern", "stable fallback issue"));
-    await tick();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const firstLedger = first.appended.at(-1) as {
-      findingLifecycle: Array<{ id: string; status: string }>;
-    };
-    const findingId = firstLedger.findingLifecycle[0]!.id;
-    for (const entry of first.branch) {
-      if (entry.type === "custom" && hasObjectRuntimeType(entry.data) && entry.data) {
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-        (entry.data as { emissionHashes?: string[] }).emissionHashes = [];
-      }
-    }
-
-    const second = harness(
-      {},
-      {
-        branch: first.branch,
-        withoutSessionId: true,
-      },
-    );
-    await second.emit("session_start", { type: "session_start" });
-    await second.emit("turn_end", finalTurn("second candidate"));
-    await tick();
-    const restored = second.runtimes[0]!;
-    restored.pending[0]!.resolve(revise(restored.requests[0]!, "concern", "stable fallback issue"));
-    await tick();
-
-    expect(second.sendMessage).not.toHaveBeenCalled();
-    expect(second.appended.at(-1)).toMatchObject({
-      findingLifecycle: [expect.objectContaining({ id: findingId, status: "acknowledged" })],
-    });
-  });
-
-  test.each(["aborted", "error", "length"] as const)(
-    "skips incomplete %s turns",
-    async (stopReason) => {
-      const value = harness();
-      await value.emit("session_start", { type: "session_start" });
-      await value.emit("turn_end", {
-        ...finalTurn("incomplete"),
-        message: { ...finalTurn("incomplete").message, stopReason },
-      });
-      await tick();
-      expect(value.runtimes[0]?.requests).toHaveLength(0);
-    },
+      expect(value.runtimes).toHaveLength(2);
+      expect(firstRuntime.driver.dispose).toHaveBeenCalledOnce();
+      expect(value.runtimes[1]!.requests).toHaveLength(1);
+      value.runtimes[1]!.pending[0]!.resolve(pass(value.runtimes[1]!.requests[0]!));
+      yield* Effect.promise(() => tick());
+    }),
   );
 
-  test("disabled review does not start child work or review turns", async () => {
-    const value = harness({ enabled: false });
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    expect(value.runtimes).toHaveLength(0);
-  });
-
-  test("queued user input still runs mandatory catch-up but suppresses stale delivery", async () => {
-    const value = harness();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("obsolete"));
-    await tick();
-    const current = value.runtimes[0]!;
-    expect(current.requests).toHaveLength(1);
-    current.pending[0]!.resolve(revise(current.requests[0]!));
-    await tick();
-    expect(value.sendMessage).not.toHaveBeenCalled();
-  });
-
-  test("successful pass checkpoints remain silent while persisting compact state", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(pass(current.requests[0]!));
-    await tick();
-    expect(value.sendMessage).not.toHaveBeenCalled();
-    expect(value.appended).toHaveLength(1);
-  });
-
-  test("never copies model-authored checkpoint state into the durable ledger", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    current.pending[0]!.resolve({
-      ...pass(current.requests[0]!),
-      stateSummary: "COPIED_TRANSCRIPT_73af private thinking /secret/file sk-abcdefghijklmnop",
-      summary: "COPIED_TRANSCRIPT_73af",
-    });
-    await tick();
-
-    expect(JSON.stringify(value.appended[0])).not.toMatch(
-      /COPIED_TRANSCRIPT_73af|private thinking|secret\/file|sk-abcdefghijklmnop/,
-    );
-    expect(value.appended[0]).toMatchObject({
-      reviewSummary: { verdict: "pass" },
-    });
-  });
-
-  test("logs checkpoint failures and emits a rate-limited warning", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    value.runtimes[0]!.pending[0]!.reject(new Error("provider failure"));
-    await tick();
-    expect(value.logFailure).toHaveBeenCalledOnce();
-    expect(value.ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("keeping the primary response"),
-      "warning",
-    );
-
-    await value.emit("turn_end", finalTurn("second candidate"));
-    await tick();
-    value.runtimes[0]!.pending[1]!.reject(new Error("provider failed again"));
-    await tick();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const failureWarnings = (value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([message, level]) =>
-        level === "warning" && String(message).includes("keeping the primary response"),
-    );
-    expect(failureWarnings).toHaveLength(1);
-    expect(value.logFailure).toHaveBeenCalledTimes(2);
-  });
-
-  test("does not show a late spinner when a checkpoint settles within the delay", async () => {
-    vi.useFakeTimers();
-    try {
+  it.effect("discards a checkpoint completed after newer genuine user work", () =>
+    Effect.gen(function* () {
       const value = harness();
-      await value.emit("session_start", { type: "session_start" });
-      await value.emit("turn_end", finalTurn("candidate"));
-      await vi.advanceTimersByTimeAsync(0);
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("old answer")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0];
+      if (!current?.requests[0]) throw new Error("missing checkpoint");
+      yield* invoke(
+        value.emit("message_end", {
+          type: "message_end",
+          message: { role: "user", content: "new request" },
+        }),
+      );
+      current.pending[0]?.resolve(revise(current.requests[0]));
+      yield* Effect.promise(() => tick());
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(value.ctx.abort).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("suppresses delivery when user input is queued", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0];
+      if (!current?.requests[0]) throw new Error("missing checkpoint");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      current.pending[0]?.resolve(revise(current.requests[0]));
+      yield* Effect.promise(() => tick());
+      expect(value.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect(
+    "does not recursively observe an advisor review custom message as genuine user work",
+    () =>
+      Effect.gen(function* () {
+        const value = harness();
+        yield* invoke(value.emit("session_start", { type: "session_start" }));
+        yield* invoke(
+          value.emit("message_end", {
+            type: "message_end",
+            message: { role: "custom", customType: "advisor-review", content: "critique" },
+          }),
+        );
+        yield* invoke(value.emit("turn_end", finalTurn("answer")));
+        yield* Effect.promise(() => tick());
+        const request = value.runtimes[0]?.requests[0];
+        expect(request?.observations).not.toContain("critique");
+      }),
+  );
+
+  it.effect("steers an active parent without triggering a synthetic turn", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      yield* resolveVerifiedBlocker(current, 0);
+      expect(value.sendMessage).toHaveBeenCalledWith(expect.anything(), { deliverAs: "steer" });
+      expect(value.ctx.abort).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("suppresses a late blocker after an external abort without waking the parent", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      yield* invoke(
+        value.emit("turn_end", {
+          ...finalTurn(""),
+          message: { role: "assistant", content: [], stopReason: "aborted" },
+        }),
+      );
+      current.pending[0]!.resolve(revise(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      expect(value.ctx.abort).not.toHaveBeenCalled();
+      expect(value.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("drops a late completion after newer genuine user work", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      yield* invoke(
+        value.emit("message_end", {
+          type: "message_end",
+          message: { role: "user", content: "newer work" },
+        }),
+      );
+      current.pending[0]!.resolve(revise(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      expect(value.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("cancel stops in-flight work without late delivery", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
       const current = value.runtimes[0]!;
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+      yield* invoke(value.commands.get("advisor")!.handler("cancel", value.ctx as never));
+      current.pending[0]!.resolve(revise(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      expect(value.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
 
-      current.pending[0]!.resolve(pass(current.requests[0]!));
-      await vi.advanceTimersByTimeAsync(500);
-      expect(setStatus.mock.calls.some((call) => String(call[1]).includes("advising"))).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("manual review cannot start unmanaged work after shutdown or a tree callback", async () => {
-    const value = harness({}, { runtimeStartPromises: [undefined] });
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const initial = value.runtimes[0]!;
-    initial.pending[0]!.resolve(pass(initial.requests[0]!));
-    await tick();
-    await value.emit("session_shutdown", { type: "session_shutdown" });
-    const command = value.commands.get("advisor")!;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
-    notify.mockClear();
-
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const review = command.handler("review", value.ctx as never);
-    await tick();
-    expect(value.runtimes).toHaveLength(1);
-    await value.emit("session_tree", { type: "session_tree" });
-    expect(value.runtimes).toHaveLength(1);
-    await review;
-    await tick();
-
-    expect(value.runtimes[0]!.requests).toHaveLength(1);
-    expect(notify).not.toHaveBeenCalledWith(
-      "No completed response is available to review.",
-      "warning",
-    );
-  });
-
-  test("cleans trajectory timers when newer user work supersedes the active turn", async () => {
-    vi.useFakeTimers();
-    try {
+  it.effect("requires a correlated second pass before delivering a high-confidence blocker", () =>
+    Effect.gen(function* () {
       const value = harness();
-      await value.emit("session_start", { type: "session_start" });
-      await value.emit("turn_start", { type: "turn_start", turnIndex: 1 });
-      await value.emit("message_end", { message: { role: "user", content: "new work" } });
-      await vi.advanceTimersByTimeAsync(100_000);
-      expect(value.runtimes[0]?.requests).toHaveLength(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      const initial = confidentBlocker(current.requests[0]!);
+      current.pending[0]!.resolve(initial);
+      yield* Effect.promise(() => tick());
 
-  test("uses turn_start as the sole parent-turn increment in Pi message ordering", async () => {
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(current.requests[1]?.focus).toBe("blocker-verification");
+      expect(current.requests[1]?.verificationReview?.findings).toEqual(initial.findings);
+      current.pending[1]!.resolve(confidentBlocker(current.requests[1]!));
+      yield* Effect.promise(() => tick());
+
+      expect(value.sendMessage).toHaveBeenCalledOnce();
+      expect(value.sendMessage.mock.lastCall?.[1]).toEqual({
+        deliverAs: "steer",
+        triggerTurn: true,
+      });
+    }),
+  );
+
+  it.effect("drops an unconfirmed blocker without disturbing the primary response", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      current.pending[0]!.resolve(confidentBlocker(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      current.pending[1]!.resolve(pass(current.requests[1]!));
+      yield* Effect.promise(() => tick());
+
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(value.ctx.abort).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("persists the reset intervention budget at a genuine request boundary", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "budgeted issue"));
+      yield* Effect.promise(() => tick());
+      expect(value.appended.at(-1)).toMatchObject({
+        routing: { interventionBudget: { delivered: 1 } },
+      });
+
+      yield* invoke(
+        value.emit("message_end", {
+          type: "message_end",
+          message: { role: "user", content: "new request" },
+        }),
+      );
+      expect(value.appended.at(-1)).toMatchObject({
+        routing: { interventionBudget: { delivered: 0, correctionUsed: false } },
+      });
+    }),
+  );
+
+  it.effect("keeps lifecycle identity stable across restart without a session ID", () =>
+    Effect.gen(function* () {
+      const first = harness({}, { withoutSessionId: true });
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (first.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      yield* invoke(first.emit("session_start", { type: "session_start" }));
+      yield* invoke(first.emit("turn_end", finalTurn("first candidate")));
+      yield* Effect.promise(() => tick());
+      const initial = first.runtimes[0]!;
+      initial.pending[0]!.resolve(revise(initial.requests[0]!, "concern", "stable fallback issue"));
+      yield* Effect.promise(() => tick());
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const firstLedger = first.appended.at(-1) as {
+        findingLifecycle: Array<{ id: string; status: string }>;
+      };
+      const findingId = firstLedger.findingLifecycle[0]!.id;
+      for (const entry of first.branch) {
+        if (entry.type === "custom" && hasObjectRuntimeType(entry.data) && entry.data) {
+          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          (entry.data as { emissionHashes?: string[] }).emissionHashes = [];
+        }
+      }
+
+      const second = harness(
+        {},
+        {
+          branch: first.branch,
+          withoutSessionId: true,
+        },
+      );
+      yield* invoke(second.emit("session_start", { type: "session_start" }));
+      yield* invoke(second.emit("turn_end", finalTurn("second candidate")));
+      yield* Effect.promise(() => tick());
+      const restored = second.runtimes[0]!;
+      restored.pending[0]!.resolve(
+        revise(restored.requests[0]!, "concern", "stable fallback issue"),
+      );
+      yield* Effect.promise(() => tick());
+
+      expect(second.sendMessage).not.toHaveBeenCalled();
+      expect(second.appended.at(-1)).toMatchObject({
+        findingLifecycle: [expect.objectContaining({ id: findingId, status: "acknowledged" })],
+      });
+    }),
+  );
+
+  it.effect.each(["aborted", "error", "length"] as const)(
+    "skips incomplete %s turns",
+    (stopReason) =>
+      Effect.gen(function* () {
+        const value = harness();
+        yield* invoke(value.emit("session_start", { type: "session_start" }));
+        yield* invoke(
+          value.emit("turn_end", {
+            ...finalTurn("incomplete"),
+            message: { ...finalTurn("incomplete").message, stopReason },
+          }),
+        );
+        yield* Effect.promise(() => tick());
+        expect(value.runtimes[0]?.requests).toHaveLength(0);
+      }),
+  );
+
+  it.effect("disabled review does not start child work or review turns", () =>
+    Effect.gen(function* () {
+      const value = harness({ enabled: false });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes).toHaveLength(0);
+    }),
+  );
+
+  it.effect("queued user input still runs mandatory catch-up but suppresses stale delivery", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("obsolete")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      expect(current.requests).toHaveLength(1);
+      current.pending[0]!.resolve(revise(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      expect(value.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("successful pass checkpoints remain silent while persisting compact state", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      current.pending[0]!.resolve(pass(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(value.appended).toHaveLength(1);
+    }),
+  );
+
+  it.effect("never copies model-authored checkpoint state into the durable ledger", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+      current.pending[0]!.resolve({
+        ...pass(current.requests[0]!),
+        stateSummary: "COPIED_TRANSCRIPT_73af private thinking /secret/file sk-abcdefghijklmnop",
+        summary: "COPIED_TRANSCRIPT_73af",
+      });
+      yield* Effect.promise(() => tick());
+
+      expect(serializedSnapshot(value.appended[0])).not.toMatch(
+        /COPIED_TRANSCRIPT_73af|private thinking|secret\/file|sk-abcdefghijklmnop/,
+      );
+      expect(value.appended[0]).toMatchObject({
+        reviewSummary: { verdict: "pass" },
+      });
+    }),
+  );
+
+  it.effect("logs checkpoint failures and emits a rate-limited warning", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      value.runtimes[0]!.pending[0]!.reject(new Error("provider failure"));
+      yield* Effect.promise(() => tick());
+      expect(value.logFailure).toHaveBeenCalledOnce();
+      expect(value.ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("keeping the primary response"),
+        "warning",
+      );
+
+      yield* invoke(value.emit("turn_end", finalTurn("second candidate")));
+      yield* Effect.promise(() => tick());
+      value.runtimes[0]!.pending[1]!.reject(new Error("provider failed again"));
+      yield* Effect.promise(() => tick());
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const failureWarnings = (value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([message, level]) =>
+          level === "warning" && String(message).includes("keeping the primary response"),
+      );
+      expect(failureWarnings).toHaveLength(1);
+      expect(value.logFailure).toHaveBeenCalledTimes(2);
+    }),
+  );
+
+  test("does not show a late spinner when a checkpoint settles within the delay", () => {
+    vi.useFakeTimers();
     const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("message_end", {
-      type: "message_end",
-      message: { role: "user", content: "ordered user" },
-    });
-    await value.emit("turn_start", { type: "turn_start", turnIndex: 1 });
-    await value.emit("message_update", {
-      type: "message_update",
-      assistantMessageEvent: { type: "text_delta", delta: "ordered assistant" },
-    });
-    await value.emit("turn_end", finalTurn("ordered final"));
-    await tick();
-    const observations = value.runtimes[0]!.requests[0]!.observations;
-    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
-    const records = JSON.parse(observations.split("\n\n").at(-1)!) as Array<{
-      type: string;
-      parentTurnId: number;
-    }>;
-
-    expect(records.find((record) => record.type === "user")?.parentTurnId).toBe(0);
-    expect(records.find((record) => record.type === "assistant_text_delta")?.parentTurnId).toBe(1);
-    expect(records.find((record) => record.type === "assistant_final")?.parentTurnId).toBe(1);
-    value.runtimes[0]!.pending[0]!.resolve(pass(value.runtimes[0]!.requests[0]!));
-    await tick();
+    return value
+      .emit("session_start", { type: "session_start" })
+      .then(() => value.emit("turn_end", finalTurn("candidate")))
+      .then(() => vi.advanceTimersByTimeAsync(0))
+      .then(() => {
+        const current = value.runtimes[0]!;
+        current.pending[0]!.resolve(pass(current.requests[0]!));
+        return vi.advanceTimersByTimeAsync(500);
+      })
+      .then(() => {
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+        expect(setStatus.mock.calls.some((call) => String(call[1]).includes("advising"))).toBe(
+          false,
+        );
+      })
+      .finally(() => {
+        vi.useRealTimers();
+      });
   });
 
-  test("persists an external aborted turn cancellation across shutdown and restart", async () => {
-    const first = harness();
-    await first.emit("session_start", { type: "session_start" });
-    await first.emit("turn_end", finalTurn("baseline"));
-    await tick();
-    first.runtimes[0]!.pending[0]!.resolve(pass(first.runtimes[0]!.requests[0]!));
-    await tick();
-    await first.emit("turn_end", {
-      ...finalTurn(""),
-      message: { role: "assistant", content: [], stopReason: "aborted" },
-    });
-    expect(first.appended.at(-1)).toMatchObject({
-      routing: { cancellationLatched: true },
-    });
-    await first.emit("session_shutdown", { type: "session_shutdown" });
+  it.effect("manual review cannot start unmanaged work after shutdown or a tree callback", () =>
+    Effect.gen(function* () {
+      const value = harness({}, { runtimeStartPromises: [undefined] });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
+      yield* Effect.promise(() => tick());
+      const initial = value.runtimes[0]!;
+      initial.pending[0]!.resolve(pass(initial.requests[0]!));
+      yield* Effect.promise(() => tick());
+      yield* invoke(value.emit("session_shutdown", { type: "session_shutdown" }));
+      const command = value.commands.get("advisor")!;
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+      notify.mockClear();
 
-    const second = harness({}, { branch: first.branch });
-    await second.emit("session_start", { type: "session_start" });
-    await second.emit("turn_end", finalTurn("after restart"));
-    await tick();
-    const current = second.runtimes[0]!;
-    current.pending[0]!.resolve(confidentBlocker(current.requests[0]!));
-    await tick();
-    current.pending[1]!.resolve(confidentBlocker(current.requests[1]!));
-    await tick();
-    expect(second.sendMessage).not.toHaveBeenCalled();
-  });
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const review = command.handler("review", value.ctx as never);
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes).toHaveLength(1);
+      yield* invoke(value.emit("session_tree", { type: "session_tree" }));
+      expect(value.runtimes).toHaveLength(1);
+      yield* invoke(review);
+      yield* Effect.promise(() => tick());
 
-  test("observes assistant_final before turn_complete in the checkpoint batch", async () => {
+      expect(value.runtimes[0]!.requests).toHaveLength(1);
+      expect(notify).not.toHaveBeenCalledWith(
+        "No completed response is available to review.",
+        "warning",
+      );
+    }),
+  );
+
+  test("cleans trajectory timers when newer user work supersedes the active turn", () => {
+    vi.useFakeTimers();
     const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("ordered"));
-    await tick();
-    const observations = value.runtimes[0]?.requests[0]?.observations ?? "";
-    expect(observations.indexOf("assistant_final")).toBeLessThan(
-      observations.indexOf("turn_complete"),
-    );
+    return value
+      .emit("session_start", { type: "session_start" })
+      .then(() => value.emit("turn_start", { type: "turn_start", turnIndex: 1 }))
+      .then(() => value.emit("message_end", { message: { role: "user", content: "new work" } }))
+      .then(() => vi.advanceTimersByTimeAsync(100_000))
+      .then(() => {
+        expect(value.runtimes[0]?.requests).toHaveLength(0);
+      })
+      .finally(() => {
+        vi.useRealTimers();
+      });
   });
+
+  it.effect("uses turn_start as the sole parent-turn increment in Pi message ordering", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(
+        value.emit("message_end", {
+          type: "message_end",
+          message: { role: "user", content: "ordered user" },
+        }),
+      );
+      yield* invoke(value.emit("turn_start", { type: "turn_start", turnIndex: 1 }));
+      yield* invoke(
+        value.emit("message_update", {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "ordered assistant" },
+        }),
+      );
+      yield* invoke(value.emit("turn_end", finalTurn("ordered final")));
+      yield* Effect.promise(() => tick());
+      const observations = value.runtimes[0]!.requests[0]!.observations;
+      const records = Schema.decodeUnknownSync(
+        Schema.fromJsonString(
+          Schema.Array(Schema.Struct({ type: Schema.String, parentTurnId: Schema.Number })),
+        ),
+      )(observations.split("\n\n").at(-1)!);
+
+      expect(records.find((record) => record.type === "user")?.parentTurnId).toBe(0);
+      expect(records.find((record) => record.type === "assistant_text_delta")?.parentTurnId).toBe(
+        1,
+      );
+      expect(records.find((record) => record.type === "assistant_final")?.parentTurnId).toBe(1);
+      value.runtimes[0]!.pending[0]!.resolve(pass(value.runtimes[0]!.requests[0]!));
+      yield* Effect.promise(() => tick());
+    }),
+  );
+
+  it.effect("persists an external aborted turn cancellation across shutdown and restart", () =>
+    Effect.gen(function* () {
+      const first = harness();
+      yield* invoke(first.emit("session_start", { type: "session_start" }));
+      yield* invoke(first.emit("turn_end", finalTurn("baseline")));
+      yield* Effect.promise(() => tick());
+      first.runtimes[0]!.pending[0]!.resolve(pass(first.runtimes[0]!.requests[0]!));
+      yield* Effect.promise(() => tick());
+      yield* invoke(
+        first.emit("turn_end", {
+          ...finalTurn(""),
+          message: { role: "assistant", content: [], stopReason: "aborted" },
+        }),
+      );
+      expect(first.appended.at(-1)).toMatchObject({
+        routing: { cancellationLatched: true },
+      });
+      yield* invoke(first.emit("session_shutdown", { type: "session_shutdown" }));
+
+      const second = harness({}, { branch: first.branch });
+      yield* invoke(second.emit("session_start", { type: "session_start" }));
+      yield* invoke(second.emit("turn_end", finalTurn("after restart")));
+      yield* Effect.promise(() => tick());
+      const current = second.runtimes[0]!;
+      current.pending[0]!.resolve(confidentBlocker(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      current.pending[1]!.resolve(confidentBlocker(current.requests[1]!));
+      yield* Effect.promise(() => tick());
+      expect(second.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("observes assistant_final before turn_complete in the checkpoint batch", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", finalTurn("ordered")));
+      yield* Effect.promise(() => tick());
+      const observations = value.runtimes[0]?.requests[0]?.observations ?? "";
+      expect(observations.indexOf("assistant_final")).toBeLessThan(
+        observations.indexOf("turn_complete"),
+      );
+    }),
+  );
 });

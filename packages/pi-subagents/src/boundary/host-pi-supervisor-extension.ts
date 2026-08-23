@@ -1,6 +1,4 @@
 // Sole pi-subagents bridge extension loaded into Herdr-hosted Pi children.
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/asyncFunction:off
 import * as Context from "effect/Context";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
@@ -105,6 +103,15 @@ interface SupervisorBridgeSessionInput {
   readonly configPath: string;
 }
 
+/** Reads and scrubs the one-shot runtime API credentials from the given environment snapshot. */
+const consumeRuntimeApiCredentials = (environment: NodeJS.ProcessEnv) => {
+  const apiKey = environment.PI_SUBAGENT_RUNTIME_API_KEY;
+  const provider = environment.PI_SUBAGENT_RUNTIME_API_PROVIDER;
+  delete environment.PI_SUBAGENT_RUNTIME_API_KEY;
+  delete environment.PI_SUBAGENT_RUNTIME_API_PROVIDER;
+  return { apiKey, provider };
+};
+
 export default function registerPiSubagentSupervisorBridge(
   pi: ExtensionAPI,
   dependencies: PiSupervisorBridgeExtensionDependencies = { openBridge: openPiSupervisorBridge },
@@ -199,16 +206,13 @@ export default function registerPiSubagentSupervisorBridge(
     return { ...event.payload, service_tier: FAST_SERVICE_TIER };
   });
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", (_event, ctx) => {
     if (started) return;
     started = true;
     shuttingDown = false;
     // Ephemeral provider bootstrap must be consumed before any early return so a malformed private
     // bridge flag cannot leave credentials in the long-lived delegated Pi environment.
-    const runtimeApiKey = process.env.PI_SUBAGENT_RUNTIME_API_KEY;
-    const runtimeApiProvider = process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
-    delete process.env.PI_SUBAGENT_RUNTIME_API_KEY;
-    delete process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
+    const runtimeApi = consumeRuntimeApiCredentials(process.env);
 
     const config = pi.getFlag("pi-subagents-supervisor-config");
     if (!Predicate.isString(config)) {
@@ -216,92 +220,100 @@ export default function registerPiSubagentSupervisorBridge(
         ctx.ui.notify("Private subagent supervisor configuration is missing.", "error");
       return;
     }
-    if (runtimeApiKey && runtimeApiProvider)
-      pi.registerProvider(runtimeApiProvider, { apiKey: runtimeApiKey });
+    if (runtimeApi.apiKey && runtimeApi.provider)
+      pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
 
-    const token = await slot.start({ configPath: config });
-    if (token === undefined || shuttingDown || !slot.isCurrent(token)) {
-      if (!shuttingDown && ctx.hasUI)
-        ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
-      return;
-    }
-    await loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted()).catch(() => undefined);
-    if (shuttingDown || !slot.isCurrent(token) || !client) return;
+    return slot.start({ configPath: config }).then((token) => {
+      if (token === undefined || shuttingDown || !slot.isCurrent(token)) {
+        if (!shuttingDown && ctx.hasUI)
+          ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
+        return;
+      }
+      return loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())
+        .catch(() => undefined)
+        .then(() => {
+          if (shuttingDown || !slot.isCurrent(token) || !client) return;
 
-    const messageTool = (
-      name: "supervisor_progress" | "supervisor_warning" | "supervisor_question",
-      label: string,
-      description: string,
-    ) =>
-      defineTool({
-        name,
-        label,
-        description,
-        parameters: MessageParameters,
-        async execute(_id, input, signal) {
-          if (!exactMessage(input))
-            throw new Error("Supervisor message input is malformed or excessive.");
-          const text = await client?.call(name, { message: input.message }, signal);
-          return {
-            content: [{ type: "text" as const, text: text ?? "Supervisor unavailable." }],
-            details: {},
-          };
-        },
-      });
+          const messageTool = (
+            name: "supervisor_progress" | "supervisor_warning" | "supervisor_question",
+            label: string,
+            description: string,
+          ) =>
+            defineTool({
+              name,
+              label,
+              description,
+              parameters: MessageParameters,
+              execute(_id, input, signal) {
+                if (!exactMessage(input))
+                  return Promise.reject(
+                    new Error("Supervisor message input is malformed or excessive."),
+                  );
+                return Promise.resolve(client?.call(name, { message: input.message }, signal)).then(
+                  (text) => ({
+                    content: [{ type: "text" as const, text: text ?? "Supervisor unavailable." }],
+                    details: {},
+                  }),
+                );
+              },
+            });
 
-    const report = defineTool({
-      name: "supervisor_submit_report",
-      label: "Submit Supervisor Report",
-      description:
-        "Submit one complete final report for the current assignment with a fresh stable delivery identity. This is the only completion signal.",
-      promptSnippet: "Submit the complete final report to the parent supervisor",
-      promptGuidelines: [
-        "Call supervisor_submit_report exactly once after completing the assignment. Use a fresh bounded delivery_id for each later retained assignment.",
-      ],
-      parameters: ReportParameters,
-      async execute(_id, input, signal) {
-        if (!exactReport(input))
-          throw new Error("Supervisor report input is malformed or excessive.");
-        const text = await submitReport(assignment, input, signal);
-        return {
-          content: [{ type: "text" as const, text }],
-          details: {},
-        };
-      },
+          const report = defineTool({
+            name: "supervisor_submit_report",
+            label: "Submit Supervisor Report",
+            description:
+              "Submit one complete final report for the current assignment with a fresh stable delivery identity. This is the only completion signal.",
+            promptSnippet: "Submit the complete final report to the parent supervisor",
+            promptGuidelines: [
+              "Call supervisor_submit_report exactly once after completing the assignment. Use a fresh bounded delivery_id for each later retained assignment.",
+            ],
+            parameters: ReportParameters,
+            execute(_id, input, signal) {
+              if (!exactReport(input))
+                return Promise.reject(
+                  new Error("Supervisor report input is malformed or excessive."),
+                );
+              return submitReport(assignment, input, signal).then((text) => ({
+                content: [{ type: "text" as const, text }],
+                details: {},
+              }));
+            },
+          });
+
+          const tools = [
+            messageTool(
+              "supervisor_progress",
+              "Supervisor Progress",
+              "Send bounded progress to the parent projection without blocking.",
+            ),
+            messageTool(
+              "supervisor_warning",
+              "Supervisor Warning",
+              "Record a bounded non-blocking warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
+            ),
+            messageTool(
+              "supervisor_question",
+              "Ask Supervisor",
+              "Ask this assignment's one exact correlated blocking parent question and wait for its reply.",
+            ),
+            report,
+          ];
+          for (const tool of tools) pi.registerTool(withCodePreviewShell(tool));
+          pi.setActiveTools([
+            ...new Set([
+              ...pi
+                .getActiveTools()
+                .filter(
+                  (name) =>
+                    !name.startsWith("subagent_") &&
+                    !name.startsWith("herdr_agent_") &&
+                    name !== "contact_parent",
+                ),
+              ...tools.map((tool) => tool.name),
+            ]),
+          ]);
+        });
     });
-
-    const tools = [
-      messageTool(
-        "supervisor_progress",
-        "Supervisor Progress",
-        "Send bounded progress to the parent projection without blocking.",
-      ),
-      messageTool(
-        "supervisor_warning",
-        "Supervisor Warning",
-        "Record a bounded non-blocking warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
-      ),
-      messageTool(
-        "supervisor_question",
-        "Ask Supervisor",
-        "Ask this assignment's one exact correlated blocking parent question and wait for its reply.",
-      ),
-      report,
-    ];
-    for (const tool of tools) pi.registerTool(withCodePreviewShell(tool));
-    pi.setActiveTools([
-      ...new Set([
-        ...pi
-          .getActiveTools()
-          .filter(
-            (name) =>
-              !name.startsWith("subagent_") &&
-              !name.startsWith("herdr_agent_") &&
-              name !== "contact_parent",
-          ),
-        ...tools.map((tool) => tool.name),
-      ]),
-    ]);
   });
 
   // Herdr can steer a retained assignment into a still-running Pi loop. `input` observes that
@@ -320,7 +332,7 @@ export default function registerPiSubagentSupervisorBridge(
     assignment.settledSuccessfully = text !== undefined;
   });
 
-  pi.on("agent_settled", async () => {
+  pi.on("agent_settled", () => {
     const state = assignment;
     if (shuttingDown || state.accepted || state.fallbackStarted || !state.settledSuccessfully)
       return;
@@ -334,7 +346,10 @@ export default function registerPiSubagentSupervisorBridge(
         : undefined);
     if (!input) return;
     state.fallbackStarted = true;
-    await submitReport(state, input).catch(() => undefined);
+    return submitReport(state, input).then(
+      () => undefined,
+      () => undefined,
+    );
   });
 
   pi.on("session_shutdown", () => {

@@ -1,6 +1,5 @@
 // The LocalCliProcess service door: local CLI request/service contracts plus environment,
 // preflight, and probe orchestration over the private harness and wire-transport boundaries.
-// @effect-diagnostics effect/processEnv:off
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

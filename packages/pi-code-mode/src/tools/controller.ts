@@ -95,8 +95,6 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
     },
   });
 }
-
-// oxlint-disable-next-line no-explicit-any -- Pi's own AnyToolDefinition shape.
 export type CodeModeToolDefinition = ToolDefinition<any, any, any>;
 
 /**

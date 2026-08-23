@@ -1,5 +1,4 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
-// @effect-diagnostics effect/asyncFunction:off
 import * as Predicate from "effect/Predicate";
 
 import {
@@ -318,25 +317,25 @@ export function registerCodeModeSettingsController(
     });
   };
 
-  const openInteractiveSettings = async (ctx: ExtensionCommandContext): Promise<void> => {
+  const openInteractiveSettings = (ctx: ExtensionCommandContext): Promise<void> => {
     const state = snapshot();
     if (!state) return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
     const capturedSignal = captureSignal(ctx);
     if (capturedSignal._tag === "Unavailable") return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
-    let scope: CodeModeSettingScope = "global";
     if (!state.projectTrusted) {
       // Untrusted projects only ever see the global scope.
       notifyAtHostBoundary(ctx, CODE_MODE_UNTRUSTED_NOTICE, "warning");
-    } else {
-      const choice = await selectAtHostBoundary(ctx, "Code Mode settings scope", [
-        "global",
-        "project",
-      ]);
-      if (choice._tag === "Cancelled") return;
-      // A host without a usable selector degrades to the global scope instead of failing.
-      if (choice._tag === "Answered" && choice.value === "project") scope = "project";
+      return openScopeSettings(ctx, "global", capturedSignal.signal);
     }
-    return openScopeSettings(ctx, scope, capturedSignal.signal);
+    return selectAtHostBoundary(ctx, "Code Mode settings scope", ["global", "project"]).then(
+      (choice) => {
+        if (choice._tag === "Cancelled") return;
+        // A host without a usable selector degrades to the global scope instead of failing.
+        const scope: CodeModeSettingScope =
+          choice._tag === "Answered" && choice.value === "project" ? "project" : "global";
+        return openScopeSettings(ctx, scope, capturedSignal.signal);
+      },
+    );
   };
 
   pi.registerCommand(COMMAND, {

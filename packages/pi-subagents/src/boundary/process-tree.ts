@@ -1,7 +1,6 @@
 // Node process-tree ownership is intentionally isolated at this boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
+import { nodeSpawn as spawn, type NodeChildProcess } from "./node-builtins.ts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";

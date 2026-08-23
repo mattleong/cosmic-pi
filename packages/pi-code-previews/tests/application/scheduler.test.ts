@@ -1,9 +1,8 @@
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { it } from "@effect/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { CodePreviewSchedulerService } from "../../src/application/scheduler.ts";
 
 it.effect("cancels scheduled callbacks synchronously while the session remains active", () =>
@@ -18,7 +17,7 @@ it.effect("cancels scheduled callbacks synchronously while the session remains a
     stop();
     yield* TestClock.adjust(500);
     assert.equal(ticks, 2);
-  }).pipe(Effect.provide(CodePreviewSchedulerService.layer)),
+  }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
 );
 
 it.effect("interrupts every scheduled callback before the scheduler scope closes", () =>
@@ -30,7 +29,7 @@ it.effect("interrupts every scheduled callback before the scheduler scope closes
         service.schedule(100, () => ticks++);
         yield* TestClock.adjust(100);
         assert.equal(ticks, 1);
-      }).pipe(Effect.provide(CodePreviewSchedulerService.layer)),
+      }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
     );
 
     yield* TestClock.adjust(500);
@@ -44,7 +43,7 @@ it.effect("interrupts work started through a retained door after its session clo
     yield* Effect.scoped(
       Effect.gen(function* () {
         schedule = (yield* CodePreviewSchedulerService).schedule;
-      }).pipe(Effect.provide(CodePreviewSchedulerService.layer)),
+      }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
     );
     if (!schedule) return yield* Effect.die("scheduler door was not captured");
 

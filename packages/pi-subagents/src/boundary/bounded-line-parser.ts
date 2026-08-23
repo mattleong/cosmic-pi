@@ -1,5 +1,4 @@
 // Node stream/StringDecoder ownership is intentionally isolated at this boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { StringDecoder } from "node:string_decoder";
 import * as Queue from "effect/Queue";
 

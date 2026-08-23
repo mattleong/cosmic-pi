@@ -1,6 +1,4 @@
 // External editor integration is a narrow Node/Pi host boundary.
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/strictEffectProvide:off
 import { SettingsManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import * as Cause from "effect/Cause";
@@ -8,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
@@ -89,16 +88,16 @@ export function editWithExternalEditor(
   signal: AbortSignal,
 ): Promise<string | undefined> {
   if (signal.aborted) return Promise.resolve(undefined);
-  return Effect.runPromiseExit(
-    editWithExternalEditorEffect(tui, configuredCommand, value).pipe(
-      Effect.provide(externalEditorLayer),
-    ),
-    { signal },
-  ).then((exit) => {
-    if (Exit.isSuccess(exit)) return exit.value;
-    if (signal.aborted) return undefined;
-    const failure = Cause.squash(exit.cause);
-    if (failure instanceof ExternalEditorError) throw failure;
-    throw new ExternalEditorError({ message: "External editor execution failed." });
-  });
+  // This runtime is the sole Effect entry point for one external-editor invocation.
+  const runtime = ManagedRuntime.make(externalEditorLayer);
+  return runtime
+    .runPromiseExit(editWithExternalEditorEffect(tui, configuredCommand, value), { signal })
+    .then((exit) => {
+      if (Exit.isSuccess(exit)) return exit.value;
+      if (signal.aborted) return undefined;
+      const failure = Cause.squash(exit.cause);
+      if (failure instanceof ExternalEditorError) throw failure;
+      throw new ExternalEditorError({ message: "External editor execution failed." });
+    })
+    .finally(() => runtime.dispose());
 }

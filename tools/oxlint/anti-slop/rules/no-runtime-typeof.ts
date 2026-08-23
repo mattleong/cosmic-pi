@@ -4,6 +4,14 @@ import type { ESTree } from "@oxlint/plugins";
 
 type RuntimeFunction = ESTree.ArrowFunctionExpression | ESTree.Function;
 
+interface RuntimeTypeofOptions {
+	readonly allowInTypeGuards?: boolean;
+}
+
+function isRuntimeTypeofOptions<Value>(value: Value): value is Value & RuntimeTypeofOptions {
+	return value !== null && Object(value) === value && !Array.isArray(value);
+}
+
 function isRuntimeFunction(node: ESTree.Node): node is RuntimeFunction {
 	return (
 		node.type === "ArrowFunctionExpression" ||
@@ -51,10 +59,7 @@ export const noRuntimeTypeofRule = defineRule({
 			UnaryExpression(node) {
 				const option = context.options?.[0];
 				const allowInTypeGuards =
-					typeof option === "object" &&
-					option !== null &&
-					!Array.isArray(option) &&
-					option.allowInTypeGuards === true;
+					isRuntimeTypeofOptions(option) && option.allowInTypeGuards === true;
 				if (
 					node.operator === "typeof" &&
 					(!allowInTypeGuards || !isInsideTypeGuard(node))

@@ -1,5 +1,4 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -13,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   LocalProcess,
   LocalProcessError,
@@ -165,7 +165,7 @@ describe("BackgroundTerminalService", () => {
         projection.jobs.some((job) => job.logs.length > 0),
       );
       expect(outputPublications.length).toBeLessThanOrEqual(2);
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("starts, long-polls logs, and publishes process exit", () => {
@@ -186,7 +186,7 @@ describe("BackgroundTerminalService", () => {
       harness.controls[0]?.complete();
       yield* Deferred.await(terminal.reached);
       expect(yield* service.status(started.id)).toMatchObject({ state: "exited", exitCode: 0 });
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("stops a process tree idempotently", () => {
@@ -200,7 +200,7 @@ describe("BackgroundTerminalService", () => {
       expect(harness.controls[0]?.modes).toEqual(["graceful"]);
       expect((yield* service.stop(started.id)).state).toBe("stopped");
       expect(harness.controls[0]?.modes).toEqual(["graceful"]);
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("escalates graceful stop after the configured grace period", () => {
@@ -216,7 +216,7 @@ describe("BackgroundTerminalService", () => {
       yield* TestClock.adjust("2 seconds");
       expect((yield* Fiber.join(stopping)).state).toBe("stopped");
       expect(harness.controls[0]?.modes).toEqual(["graceful", "force"]);
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("retains capacity until a process confirms exit after stop times out", () => {
@@ -248,7 +248,7 @@ describe("BackgroundTerminalService", () => {
       harness.controls[0]?.complete({ exitCode: null, signal: "SIGKILL" });
       yield* Effect.yieldNow;
       expect(yield* service.status(started.id)).toMatchObject({ state: "stopped" });
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("reports process-tree termination failures without fabricating completion", () => {
@@ -266,7 +266,7 @@ describe("BackgroundTerminalService", () => {
       harness.controls[0]?.complete({ exitCode: null, signal: "SIGTERM" });
       yield* Effect.yieldNow;
       expect(yield* service.status(started.id)).toMatchObject({ state: "stopped" });
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("marks runtime timeouts without a default timeout", () => {
@@ -279,7 +279,7 @@ describe("BackgroundTerminalService", () => {
       yield* TestClock.adjust("10 seconds");
       yield* Deferred.await(terminal.reached);
       expect((yield* service.status(started.id)).state).toBe("timed_out");
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("keeps an interrupted start owned by session shutdown", () => {
@@ -295,7 +295,7 @@ describe("BackgroundTerminalService", () => {
       yield* Deferred.succeed(spawnGate, undefined);
       expect((yield* service.stopAll()).map((job) => job.state)).toEqual(["stopped"]);
       expect(harness.controls[0]?.modes).toContain("graceful");
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("updates snapshot metadata when the shared log budget evicts output", () => {
@@ -320,7 +320,7 @@ describe("BackgroundTerminalService", () => {
       yield* Fiber.join(secondLogs);
       expect((yield* service.status(first.id)).droppedLogBytes).toBe(3_000);
       yield* service.stopAll();
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("terminates a late handle while retaining stopping ownership until exit", () => {
@@ -348,7 +348,7 @@ describe("BackgroundTerminalService", () => {
       expect((yield* service.status("term-1")).state).toBe("stopped");
       expect(harness.controls[0]?.modes).toContain("force");
       yield* Fiber.await(starting);
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("enforces active capacity", () => {
@@ -359,7 +359,7 @@ describe("BackgroundTerminalService", () => {
       const second = yield* Effect.result(service.start({ command: "second", cwd: "." }));
       expect(second._tag).toBe("Failure");
       yield* service.stopAll();
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
   it.effect("confirms active termination before the fixed monitor scope closes", () => {

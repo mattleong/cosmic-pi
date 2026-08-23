@@ -1,10 +1,10 @@
 // Real-smoke path identity checks intentionally use Node filesystem canonicalization.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { nodePath, nodeRealpathSync as realpathSync } from "./support/node-builtins.ts";
+
+const { basename, dirname, join, resolve } = nodePath;
 
 const nodeCode = <ErrorInput>(error: ErrorInput): string | undefined =>
   error && hasObjectRuntimeType(error) && "code" in error && Predicate.isString(error.code)

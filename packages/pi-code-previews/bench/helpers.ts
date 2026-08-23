@@ -1,14 +1,29 @@
-// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
+// Benchmark reporting and high-resolution timing are explicit non-application boundaries.
 import { performance } from "node:perf_hooks";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
+import * as Config from "effect/Config";
+import * as Console from "effect/Console";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+
+/** Synchronous Effect Console bridge for benchmark reporting. */
+export function benchLog(...args: ReadonlyArray<unknown>): void {
+  Effect.runSync(Console.log(...args));
+}
+
+/** One printable benchmark table row: report labels mapped to formatted cells. */
+export type BenchTableRow = Record<string, string | number | boolean | undefined>;
+
+/** Synchronous Effect Console bridge for tabular benchmark reporting. */
+export function benchTable(rows: ReadonlyArray<BenchTableRow>): void {
+  Effect.runSync(Console.table(rows));
+}
+
+function readBenchEnvironment(name: string): string | undefined {
+  return Option.getOrUndefined(Effect.runSync(Config.option(Config.string(name))));
+}
 
 export type BenchResult = {
   caseName: string;
@@ -27,11 +42,11 @@ export const SAMPLES = Math.floor(readPositiveNumber("BENCH_SAMPLES", 5));
 export const VERBOSE = isEnabled("BENCH_VERBOSE");
 
 export function printBenchHeader(name: string): void {
-  console.log(`pi-code-previews ${name} benchmark`);
-  console.log(`node=${process.version} platform=${process.platform}/${process.arch}`);
-  console.log(`timestamp=${new Date().toISOString()}`);
-  console.log(`warmupMs=${WARMUP_MS} sampleMs=${SAMPLE_MS} samples=${SAMPLES}`);
-  console.log("");
+  benchLog(`pi-code-previews ${name} benchmark`);
+  benchLog(`node=${process.version} platform=${process.platform}/${process.arch}`);
+  benchLog(`timestamp=${DateTime.formatIso(Effect.runSync(DateTime.now))}`);
+  benchLog(`warmupMs=${WARMUP_MS} sampleMs=${SAMPLE_MS} samples=${SAMPLES}`);
+  benchLog("");
 }
 
 export function runBench(
@@ -45,7 +60,9 @@ export function runBench(
   for (let sample = 0; sample < SAMPLES; sample++) samples.push(runFor(SAMPLE_MS, fn));
   const iterations = samples.reduce((total, sample) => total + sample.iterations, 0);
   const totalMs = samples.reduce((total, sample) => total + sample.ms, 0);
-  const sampleMeans = samples.map((sample) => sample.ms / sample.iterations).sort((a, b) => a - b);
+  const sampleMeans = samples
+    .map((sample) => sample.ms / sample.iterations)
+    .toSorted((a, b) => a - b);
   const meanMs = totalMs / iterations;
   return {
     caseName,
@@ -67,10 +84,10 @@ export function timeOnce(fn: () => void): number {
 
 export function printResults(results: BenchResult[], verbose = VERBOSE): void {
   if (!verbose) {
-    console.log("Set BENCH_VERBOSE=1 to print the full raw benchmark table.");
+    benchLog("Set BENCH_VERBOSE=1 to print the full raw benchmark table.");
     return;
   }
-  console.table(
+  benchTable(
     results.map((result) => ({
       case: result.caseName,
       layer: result.layer,
@@ -85,7 +102,7 @@ export function printResults(results: BenchResult[], verbose = VERBOSE): void {
 }
 
 export function printLayerSummary(results: BenchResult[]): void {
-  console.table(
+  benchTable(
     results.map((result) => ({
       case: result.caseName,
       layer: result.layer,
@@ -95,7 +112,7 @@ export function printLayerSummary(results: BenchResult[]): void {
       "ops/sec": result.opsPerSec.toFixed(0),
     })),
   );
-  console.log("");
+  benchLog("");
 }
 
 export function renderComponent(component: Component, width: number): string {
@@ -112,11 +129,11 @@ export function formatDuration(ms: number): string {
 }
 
 export function isEnabled(name: string): boolean {
-  return /^(?:1|true|yes|on)$/i.test(process.env[name] ?? "");
+  return /^(?:1|true|yes|on)$/i.test(readBenchEnvironment(name) ?? "");
 }
 
 export function readPositiveNumber(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
+  const value = Number(readBenchEnvironment(name));
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 

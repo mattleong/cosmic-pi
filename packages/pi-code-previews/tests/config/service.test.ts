@@ -1,7 +1,4 @@
 // Effect-owned settings state and interruption assertions.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import assert from "node:assert/strict";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { it } from "@effect/vitest";
@@ -9,10 +6,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
   JsonDocumentError,
   JsonDocumentStore,
+  provideBuiltLayer,
   type JsonDocumentModification,
   type JsonObject,
 } from "pi-cosmic-core";
@@ -60,7 +59,7 @@ it.effect("logs a sanitized warning and continues after a malformed settings doc
     Layer.succeed(JsonDocumentStore, documents),
   );
   return CodePreviewSettingsService.use((service) => service.load()).pipe(
-    Effect.provide(
+    provideBuiltLayer(
       Layer.merge(
         CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies)),
         captured.layer,
@@ -68,7 +67,9 @@ it.effect("logs a sanitized warning and continues after a malformed settings doc
     ),
     Effect.tap(() =>
       Effect.sync(() => {
-        const telemetry = JSON.stringify(captured.entries);
+        const telemetry = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
+          captured.entries,
+        );
         assert.match(telemetry, /Failed to load settings for code previews/);
         assert.equal(telemetry.includes("secret/settings"), false);
         assert.equal(telemetry.includes("secret malformed"), false);
@@ -96,10 +97,10 @@ it.effect("starts each session from its own environment defaults", () =>
       return CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies));
     };
     const first = yield* CodePreviewSettingsService.use((service) => service.snapshot).pipe(
-      Effect.provide(makeLayer("17")),
+      provideBuiltLayer(makeLayer("17")),
     );
     const second = yield* CodePreviewSettingsService.use((service) => service.snapshot).pipe(
-      Effect.provide(makeLayer("29")),
+      provideBuiltLayer(makeLayer("29")),
     );
     assert.equal(first.settings.readCollapsedLines, 17);
     assert.equal(first.saveContext.baseline.readCollapsedLines, 17);
@@ -159,7 +160,7 @@ it.effect("failed persistence leaves authoritative state and renderer projection
         assert.equal(codePreviewSettings.readCollapsedLines, 17);
         assert.equal(settingsSaveContextProjection(), saveContextBefore);
       }),
-    ).pipe(Effect.provide(layer));
+    ).pipe(provideBuiltLayer(layer));
   }),
 );
 
@@ -199,7 +200,7 @@ it.effect("runtime-invalid settings fail before document commit or projection pu
         assert.equal(codePreviewSettings, publishedBefore);
         assert.equal(settingsSaveContextProjection(), saveContextBefore);
       }),
-    ).pipe(Effect.provide(layer));
+    ).pipe(provideBuiltLayer(layer));
   }),
 );
 
@@ -235,7 +236,7 @@ it.effect("save fails typed without atomic document modification capability", ()
         assert.equal((yield* service.snapshot).settings.readCollapsedLines, 17);
         assert.equal(codePreviewSettings.readCollapsedLines, 17);
       }),
-    ).pipe(Effect.provide(layer));
+    ).pipe(provideBuiltLayer(layer));
   }),
 );
 
@@ -300,7 +301,7 @@ it.effect("flush waits for prior saves and its interruption cannot lose the save
         assert.equal(persistedLines, 42);
         assert.equal((yield* service.snapshot).settings.readCollapsedLines, 42);
       }),
-    ).pipe(Effect.provide(layer));
+    ).pipe(provideBuiltLayer(layer));
   }).pipe(Effect.scoped),
 );
 
@@ -369,7 +370,7 @@ it.effect("interruption after JSON commit cannot leave authoritative settings st
         assert.equal(codePreviewSettings.readCollapsedLines, 42);
         assert.deepEqual(settingsSaveContextProjection(), committedState.saveContext);
       }),
-    ).pipe(Effect.provide(layer));
+    ).pipe(provideBuiltLayer(layer));
   }).pipe(Effect.scoped),
 );
 
@@ -396,7 +397,7 @@ it.effect("interrupted settings loads finalize without publishing a partial snap
     );
     const layer = CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies));
     const fiber = yield* CodePreviewSettingsService.use((service) => service.load()).pipe(
-      Effect.provide(layer),
+      provideBuiltLayer(layer),
       Effect.forkScoped,
     );
     yield* Deferred.await(started);

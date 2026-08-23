@@ -1,5 +1,4 @@
-// Test harness boundary: the child API requires a controllable native Promise.
-// @effect-diagnostics effect/newPromise:off
+// Test harness boundary: the child API requires a controllable Promise-shaped follow-up.
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -15,6 +14,7 @@ import type {
   AdvisorFinalizationCompletion,
 } from "../../src/runtime/types.ts";
 import { agentSessionFixture } from "../support/agent-session.ts";
+import { tick } from "../support/async.ts";
 
 // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const makeIngress = <A>(offered: A[]): SynchronousIngress<A> =>
@@ -85,15 +85,11 @@ describe("Advisor session event epoch ownership", () => {
     expect(recordStream).not.toHaveBeenCalled();
   });
 
-  it.effect("keeps a delayed finalization completion on its originating epoch", () =>
-    Effect.gen(function* () {
-      let resolveFollowUp!: () => void;
-      const followUp = vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveFollowUp = resolve;
-          }),
-      );
+  it.effect("keeps a delayed finalization completion on its originating epoch", () => {
+    const followUpGate = Deferred.makeUnsafe<void>();
+    const resolveFollowUp = () => void Deferred.doneUnsafe(followUpGate, Effect.void);
+    const followUp = vi.fn(() => Effect.runPromise(Deferred.await(followUpGate)));
+    return Effect.gen(function* () {
       const finalizations: AdvisorFinalizationCompletion[] = [];
       const session = agentSessionFixture({ isStreaming: true, followUp });
       const child = makeChild(1, session, [], finalizations);
@@ -124,11 +120,11 @@ describe("Advisor session event epoch ownership", () => {
       child.epoch = 2;
       activeCheckpoint = successor;
       resolveFollowUp();
-      yield* Effect.promise(() => Promise.resolve());
+      yield* Effect.promise(() => tick());
 
       expect(finalizations).toEqual([{ epoch: 1, succeeded: true }]);
       yield* events.handleFinalizationCompletionEffect(finalizations[0]!);
       expect(yield* Deferred.isDone(successor.finalization)).toBe(false);
-    }),
-  );
+    });
+  });
 });

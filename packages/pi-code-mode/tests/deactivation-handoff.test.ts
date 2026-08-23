@@ -2,16 +2,11 @@
 // on reload/new/resume/fork. These suites cover the pure handoff (identity resolution, TTL,
 // consume-on-capture) and an integration flow that destroys the old application closure,
 // constructs a fresh one, and replays realistic session events.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/globalDate:off
-// @effect-diagnostics effect/processEnv:off
 import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { afterEach, beforeEach, vi } from "vitest";
 import { registerCodeModeApplication } from "../src/application.ts";
 import type { NestedPiToolDefinitions } from "../src/boundary/host-builtin-tools.ts";
 import {
@@ -20,6 +15,17 @@ import {
 } from "../src/boundary/host-deactivation-handoff.ts";
 import { CODE_MODE_TOOL_NAME } from "../src/tools/controller.ts";
 import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
+
+// Raw Node builtin access for synchronous test scaffolding, mirroring pi-cosmic-core's
+// platform boundary; the Effect FileSystem service does not expose these sync contracts.
+const nodeFsModule = process.getBuiltinModule("node:fs");
+const nodePathModule = process.getBuiltinModule("node:path");
+if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
+const { mkdtempSync, rmSync } = nodeFsModule;
+const { join } = nodePathModule;
+
+// Mutating the agent-directory slot is this suite's process-environment host boundary.
+const processEnv: NodeJS.ProcessEnv = process.env;
 
 const HANDOFF_SLOT = Symbol.for("@cosmic-pi/pi-code-mode/code-mode-deactivation-handoff/v2");
 const clearSlot = () => {
@@ -113,14 +119,14 @@ type Handler = ExtensionHandler<any, any>;
 const tempDirectories: string[] = [];
 afterEach(() => {
   for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true });
-  delete process.env.PI_CODING_AGENT_DIR;
+  delete processEnv.PI_CODING_AGENT_DIR;
 });
 
 /** One extension-module instance over a mutable active-tool list; recreatable to model reload. */
 const instance = (activeTools: string[], sessionId: string | undefined, sharedCwd?: string) => {
   const agentDir = mkdtempSync(join(tmpdir(), "pi-code-mode-handoff-agent-"));
   tempDirectories.push(agentDir);
-  process.env.PI_CODING_AGENT_DIR = agentDir;
+  processEnv.PI_CODING_AGENT_DIR = agentDir;
 
   const handlers = new Map<string, Handler>();
   const registerTool = vi.fn();
@@ -165,104 +171,154 @@ const instance = (activeTools: string[], sessionId: string | undefined, sharedCw
 };
 
 describe("deactivation intent across module recreation", () => {
-  it("preserves a deliberate deactivation across a reload that recreates the module", async () => {
-    const active = ["read", "bash"];
+  it.effect("preserves a deliberate deactivation across a reload that recreates the module", () =>
+    Effect.gen(function* () {
+      const active = ["read", "bash"];
 
-    // Old module: session starts, code_mode registers and activates.
-    const a = instance(active, "session-A");
-    await a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx);
-    expect(active).toContain(CODE_MODE_TOOL_NAME);
+      // Old module: session starts, code_mode registers and activates.
+      const a = instance(active, "session-A");
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx)),
+      );
+      expect(active).toContain(CODE_MODE_TOOL_NAME);
 
-    // The user deliberately deactivates code_mode mid-session.
-    active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
-    expect(active).not.toContain(CODE_MODE_TOOL_NAME);
+      // The user deliberately deactivates code_mode mid-session.
+      active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
+      expect(active).not.toContain(CODE_MODE_TOOL_NAME);
 
-    // Reload: the old module shuts down (publishing intent), then a fresh module is created.
-    await a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx);
+      // Reload: the old module shuts down (publishing intent), then a fresh module is created.
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx)),
+      );
 
-    const b = instance(active, "session-A");
-    await b.handlers.get("session_start")?.({ reason: "reload" }, b.ctx);
+      const b = instance(active, "session-A");
+      yield* Effect.promise(() =>
+        Promise.resolve(b.handlers.get("session_start")?.({ reason: "reload" }, b.ctx)),
+      );
 
-    // The fresh module re-registers the tool but honors the preserved deactivation.
-    expect(b.registerTool).toHaveBeenCalledTimes(1);
-    expect(active).not.toContain(CODE_MODE_TOOL_NAME);
-  });
+      // The fresh module re-registers the tool but honors the preserved deactivation.
+      expect(b.registerTool).toHaveBeenCalledTimes(1);
+      expect(active).not.toContain(CODE_MODE_TOOL_NAME);
+    }),
+  );
 
-  it("does not leak deactivation into a genuinely different session (new/fork)", async () => {
-    const active = ["read", "bash"];
+  it.effect("does not leak deactivation into a genuinely different session (new/fork)", () =>
+    Effect.gen(function* () {
+      const active = ["read", "bash"];
 
-    const a = instance(active, "session-A");
-    await a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx);
-    active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
-    await a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx);
+      const a = instance(active, "session-A");
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx)),
+      );
+      active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx)),
+      );
 
-    // A new session (different id) recreates the module: it must start activated again.
-    const b = instance(active, "session-B");
-    await b.handlers.get("session_start")?.({ reason: "new" }, b.ctx);
-    expect(active).toContain(CODE_MODE_TOOL_NAME);
-  });
+      // A new session (different id) recreates the module: it must start activated again.
+      const b = instance(active, "session-B");
+      yield* Effect.promise(() =>
+        Promise.resolve(b.handlers.get("session_start")?.({ reason: "new" }, b.ctx)),
+      );
+      expect(active).toContain(CODE_MODE_TOOL_NAME);
+    }),
+  );
 
-  it("preserves an active tool across reload (no false deactivation)", async () => {
-    const active = ["read", "bash"];
+  it.effect("preserves an active tool across reload (no false deactivation)", () =>
+    Effect.gen(function* () {
+      const active = ["read", "bash"];
 
-    const a = instance(active, "session-A");
-    await a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx);
-    // The user leaves code_mode active.
-    await a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx);
+      const a = instance(active, "session-A");
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx)),
+      );
+      // The user leaves code_mode active.
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx)),
+      );
 
-    const b = instance(active, "session-A");
-    await b.handlers.get("session_start")?.({ reason: "reload" }, b.ctx);
-    expect(active).toContain(CODE_MODE_TOOL_NAME);
-  });
+      const b = instance(active, "session-A");
+      yield* Effect.promise(() =>
+        Promise.resolve(b.handlers.get("session_start")?.({ reason: "reload" }, b.ctx)),
+      );
+      expect(active).toContain(CODE_MODE_TOOL_NAME);
+    }),
+  );
 
-  it("restores across resume when the session identity matches", async () => {
-    const active = ["read", "bash"];
+  it.effect("restores across resume when the session identity matches", () =>
+    Effect.gen(function* () {
+      const active = ["read", "bash"];
 
-    const a = instance(active, "session-resume");
-    await a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx);
-    active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
-    await a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx);
+      const a = instance(active, "session-resume");
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx)),
+      );
+      active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx)),
+      );
 
-    const b = instance(active, "session-resume");
-    await b.handlers.get("session_start")?.({ reason: "resume" }, b.ctx);
-    expect(active).not.toContain(CODE_MODE_TOOL_NAME);
-  });
+      const b = instance(active, "session-resume");
+      yield* Effect.promise(() =>
+        Promise.resolve(b.handlers.get("session_start")?.({ reason: "resume" }, b.ctx)),
+      );
+      expect(active).not.toContain(CODE_MODE_TOOL_NAME);
+    }),
+  );
 
-  it("does not leak deactivation into a different session in the same cwd", async () => {
-    // Same project directory, different session id: without the removed cwd fallback the
-    // fresh module must start activated.
-    const cwd = mkdtempSync(join(tmpdir(), "pi-code-mode-handoff-shared-cwd-"));
-    tempDirectories.push(cwd);
-    const active = ["read", "bash"];
+  it.effect("does not leak deactivation into a different session in the same cwd", () =>
+    Effect.gen(function* () {
+      // Same project directory, different session id: without the removed cwd fallback the
+      // fresh module must start activated.
+      const cwd = mkdtempSync(join(tmpdir(), "pi-code-mode-handoff-shared-cwd-"));
+      tempDirectories.push(cwd);
+      const active = ["read", "bash"];
 
-    const a = instance(active, "session-A", cwd);
-    await a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx);
-    active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
-    await a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx);
+      const a = instance(active, "session-A", cwd);
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx)),
+      );
+      active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx)),
+      );
 
-    const b = instance(active, "session-B", cwd);
-    await b.handlers.get("session_start")?.({ reason: "new" }, b.ctx);
-    expect(active).toContain(CODE_MODE_TOOL_NAME);
-  });
+      const b = instance(active, "session-B", cwd);
+      yield* Effect.promise(() =>
+        Promise.resolve(b.handlers.get("session_start")?.({ reason: "new" }, b.ctx)),
+      );
+      expect(active).toContain(CODE_MODE_TOOL_NAME);
+    }),
+  );
 
-  it("preserves nothing when no session id is exposed, even in the same cwd", async () => {
-    // With no stable identity nothing is published; the safe default (activated) wins and a
-    // later session in the same project can never inherit the intent.
-    const cwd = mkdtempSync(join(tmpdir(), "pi-code-mode-handoff-no-id-cwd-"));
-    tempDirectories.push(cwd);
-    const active = ["read", "bash"];
+  it.effect("preserves nothing when no session id is exposed, even in the same cwd", () =>
+    Effect.gen(function* () {
+      // With no stable identity nothing is published; the safe default (activated) wins and a
+      // later session in the same project can never inherit the intent.
+      const cwd = mkdtempSync(join(tmpdir(), "pi-code-mode-handoff-no-id-cwd-"));
+      tempDirectories.push(cwd);
+      const active = ["read", "bash"];
 
-    const a = instance(active, undefined, cwd);
-    await a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx);
-    active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
-    await a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx);
+      const a = instance(active, undefined, cwd);
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_start")?.({ reason: "startup" }, a.ctx)),
+      );
+      active.splice(active.indexOf(CODE_MODE_TOOL_NAME), 1);
+      yield* Effect.promise(() =>
+        Promise.resolve(a.handlers.get("session_shutdown")?.({ reason: "reload" }, a.ctx)),
+      );
 
-    const b = instance(active, undefined, cwd);
-    await b.handlers.get("session_start")?.({ reason: "reload" }, b.ctx);
-    expect(active).toContain(CODE_MODE_TOOL_NAME);
+      const b = instance(active, undefined, cwd);
+      yield* Effect.promise(() =>
+        Promise.resolve(b.handlers.get("session_start")?.({ reason: "reload" }, b.ctx)),
+      );
+      expect(active).toContain(CODE_MODE_TOOL_NAME);
 
-    const c = instance(active, "session-C", cwd);
-    await c.handlers.get("session_start")?.({ reason: "new" }, c.ctx);
-    expect(active).toContain(CODE_MODE_TOOL_NAME);
-  });
+      const c = instance(active, "session-C", cwd);
+      yield* Effect.promise(() =>
+        Promise.resolve(c.handlers.get("session_start")?.({ reason: "new" }, c.ctx)),
+      );
+      expect(active).toContain(CODE_MODE_TOOL_NAME);
+    }),
+  );
 });

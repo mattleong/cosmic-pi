@@ -1,5 +1,4 @@
 // Promise-shaped Pi command handlers are an explicit host boundary.
-// @effect-diagnostics effect/asyncFunction:off
 import * as Effect from "effect/Effect";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { completeSettingsArguments } from "pi-cosmic-core";
@@ -64,7 +63,7 @@ export function registerAdvisorCommands(
   });
 }
 
-async function handleAdvisorCommand(
+function handleAdvisorCommand(
   args: string,
   ctx: ExtensionCommandContext,
   state: AdvisorConfigState,
@@ -74,28 +73,36 @@ async function handleAdvisorCommand(
   if (!command) return openAdvisorDashboard(ctx, state, actions);
   if (command === "review") {
     const unavailable = manualReviewUnavailableReason(ctx, state);
-    if (unavailable) return ctx.ui.notify(unavailable, "warning");
-    const result = await actions.reviewLast(ctx);
-    ctx.ui.notify(reviewRequestMessage(result), result === "started" ? "info" : "warning");
-  } else if (command === "fix") {
-    notifyCardAction(ctx, actions.fixLast(ctx), "fixed");
-  } else if (command === "dismiss") {
-    notifyCardAction(ctx, actions.dismissLast(ctx), "dismissed");
-  } else if (command === "cancel") {
-    const cancelled = await actions.cancel(ctx);
-    ctx.ui.notify(
-      cancelled ? "Cancelled pending Advisor work." : "No Advisor review is active.",
-      "info",
+    if (unavailable) return Promise.resolve(ctx.ui.notify(unavailable, "warning"));
+    return Promise.resolve(actions.reviewLast(ctx)).then((result) =>
+      ctx.ui.notify(reviewRequestMessage(result), result === "started" ? "info" : "warning"),
     );
-  } else if (command === "on") {
+  }
+  if (command === "fix")
+    return Promise.resolve(notifyCardAction(ctx, actions.fixLast(ctx), "fixed"));
+  if (command === "dismiss")
+    return Promise.resolve(notifyCardAction(ctx, actions.dismissLast(ctx), "dismissed"));
+  if (command === "cancel")
+    return Promise.resolve(actions.cancel(ctx)).then((cancelled) =>
+      ctx.ui.notify(
+        cancelled ? "Cancelled pending Advisor work." : "No Advisor review is active.",
+        "info",
+      ),
+    );
+  if (command === "on") {
     if (!advisorModelReady(ctx, state.get())) return openAdvisorSetup(ctx, state);
-    if (await updateConfig(ctx, state, { enabled: true })) ctx.ui.notify("Advisor is on.", "info");
-  } else if (command === "off") {
-    if (await updateConfig(ctx, state, { enabled: false }))
-      ctx.ui.notify("Advisor is off.", "info");
-  } else if (command === "setup") await openAdvisorSetup(ctx, state);
-  else if (command === "usage") showAdvisorUsage(ctx, state.get(), state.getMetrics());
-  else ctx.ui.notify(`Usage: /advisor [${SUBCOMMANDS.join("|")}]`, "error");
+    return updateConfig(ctx, state, { enabled: true }).then((updated) => {
+      if (updated) ctx.ui.notify("Advisor is on.", "info");
+    });
+  }
+  if (command === "off")
+    return updateConfig(ctx, state, { enabled: false }).then((updated) => {
+      if (updated) ctx.ui.notify("Advisor is off.", "info");
+    });
+  if (command === "setup") return openAdvisorSetup(ctx, state);
+  if (command === "usage")
+    return Promise.resolve(showAdvisorUsage(ctx, state.get(), state.getMetrics()));
+  return Promise.resolve(ctx.ui.notify(`Usage: /advisor [${SUBCOMMANDS.join("|")}]`, "error"));
 }
 
 function manualReviewUnavailableReason(

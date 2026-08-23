@@ -1,5 +1,4 @@
 // Pi tool execution is a Promise-shaped host boundary.
-// @effect-diagnostics effect/asyncFunction:off
 import type { JsonObject } from "pi-cosmic-core";
 import type {
   AgentToolResult,
@@ -315,7 +314,7 @@ const managementAcknowledgement = (
   }
 };
 
-export const executeSubagentAction = async (
+export const executeSubagentAction = (
   pi: ExtensionAPI,
   runtime: SubagentToolRuntime,
   input: SubagentToolInput,
@@ -701,78 +700,84 @@ export const executeSubagentAction = async (
   if (signal?.aborted) cancelAwait();
   else signal?.addEventListener("abort", cancelAwait, { once: true });
 
-  let executionResult: {
-    readonly runs: ReadonlyArray<SubagentRunView>;
-    readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
-    readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
-    readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
-    readonly attentionRequired?: boolean;
-    readonly text?: string;
-  };
-  try {
-    executionResult = await runtime.run(effect, signal);
-  } finally {
-    signal?.removeEventListener("abort", cancelAwait);
-  }
-
-  const { runs, attentionRequired, text: formattedText } = executionResult;
-  const startFailures = executionResult.startFailures ?? [];
-  const startEntries = executionResult.startEntries;
-  const actionFailures = executionResult.actionFailures ?? [];
-  const details: unknown =
-    input.action === "start"
-      ? makeStartAwaitCardDetails(
-          (() => {
-            const baseResult = { action: "start" as const, runs };
-            const withStartEntries = startEntries ? { ...baseResult, startEntries } : baseResult;
-            const withStartFailures =
-              startFailures.length > 0 ? { ...withStartEntries, startFailures } : withStartEntries;
-            return withStartFailures;
-          })(),
-        )
-      : input.action === "await"
-        ? makeStartAwaitCardDetails(
-            (() => {
-              const baseResult = { action: "await" as const, runs, awaitUntil: input.until };
-              const withAttentionRequired = attentionRequired
-                ? { ...baseResult, attentionRequired: true }
-                : baseResult;
-              return withAttentionRequired;
-            })(),
-          )
-        : makeCompactToolDetails(
-            (() => {
-              const baseResult = {
-                action: input.action,
-                runs,
-                includeReports: input.action === "status",
-              };
-              const withActionFailures =
-                actionFailures.length > 0 ? { ...baseResult, actionFailures } : baseResult;
-              const withAttentionRequired = attentionRequired
-                ? { ...withActionFailures, attentionRequired: true }
-                : withActionFailures;
-              return withAttentionRequired;
-            })(),
-          );
-  const text =
-    input.action === "start"
-      ? (formattedText ?? formatStartResult(runs, startFailures))
-      : actionFailures.length > 0
-        ? input.action === "status"
-          ? (formattedText ?? formatDetailedRuns(runs).text)
-          : joinBoundedToolText([
-              managementAcknowledgement(input.action, runs),
-              formatActionFailures(actionFailures),
-            ])
-        : runs.length === 0
-          ? "No subagent runs."
-          : input.action === "list"
-            ? runs.map((run) => formatRun(run)).join("\n")
-            : input.action === "status"
-              ? (formattedText ?? formatDetailedRuns(runs).text)
-              : input.action === "await"
+  return runtime
+    .run(effect, signal)
+    .finally(() => {
+      signal?.removeEventListener("abort", cancelAwait);
+    })
+    .then(
+      (executionResult: {
+        readonly runs: ReadonlyArray<SubagentRunView>;
+        readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
+        readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
+        readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
+        readonly attentionRequired?: boolean;
+        readonly text?: string;
+      }): AgentToolResult<unknown> => {
+        const { runs, attentionRequired, text: formattedText } = executionResult;
+        const startFailures = executionResult.startFailures ?? [];
+        const startEntries = executionResult.startEntries;
+        const actionFailures = executionResult.actionFailures ?? [];
+        const details: unknown =
+          input.action === "start"
+            ? makeStartAwaitCardDetails(
+                (() => {
+                  const baseResult = { action: "start" as const, runs };
+                  const withStartEntries = startEntries
+                    ? { ...baseResult, startEntries }
+                    : baseResult;
+                  const withStartFailures =
+                    startFailures.length > 0
+                      ? { ...withStartEntries, startFailures }
+                      : withStartEntries;
+                  return withStartFailures;
+                })(),
+              )
+            : input.action === "await"
+              ? makeStartAwaitCardDetails(
+                  (() => {
+                    const baseResult = { action: "await" as const, runs, awaitUntil: input.until };
+                    const withAttentionRequired = attentionRequired
+                      ? { ...baseResult, attentionRequired: true }
+                      : baseResult;
+                    return withAttentionRequired;
+                  })(),
+                )
+              : makeCompactToolDetails(
+                  (() => {
+                    const baseResult = {
+                      action: input.action,
+                      runs,
+                      includeReports: input.action === "status",
+                    };
+                    const withActionFailures =
+                      actionFailures.length > 0 ? { ...baseResult, actionFailures } : baseResult;
+                    const withAttentionRequired = attentionRequired
+                      ? { ...withActionFailures, attentionRequired: true }
+                      : withActionFailures;
+                    return withAttentionRequired;
+                  })(),
+                );
+        const text =
+          input.action === "start"
+            ? (formattedText ?? formatStartResult(runs, startFailures))
+            : actionFailures.length > 0
+              ? input.action === "status"
                 ? (formattedText ?? formatDetailedRuns(runs).text)
-                : managementAcknowledgement(input.action, runs);
-  return { content: [{ type: "text", text: boundToolOutput(text) }], details };
+                : joinBoundedToolText([
+                    managementAcknowledgement(input.action, runs),
+                    formatActionFailures(actionFailures),
+                  ])
+              : runs.length === 0
+                ? "No subagent runs."
+                : input.action === "list"
+                  ? runs.map((run) => formatRun(run)).join("\n")
+                  : input.action === "status"
+                    ? (formattedText ?? formatDetailedRuns(runs).text)
+                    : input.action === "await"
+                      ? (formattedText ?? formatDetailedRuns(runs).text)
+                      : managementAcknowledgement(input.action, runs);
+        return { content: [{ type: "text", text: boundToolOutput(text) }], details };
+      },
+    );
 };

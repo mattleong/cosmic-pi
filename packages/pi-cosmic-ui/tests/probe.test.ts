@@ -1,11 +1,14 @@
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { PiExec } from "../src/probe/pi-exec.ts";
 import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import { RepositoryProbe } from "../src/probe/repository-probe.ts";
+
+// Pure leak-check serialization stays outside Effect code on purpose: it scans captured
+// telemetry spans for secret path fragments.
+const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
 
 describe("repository probe", () => {
   it.effect("parses Git status/diff and captures redacted probe spans", () => {
@@ -34,7 +37,7 @@ describe("repository probe", () => {
         linesAdded: 3,
       });
       expect(yield* probe.pullRequest("/secret/project/not-recorded")).toBe(17);
-      const telemetry = JSON.stringify(
+      const telemetry = serializedSnapshot(
         captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
       );
       expect(captured.spans.map((span) => span.name)).toEqual(
@@ -43,7 +46,9 @@ describe("repository probe", () => {
       expect(telemetry).not.toContain("secret");
       expect(telemetry).not.toContain("not-recorded");
     }).pipe(
-      Effect.provide(Layer.merge(RepositoryProbe.layer.pipe(Layer.provide(exec)), captured.layer)),
+      provideBuiltLayer(
+        Layer.merge(RepositoryProbe.layer.pipe(Layer.provide(exec)), captured.layer),
+      ),
     );
   });
 });

@@ -17,7 +17,7 @@ export function pushTokenRange(ranges: TextRange[], token: WordEmphasisToken): v
 }
 
 export function mergeRangesByStart(ranges: TextRange[]): TextRange[] {
-  return mergeRanges([...ranges].sort((a, b) => a[0] - b[0]));
+  return mergeRanges(ranges.toSorted((a, b) => a[0] - b[0]));
 }
 
 export function mergeRanges(ranges: TextRange[]): TextRange[] {

@@ -1,9 +1,8 @@
 // Benchmark-only scoped runtime; production rendering never creates a runtime.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/unsafeEffectTypeAssertion:off
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Predicate from "effect/Predicate";
 import { ShikiAdapter } from "../src/boundary/shiki";
 import {
   clearCodePreviewSessionCapability,
@@ -15,30 +14,55 @@ import { CodePreviewEnvironmentService } from "../src/config/env";
 import { initializeShikiEffect } from "../src/syntax/shiki";
 import { CodePreviewSyntaxService } from "../src/syntax/service";
 
-export async function startBenchmarkShikiSession(theme: string): Promise<() => Promise<void>> {
+/**
+ * Snapshot of the current environment for benchmark-scoped environment layers.
+ * Reading through `Object.entries` keeps the snapshot explicit and validated.
+ */
+function environmentSnapshot(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).flatMap(([key, value]) =>
+      Predicate.isString(value) ? [[key, value]] : [],
+    ),
+  );
+}
+
+export function startBenchmarkShikiSession(
+  theme: string,
+  environmentOptions: {
+    /** Values used only when the ambient environment does not define them. */
+    defaults?: Readonly<Record<string, string>>;
+    /** Values forced over the ambient environment. */
+    overrides?: Readonly<Record<string, string>>;
+  } = {},
+): Promise<() => Promise<void>> {
   const layer = Layer.merge(
     CodePreviewSyntaxService.layer.pipe(Layer.provide(ShikiAdapter.layer)),
-    CodePreviewEnvironmentService.layer,
+    CodePreviewEnvironmentService.layerFrom({
+      ...environmentOptions.defaults,
+      ...environmentSnapshot(),
+      ...environmentOptions.overrides,
+    }),
   );
   const runtime = ManagedRuntime.make(layer);
-  await runtime.runPromise(initializeShikiEffect(theme));
-  // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
-  const capability = {
-    token: 1,
-    run: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
-      runtime.runPromise(effect, signal ? { signal } : undefined),
-    defer: (task: () => void) => {
-      const fiber = runtime.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
-      return () => fiber.interruptUnsafe();
-    },
-    schedule: (interval: number, task: () => void) => {
-      const fiber = runtime.runFork(previewScheduleEffect(interval, task));
-      return () => fiber.interruptUnsafe();
-    },
-  } as CodePreviewSessionCapability;
-  installCodePreviewSessionCapability(capability);
-  return async () => {
-    clearCodePreviewSessionCapability(1);
-    await runtime.dispose();
-  };
+  return runtime.runPromise(initializeShikiEffect(theme)).then(() => {
+    // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+    const capability = {
+      token: 1,
+      run: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
+        runtime.runPromise(effect, signal ? { signal } : undefined),
+      defer: (task: () => void) => {
+        const fiber = runtime.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
+        return () => fiber.interruptUnsafe();
+      },
+      schedule: (interval: number, task: () => void) => {
+        const fiber = runtime.runFork(previewScheduleEffect(interval, task));
+        return () => fiber.interruptUnsafe();
+      },
+    } as CodePreviewSessionCapability;
+    installCodePreviewSessionCapability(capability);
+    return () => {
+      clearCodePreviewSessionCapability(1);
+      return runtime.dispose();
+    };
+  });
 }

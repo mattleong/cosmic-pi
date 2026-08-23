@@ -1,24 +1,6 @@
 // Test boundary intentionally uses Node temp-directory helpers.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
 import assert from "node:assert/strict";
-import {
-  chmod,
-  link as createLink,
-  lstat,
-  mkdir,
-  mkdtemp,
-  open,
-  readFile,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { layer } from "@effect/vitest";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
@@ -29,6 +11,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { expectTypeOf, test } from "vitest";
 import {
   type CodePreviewWriteDetails,
@@ -37,6 +20,25 @@ import {
 } from "../../src/write/preview-execution";
 import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
+
+// Raw Node builtin access for test scaffolding, mirroring pi-cosmic-core's platform boundary.
+const nodeFsModule = process.getBuiltinModule("node:fs");
+const nodePathModule = process.getBuiltinModule("node:path");
+if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
+const {
+  chmod,
+  link: createLink,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} = nodeFsModule.promises;
+const { join } = nodePathModule;
 
 class TestFileSystemError extends Schema.TaggedError<TestFileSystemError>()("TestFileSystemError", {
   operation: Schema.String,
@@ -64,30 +66,34 @@ const withTempDirectory = <A, E, R>(
       ),
   );
 
-test("before-write details replace undefined details and preserve object fields", async () => {
+test("before-write details replace undefined details and preserve object fields", () => {
   const resultWithoutDetails: AgentToolResult<undefined> = { content: [], details: undefined };
-  const enrichedWithoutDetails = await withCodePreviewBeforeWrite(resultWithoutDetails, {
+  return withCodePreviewBeforeWrite(resultWithoutDetails, {
     kind: "content",
     content: "before",
-  });
-  expectTypeOf(enrichedWithoutDetails.details).toEqualTypeOf<CodePreviewWriteDetails>();
-  assert.deepEqual(enrichedWithoutDetails.details, {
-    codePreviewBeforeWrite: { kind: "content", byteLength: 6 },
-  });
+  })
+    .then((enrichedWithoutDetails) => {
+      expectTypeOf(enrichedWithoutDetails.details).toEqualTypeOf<CodePreviewWriteDetails>();
+      assert.deepEqual(enrichedWithoutDetails.details, {
+        codePreviewBeforeWrite: { kind: "content", byteLength: 6 },
+      });
 
-  const resultWithDetails: AgentToolResult<{ readonly existing: "kept" }> = {
-    content: [],
-    details: { existing: "kept" },
-  };
-  const enrichedWithDetails = await withCodePreviewBeforeWrite(resultWithDetails, undefined);
-  expectTypeOf(enrichedWithDetails.details.existing).toEqualTypeOf<"kept">();
-  expectTypeOf(enrichedWithDetails.details.codePreviewBeforeWrite).toEqualTypeOf<
-    CodePreviewWriteDetails["codePreviewBeforeWrite"]
-  >();
-  assert.deepEqual(enrichedWithDetails.details, {
-    existing: "kept",
-    codePreviewBeforeWrite: undefined,
-  });
+      const resultWithDetails: AgentToolResult<{ readonly existing: "kept" }> = {
+        content: [],
+        details: { existing: "kept" },
+      };
+      return withCodePreviewBeforeWrite(resultWithDetails, undefined);
+    })
+    .then((enrichedWithDetails) => {
+      expectTypeOf(enrichedWithDetails.details.existing).toEqualTypeOf<"kept">();
+      expectTypeOf(enrichedWithDetails.details.codePreviewBeforeWrite).toEqualTypeOf<
+        CodePreviewWriteDetails["codePreviewBeforeWrite"]
+      >();
+      assert.deepEqual(enrichedWithDetails.details, {
+        existing: "kept",
+        codePreviewBeforeWrite: undefined,
+      });
+    });
 });
 
 layer(CodePreviewWriteService.layer)("session write service", (it) => {
@@ -110,7 +116,7 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           true,
         );
       }),
-    ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
   );
 
   it.effect("writes follow mixed relative and absolute final symlink chains", () =>
@@ -139,7 +145,7 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           true,
         );
       }),
-    ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
   );
 
   it.effect("resolves relative final links from their physical symlinked directory", () =>
@@ -172,7 +178,7 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           false,
         );
       }),
-    ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
   );
 
   it.effect("writes preserve target inode, mode, hard-link aliases, and open descriptors", () =>
@@ -209,7 +215,7 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           (descriptor) => testFileSystem("close target", () => descriptor.close()),
         );
       }),
-    ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
   );
 
   it.effect("new files use normal writeFile creation mode under the process umask", () =>
@@ -225,7 +231,7 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           (yield* testFileSystem("inspect preview fixture", () => stat(preview))).mode & 0o777;
         assert.equal(previewMode, controlMode);
       }),
-    ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
   );
 
   it.effect("dangling symlinks do not create target directories", () =>
@@ -256,7 +262,7 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
         );
         assert.equal(created, false);
       }),
-    ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
   );
 
   it.effect("cyclic and over-depth final symlink chains fail without replacing links", () =>
@@ -305,7 +311,7 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           true,
         );
       }),
-    ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
   );
 
   it.effect("interruption keeps the path semaphore until an uninterruptible write settles", () =>
@@ -332,14 +338,14 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           "target.txt",
           "first",
           dir,
-        ).pipe(Effect.provide(providers), Effect.forkScoped);
+        ).pipe(provideBuiltLayer(providers), Effect.forkScoped);
         yield* Deferred.await(started);
         const second = yield* executeWriteWithPreviewEffect(
           "tool-2",
           "target.txt",
           "second",
           dir,
-        ).pipe(Effect.provide(providers), Effect.forkScoped);
+        ).pipe(provideBuiltLayer(providers), Effect.forkScoped);
         yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         const pendingBeforeRelease = second.pollUnsafe();
@@ -355,6 +361,6 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
         assert.deepEqual(lookupBeforeWrite("tool-1"), { kind: "content", content: "before" });
         assert.deepEqual(lookupBeforeWrite("tool-2"), { kind: "content", content: "first" });
       }).pipe(Effect.scoped),
-    ).pipe(Effect.provide(NodeFileSystem.layer)),
+    ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
   );
 });

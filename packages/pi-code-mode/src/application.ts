@@ -1,6 +1,5 @@
 /** Code Mode session lifecycle, `code_mode` tool registration, and command wiring. */
 // Pi session handlers are Promise-shaped host boundaries.
-// @effect-diagnostics effect/asyncFunction:off
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -159,7 +158,7 @@ export function registerCodeModeApplication(
     captureSignal: captureHostSignal,
   });
 
-  const activateSession = async (ctx: ExtensionContext): Promise<void> => {
+  const activateSession = (ctx: ExtensionContext): Promise<void> => {
     const generation = ++preparationGeneration;
     observeUserIntent();
     // Restore a deliberate deactivation this session recorded before Pi recreated the
@@ -178,54 +177,55 @@ export function registerCodeModeApplication(
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") {
       notifyAtHostBoundary(ctx, "Code Mode is unavailable for this session.", "warning");
-      await slot.shutdown();
-      return;
+      return slot.shutdown().then(() => undefined);
     }
     const projectTrusted = isProjectTrusted(ctx);
-    const token = await slot.start({ ctx, cwd: captured.cwd, projectTrusted }, captured.signal);
-    // Start failure already notified via onStartFailure; a superseded start stays silent.
-    if (token === undefined) return;
-    if (generation !== preparationGeneration || !slot.isCurrent(token)) return;
+    return slot.start({ ctx, cwd: captured.cwd, projectTrusted }, captured.signal).then((token) => {
+      // Start failure already notified via onStartFailure; a superseded start stays silent.
+      if (token === undefined) return;
+      if (generation !== preparationGeneration || !slot.isCurrent(token)) return;
 
-    const state = MutableRef.get(stateRef);
-    // Untrusted or disabled sessions register nothing; the tool stays deactivated.
-    if (state === undefined || !state.available) return;
+      const state = MutableRef.get(stateRef);
+      // Untrusted or disabled sessions register nothing; the tool stays deactivated.
+      if (state === undefined || !state.available) return;
 
-    try {
       // Trusted project settings must finish loading before the wrap below: the preview
-      // shell captures its mode at wrapping time.
-      await boundaries.loadSettings(captured.cwd, projectTrusted);
-    } catch {
-      // Preview-settings failures degrade to preview defaults; they never block the tool.
-    }
-    // A slow settings load must never register an implementation bound to a replaced
-    // session (old cwd, old runtime): re-check currency after every await.
-    if (generation !== preparationGeneration || !slot.isCurrent(token)) return;
+      // shell captures its mode at wrapping time. Preview-settings failures degrade to
+      // preview defaults; they never block the tool.
+      return Promise.resolve()
+        .then(() => Promise.resolve(boundaries.loadSettings(captured.cwd, projectTrusted)))
+        .catch(() => undefined)
+        .then(() => {
+          // A slow settings load must never register an implementation bound to a replaced
+          // session (old cwd, old runtime): re-check currency after every settled promise.
+          if (generation !== preparationGeneration || !slot.isCurrent(token)) return;
 
-    const isCurrent = () => generation === preparationGeneration && slot.isCurrent(token);
-    const definition = buildCodeModeToolDefinition({
-      catalogBudget: state.config.catalogBudget,
-      execute: makeCodeModeToolExecute({
-        isCurrent,
-        getState: () => MutableRef.get(stateRef),
-        runInSession: (effect, signal) => slot.run(effect, signal),
-        definitions: boundaries.makeNestedDefinitions(captured.cwd),
-        retainFailureDetails: failureDetails.retain,
-      }),
+          const isCurrent = () => generation === preparationGeneration && slot.isCurrent(token);
+          const definition = buildCodeModeToolDefinition({
+            catalogBudget: state.config.catalogBudget,
+            execute: makeCodeModeToolExecute({
+              isCurrent,
+              getState: () => MutableRef.get(stateRef),
+              runInSession: (effect, signal) => slot.run(effect, signal),
+              definitions: boundaries.makeNestedDefinitions(captured.cwd),
+              retainFailureDetails: failureDetails.retain,
+            }),
+          });
+          let wrapped: CodeModeToolDefinition;
+          try {
+            wrapped = boundaries.wrapTool(definition);
+          } catch {
+            notifyAtHostBoundary(ctx, "Code Mode failed to register its tool.", "warning");
+            return;
+          }
+          if (!registerCodeModeTool(pi, wrapped)) {
+            notifyAtHostBoundary(ctx, "Code Mode failed to register its tool.", "warning");
+            return;
+          }
+          hasRegisteredTool = true;
+          expectedActive = reconcileCodeModeToolActivation(pi, !userDeactivated);
+        });
     });
-    let wrapped: CodeModeToolDefinition;
-    try {
-      wrapped = boundaries.wrapTool(definition);
-    } catch {
-      notifyAtHostBoundary(ctx, "Code Mode failed to register its tool.", "warning");
-      return;
-    }
-    if (!registerCodeModeTool(pi, wrapped)) {
-      notifyAtHostBoundary(ctx, "Code Mode failed to register its tool.", "warning");
-      return;
-    }
-    hasRegisteredTool = true;
-    expectedActive = reconcileCodeModeToolActivation(pi, !userDeactivated);
   };
 
   pi.on("session_start", (_event, ctx) => activateSession(ctx));

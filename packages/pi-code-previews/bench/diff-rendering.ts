@@ -1,13 +1,8 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
 import type { DiffWordEmphasis } from "../src/config/schema";
 import {
+  benchLog,
+  benchTable,
   benchTheme,
   formatDuration,
   formatMs,
@@ -113,10 +108,10 @@ try {
   printLargeDiffEstimates(results, cases, largeScenarios);
   if (LARGE_ACTUAL) printActualLargeDiffTimings(largeScenarios);
   if (VERBOSE) printResults(results);
-  else console.log("Set BENCH_VERBOSE=1 to print the full raw benchmark table.");
+  else benchLog("Set BENCH_VERBOSE=1 to print the full raw benchmark table.");
   if (!LARGE_ACTUAL)
-    console.log("Set BENCH_LARGE_ACTUAL=1 to run one-shot actual large diff renders.");
-  if (sink === Number.MIN_SAFE_INTEGER) console.log("sink", sink);
+    benchLog("Set BENCH_LARGE_ACTUAL=1 to run one-shot actual large diff renders.");
+  if (sink === Number.MIN_SAFE_INTEGER) benchLog("sink", sink);
 } finally {
   setCodePreviewSettings(previousSettings);
   await stopShiki();
@@ -149,12 +144,12 @@ function printSummary(results: BenchResult[], benchCases: BenchCase[]): void {
     };
   });
 
-  console.log("Word emphasis risk summary");
-  console.table(rows);
-  console.log(
+  benchLog("Word emphasis risk summary");
+  benchTable(rows);
+  benchLog(
     "Verdict bands use render mean overhead and word-range p95 cost: fine < 1ms, watch 1-8ms, problem > 8ms. The render columns show overhead versus wordEmphasis=off.",
   );
-  console.log("");
+  benchLog("");
 }
 
 function printLargeDiffEstimates(
@@ -183,12 +178,12 @@ function printLargeDiffEstimates(
     };
   });
 
-  console.log("Large diff word-emphasis estimates");
-  console.table(rows);
-  console.log(
+  benchLog("Large diff word-emphasis estimates");
+  benchTable(rows);
+  benchLog(
     "These estimates multiply the measured smart word-ranges cost per changed pair. They isolate word-emphasis analysis, not syntax highlighting or terminal wrapping.",
   );
-  console.log("");
+  benchLog("");
 }
 
 function printActualLargeDiffTimings(scenarios: LargeScenario[]): void {
@@ -236,9 +231,9 @@ function printActualLargeDiffTimings(scenarios: LargeScenario[]): void {
     }
   }
 
-  console.log("Actual large diff one-shot timings");
-  console.table(rows);
-  console.log("");
+  benchLog("Actual large diff one-shot timings");
+  benchTable(rows);
+  benchLog("");
 }
 
 function findResult(
@@ -272,7 +267,7 @@ function printResults(results: BenchResult[]): void {
     "p95 ms/op": result.p95Ms.toFixed(4),
     "ops/sec": result.opsPerSec.toFixed(0),
   }));
-  console.table(rows);
+  benchTable(rows);
 }
 
 function makeCases(): BenchCase[] {

@@ -1,13 +1,12 @@
 // Resource lifecycle assertions.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import assert from "node:assert/strict";
 import { describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
   makeCapturedLogger,
@@ -69,13 +68,13 @@ describe("session syntax service", () => {
       assert.equal((yield* service.status).initialized, true);
       assert.ok(captured.spans.some((span) => span.name === "pi-code-previews.shiki.initialize"));
       assert.equal(
-        JSON.stringify(
+        Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
           captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
         ).includes("secret-theme-path"),
         false,
       );
     }).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         Layer.merge(
           CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
           captured.layer,
@@ -125,7 +124,7 @@ describe("session syntax service", () => {
           assert.equal(callbacks, 2);
         }),
       ).pipe(
-        Effect.provide(
+        provideBuiltLayer(
           CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
         ),
       );
@@ -147,7 +146,7 @@ describe("session syntax service", () => {
       loadLanguage: () => Effect.void,
     });
     return CodePreviewSyntaxService.use((service) => service.initialize("secret-theme")).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         Layer.merge(
           CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
           captured.layer,
@@ -158,7 +157,7 @@ describe("session syntax service", () => {
           const telemetry = capturedTelemetrySnapshot(captured);
           assert.match(telemetry, /Shiki failed to initialize/);
           assert.equal(telemetry.includes("secret-theme"), false);
-          assert.equal(telemetry.includes("secret\/path"), false);
+          assert.equal(telemetry.includes("secret/path"), false);
           assert.equal(telemetry.includes("sk-secret"), false);
         }),
       ),
@@ -194,7 +193,7 @@ describe("session syntax service", () => {
           assert.equal((yield* service.status).initialized, true);
         }),
       ).pipe(
-        Effect.provide(
+        provideBuiltLayer(
           CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
         ),
       );
@@ -225,7 +224,7 @@ describe("session syntax service", () => {
         assert.equal(callbacks, 2);
       }),
     ).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
       ),
     );
@@ -262,7 +261,7 @@ describe("session syntax service", () => {
           assert.equal(callbacks, requests);
         }),
       ).pipe(
-        Effect.provide(
+        provideBuiltLayer(
           CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
         ),
       );
@@ -305,7 +304,7 @@ describe("session syntax service", () => {
           assert.equal(syntaxProjection()?.loadedLanguages.includes("rust"), true);
         }),
       ).pipe(
-        Effect.provide(
+        provideBuiltLayer(
           CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
         ),
       );
@@ -319,7 +318,7 @@ describe("session syntax service", () => {
       loadLanguage: () => Effect.void,
     });
     return CodePreviewSyntaxService.use(() => Effect.void).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
       ),
       Effect.andThen(
@@ -360,7 +359,7 @@ describe("session syntax service", () => {
         assert.equal(oldDisposed, 0);
       }),
     ).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
       ),
       Effect.ensuring(Effect.sync(() => assert.equal(oldDisposed, 1))),
@@ -393,7 +392,7 @@ describe("session syntax service", () => {
           assert.equal(syntaxProjection()?.highlighter, next);
           assert.equal(syntaxProjection()?.theme, "next");
         }),
-      ).pipe(Effect.provide(layer));
+      ).pipe(provideBuiltLayer(layer));
       assert.equal(oldDisposeAttempts, 1);
       assert.equal(nextDisposeAttempts, 1);
       assert.match(capturedTelemetrySnapshot(captured), /failed to dispose cleanly/);
@@ -429,7 +428,7 @@ describe("session syntax service", () => {
             yield* Deferred.await(started);
           }),
         ).pipe(
-          Effect.provide(
+          provideBuiltLayer(
             CodePreviewSyntaxService.layer.pipe(
               Layer.provide(Layer.succeed(ShikiAdapter, adapter)),
             ),
@@ -458,7 +457,7 @@ describe("session syntax service", () => {
       const effect = CodePreviewSyntaxService.use((service) =>
         service.initialize("dark-plus"),
       ).pipe(
-        Effect.provide(
+        provideBuiltLayer(
           CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
         ),
       );

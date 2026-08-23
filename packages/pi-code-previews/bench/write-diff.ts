@@ -1,14 +1,9 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
 import { summarizeDiff } from "../src/diff/index";
 import { createSimpleDiff, createStructuredDiff } from "../src/diff/structured";
 import {
+  benchLog,
+  benchTable,
   formatDuration,
   isEnabled,
   printBenchHeader,
@@ -66,14 +61,14 @@ for (const benchCase of cases) {
 }
 
 printLayerSummary(results);
-console.log("createStructuredDiff measures diff package line diffing plus context compaction.");
-console.log("createSimpleDiff includes formatting the structured hunks into renderable diff text.");
-console.log("summarizeDiff isolates the full-diff scan that edit/write result headers perform.");
-console.log("");
+benchLog("createStructuredDiff measures diff package line diffing plus context compaction.");
+benchLog("createSimpleDiff includes formatting the structured hunks into renderable diff text.");
+benchLog("summarizeDiff isolates the full-diff scan that edit/write result headers perform.");
+benchLog("");
 printResults(results);
 if (isEnabled("BENCH_WRITE_LARGE")) printLargeOneShotTimings();
-else console.log("Set BENCH_WRITE_LARGE=1 to run 100k-line one-shot diff timings.");
-if (sink === Number.MIN_SAFE_INTEGER) console.log("sink", sink);
+else benchLog("Set BENCH_WRITE_LARGE=1 to run 100k-line one-shot diff timings.");
+if (sink === Number.MIN_SAFE_INTEGER) benchLog("sink", sink);
 
 function makeCases(): DiffInputCase[] {
   const appendBefore = fileLines("const item", 5_000);
@@ -118,9 +113,9 @@ function printLargeOneShotTimings(): void {
   const summaryMs = timeOnce(() => {
     sink += summarizeDiff(diff).totalLines;
   });
-  console.log("");
-  console.log("100k-line one-shot timings");
-  console.table([
+  benchLog("");
+  benchLog("100k-line one-shot timings");
+  benchTable([
     {
       case: "single middle edit",
       createSimpleDiff: formatDuration(createMs),

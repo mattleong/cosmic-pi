@@ -1,6 +1,4 @@
 // One bounded ambient Herdr/native environment snapshot is captured at the Node boundary.
-// @effect-diagnostics effect/processEnv:off
-
 const CAPTURED_HERDR_ENVIRONMENT_KEYS = [
   "HOME",
   "USER",

@@ -1,10 +1,7 @@
 // Test/benchmark boundary intentionally reports native timing.
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
 import { performance } from "node:perf_hooks";
 import { Text } from "@earendil-works/pi-tui";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { synchronousNow as previewNow } from "../src/boundary/clock";
 import { createSimpleDiff } from "../src/diff/index";
@@ -16,7 +13,14 @@ import {
 } from "../src/application/capability";
 import { previewScheduleEffect } from "../src/application/scheduler";
 import { resolvePreviewLanguage } from "../src/syntax/language";
-import { benchTheme, printBenchHeader, printLayerSummary, runBench, timeOnce } from "./helpers";
+import {
+  benchLog,
+  benchTheme,
+  printBenchHeader,
+  printLayerSummary,
+  runBench,
+  timeOnce,
+} from "./helpers";
 
 printBenchHeader("render boundaries");
 const cases = [
@@ -42,7 +46,7 @@ if (!json || json.p95Ms > 0.01)
 const before = Array.from({ length: 250 }, (_, index) => `before ${index}`).join("\n");
 const after = Array.from({ length: 250 }, (_, index) => `after ${index}`).join("\n");
 const sampleMedian = (samples: readonly number[]): number => {
-  const sorted = [...samples].sort((left, right) => left - right);
+  const sorted = samples.toSorted((left, right) => left - right);
   return sorted[Math.floor(sorted.length / 2)] ?? 0;
 };
 const measureDiff = () => timeOnce(() => createSimpleDiff(before, after));
@@ -75,7 +79,7 @@ const capability = {
 installCodePreviewSessionCapability(capability);
 const cancellationSamplesMs: number[] = [];
 let computed = false;
-for (let sample = 0; sample < 9; sample++) {
+const sampleCancellation = Effect.gen(function* () {
   const cancellationStart = performance.now();
   const preview = new DeferredPreview(
     "loading",
@@ -88,15 +92,17 @@ for (let sample = 0; sample < 9; sample++) {
   );
   preview.cancel();
   // Samples are intentionally sequential so each latency observes one event-loop turn.
-  // eslint-disable-next-line no-await-in-loop
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  yield* Effect.sleep(Duration.zero);
   cancellationSamplesMs.push(performance.now() - cancellationStart);
-}
+});
+await Effect.runPromise(
+  Effect.forEach(Array.from({ length: 9 }), () => sampleCancellation, { discard: true }),
+);
 const cancellationLatencyMs = sampleMedian(cancellationSamplesMs);
 clearCodePreviewSessionCapability();
 if (computed) throw new Error("Cancelled deferred preview still computed.");
 if (cancellationLatencyMs > 100)
   throw new Error(`Deferred cancellation latency exceeded 100ms: ${cancellationLatencyMs}`);
-console.log(
+benchLog(
   `deferred method=3-warmup+9-sample-median baselineMs=${committedBaselineMedianMs.toFixed(3)} regressionLimitMs=${regressionLimitMs.toFixed(3)} cpuSamplesMs=${cpuSamplesMs.map((sample) => sample.toFixed(3)).join(",")} cpuMedianMs=${cpuBlockMs.toFixed(3)} cancellationSamplesMs=${cancellationSamplesMs.map((sample) => sample.toFixed(3)).join(",")} cancellationMedianMs=${cancellationLatencyMs.toFixed(3)} worker=not-justified`,
 );

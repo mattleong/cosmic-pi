@@ -1,9 +1,8 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { PiApi } from "pi-cosmic-core";
+import { PiApi, provideBuiltLayer } from "pi-cosmic-core";
 import { PiExec } from "../src/probe/pi-exec.ts";
 
 describe("Pi exec", () => {
@@ -36,6 +35,6 @@ describe("Pi exec", () => {
         },
         { command: "gh", args: ["pr", "view", "--json", "number"] },
       ]);
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 });

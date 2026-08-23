@@ -1,10 +1,9 @@
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
   jsonHttpRawResponse,
@@ -20,6 +19,10 @@ const jwt = (teamId: string) => {
   const payload = Buffer.from(JSON.stringify({ team_id: teamId })).toString("base64url");
   return `header.${payload}.signature`;
 };
+
+// Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
+// runtime values (tagged errors, redacted credentials) for secret fragments.
+const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
 
 const registryLayer = (token?: string) =>
   Layer.succeed(
@@ -56,23 +59,23 @@ describe("xAI authentication", () => {
     });
 
     return Effect.gen(function* () {
-      expect(yield* readXaiAuthResult(authPath).pipe(Effect.provide(missing.layer))).toEqual({
+      expect(yield* readXaiAuthResult(authPath).pipe(provideBuiltLayer(missing.layer))).toEqual({
         _tag: "Missing",
       });
 
       const malformedResult = yield* readXaiAuthResult(authPath).pipe(
-        Effect.provide(malformed.layer),
+        provideBuiltLayer(malformed.layer),
       );
       expect(malformedResult).toMatchObject({ _tag: "Malformed", operation: "decode" });
-      expect(JSON.stringify(malformedResult)).not.toContain("refresh-secret-malformed");
+      expect(serializedSnapshot(malformedResult)).not.toContain("refresh-secret-malformed");
 
-      const validResult = yield* readXaiAuthResult(authPath).pipe(Effect.provide(valid.layer));
+      const validResult = yield* readXaiAuthResult(authPath).pipe(provideBuiltLayer(valid.layer));
       expect(validResult._tag).toBe("Found");
       if (validResult._tag === "Found") {
         expect(Redacted.value(validResult.credentials.accessToken)).toBe(accessToken);
         expect(validResult.credentials.teamId).toBe("team-owned");
-        expect(JSON.stringify(validResult.credentials)).not.toContain(accessToken);
-        expect(JSON.stringify(validResult.credentials)).not.toContain("refresh-secret-valid");
+        expect(serializedSnapshot(validResult.credentials)).not.toContain(accessToken);
+        expect(serializedSnapshot(validResult.credentials)).not.toContain("refresh-secret-valid");
       }
     });
   });
@@ -117,13 +120,13 @@ describe("xAI authentication", () => {
         expect(result.credentials.source).toBe("modelRegistry");
         expect(Redacted.value(result.credentials.accessToken)).toBe(registrySecret);
       }
-      const serialized = `${JSON.stringify(result)}\n${capturedTelemetrySnapshot({
+      const serialized = `${serializedSnapshot(result)}\n${capturedTelemetrySnapshot({
         entries: logger.entries,
         spans: tracer.spans,
       })}`;
       for (const secret of [expiredAccess, refreshSecret, registrySecret, "provider-secret-body"])
         expect(serialized).not.toContain(secret);
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("keeps a still-valid file token when its refresh fails", () => {
@@ -158,6 +161,6 @@ describe("xAI authentication", () => {
         expect(result.credentials.source).toBe("authFile");
         expect(Redacted.value(result.credentials.accessToken)).toBe("valid-access-secret");
       }
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 });

@@ -2,19 +2,13 @@
 // roots, sanitized environment and API-key selection, Codex config builders, failure-atomic
 // prepare/remove, and the bounded isolated auth probes. This boundary owns no wire transport
 // and must not import the LocalCliProcess service.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/cryptoRandomBytes:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { runBoundedProcessNode } from "pi-cosmic-core";
 import { randomBytes } from "node:crypto";
-import { promises as fs } from "node:fs";
-import { join } from "node:path";
+import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { claudeArgv, claudeSettings } from "../backend/claude-policy.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
@@ -27,6 +21,8 @@ import {
   writeExclusive,
 } from "./harness-shared.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
+
+const { join } = nodePath;
 
 const HARNESS_ROOT = "local-cli-v1";
 const CATALOG_HARNESS_ROOT = "native-model-catalog-v1";
@@ -153,80 +149,101 @@ const codexConfig = (supervisor: SupervisorConnectionMetadata, fastMode: boolean
 
 const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
 
-export const prepareLocalCliHarness = async (
+export const prepareLocalCliHarness = (
   options: LocalCliHarnessOptions,
   request: LocalCliHarnessRequest,
-): Promise<LocalCliHarness> => {
-  const agentDirectory = await safeAgentDirectory(options.agentDirectory);
-  const packageRoot = join(agentDirectory, "subagents");
-  const root = join(packageRoot, HARNESS_ROOT);
-  await ensurePrivateDirectory(packageRoot);
-  await ensurePrivateDirectory(root);
-  const directory = join(
-    root,
-    `${request.runtime}-${request.launch.runId}-${randomBytes(12).toString("hex")}`,
-  );
-  await fs.mkdir(directory, { mode: 0o700 });
-  try {
-    const directoryStat = await fs.lstat(directory);
-    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink())
-      throw new Error("unsafe-harness-directory");
-    const executable = options.executables?.[request.runtime] ?? request.runtime;
-    const sourceEnvironment = options.environment ?? process.env;
-    const env = sanitizeLocalCliEnvironment(sourceEnvironment, request.runtime, request.launch);
+): Promise<LocalCliHarness> =>
+  safeAgentDirectory(options.agentDirectory).then((agentDirectory) => {
+    const packageRoot = join(agentDirectory, "subagents");
+    const root = join(packageRoot, HARNESS_ROOT);
+    const directory = join(
+      root,
+      `${request.runtime}-${request.launch.runId}-${randomBytes(12).toString("hex")}`,
+    );
+    const buildHarness = (): Promise<LocalCliHarness> =>
+      fs.lstat(directory).then((directoryStat) => {
+        if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink())
+          throw new Error("unsafe-harness-directory");
+        const executable = options.executables?.[request.runtime] ?? request.runtime;
+        const sourceEnvironment = options.environment ?? process.env;
+        const env = sanitizeLocalCliEnvironment(sourceEnvironment, request.runtime, request.launch);
 
-    if (request.runtime === "claude") {
-      const settingsPath = join(directory, "settings.json");
-      const mcpPath = join(directory, "mcp.json");
-      const promptPath = join(directory, "system-prompt.md");
-      const writerPolicy = claudeWriterCwdPolicy(request.launch.cwd);
-      await writeExclusive(
-        settingsPath,
-        `${JSON.stringify(claudeSettings(request.launch, writerPolicy))}\n`,
+        if (request.runtime === "claude") {
+          const settingsPath = join(directory, "settings.json");
+          const mcpPath = join(directory, "mcp.json");
+          const promptPath = join(directory, "system-prompt.md");
+          const writerPolicy = claudeWriterCwdPolicy(request.launch.cwd);
+          return writeExclusive(
+            settingsPath,
+            `${JSON.stringify(claudeSettings(request.launch, writerPolicy))}\n`,
+          )
+            .then(() => {
+              if (options.harnessFault === "after-claude-settings")
+                throw new Error("fixture-after-claude-settings");
+              return writeExclusive(mcpPath, `${JSON.stringify(request.supervisor.claudeMcp)}\n`);
+            })
+            .then(() => writeExclusive(promptPath, request.launch.systemPrompt))
+            .then(() => ({
+              directory,
+              executable,
+              args: claudeArgv(request.launch, { settingsPath, mcpPath, promptPath }, writerPolicy),
+              env,
+            }));
+        }
+
+        const codexHome = join(directory, "codex-home");
+        return fs
+          .mkdir(codexHome, { mode: 0o700 })
+          .then(() =>
+            writeExclusive(
+              join(codexHome, "config.toml"),
+              codexConfig(request.supervisor, request.launch.fastMode),
+            ),
+          )
+          .then(() => readValidatedCodexAuth(sourceEnvironment))
+          .then((auth) => {
+            if (auth)
+              return writeExclusive(join(codexHome, "auth.json"), auth).then(() => {
+                if (options.harnessFault === "after-codex-auth")
+                  throw new Error("fixture-after-codex-auth");
+              });
+            if (!approvedCodexApiKey(sourceEnvironment)) throw new Error("codex-auth-unavailable");
+            return undefined;
+          })
+          .then(() => ({
+            directory,
+            executable,
+            args: codexArgv(),
+            env: { ...env, CODEX_HOME: codexHome },
+          }));
+      });
+    return ensurePrivateDirectory(packageRoot)
+      .then(() => ensurePrivateDirectory(root))
+      .then(() => fs.mkdir(directory, { mode: 0o700 }))
+      .then(() =>
+        buildHarness().catch((error) =>
+          Promise.resolve()
+            .then(() => {
+              if (options.harnessCleanupFault) throw new Error("fixture-harness-cleanup-failure");
+              return removeLocalCliHarness(directory);
+            })
+            .then(
+              () => {
+                throw error;
+              },
+              () => {
+                throw harnessCleanupUnconfirmed(error);
+              },
+            ),
+        ),
       );
-      if (options.harnessFault === "after-claude-settings")
-        throw new Error("fixture-after-claude-settings");
-      await writeExclusive(mcpPath, `${JSON.stringify(request.supervisor.claudeMcp)}\n`);
-      await writeExclusive(promptPath, request.launch.systemPrompt);
-      return {
-        directory,
-        executable,
-        args: claudeArgv(request.launch, { settingsPath, mcpPath, promptPath }, writerPolicy),
-        env,
-      };
-    }
+  });
 
-    const codexHome = join(directory, "codex-home");
-    await fs.mkdir(codexHome, { mode: 0o700 });
-    const config = codexConfig(request.supervisor, request.launch.fastMode);
-    await writeExclusive(join(codexHome, "config.toml"), config);
-    const auth = await readValidatedCodexAuth(sourceEnvironment);
-    if (auth) {
-      await writeExclusive(join(codexHome, "auth.json"), auth);
-      if (options.harnessFault === "after-codex-auth") throw new Error("fixture-after-codex-auth");
-    } else if (!approvedCodexApiKey(sourceEnvironment)) throw new Error("codex-auth-unavailable");
-    return {
-      directory,
-      executable,
-      args: codexArgv(),
-      env: { ...env, CODEX_HOME: codexHome },
-    };
-  } catch (error) {
-    try {
-      if (options.harnessCleanupFault) throw new Error("fixture-harness-cleanup-failure");
-      await removeLocalCliHarness(directory);
-    } catch {
-      throw harnessCleanupUnconfirmed(error);
-    }
-    throw error;
-  }
-};
-
-export const removeLocalCliHarness = async (directory: string): Promise<void> => {
-  const stat = await fs.lstat(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
-  await fs.rm(directory, { recursive: true, force: false });
-};
+export const removeLocalCliHarness = (directory: string): Promise<void> =>
+  fs.lstat(directory).then((stat) => {
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
+    return fs.rm(directory, { recursive: true, force: false });
+  });
 
 export interface CodexCatalogHarness {
   readonly args: ReadonlyArray<string>;
@@ -235,41 +252,50 @@ export interface CodexCatalogHarness {
 }
 
 /** Isolates model discovery from user Codex config while copying only bounded authentication. */
-export const prepareCodexCatalogHarness = async (options: {
+export const prepareCodexCatalogHarness = (options: {
   readonly agentDirectory: string;
   readonly environment: NodeJS.ProcessEnv;
-}): Promise<CodexCatalogHarness> => {
-  const agentDirectory = await safeAgentDirectory(options.agentDirectory);
-  const packageRoot = join(agentDirectory, "subagents");
-  const root = join(packageRoot, CATALOG_HARNESS_ROOT);
-  await ensurePrivateDirectory(packageRoot);
-  await ensurePrivateDirectory(root);
-  const directory = join(root, `codex-${randomBytes(12).toString("hex")}`);
-  await fs.mkdir(directory, { mode: 0o700 });
-  try {
-    const codexHome = join(directory, "codex-home");
-    await fs.mkdir(codexHome, { mode: 0o700 });
-    await writeExclusive(join(codexHome, "config.toml"), codexCatalogConfig());
-    const auth = await readValidatedCodexAuth(options.environment);
-    if (auth) await writeExclusive(join(codexHome, "auth.json"), auth);
-    else if (!approvedCodexApiKey(options.environment)) throw new Error("codex-auth-unavailable");
-    return {
-      args: codexArgv(),
-      env: {
-        ...sanitizeLocalCliEnvironment(options.environment, "codex"),
-        CODEX_HOME: codexHome,
-      },
-      release: () => removeLocalCliHarness(directory),
+}): Promise<CodexCatalogHarness> =>
+  safeAgentDirectory(options.agentDirectory).then((agentDirectory) => {
+    const packageRoot = join(agentDirectory, "subagents");
+    const root = join(packageRoot, CATALOG_HARNESS_ROOT);
+    const directory = join(root, `codex-${randomBytes(12).toString("hex")}`);
+    const buildHarness = (): Promise<CodexCatalogHarness> => {
+      const codexHome = join(directory, "codex-home");
+      return fs
+        .mkdir(codexHome, { mode: 0o700 })
+        .then(() => writeExclusive(join(codexHome, "config.toml"), codexCatalogConfig()))
+        .then(() => readValidatedCodexAuth(options.environment))
+        .then((auth) => {
+          if (auth) return writeExclusive(join(codexHome, "auth.json"), auth);
+          if (!approvedCodexApiKey(options.environment)) throw new Error("codex-auth-unavailable");
+          return undefined;
+        })
+        .then(() => ({
+          args: codexArgv(),
+          env: {
+            ...sanitizeLocalCliEnvironment(options.environment, "codex"),
+            CODEX_HOME: codexHome,
+          },
+          release: () => removeLocalCliHarness(directory),
+        }));
     };
-  } catch (error) {
-    try {
-      await removeLocalCliHarness(directory);
-    } catch {
-      throw harnessCleanupUnconfirmed(error);
-    }
-    throw error;
-  }
-};
+    return ensurePrivateDirectory(packageRoot)
+      .then(() => ensurePrivateDirectory(root))
+      .then(() => fs.mkdir(directory, { mode: 0o700 }))
+      .then(() =>
+        buildHarness().catch((error) =>
+          removeLocalCliHarness(directory).then(
+            () => {
+              throw error;
+            },
+            () => {
+              throw harnessCleanupUnconfirmed(error);
+            },
+          ),
+        ),
+      );
+  });
 
 export interface ProbeResult {
   readonly code: number | null;
@@ -318,24 +344,21 @@ export const runProbeEffect = (
     ),
   );
 
-export const runIsolatedCodexAuthProbe = async (
+export const runIsolatedCodexAuthProbe = (
   executable: string,
   agentDirectory: string,
   environment: NodeJS.ProcessEnv,
-): Promise<ProbeResult> => {
-  const harness = await prepareCodexCatalogHarness({ agentDirectory, environment });
-  const result = await Effect.runPromise(
-    runProbeEffect(executable, ["login", "status"], harness.env),
+): Promise<ProbeResult> =>
+  prepareCodexCatalogHarness({ agentDirectory, environment }).then((harness) =>
+    Effect.runPromise(runProbeEffect(executable, ["login", "status"], harness.env)).then((result) =>
+      harness.release().then(
+        () => result,
+        () => ({
+          ...result,
+          code: null,
+          cleanupUnconfirmed: true,
+          stderr: "Codex readiness probe private harness cleanup could not be confirmed.",
+        }),
+      ),
+    ),
   );
-  try {
-    await harness.release();
-    return result;
-  } catch {
-    return {
-      ...result,
-      code: null,
-      cleanupUnconfirmed: true,
-      stderr: "Codex readiness probe private harness cleanup could not be confirmed.",
-    };
-  }
-};

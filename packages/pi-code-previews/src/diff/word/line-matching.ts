@@ -257,7 +257,7 @@ function addCrossingPairs(
     });
   }
 
-  return out.sort(
+  return out.toSorted(
     (a, b) =>
       (positions.removed.get(a.removedIndex) ?? 0) - (positions.removed.get(b.removedIndex) ?? 0),
   );

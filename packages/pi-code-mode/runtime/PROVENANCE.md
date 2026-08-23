@@ -29,9 +29,11 @@ behavior for diffability:
 - `src/tool-schema.ts`
 - `src/values.ts`
 - `src/runtime-values.ts` (local type-narrowing support; see deviation 10)
+- `src/failure.ts` (local closed Effect failure union; see deviation 6)
 - `src/interpreter/model.ts`
 - `src/interpreter/runtime.ts`
-- `src/stdlib/*.ts` (all twelve modules)
+- `src/stdlib/*.ts` (the twelve upstream modules plus local `epoch.ts`; see
+  deviation 6)
 - Behavioral portions of `test/codemode.test.ts`, plus `test/parity.test.ts`,
   `test/promise.test.ts`, and `test/stdlib.test.ts` (relocated to `tests/` per this
   repository's layout rules)
@@ -54,8 +56,9 @@ are deliberate local behavior layered on top of the vendored interpreter; they a
 confined to the additions listed there and do not alter upstream execution results.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
-2. Tests import from `vitest` instead of `bun:test` and live under `tests/`
-   (repository rule) instead of `test/`; Node + Vitest replace Bun as the runner.
+2. Tests import from `@effect/vitest` instead of `bun:test` and live under
+   `tests/` (repository rule) instead of `test/`; Node + Vitest replace Bun as
+   the runner.
 3. `effect` is consumed at the workspace-pinned `4.0.0-rc.108` instead of the
    upstream catalog `4.0.0-beta.83`; the RC migration renamed the local
    schema-backed `ToolError` base from `Schema.TaggedErrorClass` to
@@ -67,12 +70,30 @@ confined to the additions listed there and do not alter upstream execution resul
 5. All files are formatted with the repository's `oxfmt` configuration
    (semicolons, wrapping); compare against upstream with a formatter-insensitive
    diff or by re-formatting the upstream files before diffing.
-6. `tsconfig.json` relaxes `erasableSyntaxOnly`, `exactOptionalPropertyTypes`,
-   `noUnusedLocals`, and `noUnusedParameters` and disables five Effect
-   language-service diagnostics (`anyUnknownInErrorContext`, `asyncFunction`,
-   `extendsNativeError`, `globalDate`, `importFromBarrel`) for this package
-   only, so upstream sources typecheck verbatim. `.oxlintrc.json` likewise
-   disables four stylistic lint rules that the vendored style trips.
+6. **Zero-suppression workspace adaptation (mechanical).** The runtime inherits
+   the full workspace TypeScript and Effect language-service configuration. It
+   has no disabled compiler checks, diagnostic overrides, lint exemptions, or
+   source suppressions. The adaptation needed to meet that contract is
+   formatter-insensitive and behavior-neutral:
+   - Effect imports use package subpaths, local imports use `.js` specifiers,
+     optional fields satisfy `exactOptionalPropertyTypes`, and unused
+     parameters/locals and redundant spreads were removed.
+   - TypeScript parameter properties became explicit fields and constructors so
+     `erasableSyntaxOnly` remains enabled; the interpreter no longer aliases
+     `this`.
+   - `InterpreterRuntimeError` and `ToolRuntimeError` use `Data.TaggedError`,
+     while `ProgramThrow` is a plain internal control carrier. `src/failure.ts`
+     names the closed runtime failure union. Host effects are normalized through
+     the existing safe `ToolError` boundary before entering that union. Guest
+     `Error` objects, caught values, `instanceof`, interruption, and model-visible
+     diagnostics keep their prior behavior.
+   - Host lifecycle durations use the Effect `Clock`. Local
+     `src/stdlib/epoch.ts` keeps guest `Date` wall-clock, `TimeClip`, host-zone,
+     daylight-saving, and ISO behavior separate from host Effect timing,
+     including native local-setter disambiguation for component-form dates.
+   - Retained asynchronous Vitest cases use `@effect/vitest` with Effect-backed,
+     non-`async` test bodies. Guest programs still exercise native JavaScript
+     `async` and `Promise` semantics inside the interpreter.
 7. Runtime public semantics and fixed constants are preserved: tool-call
    concurrency 8, data-boundary depth 32, no defaults for
    `timeoutMs`/`maxToolCalls`/`maxOutputBytes`, catalog budget default 2000.

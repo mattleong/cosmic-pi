@@ -10,11 +10,13 @@ type MarkedDiffLine = { kind?: "add" | "remove"; line: string };
 export class FullWidthDiffText implements Component {
   private cachedWidth: number | undefined;
   private cachedRows: string[] | undefined;
+  private text: string;
+  private readonly theme: Theme | undefined;
 
-  constructor(
-    private text: string,
-    private readonly theme?: Theme,
-  ) {}
+  constructor(text: string, theme?: Theme) {
+    this.text = text;
+    this.theme = theme;
+  }
 
   setText(text: string): void {
     if (this.text === text) return;

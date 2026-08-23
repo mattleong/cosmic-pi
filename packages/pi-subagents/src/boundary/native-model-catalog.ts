@@ -1,5 +1,4 @@
 // Native CLI catalog discovery and bounded child-process ownership live at this boundary.
-// @effect-diagnostics effect/processEnv:off
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";

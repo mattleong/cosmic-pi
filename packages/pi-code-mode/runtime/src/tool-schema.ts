@@ -1,6 +1,7 @@
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "./runtime-values.ts";
-import { JsonPointer, Schema } from "effect";
+import { hasObjectRuntimeType } from "./runtime-values.js";
+import * as JsonPointer from "effect/JsonPointer";
+import * as Schema from "effect/Schema";
 import type { Definition, JsonSchema, SchemaType } from "./tool.js";
 
 const isEffectSchema = (schema: SchemaType): schema is Schema.Decoder<unknown> & Schema.Top =>
@@ -141,8 +142,8 @@ const renderSchema = (
           ...ctx,
           definitions: {
             ...ctx.definitions,
-            ...(schema.definitions ?? {}),
-            ...(schema.$defs ?? {}),
+            ...schema.definitions,
+            ...schema.$defs,
           },
         };
   if (schema.$ref) {
@@ -247,7 +248,7 @@ export const toTypeScript = (schema: Schema.Top, decoded = false, pretty = false
 export const jsonSchemaToTypeScript = (schema: JsonSchema, pretty = false): string => {
   try {
     return renderSchema(schema, {
-      definitions: { ...(schema.definitions ?? {}), ...(schema.$defs ?? {}) },
+      definitions: { ...schema.definitions, ...schema.$defs },
       pretty,
     });
   } catch {
@@ -280,8 +281,8 @@ export const inputProperties = <R>(definition: Definition<R>): Array<InputProper
       : {
           schema: definition.input,
           definitions: {
-            ...(definition.input.definitions ?? {}),
-            ...(definition.input.$defs ?? {}),
+            ...definition.input.definitions,
+            ...definition.input.$defs,
           },
         };
     const definitions = document.definitions ?? {};

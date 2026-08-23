@@ -1,5 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,7 +8,7 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { JsonHttpClient, StreamingHttpClient } from "../index.ts";
+import { JsonHttpClient, provideBuiltLayer, StreamingHttpClient } from "../index.ts";
 import {
   capturedTelemetrySnapshot,
   jsonHttpRawResponse,
@@ -41,7 +39,7 @@ it.effect("decodes JSON responses through the workspace adapter", () =>
       status: 200,
       body: { ok: true },
     });
-  }).pipe(Effect.provide(JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":true}'))))),
+  }).pipe(provideBuiltLayer(JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":true}'))))),
 );
 
 it.effect("captures stable HTTP spans without URLs, bodies, or credentials", () => {
@@ -54,7 +52,7 @@ it.effect("captures stable HTTP spans without URLs, bodies, or credentials", () 
         headers: { authorization: secret },
         responseSchema: Schema.Struct({ ok: Schema.Boolean }),
       }),
-    ).pipe(Effect.provide(JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":true}')))));
+    ).pipe(provideBuiltLayer(JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":true}')))));
     yield* JsonHttpClient.use((http) =>
       http.request({
         url: "https://secret.invalid/private",
@@ -62,7 +60,7 @@ it.effect("captures stable HTTP spans without URLs, bodies, or credentials", () 
         responseSchema: Schema.Struct({ ok: Schema.Boolean }),
       }),
     ).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         JsonHttpClient.layer.pipe(Layer.provide(clientLayer("provider-secret-body", 401))),
       ),
     );
@@ -73,7 +71,7 @@ it.effect("captures stable HTTP spans without URLs, bodies, or credentials", () 
           headers: { authorization: secret },
         })
         .pipe(Effect.flatMap((response) => response.discardRawBody)),
-    ).pipe(Effect.provide(StreamingHttpClient.layer.pipe(Layer.provide(clientLayer("stream")))));
+    ).pipe(provideBuiltLayer(StreamingHttpClient.layer.pipe(Layer.provide(clientLayer("stream")))));
     const names = captured.spans.map((span) => span.name);
     expect(names).toContain("pi-cosmic-core.http.json.request");
     expect(names).toContain("pi-cosmic-core.http.json.decode");
@@ -84,7 +82,7 @@ it.effect("captures stable HTTP spans without URLs, bodies, or credentials", () 
     expect(telemetry).not.toContain("sk-secret");
     expect(telemetry).not.toContain("private");
     expect(telemetry).not.toContain("provider-secret-body");
-  }).pipe(Effect.provide(captured.layer));
+  }).pipe(provideBuiltLayer(captured.layer));
 });
 
 it.effect("maps invalid JSON without exposing response contents", () =>
@@ -98,7 +96,7 @@ it.effect("maps invalid JSON without exposing response contents", () =>
     );
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(String(result.failure)).not.toContain("secret-body");
-  }).pipe(Effect.provide(JsonHttpClient.layer.pipe(Layer.provide(clientLayer("secret-body"))))),
+  }).pipe(provideBuiltLayer(JsonHttpClient.layer.pipe(Layer.provide(clientLayer("secret-body"))))),
 );
 
 it.effect("maps schema decode failures without exposing decoded values", () =>
@@ -116,7 +114,9 @@ it.effect("maps schema decode failures without exposing decoded values", () =>
       expect(String(result.failure)).not.toContain("secret-value");
     }
   }).pipe(
-    Effect.provide(JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":"secret-value"}')))),
+    provideBuiltLayer(
+      JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":"secret-value"}'))),
+    ),
   ),
 );
 
@@ -133,7 +133,7 @@ it.effect("preserves rejected status and provider error bodies without decoding 
       errorBody: "provider-error",
     });
   }).pipe(
-    Effect.provide(JsonHttpClient.layer.pipe(Layer.provide(clientLayer("provider-error", 429)))),
+    provideBuiltLayer(JsonHttpClient.layer.pipe(Layer.provide(clientLayer("provider-error", 429)))),
   ),
 );
 
@@ -147,7 +147,7 @@ it.effect(
           responseSchema: Schema.Struct({ ok: Schema.Boolean }),
         }),
       ).pipe(
-        Effect.provide(
+        provideBuiltLayer(
           jsonHttpTestLayer(() =>
             Effect.succeed(jsonHttpRawResponse(502, "<html>provider unavailable</html>")),
           ),
@@ -165,7 +165,7 @@ it.effect(
           responseSchema: Schema.Struct({ ok: Schema.Boolean }),
         }),
       ).pipe(
-        Effect.provide(
+        provideBuiltLayer(
           jsonHttpTestLayer(() => Effect.succeed(jsonHttpRawResponse(200, '{"ok":true}'))),
         ),
       );
@@ -195,7 +195,7 @@ it.effect("maps transport failure without exposing its URL or cause", () =>
           responseSchema: Schema.Struct({ ok: Schema.Boolean }),
         }),
       ),
-    ).pipe(Effect.provide(layer));
+    ).pipe(provideBuiltLayer(layer));
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") {
       expect(String(result.failure)).not.toContain("secret.invalid");
@@ -217,7 +217,7 @@ it.effect("encodes JSON request bodies through their schema", () =>
         { value: 42 },
       ),
     ).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         jsonHttpTestLayer((input) => {
           expect(input.encodedJsonBody).toEqual({ value: 42 });
           return Effect.succeed(jsonHttpRawResponse(200, '{"ok":true}'));
@@ -248,7 +248,7 @@ it.effect("rejects invalid JSON request bodies before transport", () =>
         ),
       ),
     ).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         JsonHttpClient.layer.pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, client))),
       ),
     );
@@ -269,7 +269,7 @@ it.effect("bounds JSON response buffering before decoding", () =>
     );
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("response");
-  }).pipe(Effect.provide(JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":true}'))))),
+  }).pipe(provideBuiltLayer(JsonHttpClient.layer.pipe(Layer.provide(clientLayer('{"ok":true}'))))),
 );
 
 it.effect("rejects streaming request bodies that fail schema encoding before transport", () =>
@@ -289,7 +289,7 @@ it.effect("rejects streaming request bodies that fail schema encoding before tra
           value: Number.NaN,
         }),
       ),
-    ).pipe(Effect.provide(layer));
+    ).pipe(provideBuiltLayer(layer));
     expect(result._tag).toBe("Failure");
     expect(executions).toBe(0);
   }),
@@ -314,7 +314,7 @@ it.effect("rejects undefined JSON encodings before production or test transport"
         ),
       ),
     ).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         StreamingHttpClient.layer.pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, client))),
       ),
     );
@@ -329,7 +329,7 @@ it.effect("rejects undefined JSON encodings before production or test transport"
         ),
       ),
     ).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         streamingHttpTestLayer(() => {
           testExecutions++;
           return Effect.succeed(streamingHttpResponse(200, Stream.empty));
@@ -362,7 +362,7 @@ it.effect("streams and discards response bodies", () =>
     expect(text).toBe("stream");
     const second = yield* http.requestRawBytes({ url: "https://example.invalid" });
     yield* second.discardRawBody;
-  }).pipe(Effect.provide(StreamingHttpClient.layer.pipe(Layer.provide(clientLayer("stream"))))),
+  }).pipe(provideBuiltLayer(StreamingHttpClient.layer.pipe(Layer.provide(clientLayer("stream"))))),
 );
 
 it.effect("maps a mid-stream failure without exposing its cause", () =>
@@ -378,7 +378,7 @@ it.effect("maps a mid-stream failure without exposing its cause", () =>
         const response = yield* http.requestRawBytes({ url: "https://example.invalid" });
         return yield* Effect.result(response.rawBody.pipe(Stream.runDrain));
       }),
-    ).pipe(Effect.provide(StreamingHttpClient.layer.pipe(Layer.provide(clientLayer(source)))));
+    ).pipe(provideBuiltLayer(StreamingHttpClient.layer.pipe(Layer.provide(clientLayer(source)))));
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(String(result.failure)).not.toContain("secret stream");
   }),
@@ -400,7 +400,7 @@ it.effect("cancels a response stream when its consumer is interrupted", () =>
         yield* Fiber.interrupt(consumer);
       }),
     ).pipe(
-      Effect.provide(StreamingHttpClient.layer.pipe(Layer.provide(clientLayer(source)))),
+      provideBuiltLayer(StreamingHttpClient.layer.pipe(Layer.provide(clientLayer(source)))),
       Effect.scoped,
     );
     expect(cancellations).toBe(1);
@@ -425,7 +425,7 @@ it.effect("interrupts an in-flight transport effect", () =>
         url: "https://example.invalid",
         responseSchema: Schema.Struct({ ok: Schema.Boolean }),
       }),
-    ).pipe(Effect.provide(layer), Effect.forkScoped);
+    ).pipe(provideBuiltLayer(layer), Effect.forkScoped);
     yield* Deferred.await(started);
     yield* Fiber.interrupt(fiber);
     expect(finalized).toBe(1);

@@ -1,10 +1,10 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { ProfileCandidate, ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
@@ -103,7 +103,7 @@ describe("explicit profile-route retry", () => {
         .claimRetryContinuation(failedRun.id)
         .pipe(Effect.flip);
       expect(alreadySuperseded).toMatchObject({ code: "retry_already_superseded" });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("waits for confirmed cleanup before granting the retry claim", () => {
@@ -129,7 +129,7 @@ describe("explicit profile-route retry", () => {
       const claim = yield* Fiber.join(claiming);
       expect(claim.source.id).toBe(failedRun.id);
       yield* service.releaseRetryClaim(failedRun.id, claim.claimToken);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("releases the predecessor claim when successor admission never starts", () => {
@@ -153,7 +153,7 @@ describe("explicit profile-route retry", () => {
       const reclaimed = yield* service.claimRetryContinuation(failedRun.id);
       expect(reclaimed.claimToken).not.toBe(claim.claimToken);
       yield* service.releaseRetryClaim(failedRun.id, reclaimed.claimToken);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("revalidates the exclusive predecessor claim at successor admission", () => {
@@ -176,7 +176,7 @@ describe("explicit profile-route retry", () => {
         .pipe(Effect.flip);
       expect(stale).toMatchObject({ code: "retry_claim_stale" });
       expect(yield* service.list).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("refuses continuation after uncertain task delivery", () => {
@@ -195,7 +195,7 @@ describe("explicit profile-route retry", () => {
       const failedRun = (yield* service.list)[0]!;
       const blocked = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
       expect(blocked).toMatchObject({ code: "retry_outcome_uncertain" });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("blocks continuation when failed-run cleanup is quarantined", () => {
@@ -211,7 +211,7 @@ describe("explicit profile-route retry", () => {
       const blocked = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
       expect(blocked).toMatchObject({ code: "retry_cleanup_unconfirmed" });
       expect((yield* service.status(failedRun.id)).warning).toContain("quarantined");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("publishes exhaustion and blocks repeated continuation", () => {
@@ -229,6 +229,6 @@ describe("explicit profile-route retry", () => {
       expect(yield* service.status(failedRun.id)).toMatchObject({ retryExhausted: true });
       const exhausted = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
       expect(exhausted).toMatchObject({ code: "retry_route_exhausted" });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 });

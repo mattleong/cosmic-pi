@@ -1,5 +1,4 @@
 // Herdr-safe agent names use a bounded digest of parent/run ownership identity.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";

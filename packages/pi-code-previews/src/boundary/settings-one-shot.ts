@@ -1,12 +1,16 @@
 // Public compatibility boundary for settings access before Pi starts a session.
-// @effect-diagnostics effect/strictEffectProvide:off
 import * as Predicate from "effect/Predicate";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
+import {
+  AgentDirectory,
+  nodeFilePlatformLayer,
+  piHostLoggerLayer,
+  provideBuiltLayer,
+} from "pi-cosmic-core";
 import { CodePreviewEnvironmentService } from "../config/env";
 import { CodePreviewSettingsService } from "../config/service";
 
@@ -36,7 +40,7 @@ export function runOneShotSettingsEffect<A, E>(
   signal?: AbortSignal,
 ): Promise<A> {
   const serialized = oneShotSettingsPermit.withPermit(
-    effect.pipe(Effect.provide(oneShotSettingsLayer())),
+    effect.pipe(provideBuiltLayer(oneShotSettingsLayer())),
   );
   return Effect.runPromise(serialized, signal ? { signal } : undefined);
 }

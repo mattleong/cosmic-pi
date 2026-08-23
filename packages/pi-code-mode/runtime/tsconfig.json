@@ -2,61 +2,7 @@
   "extends": "../../../tsconfig.effect.json",
   "compilerOptions": {
     "module": "ESNext",
-    "moduleResolution": "Bundler",
-    // Vendored OpenCode 2 Code Mode sources (see PROVENANCE.md) keep upstream
-    // syntax and typing conventions to stay diffable against the pinned commit.
-    "erasableSyntaxOnly": false,
-    "exactOptionalPropertyTypes": false,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "plugins": [
-      {
-        "name": "@effect/language-service",
-        "diagnostics": true,
-        "refactors": true,
-        "diagnosticsName": true,
-        "includeSuggestionsInTsc": true,
-        "ignoreEffectWarningsInTscExitCode": false,
-        "ignoreEffectErrorsInTscExitCode": false,
-        "ignoreEffectSuggestionsInTscExitCode": true,
-        "excludeExternalLibrariesWhenSkipLibCheck": true,
-        "namespaceImportPackages": ["effect", "@effect/*"],
-        "diagnosticSeverity": {
-          // Off for vendored upstream style only; do not relax further.
-          "anyUnknownInErrorContext": "off",
-          "asyncFunction": "off",
-          "extendsNativeError": "off",
-          "globalDate": "off",
-          "importFromBarrel": "off",
-          "cryptoRandomUUID": "error",
-          "cryptoRandomUUIDInEffect": "error",
-          "deterministicKeys": "error",
-          "duplicatePackage": "error",
-          "globalConsole": "error",
-          "globalConsoleInEffect": "error",
-          "globalDateInEffect": "error",
-          "globalFetch": "error",
-          "globalFetchInEffect": "error",
-          "globalRandom": "error",
-          "globalRandomInEffect": "error",
-          "globalTimers": "error",
-          "globalTimersInEffect": "error",
-          "layerMergeAllWithDependencies": "error",
-          "leakingRequirements": "error",
-          "multipleEffectProvide": "error",
-          "newPromise": "error",
-          "nodeBuiltinImport": "error",
-          "outdatedApi": "error",
-          "preferSchemaOverJson": "error",
-          "processEnv": "error",
-          "processEnvInEffect": "error",
-          "serviceNotAsClass": "error",
-          "strictEffectProvide": "error",
-          "unknownInEffectCatch": "error",
-          "unsafeEffectTypeAssertion": "error"
-        }
-      }
-    ]
+    "moduleResolution": "Bundler"
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]
 }

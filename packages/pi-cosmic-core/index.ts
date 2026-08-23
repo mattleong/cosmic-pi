@@ -8,6 +8,7 @@ export {
   type PiManagedRuntime,
 } from "./src/runtime/runtime.ts";
 export { bestEffortHostBootstrap } from "./src/runtime/host-bootstrap.ts";
+export { provideBuiltLayer } from "./src/runtime/layers.ts";
 export {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,

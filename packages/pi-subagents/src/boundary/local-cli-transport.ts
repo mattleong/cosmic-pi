@@ -1,10 +1,7 @@
 // Local CLI wire transport: child spawn, bounded stdout/stderr/JSONL event queue,
 // backpressured writes, awaitExit, and fail-closed process-tree termination/release. This
 // boundary owns no harness filesystem state and never imports the LocalCliProcess service.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
-import { spawn } from "node:child_process";
+import { nodeSpawn as spawn } from "./node-builtins.ts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -29,6 +26,9 @@ const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 const EVENT_CAPACITY = 512;
 const WRITE_TIMEOUT = "10 seconds";
+
+/** Outbound frames are locally constructed protocol values serialized as one pure JSONL line. */
+const encodeOutboundFrame = (value: LocalCliOutboundFrame): string => `${JSON.stringify(value)}\n`;
 
 export type LocalCliWireEvent =
   | { readonly type: "message"; readonly value: unknown }
@@ -261,7 +261,7 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
           }
           let encoded: string;
           try {
-            encoded = `${JSON.stringify(value)}\n`;
+            encoded = encodeOutboundFrame(value);
           } catch (error) {
             resumeWrite(
               Effect.fail(processError("encode local CLI frame for", error, "transport_not_sent")),

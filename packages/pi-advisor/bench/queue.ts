@@ -1,6 +1,4 @@
 // Benchmark reporting and high-resolution timing are explicit non-application boundaries.
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { performance } from "node:perf_hooks";
 import * as Effect from "effect/Effect";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -91,8 +89,8 @@ if (checkpointMedian > checkpointLimit)
     `Advisor checkpoint median regressed beyond 10%: ${checkpointMedian.toFixed(3)}ms > ${checkpointLimit.toFixed(3)}ms`,
   );
 
-console.log(
-  JSON.stringify(
+process.stdout.write(
+  `${JSON.stringify(
     {
       method: "3-warmup+7-sample-median",
       ingestion: {
@@ -114,5 +112,5 @@ console.log(
     },
     null,
     2,
-  ),
+  )}\n`,
 );

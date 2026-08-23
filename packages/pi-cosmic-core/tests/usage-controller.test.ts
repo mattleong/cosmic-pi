@@ -1,4 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -11,6 +10,7 @@ import {
   type UsageProviderRequirements,
 } from "../src/usage-controller.ts";
 import { AgentDirectory } from "../src/platform/agent-directory.ts";
+import { provideBuiltLayer } from "../src/runtime/layers.ts";
 import { JsonDocumentStore } from "../src/platform/json-document.ts";
 import { JsonHttpClient } from "../src/platform/json-http.ts";
 import { initialUsageProjection } from "../src/usage-projection.ts";
@@ -95,5 +95,5 @@ it.effect("usage controller treats omitted project trust as untrusted", () => {
       provideDependencies,
     });
     expect(observedTrust).toBe(false);
-  }).pipe(Effect.provide(dependencies));
+  }).pipe(provideBuiltLayer(dependencies));
 });

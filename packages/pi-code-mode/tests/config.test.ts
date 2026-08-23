@@ -1,7 +1,5 @@
-// Async test bodies are Promise-shaped Vitest boundaries.
-// @effect-diagnostics effect/asyncFunction:off
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
 import { findCodeModeSettingDescriptor, resolveCodeModeConfig } from "../src/config/options.ts";
 import {
   CODE_MODE_FIELD_IDS,
@@ -62,23 +60,27 @@ describe("code mode config resolution", () => {
 });
 
 describe("code mode setting descriptors", () => {
-  it("parses bounded integers and rejects malformed or out-of-range input", async () => {
-    const descriptor = findCodeModeSettingDescriptor("timeoutMs");
-    expect(descriptor).toBeDefined();
-    await expect(Effect.runPromise(descriptor!.decode("60000"))).resolves.toBe(60_000);
-    await expect(Effect.runPromise(descriptor!.decode(" 250 "))).resolves.toBe(250);
-    for (const raw of ["nope", "1.5", "1e3", "", "0", "-1", "600001", "99999999999999999999"]) {
-      const error = await Effect.runPromise(descriptor!.decode(raw).pipe(Effect.flip));
-      expect(error._tag).toBe("InvalidCodeModeSettingError");
-      expect(error.message).toContain("timeoutMs");
-    }
-  });
+  it.effect("parses bounded integers and rejects malformed or out-of-range input", () =>
+    Effect.gen(function* () {
+      const descriptor = findCodeModeSettingDescriptor("timeoutMs");
+      expect(descriptor).toBeDefined();
+      expect(yield* descriptor!.decode("60000")).toBe(60_000);
+      expect(yield* descriptor!.decode(" 250 ")).toBe(250);
+      for (const raw of ["nope", "1.5", "1e3", "", "0", "-1", "600001", "99999999999999999999"]) {
+        const error = yield* descriptor!.decode(raw).pipe(Effect.flip);
+        expect(error._tag).toBe("InvalidCodeModeSettingError");
+        expect(error.message).toContain("timeoutMs");
+      }
+    }),
+  );
 
-  it("parses booleans strictly", async () => {
-    const descriptor = findCodeModeSettingDescriptor("enabled");
-    await expect(Effect.runPromise(descriptor!.decode("true"))).resolves.toBe(true);
-    await expect(Effect.runPromise(descriptor!.decode("false"))).resolves.toBe(false);
-    const error = await Effect.runPromise(descriptor!.decode("yes").pipe(Effect.flip));
-    expect(error._tag).toBe("InvalidCodeModeSettingError");
-  });
+  it.effect("parses booleans strictly", () =>
+    Effect.gen(function* () {
+      const descriptor = findCodeModeSettingDescriptor("enabled");
+      expect(yield* descriptor!.decode("true")).toBe(true);
+      expect(yield* descriptor!.decode("false")).toBe(false);
+      const error = yield* descriptor!.decode("yes").pipe(Effect.flip);
+      expect(error._tag).toBe("InvalidCodeModeSettingError");
+    }),
+  );
 });

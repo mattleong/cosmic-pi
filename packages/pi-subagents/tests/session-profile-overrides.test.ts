@@ -1,7 +1,7 @@
-// Promise assertions are test-runner boundaries.
-// @effect-diagnostics effect/asyncFunction:off
+// Effect test entry points own the profile service lifecycle.
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
+import * as Exit from "effect/Exit";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import type { ProfileCandidate, ProfileRoute } from "../src/profiles/model.ts";
@@ -45,140 +45,146 @@ const baseConfig = () => {
 };
 
 describe("session profile overrides", () => {
-  it("overlays complete routes above project configuration and clears without persistence", async () => {
-    const published: number[] = [];
-    const service = await Effect.runPromise(
-      makeSubagentProfileService(baseConfig(), {
-        publishSessionOverrides: (seed) => published.push(seed.revision),
-      }),
-    );
-    const initial = await Effect.runPromise(service.capture);
-    expect(initial.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/project");
-    expect(initial.effectiveConfig.profileSources.reviewer).toBe("project");
+  it.effect(
+    "overlays complete routes above project configuration and clears without persistence",
+    () =>
+      Effect.gen(function* () {
+        const published: number[] = [];
+        const service = yield* makeSubagentProfileService(baseConfig(), {
+          publishSessionOverrides: (seed) => published.push(seed.revision),
+        });
+        const initial = yield* service.capture;
+        expect(initial.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
+          "openai/project",
+        );
+        expect(initial.effectiveConfig.profileSources.reviewer).toBe("project");
 
-    const overridden = await Effect.runPromise(
-      service.patchSessionProfile({
-        profile: "reviewer",
-        route: route("openai/session"),
-        expectedRevision: initial.revision,
-      }),
-    );
-    expect(overridden.revision).toBe(1);
-    expect(overridden.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
-      "openai/session",
-    );
-    expect(overridden.effectiveConfig.profileSources.reviewer).toBe("session");
-
-    const cleared = await Effect.runPromise(
-      service.patchSessionProfile({
-        profile: "reviewer",
-        expectedRevision: overridden.revision,
-      }),
-    );
-    expect(cleared.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/project");
-    expect(cleared.effectiveConfig.profileSources.reviewer).toBe("project");
-    expect(published).toEqual([1, 2]);
-  });
-
-  it("supports temporary disable, clear-all, no-op revisions, and stale-write rejection", async () => {
-    const service = await Effect.runPromise(makeSubagentProfileService(baseConfig()));
-    const initial = await Effect.runPromise(service.capture);
-    const disabled = await Effect.runPromise(
-      service.patchSessionProfile({
-        profile: "reviewer",
-        route: { candidates: [] },
-        expectedRevision: initial.revision,
-      }),
-    );
-    expect(disabled.effectiveConfig.profiles.reviewer.candidates).toEqual([]);
-    expect(disabled.effectiveConfig.profileSources.reviewer).toBe("session");
-    expect(
-      service.resolve(disabled, "reviewer", {
-        availablePiModels: [],
-        forkAvailable: false,
-      }),
-    ).toMatchObject({
-      kind: "failed",
-      message: expect.stringContaining("/subagents profiles session"),
-    });
-
-    await expect(
-      Effect.runPromise(
-        service.patchSessionProfile({
-          profile: "scout",
-          route: route("openai/stale"),
-          expectedRevision: initial.revision,
-        }),
-      ),
-    ).rejects.toMatchObject({
-      _tag: "SessionProfileConflictError",
-      expectedRevision: 0,
-      actualRevision: 1,
-    });
-
-    const unchanged = await Effect.runPromise(
-      service.patchSessionProfile({
-        profile: "reviewer",
-        route: { candidates: [] },
-        expectedRevision: disabled.revision,
-      }),
-    );
-    expect(unchanged.revision).toBe(disabled.revision);
-
-    const cleared = await Effect.runPromise(service.clearSessionProfiles(unchanged.revision));
-    expect(cleared.revision).toBe(2);
-    expect(cleared.overrides).toEqual({});
-    expect(cleared.effectiveConfig.profileSources.reviewer).toBe("project");
-  });
-
-  it("linearizes racing same-revision patches so exactly one commits", async () => {
-    const service = await Effect.runPromise(makeSubagentProfileService(baseConfig()));
-    const initial = await Effect.runPromise(service.capture);
-    const outcomes = await Promise.allSettled([
-      Effect.runPromise(
-        service.patchSessionProfile({
-          profile: "scout",
-          route: route("openai/one"),
-          expectedRevision: initial.revision,
-        }),
-      ),
-      Effect.runPromise(
-        service.patchSessionProfile({
+        const overridden = yield* service.patchSessionProfile({
           profile: "reviewer",
-          route: route("openai/two"),
+          route: route("openai/session"),
           expectedRevision: initial.revision,
-        }),
-      ),
-    ]);
-    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
-    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
-    const snapshot = await Effect.runPromise(service.capture);
-    expect(snapshot.revision).toBe(1);
-    expect(Object.keys(snapshot.overrides)).toHaveLength(1);
-  });
+        });
+        expect(overridden.revision).toBe(1);
+        expect(overridden.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
+          "openai/session",
+        );
+        expect(overridden.effectiveConfig.profileSources.reviewer).toBe("session");
 
-  it("allows a session route to repair an invalid loaded project route temporarily", async () => {
-    const global = decodeSubagentConfig({ version: 4 }, "global");
-    const project = decodeSubagentConfig({ version: 4, profiles: { reviewer: null } }, "project");
-    const base = resolveSubagentConfig({
-      globalConfigPath: "/agent/pi-subagents.json",
-      projectConfigPath: "/repo/.pi/pi-subagents.json",
-      projectTrusted: true,
-      globalConfigExists: true,
-      projectConfigExists: true,
-      global,
-      project,
-    });
-    const initial = makeSessionProfileSnapshot(base);
-    expect(initial.effectiveConfig.profileSources.reviewer).toBe("project-invalid");
-    const repaired = await Effect.runPromise(
-      patchSessionProfileSnapshot(initial, {
+        const cleared = yield* service.patchSessionProfile({
+          profile: "reviewer",
+          expectedRevision: overridden.revision,
+        });
+        expect(cleared.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
+          "openai/project",
+        );
+        expect(cleared.effectiveConfig.profileSources.reviewer).toBe("project");
+        expect(published).toEqual([1, 2]);
+      }),
+  );
+
+  it.effect(
+    "supports temporary disable, clear-all, no-op revisions, and stale-write rejection",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* makeSubagentProfileService(baseConfig());
+        const initial = yield* service.capture;
+        const disabled = yield* service.patchSessionProfile({
+          profile: "reviewer",
+          route: { candidates: [] },
+          expectedRevision: initial.revision,
+        });
+        expect(disabled.effectiveConfig.profiles.reviewer.candidates).toEqual([]);
+        expect(disabled.effectiveConfig.profileSources.reviewer).toBe("session");
+        expect(
+          service.resolve(disabled, "reviewer", {
+            availablePiModels: [],
+            forkAvailable: false,
+          }),
+        ).toMatchObject({
+          kind: "failed",
+          message: expect.stringContaining("/subagents profiles session"),
+        });
+
+        const conflict = yield* service
+          .patchSessionProfile({
+            profile: "scout",
+            route: route("openai/stale"),
+            expectedRevision: initial.revision,
+          })
+          .pipe(Effect.flip);
+        expect(conflict).toMatchObject({
+          _tag: "SessionProfileConflictError",
+          expectedRevision: 0,
+          actualRevision: 1,
+        });
+
+        const unchanged = yield* service.patchSessionProfile({
+          profile: "reviewer",
+          route: { candidates: [] },
+          expectedRevision: disabled.revision,
+        });
+        expect(unchanged.revision).toBe(disabled.revision);
+
+        const cleared = yield* service.clearSessionProfiles(unchanged.revision);
+        expect(cleared.revision).toBe(2);
+        expect(cleared.overrides).toEqual({});
+        expect(cleared.effectiveConfig.profileSources.reviewer).toBe("project");
+      }),
+  );
+
+  it.effect("linearizes racing same-revision patches so exactly one commits", () =>
+    Effect.gen(function* () {
+      const service = yield* makeSubagentProfileService(baseConfig());
+      const initial = yield* service.capture;
+      const outcomes = yield* Effect.all(
+        [
+          Effect.exit(
+            service.patchSessionProfile({
+              profile: "scout",
+              route: route("openai/one"),
+              expectedRevision: initial.revision,
+            }),
+          ),
+          Effect.exit(
+            service.patchSessionProfile({
+              profile: "reviewer",
+              route: route("openai/two"),
+              expectedRevision: initial.revision,
+            }),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1);
+      expect(outcomes.filter(Exit.isFailure)).toHaveLength(1);
+      const snapshot = yield* service.capture;
+      expect(snapshot.revision).toBe(1);
+      expect(Object.keys(snapshot.overrides)).toHaveLength(1);
+    }),
+  );
+
+  it.effect("allows a session route to repair an invalid loaded project route temporarily", () =>
+    Effect.gen(function* () {
+      const global = decodeSubagentConfig({ version: 4 }, "global");
+      const project = decodeSubagentConfig({ version: 4, profiles: { reviewer: null } }, "project");
+      const base = resolveSubagentConfig({
+        globalConfigPath: "/agent/pi-subagents.json",
+        projectConfigPath: "/repo/.pi/pi-subagents.json",
+        projectTrusted: true,
+        globalConfigExists: true,
+        projectConfigExists: true,
+        global,
+        project,
+      });
+      const initial = makeSessionProfileSnapshot(base);
+      expect(initial.effectiveConfig.profileSources.reviewer).toBe("project-invalid");
+      const repaired = yield* patchSessionProfileSnapshot(initial, {
         profile: "reviewer",
         route: route("openai/repair"),
         expectedRevision: 0,
-      }),
-    );
-    expect(repaired.effectiveConfig.profileSources.reviewer).toBe("session");
-    expect(repaired.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/repair");
-  });
+      });
+      expect(repaired.effectiveConfig.profileSources.reviewer).toBe("session");
+      expect(repaired.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/repair");
+    }),
+  );
 });

@@ -1,8 +1,4 @@
 // The child-only Pi/Node bridge is intentionally Promise- and callback-shaped.
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/asyncFunction:off
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
@@ -19,6 +15,7 @@ import {
   MAX_TOOL_OUTPUT_CHARS,
 } from "../run/limits.ts";
 import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
+import { isSubagentChildProcess } from "./host-environment.ts";
 
 const ProtocolIdSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS));
 const ParentMessageSchema = Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS));
@@ -28,6 +25,15 @@ const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
+
+/** Reads and scrubs the one-shot runtime API credentials from the given environment snapshot. */
+const consumeRuntimeApiCredentials = (environment: NodeJS.ProcessEnv) => {
+  const apiKey = environment.PI_SUBAGENT_RUNTIME_API_KEY;
+  const provider = environment.PI_SUBAGENT_RUNTIME_API_PROVIDER;
+  delete environment.PI_SUBAGENT_RUNTIME_API_KEY;
+  delete environment.PI_SUBAGENT_RUNTIME_API_PROVIDER;
+  return { apiKey, provider };
+};
 
 interface ContactParentEnvelope {
   readonly channel: "pi-subagents";
@@ -102,19 +108,16 @@ const sendIpcEffect = (message: IpcMessage): Effect.Effect<void, ParentContactEr
   });
 
 export default function subagentChildBridge(pi: ExtensionAPI): void {
-  if (process.env.PI_SUBAGENT_CHILD !== "1") return;
+  if (!isSubagentChildProcess()) return;
   pi.registerFlag("pi-subagents-fast-mode", {
     description: "Private OpenAI fast-mode request for this subagent",
     type: "boolean",
     default: false,
   });
   const fastMode = pi.getFlag("pi-subagents-fast-mode") === true;
-  const runtimeApiKey = process.env.PI_SUBAGENT_RUNTIME_API_KEY;
-  const runtimeApiProvider = process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
-  delete process.env.PI_SUBAGENT_RUNTIME_API_KEY;
-  delete process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
-  if (runtimeApiKey && runtimeApiProvider)
-    pi.registerProvider(runtimeApiProvider, { apiKey: runtimeApiKey });
+  const runtimeApi = consumeRuntimeApiCredentials(process.env);
+  if (runtimeApi.apiKey && runtimeApi.provider)
+    pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
   const pending = new Map<string, Deferred.Deferred<string, ParentContactError>>();
   let listening = false;
 
@@ -194,7 +197,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
       "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report; use a question instead when a risk could invalidate work the parent is doing now.",
     parameters: ContactParentParameters,
     executionMode: "sequential",
-    async execute(_toolCallId, params, signal) {
+    execute(_toolCallId, params, signal) {
       const requestId = `contact-${process.pid}-${nextRequest++}`;
       const envelope: ContactParentEnvelope = {
         channel: "pi-subagents",
@@ -204,68 +207,66 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
         message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),
       };
       if (params.kind !== "question") {
-        await Effect.runPromise(sendIpcEffect(envelope));
-        return {
+        return Effect.runPromise(sendIpcEffect(envelope)).then(() => ({
           content: [{ type: "text" as const, text: `Parent received ${params.kind}.` }],
           details: {},
-        };
+        }));
       }
 
-      let reply: string;
-      try {
-        reply = await Effect.runPromise(
-          Effect.gen(function* () {
-            const waiter = Deferred.makeUnsafe<string, ParentContactError>();
-            pending.set(requestId, waiter);
-            yield* sendIpcEffect(envelope).pipe(
-              Effect.catch((error) =>
-                Effect.sync(() => {
-                  if (pending.get(requestId) === waiter) pending.delete(requestId);
-                }).pipe(Effect.andThen(() => Effect.fail(error))),
-              ),
-            );
-            return yield* Deferred.await(waiter);
-          }).pipe(
-            // A parent that never replies must not block this child forever.
-            Effect.timeout(QUESTION_TIMEOUT_MILLIS),
-            Effect.mapError((error) =>
-              error instanceof ParentContactError
-                ? error
-                : new ParentContactError({
-                    message: "Parent question timed out without a reply.",
-                  }),
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          const waiter = Deferred.makeUnsafe<string, ParentContactError>();
+          pending.set(requestId, waiter);
+          yield* sendIpcEffect(envelope).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                if (pending.get(requestId) === waiter) pending.delete(requestId);
+              }).pipe(Effect.andThen(() => Effect.fail(error))),
             ),
-            // Cancellation (tool abort or timeout) tells the parent to stop waiting too;
-            // the supervisor view already understands the cancelled-question event.
-            Effect.onExit((exit) =>
-              Exit.isSuccess(exit)
-                ? Effect.void
-                : Effect.sync(() => {
-                    if (!pending.delete(requestId)) return;
-                    const cancel: ContactCancelEnvelope = {
-                      channel: "pi-subagents",
-                      type: "contact_cancel",
-                      requestId,
-                    };
-                    void Effect.runPromise(sendIpcEffect(cancel).pipe(Effect.ignore));
-                  }),
-            ),
+          );
+          return yield* Deferred.await(waiter);
+        }).pipe(
+          // A parent that never replies must not block this child forever.
+          Effect.timeout(QUESTION_TIMEOUT_MILLIS),
+          Effect.mapError((error) =>
+            error instanceof ParentContactError
+              ? error
+              : new ParentContactError({
+                  message: "Parent question timed out without a reply.",
+                }),
           ),
-          { signal },
-        );
-      } catch (error) {
-        if (signal?.aborted) throw new Error("Parent question was cancelled.");
-        throw error instanceof ParentContactError ? new Error(error.message) : error;
-      }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`,
-          },
-        ],
-        details: {},
-      };
+          // Cancellation (tool abort or timeout) tells the parent to stop waiting too;
+          // the supervisor view already understands the cancelled-question event.
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.void
+              : Effect.sync(() => {
+                  if (!pending.delete(requestId)) return;
+                  const cancel: ContactCancelEnvelope = {
+                    channel: "pi-subagents",
+                    type: "contact_cancel",
+                    requestId,
+                  };
+                  void Effect.runPromise(sendIpcEffect(cancel).pipe(Effect.ignore));
+                }),
+          ),
+        ),
+        { signal },
+      ).then(
+        (reply) => ({
+          content: [
+            {
+              type: "text" as const,
+              text: `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`,
+            },
+          ],
+          details: {},
+        }),
+        (error) => {
+          if (signal?.aborted) throw new Error("Parent question was cancelled.");
+          throw error instanceof ParentContactError ? new Error(error.message) : error;
+        },
+      );
     },
   });
 }

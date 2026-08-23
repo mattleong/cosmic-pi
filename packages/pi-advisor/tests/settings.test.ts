@@ -1,7 +1,8 @@
 // Pi command handlers are Promise-shaped test boundaries.
-// @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { vi } from "vitest";
 import {
   normalizeAdvisorConfig,
   patchAdvisorConfig,
@@ -19,13 +20,13 @@ function harness(
 ) {
   let config = initial;
   const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
-  const persist = vi.fn(async (patch: AdvisorConfigPatch) => {
+  const persist = vi.fn((patch: AdvisorConfigPatch) => {
     const base = { enabled: config.enabled, setupDismissed: config.setupDismissed };
     const withProvider = config.provider ? { ...base, provider: config.provider } : base;
     const patched = config.model ? { ...withProvider, model: config.model } : withProvider;
     const raw = patchAdvisorConfig(patched, patch);
     config = normalizeAdvisorConfig(raw, config.configPath);
-    return config;
+    return Promise.resolve(config);
   });
   const state: AdvisorConfigState = {
     get: () => config,
@@ -79,7 +80,7 @@ function context(
     hasUI: true,
     ui: {
       notify,
-      select: vi.fn(async () => selections.shift()),
+      select: vi.fn(() => Promise.resolve(selections.shift())),
     },
     modelRegistry: {
       getAvailable: vi.fn(() => options.models ?? []),
@@ -91,104 +92,123 @@ function context(
   return fixture as typeof fixture & ExtensionCommandContext;
 }
 
+const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
+  Effect.promise(() => Promise.resolve(value).then(() => undefined));
+
 describe("Advisor commands", () => {
-  test("dashboard shows only contextual core actions", async () => {
-    const value = harness();
-    const ctx = context();
-    await value.commands.get("advisor")?.handler("", ctx);
-    expect(ctx.ui.select).toHaveBeenCalledWith(expect.stringContaining("Advisor · ready"), [
-      "Change model",
-      "Turn off",
-      "Usage",
-      "Done",
-    ]);
-  });
+  it.effect("dashboard shows only contextual core actions", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const ctx = context();
+      yield* invoke(value.commands.get("advisor")?.handler("", ctx));
+      expect(ctx.ui.select).toHaveBeenCalledWith(expect.stringContaining("Advisor · ready"), [
+        "Change model",
+        "Turn off",
+        "Usage",
+        "Done",
+      ]);
+    }),
+  );
 
-  test("one-off review remains available while automatic operation is off", async () => {
-    const value = harness(
-      normalizeAdvisorConfig(
-        { enabled: false, provider: "p", model: "m", setupDismissed: true },
-        "/config",
-      ),
-    );
-    const ctx = context();
-    await value.commands.get("advisor")?.handler("review", ctx);
-    expect(value.actions.reviewLast).toHaveBeenCalledWith(ctx);
-  });
+  it.effect("one-off review remains available while automatic operation is off", () =>
+    Effect.gen(function* () {
+      const value = harness(
+        normalizeAdvisorConfig(
+          { enabled: false, provider: "p", model: "m", setupDismissed: true },
+          "/config",
+        ),
+      );
+      const ctx = context();
+      yield* invoke(value.commands.get("advisor")?.handler("review", ctx));
+      expect(value.actions.reviewLast).toHaveBeenCalledWith(ctx);
+    }),
+  );
 
-  test("rejects removed aliases rather than accepting them", async () => {
-    const value = harness();
-    const ctx = context();
-    for (const removed of [
-      "next",
-      "pause",
-      "resume",
-      "enable",
-      "disable",
-      "settings",
-      "status",
-      "debug",
-      "once",
-      "review-last",
-      "verify-last",
-    ]) {
-      await value.commands.get("advisor")?.handler(removed, ctx);
-    }
-    expect(ctx.ui.notify).toHaveBeenCalledTimes(11);
-    expect(value.actions.reviewLast).not.toHaveBeenCalled();
-  });
+  it.effect("rejects removed aliases rather than accepting them", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const ctx = context();
+      for (const removed of [
+        "next",
+        "pause",
+        "resume",
+        "enable",
+        "disable",
+        "settings",
+        "status",
+        "debug",
+        "once",
+        "review-last",
+        "verify-last",
+      ]) {
+        yield* invoke(value.commands.get("advisor")?.handler(removed, ctx));
+      }
+      expect(ctx.ui.notify).toHaveBeenCalledTimes(11);
+      expect(value.actions.reviewLast).not.toHaveBeenCalled();
+    }),
+  );
 
-  test("on and off directly control automatic Advisor operation", async () => {
-    const value = harness();
-    const ctx = context();
-    await value.commands.get("advisor")?.handler("off", ctx);
-    expect(value.getConfig().enabled).toBe(false);
-    expect(ctx.ui.notify).toHaveBeenCalledWith("Advisor is off.", "info");
-    await value.commands.get("advisor")?.handler("on", ctx);
-    expect(value.getConfig().enabled).toBe(true);
-    expect(ctx.ui.notify).toHaveBeenCalledWith("Advisor is on.", "info");
-  });
+  it.effect("on and off directly control automatic Advisor operation", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const ctx = context();
+      yield* invoke(value.commands.get("advisor")?.handler("off", ctx));
+      expect(value.getConfig().enabled).toBe(false);
+      expect(ctx.ui.notify).toHaveBeenCalledWith("Advisor is off.", "info");
+      yield* invoke(value.commands.get("advisor")?.handler("on", ctx));
+      expect(value.getConfig().enabled).toBe(true);
+      expect(ctx.ui.notify).toHaveBeenCalledWith("Advisor is on.", "info");
+    }),
+  );
 
-  test("setup model choice atomically enables and dismisses onboarding", async () => {
-    const value = harness(normalizeAdvisorConfig({}, "/config"));
-    const ctx = context({
-      selections: ["provider/model"],
-      models: [{ provider: "provider", id: "model" }],
-    });
-    await value.commands.get("advisor")?.handler("setup", ctx);
-    expect(value.persist).toHaveBeenCalledOnce();
-    expect(value.persist.mock.calls[0]?.[0]).toEqual({
-      provider: "provider",
-      model: "model",
-      enabled: true,
-      setupDismissed: true,
-    });
-    expect(value.getConfig()).toMatchObject({
-      provider: "provider",
-      model: "model",
-      enabled: true,
-      setupDismissed: true,
-    });
-  });
+  it.effect("setup model choice atomically enables and dismisses onboarding", () =>
+    Effect.gen(function* () {
+      const value = harness(normalizeAdvisorConfig({}, "/config"));
+      const ctx = context({
+        selections: ["provider/model"],
+        models: [{ provider: "provider", id: "model" }],
+      });
+      yield* invoke(value.commands.get("advisor")?.handler("setup", ctx));
+      expect(value.persist).toHaveBeenCalledOnce();
+      expect(value.persist.mock.calls[0]?.[0]).toEqual({
+        provider: "provider",
+        model: "model",
+        enabled: true,
+        setupDismissed: true,
+      });
+      expect(value.getConfig()).toMatchObject({
+        provider: "provider",
+        model: "model",
+        enabled: true,
+        setupDismissed: true,
+      });
+    }),
+  );
 
-  test("Not now persists only setup dismissal", async () => {
-    const value = harness(normalizeAdvisorConfig({}, "/config"));
-    await value.commands.get("advisor")?.handler("setup", context({ selections: ["Not now"] }));
-    expect(value.persist).toHaveBeenCalledWith({ setupDismissed: true }, "/config");
-    expect(value.getConfig()).toMatchObject({
-      enabled: false,
-      setupDismissed: true,
-      configured: false,
-    });
-  });
+  it.effect("Not now persists only setup dismissal", () =>
+    Effect.gen(function* () {
+      const value = harness(normalizeAdvisorConfig({}, "/config"));
+      yield* invoke(
+        value.commands.get("advisor")?.handler("setup", context({ selections: ["Not now"] })),
+      );
+      expect(value.persist).toHaveBeenCalledWith({ setupDismissed: true }, "/config");
+      expect(value.getConfig()).toMatchObject({
+        enabled: false,
+        setupDismissed: true,
+        configured: false,
+      });
+    }),
+  );
 
-  test("usage remains a concise detailed report", async () => {
-    const value = harness();
-    const ctx = context();
-    await value.commands.get("advisor")?.handler("usage", ctx);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Responses/reviews/cards:"),
-      "info",
-    );
-  });
+  it.effect("usage remains a concise detailed report", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const ctx = context();
+      yield* invoke(value.commands.get("advisor")?.handler("usage", ctx));
+      expect(ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("Responses/reviews/cards:"),
+        "info",
+      );
+    }),
+  );
 });

@@ -1,5 +1,4 @@
 // Ambient environment capture is a Node boundary invariant.
-// @effect-diagnostics effect/processEnv:off
 import { describe, expect, it } from "vitest";
 import { captureHerdrEnvironment } from "../src/boundary/herdr-environment.ts";
 

@@ -1,17 +1,16 @@
 // Security adapter coverage intentionally uses real Node filesystem primitives.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { SafeFile } from "../index.ts";
+import { provideBuiltLayer, SafeFile } from "../index.ts";
+import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
 import { closeSafeFileHandle } from "../src/platform/safe-file.ts";
-import { makeCapturedTracer } from "../testing.ts";
+import { capturedTelemetrySnapshot, makeCapturedTracer } from "../testing.ts";
+
+const { mkdtemp, realpath, rm, writeFile } = nodeFsPromises;
+const { join } = nodePath;
 
 class TestFileSystemError extends Schema.TaggedError<TestFileSystemError>()("TestFileSystemError", {
   operation: Schema.String,
@@ -52,13 +51,9 @@ it.live("reads a stable file and captures a path-free resource span", () => {
       expect(captured.spans.map((span) => span.name)).toContain(
         "pi-cosmic-core.safe-file.initialize",
       );
-      expect(
-        JSON.stringify(
-          captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
-        ),
-      ).not.toContain(file);
+      expect(capturedTelemetrySnapshot(captured)).not.toContain(file);
     }),
-  ).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(captured.layer))));
+  ).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(captured.layer))));
 });
 
 it.live("fails safely when the file exceeds the configured limit", () =>
@@ -72,7 +67,7 @@ it.live("fails safely when the file exceeds the configured limit", () =>
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") expect(String(result.failure)).not.toContain(file);
     }),
-  ).pipe(Effect.provide(SafeFile.layer)),
+  ).pipe(provideBuiltLayer(SafeFile.layer)),
 );
 
 it.effect("maps close rejection to a redacted typed failure before deliberate recovery", () =>

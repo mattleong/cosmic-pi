@@ -1,14 +1,8 @@
 // Private loopback supervisor RPC transport and agent-directory state live at this boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/cryptoRandomBytes:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { promises as fs } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -59,6 +53,8 @@ import {
   SupervisorRpcConnection,
   type SupervisorRpcConnectionContract,
 } from "./supervisor-rpc-protocol.ts";
+
+const { join } = nodePath;
 
 const LOOPBACK_HOST = "127.0.0.1" as const;
 const CHANNEL_ROOT = "supervisor-channels-v2";
@@ -330,28 +326,29 @@ const prepareStateDirectory = (
     const removeLateDirectory = () =>
       directoryCreated ? fs.rmdir(stateDirectory).catch(() => undefined) : Promise.resolve();
     return yield* Effect.tryPromise({
-      try: async (signal) => {
-        await fs.mkdir(stateDirectory, { mode: 0o700 });
-        directoryCreated = true;
-        onCreated();
-        if (signal.aborted) {
-          await removeLateDirectory();
-          throw new Error("state-directory-acquisition-interrupted");
-        }
-        const stateStat = await fs.lstat(stateDirectory);
-        if (signal.aborted || !stateStat.isDirectory() || stateStat.isSymbolicLink())
-          throw new Error("unsafe-run-dir");
-        return prepared;
-      },
+      try: (signal) =>
+        fs.mkdir(stateDirectory, { mode: 0o700 }).then(() => {
+          directoryCreated = true;
+          onCreated();
+          if (signal.aborted)
+            return removeLateDirectory().then(() => {
+              throw new Error("state-directory-acquisition-interrupted");
+            });
+          return fs.lstat(stateDirectory).then((stateStat) => {
+            if (signal.aborted || !stateStat.isDirectory() || stateStat.isSymbolicLink())
+              throw new Error("unsafe-run-dir");
+            return prepared;
+          });
+        }),
       catch: (error) => privateStateError("prepare-state-directory", error),
     }).pipe(Effect.onError(() => Effect.promise(removeLateDirectory)));
   });
 
-const writePrivateConfig = async (path: string, value: SupervisorChannelConfig): Promise<void> => {
+const writePrivateConfig = (path: string, value: SupervisorChannelConfig): Promise<void> => {
   const source = `${JSON.stringify(value)}\n`;
   if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
-    throw new Error("config-size");
-  await writeExclusive(path, source);
+    return Promise.reject(new Error("config-size"));
+  return writeExclusive(path, source);
 };
 
 const removePrivateState = (

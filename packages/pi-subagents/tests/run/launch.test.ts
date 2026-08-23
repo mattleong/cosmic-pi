@@ -1,6 +1,4 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
 
@@ -19,7 +18,7 @@ describe("SubagentService", () => {
       const firstLayer = serviceLayer().pipe(Layer.provide(firstFake.layer));
       const first = yield* SubagentService.use((service) => service.start(request())).pipe(
         Effect.scoped,
-        Effect.provide(firstLayer),
+        provideBuiltLayer(firstLayer),
       );
 
       const secondFake = fakeChildLayer();
@@ -29,7 +28,7 @@ describe("SubagentService", () => {
         const second = yield* service.start(request());
         const stale = yield* service.status(first.id).pipe(Effect.flip);
         return { second, stale };
-      }).pipe(Effect.scoped, Effect.provide(secondLayer));
+      }).pipe(Effect.scoped, provideBuiltLayer(secondLayer));
 
       expect(first.id).toMatch(/^agent-r[0-9a-z]+-1$/);
       expect(result.second.id).toMatch(/^agent-r[0-9a-z]+-1$/);
@@ -53,7 +52,7 @@ describe("SubagentService", () => {
         const ordinal = run.id.slice(run.id.lastIndexOf("-") + 1);
         expect(run.name).toBe(`subagent-${ordinal}`);
       }
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("rejects an unsupported backend before reserving or spawning a run", () => {
@@ -70,7 +69,7 @@ describe("SubagentService", () => {
       });
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("injects profile guidance and retains selection provenance", () => {
@@ -95,7 +94,7 @@ describe("SubagentService", () => {
       });
       expect(fake.controls[0]?.launch.systemPrompt).toContain("assigned profile is reviewer");
       expect(fake.controls[0]?.launch.systemPrompt).toContain("independent reviewer");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("preserves selected fork context through run state and child launch", () => {
@@ -108,7 +107,7 @@ describe("SubagentService", () => {
       );
       expect(started.context).toBe("fork");
       expect(fake.controls[0]?.launch.context).toBe("fork");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -129,7 +128,7 @@ describe("SubagentService", () => {
         expect(failure.message).toContain(
           "does not support requested effort high; effective level was off",
         );
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -151,7 +150,7 @@ describe("SubagentService", () => {
       });
       expect(failure.message).toContain("The writer task may have been accepted");
       expect((yield* service.list)[0]?.state).toBe("failed");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("fails an explicit-effort start when the backend resolves another effort", () => {
@@ -167,7 +166,7 @@ describe("SubagentService", () => {
         code: "pi_effort_unsupported",
       });
       expect(failure.message).toContain("does not support requested effort high");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -216,7 +215,7 @@ describe("SubagentService", () => {
         const admitted = yield* service.start(request({ name: "admitted-after-cleanup" }));
         expect(admitted.state).toBe("running");
         expect(fake.controls).toHaveLength(13);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -260,7 +259,7 @@ describe("SubagentService", () => {
       yield* Effect.forEach(gates, (gate) => Deferred.succeed(gate, undefined), {
         discard: true,
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("bounds failed-delivery history at 50 and recovers admission after consumption", () => {
@@ -316,7 +315,7 @@ describe("SubagentService", () => {
       expect(retained).toHaveLength(50);
       expect(retained.some((run) => run.id === firstId)).toBe(false);
       expect(fake.reclaimedRunIds).toEqual([firstId]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keeps the evicted record registered and admits nothing when reclaim fails", () => {
@@ -382,7 +381,7 @@ describe("SubagentService", () => {
       expect(retained.some((run) => run.id === firstId)).toBe(true);
       expect(retained.some((run) => run.id === secondId)).toBe(true);
       expect(retained.some((run) => run.id === thirdId)).toBe(false);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("concurrent evicting starts never claim the same reclaim candidate", () => {
@@ -433,7 +432,7 @@ describe("SubagentService", () => {
       expect((yield* Fiber.join(startA)).state).toBe("running");
       expect((yield* Fiber.join(startB)).state).toBe("running");
       expect(yield* service.list).toHaveLength(50);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("rejects capacity before reclaiming resumable history", () => {
@@ -474,7 +473,7 @@ describe("SubagentService", () => {
       expect(retained.some((run) => run.id === oldestId)).toBe(true);
       expect(retained.some((run) => run.name === "capacity-blocked")).toBe(false);
       expect(fake.reclaimedRunIds).not.toContain(oldestId);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("retains only the newest 50 terminal records", () => {
@@ -491,6 +490,6 @@ describe("SubagentService", () => {
       const history = yield* service.list;
       expect(history).toHaveLength(50);
       expect(history.some((run) => run.id === firstId)).toBe(false);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 });

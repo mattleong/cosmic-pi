@@ -7,12 +7,8 @@
     "perf": "error",
     "suspicious": "error"
   },
-  "rules": {
-    "no-control-regex": "off",
-    "no-useless-escape": "off",
-    "unicorn/no-array-reverse": "off",
-    "unicorn/no-array-sort": "off"
-  },
+  "rules": {},
+
   "env": {
     "builtin": true
   }

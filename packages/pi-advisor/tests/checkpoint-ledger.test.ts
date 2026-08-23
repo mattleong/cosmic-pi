@@ -1,5 +1,3 @@
-// Test harness boundary: only the diagnostics used by this file are suppressed.
-// @effect-diagnostics effect/globalDate:off
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
 import { advisorFindingId } from "../src/review/finding-lifecycle.ts";
@@ -21,7 +19,7 @@ function entry<DataInput>(id: string, parentId: string | null, data?: DataInput)
         type: "custom",
         id,
         parentId,
-        timestamp: new Date().toISOString(),
+        timestamp: "2024-01-01T00:00:00.000Z",
         customType: ADVISOR_CHECKPOINT_ENTRY_TYPE,
         data,
       }
@@ -29,8 +27,8 @@ function entry<DataInput>(id: string, parentId: string | null, data?: DataInput)
         type: "message",
         id,
         parentId,
-        timestamp: new Date().toISOString(),
-        message: { role: "user", content: "hello", timestamp: Date.now() },
+        timestamp: "2024-01-01T00:00:00.000Z",
+        message: { role: "user", content: "hello", timestamp: 1 },
       };
 }
 

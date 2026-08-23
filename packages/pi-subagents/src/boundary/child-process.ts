@@ -1,17 +1,8 @@
 // Node process and session-file ownership is intentionally isolated at this boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/cryptoRandomUUID:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalDate:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
-import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { spawn } from "node:child_process";
+import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, rm, rmdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeFsPromises, nodePath, nodeSpawn as spawn } from "./node-builtins.ts";
 import {
   getAgentDir,
   getPackageDir,
@@ -20,6 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -36,6 +28,9 @@ import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-lin
 import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../backend/local-pi-protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../domain/routing.ts";
+
+const { mkdir, rm, rmdir, writeFile } = nodeFsPromises;
+const { join } = nodePath;
 
 const MAX_RPC_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_RPC_QUEUED_BYTES = 8 * 1024 * 1024;
@@ -131,24 +126,23 @@ const reclaimChildRunState = (
   request: { readonly parentSessionId: string; readonly runId: string },
 ) =>
   Effect.tryPromise({
-    try: async () => {
+    try: () => {
       const runDirectory = subagentRunDirectory(
         agentDirectory,
         request.parentSessionId,
         request.runId,
       );
-      await rm(runDirectory, { recursive: true, force: true });
-      try {
-        await rmdir(join(runDirectory, ".."));
-      } catch (error) {
-        // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
-        const code =
-          hasObjectRuntimeType(error) && error !== null && "code" in error
-            ? (error as { readonly code?: unknown }).code
-            : undefined;
-        if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
-          throw error;
-      }
+      return rm(runDirectory, { recursive: true, force: true }).then(() =>
+        rmdir(join(runDirectory, "..")).catch((error) => {
+          // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
+          const code =
+            hasObjectRuntimeType(error) && error !== null && "code" in error
+              ? (error as { readonly code?: unknown }).code
+              : undefined;
+          if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
+            throw error;
+        }),
+      );
     },
     catch: (error) => processError("reclaim subagent run state", error),
   });
@@ -269,19 +263,22 @@ const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry 
   return { ...entry, parentId };
 };
 
-async function createForkedSession(request: ChildLaunchRequest, runDir: string): Promise<string> {
+function createForkedSession(request: ChildLaunchRequest, runDir: string): Promise<string> {
   if (!request.parentSessionFile || !request.parentLeafId)
-    throw new Error("Forked context requires a persisted parent session and stable parent leaf.");
+    return Promise.reject(
+      new Error("Forked context requires a persisted parent session and stable parent leaf."),
+    );
   const source = SessionManager.open(request.parentSessionFile);
   const branch = source.getBranch(request.parentLeafId).filter((entry) => entry.type !== "label");
-  if (branch.length === 0) throw new Error("The selected parent session branch is empty.");
+  if (branch.length === 0)
+    return Promise.reject(new Error("The selected parent session branch is empty."));
   const sessionId = randomUUID();
   const sessionFile = join(runDir, `session-${sessionId}.jsonl`);
   const header = {
     type: "session" as const,
     version: 3,
     id: sessionId,
-    timestamp: new Date().toISOString(),
+    timestamp: DateTime.formatIso(DateTime.makeUnsafe(synchronousNow())),
     cwd: request.cwd,
     parentSession: request.parentSessionFile,
   };
@@ -292,13 +289,15 @@ async function createForkedSession(request: ChildLaunchRequest, runDir: string):
     return cloned;
   });
   const content = [header, ...entries].map((entry) => JSON.stringify(entry)).join("\n") + "\n";
-  await writeFile(sessionFile, content, { encoding: "utf8", mode: 0o600 });
-  return sessionFile;
+  return writeFile(sessionFile, content, { encoding: "utf8", mode: 0o600 }).then(() => sessionFile);
 }
 
 function extensionPath(): string {
   return fileURLToPath(new URL("./host-child.ts", import.meta.url));
 }
+
+// Locally constructed RPC command frames are serialized by this pure protocol encoder.
+const encodeRpcCommandFrame = (command: RpcCommand): string => `${JSON.stringify(command)}\n`;
 
 const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   agentDirectory: string,
@@ -517,7 +516,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
             }
             let encoded: string;
             try {
-              encoded = `${JSON.stringify(command)}\n`;
+              encoded = encodeRpcCommandFrame(command);
               stdin.write(encoded, (error) =>
                 resume(
                   error

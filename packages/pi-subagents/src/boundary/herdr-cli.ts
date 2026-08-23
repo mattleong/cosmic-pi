@@ -1,5 +1,4 @@
 // Herdr CLI process ownership and inherited-session selection are isolated at this boundary.
-// @effect-diagnostics effect/processEnv:off
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

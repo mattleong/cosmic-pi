@@ -118,7 +118,7 @@ export const invokeRegExpMethod = (
   }
 };
 import * as Predicate from "effect/Predicate";
-import { runtimeTypeName } from "../runtime-values.ts";
+import { runtimeTypeName } from "../runtime-values.js";
 import { assertConfinedRegExp, assertConfinedRegExpOperation } from "../interpreter/confinement.js";
 import {
   type AstNode,

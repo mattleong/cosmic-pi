@@ -1,4 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -7,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import { AgentDirectory } from "pi-cosmic-core";
+import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
 import { jsonHttpTestLayer, makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { XaiUsageService } from "../src/usage/controller.ts";
 import type { UsageSnapshot } from "../src/usage/format.ts";
@@ -130,7 +129,7 @@ describe("XaiUsageService", () => {
           });
           expect(MutableRef.get(projection).statusLine).toBeDefined();
           expect(changes).toBeGreaterThan(0);
-        }).pipe(Effect.provide(serviceLayer));
+        }).pipe(provideBuiltLayer(serviceLayer));
       });
     },
   );

@@ -1,10 +1,10 @@
 // Explicit test entry-point Layer provision owns the captured logger.
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
 import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import { makeLocalCliRawEventOwnership } from "../src/backend/local-cli-events.ts";
@@ -46,7 +46,7 @@ describe("local CLI raw event ownership", () => {
         expect(capturedTelemetrySnapshot({ entries: captured.entries })).not.toContain(
           "ingress overflowed",
         );
-      }).pipe(Effect.provide(captured.layer));
+      }).pipe(provideBuiltLayer(captured.layer));
     }),
   );
 
@@ -69,7 +69,7 @@ describe("local CLI raw event ownership", () => {
         const warnings = capturedTelemetrySnapshot({ entries: captured.entries });
         expect(warnings).toContain("ingress overflowed");
         expect(warnings).toContain("activity");
-      }).pipe(Effect.provide(captured.layer));
+      }).pipe(provideBuiltLayer(captured.layer));
     }),
   );
 
@@ -93,7 +93,7 @@ describe("local CLI raw event ownership", () => {
         expect(capturedTelemetrySnapshot({ entries: captured.entries })).toContain(
           "ingress overflowed",
         );
-      }).pipe(Effect.provide(captured.layer));
+      }).pipe(provideBuiltLayer(captured.layer));
     }),
   );
 });

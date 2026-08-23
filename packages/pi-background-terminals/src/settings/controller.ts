@@ -1,5 +1,4 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
-// @effect-diagnostics effect/asyncFunction:off
 import * as Predicate from "effect/Predicate";
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -14,16 +13,16 @@ export interface ProcessManagerActions {
   readonly clear: () => Promise<void>;
 }
 
-async function openProcessManager(
+function openProcessManager(
   ctx: ExtensionCommandContext,
   bridge: BackgroundTerminalProjectionBridge,
   actions: ProcessManagerActions,
 ): Promise<void> {
   if (ctx.mode !== "tui") {
     if (ctx.hasUI) ctx.ui.notify("/ps requires interactive TUI mode.", "warning");
-    return;
+    return Promise.resolve();
   }
-  await ctx.ui.custom<void>(
+  return ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
       const manager = new ProcessManagerComponent({
         theme,

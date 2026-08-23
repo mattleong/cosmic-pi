@@ -26,8 +26,6 @@ import { toolError, type ToolError } from "./codemode-runtime.ts";
 
 export const PI_GUEST_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 export type PiGuestToolName = (typeof PI_GUEST_TOOL_NAMES)[number];
-
-// oxlint-disable-next-line no-explicit-any -- Pi's own AnyToolDefinition shape.
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 export type PiGuestToolInput = Parameters<AnyToolDefinition["execute"]>[1];
 

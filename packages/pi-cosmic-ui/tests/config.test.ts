@@ -1,4 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -9,6 +8,7 @@ import {
   JsonDocumentError,
   JsonDocumentStore,
   nodePlatformLayer,
+  provideBuiltLayer,
   type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
@@ -34,7 +34,7 @@ const withTempConfig = <A, E>(
     const agent = path.join(root, "agent");
     yield* fs.makeDirectory(cwd, { recursive: true });
     return yield* run({ root, cwd, agent });
-  }).pipe(Effect.scoped, Effect.provide(nodePlatformLayer));
+  }).pipe(Effect.scoped, provideBuiltLayer(nodePlatformLayer));
 
 describe("Cosmic UI config", () => {
   it.effect("merges valid fields independently and preserves unknown fields", () =>
@@ -131,7 +131,7 @@ describe("Cosmic UI config", () => {
       expect(memory.documents.get(paths.project)).toEqual({
         footer: { enabled: false, density: "compact" },
       });
-    }).pipe(Effect.provide(Layer.merge(Layer.succeed(JsonDocumentStore, service), Path.layer)));
+    }).pipe(provideBuiltLayer(Layer.merge(Layer.succeed(JsonDocumentStore, service), Path.layer)));
   });
 
   it.effect("reselects scope when external documents appear or disappear", () =>
@@ -193,7 +193,7 @@ describe("Cosmic UI config", () => {
       expect(messages.join(" ")).not.toContain("secret");
       expect(messages.join(" ")).not.toContain("credential");
     }).pipe(
-      Effect.provide(Layer.merge(Layer.succeed(JsonDocumentStore, service), Path.layer)),
+      provideBuiltLayer(Layer.merge(Layer.succeed(JsonDocumentStore, service), Path.layer)),
       Effect.withLogger(logger),
     );
   });

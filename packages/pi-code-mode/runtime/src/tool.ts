@@ -1,5 +1,7 @@
-import { hasObjectRuntimeType } from "./runtime-values.ts";
-import { Effect, Schema } from "effect";
+import { hasObjectRuntimeType } from "./runtime-values.js";
+import type * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
+import { runHost, type ToolError } from "./tool-error.js";
 
 /**
  * JSON Schema subset accepted for render-only tool schemas.
@@ -9,25 +11,25 @@ import { Effect, Schema } from "effect";
  * adapter-provided tools (e.g. MCP definitions) whose schemas arrive as JSON Schema documents.
  */
 export type JsonSchema = {
-  readonly type?: string | ReadonlyArray<string>;
-  readonly enum?: ReadonlyArray<unknown>;
+  readonly type?: string | ReadonlyArray<string> | undefined;
+  readonly enum?: ReadonlyArray<unknown> | undefined;
   readonly const?: unknown;
-  readonly anyOf?: ReadonlyArray<JsonSchema>;
-  readonly oneOf?: ReadonlyArray<JsonSchema>;
-  readonly allOf?: ReadonlyArray<JsonSchema>;
-  readonly properties?: Readonly<Record<string, JsonSchema>>;
-  readonly required?: ReadonlyArray<string>;
-  readonly items?: JsonSchema;
-  readonly additionalProperties?: boolean | JsonSchema;
-  readonly description?: string;
+  readonly anyOf?: ReadonlyArray<JsonSchema> | undefined;
+  readonly oneOf?: ReadonlyArray<JsonSchema> | undefined;
+  readonly allOf?: ReadonlyArray<JsonSchema> | undefined;
+  readonly properties?: Readonly<Record<string, JsonSchema>> | undefined;
+  readonly required?: ReadonlyArray<string> | undefined;
+  readonly items?: JsonSchema | undefined;
+  readonly additionalProperties?: boolean | JsonSchema | undefined;
+  readonly description?: string | undefined;
   readonly default?: unknown;
-  readonly format?: string;
-  readonly deprecated?: boolean;
-  readonly minItems?: number;
-  readonly maxItems?: number;
-  readonly $ref?: string;
-  readonly $defs?: Readonly<Record<string, JsonSchema>>;
-  readonly definitions?: Readonly<Record<string, JsonSchema>>;
+  readonly format?: string | undefined;
+  readonly deprecated?: boolean | undefined;
+  readonly minItems?: number | undefined;
+  readonly maxItems?: number | undefined;
+  readonly $ref?: string | undefined;
+  readonly $defs?: Readonly<Record<string, JsonSchema>> | undefined;
+  readonly definitions?: Readonly<Record<string, JsonSchema>> | undefined;
 };
 
 /** Either a validating Effect Schema or a render-only JSON Schema document. */
@@ -39,7 +41,8 @@ export type Definition<R = never> = {
   readonly description: string;
   readonly input: SchemaType;
   readonly output: SchemaType | undefined;
-  readonly run: <Input>(input: Input) => Effect.Effect<unknown, unknown, R>;
+  /** Stored runner, already normalized onto the closed `ToolError` failure channel. */
+  readonly run: <Input>(input: Input) => Effect.Effect<unknown, ToolError, R>;
 };
 
 /** The value `run` receives: the decoded type for Effect Schemas, `unknown` for JSON Schemas. */
@@ -49,11 +52,16 @@ type InputType<S> = S extends Schema.Decoder<unknown> ? S["Type"] : unknown;
 type ResultType<S> = S extends Schema.Decoder<unknown> ? S["Encoded"] : unknown;
 
 /** Options for defining one CodeMode tool. */
-export type Options<I extends SchemaType, O extends SchemaType | undefined, R = never> = {
+export type Options<
+  I extends SchemaType,
+  O extends SchemaType | undefined,
+  E = never,
+  R = never,
+> = {
   readonly description: string;
   readonly input: I;
   readonly output?: O;
-  readonly run: (input: InputType<I>) => Effect.Effect<ResultType<O>, unknown, R>;
+  readonly run: (input: InputType<I>) => Effect.Effect<ResultType<O>, E, R>;
 };
 
 export const isDefinition = <R = never, Value = unknown>(
@@ -92,9 +100,10 @@ export const isDefinition = <R = never, Value = unknown>(
 export const make = <
   I extends SchemaType,
   const O extends SchemaType | undefined = undefined,
+  E = never,
   R = never,
 >(
-  options: Options<I, O, R>,
+  options: Options<I, O, E, R>,
 ): Definition<R> => ({
   _tag: "CodeModeTool",
   description: options.description,
@@ -102,6 +111,6 @@ export const make = <
   output: options.output,
   run: (input) => {
     // SAFETY: ToolRuntime decodes Effect Schema inputs before invoking this stored definition.
-    return options.run(input as InputType<I>);
+    return runHost(options.run(input as InputType<I>));
   },
 });

@@ -1,5 +1,4 @@
 // Test harness boundary: session/model stubs are Promise-shaped Pi fixtures.
-// @effect-diagnostics effect/strictEffectProvide:off
 import type {
   createAgentSession,
   ExtensionContext,
@@ -7,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { advisorPlatformLayer } from "../../src/boundary/executor.ts";
 import type { ResolvedAdvisorConfig } from "../../src/config/options.ts";
 import type { AdvisorChildModel } from "../../src/runtime/client.ts";
@@ -46,7 +46,7 @@ export const makeTestChildFactory = (
           try: () => overrides.createTools!(cwd),
           catch: toModelError("Advisor tools could not be created."),
         })
-      : createAdvisorToolsEffect(cwd, runner).pipe(Effect.provide(advisorPlatformLayer)),
+      : createAdvisorToolsEffect(cwd, runner).pipe(provideBuiltLayer(advisorPlatformLayer)),
   createSession: (options) =>
     overrides.createSession
       ? overrides.createSession(options)

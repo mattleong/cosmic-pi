@@ -1,5 +1,4 @@
 // Pi dialog APIs are Promise-shaped host boundaries.
-// @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -23,26 +22,33 @@ export interface HostDialogsContract {
 const hostError = (operation: string) =>
   new AskUserHostError({ operation, message: `Unable to ${operation} the user questionnaire.` });
 
-async function boundedInput(
+/** Adapts one Promise-shaped Pi dialog call; interruption aborts the forwarded signal. */
+const dialogCall = <A>(
+  run: (signal: AbortSignal) => Promise<A>,
+): Effect.Effect<A, AskUserHostError> =>
+  Effect.tryPromise({ try: run, catch: () => hostError("open") });
+
+const boundedInput = (
   ui: ExtensionUIContext,
   title: string,
   placeholder: string,
-  signal: AbortSignal,
-): Promise<string | undefined> {
-  while (!signal.aborted) {
-    const value = await ui.input(title, placeholder, { signal });
-    if (value === undefined) return undefined;
-    const trimmed = value.trim();
-    if (trimmed.length > 0 && trimmed.length <= MAX_CUSTOM_ANSWER_LENGTH) return trimmed;
-    ui.notify(
-      trimmed.length === 0
-        ? "The answer cannot be empty."
-        : `Keep the answer under ${MAX_CUSTOM_ANSWER_LENGTH} characters.`,
-      "warning",
-    );
-  }
-  return undefined;
-}
+): Effect.Effect<string | undefined, AskUserHostError> =>
+  Effect.gen(function* () {
+    while (true) {
+      const value = yield* dialogCall((signal) => ui.input(title, placeholder, { signal }));
+      if (value === undefined) return undefined;
+      const trimmed = value.trim();
+      if (trimmed.length > 0 && trimmed.length <= MAX_CUSTOM_ANSWER_LENGTH) return trimmed;
+      yield* Effect.sync(() =>
+        ui.notify(
+          trimmed.length === 0
+            ? "The answer cannot be empty."
+            : `Keep the answer under ${MAX_CUSTOM_ANSWER_LENGTH} characters.`,
+          "warning",
+        ),
+      );
+    }
+  });
 
 const previewText = (question: AskUserQuestion): string => {
   const previews = question.choices.flatMap((choice, index) =>
@@ -60,19 +66,18 @@ const optionLines = (question: AskUserQuestion): string[] =>
     (choice, index) => `${index + 1}. ${safeText(choice.label)} — ${safeText(choice.description)}`,
   );
 
-async function askRpcQuestion(
+const askSingleQuestion = (
   ui: ExtensionUIContext,
   question: AskUserQuestion,
-  signal: AbortSignal,
-): Promise<AskUserAnswer | undefined> {
-  const title = `[${safeText(question.title)}] ${safeText(question.prompt)}${previewText(question)}`;
-  if (question.mode === "single") {
+  title: string,
+): Effect.Effect<AskUserAnswer | undefined, AskUserHostError> =>
+  Effect.gen(function* () {
     const options = [
       ...optionLines(question),
       `${question.choices.length + 1}. Write a custom answer`,
     ];
-    while (!signal.aborted) {
-      const selected = await ui.select(title, options, { signal });
+    while (true) {
+      const selected = yield* dialogCall((signal) => ui.select(title, options, { signal }));
       if (selected === undefined) return undefined;
       const index = options.indexOf(selected);
       if (index < 0) return undefined;
@@ -85,105 +90,124 @@ async function askRpcQuestion(
           labels: [choice.label],
         };
       }
-      const text = await boundedInput(ui, `${title}\n\nWrite your answer:`, "Your answer", signal);
+      const text = yield* boundedInput(ui, `${title}\n\nWrite your answer:`, "Your answer");
       if (text !== undefined) return { key: question.key, kind: "custom", text };
-      if (!signal.aborted)
-        ui.notify("Custom answer dismissed; choose an option or cancel the question.", "info");
+      yield* Effect.sync(() =>
+        ui.notify("Custom answer dismissed; choose an option or cancel the question.", "info"),
+      );
     }
-    return undefined;
-  }
+  });
 
-  while (!signal.aborted) {
-    const value = await boundedInput(
-      ui,
-      `${title}\n\n${optionLines(question).join("\n")}\n\nEnter choice numbers separated by commas, or write a custom answer.`,
-      "1,3",
-      signal,
-    );
-    if (value === undefined) return undefined;
-    const tokens = value.split(/[\s,]+/).filter(Boolean);
-    const numeric = tokens.every((token) => /^\d+\.?$/.test(token));
-    if (numeric) {
-      const indices = tokens.map((token) => Number.parseInt(token, 10) - 1);
-      if (indices.some((index) => index < 0 || index >= question.choices.length)) {
-        ui.notify(`Use choice numbers from 1 to ${question.choices.length}.`, "warning");
-        continue;
+const askMultipleQuestion = (
+  ui: ExtensionUIContext,
+  question: AskUserQuestion,
+  title: string,
+): Effect.Effect<AskUserAnswer | undefined, AskUserHostError> =>
+  Effect.gen(function* () {
+    while (true) {
+      const value = yield* boundedInput(
+        ui,
+        `${title}\n\n${optionLines(question).join("\n")}\n\nEnter choice numbers separated by commas, or write a custom answer.`,
+        "1,3",
+      );
+      if (value === undefined) return undefined;
+      const tokens = value.split(/[\s,]+/).filter(Boolean);
+      const numeric = tokens.every((token) => /^\d+\.?$/.test(token));
+      if (numeric) {
+        const indices = tokens.map((token) => Number.parseInt(token, 10) - 1);
+        if (indices.some((index) => index < 0 || index >= question.choices.length)) {
+          yield* Effect.sync(() =>
+            ui.notify(`Use choice numbers from 1 to ${question.choices.length}.`, "warning"),
+          );
+          continue;
+        }
+        const unique = [...new Set(indices)];
+        const choices = unique.map((index) => question.choices[index]!);
+        return {
+          key: question.key,
+          kind: "choices",
+          values: choices.map((choice) => choice.value),
+          labels: choices.map((choice) => choice.label),
+        };
       }
-      const unique = [...new Set(indices)];
-      const choices = unique.map((index) => question.choices[index]!);
-      return {
-        key: question.key,
-        kind: "choices",
-        values: choices.map((choice) => choice.value),
-        labels: choices.map((choice) => choice.label),
-      };
+      return { key: question.key, kind: "custom", text: value };
     }
-    return { key: question.key, kind: "custom", text: value };
-  }
-  return undefined;
-}
+  });
 
-async function runRpc(
+const askRpcQuestion = (
+  ui: ExtensionUIContext,
+  question: AskUserQuestion,
+): Effect.Effect<AskUserAnswer | undefined, AskUserHostError> => {
+  const title = `[${safeText(question.title)}] ${safeText(question.prompt)}${previewText(question)}`;
+  return question.mode === "single"
+    ? askSingleQuestion(ui, question, title)
+    : askMultipleQuestion(ui, question, title);
+};
+
+const runRpc = (
   ctx: ExtensionContext,
   request: AskUserRequest,
-  signal: AbortSignal,
-): Promise<AskUserOutcome> {
-  const answers: AskUserAnswer[] = [];
-  for (const question of request.questions) {
-    const answer = await askRpcQuestion(ctx.ui, question, signal);
-    if (!answer) return cancelQuestionnaire();
-    answers.push(answer);
-  }
-  return { outcome: "submitted", answers };
-}
+): Effect.Effect<AskUserOutcome, AskUserHostError> =>
+  Effect.gen(function* () {
+    const answers: AskUserAnswer[] = [];
+    for (const question of request.questions) {
+      const answer = yield* askRpcQuestion(ctx.ui, question);
+      if (!answer) return cancelQuestionnaire();
+      answers.push(answer);
+    }
+    return { outcome: "submitted", answers };
+  });
 
-async function runTui(
+// The TUI overlay is a Promise-shaped Pi callback boundary; the caller adapts it with
+// Effect.tryPromise so interruption aborts the forwarded signal.
+function runTui(
   ctx: ExtensionContext,
   bridge: AskUserDialogBridge,
   request: AskUserRequest,
   signal: AbortSignal,
 ): Promise<AskUserOutcome> {
-  const { AskUserDialog } = await import("../ui/dialog.ts");
-  const editorCommand = captureExternalEditorCommand(ctx);
-  let close: ((outcome: AskUserOutcome) => void) | undefined;
-  let bridgeToken: number | undefined;
-  let dialog: import("../ui/dialog.ts").AskUserDialog | undefined;
-  const abort = () => close?.(cancelQuestionnaire());
-  signal.addEventListener("abort", abort, { once: true });
-  try {
-    return await ctx.ui.custom<AskUserOutcome>(
-      (tui, theme, keybindings, done) => {
-        close = done;
-        dialog = new AskUserDialog({
-          tui,
-          theme,
-          keybindings,
-          request,
-          done,
-          editExternally: (value) => editWithExternalEditor(tui, editorCommand, value, signal),
-          onCollapse: () => {
-            if (bridgeToken !== undefined) bridge.markCollapsed(bridgeToken);
-          },
-        });
-        bridgeToken = bridge.activate({ resume: () => dialog?.resume() });
-        if (signal.aborted) done(cancelQuestionnaire());
-        return dialog;
-      },
-      {
-        overlay: true,
-        overlayOptions: {
-          anchor: "bottom-center",
-          width: "100%",
-          maxHeight: "100%",
-          margin: { left: 0, right: 0, bottom: 0 },
+  return import("../ui/dialog.ts").then(({ AskUserDialog }) => {
+    const editorCommand = captureExternalEditorCommand(ctx);
+    let close: ((outcome: AskUserOutcome) => void) | undefined;
+    let bridgeToken: number | undefined;
+    let dialog: import("../ui/dialog.ts").AskUserDialog | undefined;
+    const abort = () => close?.(cancelQuestionnaire());
+    signal.addEventListener("abort", abort, { once: true });
+    return ctx.ui
+      .custom<AskUserOutcome>(
+        (tui, theme, keybindings, done) => {
+          close = done;
+          dialog = new AskUserDialog({
+            tui,
+            theme,
+            keybindings,
+            request,
+            done,
+            editExternally: (value) => editWithExternalEditor(tui, editorCommand, value, signal),
+            onCollapse: () => {
+              if (bridgeToken !== undefined) bridge.markCollapsed(bridgeToken);
+            },
+          });
+          bridgeToken = bridge.activate({ resume: () => dialog?.resume() });
+          if (signal.aborted) done(cancelQuestionnaire());
+          return dialog;
         },
-        onHandle: (handle) => dialog?.setOverlayHandle(handle),
-      },
-    );
-  } finally {
-    signal.removeEventListener("abort", abort);
-    bridge.clear(bridgeToken);
-  }
+        {
+          overlay: true,
+          overlayOptions: {
+            anchor: "bottom-center",
+            width: "100%",
+            maxHeight: "100%",
+            margin: { left: 0, right: 0, bottom: 0 },
+          },
+          onHandle: (handle) => dialog?.setOverlayHandle(handle),
+        },
+      )
+      .finally(() => {
+        signal.removeEventListener("abort", abort);
+        bridge.clear(bridgeToken);
+      });
+  });
 }
 
 export class HostDialogs extends Context.Service<HostDialogs, HostDialogsContract>()(
@@ -194,13 +218,12 @@ export class HostDialogs extends Context.Service<HostDialogs, HostDialogsContrac
       HostDialogs,
       HostDialogs.of({
         ask: (request) =>
-          Effect.tryPromise({
-            try: (signal) =>
-              ctx.mode === "tui"
-                ? runTui(ctx, bridge, request, signal)
-                : runRpc(ctx, request, signal),
-            catch: () => hostError(ctx.mode === "tui" ? "render" : "open"),
-          }),
+          ctx.mode === "tui"
+            ? Effect.tryPromise({
+                try: (signal) => runTui(ctx, bridge, request, signal),
+                catch: () => hostError("render"),
+              })
+            : runRpc(ctx, request),
       }),
     );
   }

@@ -1,6 +1,4 @@
 // Promise-shaped Pi host boundary test.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/processEnv:off
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
@@ -14,6 +12,7 @@ import type {
   SupervisorToolName,
 } from "../src/boundary/pi-supervisor-bridge-client.ts";
 import { extensionApiFixture, extensionContextFixture, modelFixture } from "./fixtures/pi-host.ts";
+import { effectTest, settle, step } from "./support/effect-test.ts";
 
 type BridgeCall = {
   readonly [Name in SupervisorToolName]: {
@@ -29,7 +28,7 @@ const openBridge = vi.fn(
   (_: string) =>
     Effect.acquireRelease(
       Effect.succeed({
-        call: async <Name extends SupervisorToolName>(
+        call: <Name extends SupervisorToolName>(
           name: Name,
           input: SupervisorToolArgumentsByName[Name],
         ) => {
@@ -37,9 +36,9 @@ const openBridge = vi.fn(
           bridgeCalls.push({ name, input } as BridgeCall);
           if (name === "supervisor_submit_report" && reportFailuresRemaining > 0) {
             reportFailuresRemaining -= 1;
-            throw new Error("uncertain report delivery");
+            return Promise.reject(new Error("uncertain report delivery"));
           }
-          return "accepted";
+          return Promise.resolve("accepted");
         },
         close,
       }),
@@ -95,14 +94,20 @@ const bridgeHarness = (
   return { handlers, tools };
 };
 
-const startBridgeHarness = async () => {
+const startBridgeHarness = () => {
   const harness = bridgeHarness();
-  await harness.handlers.get("session_start")?.(
-    {},
-    extensionContextFixture({ cwd: "/project", isProjectTrusted: () => false, hasUI: false }),
-  );
-  return harness;
+  return Promise.resolve(
+    harness.handlers.get("session_start")?.(
+      {},
+      extensionContextFixture({ cwd: "/project", isProjectTrusted: () => false, hasUI: false }),
+    ),
+  ).then(() => harness);
 };
+
+const runtimeCredentialSnapshot = (source: NodeJS.ProcessEnv) => ({
+  apiKey: source.PI_SUBAGENT_RUNTIME_API_KEY,
+  provider: source.PI_SUBAGENT_RUNTIME_API_PROVIDER,
+});
 
 const assistantMessage = (text: string, stopReason: "stop" | "aborted" = "stop") => ({
   role: "assistant",
@@ -130,56 +135,67 @@ describe("Herdr-hosted Pi bridge extension", () => {
     ).toEqual({ input: "task", service_tier: "priority" });
   });
 
-  it("deletes ephemeral provider credentials before a config-validation return", async () => {
-    const handlers = new Map<string, BridgeEventHandler>();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const pi = extensionApiFixture({
-      registerFlag: vi.fn(),
-      getFlag: vi.fn(() => undefined),
-      on: vi.fn((name: string, handler: BridgeEventHandler) => handlers.set(name, handler)),
-      registerProvider: vi.fn(),
-    });
-    vi.stubEnv("PI_SUBAGENT_RUNTIME_API_KEY", "must-be-deleted");
-    vi.stubEnv("PI_SUBAGENT_RUNTIME_API_PROVIDER", "openai-codex");
-    registerBridge(pi, { openBridge });
-    await handlers.get("session_start")?.({}, extensionContextFixture({ hasUI: false }));
-    expect(process.env.PI_SUBAGENT_RUNTIME_API_KEY).toBeUndefined();
-    expect(process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER).toBeUndefined();
-    expect(pi.registerProvider).not.toHaveBeenCalled();
-  });
+  effectTest(
+    "deletes ephemeral provider credentials before a config-validation return",
+    function* () {
+      const handlers = new Map<string, BridgeEventHandler>();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const pi = extensionApiFixture({
+        registerFlag: vi.fn(),
+        getFlag: vi.fn(() => undefined),
+        on: vi.fn((name: string, handler: BridgeEventHandler) => handlers.set(name, handler)),
+        registerProvider: vi.fn(),
+      });
+      vi.stubEnv("PI_SUBAGENT_RUNTIME_API_KEY", "must-be-deleted");
+      vi.stubEnv("PI_SUBAGENT_RUNTIME_API_PROVIDER", "openai-codex");
+      registerBridge(pi, { openBridge });
+      yield* settle(() =>
+        handlers.get("session_start")?.({}, extensionContextFixture({ hasUI: false })),
+      );
+      const remaining = runtimeCredentialSnapshot(process.env);
+      expect(remaining.apiKey).toBeUndefined();
+      expect(remaining.provider).toBeUndefined();
+      expect(pi.registerProvider).not.toHaveBeenCalled();
+    },
+  );
 
-  it("promotes a settled final Pi response through the supervisor report channel", async () => {
-    const { handlers } = await startBridgeHarness();
-    handlers.get("before_agent_start")?.({}, bridgeContext);
-    handlers.get("agent_end")?.(
-      { messages: [assistantMessage("Complete review report.")] },
-      bridgeContext,
-    );
-    expect(bridgeCalls).toEqual([]);
+  effectTest(
+    "promotes a settled final Pi response through the supervisor report channel",
+    function* () {
+      const { handlers } = yield* step(startBridgeHarness);
+      handlers.get("before_agent_start")?.({}, bridgeContext);
+      handlers.get("agent_end")?.(
+        { messages: [assistantMessage("Complete review report.")] },
+        bridgeContext,
+      );
+      expect(bridgeCalls).toEqual([]);
 
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+      yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
-    expect(bridgeCalls).toEqual([
-      {
-        name: "supervisor_submit_report",
-        input: { delivery_id: "pi-final-1", report: "Complete review report." },
-      },
-    ]);
-  });
+      expect(bridgeCalls).toEqual([
+        {
+          name: "supervisor_submit_report",
+          input: { delivery_id: "pi-final-1", report: "Complete review report." },
+        },
+      ]);
+    },
+  );
 
-  it("does not duplicate an explicitly accepted report at agent settlement", async () => {
-    const { handlers, tools } = await startBridgeHarness();
+  effectTest("does not duplicate an explicitly accepted report at agent settlement", function* () {
+    const { handlers, tools } = yield* step(startBridgeHarness);
     handlers.get("before_agent_start")?.({}, bridgeContext);
     const report = tools.find((tool) => tool.name === "supervisor_submit_report")!;
-    await report.execute("report-1", {
-      delivery_id: "explicit-report-1",
-      report: "Explicit report.",
-    });
+    yield* step(() =>
+      report.execute("report-1", {
+        delivery_id: "explicit-report-1",
+        report: "Explicit report.",
+      }),
+    );
     handlers.get("agent_end")?.(
       { messages: [assistantMessage("Native final text.")] },
       bridgeContext,
     );
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+    yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
     expect(bridgeCalls).toEqual([
       {
@@ -189,22 +205,24 @@ describe("Herdr-hosted Pi bridge extension", () => {
     ]);
   });
 
-  it("retries an uncertain explicit report with the same delivery identity", async () => {
-    const { handlers, tools } = await startBridgeHarness();
+  effectTest("retries an uncertain explicit report with the same delivery identity", function* () {
+    const { handlers, tools } = yield* step(startBridgeHarness);
     handlers.get("before_agent_start")?.({}, bridgeContext);
     reportFailuresRemaining = 1;
     const report = tools.find((tool) => tool.name === "supervisor_submit_report")!;
-    await expect(
-      report.execute("report-uncertain", {
-        delivery_id: "stable-explicit-report",
-        report: "Explicit report with uncertain delivery.",
-      }),
-    ).rejects.toThrow("uncertain");
+    yield* step(() =>
+      expect(
+        report.execute("report-uncertain", {
+          delivery_id: "stable-explicit-report",
+          report: "Explicit report with uncertain delivery.",
+        }),
+      ).rejects.toThrow("uncertain"),
+    );
     handlers.get("agent_end")?.(
       { messages: [assistantMessage("Native final text.")] },
       bridgeContext,
     );
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+    yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
     expect(bridgeCalls).toEqual([
       {
@@ -224,81 +242,98 @@ describe("Herdr-hosted Pi bridge extension", () => {
     ]);
   });
 
-  it("locks an uncertain explicit report identity against conflicting retries", async () => {
-    const { handlers, tools } = await startBridgeHarness();
-    handlers.get("before_agent_start")?.(
-      { prompt: "Begin supervisor assignment epoch 1." },
-      bridgeContext,
-    );
-    reportFailuresRemaining = 1;
-    const report = tools.find((tool) => tool.name === "supervisor_submit_report")!;
-    await expect(
-      report.execute("report-uncertain", {
-        delivery_id: "stable-explicit-report",
-        report: "Explicit report with uncertain delivery.",
-      }),
-    ).rejects.toThrow("uncertain");
-    await expect(
-      report.execute("report-conflict", {
-        delivery_id: "conflicting-report",
-        report: "Conflicting report.",
-      }),
-    ).rejects.toThrow("different supervisor report identity");
-    handlers.get("agent_end")?.(
-      { messages: [assistantMessage("Native final text.")] },
-      bridgeContext,
-    );
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+  effectTest(
+    "locks an uncertain explicit report identity against conflicting retries",
+    function* () {
+      const { handlers, tools } = yield* step(startBridgeHarness);
+      handlers.get("before_agent_start")?.(
+        { prompt: "Begin supervisor assignment epoch 1." },
+        bridgeContext,
+      );
+      reportFailuresRemaining = 1;
+      const report = tools.find((tool) => tool.name === "supervisor_submit_report")!;
+      yield* step(() =>
+        expect(
+          report.execute("report-uncertain", {
+            delivery_id: "stable-explicit-report",
+            report: "Explicit report with uncertain delivery.",
+          }),
+        ).rejects.toThrow("uncertain"),
+      );
+      yield* step(() =>
+        expect(
+          report.execute("report-conflict", {
+            delivery_id: "conflicting-report",
+            report: "Conflicting report.",
+          }),
+        ).rejects.toThrow("different supervisor report identity"),
+      );
+      handlers.get("agent_end")?.(
+        { messages: [assistantMessage("Native final text.")] },
+        bridgeContext,
+      );
+      yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
-    expect(bridgeCalls).toHaveLength(2);
-    expect(bridgeCalls[1]).toEqual(bridgeCalls[0]);
-  });
+      expect(bridgeCalls).toHaveLength(2);
+      expect(bridgeCalls[1]).toEqual(bridgeCalls[0]);
+    },
+  );
 
-  it("resets retained assignment state when an epoch is steered into the active Pi loop", async () => {
-    const { handlers, tools } = await startBridgeHarness();
-    handlers.get("before_agent_start")?.(
-      { prompt: "Begin supervisor assignment epoch 1." },
-      bridgeContext,
-    );
-    const report = tools.find((tool) => tool.name === "supervisor_submit_report")!;
-    await report.execute("report-1", {
-      delivery_id: "explicit-report-1",
-      report: "First report.",
-    });
+  effectTest(
+    "resets retained assignment state when an epoch is steered into the active Pi loop",
+    function* () {
+      const { handlers, tools } = yield* step(startBridgeHarness);
+      handlers.get("before_agent_start")?.(
+        { prompt: "Begin supervisor assignment epoch 1." },
+        bridgeContext,
+      );
+      const report = tools.find((tool) => tool.name === "supervisor_submit_report")!;
+      yield* step(() =>
+        report.execute("report-1", {
+          delivery_id: "explicit-report-1",
+          report: "First report.",
+        }),
+      );
 
-    handlers.get("input")?.(
-      {
-        text: "Begin supervisor assignment epoch 2.\n\nRetained follow-up.",
-        source: "interactive",
-        streamingBehavior: "steer",
-      },
-      bridgeContext,
-    );
-    handlers.get("agent_end")?.({ messages: [assistantMessage("Second report.")] }, bridgeContext);
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+      handlers.get("input")?.(
+        {
+          text: "Begin supervisor assignment epoch 2.\n\nRetained follow-up.",
+          source: "interactive",
+          streamingBehavior: "steer",
+        },
+        bridgeContext,
+      );
+      handlers.get("agent_end")?.(
+        { messages: [assistantMessage("Second report.")] },
+        bridgeContext,
+      );
+      yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
-    expect(bridgeCalls).toEqual([
-      {
-        name: "supervisor_submit_report",
-        input: { delivery_id: "explicit-report-1", report: "First report." },
-      },
-      {
-        name: "supervisor_submit_report",
-        input: { delivery_id: "pi-final-2", report: "Second report." },
-      },
-    ]);
-  });
+      expect(bridgeCalls).toEqual([
+        {
+          name: "supervisor_submit_report",
+          input: { delivery_id: "explicit-report-1", report: "First report." },
+        },
+        {
+          name: "supervisor_submit_report",
+          input: { delivery_id: "pi-final-2", report: "Second report." },
+        },
+      ]);
+    },
+  );
 
-  it("treats same-epoch input and agent-start events as idempotent", async () => {
-    const { handlers, tools } = await startBridgeHarness();
+  effectTest("treats same-epoch input and agent-start events as idempotent", function* () {
+    const { handlers, tools } = yield* step(startBridgeHarness);
     const epochPrompt = "Begin supervisor assignment epoch 1.\n\nInitial assignment.";
     handlers.get("input")?.({ text: epochPrompt, source: "interactive" }, bridgeContext);
     handlers.get("before_agent_start")?.({ prompt: epochPrompt }, bridgeContext);
     const report = tools.find((tool) => tool.name === "supervisor_submit_report")!;
-    await report.execute("report-1", {
-      delivery_id: "explicit-report-1",
-      report: "Explicit report.",
-    });
+    yield* step(() =>
+      report.execute("report-1", {
+        delivery_id: "explicit-report-1",
+        report: "Explicit report.",
+      }),
+    );
 
     handlers.get("input")?.(
       { text: epochPrompt, source: "interactive", streamingBehavior: "steer" },
@@ -309,7 +344,7 @@ describe("Herdr-hosted Pi bridge extension", () => {
       { messages: [assistantMessage("Duplicate final text.")] },
       bridgeContext,
     );
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+    yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
     expect(bridgeCalls).toEqual([
       {
@@ -319,12 +354,12 @@ describe("Herdr-hosted Pi bridge extension", () => {
     ]);
   });
 
-  it("uses a fresh fallback identity for each retained Pi assignment", async () => {
-    const { handlers } = await startBridgeHarness();
+  effectTest("uses a fresh fallback identity for each retained Pi assignment", function* () {
+    const { handlers } = yield* step(startBridgeHarness);
     for (const report of ["First report.", "Second report."]) {
       handlers.get("before_agent_start")?.({}, bridgeContext);
       handlers.get("agent_end")?.({ messages: [assistantMessage(report)] }, bridgeContext);
-      await handlers.get("agent_settled")?.({}, bridgeContext);
+      yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
     }
 
     expect(bridgeCalls).toEqual([
@@ -339,25 +374,27 @@ describe("Herdr-hosted Pi bridge extension", () => {
     ]);
   });
 
-  it("does not retry an uncertain explicit report after an interrupted turn", async () => {
-    const { handlers, tools } = await startBridgeHarness();
+  effectTest("does not retry an uncertain explicit report after an interrupted turn", function* () {
+    const { handlers, tools } = yield* step(startBridgeHarness);
     handlers.get("before_agent_start")?.(
       { prompt: "Begin supervisor assignment epoch 1." },
       bridgeContext,
     );
     reportFailuresRemaining = 1;
     const report = tools.find((tool) => tool.name === "supervisor_submit_report")!;
-    await expect(
-      report.execute("report-uncertain", {
-        delivery_id: "interrupted-report",
-        report: "Do not retry after interruption.",
-      }),
-    ).rejects.toThrow("uncertain");
+    yield* step(() =>
+      expect(
+        report.execute("report-uncertain", {
+          delivery_id: "interrupted-report",
+          report: "Do not retry after interruption.",
+        }),
+      ).rejects.toThrow("uncertain"),
+    );
     handlers.get("agent_end")?.(
       { messages: [assistantMessage("Partial report.", "aborted")] },
       bridgeContext,
     );
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+    yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
     expect(bridgeCalls).toEqual([
       {
@@ -370,48 +407,51 @@ describe("Herdr-hosted Pi bridge extension", () => {
     ]);
   });
 
-  it("releases a bridge acquired by startup when shutdown interrupts initialization", async () => {
-    const acquired = Deferred.makeUnsafe<void>();
-    const initialization = Deferred.makeUnsafe<void>();
-    const release = vi.fn();
-    const blockedOpen: PiSupervisorBridgeExtensionDependencies["openBridge"] = () =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          Deferred.doneUnsafe(acquired, Effect.void);
-          return {
-            call: async <Name extends SupervisorToolName>(
-              _name: Name,
-              _input: SupervisorToolArgumentsByName[Name],
-            ) => "accepted",
-            close: vi.fn(),
-          };
-        }),
-        () => Effect.sync(release),
-      ).pipe(Effect.tap(() => Deferred.await(initialization)));
-    const { handlers, tools } = bridgeHarness(blockedOpen);
-    const starting = Promise.resolve(
-      handlers.get("session_start")?.(
-        {},
-        extensionContextFixture({ cwd: "/project", isProjectTrusted: () => false, hasUI: false }),
-      ),
-    );
-    await Effect.runPromise(Deferred.await(acquired));
+  effectTest(
+    "releases a bridge acquired by startup when shutdown interrupts initialization",
+    function* () {
+      const acquired = Deferred.makeUnsafe<void>();
+      const initialization = Deferred.makeUnsafe<void>();
+      const release = vi.fn();
+      const blockedOpen: PiSupervisorBridgeExtensionDependencies["openBridge"] = () =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            Deferred.doneUnsafe(acquired, Effect.void);
+            return {
+              call: <Name extends SupervisorToolName>(
+                _name: Name,
+                _input: SupervisorToolArgumentsByName[Name],
+              ) => Promise.resolve("accepted"),
+              close: vi.fn(),
+            };
+          }),
+          () => Effect.sync(release),
+        ).pipe(Effect.tap(() => Deferred.await(initialization)));
+      const { handlers, tools } = bridgeHarness(blockedOpen);
+      const starting = Promise.resolve(
+        handlers.get("session_start")?.(
+          {},
+          extensionContextFixture({ cwd: "/project", isProjectTrusted: () => false, hasUI: false }),
+        ),
+      );
+      yield* step(() => Effect.runPromise(Deferred.await(acquired)));
 
-    await handlers.get("session_shutdown")?.({}, bridgeContext);
-    await starting;
+      yield* settle(() => handlers.get("session_shutdown")?.({}, bridgeContext));
+      yield* step(() => starting);
 
-    expect(release).toHaveBeenCalledOnce();
-    expect(tools).toEqual([]);
-  });
+      expect(release).toHaveBeenCalledOnce();
+      expect(tools).toEqual([]);
+    },
+  );
 
-  it("does not auto-report an interrupted turn or after session shutdown", async () => {
-    const { handlers } = await startBridgeHarness();
+  effectTest("does not auto-report an interrupted turn or after session shutdown", function* () {
+    const { handlers } = yield* step(startBridgeHarness);
     handlers.get("before_agent_start")?.({}, bridgeContext);
     handlers.get("agent_end")?.(
       { messages: [assistantMessage("Partial report.", "aborted")] },
       bridgeContext,
     );
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+    yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
     expect(bridgeCalls).toEqual([]);
 
     handlers.get("before_agent_start")?.({}, bridgeContext);
@@ -419,8 +459,8 @@ describe("Herdr-hosted Pi bridge extension", () => {
       { messages: [assistantMessage("Late complete report.")] },
       bridgeContext,
     );
-    await handlers.get("session_shutdown")?.({}, bridgeContext);
-    await handlers.get("agent_settled")?.({}, bridgeContext);
+    yield* settle(() => handlers.get("session_shutdown")?.({}, bridgeContext));
+    yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
     expect(bridgeCalls).toEqual([]);
     expect(close).toHaveBeenCalledOnce();

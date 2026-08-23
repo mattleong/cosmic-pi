@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-this-alias -- Effect.gen uses an explicit stable class receiver. */
 import {
   SessionManager,
   SettingsManager,
@@ -154,35 +153,34 @@ export class AdvisorRuntime {
     return this.activeChildProjection?.session;
   }
   startEffect(options: AdvisorRuntimeStartOptions) {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       // Serialize detachment and bounded finalization so a replacement never overlaps an owned
       // child. Startup remains interruptible and uses the epoch token to reject stale concurrent
       // initializations.
-      const admission = yield* self.lifecycleLock.withPermits(1)(
-        Effect.gen(function* () {
-          yield* self.awaitPendingStartCleanupEffect();
-          const reserved = yield* SynchronizedRef.modify(self.activeChild, (current) => {
-            const startEpoch = ++self.epoch;
-            if (self.activeChildProjection === current) self.activeChildProjection = undefined;
+      const admission = yield* this.lifecycleLock.withPermits(1)(
+        Effect.gen({ self: this }, function* () {
+          yield* this.awaitPendingStartCleanupEffect();
+          const reserved = yield* SynchronizedRef.modify(this.activeChild, (current) => {
+            const startEpoch = ++this.epoch;
+            if (this.activeChildProjection === current) this.activeChildProjection = undefined;
             return [{ startEpoch, previous: current } as const, undefined];
           });
-          self.pendingSeed = undefined;
-          self.activeCheckpoint = undefined;
+          this.pendingSeed = undefined;
+          this.activeCheckpoint = undefined;
           if (reserved.previous) yield* Scope.close(reserved.previous.scope, Exit.void);
           return reserved;
         }),
       );
       const startEpoch = admission.startEpoch;
-      if (startEpoch !== self.epoch)
+      if (startEpoch !== this.epoch)
         return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
-      self.options = options;
-      const initialize = Effect.gen(function* () {
-        const child = yield* self.childFactory.createChildModel(options.ctx, options.config);
-        if (startEpoch !== self.epoch)
+      this.options = options;
+      const initialize = Effect.gen({ self: this }, function* () {
+        const child = yield* this.childFactory.createChildModel(options.ctx, options.config);
+        if (startEpoch !== this.epoch)
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
-        const tools = yield* self.childFactory.createTools(options.ctx.cwd, self.toolRunner);
-        if (startEpoch !== self.epoch)
+        const tools = yield* this.childFactory.createTools(options.ctx.cwd, this.toolRunner);
+        if (startEpoch !== this.epoch)
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
         const createOptions: CreateAgentSessionOptions = {
           cwd: options.ctx.cwd,
@@ -202,16 +200,16 @@ export class AdvisorRuntime {
           excludeTools: unsafeToolNames(),
         };
         const startCleanup = yield* Deferred.make<void>();
-        self.pendingStartCleanup = startCleanup;
+        this.pendingStartCleanup = startCleanup;
         const result = yield* Effect.uninterruptibleMask(() =>
           Effect.interruptible(
             createChildSessionEffect(
-              () => self.childFactory.createSession(createOptions),
+              () => this.childFactory.createSession(createOptions),
               startCleanup,
             ),
           ).pipe(
             Effect.flatMap((result) => {
-              if (startEpoch !== self.epoch)
+              if (startEpoch !== this.epoch)
                 return disposeSessionNowEffect(result.session).pipe(
                   Effect.andThen(
                     Effect.fail(
@@ -219,25 +217,27 @@ export class AdvisorRuntime {
                     ),
                   ),
                 );
-              return self
-                .acquireChildEffect(result.session, startEpoch, ADVISOR_OPERATION_TIMEOUT_MS)
-                .pipe(Effect.as(result));
+              return this.acquireChildEffect(
+                result.session,
+                startEpoch,
+                ADVISOR_OPERATION_TIMEOUT_MS,
+              ).pipe(Effect.as(result));
             }),
           ),
         );
-        if (startEpoch !== self.epoch)
+        if (startEpoch !== this.epoch)
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
-        yield* self.sessionSafety.assertSessionSafeToolsEffect(result.session);
+        yield* this.sessionSafety.assertSessionSafeToolsEffect(result.session);
         if (result.session.sessionFile !== undefined)
-          return yield* self.sessionSafety.fatalSafetyFailureEffect(
+          return yield* this.sessionSafety.fatalSafetyFailureEffect(
             "Advisor child session unexpectedly has a persistent file.",
           );
-        self.resetRequiredReason = undefined;
+        this.resetRequiredReason = undefined;
         const basePendingSeed = {
           seed: options.seed,
           maxContextChars: ADVISOR_RECENT_CONTEXT_CHARS,
         };
-        self.pendingSeed =
+        this.pendingSeed =
           options.stateSummary === undefined
             ? basePendingSeed
             : { ...basePendingSeed, stateSummary: options.stateSummary };
@@ -250,26 +250,25 @@ export class AdvisorRuntime {
             : new AdvisorModelError({ message: "Advisor child startup timed out." }),
         ),
         Effect.onExit((exit) =>
-          exit._tag === "Failure" ? self.invalidateFailedStartEffect(startEpoch) : Effect.void,
+          exit._tag === "Failure" ? this.invalidateFailedStartEffect(startEpoch) : Effect.void,
         ),
         Effect.withSpan("pi-advisor.child.start"),
       );
     });
   }
   checkpointEffect(request: AdvisorCheckpointRequest) {
-    const self = this;
-    return Effect.gen(function* () {
-      const child = yield* self.sessionSafety.requireChildEffect();
+    return Effect.gen({ self: this }, function* () {
+      const child = yield* this.sessionSafety.requireChildEffect();
       const session = child.session;
       child.releaseState.aborted = false;
-      yield* self.sessionSafety.assertSafeToolsEffect();
-      const checkpointEpoch = self.epoch;
-      self.toolRounds = 0;
-      self.streamedChars = 0;
-      self.childStreamState = emptyAdvisorTrajectoryDetector();
-      self.resetRequiredReason = undefined;
-      self.lastStopError = undefined;
-      const seed = self.pendingSeed;
+      yield* this.sessionSafety.assertSafeToolsEffect();
+      const checkpointEpoch = this.epoch;
+      this.toolRounds = 0;
+      this.streamedChars = 0;
+      this.childStreamState = emptyAdvisorTrajectoryDetector();
+      this.resetRequiredReason = undefined;
+      this.lastStopError = undefined;
+      const seed = this.pendingSeed;
       const prompt = buildCheckpointPrompt(request, seed);
       const finalPrompt = buildCheckpointFinalizationPrompt(request);
       const abortRequested = yield* Deferred.make<void>();
@@ -281,14 +280,14 @@ export class AdvisorRuntime {
         finalization,
         finalizationQueued: false,
       };
-      self.activeCheckpoint = active;
+      this.activeCheckpoint = active;
       const promptEffect = Effect.tryPromise({
         try: () => session.prompt(prompt, { expandPromptTemplates: false, source: "extension" }),
         catch: toModelError("Advisor checkpoint failed."),
       }).pipe(
         Effect.raceFirst(
           Deferred.await(active.abortRequested).pipe(
-            Effect.andThen(self.abortEffect()),
+            Effect.andThen(this.abortEffect()),
             Effect.andThen(
               Effect.fail(
                 new AdvisorRuntimeResetRequiredError({
@@ -300,14 +299,14 @@ export class AdvisorRuntime {
         ),
       );
       yield* promptEffect.pipe(
-        Effect.andThen(self.sessionEvents.awaitChildEventsEffect(checkpointEpoch)),
+        Effect.andThen(this.sessionEvents.awaitChildEventsEffect(checkpointEpoch)),
         Effect.andThen(
           Effect.suspend(() =>
             active.finalizationQueued
               ? Deferred.await(active.finalization).pipe(
                   Effect.raceFirst(
                     Deferred.await(active.abortRequested).pipe(
-                      Effect.andThen(self.abortEffect()),
+                      Effect.andThen(this.abortEffect()),
                       Effect.andThen(
                         Effect.fail(
                           new AdvisorRuntimeResetRequiredError({
@@ -321,41 +320,41 @@ export class AdvisorRuntime {
               : Effect.void,
           ),
         ),
-        Effect.andThen(self.sessionEvents.awaitChildEventsEffect(checkpointEpoch)),
-        Effect.onInterrupt(() => self.abortEffect()),
+        Effect.andThen(this.sessionEvents.awaitChildEventsEffect(checkpointEpoch)),
+        Effect.onInterrupt(() => this.abortEffect()),
         Effect.timeout(Duration.millis(ADVISOR_OPERATION_TIMEOUT_MS)),
         Effect.mapError((error) => {
-          if (self.resetRequiredReason)
-            return new AdvisorRuntimeResetRequiredError({ message: self.resetRequiredReason });
+          if (this.resetRequiredReason)
+            return new AdvisorRuntimeResetRequiredError({ message: this.resetRequiredReason });
           if (error instanceof AdvisorModelError) return error;
-          self.invalidateForReprime("Advisor review timed out and requires a fresh context.");
+          this.invalidateForReprime("Advisor review timed out and requires a fresh context.");
           return new AdvisorRuntimeResetRequiredError({ message: "Advisor review timed out." });
         }),
         Effect.ensuring(
           Effect.sync(() => {
-            if (self.activeCheckpoint === active) self.activeCheckpoint = undefined;
+            if (this.activeCheckpoint === active) this.activeCheckpoint = undefined;
           }),
         ),
         Effect.withSpan("pi-advisor.child.checkpoint"),
       );
-      if (self.resetRequiredReason) {
-        const reason = self.resetRequiredReason;
-        yield* self.abortEffect();
+      if (this.resetRequiredReason) {
+        const reason = this.resetRequiredReason;
+        yield* this.abortEffect();
         return yield* new AdvisorRuntimeResetRequiredError({ message: reason });
       }
-      if (checkpointEpoch !== self.epoch)
+      if (checkpointEpoch !== this.epoch)
         return yield* new AdvisorRuntimeResetRequiredError({
           message:
-            self.resetRequiredReason ?? "Advisor checkpoint became stale after runtime reset.",
+            this.resetRequiredReason ?? "Advisor checkpoint became stale after runtime reset.",
         });
-      if (self.lastStopError) return yield* new AdvisorModelError({ message: self.lastStopError });
+      if (this.lastStopError) return yield* new AdvisorModelError({ message: this.lastStopError });
       if (!active.finalizationQueued)
         return yield* new AdvisorModelError({
           message:
             "Advisor prompt settled before correlated checkpoint finalization could be queued.",
         });
-      yield* self.sessionSafety.assertSafeToolsEffect();
-      if (seed === self.pendingSeed) self.pendingSeed = undefined;
+      yield* this.sessionSafety.assertSafeToolsEffect();
+      if (seed === this.pendingSeed) this.pendingSeed = undefined;
       const finalizedText = yield* assistantTextAfterPromptEffect(session.messages, finalPrompt);
       const checkpoint = yield* parseAdvisorCheckpointEffect(finalizedText);
       if (
@@ -369,17 +368,16 @@ export class AdvisorRuntime {
     });
   }
   steerEffect(observations: string) {
-    const self = this;
-    return Effect.gen(function* () {
-      const session = yield* self.sessionSafety.requireSessionEffect();
-      yield* self.sessionSafety.assertSafeToolsEffect();
-      const steeringEpoch = self.epoch;
-      if (!session.isStreaming || !self.activeCheckpoint) return false;
+    return Effect.gen({ self: this }, function* () {
+      const session = yield* this.sessionSafety.requireSessionEffect();
+      yield* this.sessionSafety.assertSafeToolsEffect();
+      const steeringEpoch = this.epoch;
+      if (!session.isStreaming || !this.activeCheckpoint) return false;
       yield* Effect.tryPromise({
         try: () => session.steer(buildObservationSteer(observations)),
         catch: toModelError("Advisor steering failed."),
       });
-      if (steeringEpoch !== self.epoch)
+      if (steeringEpoch !== this.epoch)
         return yield* new AdvisorModelError({
           message: "Advisor observation delivery became stale.",
         });
@@ -396,10 +394,9 @@ export class AdvisorRuntime {
     return this.startEffect(startOptions).pipe(Effect.withSpan("pi-advisor.child.reprime"));
   }
   private acquireChildEffect(session: AgentSession, startEpoch: number, abortTimeoutMs: number) {
-    const self = this;
     return Effect.uninterruptibleMask(() =>
-      Effect.gen(function* () {
-        const scope = yield* Scope.fork(self.resourceScope);
+      Effect.gen({ self: this }, function* () {
+        const scope = yield* Scope.fork(this.resourceScope);
         const releaseState = { aborted: false };
         let committed = false;
         const close = Scope.close(scope, Exit.void);
@@ -407,14 +404,14 @@ export class AdvisorRuntime {
           scope,
           Effect.suspend(() => stopSessionEffect(session, !releaseState.aborted, abortTimeoutMs)),
         );
-        const acquire = Effect.gen(function* () {
+        const acquire = Effect.gen({ self: this }, function* () {
           let childHandle: ActiveAdvisorChild | undefined;
           const events = yield* makeSynchronousIngress<AdvisorChildEvent, never, never>({
             capacity: 128,
             overflow: "drop",
             handle: (event) =>
               childHandle
-                ? self.sessionEvents.handleChildEventEffect(childHandle, event)
+                ? this.sessionEvents.handleChildEventEffect(childHandle, event)
                 : Effect.void,
           }).pipe(Effect.provideService(Scope.Scope, scope));
           const finalizations = yield* makeSynchronousIngress<
@@ -425,7 +422,7 @@ export class AdvisorRuntime {
             capacity: 1,
             overflow: "coalesce-latest",
             handle: (completion) =>
-              self.sessionEvents.handleFinalizationCompletionEffect(completion),
+              this.sessionEvents.handleFinalizationCompletionEffect(completion),
           }).pipe(Effect.provideService(Scope.Scope, scope));
           const handle: ActiveAdvisorChild = {
             epoch: startEpoch,
@@ -439,7 +436,7 @@ export class AdvisorRuntime {
           childHandle = handle;
           const unsubscribe = yield* Effect.try({
             try: () =>
-              session.subscribe((event) => self.sessionEvents.observeChildEvent(handle, event)),
+              session.subscribe((event) => this.sessionEvents.observeChildEvent(handle, event)),
             catch: () =>
               new AdvisorModelError({ message: "Advisor child event subscription failed." }),
           });
@@ -453,11 +450,11 @@ export class AdvisorRuntime {
               }
             }),
           );
-          const installed = yield* SynchronizedRef.modifyEffect(self.activeChild, (current) =>
+          const installed = yield* SynchronizedRef.modifyEffect(this.activeChild, (current) =>
             Effect.sync(() => {
-              if (startEpoch !== self.epoch || current !== undefined)
+              if (startEpoch !== this.epoch || current !== undefined)
                 return [false, current] as const;
-              self.activeChildProjection = handle;
+              this.activeChildProjection = handle;
               committed = true;
               return [true, handle] as const;
             }),
@@ -472,47 +469,44 @@ export class AdvisorRuntime {
     );
   }
   private awaitPendingStartCleanupEffect() {
-    const self = this;
-    const pending = self.pendingStartCleanup;
+    const pending = this.pendingStartCleanup;
     if (!pending) return Effect.void;
     return Deferred.await(pending).pipe(
       Effect.andThen(
         Effect.sync(() => {
-          if (self.pendingStartCleanup === pending) self.pendingStartCleanup = undefined;
+          if (this.pendingStartCleanup === pending) this.pendingStartCleanup = undefined;
         }),
       ),
     );
   }
   private invalidateFailedStartEffect(startEpoch: number) {
-    const self = this;
-    return self.lifecycleLock.withPermits(1)(
-      Effect.gen(function* () {
-        if (startEpoch !== self.epoch) return;
-        const active = yield* SynchronizedRef.modify(self.activeChild, (current) => {
-          self.epoch++;
-          if (self.activeChildProjection === current) self.activeChildProjection = undefined;
+    return this.lifecycleLock.withPermits(1)(
+      Effect.gen({ self: this }, function* () {
+        if (startEpoch !== this.epoch) return;
+        const active = yield* SynchronizedRef.modify(this.activeChild, (current) => {
+          this.epoch++;
+          if (this.activeChildProjection === current) this.activeChildProjection = undefined;
           return [current, undefined] as const;
         });
-        self.pendingSeed = undefined;
-        self.activeCheckpoint = undefined;
+        this.pendingSeed = undefined;
+        this.activeCheckpoint = undefined;
         if (active) yield* Scope.close(active.scope, Exit.void);
       }),
     );
   }
   abortEffect() {
-    const self = this;
-    return self.lifecycleLock.withPermits(1)(
+    return this.lifecycleLock.withPermits(1)(
       Effect.uninterruptibleMask(() =>
-        Effect.gen(function* () {
-          yield* Effect.interruptible(self.awaitPendingStartCleanupEffect());
-          self.epoch++;
+        Effect.gen({ self: this }, function* () {
+          yield* Effect.interruptible(this.awaitPendingStartCleanupEffect());
+          this.epoch++;
           const selected = yield* SynchronizedRef.modify<
             ActiveAdvisorChild | undefined,
             AdvisorAbortSelection
-          >(self.activeChild, (active) => {
+          >(this.activeChild, (active) => {
             if (!active) return [{ active: undefined }, active];
             if (active.releaseState.aborted) {
-              active.epoch = self.epoch;
+              active.epoch = this.epoch;
               return [{ active: undefined }, active];
             }
             active.releaseState.aborted = true;
@@ -524,15 +518,15 @@ export class AdvisorRuntime {
             awaitSessionAbortEffect(active.session, ADVISOR_OPERATION_TIMEOUT_MS),
           ).pipe(
             Effect.onInterrupt(() =>
-              self.forceDetachChildEffect(
+              this.forceDetachChildEffect(
                 active,
                 "Advisor child abort was interrupted and requires a fresh context.",
               ),
             ),
           );
-          if (outcome === "settled") active.epoch = self.epoch;
+          if (outcome === "settled") active.epoch = this.epoch;
           else
-            yield* self.forceDetachChildEffect(
+            yield* this.forceDetachChildEffect(
               active,
               outcome === "timed-out"
                 ? "Advisor child abort timed out and requires a fresh context."
@@ -543,35 +537,33 @@ export class AdvisorRuntime {
     );
   }
   private forceDetachChildEffect(target: ActiveAdvisorChild, reason: string) {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       const result = yield* SynchronizedRef.modify<
         ActiveAdvisorChild | undefined,
         AdvisorForcedDetach
-      >(self.activeChild, (current) => {
+      >(this.activeChild, (current) => {
         if (current !== target) return [{ active: undefined, publishDiagnostic: false }, current];
-        if (self.activeChildProjection === target) self.activeChildProjection = undefined;
-        return [{ active: target, publishDiagnostic: self.markResetRequired(reason) }, undefined];
+        if (this.activeChildProjection === target) this.activeChildProjection = undefined;
+        return [{ active: target, publishDiagnostic: this.markResetRequired(reason) }, undefined];
       });
       if (!result.active) return;
-      if (result.publishDiagnostic) isolateCallback(() => self.options?.onDiagnostic?.(reason));
-      self.pendingSeed = undefined;
-      self.activeCheckpoint = undefined;
+      if (result.publishDiagnostic) isolateCallback(() => this.options?.onDiagnostic?.(reason));
+      this.pendingSeed = undefined;
+      this.activeCheckpoint = undefined;
       yield* Scope.close(result.active.scope, Exit.void);
     });
   }
   disposeChildEffect() {
-    const self = this;
-    return self.lifecycleLock.withPermits(1)(
-      Effect.gen(function* () {
-        yield* self.awaitPendingStartCleanupEffect();
-        const active = yield* SynchronizedRef.modify(self.activeChild, (current) => {
-          self.epoch++;
-          if (self.activeChildProjection === current) self.activeChildProjection = undefined;
+    return this.lifecycleLock.withPermits(1)(
+      Effect.gen({ self: this }, function* () {
+        yield* this.awaitPendingStartCleanupEffect();
+        const active = yield* SynchronizedRef.modify(this.activeChild, (current) => {
+          this.epoch++;
+          if (this.activeChildProjection === current) this.activeChildProjection = undefined;
           return [current, undefined] as const;
         });
-        self.pendingSeed = undefined;
-        self.activeCheckpoint = undefined;
+        this.pendingSeed = undefined;
+        this.activeCheckpoint = undefined;
         if (active) yield* Scope.close(active.scope, Exit.void);
       }),
     );

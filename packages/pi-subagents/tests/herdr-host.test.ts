@@ -1,10 +1,10 @@
 // Test entry point composes the subject Layer once.
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { HerdrCli } from "../src/boundary/herdr-cli.ts";
 import { HerdrHarness } from "../src/boundary/herdr-harness.ts";
 import { HerdrHost } from "../src/boundary/herdr-host.ts";
@@ -49,7 +49,7 @@ describe("session-owned Herdr topology", () => {
         expect(fake.closedPanes).toEqual([first.paneId, second.paneId]);
         expect(fake.callerPaneLive()).toBe(true);
         expect(fake.cleanupAuthorizations()).toBe(2);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -76,7 +76,7 @@ describe("session-owned Herdr topology", () => {
       expect(fake.callerPaneLive()).toBe(true);
       expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("uses the newest remaining owned pane after the latest pane closes", () => {
@@ -112,7 +112,7 @@ describe("session-owned Herdr topology", () => {
       yield* second.close;
       yield* first.close;
       expect(fake.callerPaneLive()).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("generates distinct Herdr 0.8-safe names for every hosted runtime", () => {
@@ -136,7 +136,7 @@ describe("session-owned Herdr topology", () => {
         yield* hosted.close;
       }
       expect(new Set(names).size).toBe(3);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("waits for a transient native pane occupant before spending activation probes", () => {
@@ -155,7 +155,7 @@ describe("session-owned Herdr topology", () => {
       });
       expect(fake.shellProcessInspections.get(hosted.paneId)).toBeGreaterThanOrEqual(5);
       expect(fake.activationConfirmations.get(hosted.paneId)).toBe(2);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("waits for stale post-activation agent detection before environment input", () => {
@@ -177,7 +177,7 @@ describe("session-owned Herdr topology", () => {
         paneId: hosted.paneId,
         operation: "prepare pane environment",
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("rolls back when both harmless pane-input activation probes are dropped", () => {
@@ -205,7 +205,7 @@ describe("session-owned Herdr topology", () => {
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.focusedTab()).toBe("user:t");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("does not restore stale focus after rollback closes the owned pane", () => {
@@ -227,7 +227,7 @@ describe("session-owned Herdr topology", () => {
       );
       expect(fake.focusedTab()).toBe("user:other");
       expect(fake.focusOperations.filter((operation) => operation === "restore focus")).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("rolls back a confirmed pre-application agent_pane_busy rejection", () => {
@@ -254,7 +254,7 @@ describe("session-owned Herdr topology", () => {
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.focusedTab()).toBe("user:t");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("rolls back before committing a run when focus restoration fails", () => {
@@ -281,7 +281,7 @@ describe("session-owned Herdr topology", () => {
       expect(fake.closedPanes).toEqual(["user:p1"]);
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live("quarantines startup when native-session identity is not returned atomically", () => {
@@ -310,7 +310,7 @@ describe("session-owned Herdr topology", () => {
       expect(fake.cleanupAuthorizations()).toBe(0);
       expect(fake.closedPanes).toEqual([]);
       expect(fake.callerPaneLive()).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.live(
@@ -337,7 +337,7 @@ describe("session-owned Herdr topology", () => {
         expect(fake.closedPanes).toEqual([]);
         expect(fake.callerPaneLive()).toBe(true);
         expect(fake.cleanupAuthorizations()).toBe(1);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -366,7 +366,7 @@ describe("session-owned Herdr topology", () => {
         expect(fake.cleanupAuthorizations()).toBe(0);
         expect(fake.closedPanes).toEqual([]);
         expect(fake.callerPaneLive()).toBe(true);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 });

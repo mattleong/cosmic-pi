@@ -1,13 +1,12 @@
-// Effect test entry point owns the temporary Node filesystem fixture.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+// Effect test entry point owns the temporary filesystem fixture.
 import { expect, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 import { readRawAdvisorConfigEffect, writeAdvisorConfigPatchEffect } from "../src/config/store.ts";
@@ -15,12 +14,11 @@ import { readRawAdvisorConfigEffect, writeAdvisorConfigPatchEffect } from "../sr
 it.effect("publishes committed config before interruption can observe the renamed document", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const directory = mkdtempSync(join(tmpdir(), "pi-advisor-config-commit-"));
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => rmSync(directory, { recursive: true, force: true })),
-      );
-      const path = join(directory, "advisor.json");
       const platform = yield* Layer.build(advisorPlatformLayer);
+      const fs = Context.get(platform, FileSystem.FileSystem);
+      const pathService = Context.get(platform, Path.Path);
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-advisor-config-commit-" });
+      const path = pathService.join(directory, "advisor.json");
       const commitStarted = yield* Deferred.make<void>();
       const releaseCommit = yield* Deferred.make<void>();
       let published: ResolvedAdvisorConfig | undefined;

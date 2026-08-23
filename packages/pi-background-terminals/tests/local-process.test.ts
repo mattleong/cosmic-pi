@@ -1,13 +1,13 @@
 // Explicit test entry-point Layer provision owns the local process scope.
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { LocalProcess, makeBackgroundProcessEnvironment } from "../src/boundary/local-process.ts";
 
 const withLocalProcess = <A, E>(effect: Effect.Effect<A, E, LocalProcess | Scope.Scope>) =>
-  effect.pipe(Effect.scoped, Effect.provide(LocalProcess.layer));
+  effect.pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
 
 describe("local process boundary", () => {
   it("requests color from compatible CLIs unless the environment explicitly configures it", () => {

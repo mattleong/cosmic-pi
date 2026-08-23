@@ -1,15 +1,9 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
 import { FullWidthDiffText, renderSyntaxHighlightedDiff } from "../src/diff/index";
 import { startBenchmarkShikiSession } from "./shiki-session";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import {
+  benchLog,
   benchTheme,
   numberedLines,
   printBenchHeader,
@@ -77,12 +71,12 @@ try {
   }
 
   printLayerSummary(results);
-  console.log("component/cold constructs FullWidthDiffText and renders once.");
-  console.log("component/cached measures the same-width render cache.");
-  console.log("component/reflow alternates widths to force wrap/padding recomputation.");
-  console.log("");
+  benchLog("component/cold constructs FullWidthDiffText and renders once.");
+  benchLog("component/cached measures the same-width render cache.");
+  benchLog("component/reflow alternates widths to force wrap/padding recomputation.");
+  benchLog("");
   printResults(results);
-  if (sink === Number.MIN_SAFE_INTEGER) console.log("sink", sink);
+  if (sink === Number.MIN_SAFE_INTEGER) benchLog("sink", sink);
 } finally {
   setCodePreviewSettings(previousSettings);
   await stopShiki();

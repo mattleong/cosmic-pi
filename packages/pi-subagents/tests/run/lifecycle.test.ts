@@ -1,6 +1,4 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,6 +8,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   fakeChildLayer,
@@ -82,7 +81,7 @@ describe("SubagentService", () => {
       ]);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       expect(fake.reclaimedRunIds).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("reclaims completed local Pi run state when the session scope ends", () =>
@@ -101,7 +100,7 @@ describe("SubagentService", () => {
         yield* yieldUntil(() => fake.controls[0]?.released() === 1);
         expect(fake.reclaimedRunIds).toEqual([]);
         return run.id;
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
 
       expect(fake.reclaimedRunIds).toEqual([runId]);
     }),
@@ -117,7 +116,7 @@ describe("SubagentService", () => {
       expect(stopped.state).toBe("stopped");
       expect(stopped.warning).toContain("remains quarantined");
       expect(fake.reclaimedRunIds).toEqual([run.id]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("coalesces streamed token activity publications", () => {
@@ -154,7 +153,7 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.length === beforeActivityTick + 1);
       expect((yield* service.status(run.id)).lastActivityAt).toBe(run.lastActivityAt + 1_000);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("terminates a completed Pi process and restores its saved session", () => {
@@ -185,7 +184,7 @@ describe("SubagentService", () => {
         "get_state",
         "prompt",
       ]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("reports a backend-generic error when completed resume state is unavailable", () => {
@@ -208,7 +207,7 @@ describe("SubagentService", () => {
       });
       expect(failure.message).toContain("local/pi did not provide continuation state");
       expect(failure.message).not.toContain("session file");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("waits for completed-process cleanup before restoring the session", () => {
@@ -235,7 +234,7 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       expect((yield* Fiber.join(resuming)).state).toBe("running");
       expect(fake.controls).toHaveLength(2);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("finalizes and releases slots when a backend awaitExit fails", () => {
@@ -269,7 +268,7 @@ describe("SubagentService", () => {
       );
       expect(replacement.state).toBe("running");
       expect(fake.controls).toHaveLength(2);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("drains buffered lifecycle output before processing child exit", () => {
@@ -295,7 +294,7 @@ describe("SubagentService", () => {
       const completed = yield* service.status(run.id);
       expect(completed.state).toBe("completed");
       expect(completed.finalText).toBe("Final output before exit.");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("settles interrupted startup as stopped without a warning", () => {
@@ -321,7 +320,7 @@ describe("SubagentService", () => {
       const id = projections.at(-1)?.runs[0]?.id;
       expect(id).toBeDefined();
       expect((yield* service.status(id!)).error).toBeUndefined();
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("allows local display rename for stopped runs", () => {
@@ -337,7 +336,7 @@ describe("SubagentService", () => {
       expect(
         fake.controls[0]?.commands.some((command) => command.type === "set_session_name"),
       ).toBe(false);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("preserves terminal state, completion delivery, and local completed rename", () => {
@@ -400,7 +399,7 @@ describe("SubagentService", () => {
       const stoppedFailed = yield* service.stop(failedRun.id);
       expect(stoppedFailed.state).toBe("failed");
       expect(stoppedFailed.endedAt).toBe(failedBeforeStop?.endedAt);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("ignores child contact and lifecycle events after a run is terminal", () => {
@@ -426,7 +425,7 @@ describe("SubagentService", () => {
       yield* Effect.yieldNow;
       expect((yield* service.status(run.id)).state).toBe("completed");
       expect((yield* service.status(run.id)).question).toBeUndefined();
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keeps a run stopped when startup finishes late", () =>
@@ -460,7 +459,7 @@ describe("SubagentService", () => {
         expect((yield* service.status(id!)).state).toBe("stopped");
         expect(fake.reclaimedRunIds).toContain(id);
         expect(cleanupOrder).toEqual(["backend", "lease"]);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     }),
   );
 
@@ -480,7 +479,7 @@ describe("SubagentService", () => {
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* Effect.yieldNow;
       expect((yield* service.list)[0]?.state).toBe("failed");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("clears the delivered final report while a completed run resumes", () => {
@@ -506,7 +505,7 @@ describe("SubagentService", () => {
       const resumed = yield* service.resume(run.id, "Continue");
       expect(resumed.state).toBe("running");
       expect(resumed.finalText).toBeUndefined();
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keeps a failed resume terminal and redacts the RPC error", () => {
@@ -537,7 +536,7 @@ describe("SubagentService", () => {
       expect(failed.state).toBe("failed");
       expect(failed.finalText).toBe("Preserved report.");
       expect(fake.controls[1]?.terminations).toContain("force");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("silently releases children when the session runtime is replaced", () => {
@@ -550,7 +549,7 @@ describe("SubagentService", () => {
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
         yield* service.start(request());
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
 
       expect(fake.controls[0]?.released()).toBe(1);
       expect(notifications).toEqual([]);

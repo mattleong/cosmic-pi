@@ -1,9 +1,5 @@
 #!/usr/bin/env node
 // The executable MCP edge deliberately owns native stdio and no-follow config reads.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/strictEffectProvide:off
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
@@ -21,10 +17,8 @@ import { RpcClient, RpcClientError, RpcSerialization } from "effect/unstable/rpc
 import { Socket } from "effect/unstable/socket";
 import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "pi-cosmic-core";
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { nodeFsConstants as constants, nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
   SUPERVISOR_CHANNEL_VERSION,
@@ -36,7 +30,14 @@ import {
   SupervisorRpcGroup,
 } from "../supervisor/protocol.ts";
 
-for (const key of Object.keys(process.env)) delete process.env[key];
+const { lstat, open } = nodeFsPromises;
+const { dirname, isAbsolute, resolve } = nodePath;
+
+// The helper scrubs its entire inherited environment snapshot before any other work.
+const scrubEnvironment = (environment: NodeJS.ProcessEnv): void => {
+  for (const key of Object.keys(environment)) delete environment[key];
+};
+scrubEnvironment(process.env);
 
 const VERSION = SUPERVISOR_CHANNEL_VERSION;
 const SERVER_NAME = "pi-subagents-supervisor";
@@ -467,9 +468,9 @@ const liveClient = (): RpcClient.FromGroup<
   return supervisorClient;
 };
 
-const callProgress = async (message: string, signal?: AbortSignal): Promise<void> => {
+const callProgress = (message: string, signal?: AbortSignal): Promise<void> => {
   const client = liveClient();
-  await runSupervisor(
+  return runSupervisor(
     client.SupervisorProgress({
       ...authenticatedPayload(),
       assignmentEpoch,
@@ -477,12 +478,12 @@ const callProgress = async (message: string, signal?: AbortSignal): Promise<void
       message,
     }),
     signal,
-  );
+  ).then(() => undefined);
 };
 
-const callWarning = async (message: string, signal?: AbortSignal): Promise<void> => {
+const callWarning = (message: string, signal?: AbortSignal): Promise<void> => {
   const client = liveClient();
-  await runSupervisor(
+  return runSupervisor(
     client.SupervisorWarning({
       ...authenticatedPayload(),
       assignmentEpoch,
@@ -490,16 +491,16 @@ const callWarning = async (message: string, signal?: AbortSignal): Promise<void>
       message,
     }),
     signal,
-  );
+  ).then(() => undefined);
 };
 
-const callQuestion = async (
+const callQuestion = (
   message: string,
   signal?: AbortSignal,
 ): Promise<{ readonly message: string }> => {
   const client = liveClient();
   const questionEpoch = assignmentEpoch;
-  const response = await runSupervisor(
+  return runSupervisor(
     client.SupervisorQuestion({
       ...authenticatedPayload(),
       assignmentEpoch: questionEpoch,
@@ -508,18 +509,18 @@ const callQuestion = async (
     }),
     signal,
     false,
+  ).then((response) =>
+    runSupervisor(
+      client.SupervisorAcknowledgeQuestionReply({
+        ...authenticatedPayload(),
+        assignmentEpoch: questionEpoch,
+        questionId: response.questionId,
+      }),
+    ).then(() => ({ message: response.message })),
   );
-  await runSupervisor(
-    client.SupervisorAcknowledgeQuestionReply({
-      ...authenticatedPayload(),
-      assignmentEpoch: questionEpoch,
-      questionId: response.questionId,
-    }),
-  );
-  return { message: response.message };
 };
 
-const callReport = async (
+const callReport = (
   deliveryId: ReturnType<typeof SupervisorDeliveryIdSchema.make>,
   text: string,
   signal?: AbortSignal,
@@ -705,40 +706,37 @@ const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | un
   }
 };
 
-const executeTool = async (request: ToolCall, signal: AbortSignal): Promise<void> => {
+const executeTool = (request: ToolCall, signal: AbortSignal): Promise<void> => {
   const args = decodeToolArguments(request.name, request.arguments);
-  if (!args) {
-    await toolResult(request.id, "Tool input is malformed, excessive, or unsupported.", true);
-    return;
-  }
+  const malformed = () =>
+    toolResult(request.id, "Tool input is malformed, excessive, or unsupported.", true);
+  if (!args) return malformed();
   switch (request.name) {
     case "supervisor_progress":
       if (args.kind !== "message") break;
-      await callProgress(args.message, signal);
-      await toolResult(request.id, "Progress delivered to the parent projection.");
-      return;
+      return callProgress(args.message, signal).then(() =>
+        toolResult(request.id, "Progress delivered to the parent projection."),
+      );
     case "supervisor_warning":
       if (args.kind !== "message") break;
-      await callWarning(args.message, signal);
-      await toolResult(request.id, "Warning recorded in parent-visible run status.");
-      return;
-    case "supervisor_question": {
-      if (args.kind !== "message") break;
-      const result = await callQuestion(args.message, signal);
-      await toolResult(request.id, `Parent reply: ${result.message}`);
-      return;
-    }
-    case "supervisor_submit_report": {
-      if (args.kind !== "report") break;
-      const result = await callReport(args.deliveryId, args.report, signal);
-      await toolResult(
-        request.id,
-        `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
+      return callWarning(args.message, signal).then(() =>
+        toolResult(request.id, "Warning recorded in parent-visible run status."),
       );
-      return;
-    }
+    case "supervisor_question":
+      if (args.kind !== "message") break;
+      return callQuestion(args.message, signal).then((result) =>
+        toolResult(request.id, `Parent reply: ${result.message}`),
+      );
+    case "supervisor_submit_report":
+      if (args.kind !== "report") break;
+      return callReport(args.deliveryId, args.report, signal).then((result) =>
+        toolResult(
+          request.id,
+          `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
+        ),
+      );
   }
-  await toolResult(request.id, "Tool input is malformed, excessive, or unsupported.", true);
+  return malformed();
 };
 
 const failureCode = <FailureInput>(failure: FailureInput): string | undefined =>

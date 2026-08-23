@@ -1,17 +1,11 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
 import { evaluateWordEmphasisAccuracy } from "../src/testing/word-emphasis-accuracy";
+import { benchLog, benchTable } from "./helpers";
 
 const report = await evaluateWordEmphasisAccuracy();
 
-console.log("Word-emphasis labeled accuracy corpus");
-console.table([
+benchLog("Word-emphasis labeled accuracy corpus");
+benchTable([
   {
     target: "rendered spans",
     precision: percent(report.spans.precision),
@@ -37,8 +31,8 @@ const misses = report.cases.filter(
       (result.pairs.falsePositive > 0 || result.pairs.falseNegative > 0)),
 );
 if (misses.length > 0) {
-  console.log("Cases with misses");
-  console.table(
+  benchLog("Cases with misses");
+  benchTable(
     misses.map((result) => ({
       case: result.name,
       "exact span lines": `${result.exactSpanLines}/${result.spanLines}`,

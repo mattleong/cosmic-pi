@@ -1,4 +1,4 @@
-const NON_ASCII_TEXT_PATTERN = /[^\x00-\x7F]/;
+const NON_ASCII_TEXT_PATTERN = /\P{ASCII}/u;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 type GraphemeSegments = ReturnType<Intl.Segmenter["segment"]>;
 

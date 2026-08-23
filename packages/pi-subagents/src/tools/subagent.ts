@@ -1,5 +1,4 @@
 // Pi tool execution is a Promise-shaped host boundary.
-// @effect-diagnostics effect/asyncFunction:off
 import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { withCodePreviewShell } from "pi-code-previews";

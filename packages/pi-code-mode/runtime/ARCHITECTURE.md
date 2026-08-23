@@ -23,12 +23,14 @@ and the Pi host limits (program source size, cumulative nested output).
 src/
   index.ts              # public barrel: CodeMode, Tool, ToolError/toolError
   codemode.ts           # public CodeMode namespace: make/execute, schemas, types
+  failure.ts            # closed internal RuntimeFailure union
   tool.ts               # Tool.make and tool definition types
   tool-error.ts         # ToolError: safe model-visible tool refusal
   tool-runtime.ts       # tool tree walking, catalog/search/instructions, limits,
                         # data-boundary copying, diagnostics + lifecycle types (internal)
   tool-schema.ts        # Effect Schema / JSON Schema signature rendering (internal)
   values.ts             # sandbox value wrappers (Date, RegExp, Map, Set, URL, promises)
+  runtime-values.ts     # owned runtime-type predicates used instead of host `typeof`
   interpreter/
     model.ts            # interpreter AST/diagnostic model (internal)
     runtime.ts          # Acorn-based tree-walk interpreter (internal, vendored large file)
@@ -37,9 +39,9 @@ src/
     regex-first-sets.ts # LOCAL (non-upstream) conservative alternation first-character
                         # analysis used by the confinement regex guard
   stdlib/               # confined standard-library surfaces (internal)
-    collections.ts  console.ts  date.ts  json.ts  math.ts  number.ts
-    object.ts  promise.ts  regexp.ts  string.ts  url.ts  value.ts
-tests/                  # ported upstream behavioral suites (Vitest)
+    collections.ts  console.ts  date.ts  epoch.ts  json.ts  math.ts
+    number.ts  object.ts  promise.ts  regexp.ts  string.ts  url.ts  value.ts
+tests/                  # ported upstream behavioral suites (Effect-backed Vitest)
 ```
 
 ## Public boundary
@@ -51,9 +53,25 @@ The only public entry is `src/index.ts` (`pi-code-mode-runtime` package export):
 - `Tool` - `make`, `Definition`, `Options`, `SchemaType`, `JsonSchema`.
 - `ToolError` / `toolError` - the explicit safe-message failure channel.
 
-Everything else (`tool-runtime.ts`, `tool-schema.ts`, `values.ts`,
+Everything else (`failure.ts`, `tool-runtime.ts`, `tool-schema.ts`, `values.ts`,
 `interpreter/`, `stdlib/`) is internal; tests may reach into internals exactly
 where the upstream suites do (`ToolRuntime.copyOut`).
+
+## Effect and JavaScript boundaries
+
+The runtime inherits every workspace TypeScript, Effect language-service, and
+lint check without a package-specific relaxation. `RuntimeFailure` closes the
+interpreter's Effect error channel over owned tagged errors and internal program
+throws. `Tool.make` accepts host effects with any typed error, then normalizes
+them to the safe `ToolError` channel. Interruption remains interruption. Other
+host failures and defects become the fixed `Tool execution failed` refusal
+before interpreter code can observe them.
+
+Host lifecycle durations read the Effect `Clock`. Guest `Date` behavior stays
+JavaScript wall-clock behavior through `stdlib/epoch.ts`; it is not replaced
+with the Effect test clock. Guest `async` and `Promise` behavior likewise remains
+interpreter behavior. The Vitest suites use Effect-backed, non-`async` host test
+bodies so host scheduling and guest language semantics stay separate.
 
 ## Fixed runtime policy
 
@@ -117,7 +135,8 @@ byte budget. Covered by `tests/confinement.test.ts`.
 intentionally exceed the repository's soft file-size guidance and keep upstream
 structure, naming, and style. Do not refactor them for local conventions:
 upstream comparability is the safety property that keeps pinned manual resyncs
-reviewable. Mechanical deviations, and the deliberate confinement deviation, are
-enumerated in `PROVENANCE.md`. The confinement guards added into the vendored
-files are single call-site lines that delegate to `confinement.ts`, so an
-upstream diff stays readable.
+reviewable. Mechanical deviations, including the zero-suppression TypeScript
+and Effect adaptation, and the deliberate confinement deviation are enumerated
+in `PROVENANCE.md`. The confinement guards added into the vendored files are
+single call-site lines that delegate to `confinement.ts`, so an upstream diff
+stays readable.

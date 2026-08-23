@@ -1,9 +1,8 @@
 // Promise assertions are test-runner boundaries.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/strictEffectProvide:off
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { resolveSubagentConfig } from "../src/config/options.ts";
@@ -380,7 +379,7 @@ describe("subagent v4 profile configuration and resolution", () => {
       expect(decodeSubagentConfig({ version }, "global").unsupportedVersion).toBe(true);
   });
 
-  it("logs only path-safe diagnostics from loaded v4 configuration", async () => {
+  it("logs only path-safe diagnostics from loaded v4 configuration", () => {
     const captured = makeCapturedLogger();
     const config = resolved(document({ denied: "secret-policy-value" }));
     const store = Layer.succeed(SubagentConfigStore, {
@@ -393,7 +392,7 @@ describe("subagent v4 profile configuration and resolution", () => {
       inspect: () => Effect.die("unused"),
       patchProfile: () => Effect.die("unused"),
     });
-    await Effect.runPromise(
+    return Effect.runPromise(
       SubagentProfileService.use((service) =>
         service.capture.pipe(
           Effect.tap((snapshot) =>
@@ -404,7 +403,7 @@ describe("subagent v4 profile configuration and resolution", () => {
           Effect.asVoid,
         ),
       ).pipe(
-        Effect.provide(
+        provideBuiltLayer(
           subagentProfileServiceLayer({
             cwd: "/repo",
             agentDirectory: "/agent",
@@ -412,7 +411,8 @@ describe("subagent v4 profile configuration and resolution", () => {
           }).pipe(Layer.provide(Layer.merge(store, captured.layer))),
         ),
       ),
-    );
-    expect(JSON.stringify(captured.entries)).not.toContain("secret-policy-value");
+    ).then(() => {
+      expect(JSON.stringify(captured.entries)).not.toContain("secret-policy-value");
+    });
   });
 });

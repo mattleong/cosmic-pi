@@ -1,4 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
@@ -13,6 +12,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { provideBuiltLayer } from "../runtime/layers.ts";
 
 /** Opt-in process authority. It is intentionally excluded from nodeFilePlatformLayer. */
 export const nodeProcessLayer = NodeChildProcessSpawner.layer.pipe(
@@ -278,7 +278,7 @@ export const runBoundedProcessScoped = (
 > => Effect.scoped(runBoundedProcess(request));
 
 /** Named Node boundary for consumers that do not own a larger platform Layer. */
-export const provideNodeProcess = Effect.provide(nodeProcessLayer);
+export const provideNodeProcess = provideBuiltLayer(nodeProcessLayer);
 
 export const runBoundedProcessNode = (
   request: BoundedProcessRequest,

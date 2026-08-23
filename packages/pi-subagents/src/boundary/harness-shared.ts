@@ -1,14 +1,12 @@
 // Shared private-filesystem and harness helpers for boundary services.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { constants, promises as fs } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
+
+const { isAbsolute, join, resolve } = nodePath;
 
 export const MAX_AUTH_BYTES = 64 * 1024;
 export const MAX_PATH_CHARS = 4_096;
@@ -27,50 +25,54 @@ export const hasControlCharacter = (value: string): boolean =>
     return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
   });
 
-export const ensurePrivateDirectory = async (path: string): Promise<void> => {
-  try {
-    await fs.mkdir(path, { mode: 0o700 });
-  } catch (error) {
-    if (nodeErrorCode(error) !== "EEXIST") throw error;
-  }
-  const stat = await fs.lstat(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-private-directory");
-  await fs.chmod(path, 0o700);
-};
+export const ensurePrivateDirectory = (path: string): Promise<void> =>
+  fs
+    .mkdir(path, { mode: 0o700 })
+    .catch((error) => {
+      if (nodeErrorCode(error) !== "EEXIST") throw error;
+    })
+    .then(() => fs.lstat(path))
+    .then((stat) => {
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-private-directory");
+      return fs.chmod(path, 0o700);
+    });
 
-export const writeExclusive = async (path: string, source: string): Promise<void> => {
+export const writeExclusive = (path: string, source: string): Promise<void> => {
   const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-  const handle = await fs.open(
-    path,
-    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow,
-    0o600,
-  );
-  try {
-    await handle.writeFile(source, { encoding: "utf8" });
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await fs.chmod(path, 0o600);
+  return fs
+    .open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow, 0o600)
+    .then((handle) =>
+      handle
+        .writeFile(source, { encoding: "utf8" })
+        .then(() => handle.sync())
+        .finally(() => handle.close()),
+    )
+    .then(() => fs.chmod(path, 0o600));
 };
 
-export const safeAgentDirectory = async (agentDirectory: string): Promise<string> => {
+export const safeAgentDirectory = (agentDirectory: string): Promise<string> => {
   if (
     !isAbsolute(agentDirectory) ||
     agentDirectory.length < 1 ||
     agentDirectory.length > MAX_PATH_CHARS ||
     hasControlCharacter(agentDirectory)
   )
-    throw new Error("invalid-agent-directory");
+    return Promise.reject(new Error("invalid-agent-directory"));
   const requested = resolve(agentDirectory);
-  const requestedStat = await fs.lstat(requested);
-  if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink())
-    throw new Error("unsafe-agent-directory");
-  const canonical = await fs.realpath(requested);
-  const canonicalStat = await fs.lstat(canonical);
-  if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink())
-    throw new Error("unsafe-agent-directory");
-  return canonical;
+  return fs
+    .lstat(requested)
+    .then((requestedStat) => {
+      if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink())
+        throw new Error("unsafe-agent-directory");
+      return fs.realpath(requested);
+    })
+    .then((canonical) =>
+      fs.lstat(canonical).then((canonicalStat) => {
+        if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink())
+          throw new Error("unsafe-agent-directory");
+        return canonical;
+      }),
+    );
 };
 
 export const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): boolean => {
@@ -90,7 +92,7 @@ export const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): bool
   );
 };
 
-export const safeCodexSourceHome = async (
+export const safeCodexSourceHome = (
   sourceEnvironment: NodeJS.ProcessEnv,
 ): Promise<string | undefined> => {
   const configured = sourceEnvironment.CODEX_HOME;
@@ -102,48 +104,58 @@ export const safeCodexSourceHome = async (
     source.length > MAX_PATH_CHARS ||
     hasControlCharacter(source)
   )
-    return undefined;
-  try {
-    const requested = resolve(source);
-    const requestedStat = await fs.lstat(requested);
-    if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink()) return undefined;
-    const canonical = await fs.realpath(requested);
-    const canonicalStat = await fs.lstat(canonical);
-    if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink()) return undefined;
-    return canonical;
-  } catch {
-    return undefined;
-  }
+    return Promise.resolve(undefined);
+  return Promise.resolve()
+    .then(() => {
+      const requested = resolve(source);
+      return fs.lstat(requested).then((requestedStat) => {
+        if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink()) return undefined;
+        return fs.realpath(requested).then((canonical) =>
+          fs.lstat(canonical).then((canonicalStat) => {
+            if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink()) return undefined;
+            return canonical;
+          }),
+        );
+      });
+    })
+    .catch(() => undefined);
 };
 
-const readValidatedCodexAuthFromHome = async (sourceHome: string): Promise<string | undefined> => {
+const readValidatedCodexAuthFromHome = (sourceHome: string): Promise<string | undefined> => {
   const path = join(sourceHome, "auth.json");
-  let bytes: Buffer;
-  try {
-    const stat = await fs.lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 1 || stat.size > MAX_AUTH_BYTES)
-      return undefined;
-    bytes = await fs.readFile(path);
-  } catch {
-    return undefined;
-  }
-  if (bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES) return undefined;
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(
-    bytes.toString("utf8"),
-  );
-  if (Option.isNone(decoded)) return undefined;
-  const value = decoded.value;
-  if (!value || !hasObjectRuntimeType(value) || Array.isArray(value) || !boundedJsonValue(value))
-    return undefined;
-  return `${JSON.stringify(value)}\n`;
+  return fs
+    .lstat(path)
+    .then((stat) =>
+      !stat.isFile() || stat.isSymbolicLink() || stat.size <= 1 || stat.size > MAX_AUTH_BYTES
+        ? undefined
+        : fs.readFile(path),
+    )
+    .catch(() => undefined)
+    .then((bytes) => {
+      if (bytes === undefined || bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES)
+        return undefined;
+      const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(
+        bytes.toString("utf8"),
+      );
+      if (Option.isNone(decoded)) return undefined;
+      const value = decoded.value;
+      if (
+        !value ||
+        !hasObjectRuntimeType(value) ||
+        Array.isArray(value) ||
+        !boundedJsonValue(value)
+      )
+        return undefined;
+      return `${JSON.stringify(value)}\n`;
+    });
 };
 
-export const readValidatedCodexAuth = async (
+export const readValidatedCodexAuth = (
   sourceEnvironment: NodeJS.ProcessEnv,
-): Promise<string | undefined> => {
-  const sourceHome = await safeCodexSourceHome(sourceEnvironment);
-  return sourceHome ? readValidatedCodexAuthFromHome(sourceHome) : undefined;
-};
+): Promise<string | undefined> =>
+  safeCodexSourceHome(sourceEnvironment).then((sourceHome) =>
+    sourceHome ? readValidatedCodexAuthFromHome(sourceHome) : undefined,
+  );
 
 export const harnessCleanupUnconfirmed = (
   cause: unknown,

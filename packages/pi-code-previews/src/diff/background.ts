@@ -22,9 +22,9 @@ export function diffLineBg(
   const bg = diffBackground(kind);
   if (!bg) return line;
   const coloredLine = line
-    .replace(/\x1b\[0m/g, `\x1b[0m${bg}`)
-    .replace(/\x1b\[39m/g, `\x1b[39m${bg}`)
-    .replace(/\x1b\[49m/g, `\x1b[49m${bg}`);
+    .replaceAll("\x1b[0m", `\x1b[0m${bg}`)
+    .replaceAll("\x1b[39m", `\x1b[39m${bg}`)
+    .replaceAll("\x1b[49m", `\x1b[49m${bg}`);
   return `${bg}${coloredLine}`;
 }
 
@@ -52,8 +52,18 @@ function deriveDiffBg(
   return `\x1b[48;2;${Math.round(base.r + (fgRgb.r - base.r) * intensity)};${Math.round(base.g + (fgRgb.g - base.g) * intensity)};${Math.round(base.b + (fgRgb.b - base.b) * intensity)}m`;
 }
 
+const DECIMAL_CHANNEL_RE = /^\d+$/;
+
 function parseAnsiRgb(ansi: string): { r: number; g: number; b: number } | undefined {
-  const match = ansi.match(/\x1b\[(?:38|48);2;(\d+);(\d+);(\d+)m/);
-  if (!match) return undefined;
-  return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) };
+  for (let index = ansi.indexOf("\x1b["); index >= 0; index = ansi.indexOf("\x1b[", index + 1)) {
+    const kind = ansi.slice(index + 2, index + 7);
+    if (kind !== "38;2;" && kind !== "48;2;") continue;
+    const end = ansi.indexOf("m", index + 7);
+    if (end < 0) continue;
+    const channels = ansi.slice(index + 7, end).split(";");
+    if (channels.length !== 3 || !channels.every((channel) => DECIMAL_CHANNEL_RE.test(channel)))
+      continue;
+    return { r: Number(channels[0]), g: Number(channels[1]), b: Number(channels[2]) };
+  }
+  return undefined;
 }

@@ -1,12 +1,11 @@
 // Test assertion boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/newPromise:off
 import assert from "node:assert/strict";
 import { describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
 import {
   disposeShikiHighlighter,
@@ -79,10 +78,8 @@ describe("Shiki adapter lifecycle", () => {
   );
 
   it.effect("defers disposal until a cancelled live language Promise settles", () => {
-    let resolvePending: (() => void) | undefined;
-    const pending = new Promise<void>((resolve) => {
-      resolvePending = resolve;
-    });
+    const pendingGate = Deferred.makeUnsafe<void>();
+    const pending = Effect.runPromise(Deferred.await(pendingGate));
     let loadStarted = false;
     let disposeAttempts = 0;
     const captured = makeCapturedLogger();
@@ -105,14 +102,14 @@ describe("Shiki adapter lifecycle", () => {
       yield* Fiber.interrupt(load);
       yield* disposeShikiHighlighter(highlighter);
       assert.equal(disposeAttempts, 0);
-      resolvePending?.();
+      Deferred.doneUnsafe(pendingGate, Effect.void);
       yield* Effect.promise(() => pending);
       yield* Effect.yieldNow;
       assert.equal(disposeAttempts, 1);
       assert.match(capturedTelemetrySnapshot(captured), /failed to dispose cleanly/);
       yield* disposeShikiHighlighter(highlighter);
       assert.equal(disposeAttempts, 1);
-    }).pipe(Effect.scoped, Effect.provide(captured.layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(captured.layer));
   });
 
   it.effect("late cancellation disposal cannot throw into a Promise continuation", () =>
@@ -140,7 +137,7 @@ describe("Shiki adapter lifecycle", () => {
       yield* initializeShikiEffect("dark-plus");
       assert.equal(getShikiStatus().initialized, false);
     }).pipe(
-      Effect.provide(
+      provideBuiltLayer(
         CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
       ),
     );
@@ -160,7 +157,7 @@ describe("Shiki adapter lifecycle", () => {
       assert.equal(released, 1);
     }).pipe(
       Effect.scoped,
-      Effect.provide(
+      provideBuiltLayer(
         CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
       ),
     );

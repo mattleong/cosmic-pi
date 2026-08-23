@@ -1,8 +1,6 @@
 // Delegated-Pi to packaged supervisor MCP helper process boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 // Wire frames are encoded here because this boundary owns the JSON-RPC dialect.
-// @effect-diagnostics effect/preferSchemaOverJson:off
-import { isAbsolute } from "node:path";
+import { nodePath } from "./node-builtins.ts";
 import { fileURLToPath } from "node:url";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -208,9 +206,14 @@ const toolCallRequest = <Name extends SupervisorToolName>(
 
 type OpenBridgeSession = NdjsonRpcSession<BridgeReply>;
 
+// Locally constructed JSON-RPC frames are serialized by this pure dialect encoder.
+const encodeFrame = (message: BridgeOutboundMessage): string => `${JSON.stringify(message)}\n`;
+
+const initializedNotificationFrame = (): string =>
+  encodeFrame({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+
 const makeBridgeClientDoor = (session: OpenBridgeSession): PiSupervisorBridgeClient => {
   let nextId = 0;
-  const encodeFrame = (message: BridgeOutboundMessage): string => `${JSON.stringify(message)}\n`;
   return {
     call: <Name extends SupervisorToolName>(
       name: Name,
@@ -254,7 +257,7 @@ export const openPiSupervisorBridge = (
 ): Effect.Effect<PiSupervisorBridgeClient, RpcSessionError, Scope.Scope> =>
   Effect.gen(function* () {
     if (
-      !isAbsolute(configPath) ||
+      !nodePath.isAbsolute(configPath) ||
       configPath.length < 1 ||
       configPath.length > 4_096 ||
       configPath.includes("\0") ||
@@ -287,7 +290,7 @@ export const openPiSupervisorBridge = (
     yield* session
       .call(
         INITIALIZE_REQUEST_ID,
-        `${JSON.stringify(initializeRequest())}\n`,
+        encodeFrame(initializeRequest()),
         options.initializeTimeoutMillis ?? CALL_TIMEOUT_MILLIS,
       )
       .pipe(
@@ -299,9 +302,7 @@ export const openPiSupervisorBridge = (
             }),
         ),
       );
-    yield* session.notify(
-      `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })}\n`,
-    );
+    yield* session.notify(initializedNotificationFrame());
 
     return makeBridgeClientDoor(session);
   });

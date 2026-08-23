@@ -1,12 +1,10 @@
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/strictEffectProvide:off
 import { EventEmitter } from "node:events";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import {
   awaitProcessClose,
-  nodeProcessLayer,
+  provideNodeProcess,
   runBoundedProcessScoped,
   type ProcessCloseSource,
 } from "../index.ts";
@@ -29,7 +27,7 @@ it.live("runs a bounded one-shot process", () =>
       cleanupUnconfirmed: false,
       dispatched: true,
     });
-  }).pipe(Effect.provide(nodeProcessLayer)),
+  }).pipe(provideNodeProcess),
 );
 
 it.live("terminates a process when bounded output overflows", () =>
@@ -45,7 +43,7 @@ it.live("terminates a process when bounded output overflows", () =>
     expect(result.overflowed).toBe(true);
     expect(result.stdout).toBe("0123");
     expect(result.cleanupUnconfirmed).toBe(false);
-  }).pipe(Effect.provide(nodeProcessLayer)),
+  }).pipe(provideNodeProcess),
 );
 
 it.live("preserves a child termination signal", () =>
@@ -60,7 +58,7 @@ it.live("preserves a child termination signal", () =>
     });
     expect(result.code).toBeNull();
     expect(result.signal).toBe("SIGTERM");
-  }).pipe(Effect.provide(nodeProcessLayer)),
+  }).pipe(provideNodeProcess),
 );
 
 it.live("terminates a process at its deadline", () =>
@@ -76,7 +74,7 @@ it.live("terminates a process at its deadline", () =>
     });
     expect(result.timedOut).toBe(true);
     expect(result.cleanupUnconfirmed).toBe(false);
-  }).pipe(Effect.provide(nodeProcessLayer)),
+  }).pipe(provideNodeProcess),
 );
 
 class TestCloseSource extends EventEmitter implements ProcessCloseSource {

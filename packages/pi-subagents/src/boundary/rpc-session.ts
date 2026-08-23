@@ -1,6 +1,5 @@
 // NDJSON request/response RPC sessions over spawned helper processes live at this boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
+import { nodeSpawn as spawn, type NodeChildProcess } from "./node-builtins.ts";
 import { awaitProcessClose } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";

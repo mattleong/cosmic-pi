@@ -1,4 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,6 +9,7 @@ import * as Schema from "effect/Schema";
 import * as PlatformError from "effect/PlatformError";
 import { JsonDocumentStore } from "../src/platform/json-document.ts";
 import { ProcessCoordinator } from "../src/platform/process-coordinator.ts";
+import { provideBuiltLayer } from "../src/runtime/layers.ts";
 
 function documentLayer(initial: Readonly<Record<string, string>>) {
   const files = new Map(Object.entries(initial));
@@ -60,7 +60,7 @@ it.effect("reads and atomically writes JSON object documents", () => {
     yield* store.writeObject("/config.json", { ...document, known: false });
     expect(harness.files.get("/config.json")).toContain('"unknown": "keep"');
     expect([...harness.files.keys()]).toEqual(["/config.json"]);
-  }).pipe(Effect.provide(harness.layer));
+  }).pipe(provideBuiltLayer(harness.layer));
 });
 
 it.effect("serializes read-modify-write updates across independently provided Layers", () => {
@@ -68,14 +68,14 @@ it.effect("serializes read-modify-write updates across independently provided La
   const update = (field: string, value: number) =>
     JsonDocumentStore.use((store) =>
       store.updateObject("/auth.json", (document) => ({ ...document, [field]: value })),
-    ).pipe(Effect.provide(harness.layer));
+    ).pipe(provideBuiltLayer(harness.layer));
   return Effect.gen(function* () {
     yield* Effect.all([update("beta", 2), update("gamma", 3)], {
       concurrency: "unbounded",
     });
     expect(
       yield* JsonDocumentStore.use((store) => store.readObject("/auth.json")).pipe(
-        Effect.provide(harness.layer),
+        provideBuiltLayer(harness.layer),
       ),
     ).toEqual({
       alpha: 1,
@@ -94,7 +94,7 @@ it.effect("fails closed when the latest document cannot be decoded", () => {
     );
     expect(result._tag).toBe("Failure");
     expect(harness.files.get("/auth.json")).toBe("not-json");
-  }).pipe(Effect.provide(harness.layer));
+  }).pipe(provideBuiltLayer(harness.layer));
 });
 
 it.effect("rejects non-JSON values instead of coercing persisted data", () => {
@@ -112,7 +112,7 @@ it.effect("rejects non-JSON values instead of coercing persisted data", () => {
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("encode");
     expect(harness.files.has("/config.json")).toBe(false);
-  }).pipe(Effect.provide(harness.layer));
+  }).pipe(provideBuiltLayer(harness.layer));
 });
 
 it.effect("does not clean up a temporary path when exclusive acquisition fails", () => {
@@ -138,7 +138,7 @@ it.effect("does not clean up a temporary path when exclusive acquisition fails",
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("write");
     expect(removals).toBe(0);
-  }).pipe(Effect.provide(layer));
+  }).pipe(provideBuiltLayer(layer));
 });
 
 it.effect(
@@ -185,7 +185,7 @@ it.effect(
                 afterCommit: Effect.sync(() => void afterCommits++),
               }),
             );
-      }).pipe(Effect.provide(layer), Effect.forkScoped);
+      }).pipe(provideBuiltLayer(layer), Effect.forkScoped);
       yield* Deferred.await(writeStarted);
       yield* Fiber.interrupt(writer);
       expect(files.get("/config.json")).toBe("old");
@@ -247,7 +247,7 @@ it.effect("does not run an after-commit hook when temporary writing fails", () =
     expect(files.get("/config.json")).toBe("old");
     expect(renames).toBe(0);
     expect(afterCommits).toBe(0);
-  }).pipe(Effect.provide(layer));
+  }).pipe(provideBuiltLayer(layer));
 });
 
 it.effect("commits the document and hook exactly once before honoring interruption", () =>
@@ -298,7 +298,7 @@ it.effect("commits the document and hook exactly once before honoring interrupti
               afterCommit: Effect.sync(() => void afterCommits++),
             }),
           );
-    }).pipe(Effect.provide(layer), Effect.forkScoped);
+    }).pipe(provideBuiltLayer(layer), Effect.forkScoped);
     yield* Deferred.await(renameStarted);
     const interruption = yield* Fiber.interrupt(writer).pipe(Effect.forkScoped);
     yield* Effect.yieldNow;
@@ -349,7 +349,7 @@ it.effect("treats rename as the final fallible commit and ignores cleanup defect
     expect(files.get("/config.json")).toContain('"enabled": true');
     expect(chmodPaths).toEqual(["/tmp/owned/value.json"]);
     expect(cleanupAttempts).toBe(1);
-  }).pipe(Effect.provide(layer));
+  }).pipe(provideBuiltLayer(layer));
 });
 
 it.effect("preserves a rename failure when best-effort cleanup also defects", () => {
@@ -388,5 +388,5 @@ it.effect("preserves a rename failure when best-effort cleanup also defects", ()
     if (result._tag === "Failure") expect(result.failure.operation).toBe("rename");
     expect(files.get("/config.json")).toBe("old");
     expect(cleanupAttempts).toBe(1);
-  }).pipe(Effect.provide(layer));
+  }).pipe(provideBuiltLayer(layer));
 });

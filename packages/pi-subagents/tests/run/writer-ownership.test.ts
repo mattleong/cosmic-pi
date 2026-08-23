@@ -1,6 +1,4 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -12,6 +10,7 @@ import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "../../src/
 import { SubagentProcessError } from "../../src/run/errors.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   fakeChildLayer,
@@ -96,7 +95,7 @@ describe("SubagentService", () => {
           )
           .pipe(Effect.flip);
         expect(conflict).toMatchObject({ _tag: "SubagentWriterConflictError" });
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -133,7 +132,7 @@ describe("SubagentService", () => {
         message: expect.stringContaining("cleanup could not be confirmed"),
       });
       expect(fake.controls).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -165,7 +164,7 @@ describe("SubagentService", () => {
         expect(replacement.state).toBe("running");
         expect(fake.controls).toHaveLength(1);
         yield* service.stop(replacement.id);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -192,7 +191,7 @@ describe("SubagentService", () => {
           .startSessionOwned(request({ name: "shutdown-start-boundary", writeIntent: "writer" }))
           .pipe(Effect.forkScoped({ startImmediately: true }));
         yield* Deferred.await(acquireStarted);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
 
       expect(fake.controls).toHaveLength(0);
       expect(releases).toBe(0);
@@ -235,7 +234,7 @@ describe("SubagentService", () => {
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
         expect(fake.controls).toHaveLength(0);
         expect(releases).toBe(1);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     }),
   );
 
@@ -258,7 +257,7 @@ describe("SubagentService", () => {
 
       const conflict = yield* Effect.flip(service.resume(first.id, "Make another edit"));
       expect(conflict._tag).toBe("SubagentWriterConflictError");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("resolves completed-writer resume uncertainty and releases ownership on exit", () => {
@@ -308,7 +307,7 @@ describe("SubagentService", () => {
       );
       expect(replacement.state).toBe("running");
       expect(fake.controls).toHaveLength(3);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keys the fast in-memory writer guard by canonical cwd aliases", () => {
@@ -344,7 +343,7 @@ describe("SubagentService", () => {
       expect(acquisitions).toBe(2);
       yield* service.stop(first.id);
       yield* service.stop(other.id);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -388,7 +387,7 @@ describe("SubagentService", () => {
         });
         expect(acquisitions).toBe(1);
         yield* service.stop(first.id);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -429,7 +428,7 @@ describe("SubagentService", () => {
       expect(reader.state).toBe("running");
       expect(fake.controls).toHaveLength(1);
       yield* service.stop(reader.id);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("does not canonicalize or acquire a lease for read-only runs", () => {
@@ -454,7 +453,7 @@ describe("SubagentService", () => {
       expect(canonicalizations).toBe(0);
       expect(acquisitions).toBe(0);
       yield* service.stop(reader.id);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("fails typed writer canonicalization before reservation or backend spawn", () => {
@@ -474,7 +473,7 @@ describe("SubagentService", () => {
       });
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -505,7 +504,7 @@ describe("SubagentService", () => {
         expect(admitted.state).toBe("running");
         expect(fake.controls).toHaveLength(1);
         yield* service.stop(admitted.id);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -541,7 +540,7 @@ describe("SubagentService", () => {
         expect(Exit.isFailure(yield* Fiber.join(starting))).toBe(true);
         expect(fake.controls).toHaveLength(0);
         expect(releases).toBe(1);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     }),
   );
 
@@ -575,7 +574,7 @@ describe("SubagentService", () => {
         "backend",
         "lease-release",
       ]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("does not spawn when the durable spawn-started mark fails", () => {
@@ -604,7 +603,7 @@ describe("SubagentService", () => {
       expect(yield* service.list).toEqual([
         expect.objectContaining({ name: "mark-failure-writer", state: "failed" }),
       ]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("marks a fresh lease before every backend respawn", () => {
@@ -643,7 +642,7 @@ describe("SubagentService", () => {
       expect(resumed.state).toBe("running");
       expect(order.slice(0, 3)).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
       yield* service.stop(writer.id);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("quarantines the session and retains ownership when lease release fails", () => {
@@ -678,7 +677,7 @@ describe("SubagentService", () => {
         activeId: writer.id,
       });
       expect(fake.controls).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("closes every owned writer lease after backend cleanup on session shutdown", () => {
@@ -702,7 +701,7 @@ describe("SubagentService", () => {
           request({ name: "shutdown-two", writeIntent: "writer", cwd: "/project-two" }),
         );
         return [first.id, second.id] as const;
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
       for (const [index, id] of ids.entries()) {
         const backendIndex = order.indexOf(`backend-${index}`);
         const leaseIndex = order.indexOf(`lease-${id}`);
@@ -735,7 +734,7 @@ describe("SubagentService", () => {
         request({ name: "writer-two", writeIntent: "writer", task: "Implement tests" }),
       );
       expect(second.state).toBe("running");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("quarantines writer ownership when child scope cleanup defects", () => {
@@ -762,7 +761,7 @@ describe("SubagentService", () => {
         message: expect.stringContaining("cleanup could not be confirmed"),
       });
       expect(fake.controls).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("retains failed writer ownership until its child scope is released", () => {
@@ -787,6 +786,6 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       const next = yield* service.start(request({ name: "next-writer", writeIntent: "writer" }));
       expect(next.state).toBe("running");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 });

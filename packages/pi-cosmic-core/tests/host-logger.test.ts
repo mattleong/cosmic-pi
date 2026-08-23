@@ -1,15 +1,15 @@
 // Host log sink coverage intentionally uses real Node filesystem primitives.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/strictEffectProvide:off
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
+import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
 import { piHostFileLoggerLayer, type PiHostLogTarget } from "../src/runtime/runtime.ts";
+
+const { mkdir, mkdtemp, readFile, rm, writeFile } = nodeFsPromises;
+const { join } = nodePath;
 
 class TestFileSystemError extends Schema.TaggedError<TestFileSystemError>()("TestFileSystemError", {
   operation: Schema.String,

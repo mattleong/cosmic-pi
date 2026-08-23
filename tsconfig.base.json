@@ -2,6 +2,7 @@
   "$schema": "./node_modules/@effect/language-service/schema.json",
   "compilerOptions": {
     "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
@@ -30,7 +31,7 @@
         "includeSuggestionsInTsc": true,
         "ignoreEffectWarningsInTscExitCode": false,
         "ignoreEffectErrorsInTscExitCode": false,
-        "ignoreEffectSuggestionsInTscExitCode": true,
+        "ignoreEffectSuggestionsInTscExitCode": false,
         "excludeExternalLibrariesWhenSkipLibCheck": true,
         "namespaceImportPackages": ["effect", "@effect/*"],
         "diagnosticSeverity": {

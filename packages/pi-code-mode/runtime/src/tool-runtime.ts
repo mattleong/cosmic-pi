@@ -1,18 +1,22 @@
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "./runtime-values.ts";
-import { Cause, Effect, Schema } from "effect";
+import { hasObjectRuntimeType } from "./runtime-values.js";
+import * as Clock from "effect/Clock";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   MAX_GUEST_COLLECTION_ENTRIES,
   MAX_GUEST_STRING_LENGTH,
   queryPairsUpperBound,
 } from "./interpreter/confinement.js";
-import { ToolError, toolError } from "./tool-error.js";
+import type { RuntimeFailure } from "./failure.js";
+import { runHost, ToolError } from "./tool-error.js";
 import {
-  type InterpreterObject,
   type InterpreterValue,
   makeInterpreterObject,
   ToolReference,
 } from "./interpreter/model.js";
+import { isoString } from "./stdlib/epoch.js";
 export { ToolReference } from "./interpreter/model.js";
 import {
   decodeInput as decodeToolInput,
@@ -35,7 +39,12 @@ import {
 
 const estimateTokens = (input: string) => Math.max(0, Math.round(input.length / 4));
 
-export type HostTool<R = never> = (...args: Array<unknown>) => Effect.Effect<unknown, unknown, R>;
+/**
+ * Callable host tool leaf. The declared failure channel is the closed `ToolError`; hosts
+ * with other failure types normalize through `runHost`/`toolError` (or let failures travel
+ * as defects, which the invoke path collapses into a generic `ToolError`).
+ */
+export type HostTool<R = never> = (...args: Array<unknown>) => Effect.Effect<unknown, ToolError, R>;
 
 export type HostTools<R = never> = {
   [name: string]: HostTool<R> | Definition<R> | HostTools<R>;
@@ -162,36 +171,30 @@ const toolExpression = (path: string) =>
  */
 const MAX_VALUE_DEPTH = 32;
 
-export class ToolRuntimeError extends Error {
+type ToolRuntimeErrorKind =
+  | "UnknownTool"
+  | "InvalidToolInput"
+  | "InvalidToolOutput"
+  | "InvalidDataValue"
+  | "ToolCallLimitExceeded";
+
+export class ToolRuntimeError extends Data.TaggedError("ToolRuntimeError")<{
+  readonly kind: ToolRuntimeErrorKind;
+  readonly message: string;
+  readonly suggestions: ReadonlyArray<string>;
+}> {
   constructor(
-    readonly kind:
-      | "UnknownTool"
-      | "InvalidToolInput"
-      | "InvalidToolOutput"
-      | "InvalidDataValue"
-      | "ToolCallLimitExceeded",
+    kind: ToolRuntimeErrorKind,
     message: string,
-    readonly suggestions: ReadonlyArray<string> = [],
+    suggestions: ReadonlyArray<string> = [],
   ) {
-    super(message);
-    this.name = "ToolRuntimeError";
+    super({ kind, message, suggestions });
   }
 }
 
 const isDefinition = <R>(
   value: HostTool<R> | Definition<R> | HostTools<R>,
 ): value is Definition<R> => isToolDefinition<R>(value);
-
-const runHost = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, ToolError, R> =>
-  effect.pipe(
-    Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
-      const error = Cause.squash(cause);
-      return Effect.fail(
-        error instanceof ToolError ? error : toolError("Tool execution failed", error),
-      );
-    }),
-  );
 
 const blockedMemberNames = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -325,7 +328,7 @@ const copyBounded = <Value>(
   // return) serialize exactly as JSON.stringify would at the data boundary: Date/URL use
   // toJSON(), while RegExp/Map/Set/URLSearchParams have no JSON form beyond {}.
   if (value instanceof SandboxDate) {
-    return Number.isFinite(value.time) ? new Date(value.time).toISOString() : null;
+    return Number.isFinite(value.time) ? isoString(value.time) : null;
   }
   if (value instanceof Date) {
     return Number.isFinite(value.getTime()) ? value.toISOString() : null;
@@ -854,7 +857,7 @@ export type ToolRuntime<R = never> = {
     path: ReadonlyArray<string>,
     args: ReadonlyArray<InterpreterValue>,
     lifecycleId?: number,
-  ) => Effect.Effect<InterpreterValue, unknown, R>;
+  ) => Effect.Effect<InterpreterValue, RuntimeFailure, R>;
   /** Enumerable namespace/tool names at one node of the callable tool tree; see `namespaceKeys`. */
   readonly keys: (path: ReadonlyArray<string>) => ReadonlyArray<string>;
 };
@@ -880,21 +883,28 @@ export const make = <R>(
   ): Effect.Effect<A, E, R> => {
     const onEnd = hooks?.onToolCallEnd;
     if (onEnd === undefined) return effect;
-    const startedAt = Date.now();
-    return effect.pipe(
-      Effect.tap(() => onEnd({ ...call, durationMs: Date.now() - startedAt, outcome: "success" })),
-      Effect.tapError((error) => {
-        const message =
-          error instanceof ToolError || error instanceof ToolRuntimeError
-            ? error.message
-            : "Tool execution failed";
-        return onEnd({
-          ...call,
-          durationMs: Date.now() - startedAt,
-          outcome: "failure",
-          message,
-        });
-      }),
+    return Effect.flatMap(Clock.currentTimeMillis, (startedAt) =>
+      effect.pipe(
+        Effect.tap(() =>
+          Effect.flatMap(Clock.currentTimeMillis, (endedAt) =>
+            onEnd({ ...call, durationMs: endedAt - startedAt, outcome: "success" }),
+          ),
+        ),
+        Effect.tapError((error) => {
+          const message =
+            error instanceof ToolError || error instanceof ToolRuntimeError
+              ? error.message
+              : "Tool execution failed";
+          return Effect.flatMap(Clock.currentTimeMillis, (endedAt) =>
+            onEnd({
+              ...call,
+              durationMs: endedAt - startedAt,
+              outcome: "failure",
+              message,
+            }),
+          );
+        }),
+      ),
     );
   };
 

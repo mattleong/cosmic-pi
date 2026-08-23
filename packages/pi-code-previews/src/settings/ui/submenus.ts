@@ -39,9 +39,11 @@ interface SettingsGroupSubmenuOptions {
 
 export class SettingsGroupSubmenu extends Container {
   private readonly settingsList: SettingsList;
+  private readonly options: SettingsGroupSubmenuOptions;
 
-  constructor(private readonly options: SettingsGroupSubmenuOptions) {
+  constructor(options: SettingsGroupSubmenuOptions) {
     super();
+    this.options = options;
 
     const items = options.items();
     const notifyChange = withoutGroupRowChanges(items, options.onChange);
@@ -150,7 +152,7 @@ export class ThemeSelectSubmenu extends Container {
     super();
 
     const themes: SelectItem[] = Object.keys(bundledThemes)
-      .sort()
+      .toSorted()
       .map((theme) => ({ value: theme, label: theme }));
 
     this.selectList = new SelectList(themes, 12, getSelectListTheme(), {

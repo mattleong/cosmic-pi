@@ -1,11 +1,4 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
 import type { DiffWordEmphasis } from "../src/config/schema";
 import { renderSyntaxHighlightedDiff } from "../src/diff/index";
 import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";
@@ -13,6 +6,8 @@ import { changedRanges, changedRangesWithConfidence } from "../src/diff/word/emp
 import { profileLine, profilePlacement } from "../src/diff/word/fixtures/profile-lines";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import {
+  benchLog,
+  benchTable,
   benchTheme,
   formatDuration,
   formatMs,
@@ -79,13 +74,11 @@ try {
   printLayerSummary(results);
   printOverheadSummary(results);
   printConfidenceSummary(makeWordCases(), makePairingCases());
-  console.log("changedRanges cases target weighted exact LCS and anchor fallback paths.");
-  console.log(
-    "renderChangedBlock cases target exact and positional fallback changed-line pairing.",
-  );
-  console.log("");
+  benchLog("changedRanges cases target weighted exact LCS and anchor fallback paths.");
+  benchLog("renderChangedBlock cases target exact and positional fallback changed-line pairing.");
+  benchLog("");
   printResults(results);
-  if (sink === Number.MIN_SAFE_INTEGER) console.log("sink", sink);
+  if (sink === Number.MIN_SAFE_INTEGER) benchLog("sink", sink);
 } finally {
   setCodePreviewSettings(previousSettings);
 }
@@ -95,12 +88,12 @@ function makeWordCases(): WordCase[] {
     {
       name: "token weighted LCS boundary 512x512 reversed",
       before: numberedTokens("tok", 512).join(" "),
-      after: numberedTokens("tok", 512).reverse().join(" "),
+      after: numberedTokens("tok", 512).toReversed().join(" "),
     },
     {
       name: "token anchor fallback 513x513 reversed",
       before: numberedTokens("tok", 513).join(" "),
-      after: numberedTokens("tok", 513).reverse().join(" "),
+      after: numberedTokens("tok", 513).toReversed().join(" "),
     },
     {
       name: "repeated tokens no unique anchors fallback",
@@ -194,15 +187,15 @@ function printOverheadSummary(
       "smart overhead": formatDuration(overhead),
     };
   });
-  console.log("Changed-line pairing overhead summary");
-  console.table(rows);
-  console.log("");
+  benchLog("Changed-line pairing overhead summary");
+  benchTable(rows);
+  benchLog("");
 }
 
 function printConfidenceSummary(wordCases: WordCase[], pairingCases: PairingCase[]): void {
   setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "smart" });
-  console.log("Word emphasis confidence summary");
-  console.table(
+  benchLog("Word emphasis confidence summary");
+  benchTable(
     wordCases.map((benchCase) => {
       const ranges = changedRangesWithConfidence(benchCase.before, benchCase.after, "smart");
       return {
@@ -213,8 +206,8 @@ function printConfidenceSummary(wordCases: WordCase[], pairingCases: PairingCase
       };
     }),
   );
-  console.log("Changed-line pair confidence summary");
-  console.table(
+  benchLog("Changed-line pair confidence summary");
+  benchTable(
     pairingCases.map((benchCase) => {
       const telemetry = wordEmphasisTelemetry(benchCase.diff, benchCase.lines, "smart");
       return {
@@ -230,7 +223,7 @@ function printConfidenceSummary(wordCases: WordCase[], pairingCases: PairingCase
       };
     }),
   );
-  console.log("");
+  benchLog("");
 }
 
 function findResult(

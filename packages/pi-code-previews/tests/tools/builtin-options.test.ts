@@ -1,44 +1,48 @@
-// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
+// Explicit test entry-point Effects drive real settings files and env boundaries.
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { afterEach, test } from "vitest";
+import { afterEach } from "vitest";
 import {
   cleanupTestTempDirectories,
   createTestTempDirectory,
 } from "../../src/testing/temp-directories";
 import { getBuiltinToolOptions } from "../../src/tools/builtin-options";
+import { effectTest, step } from "../support/effect-test";
 
-const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+// Raw Node builtin access for test scaffolding, mirroring pi-cosmic-core's platform boundary.
+const nodeFsModule = process.getBuiltinModule("node:fs");
+const nodePathModule = process.getBuiltinModule("node:path");
+if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
+const { mkdir, writeFile } = nodeFsModule.promises;
+const { join } = nodePathModule;
 
-afterEach(async () => {
-  if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-  else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
-  await cleanupTestTempDirectories();
+// Mutating the agent-directory slot is this suite's process-environment host boundary.
+const processEnv: NodeJS.ProcessEnv = process.env;
+
+const originalPiCodingAgentDir = processEnv.PI_CODING_AGENT_DIR;
+
+afterEach(() => {
+  if (originalPiCodingAgentDir === undefined) delete processEnv.PI_CODING_AGENT_DIR;
+  else processEnv.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
+  return cleanupTestTempDirectories();
 });
 
-test("builtin tool options preserve Pi shell and image settings", async () => {
-  const root = await createTestTempDirectory("pi-code-previews-tool-options-");
+effectTest("builtin tool options preserve Pi shell and image settings", function* () {
+  const root = yield* step(() => createTestTempDirectory("pi-code-previews-tool-options-"));
   const agentDir = join(root, "agent");
   const cwd = join(root, "project");
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  await mkdir(agentDir, { recursive: true });
-  await mkdir(cwd, { recursive: true });
-  await writeFile(
-    join(agentDir, "settings.json"),
-    JSON.stringify({
-      shellCommandPrefix: "export PI_CODE_PREVIEW_PREFIX=ok;",
-      shellPath: "/bin/sh",
-      images: { autoResize: false },
-    }),
-    "utf8",
+  processEnv.PI_CODING_AGENT_DIR = agentDir;
+  yield* step(() => mkdir(agentDir, { recursive: true }));
+  yield* step(() => mkdir(cwd, { recursive: true }));
+  yield* step(() =>
+    writeFile(
+      join(agentDir, "settings.json"),
+      JSON.stringify({
+        shellCommandPrefix: "export PI_CODE_PREVIEW_PREFIX=ok;",
+        shellPath: "/bin/sh",
+        images: { autoResize: false },
+      }),
+      "utf8",
+    ),
   );
 
   const options = getBuiltinToolOptions(cwd, false);
@@ -47,39 +51,46 @@ test("builtin tool options preserve Pi shell and image settings", async () => {
   assert.equal(options.read?.autoResizeImages, false);
 });
 
-test("builtin tool options ignore project settings when the project is untrusted", async () => {
-  const root = await createTestTempDirectory("pi-code-previews-tool-options-trust-");
-  const agentDir = join(root, "agent");
-  const cwd = join(root, "project");
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  await mkdir(agentDir, { recursive: true });
-  await mkdir(join(cwd, ".pi"), { recursive: true });
-  await writeFile(
-    join(agentDir, "settings.json"),
-    JSON.stringify({
-      shellCommandPrefix: "export PI_GLOBAL_PREFIX=ok;",
-      shellPath: "/bin/sh",
-      images: { autoResize: false },
-    }),
-    "utf8",
-  );
-  await writeFile(
-    join(cwd, ".pi", "settings.json"),
-    JSON.stringify({
-      shellCommandPrefix: "malicious-project-prefix",
-      shellPath: "/tmp/malicious-project-shell",
-      images: { autoResize: true },
-    }),
-    "utf8",
-  );
+effectTest(
+  "builtin tool options ignore project settings when the project is untrusted",
+  function* () {
+    const root = yield* step(() => createTestTempDirectory("pi-code-previews-tool-options-trust-"));
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    processEnv.PI_CODING_AGENT_DIR = agentDir;
+    yield* step(() => mkdir(agentDir, { recursive: true }));
+    yield* step(() => mkdir(join(cwd, ".pi"), { recursive: true }));
+    yield* step(() =>
+      writeFile(
+        join(agentDir, "settings.json"),
+        JSON.stringify({
+          shellCommandPrefix: "export PI_GLOBAL_PREFIX=ok;",
+          shellPath: "/bin/sh",
+          images: { autoResize: false },
+        }),
+        "utf8",
+      ),
+    );
+    yield* step(() =>
+      writeFile(
+        join(cwd, ".pi", "settings.json"),
+        JSON.stringify({
+          shellCommandPrefix: "malicious-project-prefix",
+          shellPath: "/tmp/malicious-project-shell",
+          images: { autoResize: true },
+        }),
+        "utf8",
+      ),
+    );
 
-  const untrusted = getBuiltinToolOptions(cwd, false);
-  assert.equal(untrusted.bash?.commandPrefix, "export PI_GLOBAL_PREFIX=ok;");
-  assert.equal(untrusted.bash?.shellPath, "/bin/sh");
-  assert.equal(untrusted.read?.autoResizeImages, false);
+    const untrusted = getBuiltinToolOptions(cwd, false);
+    assert.equal(untrusted.bash?.commandPrefix, "export PI_GLOBAL_PREFIX=ok;");
+    assert.equal(untrusted.bash?.shellPath, "/bin/sh");
+    assert.equal(untrusted.read?.autoResizeImages, false);
 
-  const trusted = getBuiltinToolOptions(cwd, true);
-  assert.equal(trusted.bash?.commandPrefix, "malicious-project-prefix");
-  assert.equal(trusted.bash?.shellPath, "/tmp/malicious-project-shell");
-  assert.equal(trusted.read?.autoResizeImages, true);
-});
+    const trusted = getBuiltinToolOptions(cwd, true);
+    assert.equal(trusted.bash?.commandPrefix, "malicious-project-prefix");
+    assert.equal(trusted.bash?.shellPath, "/tmp/malicious-project-shell");
+    assert.equal(trusted.read?.autoResizeImages, true);
+  },
+);

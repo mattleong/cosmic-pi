@@ -1,11 +1,9 @@
 // Node O_NOFOLLOW and inode checks have no equivalent in Effect FileSystem.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import { constants, promises as fs } from "node:fs";
-import * as nodePath from "node:path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import { isStrictlyInsidePath } from "./paths.ts";
 
 export class SafeFileError extends Schema.TaggedError<SafeFileError>()("SafeFileError", {

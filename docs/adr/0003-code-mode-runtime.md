@@ -31,10 +31,10 @@ host concerns, and without depending on an unpublished upstream package.
    `pi-code-mode` carries the runtime by value and imports it **only by a computed
    relative path** through one boundary door (`src/boundary/codemode-runtime.ts`).
    The boundary owns the narrow structural API used by Pi, so the vendored tree
-   remains checked under its separate upstream-compatible TypeScript project
-   instead of inheriting the extension's stricter diagnostics. The relative
-   import also guarantees the runtime shares the extension's single
-   `effect` instance. The runtime's `acorn`/`typescript`/`effect` dependencies
+   remains checked under its own TypeScript project while inheriting the full
+   workspace compiler, Effect language-service, and lint policy with no runtime
+   exemptions. The relative import also guarantees the runtime shares the
+   extension's single `effect` instance. The runtime's `acorn`/`typescript`/`effect` dependencies
    are declared by `pi-code-mode` itself so packed consumers install them. Only
    `runtime/src/` and the runtime's legal/provenance docs ship in the tarball;
    the nested workspace manifest is repository-only.
@@ -54,9 +54,12 @@ The runtime is vendored from the OpenCode repository
 `d4704347465c1ee63d0c213ed00e648e7f0231c5`, package `packages/codemode`
 (`@opencode-ai/codemode@1.18.16`, MIT). Upstream file structure and behavior are
 preserved for diffability; the mechanical local deviations (Effect
-4.0.0-rc.108, TypeScript 6.0.3, Node + Vitest, oxfmt formatting, OpenAPI
-removal) are enumerated in `packages/pi-code-mode/runtime/PROVENANCE.md`. The
-upstream `interpreter/language-v1` wording and `1.x` semver name the interpreter
+4.0.0-rc.108, TypeScript 6.0.3, Node + Effect-backed Vitest, oxfmt formatting,
+OpenAPI removal, explicit erasable TypeScript syntax, closed owned failure
+channels, Effect subpath imports, and host/guest clock separation) are enumerated
+in `packages/pi-code-mode/runtime/PROVENANCE.md`. These adaptations require no
+compiler relaxation, Effect diagnostic override, lint exemption, or source
+suppression. The upstream `interpreter/language-v1` wording and `1.x` semver name the interpreter
 contract inside OpenCode 2; they are not the legacy OpenCode product-v1
 architecture.
 
@@ -156,10 +159,14 @@ of that limitation; they do not remove it.
 - The workspace catalog pins `acorn@8.15.0` and `typescript@6.0.3`; both the
   runtime package and `pi-code-mode` (which ships the runtime source and
   therefore owns its external dependencies for consumers) consume `acorn`,
-  `effect`, and `typescript` via the catalog.
-- Upstream behavioral test suites (codemode, enumeration, parity, promise,
-  signature, stdlib) run under Vitest and gate the package, alongside the local
-  `confinement` suite (together, the runtime suite). The `pi-code-mode`
+  `effect`, and `typescript` via the catalog. Runtime tests also consume the
+  catalog-pinned `@effect/vitest`.
+- Retained upstream behavioral cases from the codemode, parity, promise, and
+  stdlib suites run as Effect-backed, non-`async` Vitest tests and gate the package,
+  alongside the local `confinement` suite. Enumeration, signature-rendering, and
+  public-contract-only cases remain excluded as recorded in `PROVENANCE.md`.
+  JavaScript `async`, `Promise`, and `Date` remain guest-language behavior inside
+  the interpreter rather than host test-runner behavior. The `pi-code-mode`
   extension suites additionally run real interpreter integration tests over
   the source-loaded runtime, including the final model-visible byte-bound (all early
   paths) and deactivation-handoff cases.
@@ -169,7 +176,8 @@ of that limitation; they do not remove it.
   legal/provenance docs ship inside the installed `pi-code-mode` package and load
   through Jiti while the nested workspace manifest and runtime dev files stay out.
 - A future Effect or TypeScript bump revalidates this package like any other,
-  but upstream resyncs remain deliberate, pinned, and manually reviewed.
+  at zero diagnostics and without package-specific disabled checks. Upstream
+  resyncs remain deliberate, pinned, and manually reviewed.
 
 ## Primary references
 

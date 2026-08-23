@@ -1,17 +1,15 @@
-// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
-import { readFileSync } from "node:fs";
+// Test/benchmark boundary intentionally reads stdin/file input through raw Node builtins.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { renderSyntaxHighlightedDiff } from "../src/diff/index";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { renderedWordEmphasisSpans } from "../src/testing/rendered-word-emphasis";
 import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";
+import { benchLog } from "./helpers";
+
+// Raw Node builtin access: the Effect FileSystem service cannot read the stdin descriptor.
+const nodeFsModule = process.getBuiltinModule("node:fs");
+if (!nodeFsModule) throw new Error("Node fs builtin is unavailable.");
+const { readFileSync } = nodeFsModule;
 
 const args = process.argv.slice(2);
 const mode = args.includes("--smart") ? "smart" : "all";
@@ -24,7 +22,7 @@ const lineLimit = Math.max(1, diff.split(/\r?\n/).length);
 const rendered = renderSyntaxHighlightedDiff(diff, undefined, plainTheme(), lineLimit).split("\n");
 const spans = rendered.map(renderedWordEmphasisSpans);
 
-console.log(
+benchLog(
   JSON.stringify(
     {
       mode,

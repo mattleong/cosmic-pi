@@ -1,10 +1,9 @@
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   jsonHttpRawResponse,
   jsonHttpTestLayer,
@@ -16,6 +15,10 @@ import { ModelRegistryAuth } from "../src/boundary/model-registry-auth.ts";
 import { requestXaiUsage } from "../src/usage/format.ts";
 
 const authPath = "/agent/auth.json";
+
+// Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
+// runtime values (tagged errors, redacted credentials) for secret fragments.
+const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
 
 const registryLayer = (token?: string) =>
   Layer.succeed(
@@ -70,10 +73,10 @@ describe("requestXaiUsage resources", () => {
       if (persisted._tag === "Found") {
         expect(persisted.credentials.expires).toBeGreaterThan(0);
       }
-      expect(JSON.stringify(result)).not.toContain(expiredAccess);
-      expect(JSON.stringify(result)).not.toContain(refreshSecret);
-      expect(JSON.stringify(result)).not.toContain(refreshedAccess);
-    }).pipe(Effect.provide(layer));
+      expect(serializedSnapshot(result)).not.toContain(expiredAccess);
+      expect(serializedSnapshot(result)).not.toContain(refreshSecret);
+      expect(serializedSnapshot(result)).not.toContain(refreshedAccess);
+    }).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("releases both concurrent HTTP resources when the usage request is interrupted", () => {
@@ -96,7 +99,7 @@ describe("requestXaiUsage resources", () => {
         ),
       );
       const fiber = yield* requestXaiUsage(authPath).pipe(
-        Effect.provide(provideRequest(http)),
+        provideBuiltLayer(provideRequest(http)),
         Effect.forkScoped,
       );
       yield* Deferred.await(bothStarted);

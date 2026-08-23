@@ -12,8 +12,7 @@
     ".pi/**",
     ".pi-subagents/**",
     ".roo/**",
-    ".windsurf/**",
-    "tools/oxlint/anti-slop/**"
+    ".windsurf/**"
   ],
   "jsPlugins": [
     {

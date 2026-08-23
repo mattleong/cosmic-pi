@@ -16,7 +16,7 @@ const IDENTIFIER_TOKEN_PATTERN = /^[$_\p{L}][$_\p{L}\p{N}\p{Mark}]*$/u;
 const NUMBER_TOKEN_PATTERN = /^\p{N}+(?:\.\p{N}+)?$/u;
 const SYMBOL_TOKEN_PATTERN = /^\p{S}+$/u;
 const MEANINGFUL_OPERATOR_TOKEN_PATTERN =
-  /^(?:===|!==|=>|==|!=|<=|>=|&&|\|\||[+\-*\/%<>=!?:~&|^]+)$/;
+  /^(?:===|!==|=>|==|!=|<=|>=|&&|\|\||[+\-*/%<>=!?:~&|^]+)$/;
 const DOMAIN_SEPARATOR_TOKEN_PATTERN = /^[-/:@#]$/;
 const STRUCTURAL_PUNCTUATION_TOKEN_PATTERN = /^[{}()[\].,;]$/;
 

@@ -1,6 +1,5 @@
 // TTL bounding uses wall-clock time at this process-memory host boundary, not Effect-scheduled
 // time; the handoff is synchronous globalThis state read from Pi session callbacks.
-// @effect-diagnostics effect/globalDate:off
 /**
  * Process-memory handoff for the deliberate `code_mode` deactivation intent, so a user's
  * choice survives Pi recreating the extension module on reload/new/resume/fork.
@@ -34,6 +33,7 @@ import * as Predicate from "effect/Predicate";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { synchronousNow } from "pi-cosmic-core";
 
 const HANDOFF_SLOT_KEY = Symbol.for("@cosmic-pi/pi-code-mode/code-mode-deactivation-handoff/v2");
 
@@ -67,7 +67,7 @@ const readEnvelope = (): HandoffEnvelope | undefined => {
     if (value !== undefined) delete state[HANDOFF_SLOT_KEY];
     return undefined;
   }
-  if (Date.now() > decoded.value.expiresAt) {
+  if (synchronousNow() > decoded.value.expiresAt) {
     delete state[HANDOFF_SLOT_KEY];
     return undefined;
   }
@@ -115,7 +115,7 @@ export const makeCodeModeDeactivationHandoff = (): CodeModeDeactivationHandoff =
       version: 2,
       key,
       deactivated,
-      expiresAt: Date.now() + SESSION_KEY_TTL_MS,
+      expiresAt: synchronousNow() + SESSION_KEY_TTL_MS,
     } satisfies HandoffEnvelope);
   },
 });

@@ -1,21 +1,12 @@
-// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
-// @effect-diagnostics effect/strictEffectProvide:off
+// Explicit test entry-point Effects drive the write diff boundaries.
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { test } from "vitest";
+import { effectTest, step } from "../support/effect-test";
 import { defaultCodePreviewPerformanceConfig } from "../../src/config/env";
 import {
   getWriteDiffSkipReason,
@@ -24,6 +15,15 @@ import {
 } from "../../src/write/diff";
 import { resolvePreviewPath } from "../../src/paths/resolve";
 
+// Raw Node builtin access for test scaffolding, mirroring pi-cosmic-core's platform boundary.
+const nodeFsModule = process.getBuiltinModule("node:fs");
+const nodePathModule = process.getBuiltinModule("node:path");
+if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
+const { mkdir, mkdtemp, rm, writeFile } = nodeFsModule.promises;
+const { join } = nodePathModule;
+
+const previewFileLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer);
+
 test("resolvePreviewPath mirrors pi path expansion", () => {
   assert.equal(resolvePreviewPath("@src/file.ts", "/tmp/project"), "/tmp/project/src/file.ts");
   assert.equal(resolvePreviewPath("src/file.ts", "/tmp/project"), "/tmp/project/src/file.ts");
@@ -31,21 +31,19 @@ test("resolvePreviewPath mirrors pi path expansion", () => {
   assert.equal(resolvePreviewPath("~/file.ts", "/tmp/project"), join(homedir(), "file.ts"));
 });
 
-test("write diff skip reasons only use threshold comparisons for size limits", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-code-previews-skip-reason-"));
+effectTest("write diff skip reasons only use threshold comparisons for size limits", function* () {
+  const dir = yield* step(() => mkdtemp(join(tmpdir(), "pi-code-previews-skip-reason-")));
   try {
-    await mkdir(join(dir, "folder"));
-    const skippedDirectory = await Effect.runPromise(
-      readExistingFileForPreviewEffect("folder", dir, "after").pipe(
-        Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
-      ),
+    yield* step(() => mkdir(join(dir, "folder")));
+    const skippedDirectory = yield* readExistingFileForPreviewEffect("folder", dir, "after").pipe(
+      provideBuiltLayer(previewFileLayer),
     );
     assert.equal(skippedDirectory?.kind, "skipped");
     const reason = getWriteDiffSkipReason(skippedDirectory, "after") ?? "";
     assert.match(reason, /previous path is not a regular file \([^>]+\)$/);
     assert.doesNotMatch(reason, />/);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    yield* step(() => rm(dir, { recursive: true, force: true }));
   }
 });
 
@@ -67,15 +65,13 @@ test("write diff skip reasons reject malformed or non-current skipped details", 
   );
 });
 
-test("readExistingFileForPreview returns bounded previous content", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-code-previews-"));
+effectTest("readExistingFileForPreview returns bounded previous content", function* () {
+  const dir = yield* step(() => mkdtemp(join(tmpdir(), "pi-code-previews-")));
   try {
-    await writeFile(join(dir, "small.txt"), "before", "utf8");
+    yield* step(() => writeFile(join(dir, "small.txt"), "before", "utf8"));
     assert.deepEqual(
-      await Effect.runPromise(
-        readExistingFileForPreviewEffect("small.txt", dir, "after").pipe(
-          Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
-        ),
+      yield* readExistingFileForPreviewEffect("small.txt", dir, "after").pipe(
+        provideBuiltLayer(previewFileLayer),
       ),
       {
         kind: "content",
@@ -83,20 +79,20 @@ test("readExistingFileForPreview returns bounded previous content", async () => 
       },
     );
 
-    await writeFile(
-      join(dir, "large.txt"),
-      "x".repeat(defaultCodePreviewPerformanceConfig.maxWriteDiffBytes + 1),
-      "utf8",
-    );
-    const skipped = await Effect.runPromise(
-      readExistingFileForPreviewEffect("large.txt", dir, "after").pipe(
-        Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
+    yield* step(() =>
+      writeFile(
+        join(dir, "large.txt"),
+        "x".repeat(defaultCodePreviewPerformanceConfig.maxWriteDiffBytes + 1),
+        "utf8",
       ),
+    );
+    const skipped = yield* readExistingFileForPreviewEffect("large.txt", dir, "after").pipe(
+      provideBuiltLayer(previewFileLayer),
     );
     assert.equal(skipped?.kind, "skipped");
     assert.match(getWriteDiffSkipReason(skipped, "after") ?? "", /previous file too large/);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    yield* step(() => rm(dir, { recursive: true, force: true }));
   }
 });
 

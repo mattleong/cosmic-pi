@@ -90,11 +90,13 @@ export class BorderedToolCall implements Component {
   private resultComponent: Component | undefined;
   private cachedWidth: number | undefined;
   private cachedRows: string[] | undefined;
+  private readonly theme: Theme;
+  private readonly timingState: TimingState;
 
-  constructor(
-    private readonly theme: Theme,
-    private readonly timingState: TimingState,
-  ) {}
+  constructor(theme: Theme, timingState: TimingState) {
+    this.theme = theme;
+    this.timingState = timingState;
+  }
 
   setBorderColor(colorKey: BorderColorKey): void {
     if (this.borderColorKey === colorKey) return;
@@ -200,12 +202,20 @@ export class BorderedToolCall implements Component {
     // to the end (no trailing \x1b[49m). Let the diff bg cover padding and
     // the right margin space, then reset bg right before the border │.
     // For non-diff lines, RESET_ANSI goes before padding to clear attributes.
-    const diffBgPrefix = /^\x1b\[48;2;\d+;\d+;\d+m/.exec(truncated);
-    if (diffBgPrefix) {
+    if (startsWithDiffBackground(truncated)) {
       return `${border("│")} ${truncated}${padding} \x1b[49m${border("│")}${RESET_ANSI}`;
     }
     return `${border("│")} ${truncated}${RESET_ANSI}${padding} ${border("│")}`;
   }
+}
+
+/** True when the line opens with a truecolor background sequence (`ESC [48;2;r;g;bm`). */
+function startsWithDiffBackground(line: string): boolean {
+  if (!line.startsWith("\x1b[48;2;")) return false;
+  const end = line.indexOf("m", 7);
+  if (end < 0) return false;
+  const channels = line.slice(7, end).split(";");
+  return channels.length === 3 && channels.every((channel) => /^\d+$/.test(channel));
 }
 
 export function hiddenPreviewExpandHintForShell(state: RendererState, theme: Theme): string {

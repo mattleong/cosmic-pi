@@ -1,6 +1,5 @@
 // Pure synchronous path predicates; the Effect Path service adds no value here.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import * as nodePath from "node:path";
+import { nodePath } from "./node-builtins.ts";
 
 /** Minimal path-module surface; satisfied by node:path and @effect/platform Path.Path. */
 export interface PathContainmentAdapter {

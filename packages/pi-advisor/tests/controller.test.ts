@@ -1,11 +1,11 @@
 // Test entry point provides the controller Layer explicitly.
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { advisorControllerLayer } from "../src/application/controller.ts";
 import {
   AdvisorController,
@@ -50,7 +50,7 @@ describe("AdvisorController", () => {
       yield* Fiber.interrupt(fiber);
       expect(acquired).toBe(1);
       expect(released).toBe(1);
-    }).pipe(Effect.provide(advisorControllerLayer)),
+    }).pipe(provideBuiltLayer(advisorControllerLayer)),
   );
 
   it.effect("releases the active child when the Layer scope closes", () => {

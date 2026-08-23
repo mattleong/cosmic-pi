@@ -4,7 +4,7 @@ import { hashString } from "../shared/helpers";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { codePreviewSettings } from "../config/state";
 import { expandPreviewTabs } from "../shared/helpers";
-import { escapeControlChars } from "../shared/terminal-text";
+import { escapeControlChars, replaceSgrSequences } from "../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "./language";
 import {
   requestSyntaxInitialize,
@@ -126,7 +126,7 @@ export function isLightShikiTheme(theme: string): boolean {
 }
 function normalizeContrast(ansi: string, theme: string): string {
   if (isLightShikiTheme(theme)) return ansi;
-  return ansi.replace(/\x1b\[([0-9;]*)m/g, (sequence, parameters: string) =>
+  return replaceSgrSequences(ansi, (sequence, parameters) =>
     isLowContrastFg(parameters) ? "\x1b[38;2;139;148;158m" : sequence,
   );
 }

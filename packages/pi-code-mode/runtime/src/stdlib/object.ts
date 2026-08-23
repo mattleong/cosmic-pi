@@ -1,4 +1,4 @@
-import { hasObjectRuntimeType } from "../runtime-values.ts";
+import { hasObjectRuntimeType } from "../runtime-values.js";
 import { assertBoundedCollectionSize } from "../interpreter/confinement.js";
 import {
   type AstNode,

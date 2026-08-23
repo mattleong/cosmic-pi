@@ -1,17 +1,16 @@
 // Private process-boundary integration tests intentionally use Node process probes.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/newPromise:off
-import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect } from "vitest";
 import { makeHerdrCli } from "../src/boundary/herdr-cli.ts";
 import { runProbeEffect } from "../src/boundary/local-cli-harness.ts";
+import { effectTest, step } from "./support/effect-test.ts";
+import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+
+const { join } = nodePath;
 
 const fixture = fileURLToPath(new URL("./fixtures/hanging-probe-fixture.mjs", import.meta.url));
 const directories: string[] = [];
@@ -26,31 +25,39 @@ const processAlive = (pid: number): boolean => {
   }
 };
 
-const waitForPid = async (path: string): Promise<number> => {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const value = await fs.readFile(path, "utf8").catch(() => undefined);
-    const pid = value === undefined ? undefined : Number(value);
-    if (pid !== undefined && Number.isSafeInteger(pid) && pid > 0) return pid;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("probe pid was not published");
-};
+// Real-time polling of live child processes deliberately runs on the live default clock.
+const waitForPid = (path: string): Promise<number> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const value = yield* Effect.promise(() => fs.readFile(path, "utf8").catch(() => undefined));
+        const pid = value === undefined ? undefined : Number(value);
+        if (pid !== undefined && Number.isSafeInteger(pid) && pid > 0) return pid;
+        yield* Effect.sleep(Duration.millis(10));
+      }
+      return yield* Effect.die(new Error("probe pid was not published"));
+    }),
+  );
 
-const waitForDead = async (pid: number): Promise<void> => {
-  for (let attempt = 0; attempt < 200 && processAlive(pid); attempt++)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-};
+const waitForDead = (pid: number): Promise<void> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < 200 && processAlive(pid); attempt++)
+        yield* Effect.sleep(Duration.millis(10));
+    }),
+  );
 
-const executableFixture = async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "pi-subagents-probe-"));
-  directories.push(directory);
-  const executable = join(directory, "probe.mjs");
-  await fs.copyFile(fixture, executable);
-  await fs.chmod(executable, 0o700);
-  return { directory, executable, pidPath: join(directory, "probe.pid") };
-};
+const executableFixture = () =>
+  fs.mkdtemp(join(tmpdir(), "pi-subagents-probe-")).then((directory) => {
+    directories.push(directory);
+    const executable = join(directory, "probe.mjs");
+    return fs
+      .copyFile(fixture, executable)
+      .then(() => fs.chmod(executable, 0o700))
+      .then(() => ({ directory, executable, pidPath: join(directory, "probe.pid") }));
+  });
 
-afterEach(async () => {
+afterEach(() => {
   for (const pid of ownedPids) {
     try {
       process.kill(pid, "SIGKILL");
@@ -59,42 +66,42 @@ afterEach(async () => {
     }
   }
   ownedPids.clear();
-  await Promise.all(
+  return Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
+  ).then(() => undefined);
 });
 
 describe("probe interruption cleanup", () => {
-  it("terminates an interrupted Herdr command", async () => {
-    const test = await executableFixture();
+  effectTest("terminates an interrupted Herdr command", function* () {
+    const test = yield* step(executableFixture);
     const cli = makeHerdrCli({
       executable: test.executable,
       environment: { ...process.env, HERDR_CONFIG_PATH: test.pidPath },
       commandTimeoutMillis: 10_000,
     });
     const fiber = Effect.runFork(cli.snapshot);
-    const pid = await waitForPid(test.pidPath);
+    const pid = yield* step(() => waitForPid(test.pidPath));
     ownedPids.add(pid);
 
-    await Effect.runPromise(Fiber.interrupt(fiber));
-    await waitForDead(pid);
+    yield* step(() => Effect.runPromise(Fiber.interrupt(fiber)));
+    yield* step(() => waitForDead(pid));
     expect(processAlive(pid)).toBe(false);
     ownedPids.delete(pid);
   });
 
-  it("terminates an interrupted local CLI readiness probe", async () => {
-    const test = await executableFixture();
+  effectTest("terminates an interrupted local CLI readiness probe", function* () {
+    const test = yield* step(executableFixture);
     const fiber = Effect.runFork(
       runProbeEffect(test.executable, [], {
         ...process.env,
         PI_SUBAGENT_TEST_PID: test.pidPath,
       }),
     );
-    const pid = await waitForPid(test.pidPath);
+    const pid = yield* step(() => waitForPid(test.pidPath));
     ownedPids.add(pid);
 
-    await Effect.runPromise(Fiber.interrupt(fiber));
-    await waitForDead(pid);
+    yield* step(() => Effect.runPromise(Fiber.interrupt(fiber)));
+    yield* step(() => waitForDead(pid));
     expect(processAlive(pid)).toBe(false);
     ownedPids.delete(pid);
   });

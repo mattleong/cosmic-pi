@@ -28,7 +28,7 @@ export const dateStatics = new Set(["now", "parse", "UTC"]);
 export const invokeDateStatic = (name: string, args: InterpreterArray, node: AstNode): number => {
   switch (name) {
     case "now":
-      return Date.now();
+      return epochNow();
     case "parse":
       return Date.parse(coerceToString(args[0]));
     case "UTC":
@@ -40,17 +40,16 @@ export const invokeDateStatic = (name: string, args: InterpreterArray, node: Ast
 };
 
 export const invokeDateMethod = (value: SandboxDate, name: string, node: AstNode) => {
-  const hosted = new Date(value.time);
+  if (!Number.isFinite(value.time)) return invokeInvalidDateMethod(value, name, node);
+  const hosted = hostDate(value.time);
   switch (name) {
     case "getTime":
     case "valueOf":
       return value.time;
     case "toISOString":
-      if (!Number.isFinite(value.time))
-        throw new InterpreterRuntimeError("Invalid time value.", node);
       return hosted.toISOString();
     case "toJSON":
-      return Number.isFinite(value.time) ? hosted.toISOString() : null;
+      return hosted.toISOString();
     case "toString":
       return coerceToString(value);
     case "getFullYear":
@@ -94,10 +93,32 @@ export const invokeDateMethod = (value: SandboxDate, name: string, node: AstNode
       );
   }
 };
+
+/** Invalid Date semantics: every component getter is NaN; ISO conversion refuses. */
+const invokeInvalidDateMethod = (value: SandboxDate, name: string, node: AstNode) => {
+  switch (name) {
+    case "getTime":
+    case "valueOf":
+      return value.time;
+    case "toISOString":
+      throw new InterpreterRuntimeError("Invalid time value.", node);
+    case "toJSON":
+      return null;
+    case "toString":
+      return coerceToString(value);
+    default:
+      if (dateMethods.has(name)) return Number.NaN;
+      throw new InterpreterRuntimeError(
+        `Date method '${name}' is not available in CodeMode.`,
+        node,
+      );
+  }
+};
 import {
   type AstNode,
   type InterpreterArray,
   InterpreterRuntimeError,
 } from "../interpreter/model.js";
 import { SandboxDate } from "../values.js";
+import { epochNow, hostDate } from "./epoch.js";
 import { coerceToNumber, coerceToString } from "./value.js";

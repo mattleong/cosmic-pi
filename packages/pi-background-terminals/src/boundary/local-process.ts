@@ -1,8 +1,6 @@
-// Node process ownership is intentionally isolated at this platform boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-import { spawn, type ChildProcess } from "node:child_process";
-import { stat } from "node:fs/promises";
+// Node process ownership is intentionally isolated at this platform boundary. Raw builtin
+// access is required here: detached process groups, tree termination, and decoder-level
+// ingress backpressure are contracts the Effect ChildProcess service cannot express.
 import { StringDecoder } from "node:string_decoder";
 import { awaitProcessClose } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
@@ -16,6 +14,15 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { BackgroundLogStream } from "../job/model.ts";
 import { utf8ByteLength, utf8Tail } from "../job/utf8.ts";
+
+const childProcessModule = process.getBuiltinModule("node:child_process");
+const nodeFsModule = process.getBuiltinModule("node:fs");
+if (!childProcessModule || !nodeFsModule) {
+  throw new Error("Node child_process/fs builtins are unavailable.");
+}
+const { spawn } = childProcessModule;
+const { stat } = nodeFsModule.promises;
+type ChildProcess = InstanceType<typeof childProcessModule.ChildProcess>;
 
 const INGRESS_CHUNKS = 32;
 const BLOCKED_ENVIRONMENT_KEYS = new Set(["BASH_ENV", "ENV", "NODE_OPTIONS", "NODE_PATH"]);

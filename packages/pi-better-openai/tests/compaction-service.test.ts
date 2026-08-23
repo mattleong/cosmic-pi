@@ -1,5 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
   ContextEvent,
@@ -11,6 +9,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   OpenAICompactionClient,
   type OpenAICompactRequest,
@@ -42,6 +41,10 @@ const model = (
   contextWindow: 128_000,
   maxTokens: 8_192,
 });
+
+// Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
+// runtime failure values for secret fragments.
+const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
 
 const entry = (id: string, content: string): SessionEntry => ({
   type: "custom_message",
@@ -132,13 +135,13 @@ describe("OpenAICompactionService", () => {
         expect(yield* service.compact(compactEvent())).toBeUndefined();
         expect(yield* service.filterContext([])).toBeUndefined();
         expect(yield* service.inject({ input: [] })).toBeUndefined();
-      }).pipe(Effect.provide(serviceLayer(disabled, client)));
+      }).pipe(provideBuiltLayer(serviceLayer(disabled, client)));
 
       const ineligibleResult = yield* Effect.gen(function* () {
         const service = yield* OpenAICompactionService;
         expect(yield* service.compact(compactEvent())).toBeUndefined();
         expect(yield* service.inject({ input: [] })).toBeUndefined();
-      }).pipe(Effect.provide(serviceLayer(ineligible, client)));
+      }).pipe(provideBuiltLayer(serviceLayer(ineligible, client)));
 
       expect(disabledResult).toBeUndefined();
       expect(ineligibleResult).toBeUndefined();
@@ -226,7 +229,7 @@ describe("OpenAICompactionService", () => {
         input: [system, ...(outputs[1] ?? []), rawInput.at(-1)],
         marker: "preserved",
       });
-    }).pipe(Effect.provide(serviceLayer(target, client)));
+    }).pipe(provideBuiltLayer(serviceLayer(target, client)));
   });
 
   it.effect("maps hostile Pi session access to a typed context failure without disclosure", () => {
@@ -244,8 +247,8 @@ describe("OpenAICompactionService", () => {
       if (result._tag === "Failure") {
         expect(result.failure._tag).toBe("OpenAICompactionError");
         expect(result.failure.operation).toBe("context");
-        expect(JSON.stringify(result.failure)).not.toContain("host-context-secret");
+        expect(serializedSnapshot(result.failure)).not.toContain("host-context-secret");
       }
-    }).pipe(Effect.provide(serviceLayer(target, client)));
+    }).pipe(provideBuiltLayer(serviceLayer(target, client)));
   });
 });

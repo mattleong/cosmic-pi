@@ -1,5 +1,4 @@
 // The Context key intentionally mirrors the runtime module identity.
-// @effect-diagnostics effect/deterministicKeys:off
 import {
   createAgentSession,
   type ExtensionContext,

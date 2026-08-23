@@ -1,11 +1,10 @@
 // Scoped cache lifecycle assertions.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/strictEffectProvide:off
 import assert from "node:assert/strict";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { lookupBeforeWrite, writeProjectionSize } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
 
@@ -29,7 +28,7 @@ it.effect("bounds correlation entries and replaces reused call identifiers atomi
       });
       assert.equal(Object.isFrozen(lookupBeforeWrite("tool-64")), true);
     }),
-  ).pipe(Effect.provide(CodePreviewWriteService.layer)),
+  ).pipe(provideBuiltLayer(CodePreviewWriteService.layer)),
 );
 
 it.effect("serializes the same path while allowing different paths to proceed", () =>
@@ -69,7 +68,7 @@ it.effect("serializes the same path while allowing different paths to proceed", 
       yield* Fiber.join(otherPath);
       assert.equal(Deferred.isDoneUnsafe(samePathEntered), true);
     }),
-  ).pipe(Effect.scoped, Effect.provide(CodePreviewWriteService.layer)),
+  ).pipe(Effect.scoped, provideBuiltLayer(CodePreviewWriteService.layer)),
 );
 
 it.effect("releases an interrupted path waiter without poisoning the next acquisition", () =>
@@ -103,7 +102,7 @@ it.effect("releases an interrupted path waiter without poisoning the next acquis
       );
       assert.equal(acquired, true);
     }),
-  ).pipe(Effect.scoped, Effect.provide(CodePreviewWriteService.layer)),
+  ).pipe(Effect.scoped, provideBuiltLayer(CodePreviewWriteService.layer)),
 );
 
 it.effect("preserves the caller scope for resources acquired inside a path lock", () => {
@@ -122,7 +121,7 @@ it.effect("preserves the caller scope for resources acquired inside a path lock"
           );
           assert.equal(released, false);
         }),
-      ).pipe(Effect.provide(CodePreviewWriteService.layer)),
+      ).pipe(provideBuiltLayer(CodePreviewWriteService.layer)),
     );
     assert.equal(released, true);
   });
@@ -150,7 +149,7 @@ it.effect("before-write snapshots are cleared when the owning session scope clos
           });
           assert.equal(writeProjectionSize(), 0);
         }),
-      ).pipe(Effect.provide(CodePreviewWriteService.layer)),
+      ).pipe(provideBuiltLayer(CodePreviewWriteService.layer)),
     );
     assert.equal(writeProjectionSize(), 0);
   }),

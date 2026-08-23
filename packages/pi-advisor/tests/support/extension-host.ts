@@ -1,5 +1,4 @@
 // Test harness boundary: Pi callbacks are Promise-shaped by contract.
-// @effect-diagnostics effect/asyncFunction:off
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -23,8 +22,16 @@ export function handlerRegistry() {
   const handlers = new Map<string, HostHandler[]>();
   const on = (name: string, handler: HostHandler) =>
     handlers.set(name, [...(handlers.get(name) ?? []), handler]);
-  const emitWithContext = async <Event>(name: string, event: Event, context: ExtensionContext) => {
-    for (const handler of handlers.get(name) ?? []) await handler(event, context);
+  const emitWithContext = <Event>(
+    name: string,
+    event: Event,
+    context: ExtensionContext,
+  ): Promise<void> => {
+    let chain: Promise<unknown> = Promise.resolve();
+    for (const handler of handlers.get(name) ?? []) {
+      chain = chain.then(() => handler(event, context));
+    }
+    return chain.then(() => undefined);
   };
   const emitDetachedWithContext = <Event>(
     name: string,

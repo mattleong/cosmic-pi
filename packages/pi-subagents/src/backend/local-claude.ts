@@ -1,5 +1,4 @@
 // The stream-input correlation UUID is plain-crypto identity, not an Effect resource.
-// @effect-diagnostics effect/cryptoRandomUUID:off
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { randomUUID } from "node:crypto";
 import * as Cause from "effect/Cause";

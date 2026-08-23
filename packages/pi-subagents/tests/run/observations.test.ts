@@ -1,6 +1,4 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -13,6 +11,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
 
@@ -62,7 +61,7 @@ describe("SubagentService", () => {
       ]);
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -92,7 +91,7 @@ describe("SubagentService", () => {
           state: "completed",
           finalText: "Completed during subscription setup.",
         });
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -121,7 +120,7 @@ describe("SubagentService", () => {
 
       fake.controls[1]?.offer({ type: "agent_settled" });
       expect((yield* Fiber.join(secondAwait))[0]?.state).toBe("completed");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("fails subscribed awaits when the service scope closes", () => {
@@ -195,7 +194,7 @@ describe("SubagentService", () => {
       expect(observations[0]?.run.finalText).toBe("Owned report text.");
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("returns an await when a selected run needs a parent reply", () => {
@@ -226,7 +225,7 @@ describe("SubagentService", () => {
         state: "waiting_for_parent",
         question: { requestId: "question-during-await" },
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("reports every missing await ID before waiting", () => {
@@ -243,7 +242,7 @@ describe("SubagentService", () => {
       });
       expect(failure.message).toContain("agent-missing-1, agent-missing-2");
       expect(failure.message).toContain("subagent_list");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("delivers a claimed failure through await without a background notification", () => {
@@ -268,7 +267,7 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("awaits a fleet without polling and consumes its completion notifications", () => {
@@ -297,7 +296,7 @@ describe("SubagentService", () => {
       yield* TestClock.adjust("100 millis");
       expect(notifications).toEqual([]);
       expect(updates.at(-1)?.every((run) => run.state === "completed")).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("rejects empty awaits at the service boundary", () => {
@@ -309,7 +308,7 @@ describe("SubagentService", () => {
         const error = yield* Effect.flip(service.awaitTerminal([], until));
         expect(error._tag).toBe("InvalidSubagentRequestError");
       }
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("supports any-terminal awaits without consuming running peers", () => {
@@ -327,7 +326,7 @@ describe("SubagentService", () => {
       fake.controls[1]?.offer({ type: "agent_settled" });
       const runs = yield* Fiber.join(waiting);
       expect(runs.map((run) => run.state)).toEqual(["running", "completed"]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("releases await claims when the waiting fiber is interrupted", () => {
@@ -355,7 +354,7 @@ describe("SubagentService", () => {
         type: "completed",
         runs: [{ id: run.id }],
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keeps unconsumed observations notification-eligible", () => {
@@ -386,7 +385,7 @@ describe("SubagentService", () => {
       });
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length === 1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("returns found status observations alongside every stale ID", () => {
@@ -403,7 +402,7 @@ describe("SubagentService", () => {
 
       expect(selection.observations.map((observation) => observation.run.id)).toEqual([run.id]);
       expect(selection.missingIds).toEqual(["agent-stale-1", "agent-stale-2"]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("holds a completion claim through observation formatting and consumption", () => {
@@ -439,7 +438,7 @@ describe("SubagentService", () => {
       yield* Fiber.join(observing);
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("coalesces unclaimed fleet completions into one notification", () => {
@@ -469,7 +468,7 @@ describe("SubagentService", () => {
           { id: second.id, name: "notify-two", generation: 1 },
         ],
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("retries an unacknowledged completion generation", () => {
@@ -502,7 +501,7 @@ describe("SubagentService", () => {
       yield* TestClock.adjust("500 millis");
       expect(attempts).toBe(2);
       expect(notifications).toHaveLength(2);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("redelivers a completion after the completed-notification callback throws", () => {
@@ -532,7 +531,7 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => attempts === 2);
       yield* TestClock.adjust("30 seconds");
       expect(attempts).toBe(2);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("caps persistent completion retry backoff at thirty seconds", () => {
@@ -559,7 +558,7 @@ describe("SubagentService", () => {
         yield* yieldUntil(() => attempts === index + 1);
       }
       expect(attempts).toBe(11);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("re-delivers only the unacknowledged half of a partially delivered batch", () => {
@@ -598,7 +597,7 @@ describe("SubagentService", () => {
       expect(batches[1]).toEqual([{ id: two.id, generation: 1 }]);
       yield* TestClock.adjust("30 seconds");
       expect(batches).toHaveLength(2);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("claiming a queued completion retry removes it from delivery ownership", () => {
@@ -626,7 +625,7 @@ describe("SubagentService", () => {
       expect(runs[0]?.state).toBe("completed");
       yield* TestClock.adjust("60 seconds");
       expect(attempts).toBe(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("stops pending completion retries when the session scope closes", () => {
@@ -649,7 +648,7 @@ describe("SubagentService", () => {
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(() => attempts === 1);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
 
       // The retry fiber is owner-scoped: closing the session scope ends redelivery.
       yield* TestClock.adjust("60 seconds");
@@ -678,6 +677,6 @@ describe("SubagentService", () => {
       expect(
         notifications.filter((notification) => notification.type === "completed"),
       ).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 });

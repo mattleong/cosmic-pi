@@ -1,13 +1,12 @@
-// @effect-diagnostics effect/abortController:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
 import * as Predicate from "effect/Predicate";
 import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { vi } from "vitest";
 import cosmicUi from "../index.ts";
 import {
   cosmicUiWithDependencies,
@@ -31,8 +30,8 @@ function harness(mode: "tui" | "rpc" = "tui", dependencies?: CosmicUiApplication
   const setFooter = vi.fn();
   const setWorkingMessage = vi.fn();
   const unsubscribed = vi.fn();
-  const exec = vi.fn(
-    async (command: string, args: string[], _options?: { signal?: AbortSignal }) => ({
+  const exec = vi.fn((command: string, args: string[], _options?: { signal?: AbortSignal }) =>
+    Promise.resolve({
       stdout:
         command === "gh"
           ? "42\n"
@@ -87,262 +86,170 @@ function harness(mode: "tui" | "rpc" = "tui", dependencies?: CosmicUiApplication
   return { pi, ctx, handlers, setFooter, setWorkingMessage, exec, unsubscribed };
 }
 
-async function emit(h: ReturnType<typeof harness>, name: string): Promise<void>;
-async function emit<EventInput>(
-  h: ReturnType<typeof harness>,
-  name: string,
-  event: EventInput,
-): Promise<void>;
-async function emit<EventInput>(
+function emit<EventInput>(
   h: ReturnType<typeof harness>,
   name: string,
   event?: EventInput,
-): Promise<void> {
-  for (const handler of h.handlers.get(name) ?? []) await handler(event ?? {}, h.ctx);
-}
-
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  await vi.waitFor(
-    () => {
-      if (!predicate()) throw new Error("condition did not become true");
-    },
-    { timeout: 1_000, interval: 1 },
+  context: ExtensionContext = h.ctx,
+): Effect.Effect<void> {
+  return Effect.forEach(
+    h.handlers.get(name) ?? [],
+    (handler) => Effect.promise(() => Promise.resolve(handler(event ?? {}, context))),
+    { discard: true },
   );
 }
+
+const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
+  Effect.promise(() =>
+    vi.waitFor(
+      () => {
+        if (!predicate()) throw new Error("condition did not become true");
+      },
+      { timeout: 1_000, interval: 1 },
+    ),
+  );
+
+type ExecResult = Awaited<ReturnType<ReturnType<typeof harness>["exec"]>>;
 
 function installPendingExec(h: ReturnType<typeof harness>) {
   let started = 0;
   let aborted = 0;
   h.exec.mockImplementation(
-    (_command: string, _args: string[], options?: { signal?: AbortSignal }) =>
-      new Promise((_resolve, reject) => {
-        started++;
-        options?.signal?.addEventListener(
-          "abort",
-          () => {
-            aborted++;
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      }),
+    (_command: string, _args: string[], options?: { signal?: AbortSignal }) => {
+      started++;
+      // Deferred-backed pending host exec promise that rejects when the probe aborts.
+      const handle = Deferred.makeUnsafe<ExecResult, Error>();
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          aborted++;
+          Effect.runSync(Deferred.fail(handle, new Error("aborted")));
+        },
+        { once: true },
+      );
+      return Effect.runPromise(Deferred.await(handle));
+    },
   );
   return { started: () => started, aborted: () => aborted };
 }
 
-const successfulExec = async (command: string) => ({
-  stdout: command === "gh" ? "7\n" : "## current\n",
-  stderr: "",
-  code: 0,
-  killed: false,
-});
+const successfulExec = (command: string) =>
+  Promise.resolve({
+    stdout: command === "gh" ? "7\n" : "## current\n",
+    stderr: "",
+    code: 0,
+    killed: false,
+  });
 
 describe("Cosmic UI extension", () => {
-  test("normalizes hostile protocol getters once and isolates throwing reads", async () => {
-    const h = harness();
-    const respond = vi.fn();
-    const invalidate = vi.fn();
-    const dispose = vi.fn();
-    const stateful = <A>(value: A) => {
-      let reads = 0;
-      return () => {
-        reads++;
-        if (reads > 1) throw new Error("protocol getter reread");
-        return value;
+  it.effect("normalizes hostile protocol getters once and isolates throwing reads", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const respond = vi.fn();
+      const invalidate = vi.fn();
+      const dispose = vi.fn();
+      const stateful = <A>(value: A) => {
+        let reads = 0;
+        return () => {
+          reads++;
+          if (reads > 1) throw new Error("protocol getter reread");
+          return value;
+        };
       };
-    };
-    const queryRespond = stateful(respond);
-    const upsertOwner = stateful("owner");
-    const contribution = stateful({
-      kind: "surface",
-      id: "surface",
-      region: "media",
-      preferredWidth: 8,
-      render: () => [],
-      invalidate,
-      dispose,
-    });
-    const invalidateOwner = stateful("owner");
-    const removeId = stateful("surface");
-
-    expect(() =>
-      h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
-        version: 1,
-        get respond() {
-          return queryRespond();
-        },
-      }),
-    ).not.toThrow();
-    expect(respond).toHaveBeenCalledOnce();
-    expect(() =>
-      h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-        version: 1,
-        get owner() {
-          return upsertOwner();
-        },
-        get contribution() {
-          return contribution();
-        },
-      }),
-    ).not.toThrow();
-    await emit(h, "session_start");
-    expect(() =>
-      h.pi.events.emit(COSMIC_UI_FOOTER_INVALIDATE, {
-        version: 1,
-        get owner() {
-          return invalidateOwner();
-        },
-        id: "surface",
-      }),
-    ).not.toThrow();
-    await waitUntil(() => invalidate.mock.calls.length === 1);
-    expect(() =>
-      h.pi.events.emit(COSMIC_UI_FOOTER_REMOVE, {
-        version: 1,
-        owner: "owner",
-        get id() {
-          return removeId();
-        },
-      }),
-    ).not.toThrow();
-    await waitUntil(() => dispose.mock.calls.length === 1);
-
-    const throwing = Object.defineProperty({}, "version", {
-      get() {
-        throw new Error("secret hostile getter");
-      },
-    });
-    for (const eventName of [
-      COSMIC_UI_HOST_QUERY,
-      COSMIC_UI_FOOTER_UPSERT,
-      COSMIC_UI_FOOTER_REMOVE,
-      COSMIC_UI_FOOTER_INVALIDATE,
-    ])
-      expect(() => h.pi.events.emit(eventName, throwing)).not.toThrow();
-    await emit(h, "session_shutdown");
-  });
-
-  test("reinstalls the footer when session_start supplies a new context", async () => {
-    const h = harness();
-    await emit(h, "session_start");
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const secondContext = {
-      ...h.ctx,
-      model: { ...h.ctx.model!, id: "second-model" },
-      sessionManager: {
-        ...h.ctx.sessionManager,
-        getEntries: vi.fn(() => []),
-        getCwd: vi.fn(() => "/tmp/second-project"),
-        getSessionName: vi.fn(() => "second-session"),
-        getLeafId: vi.fn(() => "second-leaf"),
-      },
-    } as ExtensionContext;
-    for (const handler of h.handlers.get("session_start") ?? []) await handler({}, secondContext);
-
-    expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
-    expect(h.setFooter).toHaveBeenCalledTimes(3);
-    const factory = h.setFooter.mock.calls[2]?.[0];
-    const footer = factory(
-      { requestRender: vi.fn() },
-      { fg: (_color: string, text: string) => text },
-      {
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        getAvailableProviderCount: () => 1,
-        onBranchChange: () => vi.fn(),
-      },
-    );
-    const rendered = footer.render(100);
-    expect(rendered[0]).toBe("Model   second-model • high");
-    expect(rendered[1]).toContain("Repo    /tmp/second-project");
-    expect(rendered.join("\n")).toContain("second-session");
-
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const laterContext = {
-      ...secondContext,
-      model: { ...secondContext.model!, id: "later-model" },
-      sessionManager: {
-        ...secondContext.sessionManager,
-        getCwd: vi.fn(() => "/tmp/later-project"),
-        getSessionName: vi.fn(() => "later-session"),
-        getLeafId: vi.fn(() => "later-leaf"),
-      },
-    } as ExtensionContext;
-    for (const handler of h.handlers.get("model_select") ?? []) await handler({}, laterContext);
-    const laterRendered = footer.render(100);
-    expect(laterRendered[0]).toBe("Model   later-model • high");
-    expect(laterRendered[1]).toContain("Repo    /tmp/later-project");
-    expect(laterRendered.join("\n")).toContain("later-session");
-  });
-
-  test("immediately disposes in-flight startup probes on overlapping session replacement", async () => {
-    const h = harness();
-    const pending = installPendingExec(h);
-    const first = emit(h, "session_start");
-    await waitUntil(() => pending.started() === 2);
-
-    h.exec.mockImplementation(successfulExec);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const secondContext = {
-      ...h.ctx,
-      sessionManager: {
-        ...h.ctx.sessionManager,
-        getCwd: () => "/tmp/replacement",
-        getSessionName: () => "replacement",
-      },
-    } as ExtensionContext;
-    const second = Promise.all(
-      (h.handlers.get("session_start") ?? []).map((handler) => handler({}, secondContext)),
-    );
-    await Promise.all([first, second]);
-    expect(pending.aborted()).toBe(2);
-    expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
-    const factory = h.setFooter.mock.calls.at(-1)?.[0];
-    const footer = factory(
-      { requestRender: vi.fn() },
-      { fg: (_color: string, text: string) => text },
-      {
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        getAvailableProviderCount: () => 1,
-        onBranchChange: () => vi.fn(),
-      },
-    );
-    expect(footer.render(100).join("\n")).toContain("/tmp/replacement");
-  });
-
-  test("shutdown during startup survives throwing surfaces and releases every probe", async () => {
-    const h = harness();
-    const callbacks = { attach: vi.fn(), detach: vi.fn(), dispose: vi.fn() };
-    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "hostile",
-      contribution: {
+      const queryRespond = stateful(respond);
+      const upsertOwner = stateful("owner");
+      const contribution = stateful({
         kind: "surface",
-        id: "hostile",
+        id: "surface",
         region: "media",
         preferredWidth: 8,
         render: () => [],
-        attach: () => {
-          callbacks.attach();
-          throw new Error("attach");
+        invalidate,
+        dispose,
+      });
+      const invalidateOwner = stateful("owner");
+      const removeId = stateful("surface");
+
+      expect(() =>
+        h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
+          version: 1,
+          get respond() {
+            return queryRespond();
+          },
+        }),
+      ).not.toThrow();
+      expect(respond).toHaveBeenCalledOnce();
+      expect(() =>
+        h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+          version: 1,
+          get owner() {
+            return upsertOwner();
+          },
+          get contribution() {
+            return contribution();
+          },
+        }),
+      ).not.toThrow();
+      yield* emit(h, "session_start");
+      expect(() =>
+        h.pi.events.emit(COSMIC_UI_FOOTER_INVALIDATE, {
+          version: 1,
+          get owner() {
+            return invalidateOwner();
+          },
+          id: "surface",
+        }),
+      ).not.toThrow();
+      yield* waitUntil(() => invalidate.mock.calls.length === 1);
+      expect(() =>
+        h.pi.events.emit(COSMIC_UI_FOOTER_REMOVE, {
+          version: 1,
+          owner: "owner",
+          get id() {
+            return removeId();
+          },
+        }),
+      ).not.toThrow();
+      yield* waitUntil(() => dispose.mock.calls.length === 1);
+
+      const throwing = Object.defineProperty({}, "version", {
+        get() {
+          throw new Error("secret hostile getter");
         },
-        detach: () => {
-          callbacks.detach();
-          throw new Error("detach");
+      });
+      for (const eventName of [
+        COSMIC_UI_HOST_QUERY,
+        COSMIC_UI_FOOTER_UPSERT,
+        COSMIC_UI_FOOTER_REMOVE,
+        COSMIC_UI_FOOTER_INVALIDATE,
+      ])
+        expect(() => h.pi.events.emit(eventName, throwing)).not.toThrow();
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("reinstalls the footer when session_start supplies a new context", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const secondContext = {
+        ...h.ctx,
+        model: { ...h.ctx.model!, id: "second-model" },
+        sessionManager: {
+          ...h.ctx.sessionManager,
+          getEntries: vi.fn(() => []),
+          getCwd: vi.fn(() => "/tmp/second-project"),
+          getSessionName: vi.fn(() => "second-session"),
+          getLeafId: vi.fn(() => "second-leaf"),
         },
-        dispose: () => {
-          callbacks.dispose();
-          throw new Error("dispose");
-        },
-      },
-    });
-    const pending = installPendingExec(h);
-    const startup = emit(h, "session_start");
-    await waitUntil(() => pending.started() === 2);
-    const factory = h.setFooter.mock.calls[0]?.[0];
-    expect(() =>
-      factory(
+      } as ExtensionContext;
+      yield* emit(h, "session_start", {}, secondContext);
+
+      expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
+      expect(h.setFooter).toHaveBeenCalledTimes(3);
+      const factory = h.setFooter.mock.calls[2]?.[0];
+      const footer = factory(
         { requestRender: vi.fn() },
         { fg: (_color: string, text: string) => text },
         {
@@ -351,513 +258,616 @@ describe("Cosmic UI extension", () => {
           getAvailableProviderCount: () => 1,
           onBranchChange: () => vi.fn(),
         },
-      ),
-    ).not.toThrow();
-    await Promise.all([startup, emit(h, "session_shutdown")]);
-    expect(pending.aborted()).toBe(2);
-    expect(callbacks.attach).toHaveBeenCalledOnce();
-    expect(callbacks.detach).toHaveBeenCalledOnce();
-    expect(callbacks.dispose).toHaveBeenCalledOnce();
-    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-  });
+      );
+      const rendered = footer.render(100);
+      expect(rendered[0]).toBe("Model   second-model • high");
+      expect(rendered[1]).toContain("Repo    /tmp/second-project");
+      expect(rendered.join("\n")).toContain("second-session");
 
-  test("reports startup I/O failure and permits a clean subsequent session", async () => {
-    const h = harness();
-    const source = new AbortController().signal;
-    const addEventListener = vi.fn(source.addEventListener.bind(source));
-    const removeEventListener = vi.fn(source.removeEventListener.bind(source));
-    h.ctx.signal = new Proxy(source, {
-      get(target, property) {
-        if (property === "addEventListener") return addEventListener;
-        if (property === "removeEventListener") return removeEventListener;
-        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
-        const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return Predicate.isFunction(value) ? value.bind(target) : value;
-      },
-    });
-    h.ctx.cwd = "\0invalid";
-    await emit(h, "session_start");
-    expect(h.ctx.ui.notify).toHaveBeenCalledWith("Cosmic UI failed to start.", "warning");
-    expect(h.setFooter).not.toHaveBeenCalled();
-    expect(removeEventListener).toHaveBeenCalledOnce();
-
-    h.ctx.cwd = process.cwd();
-    await emit(h, "session_start");
-    expect(h.setFooter).toHaveBeenCalledOnce();
-    expect(addEventListener).toHaveBeenCalledTimes(2);
-    await emit(h, "session_shutdown");
-    expect(removeEventListener).toHaveBeenCalledTimes(2);
-  });
-
-  test("retries footer installation after the host rejects the first setFooter call", async () => {
-    const h = harness();
-    h.setFooter.mockImplementationOnce(() => {
-      throw new Error("host rejected footer");
-    });
-
-    await emit(h, "session_start");
-    expect(h.setFooter).toHaveBeenCalledOnce();
-
-    await emit(h, "session_start");
-    expect(h.setFooter).toHaveBeenCalledTimes(2);
-    expect(h.setFooter.mock.calls[1]?.[0]).toEqual(expect.any(Function));
-
-    await emit(h, "session_shutdown");
-  });
-
-  test("retains complete same-session totals but resets them before a failing new session", async () => {
-    const h = harness();
-    let reads = 0;
-    h.ctx.sessionManager.getEntries = vi.fn(() => {
-      reads++;
-      if (reads > 1) throw new Error("one-shot entries");
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      return [
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            usage: {
-              input: 100,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              cost: { total: 0 },
-            },
-          },
+      const laterContext = {
+        ...secondContext,
+        model: { ...secondContext.model!, id: "later-model" },
+        sessionManager: {
+          ...secondContext.sessionManager,
+          getCwd: vi.fn(() => "/tmp/later-project"),
+          getSessionName: vi.fn(() => "later-session"),
+          getLeafId: vi.fn(() => "later-leaf"),
         },
-      ] as never;
-    });
-    await emit(h, "session_start");
-    const firstFactory = h.setFooter.mock.calls[0]?.[0];
-    const firstFooter = firstFactory(
-      { requestRender: vi.fn() },
-      { fg: (_color: string, text: string) => text },
-      {
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        getAvailableProviderCount: () => 1,
-        onBranchChange: () => vi.fn(),
-      },
-    );
-    expect(firstFooter.render(100).join("\n")).toContain("↑100");
+      } as ExtensionContext;
+      yield* emit(h, "model_select", {}, laterContext);
+      const laterRendered = footer.render(100);
+      expect(laterRendered[0]).toBe("Model   later-model • high");
+      expect(laterRendered[1]).toContain("Repo    /tmp/later-project");
+      expect(laterRendered.join("\n")).toContain("later-session");
+    }),
+  );
 
-    await emit(h, "session_compact");
-    expect(reads).toBe(2);
-    expect(firstFooter.render(100).join("\n")).toContain("↑100");
+  it.effect(
+    "immediately disposes in-flight startup probes on overlapping session replacement",
+    () =>
+      Effect.gen(function* () {
+        const h = harness();
+        const pending = installPendingExec(h);
+        const first = yield* emit(h, "session_start").pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* waitUntil(() => pending.started() === 2);
 
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const secondContext = {
-      ...h.ctx,
-      sessionManager: {
-        ...h.ctx.sessionManager,
-        getEntries: vi.fn(() => {
-          throw new Error("new session entries unavailable");
-        }),
-      },
-    } as ExtensionContext;
-    for (const handler of h.handlers.get("session_start") ?? []) await handler({}, secondContext);
-    const secondFactory = h.setFooter.mock.calls.at(-1)?.[0];
-    const secondFooter = secondFactory(
-      { requestRender: vi.fn() },
-      { fg: (_color: string, text: string) => text },
-      {
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        getAvailableProviderCount: () => 1,
-        onBranchChange: () => vi.fn(),
-      },
-    );
-    expect(secondFooter.render(100).join("\n")).not.toContain("↑100");
-    await emit(h, "session_shutdown");
-  });
-
-  test("retains complete totals when a turn usage getter throws", async () => {
-    const h = harness();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    h.ctx.sessionManager.getEntries = vi.fn(
-      () =>
-        [
+        h.exec.mockImplementation(successfulExec);
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        const secondContext = {
+          ...h.ctx,
+          sessionManager: {
+            ...h.ctx.sessionManager,
+            getCwd: () => "/tmp/replacement",
+            getSessionName: () => "replacement",
+          },
+        } as ExtensionContext;
+        const second = Promise.all(
+          (h.handlers.get("session_start") ?? []).map((handler) => handler({}, secondContext)),
+        );
+        yield* Fiber.join(first);
+        yield* Effect.promise(() => second);
+        expect(pending.aborted()).toBe(2);
+        expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
+        const factory = h.setFooter.mock.calls.at(-1)?.[0];
+        const footer = factory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
           {
-            type: "message",
-            message: {
-              role: "assistant",
-              usage: {
-                input: 50,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                cost: { total: 0 },
-              },
-            },
+            getGitBranch: () => null,
+            getExtensionStatuses: () => new Map(),
+            getAvailableProviderCount: () => 1,
+            onBranchChange: () => vi.fn(),
           },
-        ] as never,
-    );
-    await emit(h, "session_start");
-    const factory = h.setFooter.mock.calls[0]?.[0];
-    const footer = factory(
-      { requestRender: vi.fn() },
-      { fg: (_color: string, text: string) => text },
-      {
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        getAvailableProviderCount: () => 1,
-        onBranchChange: () => vi.fn(),
-      },
-    );
-    const input = vi.fn(() => {
-      throw new Error("nested usage failure");
-    });
-    const usage = Object.defineProperty(
-      { output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
-      "input",
-      { get: input },
-    );
+        );
+        expect(footer.render(100).join("\n")).toContain("/tmp/replacement");
+      }),
+  );
 
-    await emit(h, "turn_end", { message: { role: "assistant", usage } });
-    expect(input).toHaveBeenCalledOnce();
-    expect(footer.render(100).join("\n")).toContain("↑50");
-    await emit(h, "session_shutdown");
-  });
-
-  test("retains the last complete totals when numeric decoding rejects a rescan or turn", async () => {
-    const h = harness();
-    const usage = (input: number) => ({
-      input,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: { total: 0 },
-    });
-    // SAFETY: These locally constructed session entries exercise only assistant usage aggregation.
-    h.ctx.sessionManager.getEntries = vi.fn(
-      () => [{ type: "message", message: { role: "assistant", usage: usage(50) } }] as never,
-    );
-    await emit(h, "session_start");
-    const factory = h.setFooter.mock.calls[0]?.[0];
-    const footer = factory(
-      { requestRender: vi.fn() },
-      { fg: (_color: string, text: string) => text },
-      {
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        getAvailableProviderCount: () => 1,
-        onBranchChange: () => vi.fn(),
-      },
-    );
-    expect(footer.render(100).join("\n")).toContain("↑50");
-
-    // A partially valid rescan is discarded atomically when a later record is invalid.
-    // SAFETY: These locally constructed session entries exercise only assistant usage aggregation.
-    h.ctx.sessionManager.getEntries = vi.fn(
-      () =>
-        [
-          { type: "message", message: { role: "assistant", usage: usage(25) } },
-          { type: "message", message: { role: "assistant", usage: usage(Number.NaN) } },
-        ] as never,
-    );
-    await emit(h, "session_compact");
-    expect(footer.render(100).join("\n")).toContain("↑50");
-
-    await emit(h, "turn_end", {
-      message: { role: "assistant", usage: usage(Number.POSITIVE_INFINITY) },
-    });
-    expect(footer.render(100).join("\n")).toContain("↑50");
-    await emit(h, "session_shutdown");
-  });
-
-  test("fails closed when the live context mode getter throws", async () => {
-    const h = harness();
-    Object.defineProperty(h.ctx, "mode", {
-      get() {
-        throw new Error("mode host failure");
-      },
-    });
-    await emit(h, "session_start");
-    expect(h.setFooter).not.toHaveBeenCalled();
-    await emit(h, "session_shutdown");
-  });
-
-  test("materializes session cwd, signal, and initial abort state exactly once", async () => {
-    const h = harness();
-    const source = new AbortController().signal;
-    let cwdReads = 0;
-    let signalReads = 0;
-    let abortedReads = 0;
-    const addEventListener = vi.fn(source.addEventListener.bind(source));
-    const removeEventListener = vi.fn(source.removeEventListener.bind(source));
-    const signal = new Proxy(source, {
-      get(target, property) {
-        if (property === "aborted") abortedReads++;
-        if (property === "addEventListener") return addEventListener;
-        if (property === "removeEventListener") return removeEventListener;
-        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
-        const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return Predicate.isFunction(value) ? value.bind(target) : value;
-      },
-    });
-    Object.defineProperties(h.ctx, {
-      cwd: {
-        get() {
-          cwdReads++;
-          if (cwdReads > 1) throw new Error("cwd reread");
-          return process.cwd();
-        },
-      },
-      signal: {
-        get() {
-          signalReads++;
-          if (signalReads > 1) throw new Error("signal reread");
-          return signal;
-        },
-      },
-    });
-
-    await emit(h, "session_start");
-    expect(cwdReads).toBe(1);
-    expect(signalReads).toBe(1);
-    expect(abortedReads).toBe(1);
-    expect(addEventListener).toHaveBeenCalledOnce();
-    expect(h.setFooter).toHaveBeenCalledOnce();
-    await emit(h, "session_shutdown");
-    expect(removeEventListener).toHaveBeenCalledOnce();
-  });
-
-  test("observes an abort between session capture and runtime listener registration", async () => {
-    const h = harness();
-    const controller = new AbortController();
-    const addEventListener = vi.fn(controller.signal.addEventListener.bind(controller.signal));
-    const removeEventListener = vi.fn(
-      controller.signal.removeEventListener.bind(controller.signal),
-    );
-    const signal = new Proxy(controller.signal, {
-      get(target, property) {
-        if (property === "addEventListener") return addEventListener;
-        if (property === "removeEventListener") return removeEventListener;
-        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
-        const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return Predicate.isFunction(value) ? value.bind(target) : value;
-      },
-    });
-    h.ctx.signal = signal;
-    h.ctx.isProjectTrusted = vi.fn(() => {
-      controller.abort();
-      return true;
-    });
-
-    await emit(h, "session_start");
-
-    expect(addEventListener).toHaveBeenCalledOnce();
-    expect(removeEventListener).toHaveBeenCalledOnce();
-    expect(h.setFooter).not.toHaveBeenCalled();
-    expect(h.exec).not.toHaveBeenCalled();
-  });
-
-  test("releases short-lived event abort forwarders when runtime work settles", async () => {
-    const h = harness();
-    const source = new AbortController().signal;
-    const addEventListener = vi.fn(source.addEventListener.bind(source));
-    const removeEventListener = vi.fn(source.removeEventListener.bind(source));
-    h.ctx.signal = new Proxy(source, {
-      get(target, property) {
-        if (property === "addEventListener") return addEventListener;
-        if (property === "removeEventListener") return removeEventListener;
-        // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
-        const value = property in target ? target[property as keyof AbortSignal] : undefined;
-        return Predicate.isFunction(value) ? value.bind(target) : value;
-      },
-    });
-
-    await emit(h, "session_start");
-    expect(addEventListener).toHaveBeenCalledTimes(1);
-    expect(removeEventListener).not.toHaveBeenCalled();
-
-    await emit(h, "turn_end");
-    expect(addEventListener).toHaveBeenCalledTimes(2);
-    expect(removeEventListener).toHaveBeenCalledOnce();
-
-    await emit(h, "session_shutdown");
-    expect(removeEventListener).toHaveBeenCalledTimes(2);
-  });
-
-  test("shuts down the prior session before a hostile session signal can mutate state", async () => {
-    const h = harness();
-    await emit(h, "session_start");
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const hostile = { ...h.ctx } as ExtensionContext;
-    Object.defineProperty(hostile, "signal", {
-      get() {
-        throw new Error("signal host failure");
-      },
-    });
-
-    for (const handler of h.handlers.get("session_start") ?? []) await handler({}, hostile);
-    expect(h.setFooter).toHaveBeenCalledTimes(2);
-    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-    await emit(h, "session_shutdown");
-  });
-
-  test("shuts down the prior session when the next session cwd cannot be captured", async () => {
-    const h = harness();
-    await emit(h, "session_start");
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const hostile = { ...h.ctx } as ExtensionContext;
-    Object.defineProperty(hostile, "cwd", {
-      get() {
-        throw new Error("cwd host failure");
-      },
-    });
-
-    for (const handler of h.handlers.get("session_start") ?? []) await handler({}, hostile);
-    expect(h.setFooter).toHaveBeenCalledTimes(2);
-    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-    await emit(h, "session_shutdown");
-  });
-
-  test("contains delayed branch subscription lifecycle callbacks", async () => {
-    const h = harness();
-    await emit(h, "session_start");
-    const factory = h.setFooter.mock.calls[0]?.[0];
-    let branchChanged: (() => void) | undefined;
-    const unsubscribe = vi.fn(() => {
-      throw new Error("unsubscribe host failure");
-    });
-    const footer = factory(
-      {
-        requestRender() {
-          throw new Error("render host failure");
-        },
-      },
-      { fg: (_color: string, text: string) => text },
-      {
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        getAvailableProviderCount: () => 1,
-        onBranchChange(callback: () => void) {
-          branchChanged = callback;
-          return unsubscribe;
-        },
-      },
-    );
-
-    expect(() => branchChanged?.()).not.toThrow();
-    expect(() => footer.dispose()).not.toThrow();
-    expect(unsubscribe).toHaveBeenCalledOnce();
-    await emit(h, "session_shutdown");
-  });
-
-  test("contains delayed branch subscription creation failures", async () => {
-    const h = harness();
-    await emit(h, "session_start");
-    const factory = h.setFooter.mock.calls[0]?.[0];
-    expect(() =>
-      factory(
-        { requestRender: vi.fn() },
-        { fg: (_color: string, text: string) => text },
-        {
-          getGitBranch: () => null,
-          getExtensionStatuses: () => new Map(),
-          getAvailableProviderCount: () => 1,
-          onBranchChange() {
-            throw new Error("subscription host failure");
+  it.effect("shutdown during startup survives throwing surfaces and releases every probe", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const callbacks = { attach: vi.fn(), detach: vi.fn(), dispose: vi.fn() };
+      h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+        version: COSMIC_UI_PROTOCOL_VERSION,
+        owner: "hostile",
+        contribution: {
+          kind: "surface",
+          id: "hostile",
+          region: "media",
+          preferredWidth: 8,
+          render: () => [],
+          attach: () => {
+            callbacks.attach();
+            throw new Error("attach");
+          },
+          detach: () => {
+            callbacks.detach();
+            throw new Error("detach");
+          },
+          dispose: () => {
+            callbacks.dispose();
+            throw new Error("dispose");
           },
         },
-      ),
-    ).not.toThrow();
-    await emit(h, "session_shutdown");
-  });
+      });
+      const pending = installPendingExec(h);
+      const startup = yield* emit(h, "session_start").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* waitUntil(() => pending.started() === 2);
+      const factory = h.setFooter.mock.calls[0]?.[0];
+      expect(() =>
+        factory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          {
+            getGitBranch: () => null,
+            getExtensionStatuses: () => new Map(),
+            getAvailableProviderCount: () => 1,
+            onBranchChange: () => vi.fn(),
+          },
+        ),
+      ).not.toThrow();
+      const shutdown = yield* emit(h, "session_shutdown").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Fiber.join(startup);
+      yield* Fiber.join(shutdown);
+      expect(pending.aborted()).toBe(2);
+      expect(callbacks.attach).toHaveBeenCalledOnce();
+      expect(callbacks.detach).toHaveBeenCalledOnce();
+      expect(callbacks.dispose).toHaveBeenCalledOnce();
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+    }),
+  );
 
-  test("stale failed-factory disposal cannot clear a successful retry", async () => {
-    const h = harness();
-    let staleFooter: { dispose(): void } | undefined;
-    let activeFooter: { dispose(): void } | undefined;
-    const staleUnsubscribe = vi.fn();
-    const footerData = (unsubscribe: () => void) => ({
-      getGitBranch: () => null,
-      getExtensionStatuses: () => new Map(),
-      getAvailableProviderCount: () => 1,
-      onBranchChange: () => unsubscribe,
-    });
-    h.setFooter
-      .mockImplementationOnce((factory) => {
-        staleFooter = factory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          footerData(staleUnsubscribe),
-        );
-        throw new Error("setFooter failed after factory creation");
-      })
-      .mockImplementationOnce((factory) => {
-        activeFooter = factory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          footerData(vi.fn()),
-        );
+  it.effect("reports startup I/O failure and permits a clean subsequent session", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const source = new AbortController().signal;
+      const addEventListener = vi.fn(source.addEventListener.bind(source));
+      const removeEventListener = vi.fn(source.removeEventListener.bind(source));
+      h.ctx.signal = new Proxy(source, {
+        get(target, property) {
+          if (property === "addEventListener") return addEventListener;
+          if (property === "removeEventListener") return removeEventListener;
+          // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+          const value = property in target ? target[property as keyof AbortSignal] : undefined;
+          return Predicate.isFunction(value) ? value.bind(target) : value;
+        },
+      });
+      h.ctx.cwd = "\0invalid";
+      yield* emit(h, "session_start");
+      expect(h.ctx.ui.notify).toHaveBeenCalledWith("Cosmic UI failed to start.", "warning");
+      expect(h.setFooter).not.toHaveBeenCalled();
+      expect(removeEventListener).toHaveBeenCalledOnce();
+
+      h.ctx.cwd = process.cwd();
+      yield* emit(h, "session_start");
+      expect(h.setFooter).toHaveBeenCalledOnce();
+      expect(addEventListener).toHaveBeenCalledTimes(2);
+      yield* emit(h, "session_shutdown");
+      expect(removeEventListener).toHaveBeenCalledTimes(2);
+    }),
+  );
+
+  it.effect("retries footer installation after the host rejects the first setFooter call", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      h.setFooter.mockImplementationOnce(() => {
+        throw new Error("host rejected footer");
       });
 
-    await emit(h, "session_start");
-    expect(staleUnsubscribe).toHaveBeenCalledOnce();
-    await emit(h, "session_start");
-    expect(activeFooter).toBeDefined();
+      yield* emit(h, "session_start");
+      expect(h.setFooter).toHaveBeenCalledOnce();
 
-    staleFooter?.dispose();
-    expect(staleUnsubscribe).toHaveBeenCalledOnce();
-    await emit(h, "session_shutdown");
-    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-  });
+      yield* emit(h, "session_start");
+      expect(h.setFooter).toHaveBeenCalledTimes(2);
+      expect(h.setFooter.mock.calls[1]?.[0]).toEqual(expect.any(Function));
 
-  test("an older instance cannot dispose a newer footer from the same factory", async () => {
-    const h = harness();
-    const firstUnsubscribe = vi.fn();
-    const secondUnsubscribe = vi.fn();
-    await emit(h, "session_start");
-    const factory = h.setFooter.mock.calls[0]?.[0];
-    const makeFooter = (unsubscribe: () => void) =>
-      factory(
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect(
+    "retains complete same-session totals but resets them before a failing new session",
+    () =>
+      Effect.gen(function* () {
+        const h = harness();
+        let reads = 0;
+        h.ctx.sessionManager.getEntries = vi.fn(() => {
+          reads++;
+          if (reads > 1) throw new Error("one-shot entries");
+          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          return [
+            {
+              type: "message",
+              message: {
+                role: "assistant",
+                usage: {
+                  input: 100,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: { total: 0 },
+                },
+              },
+            },
+          ] as never;
+        });
+        yield* emit(h, "session_start");
+        const firstFactory = h.setFooter.mock.calls[0]?.[0];
+        const firstFooter = firstFactory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          {
+            getGitBranch: () => null,
+            getExtensionStatuses: () => new Map(),
+            getAvailableProviderCount: () => 1,
+            onBranchChange: () => vi.fn(),
+          },
+        );
+        expect(firstFooter.render(100).join("\n")).toContain("↑100");
+
+        yield* emit(h, "session_compact");
+        expect(reads).toBe(2);
+        expect(firstFooter.render(100).join("\n")).toContain("↑100");
+
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        const secondContext = {
+          ...h.ctx,
+          sessionManager: {
+            ...h.ctx.sessionManager,
+            getEntries: vi.fn(() => {
+              throw new Error("new session entries unavailable");
+            }),
+          },
+        } as ExtensionContext;
+        yield* emit(h, "session_start", {}, secondContext);
+        const secondFactory = h.setFooter.mock.calls.at(-1)?.[0];
+        const secondFooter = secondFactory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          {
+            getGitBranch: () => null,
+            getExtensionStatuses: () => new Map(),
+            getAvailableProviderCount: () => 1,
+            onBranchChange: () => vi.fn(),
+          },
+        );
+        expect(secondFooter.render(100).join("\n")).not.toContain("↑100");
+        yield* emit(h, "session_shutdown");
+      }),
+  );
+
+  it.effect("retains complete totals when a turn usage getter throws", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      h.ctx.sessionManager.getEntries = vi.fn(
+        () =>
+          [
+            {
+              type: "message",
+              message: {
+                role: "assistant",
+                usage: {
+                  input: 50,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: { total: 0 },
+                },
+              },
+            },
+          ] as never,
+      );
+      yield* emit(h, "session_start");
+      const factory = h.setFooter.mock.calls[0]?.[0];
+      const footer = factory(
         { requestRender: vi.fn() },
         { fg: (_color: string, text: string) => text },
         {
           getGitBranch: () => null,
           getExtensionStatuses: () => new Map(),
           getAvailableProviderCount: () => 1,
-          onBranchChange: () => unsubscribe,
+          onBranchChange: () => vi.fn(),
         },
       );
-    const first = makeFooter(firstUnsubscribe);
-    makeFooter(secondUnsubscribe);
+      const input = vi.fn(() => {
+        throw new Error("nested usage failure");
+      });
+      const usage = Object.defineProperty(
+        { output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+        "input",
+        { get: input },
+      );
 
-    first.dispose();
-    expect(firstUnsubscribe).toHaveBeenCalledOnce();
-    expect(secondUnsubscribe).not.toHaveBeenCalled();
-    await emit(h, "session_shutdown");
-    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-    expect(secondUnsubscribe).toHaveBeenCalledOnce();
-  });
+      yield* emit(h, "turn_end", { message: { role: "assistant", usage } });
+      expect(input).toHaveBeenCalledOnce();
+      expect(footer.render(100).join("\n")).toContain("↑50");
+      yield* emit(h, "session_shutdown");
+    }),
+  );
 
-  test("retries footer removal after the host rejects a pre-disposal clear", async () => {
-    const h = harness();
-    let removalAttempts = 0;
-    h.setFooter.mockImplementation((factory) => {
-      if (factory !== undefined) return;
-      removalAttempts++;
-      if (removalAttempts === 1) throw new Error("footer still installed");
-    });
+  it.effect("retains the last complete totals when numeric decoding rejects a rescan or turn", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const usage = (input: number) => ({
+        input,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { total: 0 },
+      });
+      // SAFETY: These locally constructed session entries exercise only assistant usage aggregation.
+      h.ctx.sessionManager.getEntries = vi.fn(
+        () => [{ type: "message", message: { role: "assistant", usage: usage(50) } }] as never,
+      );
+      yield* emit(h, "session_start");
+      const factory = h.setFooter.mock.calls[0]?.[0];
+      const footer = factory(
+        { requestRender: vi.fn() },
+        { fg: (_color: string, text: string) => text },
+        {
+          getGitBranch: () => null,
+          getExtensionStatuses: () => new Map(),
+          getAvailableProviderCount: () => 1,
+          onBranchChange: () => vi.fn(),
+        },
+      );
+      expect(footer.render(100).join("\n")).toContain("↑50");
 
-    await emit(h, "session_start");
-    await emit(h, "session_shutdown");
+      // A partially valid rescan is discarded atomically when a later record is invalid.
+      // SAFETY: These locally constructed session entries exercise only assistant usage aggregation.
+      h.ctx.sessionManager.getEntries = vi.fn(
+        () =>
+          [
+            { type: "message", message: { role: "assistant", usage: usage(25) } },
+            { type: "message", message: { role: "assistant", usage: usage(Number.NaN) } },
+          ] as never,
+      );
+      yield* emit(h, "session_compact");
+      expect(footer.render(100).join("\n")).toContain("↑50");
 
-    expect(removalAttempts).toBe(2);
-    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-  });
+      yield* emit(h, "turn_end", {
+        message: { role: "assistant", usage: usage(Number.POSITIVE_INFINITY) },
+      });
+      expect(footer.render(100).join("\n")).toContain("↑50");
+      yield* emit(h, "session_shutdown");
+    }),
+  );
 
-  test("relinquishes footer ownership when the host disposes before rejecting removal", async () => {
-    const h = harness();
-    const unsubscribe = vi.fn();
-    let installedFooter: { dispose(): void } | undefined;
-    let removalAttempts = 0;
-    h.setFooter.mockImplementation((factory) => {
-      if (factory !== undefined) {
-        installedFooter = factory(
+  it.effect("fails closed when the live context mode getter throws", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      Object.defineProperty(h.ctx, "mode", {
+        get() {
+          throw new Error("mode host failure");
+        },
+      });
+      yield* emit(h, "session_start");
+      expect(h.setFooter).not.toHaveBeenCalled();
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("materializes session cwd, signal, and initial abort state exactly once", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const source = new AbortController().signal;
+      let cwdReads = 0;
+      let signalReads = 0;
+      let abortedReads = 0;
+      const addEventListener = vi.fn(source.addEventListener.bind(source));
+      const removeEventListener = vi.fn(source.removeEventListener.bind(source));
+      const signal = new Proxy(source, {
+        get(target, property) {
+          if (property === "aborted") abortedReads++;
+          if (property === "addEventListener") return addEventListener;
+          if (property === "removeEventListener") return removeEventListener;
+          // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+          const value = property in target ? target[property as keyof AbortSignal] : undefined;
+          return Predicate.isFunction(value) ? value.bind(target) : value;
+        },
+      });
+      Object.defineProperties(h.ctx, {
+        cwd: {
+          get() {
+            cwdReads++;
+            if (cwdReads > 1) throw new Error("cwd reread");
+            return process.cwd();
+          },
+        },
+        signal: {
+          get() {
+            signalReads++;
+            if (signalReads > 1) throw new Error("signal reread");
+            return signal;
+          },
+        },
+      });
+
+      yield* emit(h, "session_start");
+      expect(cwdReads).toBe(1);
+      expect(signalReads).toBe(1);
+      expect(abortedReads).toBe(1);
+      expect(addEventListener).toHaveBeenCalledOnce();
+      expect(h.setFooter).toHaveBeenCalledOnce();
+      yield* emit(h, "session_shutdown");
+      expect(removeEventListener).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect("observes an abort between session capture and runtime listener registration", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const controller = new AbortController();
+      const addEventListener = vi.fn(controller.signal.addEventListener.bind(controller.signal));
+      const removeEventListener = vi.fn(
+        controller.signal.removeEventListener.bind(controller.signal),
+      );
+      const signal = new Proxy(controller.signal, {
+        get(target, property) {
+          if (property === "addEventListener") return addEventListener;
+          if (property === "removeEventListener") return removeEventListener;
+          // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+          const value = property in target ? target[property as keyof AbortSignal] : undefined;
+          return Predicate.isFunction(value) ? value.bind(target) : value;
+        },
+      });
+      h.ctx.signal = signal;
+      h.ctx.isProjectTrusted = vi.fn(() => {
+        controller.abort();
+        return true;
+      });
+
+      yield* emit(h, "session_start");
+
+      expect(addEventListener).toHaveBeenCalledOnce();
+      expect(removeEventListener).toHaveBeenCalledOnce();
+      expect(h.setFooter).not.toHaveBeenCalled();
+      expect(h.exec).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("releases short-lived event abort forwarders when runtime work settles", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const source = new AbortController().signal;
+      const addEventListener = vi.fn(source.addEventListener.bind(source));
+      const removeEventListener = vi.fn(source.removeEventListener.bind(source));
+      h.ctx.signal = new Proxy(source, {
+        get(target, property) {
+          if (property === "addEventListener") return addEventListener;
+          if (property === "removeEventListener") return removeEventListener;
+          // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
+          const value = property in target ? target[property as keyof AbortSignal] : undefined;
+          return Predicate.isFunction(value) ? value.bind(target) : value;
+        },
+      });
+
+      yield* emit(h, "session_start");
+      expect(addEventListener).toHaveBeenCalledTimes(1);
+      expect(removeEventListener).not.toHaveBeenCalled();
+
+      yield* emit(h, "turn_end");
+      expect(addEventListener).toHaveBeenCalledTimes(2);
+      expect(removeEventListener).toHaveBeenCalledOnce();
+
+      yield* emit(h, "session_shutdown");
+      expect(removeEventListener).toHaveBeenCalledTimes(2);
+    }),
+  );
+
+  it.effect("shuts down the prior session before a hostile session signal can mutate state", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const hostile = { ...h.ctx } as ExtensionContext;
+      Object.defineProperty(hostile, "signal", {
+        get() {
+          throw new Error("signal host failure");
+        },
+      });
+
+      yield* emit(h, "session_start", {}, hostile);
+      expect(h.setFooter).toHaveBeenCalledTimes(2);
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("shuts down the prior session when the next session cwd cannot be captured", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const hostile = { ...h.ctx } as ExtensionContext;
+      Object.defineProperty(hostile, "cwd", {
+        get() {
+          throw new Error("cwd host failure");
+        },
+      });
+
+      yield* emit(h, "session_start", {}, hostile);
+      expect(h.setFooter).toHaveBeenCalledTimes(2);
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("contains delayed branch subscription lifecycle callbacks", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      const factory = h.setFooter.mock.calls[0]?.[0];
+      let branchChanged: (() => void) | undefined;
+      const unsubscribe = vi.fn(() => {
+        throw new Error("unsubscribe host failure");
+      });
+      const footer = factory(
+        {
+          requestRender() {
+            throw new Error("render host failure");
+          },
+        },
+        { fg: (_color: string, text: string) => text },
+        {
+          getGitBranch: () => null,
+          getExtensionStatuses: () => new Map(),
+          getAvailableProviderCount: () => 1,
+          onBranchChange(callback: () => void) {
+            branchChanged = callback;
+            return unsubscribe;
+          },
+        },
+      );
+
+      expect(() => branchChanged?.()).not.toThrow();
+      expect(() => footer.dispose()).not.toThrow();
+      expect(unsubscribe).toHaveBeenCalledOnce();
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("contains delayed branch subscription creation failures", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      const factory = h.setFooter.mock.calls[0]?.[0];
+      expect(() =>
+        factory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          {
+            getGitBranch: () => null,
+            getExtensionStatuses: () => new Map(),
+            getAvailableProviderCount: () => 1,
+            onBranchChange() {
+              throw new Error("subscription host failure");
+            },
+          },
+        ),
+      ).not.toThrow();
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("stale failed-factory disposal cannot clear a successful retry", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      let staleFooter: { dispose(): void } | undefined;
+      let activeFooter: { dispose(): void } | undefined;
+      const staleUnsubscribe = vi.fn();
+      const footerData = (unsubscribe: () => void) => ({
+        getGitBranch: () => null,
+        getExtensionStatuses: () => new Map(),
+        getAvailableProviderCount: () => 1,
+        onBranchChange: () => unsubscribe,
+      });
+      h.setFooter
+        .mockImplementationOnce((factory) => {
+          staleFooter = factory(
+            { requestRender: vi.fn() },
+            { fg: (_color: string, text: string) => text },
+            footerData(staleUnsubscribe),
+          );
+          throw new Error("setFooter failed after factory creation");
+        })
+        .mockImplementationOnce((factory) => {
+          activeFooter = factory(
+            { requestRender: vi.fn() },
+            { fg: (_color: string, text: string) => text },
+            footerData(vi.fn()),
+          );
+        });
+
+      yield* emit(h, "session_start");
+      expect(staleUnsubscribe).toHaveBeenCalledOnce();
+      yield* emit(h, "session_start");
+      expect(activeFooter).toBeDefined();
+
+      staleFooter?.dispose();
+      expect(staleUnsubscribe).toHaveBeenCalledOnce();
+      yield* emit(h, "session_shutdown");
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+    }),
+  );
+
+  it.effect("an older instance cannot dispose a newer footer from the same factory", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const firstUnsubscribe = vi.fn();
+      const secondUnsubscribe = vi.fn();
+      yield* emit(h, "session_start");
+      const factory = h.setFooter.mock.calls[0]?.[0];
+      const makeFooter = (unsubscribe: () => void) =>
+        factory(
           { requestRender: vi.fn() },
           { fg: (_color: string, text: string) => text },
           {
@@ -867,112 +877,176 @@ describe("Cosmic UI extension", () => {
             onBranchChange: () => unsubscribe,
           },
         );
-        return;
-      }
-      removalAttempts++;
-      installedFooter?.dispose();
-      throw new Error("host rejected removal after disposal");
-    });
+      const first = makeFooter(firstUnsubscribe);
+      makeFooter(secondUnsubscribe);
 
-    await emit(h, "session_start");
-    await emit(h, "session_shutdown");
-    expect(removalAttempts).toBe(1);
-    expect(unsubscribe).toHaveBeenCalledOnce();
+      first.dispose();
+      expect(firstUnsubscribe).toHaveBeenCalledOnce();
+      expect(secondUnsubscribe).not.toHaveBeenCalled();
+      yield* emit(h, "session_shutdown");
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+      expect(secondUnsubscribe).toHaveBeenCalledOnce();
+    }),
+  );
 
-    await emit(h, "session_start");
-    expect(h.setFooter).toHaveBeenLastCalledWith(expect.any(Function));
-    await emit(h, "session_shutdown");
-  });
-
-  test("session abort interrupts startup probes without waiting for them", async () => {
-    const h = harness();
-    const controller = new AbortController();
-    h.ctx.signal = controller.signal;
-    const pending = installPendingExec(h);
-    const startup = emit(h, "session_start");
-    await waitUntil(() => pending.started() === 2);
-    controller.abort();
-    await startup;
-    await waitUntil(() => pending.aborted() === 2);
-    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-  });
-
-  test("polls git status so external commits and edits refresh automatically", async () => {
-    vi.useFakeTimers();
-    try {
+  it.effect("retries footer removal after the host rejects a pre-disposal clear", () =>
+    Effect.gen(function* () {
       const h = harness();
-      await emit(h, "session_start");
-      expect(h.exec).toHaveBeenCalledTimes(3);
-      const factory = h.setFooter.mock.calls[0]?.[0];
-      const footer = factory(
-        { requestRender: vi.fn() },
-        { fg: (_color: string, text: string) => text },
-        {
-          getGitBranch: () => "main",
-          getExtensionStatuses: () => new Map(),
-          getAvailableProviderCount: () => 1,
-          onBranchChange: () => vi.fn(),
-        },
-      );
-      h.exec.mockResolvedValueOnce({
-        stdout: "## main...origin/main\n",
-        stderr: "",
-        code: 0,
-        killed: false,
+      let removalAttempts = 0;
+      h.setFooter.mockImplementation((factory) => {
+        if (factory !== undefined) return;
+        removalAttempts++;
+        if (removalAttempts === 1) throw new Error("footer still installed");
       });
 
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(h.exec).toHaveBeenCalledTimes(4);
-      const cleanFooter = footer.render(100).join("\n");
-      expect(cleanFooter).not.toContain("clean");
-      expect(cleanFooter).not.toContain("~1 ?1");
+      yield* emit(h, "session_start");
+      yield* emit(h, "session_shutdown");
 
-      await emit(h, "session_shutdown");
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(h.exec).toHaveBeenCalledTimes(4);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      expect(removalAttempts).toBe(2);
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+    }),
+  );
 
-  test("session abort removes the footer and interrupts the active runtime", async () => {
-    const h = harness();
-    const controller = new AbortController();
-    h.ctx.signal = controller.signal;
-    await emit(h, "session_start");
-    controller.abort();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-  });
+  it.effect("relinquishes footer ownership when the host disposes before rejecting removal", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const unsubscribe = vi.fn();
+      let installedFooter: { dispose(): void } | undefined;
+      let removalAttempts = 0;
+      h.setFooter.mockImplementation((factory) => {
+        if (factory !== undefined) {
+          installedFooter = factory(
+            { requestRender: vi.fn() },
+            { fg: (_color: string, text: string) => text },
+            {
+              getGitBranch: () => null,
+              getExtensionStatuses: () => new Map(),
+              getAvailableProviderCount: () => 1,
+              onBranchChange: () => unsubscribe,
+            },
+          );
+          return;
+        }
+        removalAttempts++;
+        installedFooter?.dispose();
+        throw new Error("host rejected removal after disposal");
+      });
 
-  test("awaits shared ticker cleanup during session shutdown", async () => {
-    let finishTickerShutdown!: () => void;
-    const tickerShutdown = new Promise<void>((resolve) => {
-      finishTickerShutdown = resolve;
-    });
+      yield* emit(h, "session_start");
+      yield* emit(h, "session_shutdown");
+      expect(removalAttempts).toBe(1);
+      expect(unsubscribe).toHaveBeenCalledOnce();
+
+      yield* emit(h, "session_start");
+      expect(h.setFooter).toHaveBeenLastCalledWith(expect.any(Function));
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("session abort interrupts startup probes without waiting for them", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const controller = new AbortController();
+      h.ctx.signal = controller.signal;
+      const pending = installPendingExec(h);
+      const startup = yield* emit(h, "session_start").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* waitUntil(() => pending.started() === 2);
+      controller.abort();
+      yield* Fiber.join(startup);
+      yield* waitUntil(() => pending.aborted() === 2);
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+    }),
+  );
+
+  it.effect("polls git status so external commits and edits refresh automatically", () =>
+    Effect.gen(function* () {
+      vi.useFakeTimers();
+      try {
+        const h = harness();
+        yield* emit(h, "session_start");
+        expect(h.exec).toHaveBeenCalledTimes(3);
+        const factory = h.setFooter.mock.calls[0]?.[0];
+        const footer = factory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          {
+            getGitBranch: () => "main",
+            getExtensionStatuses: () => new Map(),
+            getAvailableProviderCount: () => 1,
+            onBranchChange: () => vi.fn(),
+          },
+        );
+        h.exec.mockResolvedValueOnce({
+          stdout: "## main...origin/main\n",
+          stderr: "",
+          code: 0,
+          killed: false,
+        });
+
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
+        expect(h.exec).toHaveBeenCalledTimes(4);
+        const cleanFooter = footer.render(100).join("\n");
+        expect(cleanFooter).not.toContain("clean");
+        expect(cleanFooter).not.toContain("~1 ?1");
+
+        yield* emit(h, "session_shutdown");
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
+        expect(h.exec).toHaveBeenCalledTimes(4);
+      } finally {
+        vi.useRealTimers();
+      }
+    }),
+  );
+
+  it.effect("session abort removes the footer and interrupts the active runtime", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const controller = new AbortController();
+      h.ctx.signal = controller.signal;
+      yield* emit(h, "session_start");
+      controller.abort();
+      yield* Effect.promise(() => Promise.resolve());
+      yield* Effect.promise(() => Promise.resolve());
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+    }),
+  );
+
+  it.effect("awaits shared ticker cleanup during session shutdown", () => {
+    const finishTickerShutdown = Deferred.makeUnsafe<void>();
+    const tickerShutdown = Effect.runPromise(Deferred.await(finishTickerShutdown));
     const shutdownHostUiTickers = vi.fn(() => tickerShutdown);
     const h = harness("tui", { shutdownHostUiTickers });
-    await emit(h, "session_start");
+    return Effect.gen(function* () {
+      yield* emit(h, "session_start");
 
-    let settled = false;
-    const shutdown = emit(h, "session_shutdown").then(() => {
-      settled = true;
+      let settled = false;
+      const shutdown = yield* emit(h, "session_shutdown").pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            settled = true;
+          }),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Effect.promise(() => Promise.resolve());
+      expect(shutdownHostUiTickers).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+
+      yield* Deferred.succeed(finishTickerShutdown, undefined);
+      yield* Fiber.join(shutdown);
+      expect(settled).toBe(true);
     });
-    await Promise.resolve();
-    expect(shutdownHostUiTickers).toHaveBeenCalledOnce();
-    expect(settled).toBe(false);
-
-    finishTickerShutdown();
-    await shutdown;
-    expect(settled).toBe(true);
   });
 
-  test("releases protocol subscriptions exactly once on repeated shutdown", async () => {
-    const h = harness();
-    await emit(h, "session_start");
-    await emit(h, "session_shutdown");
-    await emit(h, "session_shutdown");
-    expect(h.unsubscribed).toHaveBeenCalledTimes(4);
-  });
+  it.effect("releases protocol subscriptions exactly once on repeated shutdown", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      yield* emit(h, "session_shutdown");
+      yield* emit(h, "session_shutdown");
+      expect(h.unsubscribed).toHaveBeenCalledTimes(4);
+    }),
+  );
 });

@@ -1,12 +1,16 @@
 // Deterministic atomic-commit suite: one long-lived Layer per test owns the store runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { AgentDirectory, JsonDocumentStore, type JsonDocumentStoreContract } from "pi-cosmic-core";
+import {
+  AgentDirectory,
+  JsonDocumentStore,
+  provideBuiltLayer,
+  type JsonDocumentStoreContract,
+} from "pi-cosmic-core";
 import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
 import { CodeModeConfigStore, type CodeModeState } from "../src/config/store.ts";
 
@@ -52,7 +56,7 @@ describe("code mode store atomic publication", () => {
       expect(memory.documents.get(GLOBAL_PATH)).toEqual({ timeoutMs: 60_000, future: true });
       expect(store.snapshot().config.timeoutMs).toBe(60_000);
       expect(published.at(-1)?.config.timeoutMs).toBe(60_000);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -83,7 +87,7 @@ describe("code mode store atomic publication", () => {
         expect(next.config.timeoutMs).toBe(60_000);
         expect(next.config.maxToolCalls).toBe(8);
         expect(published.at(-1)?.config.timeoutMs).toBe(60_000);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -116,7 +120,7 @@ describe("code mode store atomic publication", () => {
       expect(final.config.maxToolCalls).toBe(64);
       expect(published.at(-1)?.config.timeoutMs).toBe(60_000);
       expect(published.at(-1)?.config.maxToolCalls).toBe(64);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("resolves committed state from pre-commit data with no post-commit reads", () => {
@@ -146,7 +150,7 @@ describe("code mode store atomic publication", () => {
       expect(final.config.timeoutMs).toBe(1_000);
       expect(final.config.maxToolCalls).toBe(8);
       expect(published.at(-1)?.config.timeoutMs).toBe(1_000);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("overlays scopes field-wise across writes in one long-lived runtime", () => {
@@ -182,7 +186,7 @@ describe("code mode store atomic publication", () => {
       expect(afterClear.provenance.timeoutMs).toBe("global");
       expect(Object.isFrozen(published.at(-1))).toBe(true);
       expect(Object.isFrozen(published.at(-1)?.config)).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 });
 
@@ -246,6 +250,6 @@ describe("code mode untrusted project I/O", () => {
       expect(operations.length).toBeGreaterThan(0);
       expect(operations.filter((operation) => operation.includes(PROJECT_PATH))).toEqual([]);
       expect(memory.documents.get(PROJECT_PATH)).toEqual({ enabled: true, timeoutMs: 1_000 });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 });

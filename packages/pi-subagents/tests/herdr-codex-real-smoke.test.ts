@@ -1,13 +1,9 @@
 // Optional no-inference smoke requires an explicitly separate disposable Herdr server.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/cryptoRandomBytes:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/strictEffectProvide:off
 import { randomBytes } from "node:crypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { describe, expect, it } from "vitest";
 import type { BackendLaunchRequest } from "../src/backend/model.ts";
 import { HerdrCli } from "../src/boundary/herdr-cli.ts";
@@ -17,19 +13,23 @@ import { HerdrHost } from "../src/boundary/herdr-host.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { validateDisposableHerdrSelection } from "./herdr-real-smoke-safety.ts";
 
-const enabled = process.env.PI_SUBAGENTS_REAL_HERDR_CODEX_SMOKE === "1";
+const smokeGateEnabled = (source: NodeJS.ProcessEnv): boolean =>
+  source.PI_SUBAGENTS_REAL_HERDR_CODEX_SMOKE === "1";
+const smokeModel = (source: NodeJS.ProcessEnv): string | undefined =>
+  source.PI_SUBAGENTS_HERDR_CODEX_MODEL;
+const enabled = smokeGateEnabled(process.env);
 
-const disposableEnvironment = (): NodeJS.ProcessEnv => {
-  const socket = process.env.PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH;
-  const configPath = process.env.PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH;
-  const paneId = process.env.PI_SUBAGENTS_REAL_HERDR_PANE_ID;
+const disposableEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
+  const socket = source.PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH;
+  const configPath = source.PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH;
+  const paneId = source.PI_SUBAGENTS_REAL_HERDR_PANE_ID;
   if (!socket || !configPath || !paneId)
     throw new Error(
       "Herdr Codex smoke requires a separate disposable socket/config and an existing caller pane ID.",
     );
-  const selected = validateDisposableHerdrSelection(socket, configPath, process.env);
+  const selected = validateDisposableHerdrSelection(socket, configPath, source);
   return captureHerdrEnvironment({
-    ...process.env,
+    ...source,
     HERDR_SOCKET_PATH: selected.socket,
     HERDR_CONFIG_PATH: selected.configPath,
     HERDR_SESSION: undefined,
@@ -39,10 +39,10 @@ const disposableEnvironment = (): NodeJS.ProcessEnv => {
 };
 
 describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
-  it("returns atomic native-session evidence and reclaims exact topology", async () => {
-    const model = process.env.PI_SUBAGENTS_HERDR_CODEX_MODEL;
+  it("returns atomic native-session evidence and reclaims exact topology", () => {
+    const model = smokeModel(process.env);
     if (!model) throw new Error("Herdr Codex smoke requires PI_SUBAGENTS_HERDR_CODEX_MODEL.");
-    const environment = disposableEnvironment();
+    const environment = disposableEnvironment(process.env);
     const agentDirectory = getAgentDir();
     const boundaries = Layer.merge(
       HerdrCli.layer({ environment }),
@@ -53,7 +53,7 @@ describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
       Layer.merge(host, SupervisorChannel.layer({ agentDirectory })),
       boundaries,
     );
-    await Effect.runPromise(
+    return Effect.runPromise(
       Effect.gen(function* () {
         const cli = yield* HerdrCli;
         const before = yield* cli.snapshot;
@@ -87,7 +87,7 @@ describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
         expect(after.panes.some((pane) => pane.paneId === environment.HERDR_PANE_ID)).toBe(true);
         expect(after.panes.some((pane) => pane.paneId === hosted.paneId)).toBe(false);
         expect(after.agents.some((agent) => agent.name === hosted.agentName)).toBe(false);
-      }).pipe(Effect.scoped, Effect.provide(layer)),
+      }).pipe(Effect.scoped, provideBuiltLayer(layer)),
     );
   }, 180_000);
 });

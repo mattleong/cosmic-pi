@@ -1,4 +1,5 @@
-import { Effect, Schema } from "effect";
+import type * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { executeWithLimits } from "./interpreter/runtime.js";
 import {
   type HostTools,

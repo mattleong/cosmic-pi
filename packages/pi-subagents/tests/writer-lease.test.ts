@@ -1,15 +1,9 @@
 // Live filesystem primitives are exercised at this Node boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -19,19 +13,35 @@ import {
   writerLeaseRoot,
   type CanonicalWriterCwd,
 } from "../src/boundary/writer-lease.ts";
+import {
+  nodeFsPromises as fs,
+  nodePath,
+  nodeSpawn as spawn,
+  type NodeChildProcessWithoutNullStreams as ChildProcessWithoutNullStreams,
+} from "./support/node-builtins.ts";
+
+const { join } = nodePath;
 
 const token = (character: string): string => character.repeat(64);
 
 const promiseGate = () => {
-  let open!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  return { promise, open };
+  const cell = Deferred.makeUnsafe<void>();
+  return {
+    promise: Effect.runPromise(Deferred.await(cell)),
+    open: () => {
+      Deferred.doneUnsafe(cell, Effect.void);
+    },
+  };
 };
 const childFixturePath = fileURLToPath(
   new URL("./fixtures/writer-lease-child.mjs", import.meta.url),
 );
+
+// SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
+const readOwnerEvidence = (leasePath: string): Promise<{ ownershipToken?: string }> =>
+  fs
+    .readFile(join(leasePath, "owner.json"), "utf8")
+    .then((source) => JSON.parse(source) as { ownershipToken?: string });
 
 interface LeaseChildMessage {
   readonly type: "ready" | "acquired" | "marked" | "released" | "failure" | "exiting";
@@ -51,7 +61,7 @@ interface LeaseChild {
   readonly dispose: () => Promise<void>;
 }
 
-const startLeaseChild = async (
+const startLeaseChild = (
   agentDirectory: string,
   project: string,
   runId: string,
@@ -76,17 +86,24 @@ const startLeaseChild = async (
   });
   const next = (): Promise<LeaseChildMessage> => {
     const message = messages.shift();
-    return message ? Promise.resolve(message) : new Promise((resolve) => waiters.push(resolve));
+    if (message) return Promise.resolve(message);
+    const cell = Deferred.makeUnsafe<LeaseChildMessage>();
+    waiters.push((incoming) => {
+      Deferred.doneUnsafe(cell, Effect.succeed(incoming));
+    });
+    return Effect.runPromise(Deferred.await(cell));
   };
-  const dispose = async (): Promise<void> => {
+  const dispose = (): Promise<void> => {
     lines.close();
     child.stdin.end();
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await new Promise<void>((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) resolve();
-      else child.once("exit", () => resolve());
+    const exited = Deferred.makeUnsafe<void>();
+    if (child.exitCode !== null || child.signalCode !== null)
+      Deferred.doneUnsafe(exited, Effect.void);
+    else child.once("exit", () => Deferred.doneUnsafe(exited, Effect.void));
+    return Effect.runPromise(Deferred.await(exited)).then(() => {
+      if (stderr) throw new Error(stderr);
     });
-    if (stderr) throw new Error(stderr);
   };
   const leaseChild: LeaseChild = {
     process: child,
@@ -94,12 +111,13 @@ const startLeaseChild = async (
     next,
     dispose,
   };
-  const ready = await next();
-  if (ready.type !== "ready") {
-    await dispose();
-    throw new Error(`writer-lease child did not become ready: ${JSON.stringify(ready)}`);
-  }
-  return leaseChild;
+  return next().then((ready) => {
+    if (ready.type !== "ready")
+      return dispose().then(() => {
+        throw new Error(`writer-lease child did not become ready: ${JSON.stringify(ready)}`);
+      });
+    return leaseChild;
+  });
 };
 
 const withFixture = <A, E>(
@@ -111,14 +129,15 @@ const withFixture = <A, E>(
 ): Effect.Effect<A, E> =>
   Effect.acquireUseRelease(
     Effect.tryPromise({
-      try: async () => {
-        const root = await fs.mkdtemp(join(tmpdir(), "pi-subagents-writer-lease-"));
-        const agentDirectory = join(root, "agent-state");
-        const project = join(root, "project");
-        await fs.mkdir(agentDirectory, { mode: 0o700 });
-        await fs.mkdir(project, { mode: 0o700 });
-        return { root, agentDirectory, project };
-      },
+      try: () =>
+        fs.mkdtemp(join(tmpdir(), "pi-subagents-writer-lease-")).then((root) => {
+          const agentDirectory = join(root, "agent-state");
+          const project = join(root, "project");
+          return fs
+            .mkdir(agentDirectory, { mode: 0o700 })
+            .then(() => fs.mkdir(project, { mode: 0o700 }))
+            .then(() => ({ root, agentDirectory, project }));
+        }),
       catch: () => "fixture setup failed" as const,
     }).pipe(Effect.orDie),
     use,
@@ -377,8 +396,8 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
   it.effect("never reclaims a dead spawn-started lease while a detached backend survives", () =>
     withFixture(({ agentDirectory, project }) =>
       Effect.acquireUseRelease(
-        Effect.tryPromise({
-          try: async () =>
+        Effect.try({
+          try: () =>
             spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
               stdio: "ignore",
               detached: true,
@@ -482,15 +501,17 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
         });
         const cwd = yield* service.canonicalize(project);
         yield* Effect.tryPromise({
-          try: async () => {
-            await fs.mkdir(writerLeaseRoot(agentDirectory), { recursive: true, mode: 0o700 });
-            await fs.mkdir(writerLeasePath(agentDirectory, cwd.digest), { mode: 0o700 });
-            await fs.writeFile(
-              join(writerLeasePath(agentDirectory, cwd.digest), "owner.json"),
-              "{not-json",
-              { mode: 0o600 },
-            );
-          },
+          try: () =>
+            fs
+              .mkdir(writerLeaseRoot(agentDirectory), { recursive: true, mode: 0o700 })
+              .then(() => fs.mkdir(writerLeasePath(agentDirectory, cwd.digest), { mode: 0o700 }))
+              .then(() =>
+                fs.writeFile(
+                  join(writerLeasePath(agentDirectory, cwd.digest), "owner.json"),
+                  "{not-json",
+                  { mode: 0o600 },
+                ),
+              ),
           catch: () => "fixture corrupt lease setup failed" as const,
         }).pipe(Effect.orDie);
         const corrupt = yield* acquire(service, cwd, "corrupt-contender").pipe(Effect.flip);
@@ -573,39 +594,27 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
 
   it.effect("prevents delayed duplicate release from moving an ABA replacement", () =>
     withFixture(({ agentDirectory, project }) =>
-      Effect.tryPromise(async () => {
-        let firstEntered!: () => void;
-        let secondEntered!: () => void;
-        let releaseFirst!: () => void;
-        let releaseSecond!: () => void;
-        const firstEnteredPromise = new Promise<void>((resolve) => {
-          firstEntered = resolve;
-        });
-        const secondEnteredPromise = new Promise<void>((resolve) => {
-          secondEntered = resolve;
-        });
-        const firstGate = new Promise<void>((resolve) => {
-          releaseFirst = resolve;
-        });
-        const secondGate = new Promise<void>((resolve) => {
-          releaseSecond = resolve;
-        });
+      Effect.gen(function* () {
+        const firstEntered = promiseGate();
+        const secondEntered = promiseGate();
+        const firstGate = promiseGate();
+        const secondGate = promiseGate();
         const owner = makeWriterLease({
           agentDirectory,
           ownerNonce: token("a"),
           randomToken: () => token("b"),
-          beforeReleaseRename: async () => {
-            firstEntered();
-            await firstGate;
+          beforeReleaseRename: () => {
+            firstEntered.open();
+            return firstGate.promise;
           },
         });
         const duplicateReleaser = makeWriterLease({
           agentDirectory,
           ownerNonce: token("e"),
           randomToken: () => token("f"),
-          beforeReleaseRename: async () => {
-            secondEntered();
-            await secondGate;
+          beforeReleaseRename: () => {
+            secondEntered.open();
+            return secondGate.promise;
           },
         });
         const replacementOwner = makeWriterLease({
@@ -613,34 +622,31 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
           ownerNonce: token("c"),
           randomToken: () => token("d"),
         });
-        const cwd = await Effect.runPromise(owner.canonicalize(project));
-        const lease = await Effect.runPromise(
-          owner.acquire({ cwd, sessionId: "aba-session", runId: "aba-owner" }),
-        );
+        const cwd = yield* owner.canonicalize(project);
+        const lease = yield* owner.acquire({
+          cwd,
+          sessionId: "aba-session",
+          runId: "aba-owner",
+        });
         const firstRelease = Effect.runPromiseExit(owner.release(lease));
-        await firstEnteredPromise;
+        yield* Effect.promise(() => firstEntered.promise);
         const delayedDuplicate = Effect.runPromiseExit(duplicateReleaser.release(lease));
-        await secondEnteredPromise;
+        yield* Effect.promise(() => secondEntered.promise);
 
-        releaseFirst();
-        expect(Exit.isSuccess(await firstRelease)).toBe(true);
-        const replacement = await Effect.runPromise(
-          replacementOwner.acquire({
-            cwd,
-            sessionId: "replacement-session",
-            runId: "aba-replacement",
-          }),
-        );
-        releaseSecond();
-        expect(Exit.isFailure(await delayedDuplicate)).toBe(true);
+        firstGate.open();
+        expect(Exit.isSuccess(yield* Effect.promise(() => firstRelease))).toBe(true);
+        const replacement = yield* replacementOwner.acquire({
+          cwd,
+          sessionId: "replacement-session",
+          runId: "aba-replacement",
+        });
+        secondGate.open();
+        expect(Exit.isFailure(yield* Effect.promise(() => delayedDuplicate))).toBe(true);
 
-        // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
-        const evidence = JSON.parse(
-          await fs.readFile(join(replacement.leasePath, "owner.json"), "utf8"),
-        ) as { ownershipToken?: string };
+        const evidence = yield* Effect.promise(() => readOwnerEvidence(replacement.leasePath));
         expect(evidence.ownershipToken).toBe(replacement.ownershipToken);
-        await Effect.runPromise(replacementOwner.release(replacement));
-        const entries = await fs.readdir(writerLeaseRoot(agentDirectory));
+        yield* replacementOwner.release(replacement);
+        const entries = yield* Effect.promise(() => fs.readdir(writerLeaseRoot(agentDirectory)));
         expect(entries.some((entry) => entry.includes(".tombstone-"))).toBe(true);
       }).pipe(Effect.orDie),
     ),
@@ -689,42 +695,53 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
 
   it.effect("uses independent Node processes for live conflict and simultaneous acquisition", () =>
     withFixture(({ agentDirectory, project }) =>
-      Effect.tryPromise(async () => {
-        const owner = await startLeaseChild(agentDirectory, project, "process-owner");
-        const contender = await startLeaseChild(agentDirectory, project, "process-contender");
+      Effect.gen(function* () {
+        const owner = yield* Effect.promise(() =>
+          startLeaseChild(agentDirectory, project, "process-owner"),
+        );
+        const contender = yield* Effect.promise(() =>
+          startLeaseChild(agentDirectory, project, "process-contender"),
+        );
         try {
           owner.send("acquire");
-          expect(await owner.next()).toMatchObject({ type: "acquired", phase: "reserved" });
+          expect(yield* Effect.promise(owner.next)).toMatchObject({
+            type: "acquired",
+            phase: "reserved",
+          });
           contender.send("acquire");
-          expect(await contender.next()).toMatchObject({
+          expect(yield* Effect.promise(contender.next)).toMatchObject({
             type: "failure",
             tag: "WriterLeaseConflictError",
             reason: "live",
             ownerRunId: "process-owner",
           });
           owner.send("release");
-          expect(await owner.next()).toMatchObject({ type: "released" });
+          expect(yield* Effect.promise(owner.next)).toMatchObject({ type: "released" });
         } finally {
-          await Promise.all([owner.dispose(), contender.dispose()]);
+          yield* Effect.promise(() => Promise.all([owner.dispose(), contender.dispose()]));
         }
 
-        const first = await startLeaseChild(agentDirectory, project, "simultaneous-process-one");
-        const second = await startLeaseChild(agentDirectory, project, "simultaneous-process-two");
+        const first = yield* Effect.promise(() =>
+          startLeaseChild(agentDirectory, project, "simultaneous-process-one"),
+        );
+        const second = yield* Effect.promise(() =>
+          startLeaseChild(agentDirectory, project, "simultaneous-process-two"),
+        );
         try {
           first.send("acquire");
           second.send("acquire");
-          const outcomes = await Promise.all([first.next(), second.next()]);
+          const outcomes = yield* Effect.promise(() => Promise.all([first.next(), second.next()]));
           const winners = outcomes.filter((message) => message.type === "acquired");
           const losers = outcomes.filter((message) => message.type === "failure");
           expect(winners).toHaveLength(1);
           expect(losers).toHaveLength(1);
           const winner = outcomes[0]?.type === "acquired" ? first : second;
           winner.send("release");
-          expect(await winner.next()).toMatchObject({ type: "released" });
+          expect(yield* Effect.promise(winner.next)).toMatchObject({ type: "released" });
         } finally {
-          await Promise.all([first.dispose(), second.dispose()]);
+          yield* Effect.promise(() => Promise.all([first.dispose(), second.dispose()]));
         }
-      }).pipe(Effect.orDie),
+      }),
     ),
   );
 

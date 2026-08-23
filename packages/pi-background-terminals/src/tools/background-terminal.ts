@@ -1,5 +1,4 @@
 // Pi tool execution is a Promise-shaped host boundary.
-// @effect-diagnostics effect/asyncFunction:off
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -125,112 +124,113 @@ export function registerBackgroundTerminalTool(
       "Stop background_terminal jobs when they are no longer needed; every job is terminated when the Pi session is replaced or shut down.",
     ],
     parameters,
-    async execute(_toolCallId, input, signal, _onUpdate, ctx) {
-      const result = await runner.run(
-        Effect.gen(function* () {
-          const service = yield* BackgroundTerminalService;
-          const path = yield* Path.Path;
-          switch (input.action) {
-            case "start": {
-              const command = yield* required(input.command, "command");
-              const cwd = path.resolve(ctx.cwd, input.cwd ?? ".");
-              const startRequestBase = { command, cwd };
-              const startRequestWithName = input.name
-                ? { ...startRequestBase, name: input.name }
-                : startRequestBase;
-              const snapshot = yield* service.start(
-                input.timeoutSeconds !== undefined
-                  ? { ...startRequestWithName, timeoutSeconds: input.timeoutSeconds }
-                  : startRequestWithName,
-              );
-              return {
-                content: `Started ${formatJob(snapshot)}`,
-                details: {
+    execute(_toolCallId, input, signal, _onUpdate, ctx) {
+      return runner
+        .run(
+          Effect.gen(function* () {
+            const service = yield* BackgroundTerminalService;
+            const path = yield* Path.Path;
+            switch (input.action) {
+              case "start": {
+                const command = yield* required(input.command, "command");
+                const cwd = path.resolve(ctx.cwd, input.cwd ?? ".");
+                const startRequestBase = { command, cwd };
+                const startRequestWithName = input.name
+                  ? { ...startRequestBase, name: input.name }
+                  : startRequestBase;
+                const snapshot = yield* service.start(
+                  input.timeoutSeconds !== undefined
+                    ? { ...startRequestWithName, timeoutSeconds: input.timeoutSeconds }
+                    : startRequestWithName,
+                );
+                return {
+                  content: `Started ${formatJob(snapshot)}`,
+                  details: {
+                    action: input.action,
+                    snapshot,
+                  } satisfies BackgroundTerminalToolDetails,
+                };
+              }
+              case "list": {
+                // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+                const jobs = yield* service.list((input.state ?? "all") as BackgroundJobFilter);
+                return {
+                  content: jobs.length > 0 ? jobs.map(formatJob).join("\n") : "No background jobs.",
+                  details: { action: input.action, jobs } satisfies BackgroundTerminalToolDetails,
+                };
+              }
+              case "status": {
+                const snapshot = yield* service.status(yield* required(input.id, "id"));
+                return {
+                  content: formatJob(snapshot),
+                  details: {
+                    action: input.action,
+                    snapshot,
+                  } satisfies BackgroundTerminalToolDetails,
+                };
+              }
+              case "logs": {
+                const logRequestBase = { id: yield* required(input.id, "id") };
+                const logRequestWithCursor =
+                  input.afterCursor === undefined
+                    ? logRequestBase
+                    : { ...logRequestBase, afterCursor: input.afterCursor };
+                const logRequestWithTail =
+                  input.tailLines === undefined
+                    ? logRequestWithCursor
+                    : { ...logRequestWithCursor, tailLines: input.tailLines };
+                const logRequest =
+                  input.waitSeconds === undefined
+                    ? logRequestWithTail
+                    : { ...logRequestWithTail, waitSeconds: input.waitSeconds };
+                const logs = yield* service.logs(logRequest);
+                const formatted = formatLogs(logs);
+                const logDetails = {
                   action: input.action,
-                  snapshot,
-                } satisfies BackgroundTerminalToolDetails,
-              };
+                  logs: { ...logs, events: [] },
+                } satisfies BackgroundTerminalToolDetails;
+                return {
+                  content: formatted.text,
+                  details: formatted.truncation.truncated
+                    ? { ...logDetails, truncation: formatted.truncation }
+                    : logDetails,
+                };
+              }
+              case "stop": {
+                const snapshot = yield* service.stop(yield* required(input.id, "id"), input.force);
+                return {
+                  content: `Stopped ${formatJob(snapshot)}`,
+                  details: {
+                    action: input.action,
+                    snapshot,
+                  } satisfies BackgroundTerminalToolDetails,
+                };
+              }
+              case "stop_all": {
+                const jobs = yield* service.stopAll(input.force);
+                return {
+                  content: `Stopped ${jobs.length} background job${jobs.length === 1 ? "" : "s"}.`,
+                  details: { action: input.action, jobs } satisfies BackgroundTerminalToolDetails,
+                };
+              }
+              case "clear": {
+                const removed = yield* service.clear;
+                return {
+                  content: `Cleared ${removed} completed background job${removed === 1 ? "" : "s"}.`,
+                  details: {
+                    action: input.action,
+                    removed,
+                  } satisfies BackgroundTerminalToolDetails,
+                };
+              }
             }
-            case "list": {
-              // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-              const jobs = yield* service.list((input.state ?? "all") as BackgroundJobFilter);
-              return {
-                content: jobs.length > 0 ? jobs.map(formatJob).join("\n") : "No background jobs.",
-                details: { action: input.action, jobs } satisfies BackgroundTerminalToolDetails,
-              };
-            }
-            case "status": {
-              const snapshot = yield* service.status(yield* required(input.id, "id"));
-              return {
-                content: formatJob(snapshot),
-                details: {
-                  action: input.action,
-                  snapshot,
-                } satisfies BackgroundTerminalToolDetails,
-              };
-            }
-            case "logs": {
-              const logRequestBase = { id: yield* required(input.id, "id") };
-              const logRequestWithCursor =
-                input.afterCursor === undefined
-                  ? logRequestBase
-                  : { ...logRequestBase, afterCursor: input.afterCursor };
-              const logRequestWithTail =
-                input.tailLines === undefined
-                  ? logRequestWithCursor
-                  : { ...logRequestWithCursor, tailLines: input.tailLines };
-              const logRequest =
-                input.waitSeconds === undefined
-                  ? logRequestWithTail
-                  : { ...logRequestWithTail, waitSeconds: input.waitSeconds };
-              const logs = yield* service.logs(logRequest);
-              const formatted = formatLogs(logs);
-              const logDetails = {
-                action: input.action,
-                logs: { ...logs, events: [] },
-              } satisfies BackgroundTerminalToolDetails;
-              return {
-                content: formatted.text,
-                details: formatted.truncation.truncated
-                  ? { ...logDetails, truncation: formatted.truncation }
-                  : logDetails,
-              };
-            }
-            case "stop": {
-              const snapshot = yield* service.stop(yield* required(input.id, "id"), input.force);
-              return {
-                content: `Stopped ${formatJob(snapshot)}`,
-                details: {
-                  action: input.action,
-                  snapshot,
-                } satisfies BackgroundTerminalToolDetails,
-              };
-            }
-            case "stop_all": {
-              const jobs = yield* service.stopAll(input.force);
-              return {
-                content: `Stopped ${jobs.length} background job${jobs.length === 1 ? "" : "s"}.`,
-                details: { action: input.action, jobs } satisfies BackgroundTerminalToolDetails,
-              };
-            }
-            case "clear": {
-              const removed = yield* service.clear;
-              return {
-                content: `Cleared ${removed} completed background job${removed === 1 ? "" : "s"}.`,
-                details: {
-                  action: input.action,
-                  removed,
-                } satisfies BackgroundTerminalToolDetails,
-              };
-            }
-          }
-        }),
-        signal,
-      );
-      return {
-        content: [{ type: "text", text: result.content }],
-        details: result.details,
-      };
+          }),
+          signal,
+        )
+        .then((result) => ({
+          content: [{ type: "text", text: result.content }],
+          details: result.details,
+        }));
     },
     renderCall(args, theme) {
       const action = args.action ?? "...";

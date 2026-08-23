@@ -1,15 +1,14 @@
-// Test lifecycle boundary intentionally uses Promises and AbortController.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/strictEffectProvide:off
+// Test lifecycle boundary intentionally uses Promise-shaped host callbacks and AbortController.
 import * as Predicate from "effect/Predicate";
 
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime } from "pi-cosmic-core";
-import { afterEach, test } from "vitest";
+import { afterEach } from "vitest";
+import { effectTest, settle, step } from "../support/effect-test";
 import { CodePreviewSession } from "../../src/application/service";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
@@ -97,108 +96,105 @@ function harness(load: (call: number, projectTrusted: boolean) => Effect.Effect<
   };
 }
 
-test("factory registers lifecycle callbacks synchronously without starting a runtime", async () => {
-  const h = harness(() => Effect.succeed(settings));
-  const registration = codePreviewsWithDependencies(h.pi, h.dependencies);
-  assert.equal(h.handlers.has("session_start"), true);
-  assert.equal(h.handlers.has("session_shutdown"), true);
-  assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, calls: 0 });
-  await registration;
-});
+effectTest(
+  "factory registers lifecycle callbacks synchronously without starting a runtime",
+  function* () {
+    const h = harness(() => Effect.succeed(settings));
+    const registration = codePreviewsWithDependencies(h.pi, h.dependencies);
+    assert.equal(h.handlers.has("session_start"), true);
+    assert.equal(h.handlers.has("session_shutdown"), true);
+    assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, calls: 0 });
+    yield* step(() => registration);
+  },
+);
 
-test("replacement interrupts startup and releases each session exactly once", async () => {
+effectTest("replacement interrupts startup and releases each session exactly once", function* () {
   setCodePreviewSettings(settings);
-  let started: (() => void) | undefined;
   let interrupted = 0;
-  const firstStarted = new Promise<void>((resolve) => {
-    started = resolve;
-  });
+  const firstStarted = Deferred.makeUnsafe<void>();
   const h = harness((call) =>
     call === 0
-      ? Effect.sync(() => started?.()).pipe(
+      ? Effect.sync(() => Deferred.doneUnsafe(firstStarted, Effect.void)).pipe(
           Effect.andThen(Effect.never),
           Effect.ensuring(Effect.sync(() => interrupted++)),
         )
       : Effect.succeed(settings),
   );
-  await codePreviewsWithDependencies(h.pi, h.dependencies);
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const first = h.handlers.get("session_start")?.({}, h.context()) as Promise<void>;
-  await firstStarted;
+  yield* Deferred.await(firstStarted);
   // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const second = h.handlers.get("session_start")?.({}, h.context()) as Promise<void>;
-  await second;
-  await first;
+  yield* step(() => second);
+  yield* step(() => first);
   assert.equal(interrupted, 1);
   assert.deepEqual(h.counts(), { acquisitions: 2, releases: 1, calls: 2 });
-  await h.handlers.get("session_shutdown")?.({}, h.context());
-  await h.handlers.get("session_shutdown")?.({}, h.context());
+  yield* settle(() => h.handlers.get("session_shutdown")?.({}, h.context()));
+  yield* settle(() => h.handlers.get("session_shutdown")?.({}, h.context()));
   assert.equal(h.counts().releases, 2);
 });
 
-test("abort interrupts pending startup and awaits its finalizer", async () => {
+effectTest("abort interrupts pending startup and awaits its finalizer", function* () {
   setCodePreviewSettings(settings);
-  let started: (() => void) | undefined;
   let interrupted = 0;
-  const pending = new Promise<void>((resolve) => {
-    started = resolve;
-  });
+  const pending = Deferred.makeUnsafe<void>();
   const h = harness(() =>
-    Effect.sync(() => started?.()).pipe(
+    Effect.sync(() => Deferred.doneUnsafe(pending, Effect.void)).pipe(
       Effect.andThen(Effect.never),
       Effect.ensuring(Effect.sync(() => interrupted++)),
     ),
   );
-  await codePreviewsWithDependencies(h.pi, h.dependencies);
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const controller = new AbortController();
   // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const startup = h.handlers.get("session_start")?.(
     {},
     h.context(controller.signal),
   ) as Promise<void>;
-  await pending;
+  yield* Deferred.await(pending);
   controller.abort();
-  await startup;
+  yield* step(() => startup);
   assert.equal(interrupted, 1);
   assert.deepEqual(h.counts(), { acquisitions: 1, releases: 1, calls: 1 });
 });
 
-test("startup failure notifies and releases the acquired runtime", async () => {
+effectTest("startup failure notifies and releases the acquired runtime", function* () {
   setCodePreviewSettings(settings);
   const h = harness(() => Effect.die("settings failed"));
-  await codePreviewsWithDependencies(h.pi, h.dependencies);
-  await h.handlers.get("session_start")?.({}, h.context());
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+  yield* settle(() => h.handlers.get("session_start")?.({}, h.context()));
   assert.deepEqual(h.counts(), { acquisitions: 1, releases: 1, calls: 1 });
   assert.deepEqual(h.notifications, ["Code previews failed to start."]);
 });
 
-test("throwing project trust callbacks fail closed", async () => {
+effectTest("throwing project trust callbacks fail closed", function* () {
   const observedTrust: boolean[] = [];
   const h = harness((_call, projectTrusted) => {
     observedTrust.push(projectTrusted);
     return Effect.succeed(settings);
   });
-  await codePreviewsWithDependencies(h.pi, h.dependencies);
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const context = h.context();
   context.isProjectTrusted = () => {
     throw new Error("host trust failure");
   };
 
-  await h.handlers.get("session_start")?.({}, context);
+  yield* settle(() => h.handlers.get("session_start")?.({}, context));
 
   assert.deepEqual(observedTrust, [false]);
   assert.deepEqual(h.notifications, []);
-  await h.handlers.get("session_shutdown")?.({}, context);
+  yield* settle(() => h.handlers.get("session_shutdown")?.({}, context));
   assert.equal(h.counts().releases, 1);
 });
 
-test("throwing project trust getters fail closed", async () => {
+effectTest("throwing project trust getters fail closed", function* () {
   const observedTrust: boolean[] = [];
   const h = harness((_call, projectTrusted) => {
     observedTrust.push(projectTrusted);
     return Effect.succeed(settings);
   });
-  await codePreviewsWithDependencies(h.pi, h.dependencies);
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const context = h.context();
   Object.defineProperty(context, "isProjectTrusted", {
     get() {
@@ -206,15 +202,15 @@ test("throwing project trust getters fail closed", async () => {
     },
   });
 
-  await h.handlers.get("session_start")?.({}, context);
+  yield* settle(() => h.handlers.get("session_start")?.({}, context));
 
   assert.deepEqual(observedTrust, [false]);
   assert.deepEqual(h.notifications, []);
-  await h.handlers.get("session_shutdown")?.({}, context);
+  yield* settle(() => h.handlers.get("session_shutdown")?.({}, context));
   assert.equal(h.counts().releases, 1);
 });
 
-test("throwing renderer registration becomes a handled startup failure", async () => {
+effectTest("throwing renderer registration becomes a handled startup failure", function* () {
   const h = harness(() => Effect.succeed(settings));
   const dependencies: CodePreviewExtensionDependencies = {
     ...h.dependencies,
@@ -222,18 +218,18 @@ test("throwing renderer registration becomes a handled startup failure", async (
       throw new Error("host renderer registration failure");
     },
   };
-  await codePreviewsWithDependencies(h.pi, dependencies);
+  yield* step(() => codePreviewsWithDependencies(h.pi, dependencies));
 
-  await h.handlers.get("session_start")?.({}, h.context());
+  yield* settle(() => h.handlers.get("session_start")?.({}, h.context()));
 
   assert.deepEqual(h.counts(), { acquisitions: 1, releases: 1, calls: 1 });
   assert.deepEqual(h.notifications, ["Code previews failed to start."]);
 });
 
 for (const property of ["cwd", "signal"] as const) {
-  test(`throwing session ${property} getters become handled startup failures`, async () => {
+  effectTest(`throwing session ${property} getters become handled startup failures`, function* () {
     const h = harness(() => Effect.succeed(settings));
-    await codePreviewsWithDependencies(h.pi, h.dependencies);
+    yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
     const context = h.context();
     Object.defineProperty(context, property, {
       configurable: true,
@@ -242,20 +238,20 @@ for (const property of ["cwd", "signal"] as const) {
       },
     });
 
-    let startup: unknown;
+    let startup: void | PromiseLike<void>;
     assert.doesNotThrow(() => {
       startup = h.handlers.get("session_start")?.({}, context);
     });
-    await startup;
+    yield* settle(() => startup);
 
     assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, calls: 0 });
     assert.deepEqual(h.notifications, ["Code previews failed to start."]);
   });
 }
 
-test("throwing AbortSignal.aborted getters become handled startup failures", async () => {
+effectTest("throwing AbortSignal.aborted getters become handled startup failures", function* () {
   const h = harness(() => Effect.succeed(settings));
-  await codePreviewsWithDependencies(h.pi, h.dependencies);
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const context = h.context(
     new Proxy(new AbortController().signal, {
       get(signal, property) {
@@ -267,17 +263,17 @@ test("throwing AbortSignal.aborted getters become handled startup failures", asy
     }),
   );
 
-  await h.handlers.get("session_start")?.({}, context);
+  yield* settle(() => h.handlers.get("session_start")?.({}, context));
 
   assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, calls: 0 });
   assert.deepEqual(h.notifications, ["Code previews failed to start."]);
 });
 
-test("materializes the session signal once for startup and activation fibers", async () => {
+effectTest("materializes the session signal once for startup and activation fibers", function* () {
   const syntaxSettings = { ...settings, syntaxHighlighting: true };
   setCodePreviewSettings(syntaxSettings);
   const h = harness(() => Effect.succeed(syntaxSettings));
-  await codePreviewsWithDependencies(h.pi, h.dependencies);
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const context = h.context();
   const first = new AbortController().signal;
   const second = new AbortController().signal;
@@ -290,11 +286,11 @@ test("materializes the session signal once for startup and activation fibers", a
     },
   });
 
-  await h.handlers.get("session_start")?.({}, context);
+  yield* settle(() => h.handlers.get("session_start")?.({}, context));
 
   assert.equal(signalReads, 1);
   assert.equal(h.signals().run[0], first);
   assert.equal(h.signals().fork[0], first);
   assert.deepEqual(h.notifications, []);
-  await h.handlers.get("session_shutdown")?.({}, context);
+  yield* settle(() => h.handlers.get("session_shutdown")?.({}, context));
 });

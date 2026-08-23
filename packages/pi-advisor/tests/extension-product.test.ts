@@ -1,9 +1,8 @@
 // Pi callbacks and fake child sessions are Promise-shaped test boundaries.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, test } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { vi } from "vitest";
 import { normalizeAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
@@ -144,7 +143,7 @@ function harness(
   });
   const ctx = advisorExtensionContext({
     getBranch: () => entries,
-    select: vi.fn(async () => options.setupSelection),
+    select: vi.fn(() => Promise.resolve(options.setupSelection)),
     modelRegistry: {
       getAvailable: vi.fn(() =>
         options.setupSelection && options.setupSelection !== "Not now"
@@ -166,242 +165,288 @@ function harness(
     ),
     runtimeService: runtimeServiceLayer,
   })(pi);
-  const emit = async <Event>(name: string, event: Event) =>
-    registry.emitWithContext(name, event, ctx);
+  const emit = <Event>(name: string, event: Event) => registry.emitWithContext(name, event, ctx);
   return { pi, ctx, commands, requests, pending, entries, sent, emit };
 }
 
-async function settleAutomatic(
-  value: ReturnType<typeof harness>,
-  result: (request: AdvisorCheckpointRequest) => AdvisorCheckpoint,
-): Promise<void> {
-  const turn = value.emit("turn_end", finalTurn());
-  await tick();
-  value.pending.at(-1)!.resolve(result(value.requests.at(-1)!));
-  await turn;
-  await tick();
-}
+const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
+  Effect.promise(() => Promise.resolve(value).then(() => undefined));
 
-async function createManualCard(
+/** Serialized snapshot for content-leak assertions at this Promise-shaped test boundary. */
+const serializedSnapshot = <ValueInput>(value: ValueInput): string => JSON.stringify(value);
+
+const settleAutomatic = (
   value: ReturnType<typeof harness>,
   result: (request: AdvisorCheckpointRequest) => AdvisorCheckpoint,
-): Promise<void> {
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  await value.commands.get("advisor")!.handler("review", value.ctx as never);
-  await tick();
-  value.pending.at(-1)!.resolve(result(value.requests.at(-1)!));
-  await tick();
-}
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const turn = value.emit("turn_end", finalTurn());
+    yield* Effect.promise(() => tick());
+    value.pending.at(-1)!.resolve(result(value.requests.at(-1)!));
+    yield* invoke(turn);
+    yield* Effect.promise(() => tick());
+  });
+
+const createManualCard = (
+  value: ReturnType<typeof harness>,
+  result: (request: AdvisorCheckpointRequest) => AdvisorCheckpoint,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    yield* invoke(value.commands.get("advisor")!.handler("review", value.ctx as never));
+    yield* Effect.promise(() => tick());
+    value.pending.at(-1)!.resolve(result(value.requests.at(-1)!));
+    yield* Effect.promise(() => tick());
+  });
 
 describe("Advisor extension product behavior", () => {
-  test("default disabled unconfigured sessions do not open onboarding", async () => {
-    const value = harness({ configured: false, setupSelection: "Not now" });
-    await value.emit("session_start", { type: "session_start" });
-    expect(value.ctx.ui.select).not.toHaveBeenCalled();
-    expect(value.ctx.ui.notify).not.toHaveBeenCalled();
-  });
+  it.effect("default disabled unconfigured sessions do not open onboarding", () =>
+    Effect.gen(function* () {
+      const value = harness({ configured: false, setupSelection: "Not now" });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      expect(value.ctx.ui.select).not.toHaveBeenCalled();
+      expect(value.ctx.ui.notify).not.toHaveBeenCalled();
+    }),
+  );
 
-  test("automatic onboarding opens only when unconfigured Advisor is explicitly enabled", async () => {
-    const tui = harness({ configured: false, enabled: true, setupSelection: "Not now" });
-    await tui.emit("session_start", { type: "session_start" });
-    expect(tui.ctx.ui.select).toHaveBeenCalledWith("Set up Advisor", ["Not now"]);
-    expect(tui.ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("No authenticated models"),
-      "warning",
-    );
+  it.effect("automatic onboarding opens only when unconfigured Advisor is explicitly enabled", () =>
+    Effect.gen(function* () {
+      const tui = harness({ configured: false, enabled: true, setupSelection: "Not now" });
+      yield* invoke(tui.emit("session_start", { type: "session_start" }));
+      expect(tui.ctx.ui.select).toHaveBeenCalledWith("Set up Advisor", ["Not now"]);
+      expect(tui.ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("No authenticated models"),
+        "warning",
+      );
 
-    const nonUi = harness({ configured: false, enabled: true });
-    Object.assign(nonUi.ctx, { mode: "print", hasUI: false });
-    await nonUi.emit("session_start", { type: "session_start" });
-    expect(nonUi.ctx.ui.select).not.toHaveBeenCalled();
-  });
+      const nonUi = harness({ configured: false, enabled: true });
+      Object.assign(nonUi.ctx, { mode: "print", hasUI: false });
+      yield* invoke(nonUi.emit("session_start", { type: "session_start" }));
+      expect(nonUi.ctx.ui.select).not.toHaveBeenCalled();
+    }),
+  );
 
-  test("ordinary progress turns ingest and return immediately without a checkpoint", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", progressTurn());
-    expect(value.requests).toHaveLength(0);
-  });
-
-  test("trajectory evidence can request an asynchronous progress review", async () => {
-    vi.useFakeTimers();
-    try {
+  it.effect("ordinary progress turns ingest and return immediately without a checkpoint", () =>
+    Effect.gen(function* () {
       const value = harness();
-      await value.emit("session_start", { type: "session_start" });
-      await value.emit("turn_start", { type: "turn_start", turnIndex: 1 });
-      await value.emit("message_update", {
-        assistantMessageEvent: {
-          type: "thinking_delta",
-          delta: "repeat-this-unit".repeat(12),
-        },
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", progressTurn()));
+      expect(value.requests).toHaveLength(0);
+    }),
+  );
+
+  test("trajectory evidence can request an asynchronous progress review", () => {
+    vi.useFakeTimers();
+    const value = harness();
+    return value
+      .emit("session_start", { type: "session_start" })
+      .then(() => value.emit("turn_start", { type: "turn_start", turnIndex: 1 }))
+      .then(() =>
+        value.emit("message_update", {
+          assistantMessageEvent: {
+            type: "thinking_delta",
+            delta: "repeat-this-unit".repeat(12),
+          },
+        }),
+      )
+      .then(() => vi.advanceTimersByTimeAsync(15_000))
+      .then(() => {
+        expect(value.requests).toHaveLength(1);
+        value.pending[0]!.resolve(pass(value.requests[0]!));
+        return vi.advanceTimersByTimeAsync(0);
+      })
+      .then(() => value.emit("session_shutdown", { type: "session_shutdown" }))
+      .then(() => undefined)
+      .finally(() => {
+        vi.useRealTimers();
       });
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(value.requests).toHaveLength(1);
-      value.pending[0]!.resolve(pass(value.requests[0]!));
-      await vi.advanceTimersByTimeAsync(0);
-      await value.emit("session_shutdown", { type: "session_shutdown" });
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
-  test("a material final concern creates a card and corrects the parent", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, (request) => finding(request, "concern"));
-    expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(true);
-    expect(value.sent).toHaveLength(1);
-    expect(value.sent[0]).toMatchObject({ customType: "pi-advisor-guidance-v1", display: false });
-    expect(JSON.stringify(value.sent[0])).not.toContain("direct evidence");
-  });
+  it.effect("a material final concern creates a card and corrects the parent", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, (request) => finding(request, "concern"));
+      expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
+        true,
+      );
+      expect(value.sent).toHaveLength(1);
+      expect(value.sent[0]).toMatchObject({ customType: "pi-advisor-guidance-v1", display: false });
+      expect(serializedSnapshot(value.sent[0])).not.toContain("direct evidence");
+    }),
+  );
 
-  test("a blocker is independently verified before correction", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    const turn = value.emit("turn_end", finalTurn());
-    await tick();
-    value.pending[0]!.resolve(finding(value.requests[0]!, "blocker"));
-    await tick();
-    expect(value.requests[1]?.focus).toBe("blocker-verification");
-    value.pending[1]!.resolve(finding(value.requests[1]!, "blocker"));
-    await turn;
-    expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(true);
-    expect(value.sent).toHaveLength(1);
-  });
+  it.effect("a blocker is independently verified before correction", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const turn = value.emit("turn_end", finalTurn());
+      yield* Effect.promise(() => tick());
+      value.pending[0]!.resolve(finding(value.requests[0]!, "blocker"));
+      yield* Effect.promise(() => tick());
+      expect(value.requests[1]?.focus).toBe("blocker-verification");
+      value.pending[1]!.resolve(finding(value.requests[1]!, "blocker"));
+      yield* invoke(turn);
+      expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
+        true,
+      );
+      expect(value.sent).toHaveLength(1);
+    }),
+  );
 
-  test("Fix sends compact guidance and a tombstone; Dismiss sends no guidance", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, pass);
-    await createManualCard(value, (request) => finding(request, "concern", "manual-one"));
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await value.commands.get("advisor")!.handler("fix", value.ctx as never);
-    expect(value.sent).toHaveLength(1);
-    expect(value.entries.at(-1)).toMatchObject({
-      customType: ADVISOR_REVIEW_ACTION_TYPE,
-      data: { action: "fix" },
-    });
+  it.effect("Fix sends compact guidance and a tombstone; Dismiss sends no guidance", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* createManualCard(value, (request) => finding(request, "concern", "manual-one"));
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("fix", value.ctx as never));
+      expect(value.sent).toHaveLength(1);
+      expect(value.entries.at(-1)).toMatchObject({
+        customType: ADVISOR_REVIEW_ACTION_TYPE,
+        data: { action: "fix" },
+      });
 
-    await createManualCard(value, suggestion);
-    const before = value.sent.length;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await value.commands.get("advisor")!.handler("dismiss", value.ctx as never);
-    expect(value.sent).toHaveLength(before);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    expect(
-      [...value.entries]
-        .reverse()
-        .find(
-          (entry) =>
-            entry.customType === ADVISOR_REVIEW_ACTION_TYPE &&
-            (entry.data as { action?: string } | undefined)?.action === "dismiss",
-        ),
-    ).toMatchObject({
-      customType: ADVISOR_REVIEW_ACTION_TYPE,
-      data: { action: "dismiss" },
-    });
-  });
+      yield* createManualCard(value, suggestion);
+      const before = value.sent.length;
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("dismiss", value.ctx as never));
+      expect(value.sent).toHaveLength(before);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      expect(
+        [...value.entries]
+          .reverse()
+          .find(
+            (entry) =>
+              entry.customType === ADVISOR_REVIEW_ACTION_TYPE &&
+              (entry.data as { action?: string } | undefined)?.action === "dismiss",
+          ),
+      ).toMatchObject({
+        customType: ADVISOR_REVIEW_ACTION_TYPE,
+        data: { action: "dismiss" },
+      });
+    }),
+  );
 
-  test("cancel with observations but no active review does not mutate lifecycle state", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", progressTurn());
-    const before = value.entries.length;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await value.commands.get("advisor")!.handler("cancel", value.ctx as never);
-    expect(value.entries).toHaveLength(before);
-  });
+  it.effect("cancel with observations but no active review does not mutate lifecycle state", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* invoke(value.emit("turn_end", progressTurn()));
+      const before = value.entries.length;
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("cancel", value.ctx as never));
+      expect(value.entries).toHaveLength(before);
+    }),
+  );
 
-  test("automatic final suggestions are suppressed", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, suggestion);
-    expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
-      false,
-    );
-    expect(value.sent).toHaveLength(0);
-  });
+  it.effect("automatic final suggestions are suppressed", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, suggestion);
+      expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
+        false,
+      );
+      expect(value.sent).toHaveLength(0);
+    }),
+  );
 
-  test("a pass produces no card or context message", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, pass);
-    expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
-      false,
-    );
-    expect(value.sent).toHaveLength(0);
-  });
+  it.effect("a pass produces no card or context message", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
+        false,
+      );
+      expect(value.sent).toHaveLength(0);
+    }),
+  );
 
-  test("a failed manual card append does not consume delivery state", async () => {
-    const value = harness({ failCardAppends: 1 });
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, pass);
-    await createManualCard(value, (request) => finding(request, "concern", "manual-retry"));
-    expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
-      false,
-    );
-    await createManualCard(value, (request) => finding(request, "concern", "manual-retry"));
-    expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(true);
-  });
+  it.effect("a failed manual card append does not consume delivery state", () =>
+    Effect.gen(function* () {
+      const value = harness({ failCardAppends: 1 });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* createManualCard(value, (request) => finding(request, "concern", "manual-retry"));
+      expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
+        false,
+      );
+      yield* createManualCard(value, (request) => finding(request, "concern", "manual-retry"));
+      expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE)).toBe(
+        true,
+      );
+    }),
+  );
 
-  test("keeps a card open when Fix cannot send guidance", async () => {
-    const value = harness({ failSend: true });
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, pass);
-    await createManualCard(value, (request) => finding(request, "concern"));
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await value.commands.get("advisor")!.handler("fix", value.ctx as never);
-    expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_ACTION_TYPE)).toBe(
-      false,
-    );
-    expect(value.ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("card remains open"),
-      "error",
-    );
-  });
+  it.effect("keeps a card open when Fix cannot send guidance", () =>
+    Effect.gen(function* () {
+      const value = harness({ failSend: true });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* createManualCard(value, (request) => finding(request, "concern"));
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("fix", value.ctx as never));
+      expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_ACTION_TYPE)).toBe(
+        false,
+      );
+      expect(value.ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("card remains open"),
+        "error",
+      );
+    }),
+  );
 
-  test("reports when Fix sends guidance but cannot persist its tombstone", async () => {
-    const value = harness({ failActionAppend: true });
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, pass);
-    await createManualCard(value, (request) => finding(request, "concern"));
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await value.commands.get("advisor")!.handler("fix", value.ctx as never);
-    expect(value.sent).toHaveLength(1);
-    expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_ACTION_TYPE)).toBe(
-      false,
-    );
-    expect(value.ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("could not mark the card fixed"),
-      "error",
-    );
-  });
+  it.effect("reports when Fix sends guidance but cannot persist its tombstone", () =>
+    Effect.gen(function* () {
+      const value = harness({ failActionAppend: true });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* createManualCard(value, (request) => finding(request, "concern"));
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("fix", value.ctx as never));
+      expect(value.sent).toHaveLength(1);
+      expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_ACTION_TYPE)).toBe(
+        false,
+      );
+      expect(value.ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("could not mark the card fixed"),
+        "error",
+      );
+    }),
+  );
 
-  test("manual suggestions create a local card without steering", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, pass);
-    await createManualCard(value, suggestion);
-    expect(value.entries).toContainEqual(
-      expect.objectContaining({
-        customType: ADVISOR_REVIEW_CARD_TYPE,
-        data: expect.objectContaining({ kind: "suggestion" }),
-      }),
-    );
-    expect(value.sent).toHaveLength(0);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await value.commands.get("advisor")!.handler("", value.ctx as never);
-    expect(value.ctx.ui.select).toHaveBeenLastCalledWith(
-      expect.stringContaining("issue shown"),
-      expect.any(Array),
-    );
-  });
+  it.effect("manual suggestions create a local card without steering", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* createManualCard(value, suggestion);
+      expect(value.entries).toContainEqual(
+        expect.objectContaining({
+          customType: ADVISOR_REVIEW_CARD_TYPE,
+          data: expect.objectContaining({ kind: "suggestion" }),
+        }),
+      );
+      expect(value.sent).toHaveLength(0);
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("", value.ctx as never));
+      expect(value.ctx.ui.select).toHaveBeenLastCalledWith(
+        expect.stringContaining("issue shown"),
+        expect.any(Array),
+      );
+    }),
+  );
 
-  test("reports a clean result when a manual review passes", async () => {
-    const value = harness();
-    await value.emit("session_start", { type: "session_start" });
-    await settleAutomatic(value, pass);
-    await createManualCard(value, pass);
-    expect(value.ctx.ui.notify).toHaveBeenCalledWith("Advisor found no issues.", "info");
-  });
+  it.effect("reports a clean result when a manual review passes", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* createManualCard(value, pass);
+      expect(value.ctx.ui.notify).toHaveBeenCalledWith("Advisor found no issues.", "info");
+    }),
+  );
 });

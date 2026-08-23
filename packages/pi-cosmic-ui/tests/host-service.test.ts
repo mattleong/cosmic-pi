@@ -1,5 +1,3 @@
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/strictEffectProvide:off
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -13,6 +11,7 @@ import {
   AgentDirectory,
   JsonDocumentStore,
   PiApi,
+  provideBuiltLayer,
   type AtomicJsonDocumentStoreContract,
   type JsonObject,
 } from "pi-cosmic-core";
@@ -28,6 +27,36 @@ function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
   const memory = makeInMemoryDocuments(initial);
   return { values: memory.documents, layer: memory.layer };
 }
+
+type ExecResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
+
+/** Deferred-backed pending host exec promise released explicitly by the test. */
+const deferredExecResult = () => {
+  const handle = Deferred.makeUnsafe<ExecResult>();
+  return {
+    promise: Effect.runPromise(Deferred.await(handle)),
+    release: (value: ExecResult) => {
+      Effect.runSync(Deferred.succeed(handle, value));
+    },
+  };
+};
+
+/** Deferred-backed pending host exec promise that rejects when the probe signal aborts. */
+const abortablePendingExec = (
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+): Promise<ExecResult> => {
+  const handle = Deferred.makeUnsafe<ExecResult, Error>();
+  signal?.addEventListener(
+    "abort",
+    () => {
+      onAbort();
+      Effect.runSync(Deferred.fail(handle, new Error("aborted")));
+    },
+    { once: true },
+  );
+  return Effect.runPromise(Deferred.await(handle));
+};
 
 // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const context = (cwd = "/project") =>
@@ -93,7 +122,7 @@ describe("Cosmic UI host service", () => {
       yield* CosmicUiService;
       expect(MutableRef.get(projection).config?.configPath).toBe(globalPath);
       expect(MutableRef.get(projection).config?.footer.density).toBe("comfortable");
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("handles Git/gh nonzero results, parses diffs, and throttles pull requests", () => {
@@ -126,7 +155,7 @@ describe("Cosmic UI host service", () => {
       yield* TestClock.adjust("30 seconds");
       yield* service.refreshPullRequest();
       expect(calls).toBe(4);
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("coalesces concurrent Git refresh bursts", () => {
@@ -143,7 +172,7 @@ describe("Cosmic UI host service", () => {
       );
       expect(calls).toBeGreaterThan(0);
       expect(calls).toBeLessThanOrEqual(2);
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("degrades nonzero and failed probes without failing refresh", () => {
@@ -166,7 +195,7 @@ describe("Cosmic UI host service", () => {
       yield* service.refreshAll(true);
       expect(MutableRef.get(projection).gitStatus).toBeUndefined();
       expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("keeps polling after hostile live context getters recover", () => {
@@ -210,81 +239,74 @@ describe("Cosmic UI host service", () => {
       expect(callbacks.diagnostics().every(({ operation }) => operation === "host-query")).toBe(
         true,
       );
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("discards stale completions after the callback context changes", () => {
-    let release!: (value: Awaited<ReturnType<ExtensionAPI["exec"]>>) => void;
-    const pending = new Promise<Awaited<ReturnType<ExtensionAPI["exec"]>>>((resolve) => {
-      release = resolve;
-    });
+    const pending = deferredExecResult();
     const contextRef = MutableRef.make(context("/first"));
-    const { layer, projection } = serviceLayer(() => pending, { context: contextRef });
+    const { layer, projection } = serviceLayer(() => pending.promise, { context: contextRef });
     return Effect.gen(function* () {
       const service = yield* CosmicUiService;
       const fiber = yield* service.refreshGit(true).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       MutableRef.set(contextRef, context("/second"));
-      release({ stdout: "## main\n M stale.ts\n", stderr: "", code: 0, killed: false });
+      pending.release({ stdout: "## main\n M stale.ts\n", stderr: "", code: 0, killed: false });
       yield* Fiber.join(fiber);
       expect(MutableRef.get(projection).gitStatus).toBeUndefined();
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("accepts probe results across fresh same-session context objects", () => {
-    let release!: (value: Awaited<ReturnType<ExtensionAPI["exec"]>>) => void;
-    const pending = new Promise<Awaited<ReturnType<ExtensionAPI["exec"]>>>((resolve) => {
-      release = resolve;
-    });
+    const pending = deferredExecResult();
     const contextRef = MutableRef.make(context("/project"));
-    const { layer, projection } = serviceLayer(() => pending, { context: contextRef });
+    const { layer, projection } = serviceLayer(() => pending.promise, { context: contextRef });
     return Effect.gen(function* () {
       const service = yield* CosmicUiService;
       const fiber = yield* service.refreshGit(true).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       MutableRef.set(contextRef, context("/project"));
-      release({ stdout: "## main\n M current.ts\n", stderr: "", code: 0, killed: false });
+      pending.release({ stdout: "## main\n M current.ts\n", stderr: "", code: 0, killed: false });
       yield* Fiber.join(fiber);
       expect(MutableRef.get(projection).gitStatus?.modified).toBe(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("invalidates old-branch Git and PR completions before forced follow-ups", () => {
-    const oldResolvers = new Map<
-      string,
-      (value: Awaited<ReturnType<ExtensionAPI["exec"]>>) => void
-    >();
-    const nextResolvers = new Map<
-      string,
-      (value: Awaited<ReturnType<ExtensionAPI["exec"]>>) => void
-    >();
+    const oldResolvers = new Map<string, Deferred.Deferred<ExecResult>>();
+    const nextResolvers = new Map<string, Deferred.Deferred<ExecResult>>();
     const calls = new Map<string, number>();
     const { layer, projection } = serviceLayer((command) => {
       const occurrence = (calls.get(command) ?? 0) + 1;
       calls.set(command, occurrence);
-      return new Promise((resolve) =>
-        (occurrence === 1 ? oldResolvers : nextResolvers).set(command, resolve),
-      );
+      const handle = Deferred.makeUnsafe<ExecResult>();
+      (occurrence === 1 ? oldResolvers : nextResolvers).set(command, handle);
+      return Effect.runPromise(Deferred.await(handle));
     });
     const result = (stdout: string) => ({ stdout, stderr: "", code: 0, killed: false });
+    const resolveWith = (
+      handle: Deferred.Deferred<ExecResult> | undefined,
+      value: ExecResult,
+    ): Effect.Effect<void> =>
+      handle ? Effect.asVoid(Deferred.succeed(handle, value)) : Effect.void;
     return Effect.gen(function* () {
       const service = yield* CosmicUiService;
       const old = yield* service.refreshAll(true).pipe(Effect.forkScoped);
       while (oldResolvers.size < 2) yield* Effect.yieldNow;
       yield* service.invalidateProbes;
       const next = yield* service.refreshAll(true).pipe(Effect.forkScoped);
-      oldResolvers.get("git")?.(result("## old\n M old.ts\n"));
-      oldResolvers.get("gh")?.(result("1\n"));
+      yield* resolveWith(oldResolvers.get("git"), result("## old\n M old.ts\n"));
+      yield* resolveWith(oldResolvers.get("gh"), result("1\n"));
       while (nextResolvers.size < 2) yield* Effect.yieldNow;
       expect(MutableRef.get(projection).gitStatus).toBeUndefined();
       expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
-      nextResolvers.get("git")?.(result("## new\n"));
-      nextResolvers.get("gh")?.(result("2\n"));
+      yield* resolveWith(nextResolvers.get("git"), result("## new\n"));
+      yield* resolveWith(nextResolvers.get("gh"), result("2\n"));
       yield* Fiber.join(old);
       yield* Fiber.join(next);
       expect(MutableRef.get(projection).gitStatus).toMatchObject({ modified: 0 });
       expect(MutableRef.get(projection).pullRequestNumber).toBe(2);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("serializes rapid visibility edits against the latest document", () => {
@@ -312,7 +334,7 @@ describe("Cosmic UI host service", () => {
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const saved = values.get(configPath)?.footer as { hidden?: string[] } | undefined;
       expect([...(saved?.hidden ?? [])].sort()).toEqual(["metrics", "session"]);
-    }).pipe(Effect.provide(layer));
+    }).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("publishes a committed config before honoring interruption", () =>
@@ -363,7 +385,7 @@ describe("Cosmic UI host service", () => {
         yield* Fiber.join(interruption);
 
         expect(MutableRef.get(projection).config?.footer.density).toBe("compact");
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     }),
   );
 
@@ -378,18 +400,12 @@ describe("Cosmic UI host service", () => {
       const { layer } = serviceLayer(
         (_command, _args, options) => {
           calls++;
-          if (pending)
-            return new Promise((_resolve, reject) => {
-              started++;
-              options?.signal?.addEventListener(
-                "abort",
-                () => {
-                  aborted++;
-                  reject(new Error("aborted"));
-                },
-                { once: true },
-              );
+          if (pending) {
+            started++;
+            return abortablePendingExec(options?.signal, () => {
+              aborted++;
             });
+          }
           if (failing) return Promise.reject(new Error("unavailable"));
           return Promise.resolve({ stdout: "## main\n", stderr: "", code: 0, killed: false });
         },
@@ -418,7 +434,7 @@ describe("Cosmic UI host service", () => {
           }),
         );
         expect(aborted).toBe(2);
-      }).pipe(Effect.provide(layer));
+      }).pipe(provideBuiltLayer(layer));
       return program;
     },
   );
@@ -426,26 +442,17 @@ describe("Cosmic UI host service", () => {
   it.effect("interrupts manually requested probes when the service scope closes", () => {
     let started = 0;
     let aborted = 0;
-    const { layer } = serviceLayer(
-      (_command, _args, options) =>
-        new Promise((resolve, reject) => {
-          started++;
-          options?.signal?.addEventListener(
-            "abort",
-            () => {
-              aborted++;
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-          void resolve;
-        }),
-    );
+    const { layer } = serviceLayer((_command, _args, options) => {
+      started++;
+      return abortablePendingExec(options?.signal, () => {
+        aborted++;
+      });
+    });
     const program = Effect.gen(function* () {
       const service = yield* CosmicUiService;
       yield* service.refreshAll(true).pipe(Effect.forkScoped);
       while (started < 2) yield* Effect.yieldNow;
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
     return program.pipe(
       Effect.andThen(
         Effect.sync(() => {

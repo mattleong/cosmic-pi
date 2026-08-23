@@ -24,9 +24,10 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 - `src/syntax/` and `src/write/` are the other primary stateful features; `syntax/service.ts` owns Shiki state/lifecycle while `syntax/ingress.ts` owns the bounded synchronous renderer request bridge. `src/shared/projection-ownership.ts` gives these synchronous projections monotonic session ownership so a newer session wins overlap and stale cleanup cannot clear it.
 - `src/diff/`, `src/paths/`, `src/tools/` (including grep/path-list/shell helpers), and `src/warnings/` contain deterministic preview policy and transformation logic.
 - `src/tools/` owns tool names/policy, cooperative shell API (`cooperative-tools.ts`), the canonical built-in tool emoji lookup (`presentation.ts`, exported for compound renderers), tool argument/result helpers (`data/`), and synchronous tool renderers (`renderers/`).
-- `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries.
+- `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries. The synchronous render clock re-exports `synchronousNow` from `pi-cosmic-core`.
 - `src/preview/` and feature render modules are synchronous UI (no top-level `ui/` folder).
-- Package tests live under `tests/`, mirroring `src/` paths, with `*.test.ts` suffix.
+- `src/shared/terminal-text.ts` owns the code-point SGR classifiers (`matchSgrSequence`, `replaceSgrSequences`) used instead of control-character regexes for ANSI parsing.
+- Package tests live under `tests/`, mirroring `src/` paths, with `*.test.ts` suffix. `tests/support/effect-test.ts` provides the shared Effect-generator test registration (`effectTest`, `step`, `settle`, `eventLoopTurn`) for promise-shaped boundaries.
 
 ## State and resources
 

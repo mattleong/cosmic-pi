@@ -1,7 +1,7 @@
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
+import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { describe, expect, it, vi } from "vitest";
+import { vi } from "vitest";
 import { makeHostUiTickerOwner } from "../src/boundary/host-status.ts";
 import {
   makeHostUiTickerPool,
@@ -101,51 +101,50 @@ describe("host UI ticker pool", () => {
     return pool.dispose();
   });
 
-  it("disposes every active cadence group exactly once", async () => {
-    const harness = schedulerHarness();
-    const pool = makeHostUiTickerPool(harness.schedule);
-    pool.start(160, vi.fn());
-    pool.start(1_000, vi.fn());
+  it.effect("disposes every active cadence group exactly once", () =>
+    Effect.gen(function* () {
+      const harness = schedulerHarness();
+      const pool = makeHostUiTickerPool(harness.schedule);
+      pool.start(160, vi.fn());
+      pool.start(1_000, vi.fn());
 
-    const firstDisposal = pool.dispose();
-    const secondDisposal = pool.dispose();
+      const firstDisposal = pool.dispose();
+      const secondDisposal = pool.dispose();
 
-    expect(harness.scheduled.map((ticker) => ticker.interrupt.mock.calls.length)).toEqual([1, 1]);
-    expect(secondDisposal).toBe(firstDisposal);
-    await firstDisposal;
-  });
+      expect(harness.scheduled.map((ticker) => ticker.interrupt.mock.calls.length)).toEqual([1, 1]);
+      expect(secondDisposal).toBe(firstDisposal);
+      yield* Effect.promise(() => firstDisposal);
+    }),
+  );
 
-  it("waits for every tracked ticker closure before disposal settles", async () => {
-    let complete!: () => void;
-    const stopped = new Promise<void>((resolve) => {
-      complete = resolve;
-    });
+  it.effect("waits for every tracked ticker closure before disposal settles", () => {
+    const stopped = Deferred.makeUnsafe<void>();
     const schedule: HostUiTickerScheduler = () =>
-      Effect.runFork(Effect.never.pipe(Effect.ensuring(Effect.promise(() => stopped))));
+      Effect.runFork(Effect.never.pipe(Effect.ensuring(Deferred.await(stopped))));
     const pool = makeHostUiTickerPool(schedule);
-    const stopSubscription = pool.start(160, vi.fn());
-    stopSubscription();
+    return Effect.gen(function* () {
+      const stopSubscription = pool.start(160, vi.fn());
+      stopSubscription();
 
-    let settled = false;
-    const disposal = pool.dispose().then(() => {
-      settled = true;
+      let settled = false;
+      const disposal = pool.dispose().then(() => {
+        settled = true;
+      });
+      yield* Effect.promise(() => Promise.resolve());
+      expect(settled).toBe(false);
+
+      yield* Deferred.succeed(stopped, undefined);
+      yield* Effect.promise(() => disposal);
+      expect(settled).toBe(true);
+      const postDisposal = vi.fn();
+      pool.start(160, postDisposal)();
+      expect(postDisposal).not.toHaveBeenCalled();
     });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    complete();
-    await disposal;
-    expect(settled).toBe(true);
-    const postDisposal = vi.fn();
-    pool.start(160, postDisposal)();
-    expect(postDisposal).not.toHaveBeenCalled();
   });
 
-  it("rotates to a fresh pool while awaiting the previous pool", async () => {
-    let finishDisposal!: () => void;
-    const disposal = new Promise<void>((resolve) => {
-      finishDisposal = resolve;
-    });
+  it.effect("rotates to a fresh pool while awaiting the previous pool", () => {
+    const finishDisposal = Deferred.makeUnsafe<void>();
+    const disposal = Effect.runPromise(Deferred.await(finishDisposal));
     const firstStart = vi.fn(() => () => undefined);
     const secondStart = vi.fn(() => () => undefined);
     const pools: HostUiTickerPool[] = [
@@ -154,21 +153,22 @@ describe("host UI ticker pool", () => {
     ];
     let poolIndex = 0;
     const owner = makeHostUiTickerOwner(() => pools[poolIndex++]!);
+    return Effect.gen(function* () {
+      owner.start(160, vi.fn());
+      let settled = false;
+      const shutdown = owner.shutdown().then(() => {
+        settled = true;
+      });
+      owner.start(160, vi.fn());
+      yield* Effect.promise(() => Promise.resolve());
 
-    owner.start(160, vi.fn());
-    let settled = false;
-    const shutdown = owner.shutdown().then(() => {
-      settled = true;
+      expect(firstStart).toHaveBeenCalledOnce();
+      expect(secondStart).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+      yield* Deferred.succeed(finishDisposal, undefined);
+      yield* Effect.promise(() => shutdown);
+      expect(settled).toBe(true);
     });
-    owner.start(160, vi.fn());
-    await Promise.resolve();
-
-    expect(firstStart).toHaveBeenCalledOnce();
-    expect(secondStart).toHaveBeenCalledOnce();
-    expect(settled).toBe(false);
-    finishDisposal();
-    await shutdown;
-    expect(settled).toBe(true);
   });
 
   it("fails soft for invalid intervals and scheduler failures", () => {

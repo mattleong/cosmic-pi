@@ -1,11 +1,4 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
 import type {
   AgentToolResult,
   EditToolDetails,
@@ -15,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
+  benchLog,
   benchTheme,
   printBenchHeader,
   printLayerSummary,
@@ -22,9 +16,6 @@ import {
   renderComponent,
   runBench,
 } from "./helpers";
-
-process.env.CODE_PREVIEW_TOOLS = "edit";
-process.env.CODE_PREVIEW_ASYNC_RENDER_CHARS ??= "100000000";
 
 const { codePreviewSettings, setCodePreviewSettings } = await import("../src/config/state");
 const { registerToolRenderers } = await import("../src/tools/renderers/registration");
@@ -76,7 +67,10 @@ setCodePreviewSettings({
   toolCallTiming: false,
   wordEmphasis: "smart",
 });
-const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiTheme);
+const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiTheme, {
+  defaults: { CODE_PREVIEW_ASYNC_RENDER_CHARS: "100000000" },
+  overrides: { CODE_PREVIEW_TOOLS: "edit" },
+});
 
 try {
   printBenchHeader("edit renderer end-to-end");
@@ -138,13 +132,13 @@ try {
   }
 
   printLayerSummary(results);
-  console.log(
+  benchLog(
     "Cold rows create fresh renderer state, render the preview component, and render it to TUI rows.",
   );
-  console.log("Cached rows reuse renderer state to measure preview-key/component caches.");
-  console.log("");
+  benchLog("Cached rows reuse renderer state to measure preview-key/component caches.");
+  benchLog("");
   printResults(results);
-  if (sink === Number.MIN_SAFE_INTEGER) console.log("sink", sink);
+  if (sink === Number.MIN_SAFE_INTEGER) benchLog("sink", sink);
 } finally {
   setCodePreviewSettings(previousSettings);
   await stopShiki();

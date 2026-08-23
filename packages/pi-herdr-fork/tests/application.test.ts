@@ -1,10 +1,11 @@
-// @effect-diagnostics effect/asyncFunction:off
 import type {
   ExtensionAPI,
   ExtensionContext,
   ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test, vi } from "vitest";
+import { describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { expect, vi } from "vitest";
 import { registerHerdrForkApplication } from "../src/application.ts";
 
 type Handler = ExtensionHandler<any, any>;
@@ -45,95 +46,102 @@ const harness = () => {
   return { ctx, notify, start, shutdown };
 };
 
-const invoke = async <ValueInput>(value: ValueInput): Promise<void> => {
-  await value;
-};
+const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
+  Effect.promise(() => Promise.resolve(value).then(() => undefined));
 
 describe("herdr-fork session host capture", () => {
-  test("materializes cwd and signal once and never rereads the raw host signal", async () => {
-    const h = harness();
-    const controller = new AbortController();
-    let cwdReads = 0;
-    let signalReads = 0;
-    Object.defineProperties(h.ctx, {
-      cwd: {
+  it.effect("materializes cwd and signal once and never rereads the raw host signal", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const controller = new AbortController();
+      let cwdReads = 0;
+      let signalReads = 0;
+      Object.defineProperties(h.ctx, {
+        cwd: {
+          configurable: true,
+          get() {
+            cwdReads++;
+            if (cwdReads > 1) throw new Error("host-cwd-reread-secret");
+            return "/project";
+          },
+        },
+        signal: {
+          configurable: true,
+          get() {
+            signalReads++;
+            if (signalReads > 1) throw new Error("host-signal-reread-secret");
+            return controller.signal;
+          },
+        },
+      });
+
+      yield* invoke(h.start());
+
+      expect(cwdReads).toBe(1);
+      expect(signalReads).toBe(1);
+      expect(h.notify).not.toHaveBeenCalled();
+      yield* invoke(h.shutdown());
+    }),
+  );
+
+  it.effect("fails closed for a hostile signal getter", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      Object.defineProperty(h.ctx, "signal", {
         configurable: true,
         get() {
-          cwdReads++;
-          if (cwdReads > 1) throw new Error("host-cwd-reread-secret");
-          return "/project";
+          throw new Error("host-signal-secret");
         },
-      },
-      signal: {
-        configurable: true,
+      });
+
+      let startup: unknown;
+      expect(() => {
+        startup = h.start();
+      }).not.toThrow();
+      yield* invoke(startup);
+
+      expect(h.notify).toHaveBeenCalledWith(
+        "The /herdr-fork command could not capture this Pi session.",
+        "error",
+      );
+    }),
+  );
+
+  it.effect("fails closed when the captured session is already aborted", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const controller = new AbortController();
+      controller.abort();
+      h.ctx.signal = controller.signal;
+
+      yield* invoke(h.start());
+
+      expect(h.notify).toHaveBeenCalledWith(
+        "The /herdr-fork command could not capture this Pi session.",
+        "error",
+      );
+    }),
+  );
+
+  it.effect("fails closed when reading captured aborted state throws", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const hostileSignal = Object.defineProperty({}, "aborted", {
         get() {
-          signalReads++;
-          if (signalReads > 1) throw new Error("host-signal-reread-secret");
-          return controller.signal;
+          throw new Error("host-aborted-secret");
         },
-      },
-    });
+      });
+      Object.defineProperty(h.ctx, "signal", {
+        configurable: true,
+        value: hostileSignal,
+      });
 
-    await invoke(h.start());
+      yield* invoke(h.start());
 
-    expect(cwdReads).toBe(1);
-    expect(signalReads).toBe(1);
-    expect(h.notify).not.toHaveBeenCalled();
-    await invoke(h.shutdown());
-  });
-
-  test("fails closed for a hostile signal getter", async () => {
-    const h = harness();
-    Object.defineProperty(h.ctx, "signal", {
-      configurable: true,
-      get() {
-        throw new Error("host-signal-secret");
-      },
-    });
-
-    let startup: unknown;
-    expect(() => {
-      startup = h.start();
-    }).not.toThrow();
-    await invoke(startup);
-
-    expect(h.notify).toHaveBeenCalledWith(
-      "The /herdr-fork command could not capture this Pi session.",
-      "error",
-    );
-  });
-
-  test("fails closed when the captured session is already aborted", async () => {
-    const h = harness();
-    const controller = new AbortController();
-    controller.abort();
-    h.ctx.signal = controller.signal;
-
-    await invoke(h.start());
-
-    expect(h.notify).toHaveBeenCalledWith(
-      "The /herdr-fork command could not capture this Pi session.",
-      "error",
-    );
-  });
-
-  test("fails closed when reading captured aborted state throws", async () => {
-    const h = harness();
-    const hostileSignal = Object.defineProperty({}, "aborted", {
-      get() {
-        throw new Error("host-aborted-secret");
-      },
-    });
-    Object.defineProperty(h.ctx, "signal", {
-      configurable: true,
-      value: hostileSignal,
-    });
-
-    await invoke(h.start());
-
-    expect(h.notify).toHaveBeenCalledWith(
-      "The /herdr-fork command could not capture this Pi session.",
-      "error",
-    );
-  });
+      expect(h.notify).toHaveBeenCalledWith(
+        "The /herdr-fork command could not capture this Pi session.",
+        "error",
+      );
+    }),
+  );
 });

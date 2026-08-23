@@ -1,115 +1,133 @@
-// Test harness boundary: only the diagnostics used by this file are suppressed.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+// Effect test entry point owns the temporary guidance fixtures.
+import { describe, expect, layer } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { runBoundedProcessNode } from "pi-cosmic-core";
+import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import {
   loadAdvisorInstructionsEffect,
   MAX_INSTRUCTION_BYTES,
 } from "../src/review/instructions.ts";
-import { standaloneAdvisorExecutor } from "./support/executor.ts";
 
-const load = (configPath: string, cwd: string, projectTrusted: boolean) =>
-  standaloneAdvisorExecutor.run(loadAdvisorInstructionsEffect(configPath, cwd, projectTrusted));
-
-async function withTempDir<T>(run: (directory: string) => Promise<T>): Promise<T> {
-  const directory = mkdtempSync(join(tmpdir(), "pi-advisor-instructions-"));
-  try {
-    return await run(directory);
-  } finally {
-    rmSync(directory, { force: true, recursive: true });
-  }
-}
-
-describe("advisor instructions", () => {
-  test("loads global guidance before trusted project guidance", async () => {
-    await withTempDir(async (directory) => {
-      const agentDir = join(directory, "agent");
-      const projectDir = join(directory, "project");
-      const configPath = join(agentDir, "extensions", "pi-advisor.json");
-      mkdirSync(join(projectDir, ".pi"), { recursive: true });
-      mkdirSync(agentDir, { recursive: true });
-      writeFileSync(join(agentDir, "ADVISOR.md"), "Watch global invariants.", "utf8");
-      writeFileSync(join(projectDir, ".pi", "ADVISOR.md"), "Watch the project queue.", "utf8");
-
-      const loaded = await load(configPath, projectDir, true);
-
-      expect(loaded.paths).toEqual([
-        join(agentDir, "ADVISOR.md"),
-        join(projectDir, ".pi", "ADVISOR.md"),
-      ]);
-      expect(loaded.content).toContain("Watch global invariants.");
-      expect(loaded.content).toContain("Watch the project queue.");
-      expect(loaded.content?.indexOf("global")).toBeLessThan(
-        loaded.content?.indexOf("project") ?? 0,
-      );
-    });
+const tempAgentFixture = (prefix: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix });
+    const agentDir = path.join(directory, "agent");
+    const configPath = path.join(agentDir, "extensions", "pi-advisor.json");
+    return { agentDir, configPath, directory, fs, path };
   });
 
-  test("does not load project guidance for an untrusted project", async () => {
-    await withTempDir(async (directory) => {
-      const agentDir = join(directory, "agent");
-      const projectDir = join(directory, "project");
-      const configPath = join(agentDir, "extensions", "pi-advisor.json");
-      mkdirSync(join(projectDir, ".pi"), { recursive: true });
-      writeFileSync(join(projectDir, ".pi", "ADVISOR.md"), "Untrusted guidance.", "utf8");
+layer(advisorPlatformLayer)("advisor instructions", (it) => {
+  describe("advisor instructions", () => {
+    it.effect("loads global guidance before trusted project guidance", () =>
+      Effect.gen(function* () {
+        const { agentDir, configPath, directory, fs, path } = yield* tempAgentFixture(
+          "pi-advisor-instructions-",
+        );
+        const projectDir = path.join(directory, "project");
+        yield* fs.makeDirectory(path.join(projectDir, ".pi"), { recursive: true });
+        yield* fs.makeDirectory(agentDir, { recursive: true });
+        yield* fs.writeFileString(path.join(agentDir, "ADVISOR.md"), "Watch global invariants.");
+        yield* fs.writeFileString(
+          path.join(projectDir, ".pi", "ADVISOR.md"),
+          "Watch the project queue.",
+        );
 
-      expect(await load(configPath, projectDir, false)).toEqual({ paths: [] });
-    });
-  });
+        const loaded = yield* loadAdvisorInstructionsEffect(configPath, projectDir, true);
 
-  test("bounds production guidance reads by bytes before decoding", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "pi-advisor-instructions-"));
-    try {
-      const agentDir = join(directory, "agent");
-      const configPath = join(agentDir, "extensions", "pi-advisor.json");
-      mkdirSync(agentDir, { recursive: true });
-      writeFileSync(join(agentDir, "ADVISOR.md"), "é".repeat(MAX_INSTRUCTION_BYTES), "utf8");
+        expect(loaded.paths).toEqual([
+          path.join(agentDir, "ADVISOR.md"),
+          path.join(projectDir, ".pi", "ADVISOR.md"),
+        ]);
+        expect(loaded.content).toContain("Watch global invariants.");
+        expect(loaded.content).toContain("Watch the project queue.");
+        expect(loaded.content?.indexOf("global")).toBeLessThan(
+          loaded.content?.indexOf("project") ?? 0,
+        );
+      }),
+    );
 
-      const loaded = await load(configPath, directory, false);
-      expect(loaded.content).toContain("[Advisor guidance truncated]");
-      expect(loaded.content?.length).toBeLessThan(40_000);
-    } finally {
-      rmSync(directory, { force: true, recursive: true });
-    }
-  });
+    it.effect("does not load project guidance for an untrusted project", () =>
+      Effect.gen(function* () {
+        const { configPath, directory, fs, path } = yield* tempAgentFixture(
+          "pi-advisor-instructions-",
+        );
+        const projectDir = path.join(directory, "project");
+        yield* fs.makeDirectory(path.join(projectDir, ".pi"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(projectDir, ".pi", "ADVISOR.md"),
+          "Untrusted guidance.",
+        );
 
-  test("rejects symlink and FIFO guidance without blocking", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "pi-advisor-instructions-special-"));
-    try {
-      const agentDir = join(directory, "agent");
-      const configPath = join(agentDir, "extensions", "pi-advisor.json");
-      mkdirSync(agentDir, { recursive: true });
-      const outside = join(directory, "outside.md");
-      writeFileSync(outside, "outside guidance");
-      symlinkSync(outside, join(agentDir, "ADVISOR.md"));
-      expect(await load(configPath, directory, false)).toEqual({ paths: [] });
-      rmSync(join(agentDir, "ADVISOR.md"));
-      if (process.platform !== "win32") {
-        expect(spawnSync("mkfifo", [join(agentDir, "ADVISOR.md")]).status).toBe(0);
-        const started = performance.now();
-        expect(await load(configPath, directory, false)).toEqual({
+        expect(yield* loadAdvisorInstructionsEffect(configPath, projectDir, false)).toEqual({
           paths: [],
         });
-        expect(performance.now() - started).toBeLessThan(1_000);
-      }
-    } finally {
-      rmSync(directory, { force: true, recursive: true });
-    }
-  });
+      }),
+    );
 
-  test("ignores missing, empty, and unreadable-looking guidance paths", async () => {
-    await withTempDir(async (directory) => {
-      const configPath = join(directory, "agent", "extensions", "pi-advisor.json");
-      mkdirSync(join(directory, "agent"), { recursive: true });
-      writeFileSync(join(directory, "agent", "ADVISOR.md"), "   ", "utf8");
+    it.effect("bounds production guidance reads by bytes before decoding", () =>
+      Effect.gen(function* () {
+        const { agentDir, configPath, directory, fs, path } = yield* tempAgentFixture(
+          "pi-advisor-instructions-",
+        );
+        yield* fs.makeDirectory(agentDir, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(agentDir, "ADVISOR.md"),
+          "é".repeat(MAX_INSTRUCTION_BYTES),
+        );
 
-      expect(await load(configPath, join(directory, "project"), true)).toEqual({
-        paths: [],
-      });
-    });
+        const loaded = yield* loadAdvisorInstructionsEffect(configPath, directory, false);
+        expect(loaded.content).toContain("[Advisor guidance truncated]");
+        expect(loaded.content?.length).toBeLessThan(40_000);
+      }),
+    );
+
+    it.effect("rejects symlink and FIFO guidance without blocking", () =>
+      Effect.gen(function* () {
+        const { agentDir, configPath, directory, fs, path } = yield* tempAgentFixture(
+          "pi-advisor-instructions-special-",
+        );
+        yield* fs.makeDirectory(agentDir, { recursive: true });
+        const outside = path.join(directory, "outside.md");
+        yield* fs.writeFileString(outside, "outside guidance");
+        yield* fs.symlink(outside, path.join(agentDir, "ADVISOR.md"));
+        expect(yield* loadAdvisorInstructionsEffect(configPath, directory, false)).toEqual({
+          paths: [],
+        });
+        yield* fs.remove(path.join(agentDir, "ADVISOR.md"));
+        if (process.platform !== "win32") {
+          const mkfifo = yield* runBoundedProcessNode({
+            executable: "mkfifo",
+            args: [path.join(agentDir, "ADVISOR.md")],
+            stdoutLimitBytes: 4_096,
+            stderrLimitBytes: 4_096,
+            timeoutMillis: 5_000,
+          });
+          expect(mkfifo.code).toBe(0);
+          const started = performance.now();
+          expect(yield* loadAdvisorInstructionsEffect(configPath, directory, false)).toEqual({
+            paths: [],
+          });
+          expect(performance.now() - started).toBeLessThan(1_000);
+        }
+      }),
+    );
+
+    it.effect("ignores missing, empty, and unreadable-looking guidance paths", () =>
+      Effect.gen(function* () {
+        const { agentDir, configPath, directory, fs, path } = yield* tempAgentFixture(
+          "pi-advisor-instructions-",
+        );
+        yield* fs.makeDirectory(agentDir, { recursive: true });
+        yield* fs.writeFileString(path.join(agentDir, "ADVISOR.md"), "   ");
+
+        expect(
+          yield* loadAdvisorInstructionsEffect(configPath, path.join(directory, "project"), true),
+        ).toEqual({ paths: [] });
+      }),
+    );
   });
 });

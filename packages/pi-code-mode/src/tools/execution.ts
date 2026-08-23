@@ -3,7 +3,6 @@
  * runtime execution with composed cancellation, bounded progress, and model-safe results.
  */
 // Pi tool execution is a Promise-shaped host boundary.
-// @effect-diagnostics effect/asyncFunction:off
 import * as Predicate from "effect/Predicate";
 
 import type {
@@ -137,220 +136,232 @@ export type CodeModeToolExecute = (
 
 export const makeCodeModeToolExecute =
   (environment: CodeModeExecutionEnvironment): CodeModeToolExecute =>
-  async (toolCallId, params, signal, onUpdate, ctx) => {
-    const state = environment.getState();
-    if (!environment.isCurrent() || state === undefined) {
-      throw new Error(CODE_MODE_UNAVAILABLE_MESSAGE);
-    }
-    if (!state.available) {
-      throw new Error(
-        clampModelVisibleText(CODE_MODE_UNAVAILABLE_MESSAGE, state.config.maxOutputBytes),
-      );
-    }
-    const { config } = state;
-
-    const calls: MutableCallEntry[] = [];
-    const callById = new Map<number, MutableCallEntry>();
-    // `/reload` refreshes this TypeScript extension but Node can retain the already-imported
-    // runtime JS module. Older runtime instances emit only the legacy start/end hooks, so keep
-    // an independent index for that backward-compatible path instead of assuming lifecycle
-    // `queued` events always materialized the row first.
-    const legacyCallByIndex = new Map<number, MutableCallEntry>();
-    const counts = emptyCounts();
-    const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
-    const publishNow = () => publisher.publishNow(progressResult(snapshotCalls(calls), counts));
-    const trackQueued = (entry: MutableCallEntry): boolean => {
-      if (counts.total > config.maxToolCalls) return false;
-      if (calls.length >= MAX_TRACKED_CALL_ENTRIES) {
-        const evictedIndex = calls.findIndex((call) => call.status === "completed");
-        if (evictedIndex < 0) return false;
-        const [evicted] = calls.splice(evictedIndex, 1);
-        if (evicted !== undefined) callById.delete(evicted.id);
+  (toolCallId, params, signal, onUpdate, ctx) =>
+    // Synchronous refusals become rejections here, exactly as the prior async form produced.
+    Promise.resolve().then(() => {
+      const state = environment.getState();
+      if (!environment.isCurrent() || state === undefined) {
+        throw new Error(CODE_MODE_UNAVAILABLE_MESSAGE);
       }
-      calls.push(entry);
-      callById.set(entry.id, entry);
-      return true;
-    };
-    const aborted = () => signal?.aborted === true;
-    if (aborted()) return cancelledResult([], config.maxOutputBytes);
+      if (!state.available) {
+        throw new Error(
+          clampModelVisibleText(CODE_MODE_UNAVAILABLE_MESSAGE, state.config.maxOutputBytes),
+        );
+      }
+      const { config } = state;
 
-    const sourceRefusal = checkSourceSize(params.code, config.maxSourceBytes);
-    if (sourceRefusal !== undefined) {
-      throw new Error(clampModelVisibleText(sourceRefusal, config.maxOutputBytes));
-    }
-
-    const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
-    try {
-      // Give the host one leading-edge snapshot before interpreter work begins. Row admission
-      // and enriched running labels publish synchronously into Pi's next frame; status-only
-      // snapshots are frame-coalesced, with the newest state flushed on settlement.
-      publisher.publish(progressResult([], counts));
-      const budget = makeCumulativeOutputBudget(config.maxCumulativeChildOutputBytes);
-      const dispatch = makeNestedPiToolDispatch({
-        definitions: environment.definitions,
-        ctx,
-        toolCallId,
-        signal,
-      });
-
-      const execution = (environment.executeCodeMode ?? CodeMode.execute)({
-        code: params.code,
-        tools: makeExecutionGuestTools(dispatch, budget),
-        limits: {
-          timeoutMs: config.timeoutMs,
-          maxToolCalls: config.maxToolCalls,
-          maxOutputBytes: config.maxOutputBytes,
-        },
-        onToolCallLifecycle: (event) =>
-          Effect.sync(() => {
-            if (event.status === "queued") {
-              counts.total += 1;
-              counts.queued += 1;
-              const entry: MutableCallEntry = {
-                id: event.id,
-                tool: event.name,
-                status: "queued",
-                activity: describeNestedActivity(event.name, undefined),
-              };
-              if (!trackQueued(entry)) return;
-            } else {
-              const entry = callById.get(event.id);
-              const nextStatus =
-                event.status === "running"
-                  ? "running"
-                  : event.status === "succeeded"
-                    ? "completed"
-                    : event.status === "failed"
-                      ? "error"
-                      : "cancelled";
-              if (entry !== undefined) {
-                transitionCall(entry, nextStatus, counts);
-                if (event.status !== "running") entry.durationMs = event.durationMs;
-              } else {
-                if (event.status !== "running") {
-                  counts.queued -= 1;
-                  counts[statusCountKey(nextStatus)] += 1;
-                }
-                return;
-              }
-              // The start hook immediately follows the modern running event and enriches the
-              // row with decoded activity. Publish that one snapshot instead of two equivalent
-              // running updates; terminal lifecycle events remain authoritative.
-              if (event.status === "running") return;
-            }
-            if (event.status === "queued") publishNow();
-            else publish();
-          }),
-        onToolCallStart: ({ index, lifecycleId, name, input }) =>
-          Effect.sync(() => {
-            let current =
-              lifecycleId === undefined ? legacyCallByIndex.get(index) : callById.get(lifecycleId);
-            if (current === undefined && lifecycleId === undefined) {
-              counts.total += 1;
-              counts.running += 1;
-              current = {
-                // Legacy indices are execution-local and disjoint from non-negative lifecycle IDs.
-                id: -(index + 1),
-                tool: name,
-                status: "running",
-                activity: describeNestedActivity(name, input),
-              };
-              if (trackQueued(current)) legacyCallByIndex.set(index, current);
-            } else if (current !== undefined) {
-              transitionCall(current, "running", counts);
-              current.activity = describeNestedActivity(name, input);
-            }
-            // Do not place a newly admitted/enriched row behind our frame timer: Pi already has
-            // a render queued, so synchronous delivery lets the row join that next host frame.
-            publishNow();
-          }),
-        onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
-          Effect.sync(() => {
-            // Modern runtimes emit one authoritative terminal lifecycle event immediately after
-            // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
-            if (lifecycleId !== undefined) return;
-            const current = legacyCallByIndex.get(index);
-            const nextStatus = outcome === "success" ? "completed" : "error";
-            if (current !== undefined) {
-              transitionCall(current, nextStatus, counts);
-              current.durationMs = durationMs;
-              legacyCallByIndex.delete(index);
-            } else {
-              // The legacy call was counted but its row exceeded the bounded host-side cap.
-              counts.running -= 1;
-              counts[statusCountKey(nextStatus)] += 1;
-            }
-            publish();
-          }),
-      });
-
-      let result: CodeModeResult;
-      try {
-        result = await environment.runInSession(execution, signal);
-      } catch (error) {
-        const changed = settlePendingAsCancelled(calls, counts);
-        counts.cancelled += counts.queued + counts.running;
-        counts.queued = 0;
-        counts.running = 0;
-        const details = callEntryDetails(snapshotCalls(calls), counts);
-        if (changed) publisher.publish(progressResult(snapshotCalls(calls), counts));
-        publisher.settle();
-        if (aborted() || !environment.isCurrent()) {
-          return {
-            ...cancelledResult(snapshotCalls(calls), config.maxOutputBytes),
-            details: { ...callEntryDetails(snapshotCalls(calls), counts), cancelled: true },
-          };
+      const calls: MutableCallEntry[] = [];
+      const callById = new Map<number, MutableCallEntry>();
+      // `/reload` refreshes this TypeScript extension but Node can retain the already-imported
+      // runtime JS module. Older runtime instances emit only the legacy start/end hooks, so keep
+      // an independent index for that backward-compatible path instead of assuming lifecycle
+      // `queued` events always materialized the row first.
+      const legacyCallByIndex = new Map<number, MutableCallEntry>();
+      const counts = emptyCounts();
+      const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
+      const publishNow = () => publisher.publishNow(progressResult(snapshotCalls(calls), counts));
+      const trackQueued = (entry: MutableCallEntry): boolean => {
+        if (counts.total > config.maxToolCalls) return false;
+        if (calls.length >= MAX_TRACKED_CALL_ENTRIES) {
+          const evictedIndex = calls.findIndex((call) => call.status === "completed");
+          if (evictedIndex < 0) return false;
+          const [evicted] = calls.splice(evictedIndex, 1);
+          if (evicted !== undefined) callById.delete(evicted.id);
         }
-        environment.retainFailureDetails?.(toolCallId, details);
-        throw new Error(
-          clampModelVisibleText(
-            `code_mode execution did not complete: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            config.maxOutputBytes,
-          ),
-        );
-      }
-
-      const changed = settlePendingAsCancelled(calls, counts);
-      counts.cancelled += counts.queued + counts.running;
-      counts.queued = 0;
-      counts.running = 0;
-      if (changed) publisher.publish(progressResult(snapshotCalls(calls), counts));
-      publisher.settle();
-      if (aborted()) {
-        return {
-          ...cancelledResult(snapshotCalls(calls), config.maxOutputBytes),
-          details: { ...callEntryDetails(snapshotCalls(calls), counts), cancelled: true },
-        };
-      }
-
-      const callEntry = callEntryDetails(snapshotCalls(calls), counts);
-      const baseDetails: CodeModeToolDetails =
-        result.truncated === true ? { ...callEntry, truncated: true } : callEntry;
-      if (!result.ok) {
-        environment.retainFailureDetails?.(toolCallId, baseDetails);
-        throw new Error(
-          clampModelVisibleText(formatCodeModeFailure(result), config.maxOutputBytes),
-        );
-      }
-      const details: CodeModeToolDetails = {
-        ...baseDetails,
-        outputKind: Predicate.isString(result.value) ? "text" : "structured",
+        calls.push(entry);
+        callById.set(entry.id, entry);
+        return true;
       };
-      return {
-        content: [
-          {
-            type: "text",
-            text: clampModelVisibleText(
-              formatCodeModeSuccess(result, config.maxOutputBytes),
+      const aborted = () => signal?.aborted === true;
+      if (aborted()) return cancelledResult([], config.maxOutputBytes);
+
+      const sourceRefusal = checkSourceSize(params.code, config.maxSourceBytes);
+      if (sourceRefusal !== undefined) {
+        throw new Error(clampModelVisibleText(sourceRefusal, config.maxOutputBytes));
+      }
+
+      const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
+      const attempt = (): Promise<AgentToolResult<CodeModeToolDetails>> => {
+        // Give the host one leading-edge snapshot before interpreter work begins. Row admission
+        // and enriched running labels publish synchronously into Pi's next frame; status-only
+        // snapshots are frame-coalesced, with the newest state flushed on settlement.
+        publisher.publish(progressResult([], counts));
+        const budget = makeCumulativeOutputBudget(config.maxCumulativeChildOutputBytes);
+        const dispatch = makeNestedPiToolDispatch({
+          definitions: environment.definitions,
+          ctx,
+          toolCallId,
+          signal,
+        });
+
+        const execution = (environment.executeCodeMode ?? CodeMode.execute)({
+          code: params.code,
+          tools: makeExecutionGuestTools(dispatch, budget),
+          limits: {
+            timeoutMs: config.timeoutMs,
+            maxToolCalls: config.maxToolCalls,
+            maxOutputBytes: config.maxOutputBytes,
+          },
+          onToolCallLifecycle: (event) =>
+            Effect.sync(() => {
+              if (event.status === "queued") {
+                counts.total += 1;
+                counts.queued += 1;
+                const entry: MutableCallEntry = {
+                  id: event.id,
+                  tool: event.name,
+                  status: "queued",
+                  activity: describeNestedActivity(event.name, undefined),
+                };
+                if (!trackQueued(entry)) return;
+              } else {
+                const entry = callById.get(event.id);
+                const nextStatus =
+                  event.status === "running"
+                    ? "running"
+                    : event.status === "succeeded"
+                      ? "completed"
+                      : event.status === "failed"
+                        ? "error"
+                        : "cancelled";
+                if (entry !== undefined) {
+                  transitionCall(entry, nextStatus, counts);
+                  if (event.status !== "running") entry.durationMs = event.durationMs;
+                } else {
+                  if (event.status !== "running") {
+                    counts.queued -= 1;
+                    counts[statusCountKey(nextStatus)] += 1;
+                  }
+                  return;
+                }
+                // The start hook immediately follows the modern running event and enriches the
+                // row with decoded activity. Publish that one snapshot instead of two equivalent
+                // running updates; terminal lifecycle events remain authoritative.
+                if (event.status === "running") return;
+              }
+              if (event.status === "queued") publishNow();
+              else publish();
+            }),
+          onToolCallStart: ({ index, lifecycleId, name, input }) =>
+            Effect.sync(() => {
+              let current =
+                lifecycleId === undefined
+                  ? legacyCallByIndex.get(index)
+                  : callById.get(lifecycleId);
+              if (current === undefined && lifecycleId === undefined) {
+                counts.total += 1;
+                counts.running += 1;
+                current = {
+                  // Legacy indices are execution-local and disjoint from non-negative lifecycle IDs.
+                  id: -(index + 1),
+                  tool: name,
+                  status: "running",
+                  activity: describeNestedActivity(name, input),
+                };
+                if (trackQueued(current)) legacyCallByIndex.set(index, current);
+              } else if (current !== undefined) {
+                transitionCall(current, "running", counts);
+                current.activity = describeNestedActivity(name, input);
+              }
+              // Do not place a newly admitted/enriched row behind our frame timer: Pi already has
+              // a render queued, so synchronous delivery lets the row join that next host frame.
+              publishNow();
+            }),
+          onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
+            Effect.sync(() => {
+              // Modern runtimes emit one authoritative terminal lifecycle event immediately after
+              // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
+              if (lifecycleId !== undefined) return;
+              const current = legacyCallByIndex.get(index);
+              const nextStatus = outcome === "success" ? "completed" : "error";
+              if (current !== undefined) {
+                transitionCall(current, nextStatus, counts);
+                current.durationMs = durationMs;
+                legacyCallByIndex.delete(index);
+              } else {
+                // The legacy call was counted but its row exceeded the bounded host-side cap.
+                counts.running -= 1;
+                counts[statusCountKey(nextStatus)] += 1;
+              }
+              publish();
+            }),
+        });
+
+        const settleAfterFailure = (message: string): AgentToolResult<CodeModeToolDetails> => {
+          const changed = settlePendingAsCancelled(calls, counts);
+          counts.cancelled += counts.queued + counts.running;
+          counts.queued = 0;
+          counts.running = 0;
+          const details = callEntryDetails(snapshotCalls(calls), counts);
+          if (changed) publisher.publish(progressResult(snapshotCalls(calls), counts));
+          publisher.settle();
+          if (aborted() || !environment.isCurrent()) {
+            return {
+              ...cancelledResult(snapshotCalls(calls), config.maxOutputBytes),
+              details: { ...callEntryDetails(snapshotCalls(calls), counts), cancelled: true },
+            };
+          }
+          environment.retainFailureDetails?.(toolCallId, details);
+          throw new Error(
+            clampModelVisibleText(
+              `code_mode execution did not complete: ${message}`,
               config.maxOutputBytes,
             ),
-          },
-        ],
-        details,
+          );
+        };
+
+        const settleAfterSuccess = (
+          result: CodeModeResult,
+        ): AgentToolResult<CodeModeToolDetails> => {
+          const changed = settlePendingAsCancelled(calls, counts);
+          counts.cancelled += counts.queued + counts.running;
+          counts.queued = 0;
+          counts.running = 0;
+          if (changed) publisher.publish(progressResult(snapshotCalls(calls), counts));
+          publisher.settle();
+          if (aborted()) {
+            return {
+              ...cancelledResult(snapshotCalls(calls), config.maxOutputBytes),
+              details: { ...callEntryDetails(snapshotCalls(calls), counts), cancelled: true },
+            };
+          }
+
+          const callEntry = callEntryDetails(snapshotCalls(calls), counts);
+          const baseDetails: CodeModeToolDetails =
+            result.truncated === true ? { ...callEntry, truncated: true } : callEntry;
+          if (!result.ok) {
+            environment.retainFailureDetails?.(toolCallId, baseDetails);
+            throw new Error(
+              clampModelVisibleText(formatCodeModeFailure(result), config.maxOutputBytes),
+            );
+          }
+          const details: CodeModeToolDetails = {
+            ...baseDetails,
+            outputKind: Predicate.isString(result.value) ? "text" : "structured",
+          };
+          return {
+            content: [
+              {
+                type: "text",
+                text: clampModelVisibleText(
+                  formatCodeModeSuccess(result, config.maxOutputBytes),
+                  config.maxOutputBytes,
+                ),
+              },
+            ],
+            details,
+          };
+        };
+
+        return environment
+          .runInSession(execution, signal)
+          .then(settleAfterSuccess, (error) =>
+            settleAfterFailure(error instanceof Error ? error.message : String(error)),
+          );
       };
-    } finally {
-      publisher.settle();
-    }
-  };
+      return Promise.resolve()
+        .then(attempt)
+        .finally(() => {
+          publisher.settle();
+        });
+    });

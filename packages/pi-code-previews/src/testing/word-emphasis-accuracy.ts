@@ -1,11 +1,4 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
 import { collectChangedDiffBlock } from "../diff/changed-blocks";
 import { renderSyntaxHighlightedDiff } from "../diff/index";
 import { isChangedDiffLine, parseDiffLine } from "../diff/parse";
@@ -55,29 +48,35 @@ type WordEmphasisAccuracyReport = {
 type Range = [start: number, end: number];
 type LinePair = [removedLine: number, addedLine: number];
 
-export async function evaluateWordEmphasisAccuracy(
+export function evaluateWordEmphasisAccuracy(
   cases: readonly WordEmphasisAccuracyCase[] = wordEmphasisAccuracyCases,
 ): Promise<WordEmphasisAccuracyReport> {
   const previousSettings = { ...codePreviewSettings };
-  const results: WordEmphasisAccuracyCaseResult[] = [];
-
-  try {
-    if (cases.some((accuracyCase) => accuracyCase.lang)) {
-      setCodePreviewSettings({ ...previousSettings, syntaxHighlighting: true });
-      await initializeShiki(previousSettings.shikiTheme);
-    }
-    for (const accuracyCase of cases) {
-      setCodePreviewSettings({
-        ...previousSettings,
-        syntaxHighlighting: true,
-        wordEmphasis: accuracyCase.mode ?? "all",
-      });
-      results.push(evaluateCase(accuracyCase));
-    }
-  } finally {
-    setCodePreviewSettings(previousSettings);
+  let prepared: Promise<void> = Promise.resolve();
+  if (cases.some((accuracyCase) => accuracyCase.lang)) {
+    setCodePreviewSettings({ ...previousSettings, syntaxHighlighting: true });
+    prepared = initializeShiki(previousSettings.shikiTheme);
   }
+  return prepared
+    .then(() => {
+      const results: WordEmphasisAccuracyCaseResult[] = [];
+      for (const accuracyCase of cases) {
+        setCodePreviewSettings({
+          ...previousSettings,
+          syntaxHighlighting: true,
+          wordEmphasis: accuracyCase.mode ?? "all",
+        });
+        results.push(evaluateCase(accuracyCase));
+      }
+      return results;
+    })
+    .finally(() => setCodePreviewSettings(previousSettings))
+    .then(buildWordEmphasisAccuracyReport);
+}
 
+function buildWordEmphasisAccuracyReport(
+  results: WordEmphasisAccuracyCaseResult[],
+): WordEmphasisAccuracyReport {
   const spanCounts = sumMetrics(results.map((result) => result.spans));
   const pairResults = results.flatMap((result) => (result.pairs ? [result.pairs] : []));
   const pairCounts = sumMetrics(pairResults);

@@ -1,4 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -7,7 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Stream from "effect/Stream";
-import { nodePlatformLayer } from "pi-cosmic-core";
+import { nodePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../src/boundary/sharp.ts";
 import { makeImageOutput } from "../src/image/output.ts";
 import { parseImageSse } from "../src/image/stream.ts";
@@ -73,7 +72,7 @@ describe("OpenAI image resources", () => {
       const visible = yield* fs.readDirectory(directory);
       expect(visible).toHaveLength(1);
       expect(visible.some((name) => name.endsWith(".tmp"))).toBe(false);
-    }).pipe(Effect.provide(nodePlatformLayer)),
+    }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 
   it.effect("keeps the committed publication when post-commit verification is lost", () =>
@@ -104,6 +103,6 @@ describe("OpenAI image resources", () => {
       expect(
         (yield* realFs.readDirectory(directory)).filter((name) => name.endsWith(".tmp")),
       ).toEqual([]);
-    }).pipe(Effect.provide(nodePlatformLayer)),
+    }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 });

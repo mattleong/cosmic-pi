@@ -1,5 +1,4 @@
 // Pi tool execution is a Promise-shaped host boundary.
-// @effect-diagnostics effect/asyncFunction:off
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
@@ -37,15 +36,16 @@ export function registerAskUserTool(pi: ExtensionAPI, runner: AskUserToolRunner)
     ],
     parameters: AskUserParameters,
     executionMode: "sequential",
-    async execute(_toolCallId, input, signal) {
-      const outcome = await runner.run(
-        AskUserService.use((service) => service.ask(input)),
-        signal,
-      );
-      return {
-        content: [{ type: "text", text: formatAskUserOutcome(outcome) }],
-        details: outcome satisfies AskUserToolDetails,
-      };
+    execute(_toolCallId, input, signal) {
+      return runner
+        .run(
+          AskUserService.use((service) => service.ask(input)),
+          signal,
+        )
+        .then((outcome) => ({
+          content: [{ type: "text" as const, text: formatAskUserOutcome(outcome) }],
+          details: outcome satisfies AskUserToolDetails,
+        }));
     },
     renderCall(args, theme) {
       const questions = Array.isArray(args.questions) ? args.questions : [];

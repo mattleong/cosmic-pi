@@ -1,5 +1,4 @@
 // Fixed Node process and Herdr protocol boundary for the /herdr-fork command.
-// @effect-diagnostics effect/processEnv:off
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

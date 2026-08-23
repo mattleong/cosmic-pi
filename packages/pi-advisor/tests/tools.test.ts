@@ -1,286 +1,392 @@
-// Test harness boundary: only the diagnostics used by this file are suppressed.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import childProcess from "node:child_process";
+// Test harness boundary: real Node filesystem and process primitives exercise tool safety.
 import { createHash } from "node:crypto";
-import { link, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, win32 } from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { vi } from "vitest";
 import {
   ADVISOR_TOOL_LIMITS,
   AdvisorToolSafetyError,
   createAdvisorToolsEffect,
 } from "../src/runtime/tools.ts";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { _readOnlyFileSystemTest } from "../src/boundary/read-only-fs.ts";
+import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import { standaloneAdvisorExecutor } from "./support/executor.ts";
+import { nodeChildProcess, nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 
-const createAdvisorTools = (cwd: string) =>
-  standaloneAdvisorExecutor.run(createAdvisorToolsEffect(cwd, standaloneAdvisorExecutor));
+const { link, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } = nodeFsPromises;
+const { join, win32 } = nodePath;
 
 const directories: string[] = [];
 
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "pi-advisor-tools-"));
-  directories.push(root);
-  await mkdir(join(root, "src"));
-  await writeFile(join(root, "src", "a.ts"), "export const answer = 42;\nsecond line\n");
-  await writeFile(join(root, "README.md"), "answer documentation\n");
-  return root;
-}
+const fixture = () =>
+  Effect.promise(() =>
+    mkdtemp(join(tmpdir(), "pi-advisor-tools-")).then((root) => {
+      directories.push(root);
+      return mkdir(join(root, "src"))
+        .then(() =>
+          writeFile(join(root, "src", "a.ts"), "export const answer = 42;\nsecond line\n"),
+        )
+        .then(() => writeFile(join(root, "README.md"), "answer documentation\n"))
+        .then(() => root);
+    }),
+  );
 
-async function execute<ParamsInput>(root: string, name: string, params: ParamsInput) {
-  const tool = (await createAdvisorTools(root)).find((candidate) => candidate.name === name);
-  if (!tool) throw new Error(`missing ${name}`);
+const tempDir = (prefix: string) =>
+  Effect.promise(() =>
+    mkdtemp(join(tmpdir(), prefix)).then((directory) => {
+      directories.push(directory);
+      return directory;
+    }),
+  );
+
+const toolsFor = (root: string) =>
+  createAdvisorToolsEffect(root, standaloneAdvisorExecutor).pipe(
+    provideBuiltLayer(advisorPlatformLayer),
+  );
+
+const executePromise = <ParamsInput>(
+  tools: Effect.Success<ReturnType<typeof toolsFor>>,
+  name: string,
+  params: ParamsInput,
+) => {
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (!tool) return Promise.reject(new Error(`missing ${name}`));
   // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  return await tool.execute("call", params as never, undefined, undefined, {} as never);
-}
+  return tool.execute("call", params as never, undefined, undefined, {} as never);
+};
 
-function resultText(result: Awaited<ReturnType<typeof execute>>): string {
+const execute = <ParamsInput>(root: string, name: string, params: ParamsInput) =>
+  toolsFor(root).pipe(
+    Effect.flatMap((tools) => Effect.promise(() => executePromise(tools, name, params))),
+  );
+
+const executeRejects = <ParamsInput>(
+  root: string,
+  name: string,
+  params: ParamsInput,
+  matcher?: RegExp | typeof AdvisorToolSafetyError,
+) =>
+  toolsFor(root).pipe(
+    Effect.flatMap((tools) =>
+      Effect.promise(() =>
+        matcher === undefined
+          ? expect(executePromise(tools, name, params)).rejects.toThrow()
+          : expect(executePromise(tools, name, params)).rejects.toThrow(matcher),
+      ),
+    ),
+  );
+
+function resultText(result: Awaited<ReturnType<typeof executePromise>>): string {
   const content = result.content[0];
   return content?.type === "text" ? content.text : "";
 }
 
-async function digest(root: string): Promise<string> {
-  const hash = createHash("sha256");
-  for (const path of ["README.md", "src/a.ts"]) hash.update(await readFile(join(root, path)));
-  return hash.digest("hex");
-}
+const digest = (root: string) =>
+  Effect.promise(() => {
+    const hash = createHash("sha256");
+    return ["README.md", "src/a.ts"]
+      .reduce(
+        (chain, path) =>
+          chain.then(() => readFile(join(root, path))).then((bytes) => void hash.update(bytes)),
+        Promise.resolve(),
+      )
+      .then(() => hash.digest("hex"));
+  });
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
-  await Promise.all(
+  return Promise.all(
     directories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
-  );
+  ).then(() => undefined);
 });
 
 describe("package-owned Advisor tools", () => {
-  test("uses platform-relative containment for Windows paths", () => {
-    expect(
-      _readOnlyFileSystemTest.isContainedPathWith(
-        win32,
-        "C:\\project",
-        "C:\\project\\src\\file.ts",
-      ),
-    ).toBe(true);
-    expect(
-      _readOnlyFileSystemTest.isContainedPathWith(
-        win32,
-        "C:\\project",
-        "C:\\project-sibling\\secret.txt",
-      ),
-    ).toBe(false);
-  });
+  it.effect("uses platform-relative containment for Windows paths", () =>
+    Effect.sync(() => {
+      expect(
+        _readOnlyFileSystemTest.isContainedPathWith(
+          win32,
+          "C:\\project",
+          "C:\\project\\src\\file.ts",
+        ),
+      ).toBe(true);
+      expect(
+        _readOnlyFileSystemTest.isContainedPathWith(
+          win32,
+          "C:\\project",
+          "C:\\project-sibling\\secret.txt",
+        ),
+      ).toBe(false);
+    }),
+  );
 
-  test("filters outside-only names after a directory swap and restore", async () => {
-    const root = await fixture();
-    const scan = join(root, "scan");
-    const outside = await mkdtemp(join(tmpdir(), "pi-advisor-directory-swap-"));
-    directories.push(outside);
-    await mkdir(scan);
-    await writeFile(join(scan, "inside.txt"), "inside");
-    await writeFile(join(outside, "outside-only-secret.txt"), "outside");
-    const saved = `${scan}-saved`;
-    _readOnlyFileSystemTest.setDirectoryHooks({
-      beforeOpen: async (path) => {
-        await rename(path, saved);
-        await symlink(outside, path, "dir");
-      },
-      afterRead: async (path) => {
-        await rm(path);
-        await rename(saved, path);
-      },
-    });
-    try {
-      const result = await execute(root, "ls", { path: "scan" });
-      expect(resultText(result)).not.toContain("outside-only-secret.txt");
-    } finally {
-      _readOnlyFileSystemTest.setDirectoryHooks();
-    }
-  });
+  it.effect("filters outside-only names after a directory swap and restore", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const scan = join(root, "scan");
+      const outside = yield* tempDir("pi-advisor-directory-swap-");
+      yield* Effect.promise(() =>
+        mkdir(scan)
+          .then(() => writeFile(join(scan, "inside.txt"), "inside"))
+          .then(() => writeFile(join(outside, "outside-only-secret.txt"), "outside")),
+      );
+      const saved = `${scan}-saved`;
+      _readOnlyFileSystemTest.setDirectoryHooks({
+        beforeOpen: (path) => rename(path, saved).then(() => symlink(outside, path, "dir")),
+        afterRead: (path) => rm(path).then(() => rename(saved, path)),
+      });
+      yield* Effect.ensuring(
+        Effect.gen(function* () {
+          const result = yield* execute(root, "ls", { path: "scan" });
+          expect(resultText(result)).not.toContain("outside-only-secret.txt");
+        }),
+        Effect.sync(() => _readOnlyFileSystemTest.setDirectoryHooks()),
+      );
+    }),
+  );
 
-  test("rejects a pinned project root replaced by an outside symlink", async () => {
-    const root = await fixture();
-    const tools = await createAdvisorTools(root);
-    const moved = `${root}-moved`;
-    const outside = await mkdtemp(join(tmpdir(), "pi-advisor-outside-"));
-    directories.push(moved, outside);
-    await writeFile(join(outside, "secret.txt"), "outside secret");
-    await rename(root, moved);
-    await symlink(outside, root, "dir");
-    const read = tools.find((tool) => tool.name === "read");
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await expect(
-      read?.execute("call", { path: "secret.txt" }, undefined, undefined, {} as never),
-    ).rejects.toThrow(/root|exist|escape|project/i);
-  });
+  it.effect("rejects a pinned project root replaced by an outside symlink", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const tools = yield* toolsFor(root);
+      const moved = `${root}-moved`;
+      const outside = yield* tempDir("pi-advisor-outside-");
+      directories.push(moved);
+      yield* Effect.promise(() =>
+        writeFile(join(outside, "secret.txt"), "outside secret")
+          .then(() => rename(root, moved))
+          .then(() => symlink(outside, root, "dir")),
+      );
+      const read = tools.find((tool) => tool.name === "read");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* Effect.promise(() =>
+        expect(
+          read?.execute("call", { path: "secret.txt" }, undefined, undefined, {} as never),
+        ).rejects.toThrow(/root|exist|escape|project/i),
+      );
+    }),
+  );
 
-  test("treats an in-root hard-link directory entry as an in-root file", async () => {
-    const root = await fixture();
-    const outside = await mkdtemp(join(tmpdir(), "pi-advisor-hardlink-"));
-    directories.push(outside);
-    const source = join(outside, "source.txt");
-    await writeFile(source, "hard-link content");
-    await link(source, join(root, "linked.txt"));
-    expect(resultText(await execute(root, "read", { path: "linked.txt" }))).toContain(
-      "hard-link content",
-    );
-  });
+  it.effect("treats an in-root hard-link directory entry as an in-root file", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const outside = yield* tempDir("pi-advisor-hardlink-");
+      const source = join(outside, "source.txt");
+      yield* Effect.promise(() =>
+        writeFile(source, "hard-link content").then(() => link(source, join(root, "linked.txt"))),
+      );
+      expect(resultText(yield* execute(root, "read", { path: "linked.txt" }))).toContain(
+        "hard-link content",
+      );
+    }),
+  );
 
-  test("inspects a project through all four tools without mutation", async () => {
-    const root = await fixture();
-    const before = await digest(root);
-    expect(resultText(await execute(root, "read", { path: "src/a.ts" }))).toContain("answer = 42");
-    expect(resultText(await execute(root, "grep", { path: ".", pattern: "answer" }))).toContain(
-      "src/a.ts:1",
-    );
-    expect(resultText(await execute(root, "find", { path: ".", pattern: "**" }))).toContain(
-      "README.md",
-    );
-    expect(resultText(await execute(root, "ls", { path: "." }))).toContain("src/");
-    expect(await digest(root)).toBe(before);
-  });
+  it.effect("inspects a project through all four tools without mutation", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const before = yield* digest(root);
+      expect(resultText(yield* execute(root, "read", { path: "src/a.ts" }))).toContain(
+        "answer = 42",
+      );
+      expect(resultText(yield* execute(root, "grep", { path: ".", pattern: "answer" }))).toContain(
+        "src/a.ts:1",
+      );
+      expect(resultText(yield* execute(root, "find", { path: ".", pattern: "**" }))).toContain(
+        "README.md",
+      );
+      expect(resultText(yield* execute(root, "ls", { path: "." }))).toContain("src/");
+      expect(yield* digest(root)).toBe(before);
+    }),
+  );
 
-  test("rejects traversal, outside absolute paths, and escaping symlinks", async () => {
-    const root = await fixture();
-    const outside = await mkdtemp(join(tmpdir(), "pi-advisor-outside-"));
-    directories.push(outside);
-    await writeFile(join(outside, "secret"), "secret");
-    await symlink(join(outside, "secret"), join(root, "escape"));
+  it.effect("rejects traversal, outside absolute paths, and escaping symlinks", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const outside = yield* tempDir("pi-advisor-outside-");
+      yield* Effect.promise(() =>
+        writeFile(join(outside, "secret"), "secret").then(() =>
+          symlink(join(outside, "secret"), join(root, "escape")),
+        ),
+      );
+      for (const path of ["../outside", join(outside, "secret"), "escape"]) {
+        yield* executeRejects(root, "read", { path }, AdvisorToolSafetyError);
+      }
+    }),
+  );
 
-    for (const path of ["../outside", join(outside, "secret"), "escape"]) {
-      await expect(execute(root, "read", { path })).rejects.toThrow(AdvisorToolSafetyError);
-    }
-  });
+  it.effect("treats grep patterns literally and cannot execute catastrophic JavaScript regex", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      yield* Effect.promise(() =>
+        writeFile(join(root, "redos.txt"), `${"a".repeat(100_000)}!\n(a+)+$\n`),
+      );
+      const started = performance.now();
+      const result = yield* execute(root, "grep", { path: ".", pattern: "(a+)+$" });
+      expect(resultText(result)).toContain("redos.txt:2");
+      expect(performance.now() - started).toBeLessThan(1_000);
+    }),
+  );
 
-  test("treats grep patterns literally and cannot execute catastrophic JavaScript regex", async () => {
-    const root = await fixture();
-    await writeFile(join(root, "redos.txt"), `${"a".repeat(100_000)}!\n(a+)+$\n`);
-    const started = performance.now();
-    const result = await execute(root, "grep", { path: ".", pattern: "(a+)+$" });
-    expect(resultText(result)).toContain("redos.txt:2");
-    expect(performance.now() - started).toBeLessThan(1_000);
-  });
+  it.effect("matches **/*.ts at both project root and nested paths", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      yield* Effect.promise(() => writeFile(join(root, "root.ts"), "root\n"));
+      const text = resultText(yield* execute(root, "find", { path: ".", pattern: "**/*.ts" }));
+      expect(text).toContain("root.ts");
+      expect(text).toContain("src/a.ts");
+      expect(text).not.toContain("README.md");
+    }),
+  );
 
-  test("matches **/*.ts at both project root and nested paths", async () => {
-    const root = await fixture();
-    await writeFile(join(root, "root.ts"), "root\n");
-    const text = resultText(await execute(root, "find", { path: ".", pattern: "**/*.ts" }));
-    expect(text).toContain("root.ts");
-    expect(text).toContain("src/a.ts");
-    expect(text).not.toContain("README.md");
-  });
+  it.effect("rejects oversized path and grep pattern strings at execution boundaries", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const longPath = "a".repeat(ADVISOR_TOOL_LIMITS.maxPathChars + 1);
+      yield* executeRejects(root, "read", { path: longPath }, AdvisorToolSafetyError);
+      yield* executeRejects(
+        root,
+        "find",
+        { path: longPath, pattern: "**" },
+        AdvisorToolSafetyError,
+      );
+      yield* executeRejects(
+        root,
+        "grep",
+        { path: longPath, pattern: "answer" },
+        AdvisorToolSafetyError,
+      );
+      yield* executeRejects(root, "grep", { path: ".", pattern: longPath }, AdvisorToolSafetyError);
+    }),
+  );
 
-  test("rejects oversized path and grep pattern strings at execution boundaries", async () => {
-    const root = await fixture();
-    const longPath = "a".repeat(ADVISOR_TOOL_LIMITS.maxPathChars + 1);
-    await expect(execute(root, "read", { path: longPath })).rejects.toThrow(AdvisorToolSafetyError);
-    await expect(execute(root, "find", { path: longPath, pattern: "**" })).rejects.toThrow(
-      AdvisorToolSafetyError,
-    );
-    await expect(execute(root, "grep", { path: longPath, pattern: "answer" })).rejects.toThrow(
-      AdvisorToolSafetyError,
-    );
-    await expect(execute(root, "grep", { path: ".", pattern: longPath })).rejects.toThrow(
-      AdvisorToolSafetyError,
-    );
-  });
+  it.effect("rejects oversized find patterns without regular-expression evaluation", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      yield* executeRejects(
+        root,
+        "find",
+        { path: ".", pattern: "*".repeat(ADVISOR_TOOL_LIMITS.maxPatternChars + 1) },
+        AdvisorToolSafetyError,
+      );
+    }),
+  );
 
-  test("rejects oversized find patterns without regular-expression evaluation", async () => {
-    const root = await fixture();
-    await expect(
-      execute(root, "find", {
-        path: ".",
-        pattern: "*".repeat(ADVISOR_TOOL_LIMITS.maxPatternChars + 1),
-      }),
-    ).rejects.toThrow(AdvisorToolSafetyError);
-  });
+  it.effect("glob matching stays bounded for adversarial wildcard patterns", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const pattern = `${"*a".repeat(ADVISOR_TOOL_LIMITS.maxPatternChars / 2 - 3)}*.ts`;
+      const started = performance.now();
+      yield* execute(root, "find", { path: ".", pattern });
+      expect(performance.now() - started).toBeLessThan(1_000);
+    }),
+  );
 
-  test("glob matching stays bounded for adversarial wildcard patterns", async () => {
-    const root = await fixture();
-    const pattern = `${"*a".repeat(ADVISOR_TOOL_LIMITS.maxPatternChars / 2 - 3)}*.ts`;
-    const started = performance.now();
-    await execute(root, "find", { path: ".", pattern });
-    expect(performance.now() - started).toBeLessThan(1_000);
-  });
+  it.effect("does not follow symlinked directories during recursive grep or find", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const outside = yield* tempDir("pi-advisor-outside-dir-");
+      yield* Effect.promise(() =>
+        writeFile(join(outside, "credential.txt"), "outside-only-secret").then(() =>
+          symlink(outside, join(root, "linked-directory")),
+        ),
+      );
+      expect(resultText(yield* execute(root, "find", { path: ".", pattern: "**" }))).not.toContain(
+        "credential.txt",
+      );
+      expect(
+        resultText(yield* execute(root, "grep", { path: ".", pattern: "outside-only-secret" })),
+      ).not.toContain("outside-only-secret");
+    }),
+  );
 
-  test("does not follow symlinked directories during recursive grep or find", async () => {
-    const root = await fixture();
-    const outside = await mkdtemp(join(tmpdir(), "pi-advisor-outside-dir-"));
-    directories.push(outside);
-    await writeFile(join(outside, "credential.txt"), "outside-only-secret");
-    await symlink(outside, join(root, "linked-directory"));
-    expect(resultText(await execute(root, "find", { path: ".", pattern: "**" }))).not.toContain(
-      "credential.txt",
-    );
-    expect(
-      resultText(await execute(root, "grep", { path: ".", pattern: "outside-only-secret" })),
-    ).not.toContain("outside-only-secret");
-  });
+  it.effect("glob walks apply global visited-directory and entry caps", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      for (let index = 0; index < ADVISOR_TOOL_LIMITS.maxVisitedDirectories + 5; index += 1) {
+        yield* Effect.promise(() =>
+          mkdir(join(root, `directory-${index}`)).then(() =>
+            writeFile(join(root, `directory-${index}`, "value.txt"), "bounded\n"),
+          ),
+        );
+      }
+      const result = yield* execute(root, "find", { path: ".", pattern: "**" });
+      expect(resultText(result)).toContain("output truncated");
+    }),
+  );
 
-  test("glob walks apply global visited-directory and entry caps", async () => {
-    const root = await fixture();
-    for (let index = 0; index < ADVISOR_TOOL_LIMITS.maxVisitedDirectories + 5; index += 1) {
-      await mkdir(join(root, `directory-${index}`));
-      await writeFile(join(root, `directory-${index}`, "value.txt"), "bounded\n");
-    }
-    const result = await execute(root, "find", { path: ".", pattern: "**" });
-    expect(resultText(result)).toContain("output truncated");
-  });
+  it.effect("rejects an already-aborted tool execution without opening content", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      const tools = yield* toolsFor(root);
+      const read = tools.find((tool) => tool.name === "read");
+      const controller = new AbortController();
+      controller.abort();
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* Effect.promise(() =>
+        expect(
+          read?.execute("call", { path: "README.md" }, controller.signal, undefined, {} as never),
+        ).rejects.toThrow(),
+      );
+    }),
+  );
 
-  test("rejects an already-aborted tool execution without opening content", async () => {
-    const root = await fixture();
-    const read = (await createAdvisorTools(root)).find((tool) => tool.name === "read");
-    const controller = new AbortController();
-    controller.abort();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    await expect(
-      read?.execute("call", { path: "README.md" }, controller.signal, undefined, {} as never),
-    ).rejects.toThrow();
-  });
+  it.effect("rejects FIFO reads without blocking", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return;
+      const root = yield* fixture();
+      const fifo = join(root, "pipe");
+      const created = nodeChildProcess.spawnSync("mkfifo", [fifo]);
+      expect(created.status).toBe(0);
+      const started = performance.now();
+      yield* executeRejects(root, "read", { path: "pipe" });
+      expect(performance.now() - started).toBeLessThan(1_000);
+    }),
+  );
 
-  test.runIf(process.platform !== "win32")("rejects FIFO reads without blocking", async () => {
-    const root = await fixture();
-    const fifo = join(root, "pipe");
-    const created = childProcess.spawnSync("mkfifo", [fifo]);
-    expect(created.status).toBe(0);
-    const started = performance.now();
-    await expect(execute(root, "read", { path: "pipe" })).rejects.toThrow();
-    expect(performance.now() - started).toBeLessThan(1_000);
-  });
+  it.effect("bounds bytes and marks oversized evidence as truncated", () =>
+    Effect.gen(function* () {
+      const root = yield* fixture();
+      yield* Effect.promise(() =>
+        writeFile(join(root, "large.txt"), "x".repeat(ADVISOR_TOOL_LIMITS.maxBytesPerFile + 50)),
+      );
+      const result = yield* execute(root, "read", { path: "large.txt" });
+      expect(resultText(result).length).toBeLessThan(
+        ADVISOR_TOOL_LIMITS.maxBytesPerFile + ADVISOR_TOOL_LIMITS.maxLines * 10,
+      );
+      expect(resultText(result)).toContain("output truncated");
+    }),
+  );
 
-  test("bounds bytes and marks oversized evidence as truncated", async () => {
-    const root = await fixture();
-    await writeFile(join(root, "large.txt"), "x".repeat(ADVISOR_TOOL_LIMITS.maxBytesPerFile + 50));
-    const result = await execute(root, "read", { path: "large.txt" });
-    expect(resultText(result).length).toBeLessThan(
-      ADVISOR_TOOL_LIMITS.maxBytesPerFile + ADVISOR_TOOL_LIMITS.maxLines * 10,
-    );
-    expect(resultText(result)).toContain("output truncated");
-  });
+  it.effect("does not invoke guarded Node process-launch APIs during any tool operation", () =>
+    Effect.gen(function* () {
+      const guards = [
+        vi.spyOn(nodeChildProcess, "spawn"),
+        vi.spyOn(nodeChildProcess, "spawnSync"),
+        vi.spyOn(nodeChildProcess, "exec"),
+        vi.spyOn(nodeChildProcess, "execFile"),
+        vi.spyOn(nodeChildProcess, "fork"),
+      ];
+      const root = yield* fixture();
+      yield* execute(root, "read", { path: "README.md" });
+      yield* execute(root, "grep", { path: ".", pattern: "answer" });
+      yield* execute(root, "find", { path: ".", pattern: "**" });
+      yield* execute(root, "ls", { path: "." });
+      for (const guard of guards) expect(guard).not.toHaveBeenCalled();
+    }),
+  );
 
-  test("does not invoke guarded Node process-launch APIs during any tool operation", async () => {
-    const guards = [
-      vi.spyOn(childProcess, "spawn"),
-      vi.spyOn(childProcess, "spawnSync"),
-      vi.spyOn(childProcess, "exec"),
-      vi.spyOn(childProcess, "execFile"),
-      vi.spyOn(childProcess, "fork"),
-    ];
-    const root = await fixture();
-    await execute(root, "read", { path: "README.md" });
-    await execute(root, "grep", { path: ".", pattern: "answer" });
-    await execute(root, "find", { path: ".", pattern: "**" });
-    await execute(root, "ls", { path: "." });
-    for (const guard of guards) expect(guard).not.toHaveBeenCalled();
-  });
-
-  test("contains no process or mutation implementation path", async () => {
-    const source = await readFile(new URL("../src/runtime/tools.ts", import.meta.url), "utf8");
-    expect(source).not.toMatch(
-      /node:child_process|\bspawn\s*\(|\bexec(File)?\s*\(|pi\.exec|writeFile|rename|unlink/,
-    );
-    expect(source).toContain("O_NOFOLLOW");
-    expect(source).toContain("isSymbolicLink");
-  });
+  it.effect("contains no process or mutation implementation path", () =>
+    Effect.gen(function* () {
+      const source = yield* Effect.promise(() =>
+        readFile(new URL("../src/runtime/tools.ts", import.meta.url), "utf8"),
+      );
+      expect(source).not.toMatch(
+        /node:child_process|\bspawn\s*\(|\bexec(File)?\s*\(|pi\.exec|writeFile|rename|unlink/,
+      );
+      expect(source).toContain("O_NOFOLLOW");
+      expect(source).toContain("isSymbolicLink");
+    }),
+  );
 });

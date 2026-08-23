@@ -1,5 +1,4 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
-// @effect-diagnostics effect/asyncFunction:off
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -53,20 +52,20 @@ export interface FleetManagerActions {
   ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
 }
 
-async function openFleetManager(
+function openFleetManager(
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
 ): Promise<void> {
   if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
     if (ctx.hasUI) ctx.ui.notify("/subagents requires interactive TUI mode.", "warning");
-    return;
+    return Promise.resolve();
   }
   if (!actions.isAvailable()) {
     ctx.ui.notify("Subagents are not active. Run /reload, then reopen /subagents.", "warning");
-    return;
+    return Promise.resolve();
   }
-  await ctx.ui.custom<void>(
+  return ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
       let unsubscribe = () => {};
       const manager = new SubagentFleetComponent({
@@ -179,23 +178,25 @@ const fastModeAvailable = (
   return supportsSubagentFastMode(candidate.runtime, candidate.model);
 };
 
-async function requestProfileReload(
+function requestProfileReload(
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
 ): Promise<boolean> {
   const active = bridge.get().runs.some((run) => isActiveRunState(run.state));
-  const reload = await ctx.ui.confirm(
-    "Reload profile settings now?",
-    active
-      ? "Active subagent runs exist. Reloading stops all session-scoped runs. Continue?"
-      : "Reload now to apply the saved profile routes?",
-  );
-  if (!reload) return false;
-  await ctx.reload();
-  return true;
+  return ctx.ui
+    .confirm(
+      "Reload profile settings now?",
+      active
+        ? "Active subagent runs exist. Reloading stops all session-scoped runs. Continue?"
+        : "Reload now to apply the saved profile routes?",
+    )
+    .then((reload) => {
+      if (!reload) return false;
+      return Promise.resolve(ctx.reload()).then(() => true);
+    });
 }
 
-async function openProfileSettings(
+function openProfileSettings(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
@@ -208,7 +209,7 @@ async function openProfileSettings(
         "/subagents profiles requires interactive TUI mode; edit pi-subagents.json and run /reload.",
         "warning",
       );
-    return;
+    return Promise.resolve();
   }
 
   const projectTrusted = isProjectTrusted(ctx);
@@ -219,277 +220,286 @@ async function openProfileSettings(
       "Project profile settings require a trusted project; opened Global scope.",
       "warning",
     );
-  let inspection: ProfileSettingsInspection;
-  try {
-    inspection = await actions.inspectProfiles(projectTrusted);
-  } catch (error) {
-    ctx.ui.notify(
-      error instanceof Error ? error.message : "Could not inspect profile settings.",
-      "error",
-    );
-    return;
-  }
+  return actions.inspectProfiles(projectTrusted).then(
+    (initialInspection) => {
+      let inspection: ProfileSettingsInspection = initialInspection;
 
-  let availableModels = ctx.modelRegistry.getAvailable();
-  let parentCatalogModel = ctx.model
-    ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
-    : undefined;
-  let requestWorkspaceRender: (() => void) | undefined;
-  let modelRefreshNotified = false;
-  const modelRefreshController = new AbortController();
-  const notifyModelRefreshFailure = (): void => {
-    if (modelRefreshNotified || modelRefreshController.signal.aborted) return;
-    modelRefreshNotified = true;
-    ctx.ui.notify(
-      "Could not refresh Pi model catalogs; showing the last authenticated snapshot.",
-      "warning",
-    );
-  };
-  const refreshModels = async (): Promise<void> => {
-    try {
-      await ctx.modelRegistry.refresh({ signal: modelRefreshController.signal });
-      if (modelRefreshController.signal.aborted) return;
-      if (ctx.modelRegistry.getError()) {
-        notifyModelRefreshFailure();
-        return;
-      }
-      availableModels = ctx.modelRegistry.getAvailable();
-      parentCatalogModel = ctx.model
+      let availableModels = ctx.modelRegistry.getAvailable();
+      let parentCatalogModel = ctx.model
         ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
         : undefined;
-      requestWorkspaceRender?.();
-    } catch {
-      notifyModelRefreshFailure();
-    }
-  };
-  void refreshModels();
-  // Catalog I/O must never hold the settings overlay closed. Immediately resolved refreshes still
-  // update the initial snapshot; slower providers finish while the workspace is already visible.
-  await Promise.resolve();
-  let extensionProviders: ReadonlySet<string> | undefined;
-  try {
-    extensionProviders = new Set(ctx.modelRegistry.getRegisteredProviderIds());
-  } catch {
-    ctx.ui.notify(
-      "Could not inspect Pi provider provenance; Herdr Pi model choices are unavailable.",
-      "warning",
-    );
-  }
-  let parentEffort: SubagentEffort = "high";
-  if (ctx.model) {
-    try {
-      parentEffort = decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
-    } catch {
-      // Host callback failures use the same conservative fallback as launch resolution.
-    }
-  }
-  const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-  const herdrModelSelectors = createProfileModelChoices({
-    models: extensionProviders
-      ? availableModels.filter((model) => !extensionProviders.has(model.provider))
-      : [],
-    allowParent: false,
-  }).flatMap((choice) => (choice.choice.kind === "model" ? [choice.choice.selector] : []));
-  const preferredPiModel =
-    parentModel && herdrModelSelectors.includes(parentModel) ? parentModel : herdrModelSelectors[0];
-  const refreshInspection = async (
-    conflictMessage?: string,
-  ): Promise<ProfileWorkspaceSaveResult> => {
-    try {
-      inspection = await actions.inspectProfiles(isProjectTrusted(ctx));
-      return (() => {
-        const baseResult = { inspection };
-        const withConflictMessage = conflictMessage
-          ? { ...baseResult, conflictMessage }
-          : baseResult;
-        return withConflictMessage;
-      })();
-    } catch {
-      return {
-        refreshError:
-          "Profile settings changed, but the workspace could not refresh. Reopen /subagents profiles before editing again.",
-      };
-    }
-  };
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const saveDraft = async (
-    scope: ProfileSettingsScope,
-    profile: ProfileId,
-    draft: ProfileRouteDraft,
-  ): Promise<ProfileWorkspaceSaveResult> => {
-    const declaration = declaredRouteForDraft(draft);
-    if (!declaration.valid) throw new Error(declaration.error);
-    if (scope === "session") {
-      try {
-        await actions.patchSessionProfile(
-          (() => {
-            const baseResult = { profile };
-            const withRoute =
-              declaration.route === undefined
-                ? baseResult
-                : { ...baseResult, route: normalizeDeclaredProfileRoute(declaration.route) };
-            const withExpectedRevision = {
-              ...withRoute,
-              expectedRevision: inspection.session.revision,
-            };
-            return withExpectedRevision;
-          })(),
+      let requestWorkspaceRender: (() => void) | undefined;
+      let modelRefreshNotified = false;
+      const modelRefreshController = new AbortController();
+      const notifyModelRefreshFailure = (): void => {
+        if (modelRefreshNotified || modelRefreshController.signal.aborted) return;
+        modelRefreshNotified = true;
+        ctx.ui.notify(
+          "Could not refresh Pi model catalogs; showing the last authenticated snapshot.",
+          "warning",
         );
-      } catch (error) {
-        if (
+      };
+      const refreshModels = (): Promise<void> =>
+        Promise.resolve()
+          .then(() => ctx.modelRegistry.refresh({ signal: modelRefreshController.signal }))
+          .then(() => {
+            if (modelRefreshController.signal.aborted) return;
+            if (ctx.modelRegistry.getError()) {
+              notifyModelRefreshFailure();
+              return;
+            }
+            availableModels = ctx.modelRegistry.getAvailable();
+            parentCatalogModel = ctx.model
+              ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
+              : undefined;
+            requestWorkspaceRender?.();
+          })
+          .catch(() => notifyModelRefreshFailure());
+      void refreshModels();
+      // Catalog I/O must never hold the settings overlay closed. Immediately resolved refreshes still
+      // update the initial snapshot; slower providers finish while the workspace is already visible.
+      return Promise.resolve().then(() => {
+        let extensionProviders: ReadonlySet<string> | undefined;
+        try {
+          extensionProviders = new Set(ctx.modelRegistry.getRegisteredProviderIds());
+        } catch {
+          ctx.ui.notify(
+            "Could not inspect Pi provider provenance; Herdr Pi model choices are unavailable.",
+            "warning",
+          );
+        }
+        let parentEffort: SubagentEffort = "high";
+        if (ctx.model) {
+          try {
+            parentEffort = decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
+          } catch {
+            // Host callback failures use the same conservative fallback as launch resolution.
+          }
+        }
+        const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+        const herdrModelSelectors = createProfileModelChoices({
+          models: extensionProviders
+            ? availableModels.filter((model) => !extensionProviders.has(model.provider))
+            : [],
+          allowParent: false,
+        }).flatMap((choice) => (choice.choice.kind === "model" ? [choice.choice.selector] : []));
+        const preferredPiModel =
+          parentModel && herdrModelSelectors.includes(parentModel)
+            ? parentModel
+            : herdrModelSelectors[0];
+        const refreshInspection = (conflictMessage?: string): Promise<ProfileWorkspaceSaveResult> =>
+          Promise.resolve()
+            .then(() => actions.inspectProfiles(isProjectTrusted(ctx)))
+            .then(
+              (nextInspection): ProfileWorkspaceSaveResult => {
+                inspection = nextInspection;
+                const baseResult = { inspection };
+                const withConflictMessage = conflictMessage
+                  ? { ...baseResult, conflictMessage }
+                  : baseResult;
+                return withConflictMessage;
+              },
+              (): ProfileWorkspaceSaveResult => ({
+                refreshError:
+                  "Profile settings changed, but the workspace could not refresh. Reopen /subagents profiles before editing again.",
+              }),
+            );
+        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+        const isSessionProfileConflict = <ErrorInput>(error: ErrorInput): boolean =>
           error instanceof SessionProfileConflictError ||
           (hasObjectRuntimeType(error) &&
             error !== null &&
-            (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError")
-        )
-          return refreshInspection(
-            "Session profile settings changed concurrently; refreshed the active routes. Retry your edit.",
+            (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError");
+        const saveDraft = (
+          scope: ProfileSettingsScope,
+          profile: ProfileId,
+          draft: ProfileRouteDraft,
+        ): Promise<ProfileWorkspaceSaveResult> => {
+          const declaration = declaredRouteForDraft(draft);
+          if (!declaration.valid) return Promise.reject(new Error(declaration.error));
+          if (scope === "session") {
+            return actions
+              .patchSessionProfile(
+                (() => {
+                  const baseResult = { profile };
+                  const withRoute =
+                    declaration.route === undefined
+                      ? baseResult
+                      : { ...baseResult, route: normalizeDeclaredProfileRoute(declaration.route) };
+                  const withExpectedRevision = {
+                    ...withRoute,
+                    expectedRevision: inspection.session.revision,
+                  };
+                  return withExpectedRevision;
+                })(),
+              )
+              .then(
+                () => refreshInspection(),
+                (error) => {
+                  if (isSessionProfileConflict(error))
+                    return refreshInspection(
+                      "Session profile settings changed concurrently; refreshed the active routes. Retry your edit.",
+                    );
+                  throw error;
+                },
+              );
+          }
+          const expectedDocument =
+            scope === "global" ? inspection.globalDocument : inspection.projectDocument;
+          return actions
+            .patchProfile(
+              (() => {
+                const baseResult = { scope, profile };
+                const withRoute =
+                  declaration.route === undefined
+                    ? baseResult
+                    : { ...baseResult, route: declaration.route };
+                const withExpectedExists = {
+                  ...withRoute,
+                  expectedExists: expectedDocument !== undefined,
+                };
+                const withExpectedDocument =
+                  expectedDocument === undefined
+                    ? withExpectedExists
+                    : { ...withExpectedExists, expectedDocument };
+                const withProjectTrusted = {
+                  ...withExpectedDocument,
+                  projectTrusted: isProjectTrusted(ctx),
+                };
+                return withProjectTrusted;
+              })(),
+            )
+            .then(() => refreshInspection());
+        };
+        const clearSessionOverrides = (): Promise<ProfileWorkspaceSaveResult> =>
+          actions.clearSessionProfiles(inspection.session.revision).then(
+            () => refreshInspection(),
+            (error) => {
+              if (isSessionProfileConflict(error))
+                return refreshInspection(
+                  "Session profile settings changed concurrently; refreshed the active routes. Retry clearing them.",
+                );
+              throw error;
+            },
           );
-        throw error;
-      }
-    } else {
-      const expectedDocument =
-        scope === "global" ? inspection.globalDocument : inspection.projectDocument;
-      await actions.patchProfile(
-        (() => {
-          const baseResult = { scope, profile };
-          const withRoute =
-            declaration.route === undefined
-              ? baseResult
-              : { ...baseResult, route: declaration.route };
-          const withExpectedExists = {
-            ...withRoute,
-            expectedExists: expectedDocument !== undefined,
-          };
-          const withExpectedDocument =
-            expectedDocument === undefined
-              ? withExpectedExists
-              : { ...withExpectedExists, expectedDocument };
-          const withProjectTrusted = {
-            ...withExpectedDocument,
-            projectTrusted: isProjectTrusted(ctx),
-          };
-          return withProjectTrusted;
-        })(),
-      );
-    }
-    return refreshInspection();
-  };
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const clearSessionOverrides = async (): Promise<ProfileWorkspaceSaveResult> => {
-    try {
-      await actions.clearSessionProfiles(inspection.session.revision);
-      return refreshInspection();
-    } catch (error) {
-      if (
-        error instanceof SessionProfileConflictError ||
-        (hasObjectRuntimeType(error) &&
-          error !== null &&
-          (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError")
-      )
-        return refreshInspection(
-          "Session profile settings changed concurrently; refreshed the active routes. Retry clearing them.",
-        );
-      throw error;
-    }
-  };
 
-  try {
-    const reloadRequired = await ctx.ui.custom<boolean>(
-      (tui, theme, keybindings, done) => {
-        requestWorkspaceRender = () => tui.requestRender();
-        return new ProfileWorkspaceComponent(
-          (() => {
-            const baseResult = {
-              theme,
-              inspection,
-              projectTrusted,
-              initialScope: selectedInitialScope,
-              parentEffort,
-            };
-            const withPiModel = preferredPiModel
-              ? { ...baseResult, piModel: preferredPiModel }
-              : baseResult;
-            const withParentModel = parentModel ? { ...withPiModel, parentModel } : withPiModel;
-            const withGetHeightAndAdditionalFields = {
-              ...withParentModel,
-              getHeight: () => tui.terminal.rows,
-              requestRender: () => tui.requestRender(),
-              matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
-                keybindings.matches(data, id),
-              keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
-                fullScreenKeybindingLabel(
-                  id,
-                  fallback,
-                  Predicate.isFunction(keybindings.getKeys)
-                    ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
-                    : undefined,
-                ),
-              close: done,
-              saveDraft,
-              clearSessionOverrides,
-              loadModelPicker: (
-                profile: ProfileId,
-                candidateIndex: number,
-                candidate: ProfileCandidate,
-                signal?: AbortSignal,
-              ) =>
-                loadCandidateModelPicker(
-                  ctx,
+        return Promise.resolve()
+          .then(() =>
+            ctx.ui.custom<boolean>(
+              (tui, theme, keybindings, done) => {
+                requestWorkspaceRender = () => tui.requestRender();
+                return new ProfileWorkspaceComponent(
                   (() => {
                     const baseResult = {
-                      profile,
-                      candidateIndex,
-                      candidate,
-                      listNativeModels: actions.listNativeModels,
-                      piModels: availableModels,
+                      theme,
+                      inspection,
+                      projectTrusted,
+                      initialScope: selectedInitialScope,
+                      parentEffort,
                     };
-                    const withPiParentModel = parentCatalogModel
-                      ? { ...baseResult, piParentModel: parentCatalogModel }
+                    const withPiModel = preferredPiModel
+                      ? { ...baseResult, piModel: preferredPiModel }
                       : baseResult;
-                    const withAdditionalFields = {
-                      ...withPiParentModel,
-                      ...(extensionProviders
-                        ? { registeredPiProviderIds: [...extensionProviders] }
-                        : { piProviderInspectionFailed: true }),
+                    const withParentModel = parentModel
+                      ? { ...withPiModel, parentModel }
+                      : withPiModel;
+                    const withGetHeightAndAdditionalFields = {
+                      ...withParentModel,
+                      getHeight: () => tui.terminal.rows,
+                      requestRender: () => tui.requestRender(),
+                      matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
+                        keybindings.matches(data, id),
+                      keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
+                        fullScreenKeybindingLabel(
+                          id,
+                          fallback,
+                          Predicate.isFunction(keybindings.getKeys)
+                            ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+                            : undefined,
+                        ),
+                      close: done,
+                      saveDraft,
+                      clearSessionOverrides,
+                      loadModelPicker: (
+                        profile: ProfileId,
+                        candidateIndex: number,
+                        candidate: ProfileCandidate,
+                        signal?: AbortSignal,
+                      ) =>
+                        loadCandidateModelPicker(
+                          ctx,
+                          (() => {
+                            const baseResult = {
+                              profile,
+                              candidateIndex,
+                              candidate,
+                              listNativeModels: actions.listNativeModels,
+                              piModels: availableModels,
+                            };
+                            const withPiParentModel = parentCatalogModel
+                              ? { ...baseResult, piParentModel: parentCatalogModel }
+                              : baseResult;
+                            const withAdditionalFields = {
+                              ...withPiParentModel,
+                              ...(extensionProviders
+                                ? { registeredPiProviderIds: [...extensionProviders] }
+                                : { piProviderInspectionFailed: true }),
+                            };
+                            const withSignal = signal
+                              ? { ...withAdditionalFields, signal }
+                              : withAdditionalFields;
+                            return withSignal;
+                          })(),
+                        ),
+                      supportedPiEfforts: (candidate: ProfileCandidate) =>
+                        supportedPiEfforts(
+                          candidate,
+                          availableModels,
+                          parentCatalogModel,
+                          extensionProviders,
+                        ),
+                      fastModeAvailable: (candidate: ProfileCandidate) =>
+                        fastModeAvailable(ctx, candidate, extensionProviders),
+                      reload: () => requestProfileReload(ctx, bridge),
                     };
-                    const withSignal = signal
-                      ? { ...withAdditionalFields, signal }
-                      : withAdditionalFields;
-                    return withSignal;
+                    return withGetHeightAndAdditionalFields;
                   })(),
-                ),
-              supportedPiEfforts: (candidate: ProfileCandidate) =>
-                supportedPiEfforts(
-                  candidate,
-                  availableModels,
-                  parentCatalogModel,
-                  extensionProviders,
-                ),
-              fastModeAvailable: (candidate: ProfileCandidate) =>
-                fastModeAvailable(ctx, candidate, extensionProviders),
-              reload: () => requestProfileReload(ctx, bridge),
-            };
-            return withGetHeightAndAdditionalFields;
-          })(),
-        );
-      },
-      { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
-    );
-    if (reloadRequired)
+                );
+              },
+              {
+                overlay: true,
+                overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+              },
+            ),
+          )
+          .then(
+            (reloadRequired) => {
+              if (reloadRequired)
+                ctx.ui.notify(
+                  "Profile changes are saved. Run /reload to apply them to new subagents.",
+                  "info",
+                );
+            },
+            () => {
+              ctx.ui.notify(
+                "Could not open Subagents profile settings. Run /reload and try again; inspect the Pi logs if the problem continues.",
+                "error",
+              );
+            },
+          )
+          .finally(() => {
+            requestWorkspaceRender = undefined;
+            modelRefreshController.abort();
+          });
+      });
+    },
+    (error) => {
       ctx.ui.notify(
-        "Profile changes are saved. Run /reload to apply them to new subagents.",
-        "info",
+        error instanceof Error ? error.message : "Could not inspect profile settings.",
+        "error",
       );
-  } catch {
-    ctx.ui.notify(
-      "Could not open Subagents profile settings. Run /reload and try again; inspect the Pi logs if the problem continues.",
-      "error",
-    );
-  } finally {
-    requestWorkspaceRender = undefined;
-    modelRefreshController.abort();
-  }
+    },
+  );
 }
 
 export function registerSubagentManagerCommand(

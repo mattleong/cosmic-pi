@@ -68,13 +68,13 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
 
 class HealthPanel implements Component {
   private readonly text: string;
+  private readonly done: (result?: undefined) => void;
+  private readonly border: (value: string) => string;
 
-  constructor(
-    text: string,
-    private readonly done: (result?: undefined) => void,
-    private readonly border: (value: string) => string,
-  ) {
+  constructor(text: string, done: (result?: undefined) => void, border: (value: string) => string) {
     this.text = `${text}\n\nPress any key to close`;
+    this.done = done;
+    this.border = border;
   }
 
   render(width: number): string[] {

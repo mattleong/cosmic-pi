@@ -1,5 +1,4 @@
 // Promise assertions are test-runner boundaries.
-// @effect-diagnostics effect/asyncFunction:off
 import type {
   ExtensionAPI,
   ExtensionContext,

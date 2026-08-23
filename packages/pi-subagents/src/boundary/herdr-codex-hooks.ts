@@ -1,8 +1,5 @@
 // Codex hook discovery/trust and its bounded app-server process live at this boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
-import { promises as fs } from "node:fs";
+import { nodeFsPromises as fs } from "./node-builtins.ts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -200,6 +197,10 @@ const selectOwnedHook = (
     return hook;
   });
 
+// Locally constructed hook JSON-RPC request frames are serialized by this pure dialect encoder.
+const requestFrame = (id: string, method: string, params: Schema.MutableJson): string =>
+  `${JSON.stringify({ id, method, params })}\n`;
+
 const callJson = (
   session: NdjsonRpcSession<RpcResponse>,
   id: string,
@@ -209,7 +210,7 @@ const callJson = (
 ): Effect.Effect<Schema.MutableJson, HerdrCodexHooksError> =>
   Effect.gen(function* () {
     const response = yield* session
-      .call(id, `${JSON.stringify({ id, method, params })}\n`, timeoutMillis)
+      .call(id, requestFrame(id, method, params), timeoutMillis)
       .pipe(Effect.mapError(toUnavailable));
     if (!("result" in response) || response.id !== id) return yield* makeUnavailable();
     return response.result;

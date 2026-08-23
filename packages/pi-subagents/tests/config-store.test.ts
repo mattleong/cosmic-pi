@@ -1,66 +1,72 @@
 // Node filesystem setup is a test boundary for the live JSON-document Layer.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/strictEffectProvide:off
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
+import { afterEach, describe, expect } from "vitest";
 import {
   SubagentConfigStore,
   type SubagentConfigStoreContract,
   subagentConfigStoreLayer,
 } from "../src/config/store.ts";
+import { effectTest, step } from "./support/effect-test.ts";
+import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+
+const { mkdir, mkdtemp, readFile, rm, writeFile } = nodeFsPromises;
+const { join } = nodePath;
 
 const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
+afterEach(() =>
+  Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))).then(
+    () => undefined,
+  ),
+);
 const layer = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
 const withStore = <A, E>(f: (store: SubagentConfigStoreContract) => Effect.Effect<A, E>) =>
-  Effect.runPromise(Effect.flatMap(SubagentConfigStore, f).pipe(Effect.provide(layer)));
+  Effect.runPromise(Effect.flatMap(SubagentConfigStore, f).pipe(provideBuiltLayer(layer)));
 
-const fixture = async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-subagents-config-"));
-  roots.push(root);
-  const agentDirectory = join(root, "agent");
-  const cwd = join(root, "repo");
-  await mkdir(join(cwd, CONFIG_DIR_NAME), { recursive: true });
-  await mkdir(agentDirectory, { recursive: true });
-  return {
-    cwd,
-    agentDirectory,
-    globalPath: join(agentDirectory, "pi-subagents.json"),
-    projectPath: join(cwd, CONFIG_DIR_NAME, "pi-subagents.json"),
-  };
-};
+const fixture = () =>
+  mkdtemp(join(tmpdir(), "pi-subagents-config-")).then((root) => {
+    roots.push(root);
+    const agentDirectory = join(root, "agent");
+    const cwd = join(root, "repo");
+    return mkdir(join(cwd, CONFIG_DIR_NAME), { recursive: true })
+      .then(() => mkdir(agentDirectory, { recursive: true }))
+      .then(() => ({
+        cwd,
+        agentDirectory,
+        globalPath: join(agentDirectory, "pi-subagents.json"),
+        projectPath: join(cwd, CONFIG_DIR_NAME, "pi-subagents.json"),
+      }));
+  });
 
 describe("SubagentConfigStore v4", () => {
-  it("loads v4 global/project routes with project inheritance", async () => {
-    const paths = await fixture();
-    await writeFile(
-      paths.globalPath,
-      JSON.stringify({
-        version: 4,
-        profiles: {
-          worker: {
-            host: "local",
-            runtime: "pi",
-            model: "openai/worker",
-            effort: "high",
-            context: "fresh",
-            writeIntent: "writer",
-            closeOnReport: true,
+  effectTest("loads v4 global/project routes with project inheritance", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({
+          version: 4,
+          profiles: {
+            worker: {
+              host: "local",
+              runtime: "pi",
+              model: "openai/worker",
+              effort: "high",
+              context: "fresh",
+              writeIntent: "writer",
+              closeOnReport: true,
+            },
           },
-        },
-      }),
+        }),
+      ),
     );
-    await writeFile(paths.projectPath, JSON.stringify({ version: 4 }));
-    const config = await withStore((store) => store.load(paths.cwd, paths.agentDirectory, true));
+    yield* step(() => writeFile(paths.projectPath, JSON.stringify({ version: 4 })));
+    const config = yield* step(() =>
+      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+    );
     expect(config.profiles.worker).toEqual({
       candidates: [
         {
@@ -79,46 +85,56 @@ describe("SubagentConfigStore v4", () => {
     expect(config.fallbackProfile).toBe("generalist");
   });
 
-  it("accepts only v4 documents and never reads an untrusted project", async () => {
-    const paths = await fixture();
+  effectTest("accepts only v4 documents and never reads an untrusted project", function* () {
+    const paths = yield* step(fixture);
     for (const value of [{ version: 1 }, { version: 2 }, {}, { version: "4" }]) {
-      await writeFile(paths.globalPath, JSON.stringify(value));
-      await expect(
+      yield* step(() => writeFile(paths.globalPath, JSON.stringify(value)));
+      yield* step(() =>
+        expect(
+          withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+        ).rejects.toMatchObject({
+          operation: "activate",
+          path: paths.globalPath,
+        }),
+      );
+    }
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({ version: 3, denied: [{ backend: "pi", model: "legacy" }] }),
+      ),
+    );
+    yield* step(() =>
+      expect(
         withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
       ).rejects.toMatchObject({
         operation: "activate",
-        path: paths.globalPath,
-      });
-    }
-    await writeFile(
-      paths.globalPath,
-      JSON.stringify({ version: 3, denied: [{ backend: "pi", model: "legacy" }] }),
+        message: expect.stringContaining("must declare version 4"),
+      }),
     );
-    await expect(
-      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-    ).rejects.toMatchObject({
-      operation: "activate",
-      message: expect.stringContaining("must declare version 4"),
-    });
-    await writeFile(paths.globalPath, JSON.stringify({ version: 4 }));
-    await writeFile(paths.projectPath, "{ not json");
-    const config = await withStore((store) => store.load(paths.cwd, paths.agentDirectory, false));
+    yield* step(() => writeFile(paths.globalPath, JSON.stringify({ version: 4 })));
+    yield* step(() => writeFile(paths.projectPath, "{ not json"));
+    const config = yield* step(() =>
+      withStore((store) => store.load(paths.cwd, paths.agentDirectory, false)),
+    );
     expect(config.projectConfigExists).toBe(false);
   });
 
-  it("fails closed on invalid JSON", async () => {
-    const paths = await fixture();
-    await writeFile(paths.globalPath, "{ not json");
-    await expect(
-      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-    ).rejects.toMatchObject({
-      operation: "read",
-      path: paths.globalPath,
-    });
+  effectTest("fails closed on invalid JSON", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() => writeFile(paths.globalPath, "{ not json"));
+    yield* step(() =>
+      expect(
+        withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+      ).rejects.toMatchObject({
+        operation: "read",
+        path: paths.globalPath,
+      }),
+    );
   });
 
-  it("atomically patches one profile while preserving unrelated routes", async () => {
-    const paths = await fixture();
+  effectTest("atomically patches one profile while preserving unrelated routes", function* () {
+    const paths = yield* step(fixture);
     const initial = {
       version: 4,
       profiles: {
@@ -153,30 +169,32 @@ describe("SubagentConfigStore v4", () => {
         ],
       },
     };
-    await writeFile(paths.globalPath, JSON.stringify(initial));
-    const inspection = await withStore((store) =>
-      store.inspect(paths.cwd, paths.agentDirectory, true),
+    yield* step(() => writeFile(paths.globalPath, JSON.stringify(initial)));
+    const inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
     );
-    await withStore((store) =>
-      store.patchProfile(paths.cwd, paths.agentDirectory, {
-        scope: "global",
-        profile: "scout",
-        route: {
-          host: "local",
-          runtime: "pi",
-          model: "openai-codex/gpt-5.6-sol",
-          effort: "low",
-          context: "fresh",
-          writeIntent: "read-only",
-          fastMode: true,
-          closeOnReport: true,
-        },
-        expectedExists: true,
-        expectedDocument: inspection.globalDocument,
-        projectTrusted: true,
-      }),
+    yield* step(() =>
+      withStore((store) =>
+        store.patchProfile(paths.cwd, paths.agentDirectory, {
+          scope: "global",
+          profile: "scout",
+          route: {
+            host: "local",
+            runtime: "pi",
+            model: "openai-codex/gpt-5.6-sol",
+            effort: "low",
+            context: "fresh",
+            writeIntent: "read-only",
+            fastMode: true,
+            closeOnReport: true,
+          },
+          expectedExists: true,
+          expectedDocument: inspection.globalDocument,
+          projectTrusted: true,
+        }),
+      ),
     );
-    const saved = JSON.parse(await readFile(paths.globalPath, "utf8"));
+    const saved = JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")));
     expect(saved.profiles.reviewer).toEqual(initial.profiles.reviewer);
     expect(saved.profiles.scout).toEqual({
       host: "local",
@@ -188,28 +206,30 @@ describe("SubagentConfigStore v4", () => {
       fastMode: true,
       closeOnReport: true,
     });
-    const refreshed = await withStore((store) =>
-      store.inspect(paths.cwd, paths.agentDirectory, true),
+    const refreshed = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
     );
     expect(refreshed.config.profiles.scout.candidates[0]?.fastMode).toBe(true);
   });
 
-  it("rejects unknown profile aliases and configuration fields", async () => {
-    const paths = await fixture();
+  effectTest("rejects unknown profile aliases and configuration fields", function* () {
+    const paths = yield* step(fixture);
     for (const document of [
       { version: 4, defaultProfile: "generalist" },
       { version: 4, profiles: { delegate: "disabled" } },
       { version: 4, customFutureField: true },
     ]) {
-      await writeFile(paths.globalPath, JSON.stringify(document));
-      await expect(
-        withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-      ).rejects.toMatchObject({ operation: "activate", path: paths.globalPath });
+      yield* step(() => writeFile(paths.globalPath, JSON.stringify(document)));
+      yield* step(() =>
+        expect(
+          withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+        ).rejects.toMatchObject({ operation: "activate", path: paths.globalPath }),
+      );
     }
   });
 
-  it("removes inherited routes and rejects untrusted project writes", async () => {
-    const paths = await fixture();
+  effectTest("removes inherited routes and rejects untrusted project writes", function* () {
+    const paths = yield* step(fixture);
     const project = {
       version: 4,
       profiles: {
@@ -225,125 +245,147 @@ describe("SubagentConfigStore v4", () => {
         reviewer: "disabled",
       },
     };
-    await writeFile(paths.projectPath, JSON.stringify(project));
-    const inspection = await withStore((store) =>
-      store.inspect(paths.cwd, paths.agentDirectory, true),
+    yield* step(() => writeFile(paths.projectPath, JSON.stringify(project)));
+    const inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
     );
-    await expect(
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.patchProfile(paths.cwd, paths.agentDirectory, {
+            scope: "project",
+            profile: "worker",
+            expectedExists: true,
+            expectedDocument: inspection.projectDocument,
+            projectTrusted: false,
+          }),
+        ),
+      ).rejects.toMatchObject({ operation: "update", path: paths.projectPath }),
+    );
+    yield* step(() =>
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {
           scope: "project",
           profile: "worker",
           expectedExists: true,
           expectedDocument: inspection.projectDocument,
-          projectTrusted: false,
+          projectTrusted: true,
         }),
       ),
-    ).rejects.toMatchObject({ operation: "update", path: paths.projectPath });
-    await withStore((store) =>
-      store.patchProfile(paths.cwd, paths.agentDirectory, {
-        scope: "project",
-        profile: "worker",
-        expectedExists: true,
-        expectedDocument: inspection.projectDocument,
-        projectTrusted: true,
-      }),
     );
-    const saved = JSON.parse(await readFile(paths.projectPath, "utf8"));
+    const saved = JSON.parse(yield* step(() => readFile(paths.projectPath, "utf8")));
     expect(saved.profiles.worker).toBeUndefined();
     expect(saved.profiles.reviewer).toBe("disabled");
   });
 
-  it("treats removal patches with no backing file or key as true no-ops", async () => {
-    const paths = await fixture();
-    await withStore((store) =>
-      store.patchProfile(paths.cwd, paths.agentDirectory, {
-        scope: "project",
-        profile: "worker",
-        expectedExists: false,
-        projectTrusted: true,
-      }),
+  effectTest("treats removal patches with no backing file or key as true no-ops", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() =>
+      withStore((store) =>
+        store.patchProfile(paths.cwd, paths.agentDirectory, {
+          scope: "project",
+          profile: "worker",
+          expectedExists: false,
+          projectTrusted: true,
+        }),
+      ),
     );
-    await expect(readFile(paths.projectPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    await withStore((store) =>
-      store.patchProfile(paths.cwd, paths.agentDirectory, {
-        scope: "global",
-        profile: "worker",
-        expectedExists: false,
-        projectTrusted: true,
-      }),
+    yield* step(() =>
+      expect(readFile(paths.projectPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" }),
     );
-    await expect(readFile(paths.globalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("does not rewrite an existing document when the patch changes nothing", async () => {
-    const paths = await fixture();
-    const raw = JSON.stringify({ version: 4 });
-    await writeFile(paths.globalPath, raw);
-    const inspection = await withStore((store) =>
-      store.inspect(paths.cwd, paths.agentDirectory, true),
-    );
-    await withStore((store) =>
-      store.patchProfile(paths.cwd, paths.agentDirectory, {
-        scope: "global",
-        profile: "worker",
-        expectedExists: true,
-        expectedDocument: inspection.globalDocument,
-        projectTrusted: true,
-      }),
-    );
-    expect(await readFile(paths.globalPath, "utf8")).toBe(raw);
-  });
-
-  it("detects external edits instead of clobbering them", async () => {
-    const paths = await fixture();
-    await writeFile(
-      paths.globalPath,
-      JSON.stringify({
-        version: 4,
-        profiles: {
-          scout: {
-            host: "local",
-            runtime: "pi",
-            model: "parent",
-            effort: "low",
-            context: "fresh",
-            writeIntent: "read-only",
-          },
-        },
-      }),
-    );
-    const inspection = await withStore((store) =>
-      store.inspect(paths.cwd, paths.agentDirectory, true),
-    );
-    await writeFile(
-      paths.globalPath,
-      JSON.stringify({
-        version: 4,
-        profiles: {
-          scout: {
-            host: "local",
-            runtime: "pi",
-            model: "parent",
-            effort: "high",
-            context: "fresh",
-            writeIntent: "read-only",
-          },
-        },
-      }),
-    );
-    await expect(
+    yield* step(() =>
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {
           scope: "global",
           profile: "worker",
-          route: "disabled",
+          expectedExists: false,
+          projectTrusted: true,
+        }),
+      ),
+    );
+    yield* step(() =>
+      expect(readFile(paths.globalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" }),
+    );
+  });
+
+  effectTest("does not rewrite an existing document when the patch changes nothing", function* () {
+    const paths = yield* step(fixture);
+    const raw = JSON.stringify({ version: 4 });
+    yield* step(() => writeFile(paths.globalPath, raw));
+    const inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+    );
+    yield* step(() =>
+      withStore((store) =>
+        store.patchProfile(paths.cwd, paths.agentDirectory, {
+          scope: "global",
+          profile: "worker",
           expectedExists: true,
           expectedDocument: inspection.globalDocument,
           projectTrusted: true,
         }),
       ),
-    ).rejects.toMatchObject({ operation: "update", path: paths.globalPath });
-    expect(JSON.parse(await readFile(paths.globalPath, "utf8")).profiles.scout.effort).toBe("high");
+    );
+    expect(yield* step(() => readFile(paths.globalPath, "utf8"))).toBe(raw);
+  });
+
+  effectTest("detects external edits instead of clobbering them", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({
+          version: 4,
+          profiles: {
+            scout: {
+              host: "local",
+              runtime: "pi",
+              model: "parent",
+              effort: "low",
+              context: "fresh",
+              writeIntent: "read-only",
+            },
+          },
+        }),
+      ),
+    );
+    const inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+    );
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({
+          version: 4,
+          profiles: {
+            scout: {
+              host: "local",
+              runtime: "pi",
+              model: "parent",
+              effort: "high",
+              context: "fresh",
+              writeIntent: "read-only",
+            },
+          },
+        }),
+      ),
+    );
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.patchProfile(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profile: "worker",
+            route: "disabled",
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+    );
+    expect(
+      JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8"))).profiles.scout.effort,
+    ).toBe("high");
   });
 });

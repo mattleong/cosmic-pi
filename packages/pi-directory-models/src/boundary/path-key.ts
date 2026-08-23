@@ -1,5 +1,4 @@
 // Node hashing is intentionally isolated at this deterministic platform boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 
 const MAX_SLUG_CHARS = 48;

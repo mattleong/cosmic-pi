@@ -1,5 +1,6 @@
+import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "../runtime-values.ts";
+import { hasObjectRuntimeType } from "../runtime-values.js";
 import type { SandboxURL, SandboxValue } from "../values.js";
 
 export type SourcePosition = {
@@ -60,22 +61,34 @@ export type MemberReference = {
 };
 
 export class CodeModeFunction {
+  readonly parameters: ReadonlyArray<AstNode>;
+  readonly body: AstNode;
+  readonly capturedScopes: ReadonlyArray<Map<string, Binding>>;
   constructor(
-    readonly parameters: ReadonlyArray<AstNode>,
-    readonly body: AstNode,
-    readonly capturedScopes: ReadonlyArray<Map<string, Binding>>,
-  ) {}
+    parameters: ReadonlyArray<AstNode>,
+    body: AstNode,
+    capturedScopes: ReadonlyArray<Map<string, Binding>>,
+  ) {
+    this.parameters = parameters;
+    this.body = body;
+    this.capturedScopes = capturedScopes;
+  }
 }
 
 export class IntrinsicReference {
-  constructor(
-    readonly receiver: InterpreterValue,
-    readonly name: string,
-  ) {}
+  readonly receiver: InterpreterValue;
+  readonly name: string;
+  constructor(receiver: InterpreterValue, name: string) {
+    this.receiver = receiver;
+    this.name = name;
+  }
 }
 
 export class ComputedValue {
-  constructor(readonly value: InterpreterValue) {}
+  readonly value: InterpreterValue;
+  constructor(value: InterpreterValue) {
+    this.value = value;
+  }
 }
 
 export class PromiseNamespace {}
@@ -83,7 +96,10 @@ export class PromiseNamespace {}
 export type PromiseMethodName = "all" | "allSettled" | "race" | "resolve" | "reject";
 
 export class PromiseMethodReference {
-  constructor(readonly name: PromiseMethodName) {}
+  readonly name: PromiseMethodName;
+  constructor(name: PromiseMethodName) {
+    this.name = name;
+  }
 }
 
 export type GlobalNamespaceName =
@@ -100,36 +116,54 @@ export type GlobalNamespaceName =
   | "URLSearchParams";
 
 export class GlobalNamespace {
-  constructor(readonly name: GlobalNamespaceName) {}
+  readonly name: GlobalNamespaceName;
+  constructor(name: GlobalNamespaceName) {
+    this.name = name;
+  }
 }
 
 export class GlobalMethodReference {
-  constructor(
-    readonly namespace: GlobalNamespaceName | "Number" | "String",
-    readonly name: string,
-  ) {}
+  readonly namespace: GlobalNamespaceName | "Number" | "String";
+  readonly name: string;
+  constructor(namespace: GlobalNamespaceName | "Number" | "String", name: string) {
+    this.namespace = namespace;
+    this.name = name;
+  }
 }
 
 export class CoercionFunction {
-  constructor(readonly name: "Number" | "String" | "Boolean" | "parseInt" | "parseFloat") {}
+  readonly name: "Number" | "String" | "Boolean" | "parseInt" | "parseFloat";
+  constructor(name: "Number" | "String" | "Boolean" | "parseInt" | "parseFloat") {
+    this.name = name;
+  }
 }
 
 export class UriFunction {
-  constructor(
-    readonly name: "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent",
-  ) {}
+  readonly name: "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent";
+  constructor(name: "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent") {
+    this.name = name;
+  }
 }
 
 export class ProgramThrow {
-  constructor(readonly value: InterpreterValue) {}
+  readonly value: InterpreterValue;
+  constructor(value: InterpreterValue) {
+    this.value = value;
+  }
 }
 
 export class ErrorConstructorReference {
-  constructor(readonly name: string) {}
+  readonly name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
 }
 
 export class ToolReference {
-  constructor(readonly path: ReadonlyArray<string>) {}
+  readonly path: ReadonlyArray<string>;
+  constructor(path: ReadonlyArray<string>) {
+    this.path = path;
+  }
 }
 
 export type InterpreterPrimitive = undefined | null | string | number | boolean | bigint | symbol;
@@ -185,19 +219,38 @@ export const OptionalShortCircuit: unique symbol = Symbol("codemode.optional-sho
 export const supportedSyntaxMessage =
   "Supported orchestration syntax: tools.* calls (they return promises - resolve them with await), data literals, destructuring, optional chaining, template literals, conditionals, switch, loops (incl. for...of and for...in over object/array/tools keys), arrow functions, spread, try/catch, array methods (map/filter/find/findIndex/some/every/reduce/flatMap/forEach/sort/slice/concat/indexOf/lastIndexOf/at/flat/reverse/includes/join), string methods (incl. match/matchAll/replace/split with regular expressions), Date/RegExp/Map/Set/URL/URLSearchParams, URI encoding helpers, Object/Math/JSON helpers, captured console.log/warn/error/dir/table, and Promise.all/allSettled/race/resolve/reject over arrays mixing promises and plain values for parallel tool calls (promise chaining with .then/.catch is not supported - use await with try/catch).";
 
-export class InterpreterRuntimeError extends Error {
+type InterpreterRuntimeErrorProps = {
+  readonly message: string;
+  readonly kind: DiagnosticKind;
   readonly node?: AstNode;
+  readonly suggestions?: ReadonlyArray<string>;
+};
+
+type InterpreterRuntimeErrorInit = {
+  message: string;
+  kind: DiagnosticKind;
+  node?: AstNode;
+  suggestions?: ReadonlyArray<string>;
+};
+
+export class InterpreterRuntimeError extends Data.TaggedError(
+  "InterpreterRuntimeError",
+)<InterpreterRuntimeErrorProps> {
   errorName: string = "Error";
 
   constructor(
     message: string,
     node?: AstNode,
-    readonly kind: DiagnosticKind = "ExecutionFailure",
-    readonly suggestions?: ReadonlyArray<string>,
+    kind: DiagnosticKind = "ExecutionFailure",
+    suggestions?: ReadonlyArray<string>,
   ) {
-    super(message);
-    this.name = "InterpreterRuntimeError";
-    if (node) this.node = node;
+    const props: InterpreterRuntimeErrorInit = {
+      message,
+      kind,
+    };
+    if (node !== undefined) props.node = node;
+    if (suggestions !== undefined) props.suggestions = suggestions;
+    super(props);
   }
 
   as(errorName: string): this {

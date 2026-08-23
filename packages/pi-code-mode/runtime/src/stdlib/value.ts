@@ -70,7 +70,7 @@ const coerceToStringBudgeted = (value: InterpreterValue, budget: { remaining: nu
   if (value === null) return "null";
   if (value === undefined) return "undefined";
   if (value instanceof SandboxDate)
-    return Number.isFinite(value.time) ? new Date(value.time).toISOString() : "Invalid Date";
+    return Number.isFinite(value.time) ? isoString(value.time) : "Invalid Date";
   if (value instanceof SandboxRegExp) return spend(`/${value.regex.source}/${value.regex.flags}`);
   if (value instanceof SandboxMap) return "[object Map]";
   if (value instanceof SandboxSet) return "[object Set]";
@@ -132,8 +132,9 @@ export const invokeCoercion = (ref: CoercionFunction, args: InterpreterArray, no
   return coerceToString(value);
 };
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "../runtime-values.ts";
+import { hasObjectRuntimeType } from "../runtime-values.js";
 import { MAX_GUEST_STRING_LENGTH, uriEncodedLengthUpperBound } from "../interpreter/confinement.js";
+import { isoString } from "./epoch.js";
 import {
   type AstNode,
   type InterpreterArray,

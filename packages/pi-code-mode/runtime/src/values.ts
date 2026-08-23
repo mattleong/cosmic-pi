@@ -1,17 +1,27 @@
-import type { Effect, Fiber } from "effect";
+import type * as Effect from "effect/Effect";
+import type * as Fiber from "effect/Fiber";
+import type { RuntimeFailure } from "./failure.js";
 import { assertBoundedQueryPairs } from "./interpreter/confinement.js";
 import type { InterpreterValue } from "./interpreter/model.js";
 
 export class SandboxPromise {
   interrupted = false;
+  readonly fiber: Fiber.Fiber<InterpreterValue, RuntimeFailure> | undefined;
+  readonly immediate: Effect.Effect<InterpreterValue, RuntimeFailure> | undefined;
   constructor(
-    readonly fiber: Fiber.Fiber<InterpreterValue, unknown> | undefined,
-    readonly immediate?: Effect.Effect<InterpreterValue, unknown>,
-  ) {}
+    fiber: Fiber.Fiber<InterpreterValue, RuntimeFailure> | undefined,
+    immediate?: Effect.Effect<InterpreterValue, RuntimeFailure>,
+  ) {
+    this.fiber = fiber;
+    this.immediate = immediate;
+  }
 }
 
 export class SandboxDate {
-  constructor(readonly time: number) {}
+  readonly time: number;
+  constructor(time: number) {
+    this.time = time;
+  }
 }
 
 export class SandboxRegExp {
@@ -30,12 +40,17 @@ export class SandboxSet {
 }
 
 export class SandboxURLSearchParams {
-  constructor(readonly params: URLSearchParams) {}
+  readonly params: URLSearchParams;
+  constructor(params: URLSearchParams) {
+    this.params = params;
+  }
 }
 
 export class SandboxURL {
   readonly searchParams: SandboxURLSearchParams;
-  constructor(readonly url: URL) {
+  readonly url: URL;
+  constructor(url: URL) {
+    this.url = url;
     // Confinement backstop: charge the parsed query's projected pair count before this
     // eager `searchParams` access materializes the native entry list. The primary guards
     // (with program diagnostics) run at each construction route before the native URL.

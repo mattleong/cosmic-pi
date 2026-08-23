@@ -140,7 +140,7 @@ export function matchChangedLinesSparse(
     usedRemoved.add(index);
     usedAdded.add(index);
   }
-  return pairs.sort(
+  return pairs.toSorted(
     (a, b) =>
       (positions.removed.get(a.removedIndex) ?? 0) - (positions.removed.get(b.removedIndex) ?? 0),
   );
@@ -322,7 +322,7 @@ function sparseChangedLineAnchors(
       ...candidate,
       score: scoreAt(candidate.removedPosition, candidate.addedPosition),
     }))
-    .sort((a, b) => b.score - a.score || compareSparseCandidates(a, b));
+    .toSorted((a, b) => b.score - a.score || compareSparseCandidates(a, b));
   const removedScores = topTwoCandidateValues(
     scoredCandidates,
     (candidate) => candidate.removedPosition,

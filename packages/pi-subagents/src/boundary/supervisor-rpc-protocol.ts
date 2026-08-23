@@ -1,5 +1,4 @@
 // Bounded Node socket transport adapter for Effect RPC's server Protocol.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";

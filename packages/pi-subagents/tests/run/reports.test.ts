@@ -1,6 +1,4 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,6 +8,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   fakeChildLayer,
@@ -111,7 +110,7 @@ describe("SubagentService", () => {
         yield* TestClock.adjust("1 second");
         expect(notifications).toEqual([]);
         expect(yield* service.status(started.id)).not.toHaveProperty("finalText");
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -152,7 +151,7 @@ describe("SubagentService", () => {
       const followUp = yield* service.send(run.id, "Begin a new retained assignment.");
       expect(followUp).toMatchObject({ state: "running", reportGeneration: 1 });
       expect(backend.controls[0]?.prompts.at(-1)).toBe("Begin a new retained assignment.");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -279,7 +278,7 @@ describe("SubagentService", () => {
         const stopped = yield* service.stop(run.id);
         expect(stopped.state).toBe("stopped");
         expect(backend.controls[0]?.released()).toBe(1);
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -338,7 +337,7 @@ describe("SubagentService", () => {
           },
         ],
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("commits an initial report only after the matching start command confirms", () => {
@@ -380,7 +379,7 @@ describe("SubagentService", () => {
         reportGeneration: 1,
         finalText: "Fast initial report.",
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -467,7 +466,7 @@ describe("SubagentService", () => {
           reportGeneration: 2,
           finalText: "Second assignment committed after start.",
         });
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -524,7 +523,7 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === 2);
       expect((yield* service.status(run.id)).finalText).toBe("Second assignment.");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -578,7 +577,7 @@ describe("SubagentService", () => {
           reportGeneration: 1,
           finalText: "Buffered in-flight report.",
         });
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -594,7 +593,7 @@ describe("SubagentService", () => {
       });
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("caps one retained run at 64 unresolved report generations", () => {
@@ -633,7 +632,7 @@ describe("SubagentService", () => {
         code: "report_delivery_backlog",
       });
       expect((yield* service.list)[0]?.reportGeneration).toBe(64);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("caps resumed runs at 64 unresolved report generations", () => {
@@ -664,7 +663,7 @@ describe("SubagentService", () => {
         code: "report_delivery_backlog",
       });
       expect(fake.controls).toHaveLength(64);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("rolls back a raced retained start and never reuses its assignment epoch", () => {
@@ -772,7 +771,7 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(nextGate, undefined);
       expect((yield* Fiber.join(next)).state).toBe("running");
       expect(backend.controls[0]?.assignmentEpochs).toEqual([1, 2, 3]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keeps outcome-uncertain retained work and ignores idle assignment events", () => {
@@ -875,7 +874,7 @@ describe("SubagentService", () => {
         finalText: "Applied despite uncertain response.",
         warning: expect.stringContaining("may already have applied"),
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("closes an idle retained backend on session shutdown", () => {
@@ -904,7 +903,7 @@ describe("SubagentService", () => {
           Boolean(backend.controls[0] && backend.controls[0].released() === 0),
         );
         return started;
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
       expect(run.id).toBeDefined();
       expect(backend.controls[0]?.released()).toBe(1);
     });

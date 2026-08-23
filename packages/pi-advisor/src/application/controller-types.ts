@@ -1,5 +1,3 @@
-// The Context key intentionally retains its pre-move public identity.
-// @effect-diagnostics effect/deterministicKeys:off
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -107,7 +105,7 @@ export interface AdvisorControllerContract {
 export class AdvisorController extends Context.Service<
   AdvisorController,
   AdvisorControllerContract
->()("pi-advisor/advisor-controller/AdvisorController") {}
+>()("pi-advisor/application/controller-types/AdvisorController") {}
 
 export interface AdvisorExtensionDependencies {
   /** Effect-typed ConfigStore override; production composition uses `configStoreLayer`. */

@@ -1,3 +1,5 @@
+import { matchSgrSequence } from "../shared/terminal-text";
+
 type RenderedWordEmphasis = {
   content: string;
   ranges: Array<[start: number, end: number]>;
@@ -10,7 +12,6 @@ const WORD_EMPHASIS_OPEN = new Set([
   "\x1b[48;2;216;182;182m",
 ]);
 const WORD_EMPHASIS_CLOSE = "\x1b[49m";
-const SGR_SEQUENCE = /^\x1b\[[0-9;]*m/;
 
 export function parseRenderedWordEmphasis(line: string): RenderedWordEmphasis {
   const pipe = line.indexOf("│ ");
@@ -21,7 +22,7 @@ export function parseRenderedWordEmphasis(line: string): RenderedWordEmphasis {
 
   for (let index = 0; index < code.length; ) {
     if (code[index] === "\x1b") {
-      const sequence = code.slice(index).match(SGR_SEQUENCE)?.[0];
+      const sequence = matchSgrSequence(code, index);
       if (sequence) {
         if (WORD_EMPHASIS_OPEN.has(sequence) && rangeStart === undefined)
           rangeStart = content.length;

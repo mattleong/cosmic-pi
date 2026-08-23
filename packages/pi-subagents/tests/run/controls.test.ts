@@ -1,6 +1,4 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,6 +8,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   fakeChildLayer,
@@ -56,7 +55,7 @@ describe("SubagentService", () => {
         state: "running",
         question: undefined,
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("routes blocking child questions and peer notices through supervisor IPC", () => {
@@ -113,7 +112,7 @@ describe("SubagentService", () => {
           (message) => message.type === "peer_notice" && message.message.includes("reader-two"),
         ),
       ).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("finishes an accepted interrupt after its requesting fiber is cancelled", () => {
@@ -135,7 +134,7 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(gate, undefined);
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "paused");
       expect((yield* service.status(run.id)).state).toBe("paused");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("finishes an accepted resume after its requesting fiber is cancelled", () => {
@@ -164,7 +163,7 @@ describe("SubagentService", () => {
           text: "Resume: Continue safely.",
         }),
       );
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("clears a pending question when settlement wins the interrupt race", () => {
@@ -197,7 +196,7 @@ describe("SubagentService", () => {
       const resumed = yield* service.resume(run.id);
       expect(resumed.state).toBe("running");
       expect(resumed.question).toBeUndefined();
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("ignores child settlement that arrives after interruption is confirmed", () => {
@@ -218,7 +217,7 @@ describe("SubagentService", () => {
         state: "paused",
         reportGeneration: 0,
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keeps a timed-out interrupt pending until child settlement", () => {
@@ -247,7 +246,7 @@ describe("SubagentService", () => {
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "paused");
       expect((yield* service.status(run.id)).state).toBe("paused");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("does not accept RPC lifecycle events from child IPC", () => {
@@ -262,7 +261,7 @@ describe("SubagentService", () => {
       fake.controls[0]?.offerIpc({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       expect((yield* service.status(run.id)).state).toBe("failed");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("fails an in-flight RPC promptly when stop sweeps its registration", () => {
@@ -280,7 +279,7 @@ describe("SubagentService", () => {
       expect((yield* service.stop(run.id)).state).toBe("stopped");
       const error = yield* Fiber.join(sending).pipe(Effect.flip);
       expect(error).toMatchObject({ _tag: "SubagentProcessError", operation: "stop" });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("fails an in-flight RPC promptly when the run protocol fails", () => {
@@ -302,7 +301,7 @@ describe("SubagentService", () => {
       const error = yield* Fiber.join(sending).pipe(Effect.flip);
       expect(error._tag).toBe("SubagentProtocolError");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("finishes stop cleanup after the requesting fiber is interrupted", () => {
@@ -322,7 +321,7 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(releaseGate, undefined);
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
       expect(fake.controls[0]?.released()).toBe(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("ignores a parent question that arrives after interruption", () => {
@@ -346,7 +345,7 @@ describe("SubagentService", () => {
       const paused = yield* service.status(run.id);
       expect(paused.state).toBe("paused");
       expect(paused.question).toBeUndefined();
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("claims a parent question before sending its reply", () => {
@@ -382,7 +381,7 @@ describe("SubagentService", () => {
           message: "First",
         },
       ]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("finishes a delivered parent reply after the requesting fiber is interrupted", () => {
@@ -430,7 +429,7 @@ describe("SubagentService", () => {
       expect(
         fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply"),
       ).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("rejects guidance that a parent reply claimed mid-transport", () => {
@@ -481,7 +480,7 @@ describe("SubagentService", () => {
       const notices = sessionEvents.filter((event) => event.type === "notice");
       expect(notices.some((event) => event.text.includes("Guidance:"))).toBe(false);
       expect(notices.some((event) => event.text.includes("Reply: Answer"))).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect(
@@ -562,7 +561,7 @@ describe("SubagentService", () => {
         const uncertain = yield* service.status(resumeRun.id);
         expect(uncertain.state).toBe("starting");
         expect(uncertain.warning).toContain("may already have applied");
-      }).pipe(Effect.scoped, Effect.provide(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
@@ -609,7 +608,7 @@ describe("SubagentService", () => {
           message: "Proceed.",
         },
       ]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("clears an uncertain reply claim after terminal settlement and a resumed turn", () => {
@@ -651,7 +650,7 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
       expect((yield* service.reply(run.id, "Answered.")).state).toBe("running");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keeps warnings in projection and session history without host notification", () => {
@@ -726,7 +725,7 @@ describe("SubagentService", () => {
         expect(completion.runs[0]?.warning).not.toContain("First warning");
         expect(completion.runs[0]?.warning).not.toContain("secret-value");
       }
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("folds child and system warnings into a failed outcome", () => {
@@ -779,7 +778,7 @@ describe("SubagentService", () => {
         expect(notification.runs[0]?.warning).toContain(
           "Child warning: Child validation is incomplete.",
         );
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("retries actionable question delivery once without warning interference", () => {
@@ -829,7 +828,7 @@ describe("SubagentService", () => {
       expect(attempts).toBe(2);
       expect(delivered).toMatchObject([{ type: "question", message: "Retry this question?" }]);
       expect((yield* service.status(run.id)).state).toBe("waiting_for_parent");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("restarts question delivery after a stale queue drains to idle", () => {
@@ -870,7 +869,7 @@ describe("SubagentService", () => {
         message: "Delivery after idle?",
       });
       yield* yieldUntil(() => attempts.some((value) => value.requestId === "new-question"));
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("wakes a sleeping question retry when a new question is queued", () => {
@@ -913,7 +912,7 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => attempts.some((value) => value.requestId === "wake-question"));
       expect(attempts.filter((value) => value.requestId === "sleepy-question")).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("keeps currentTool accurate while parallel tools finish", () => {
@@ -955,7 +954,7 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.currentTool === undefined);
       expect((yield* service.status(run.id)).currentTool).toBeUndefined();
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("times out when an RPC transport write never completes", () => {
@@ -976,7 +975,7 @@ describe("SubagentService", () => {
         _tag: "SubagentProcessError",
         operation: "await RPC response from",
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("fails pending RPCs immediately after a schema-invalid event", () => {
@@ -1000,7 +999,7 @@ describe("SubagentService", () => {
       expect(failure._tag).toBe("SubagentProtocolError");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       expect((yield* service.status(run.id)).name).toBe("invalid-event-rpc");
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("rejects oversized parent messages before transport", () => {
@@ -1012,6 +1011,6 @@ describe("SubagentService", () => {
       const failure = yield* Effect.flip(service.send(run.id, "x".repeat(64 * 1024 + 1)));
       expect(failure._tag).toBe("InvalidSubagentRequestError");
       expect(fake.controls[0]?.commands.filter((command) => command.type === "steer")).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 });

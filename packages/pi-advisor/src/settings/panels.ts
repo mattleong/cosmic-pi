@@ -1,5 +1,4 @@
 // Pi's settings UI is Promise-shaped by contract.
-// @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { selectAdvisorOnboardingAtHostBoundary } from "../boundary/host-onboarding.ts";
 import { latestOpenAdvisorReviewCardAtHostBoundary } from "../boundary/host-review-cards.ts";
@@ -9,14 +8,14 @@ import { formatLastReview, formatModel, formatUsageDuration } from "./format.ts"
 import { notifyCardAction } from "./notify.ts";
 import type { AdvisorCommandActions, AdvisorConfigState } from "./types.ts";
 
-export async function openAdvisorDashboard(
+export function openAdvisorDashboard(
   ctx: ExtensionCommandContext,
   state: AdvisorConfigState,
   actions: AdvisorCommandActions,
 ): Promise<void> {
   if (ctx.mode !== "tui") {
     showAdvisorStatus(ctx, state.get(), state.getMetrics());
-    return;
+    return Promise.resolve();
   }
   const config = state.get();
   const metrics = state.getMetrics();
@@ -35,57 +34,67 @@ export async function openAdvisorDashboard(
     "Usage",
     "Done",
   ];
-  const choice = await ctx.ui.select(
-    `Advisor · ${stateLabel} · ${formatModel(config)} · ${formatLastReview(metrics)} · ${(metrics.totalTokens ?? 0).toLocaleString()} tokens · $${(metrics.cost ?? 0).toFixed(4)}`,
-    choices,
-  );
-  if (choice === "Set up Advisor" || choice === "Change model") await openAdvisorSetup(ctx, state);
-  else if (choice === "Review last") {
-    const result = await actions.reviewLast(ctx);
-    ctx.ui.notify(
-      result === "started"
-        ? "Advisor review started."
-        : result === "unavailable"
-          ? "No completed response is available to review."
-          : "Advisor review could not start. Try again.",
-      result === "started" ? "info" : "warning",
-    );
-  } else if (choice === "Fix last") notifyCardAction(ctx, actions.fixLast(ctx), "fixed");
-  else if (choice === "Dismiss last") notifyCardAction(ctx, actions.dismissLast(ctx), "dismissed");
-  else if (choice === "Cancel review") {
-    const cancelled = await actions.cancel(ctx);
-    ctx.ui.notify(
-      cancelled ? "Cancelled pending Advisor work." : "No Advisor review is active.",
-      "info",
-    );
-  } else if (choice === "Turn on") {
-    if (await updateConfig(ctx, state, { enabled: true })) ctx.ui.notify("Advisor is on.", "info");
-  } else if (choice === "Turn off") {
-    if (await updateConfig(ctx, state, { enabled: false }))
-      ctx.ui.notify("Advisor is off.", "info");
-  } else if (choice === "Usage") showAdvisorUsage(ctx, state.get(), state.getMetrics());
+  return ctx.ui
+    .select(
+      `Advisor · ${stateLabel} · ${formatModel(config)} · ${formatLastReview(metrics)} · ${(metrics.totalTokens ?? 0).toLocaleString()} tokens · $${(metrics.cost ?? 0).toFixed(4)}`,
+      choices,
+    )
+    .then((choice) => {
+      if (choice === "Set up Advisor" || choice === "Change model")
+        return openAdvisorSetup(ctx, state);
+      if (choice === "Review last")
+        return Promise.resolve(actions.reviewLast(ctx)).then((result) =>
+          ctx.ui.notify(
+            result === "started"
+              ? "Advisor review started."
+              : result === "unavailable"
+                ? "No completed response is available to review."
+                : "Advisor review could not start. Try again.",
+            result === "started" ? "info" : "warning",
+          ),
+        );
+      if (choice === "Fix last") return notifyCardAction(ctx, actions.fixLast(ctx), "fixed");
+      if (choice === "Dismiss last")
+        return notifyCardAction(ctx, actions.dismissLast(ctx), "dismissed");
+      if (choice === "Cancel review")
+        return Promise.resolve(actions.cancel(ctx)).then((cancelled) =>
+          ctx.ui.notify(
+            cancelled ? "Cancelled pending Advisor work." : "No Advisor review is active.",
+            "info",
+          ),
+        );
+      if (choice === "Turn on")
+        return updateConfig(ctx, state, { enabled: true }).then((updated) => {
+          if (updated) ctx.ui.notify("Advisor is on.", "info");
+        });
+      if (choice === "Turn off")
+        return updateConfig(ctx, state, { enabled: false }).then((updated) => {
+          if (updated) ctx.ui.notify("Advisor is off.", "info");
+        });
+      if (choice === "Usage") return showAdvisorUsage(ctx, state.get(), state.getMetrics());
+      return undefined;
+    });
 }
 
 /** Setup always opens when explicitly requested. One persistence patch commits each choice atomically. */
-export async function openAdvisorSetup(
+export function openAdvisorSetup(
   ctx: ExtensionCommandContext,
   state: AdvisorConfigState,
 ): Promise<void> {
   if (ctx.mode !== "tui") {
     ctx.ui.notify("Advisor setup requires interactive TUI mode.", "error");
-    return;
+    return Promise.resolve();
   }
-  const selected = await selectAdvisorOnboardingAtHostBoundary(ctx);
-  if (!selected) return;
-  if (selected.type === "not-now") {
-    await updateConfig(ctx, state, { setupDismissed: true });
-    return;
-  }
-  await updateConfig(ctx, state, {
-    provider: selected.provider,
-    model: selected.model,
-    enabled: true,
-    setupDismissed: true,
+  return selectAdvisorOnboardingAtHostBoundary(ctx).then((selected) => {
+    if (!selected) return undefined;
+    if (selected.type === "not-now")
+      return updateConfig(ctx, state, { setupDismissed: true }).then(() => undefined);
+    return updateConfig(ctx, state, {
+      provider: selected.provider,
+      model: selected.model,
+      enabled: true,
+      setupDismissed: true,
+    }).then(() => undefined);
   });
 }
 

@@ -1,17 +1,14 @@
 // Test-owned process fixture is boundary code.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
 import { it as effectIt } from "@effect/vitest";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it, vi } from "vitest";
 import { terminateProcessTree, terminateProcessTreeEffect } from "../src/boundary/process-tree.ts";
+import { nodeSpawn as spawn, type NodeChildProcess } from "./support/node-builtins.ts";
 
 const processExists = (pid: number): boolean => {
   try {
@@ -27,18 +24,23 @@ const processExists = (pid: number): boolean => {
   }
 };
 
-const waitForExit = async (pid: number): Promise<void> => {
-  for (let attempt = 0; attempt < 100 && processExists(pid); attempt += 1)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-};
+// Real-time polling of live child processes deliberately runs on the live default clock.
+const waitForExit = (pid: number): Promise<void> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < 100 && processExists(pid); attempt += 1)
+        yield* Effect.sleep(Duration.millis(10));
+    }),
+  );
 
 describe("subagent process-tree boundary", () => {
-  it("does not target an already-exited Windows PID", async () => {
+  it("does not target an already-exited Windows PID", () => {
     const spawnTaskkill = vi.fn();
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const child = { pid: 42, exitCode: 0, signalCode: null } as NodeChildProcess;
-    await terminateProcessTree(child, "force", { platform: "win32", spawnTaskkill });
-    expect(spawnTaskkill).not.toHaveBeenCalled();
+    return terminateProcessTree(child, "force", { platform: "win32", spawnTaskkill }).then(() => {
+      expect(spawnTaskkill).not.toHaveBeenCalled();
+    });
   });
 
   effectIt.effect("bounds and cancels a hanging Windows taskkill helper", () =>
@@ -87,10 +89,10 @@ describe("subagent process-tree boundary", () => {
     }),
   );
 
-  it("preserves typed failures through the Promise compatibility door", async () => {
+  it("preserves typed failures through the Promise compatibility door", () => {
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const child = { pid: 46, exitCode: null, signalCode: null } as NodeChildProcess;
-    await expect(
+    return expect(
       terminateProcessTree(child, "force", {
         platform: "win32",
         spawnTaskkill: () => {
@@ -104,7 +106,7 @@ describe("subagent process-tree boundary", () => {
     });
   });
 
-  it("passes live Windows trees to bounded taskkill", async () => {
+  it("passes live Windows trees to bounded taskkill", () => {
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const killer = new EventEmitter() as NodeChildProcess;
     killer.kill = vi.fn(() => true);
@@ -119,13 +121,14 @@ describe("subagent process-tree boundary", () => {
       },
     });
     killer.emit("close", 0);
-    await pending;
-    expect(modes).toEqual(["force"]);
+    return pending.then(() => {
+      expect(modes).toEqual(["force"]);
+    });
   });
 
   it.skipIf(process.platform === "win32")(
     "kills descendants in the detached process group after its leader exits",
-    async () => {
+    () => {
       const leader = spawn(
         process.execPath,
         [
@@ -138,29 +141,31 @@ process.stdout.write(String(child.pid) + "\\n");`,
         { detached: true, stdio: ["ignore", "pipe", "ignore"] },
       );
       let grandchildPid = 0;
-      try {
-        let output = "";
-        leader.stdout?.setEncoding("utf8");
-        leader.stdout?.on("data", (chunk: string) => {
-          output += chunk;
-        });
-        await once(leader, "close");
-        grandchildPid = Number(output.trim());
-        expect(Number.isSafeInteger(grandchildPid)).toBe(true);
-        expect(processExists(grandchildPid)).toBe(true);
-
-        await terminateProcessTree(leader, "force");
-        await waitForExit(grandchildPid);
-        expect(processExists(grandchildPid)).toBe(false);
-      } finally {
-        if (grandchildPid > 0 && processExists(grandchildPid)) {
-          try {
-            process.kill(grandchildPid, "SIGKILL");
-          } catch {
-            // Best-effort fixture cleanup.
+      let output = "";
+      leader.stdout?.setEncoding("utf8");
+      leader.stdout?.on("data", (chunk: string) => {
+        output += chunk;
+      });
+      return once(leader, "close")
+        .then(() => {
+          grandchildPid = Number(output.trim());
+          expect(Number.isSafeInteger(grandchildPid)).toBe(true);
+          expect(processExists(grandchildPid)).toBe(true);
+          return terminateProcessTree(leader, "force");
+        })
+        .then(() => waitForExit(grandchildPid))
+        .then(() => {
+          expect(processExists(grandchildPid)).toBe(false);
+        })
+        .finally(() => {
+          if (grandchildPid > 0 && processExists(grandchildPid)) {
+            try {
+              process.kill(grandchildPid, "SIGKILL");
+            } catch {
+              // Best-effort fixture cleanup.
+            }
           }
-        }
-      }
+        });
     },
   );
 });

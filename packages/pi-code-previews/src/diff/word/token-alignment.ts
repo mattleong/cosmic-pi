@@ -194,7 +194,7 @@ function longestIncreasingAfterIndexes(
     ordered.push(candidateAt(candidates, index));
     index = previous[index] ?? -1;
   }
-  return ordered.reverse();
+  return ordered.toReversed();
 }
 
 function tokenCounts(tokens: WordEmphasisToken[], start: number, end: number): Map<string, number> {

@@ -1,148 +1,144 @@
-// Test harness boundary: only the diagnostics used by this file are suppressed.
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+// Effect test entry point owns the temporary filesystem fixtures for the failure log.
+import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { afterEach, describe, expect, test } from "vitest";
-import { standaloneAdvisorExecutor } from "./support/executor.ts";
+import { provideBuiltLayer } from "pi-cosmic-core";
+import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import {
   AdvisorFailureRecordSchema,
   getAdvisorFailureLogPath,
   logAdvisorFailureEffect,
-  type AdvisorFailureDetails,
 } from "../src/logging/log.ts";
 
-const tempDirectories: string[] = [];
-const logAdvisorFailure = (configPath: string, details: AdvisorFailureDetails) =>
-  standaloneAdvisorExecutor.run(logAdvisorFailureEffect(configPath, details));
+const decodeFailureRecord = Schema.decodeUnknownSync(
+  Schema.fromJsonString(AdvisorFailureRecordSchema),
+);
+const decodeFailureLabels = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ provider: Schema.String, model: Schema.String })),
+);
 
-afterEach(() => {
-  for (const directory of tempDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-describe("advisor failure log", () => {
-  test("writes a structured diagnostic without prompt or credential data", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-log-"));
-    tempDirectories.push(agentDir);
-    const configPath = join(agentDir, "extensions", "pi-advisor.json");
-    mkdirSync(join(agentDir, "extensions"), { recursive: true });
-    const error = new Error("provider request timed out");
-
-    const logPath = await logAdvisorFailure(configPath, {
-      contextChars: 12_345,
-      durationMs: 30_001.6,
-      error,
-      model: "review-model",
-      provider: "review-provider",
-      timeoutMs: 30_000,
-    });
-
-    expect(logPath).toBe(join(agentDir, "logs", "pi-advisor.jsonl"));
-    const entry = Schema.decodeUnknownSync(AdvisorFailureRecordSchema)(
-      JSON.parse(readFileSync(logPath!, "utf8")),
-    );
-    expect(entry).toMatchObject({
-      provider: "review-provider",
-      model: "review-model",
-      timeoutMs: 30_000,
-      contextChars: 12_345,
-      durationMs: 30_002,
-      error: {
-        name: "Error",
-        message: "provider request timed out",
-      },
-    });
-    expect(entry.timestamp).toEqual(expect.any(String));
-    expect(JSON.stringify(entry)).not.toContain("prompt");
-    expect(JSON.stringify(entry)).not.toContain("credential");
+const agentFixture = (prefix: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const agentDir = yield* fs.makeTempDirectoryScoped({ prefix });
+    const configPath = path.join(agentDir, "extensions", "pi-advisor.json");
+    return { agentDir, configPath, fs, path };
   });
 
-  test("does not invoke hostile error accessors", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-hostile-log-"));
-    tempDirectories.push(agentDir);
-    const configPath = join(agentDir, "extensions", "pi-advisor.json");
-    const error = Object.defineProperty({}, "message", {
-      get() {
-        throw new Error("getter executed");
-      },
-    });
-    await expect(
-      logAdvisorFailure(configPath, {
+const hostileError = () =>
+  Object.defineProperty({}, "message", {
+    get() {
+      throw new Error("getter executed");
+    },
+  });
+
+layer(advisorPlatformLayer)("advisor failure log", (it) => {
+  it.effect("writes a structured diagnostic without prompt or credential data", () =>
+    Effect.gen(function* () {
+      const { agentDir, configPath, fs, path } = yield* agentFixture("pi-advisor-log-");
+      yield* fs.makeDirectory(path.join(agentDir, "extensions"), { recursive: true });
+      const error = new Error("provider request timed out");
+
+      const logPath = yield* logAdvisorFailureEffect(configPath, {
+        contextChars: 12_345,
+        durationMs: 30_001.6,
+        error,
+        model: "review-model",
+        provider: "review-provider",
+        timeoutMs: 30_000,
+      });
+
+      expect(logPath).toBe(path.join(agentDir, "logs", "pi-advisor.jsonl"));
+      const persisted = yield* fs.readFileString(logPath!);
+      const entry = decodeFailureRecord(persisted.trim());
+      expect(entry).toMatchObject({
+        provider: "review-provider",
+        model: "review-model",
+        timeoutMs: 30_000,
+        contextChars: 12_345,
+        durationMs: 30_002,
+        error: {
+          name: "Error",
+          message: "provider request timed out",
+        },
+      });
+      expect(entry.timestamp).toEqual(expect.any(String));
+      expect(persisted).not.toContain("prompt");
+      expect(persisted).not.toContain("credential");
+    }),
+  );
+
+  it.effect("does not invoke hostile error accessors", () =>
+    Effect.gen(function* () {
+      const { configPath, fs } = yield* agentFixture("pi-advisor-hostile-log-");
+      const logPath = yield* logAdvisorFailureEffect(configPath, {
+        contextChars: 1,
+        durationMs: 2,
+        error: hostileError(),
+        timeoutMs: 3,
+      });
+      expect(logPath).toBeDefined();
+      expect(yield* fs.readFileString(getAdvisorFailureLogPath(configPath))).toContain(
+        "Unknown error.",
+      );
+    }),
+  );
+
+  it.effect("redacts and clips provider and model labels before persistence", () =>
+    Effect.gen(function* () {
+      const { agentDir, configPath, fs, path } = yield* agentFixture("pi-advisor-label-log-");
+      yield* fs.makeDirectory(path.join(agentDir, "extensions"), { recursive: true });
+
+      const logPath = yield* logAdvisorFailureEffect(configPath, {
+        contextChars: 1,
+        durationMs: 2,
+        error: new Error("failed"),
+        model: `model-token=secret-value-${"x".repeat(400)}`,
+        provider: "provider-api_key=sk-abcdefghijklmnop",
+        timeoutMs: 3,
+      });
+      const persisted = yield* fs.readFileString(logPath!);
+      const entry = decodeFailureLabels(persisted.trim());
+
+      expect(persisted).not.toMatch(/secret-value|sk-abcdefghijklmnop/);
+      expect(persisted).toContain("REDACTED");
+      expect(entry.provider.length).toBeLessThanOrEqual(256);
+      expect(entry.model.length).toBeLessThanOrEqual(256);
+    }),
+  );
+
+  it.effect("redacts credential-like text from persisted error messages and stacks", () =>
+    Effect.gen(function* () {
+      const { agentDir, configPath, fs, path } = yield* agentFixture("pi-advisor-secret-log-");
+      yield* fs.makeDirectory(path.join(agentDir, "extensions"), { recursive: true });
+      const error = new Error(
+        "Authorization: Bearer abc.def.ghi OPENAI_API_KEY=sk-abcdefghijklmnop",
+      );
+      error.name = "Provider_OPENAI_API_KEY=name-secret-value";
+      error.stack = `Error: token=generic-secret-value\n at provider (api_key=sk-secondsecretvalue)`;
+
+      const logPath = yield* logAdvisorFailureEffect(configPath, {
         contextChars: 1,
         durationMs: 2,
         error,
         timeoutMs: 3,
-      }),
-    ).resolves.toBeDefined();
-    expect(readFileSync(getAdvisorFailureLogPath(configPath), "utf8")).toContain("Unknown error.");
-  });
+      });
+      const persisted = yield* fs.readFileString(logPath!);
 
-  test("redacts and clips provider and model labels before persistence", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-label-log-"));
-    tempDirectories.push(agentDir);
-    const configPath = join(agentDir, "extensions", "pi-advisor.json");
-    mkdirSync(join(agentDir, "extensions"), { recursive: true });
+      expect(persisted).not.toMatch(
+        /abc\.def\.ghi|sk-abcdefghijklmnop|generic-secret-value|sk-secondsecretvalue|name-secret-value/,
+      );
+      expect(persisted).toContain("REDACTED");
+    }),
+  );
 
-    const logPath = await logAdvisorFailure(configPath, {
-      contextChars: 1,
-      durationMs: 2,
-      error: new Error("failed"),
-      model: `model-token=secret-value-${"x".repeat(400)}`,
-      provider: "provider-api_key=sk-abcdefghijklmnop",
-      timeoutMs: 3,
-    });
-    const persisted = readFileSync(logPath!, "utf8");
-    // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
-    const entry = JSON.parse(persisted) as { provider: string; model: string };
-
-    expect(persisted).not.toMatch(/secret-value|sk-abcdefghijklmnop/);
-    expect(persisted).toContain("REDACTED");
-    expect(entry.provider.length).toBeLessThanOrEqual(256);
-    expect(entry.model.length).toBeLessThanOrEqual(256);
-  });
-
-  test("redacts credential-like text from persisted error messages and stacks", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-secret-log-"));
-    tempDirectories.push(agentDir);
-    const configPath = join(agentDir, "extensions", "pi-advisor.json");
-    mkdirSync(join(agentDir, "extensions"), { recursive: true });
-    const error = new Error("Authorization: Bearer abc.def.ghi OPENAI_API_KEY=sk-abcdefghijklmnop");
-    error.name = "Provider_OPENAI_API_KEY=name-secret-value";
-    error.stack = `Error: token=generic-secret-value\n at provider (api_key=sk-secondsecretvalue)`;
-
-    const logPath = await logAdvisorFailure(configPath, {
-      contextChars: 1,
-      durationMs: 2,
-      error,
-      timeoutMs: 3,
-    });
-    const persisted = readFileSync(logPath!, "utf8");
-
-    expect(persisted).not.toMatch(
-      /abc\.def\.ghi|sk-abcdefghijklmnop|generic-secret-value|sk-secondsecretvalue|name-secret-value/,
-    );
-    expect(persisted).toContain("REDACTED");
-  });
-
-  test("serializes concurrent production appends and enforces private mode", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-concurrent-log-"));
-    tempDirectories.push(agentDir);
-    const configPath = join(agentDir, "extensions", "pi-advisor.json");
-    await standaloneAdvisorExecutor.run(
-      Effect.forEach(
+  it.effect("serializes concurrent production appends and enforces private mode", () =>
+    Effect.gen(function* () {
+      const { configPath, fs } = yield* agentFixture("pi-advisor-concurrent-log-");
+      yield* Effect.forEach(
         Array.from({ length: 50 }, (_, index) => index),
         (index) =>
           logAdvisorFailureEffect(configPath, {
@@ -152,59 +148,64 @@ describe("advisor failure log", () => {
             timeoutMs: 30_000,
           }),
         { concurrency: "unbounded" },
-      ),
-    );
-    const path = getAdvisorFailureLogPath(configPath);
-    const lines = readFileSync(path, "utf8").trim().split("\n");
-    expect(lines).toHaveLength(50);
-    expect(lines.every((line) => JSON.parse(line))).toBe(true);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-  });
+      );
+      const path = getAdvisorFailureLogPath(configPath);
+      const lines = (yield* fs.readFileString(path)).trim().split("\n");
+      expect(lines).toHaveLength(50);
+      expect(lines.every((line) => Boolean(decodeFailureRecord(line)))).toBe(true);
+      expect((yield* fs.stat(path)).mode & 0o777).toBe(0o600);
+    }),
+  );
 
-  test("serializes exported helpers across separately provided Layers", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-exported-log-"));
-    tempDirectories.push(agentDir);
-    const configPath = join(agentDir, "extensions", "pi-advisor.json");
-    const paths = await Promise.all(
-      Array.from({ length: 30 }, (_, index) =>
-        logAdvisorFailure(configPath, {
-          contextChars: index,
-          durationMs: index,
-          error: new Error(`exported-${index}`),
-          timeoutMs: 30_000,
-        }),
-      ),
-    );
-    expect(paths.every(Boolean)).toBe(true);
-    const lines = readFileSync(getAdvisorFailureLogPath(configPath), "utf8").trim().split("\n");
-    expect(lines).toHaveLength(30);
-  });
+  it.effect("serializes exported helpers across separately provided Layers", () =>
+    Effect.gen(function* () {
+      const { configPath, fs } = yield* agentFixture("pi-advisor-exported-log-");
+      const paths = yield* Effect.forEach(
+        Array.from({ length: 30 }, (_, index) => index),
+        (index) =>
+          logAdvisorFailureEffect(configPath, {
+            contextChars: index,
+            durationMs: index,
+            error: new Error(`exported-${index}`),
+            timeoutMs: 30_000,
+          }).pipe(provideBuiltLayer(advisorPlatformLayer)),
+        { concurrency: "unbounded" },
+      );
+      expect(paths.every(Boolean)).toBe(true);
+      const lines = (yield* fs.readFileString(getAdvisorFailureLogPath(configPath)))
+        .trim()
+        .split("\n");
+      expect(lines).toHaveLength(30);
+    }),
+  );
 
-  test("tightens existing log directories and rotated files", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-legacy-log-"));
-    tempDirectories.push(agentDir);
-    const configPath = join(agentDir, "extensions", "pi-advisor.json");
-    const logPath = getAdvisorFailureLogPath(configPath);
-    const logDirectory = join(agentDir, "logs");
-    mkdirSync(logDirectory, { recursive: true, mode: 0o777 });
-    chmodSync(logDirectory, 0o777);
-    writeFileSync(logPath, "x".repeat(1_000_000), { mode: 0o644 });
-    chmodSync(logPath, 0o644);
+  it.effect("tightens existing log directories and rotated files", () =>
+    Effect.gen(function* () {
+      const { agentDir, configPath, fs, path } = yield* agentFixture("pi-advisor-legacy-log-");
+      const logPath = getAdvisorFailureLogPath(configPath);
+      const logDirectory = path.join(agentDir, "logs");
+      yield* fs.makeDirectory(logDirectory, { recursive: true });
+      yield* fs.chmod(logDirectory, 0o777);
+      yield* fs.writeFileString(logPath, "x".repeat(1_000_000));
+      yield* fs.chmod(logPath, 0o644);
 
-    await logAdvisorFailure(configPath, {
-      contextChars: 1,
-      durationMs: 2,
-      error: new Error("effect rotation"),
-      timeoutMs: 3,
-    });
-    expect(statSync(logDirectory).mode & 0o777).toBe(0o700);
-    expect(statSync(`${logPath}.1`).mode & 0o777).toBe(0o600);
-    expect(statSync(logPath).mode & 0o777).toBe(0o600);
-  });
+      yield* logAdvisorFailureEffect(configPath, {
+        contextChars: 1,
+        durationMs: 2,
+        error: new Error("effect rotation"),
+        timeoutMs: 3,
+      });
+      expect((yield* fs.stat(logDirectory)).mode & 0o777).toBe(0o700);
+      expect((yield* fs.stat(`${logPath}.1`)).mode & 0o777).toBe(0o600);
+      expect((yield* fs.stat(logPath)).mode & 0o777).toBe(0o600);
+    }),
+  );
 
-  test("derives the log alongside the agent extensions directory", () => {
-    expect(getAdvisorFailureLogPath("/home/user/.pi/agent/extensions/pi-advisor.json")).toBe(
-      "/home/user/.pi/agent/logs/pi-advisor.jsonl",
-    );
-  });
+  it.effect("derives the log alongside the agent extensions directory", () =>
+    Effect.sync(() => {
+      expect(getAdvisorFailureLogPath("/home/user/.pi/agent/extensions/pi-advisor.json")).toBe(
+        "/home/user/.pi/agent/logs/pi-advisor.jsonl",
+      );
+    }),
+  );
 });

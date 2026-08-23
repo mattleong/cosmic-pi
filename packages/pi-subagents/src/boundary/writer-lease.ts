@@ -1,18 +1,14 @@
 // Cross-process writer ownership requires Node's exclusive directory and stable-file primitives.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/cryptoRandomBytes:off
-// @effect-diagnostics effect/globalDate:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import { createHash, randomBytes } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
-import { join } from "node:path";
+import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { synchronousNow } from "pi-cosmic-core";
 import { nodeErrorCode } from "./harness-shared.ts";
+
+const { join } = nodePath;
 
 const LEASE_VERSION = 2 as const;
 const MAX_EVIDENCE_BYTES = 4 * 1024;
@@ -219,41 +215,50 @@ interface StableEvidenceSource {
 const sameEntries = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
   left.length === right.length && left.every((entry, index) => entry === right[index]);
 
-const readStableEvidenceSource = async (leasePath: string): Promise<StableEvidenceSource> => {
-  const beforeDirectory = await fs.lstat(leasePath, { bigint: true });
-  if (!beforeDirectory.isDirectory() || beforeDirectory.isSymbolicLink()) throw new Error("type");
-  const beforeEntries = (await fs.readdir(leasePath)).sort();
-  if (!sameEntries(beforeEntries, [OWNER_FILE])) throw new TransitionalEvidenceError();
-  const path = evidencePath(leasePath);
-  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-  const handle = await fs.open(path, constants.O_RDONLY | noFollow);
-  try {
-    const before = await handle.stat({ bigint: true });
-    if (!before.isFile() || before.size > BigInt(MAX_EVIDENCE_BYTES)) throw new Error("size");
-    const bytes = await handle.readFile();
-    const after = await handle.stat({ bigint: true });
-    const afterDirectory = await fs.lstat(leasePath, { bigint: true });
-    const afterEntries = (await fs.readdir(leasePath)).sort();
-    if (
-      bytes.byteLength > MAX_EVIDENCE_BYTES ||
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.size !== after.size ||
-      bytes.byteLength !== Number(before.size) ||
-      beforeDirectory.dev !== afterDirectory.dev ||
-      beforeDirectory.ino !== afterDirectory.ino ||
-      !sameEntries(beforeEntries, afterEntries)
-    )
-      throw new TransitionalEvidenceError();
-    return {
-      source: bytes.toString("utf8"),
-      directoryDevice: beforeDirectory.dev,
-      directoryInode: beforeDirectory.ino,
-    };
-  } finally {
-    await handle.close();
-  }
-};
+const readStableEvidenceSource = (leasePath: string): Promise<StableEvidenceSource> =>
+  fs.lstat(leasePath, { bigint: true }).then((beforeDirectory) => {
+    if (!beforeDirectory.isDirectory() || beforeDirectory.isSymbolicLink()) throw new Error("type");
+    return fs.readdir(leasePath).then((rawBeforeEntries) => {
+      const beforeEntries = rawBeforeEntries.sort();
+      if (!sameEntries(beforeEntries, [OWNER_FILE])) throw new TransitionalEvidenceError();
+      const path = evidencePath(leasePath);
+      const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+      return fs.open(path, constants.O_RDONLY | noFollow).then((handle) =>
+        handle
+          .stat({ bigint: true })
+          .then((before) => {
+            if (!before.isFile() || before.size > BigInt(MAX_EVIDENCE_BYTES))
+              throw new Error("size");
+            return handle.readFile().then((bytes) =>
+              handle.stat({ bigint: true }).then((after) =>
+                fs.lstat(leasePath, { bigint: true }).then((afterDirectory) =>
+                  fs.readdir(leasePath).then((rawAfterEntries) => {
+                    const afterEntries = rawAfterEntries.sort();
+                    if (
+                      bytes.byteLength > MAX_EVIDENCE_BYTES ||
+                      before.dev !== after.dev ||
+                      before.ino !== after.ino ||
+                      before.size !== after.size ||
+                      bytes.byteLength !== Number(before.size) ||
+                      beforeDirectory.dev !== afterDirectory.dev ||
+                      beforeDirectory.ino !== afterDirectory.ino ||
+                      !sameEntries(beforeEntries, afterEntries)
+                    )
+                      throw new TransitionalEvidenceError();
+                    return {
+                      source: bytes.toString("utf8"),
+                      directoryDevice: beforeDirectory.dev,
+                      directoryInode: beforeDirectory.ino,
+                    };
+                  }),
+                ),
+              ),
+            );
+          })
+          .finally(() => handle.close()),
+      );
+    });
+  });
 
 interface DecodedStableEvidence extends StableEvidenceSource {
   readonly evidence: WriterLeaseEvidence;
@@ -300,21 +305,15 @@ const readEvidence = (
     ),
   );
 
-const syncDirectory = async (path: string): Promise<void> => {
-  const handle = await fs.open(path, constants.O_RDONLY);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-};
+const syncDirectory = (path: string): Promise<void> =>
+  fs.open(path, constants.O_RDONLY).then((handle) => handle.sync().finally(() => handle.close()));
+
+// Locally constructed ownership evidence is serialized by this pure boundary encoder.
+const encodeEvidence = (evidence: WriterLeaseEvidence): string => `${JSON.stringify(evidence)}\n`;
 
 const ensureLeaseRoot = (root: string): Effect.Effect<void, WriterLeaseAcquireError> =>
   Effect.tryPromise({
-    try: async () => {
-      await fs.mkdir(root, { recursive: true, mode: 0o700 });
-      await fs.chmod(root, 0o700);
-    },
+    try: () => fs.mkdir(root, { recursive: true, mode: 0o700 }).then(() => fs.chmod(root, 0o700)),
     catch: () =>
       new WriterLeaseAcquireError({
         message: "Unable to prepare private writer-lease state; writer startup was denied.",
@@ -323,15 +322,14 @@ const ensureLeaseRoot = (root: string): Effect.Effect<void, WriterLeaseAcquireEr
 
 const createLeaseDirectory = (leasePath: string): Effect.Effect<boolean, WriterLeaseAcquireError> =>
   Effect.tryPromise({
-    try: async () => {
-      try {
-        await fs.mkdir(leasePath, { mode: 0o700 });
-        return true;
-      } catch (error) {
-        if (nodeErrorCode(error) === "EEXIST") return false;
-        throw error;
-      }
-    },
+    try: () =>
+      fs.mkdir(leasePath, { mode: 0o700 }).then(
+        () => true,
+        (error) => {
+          if (nodeErrorCode(error) === "EEXIST") return false;
+          throw error;
+        },
+      ),
     catch: () =>
       new WriterLeaseAcquireError({
         message: "Unable to acquire private writer-lease state; writer startup was denied.",
@@ -344,32 +342,45 @@ const writeOwnedEvidence = (
   evidence: WriterLeaseEvidence,
 ): Effect.Effect<void, WriterLeaseAcquireError> =>
   Effect.tryPromise({
-    try: async () => {
-      const source = `${JSON.stringify(evidence)}\n`;
-      if (Buffer.byteLength(source, "utf8") > MAX_EVIDENCE_BYTES) throw new Error("size");
-      let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-      try {
-        handle = await fs.open(
+    try: () => {
+      const source = encodeEvidence(evidence);
+      if (Buffer.byteLength(source, "utf8") > MAX_EVIDENCE_BYTES)
+        return Promise.reject(new Error("size"));
+      return fs
+        .open(
           evidencePath(leasePath),
           constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
           0o600,
+        )
+        .then((handle) =>
+          handle
+            .writeFile(source, { encoding: "utf8" })
+            .then(() => handle.sync())
+            .then(() => handle.close())
+            .catch((error) =>
+              handle
+                .close()
+                .catch(() => undefined)
+                .then(() => {
+                  throw error;
+                }),
+            ),
+        )
+        .then(() => syncDirectory(leasePath))
+        .then(() => syncDirectory(root))
+        .catch((error) =>
+          fs
+            .rm(leasePath, { recursive: true, force: false })
+            .then(() => syncDirectory(root))
+            .then(
+              () => {
+                throw error;
+              },
+              () => {
+                throw new Error("cleanup-unconfirmed");
+              },
+            ),
         );
-        await handle.writeFile(source, { encoding: "utf8" });
-        await handle.sync();
-        await handle.close();
-        handle = undefined;
-        await syncDirectory(leasePath);
-        await syncDirectory(root);
-      } catch (error) {
-        if (handle) await handle.close().catch(() => undefined);
-        try {
-          await fs.rm(leasePath, { recursive: true, force: false });
-          await syncDirectory(root);
-        } catch {
-          throw new Error("cleanup-unconfirmed");
-        }
-        throw error;
-      }
     },
     catch: () =>
       new WriterLeaseAcquireError({
@@ -402,16 +413,15 @@ const claimDeadReservedLease = (
   // Any late operation for that owner therefore cannot rename a replacement lease after an ABA cycle.
   const orphanPath = tombstonePath(leasePath, evidence.ownershipToken);
   return Effect.tryPromise({
-    try: async () => {
-      try {
-        await fs.rename(leasePath, orphanPath);
-        return true;
-      } catch (error) {
-        const code = nodeErrorCode(error);
-        if (code === "ENOENT" || code === "EEXIST" || code === "ENOTEMPTY") return false;
-        throw error;
-      }
-    },
+    try: () =>
+      fs.rename(leasePath, orphanPath).then(
+        () => true,
+        (error) => {
+          const code = nodeErrorCode(error);
+          if (code === "ENOENT" || code === "EEXIST" || code === "ENOTEMPTY") return false;
+          throw error;
+        },
+      ),
     catch: () =>
       conflict(
         "uncertain",
@@ -459,7 +469,7 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseCo
   const parentPid = options.parentPid ?? process.pid;
   const parentProcessStartedAtMillis =
     options.parentProcessStartedAtMillis ??
-    Math.max(0, Math.floor(Date.now() - process.uptime() * 1_000));
+    Math.max(0, Math.floor(synchronousNow() - process.uptime() * 1_000));
   const ownerNonce = options.ownerNonce ?? randomToken();
   const nowMillis = options.nowMillis ?? Date.now;
   const nextToken = options.randomToken ?? randomToken;
@@ -490,18 +500,19 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseCo
 
   const canonicalize: WriterLeaseContract["canonicalize"] = (cwd) =>
     Effect.tryPromise({
-      try: async () => {
-        const path = await fs.realpath(cwd);
-        const stat = await fs.stat(path, { bigint: true });
-        if (!stat.isDirectory()) throw new Error("not-directory");
-        const filesystemIdentity = `dev:${stat.dev.toString(16)};ino:${stat.ino.toString(16)}`;
-        if (
-          filesystemIdentity.length > MAX_FILESYSTEM_IDENTITY_CHARS ||
-          !FILESYSTEM_IDENTITY_PATTERN.test(filesystemIdentity)
-        )
-          throw new Error("identity");
-        return { path, filesystemIdentity, digest: digest(filesystemIdentity) };
-      },
+      try: () =>
+        fs.realpath(cwd).then((path) =>
+          fs.stat(path, { bigint: true }).then((stat) => {
+            if (!stat.isDirectory()) throw new Error("not-directory");
+            const filesystemIdentity = `dev:${stat.dev.toString(16)};ino:${stat.ino.toString(16)}`;
+            if (
+              filesystemIdentity.length > MAX_FILESYSTEM_IDENTITY_CHARS ||
+              !FILESYSTEM_IDENTITY_PATTERN.test(filesystemIdentity)
+            )
+              throw new Error("identity");
+            return { path, filesystemIdentity, digest: digest(filesystemIdentity) };
+          }),
+        ),
       catch: () =>
         new WriterCwdCanonicalizationError({
           message:
@@ -654,35 +665,40 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseCo
           spawnStartedAtMillis: Math.max(0, Math.floor(nowMillis())),
         };
         yield* Effect.tryPromise({
-          try: async () => {
-            const source = `${JSON.stringify(startedEvidence)}\n`;
-            if (Buffer.byteLength(source, "utf8") > MAX_EVIDENCE_BYTES) throw new Error("size");
+          try: () => {
+            const source = encodeEvidence(startedEvidence);
+            if (Buffer.byteLength(source, "utf8") > MAX_EVIDENCE_BYTES)
+              return Promise.reject(new Error("size"));
             const temporaryPath = transitionPath(lease.leasePath, lease.ownershipToken);
-            let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-            try {
-              handle = await fs.open(
-                temporaryPath,
-                constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-                0o600,
-              );
-              await handle.writeFile(source, { encoding: "utf8" });
-              await handle.sync();
-              await handle.close();
-              handle = undefined;
-              const directory = await fs.lstat(lease.leasePath, { bigint: true });
-              if (
-                directory.dev !== current.directoryDevice ||
-                directory.ino !== current.directoryInode
+            return fs
+              .open(temporaryPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
+              .then((handle) =>
+                handle
+                  .writeFile(source, { encoding: "utf8" })
+                  .then(() => handle.sync())
+                  .then(() => handle.close())
+                  .catch((error) =>
+                    handle
+                      .close()
+                      .catch(() => undefined)
+                      .then(() => {
+                        // A transition artifact is intentionally retained. Its presence makes
+                        // dead-owner inspection transitional/fail-closed rather than
+                        // misclassifying the old reservation.
+                        throw error;
+                      }),
+                  ),
               )
-                throw new Error("directory-changed");
-              await fs.rename(temporaryPath, evidencePath(lease.leasePath));
-              await syncDirectory(lease.leasePath);
-            } catch (error) {
-              if (handle) await handle.close().catch(() => undefined);
-              // A transition artifact is intentionally retained. Its presence makes dead-owner
-              // inspection transitional/fail-closed rather than misclassifying the old reservation.
-              throw error;
-            }
+              .then(() => fs.lstat(lease.leasePath, { bigint: true }))
+              .then((directory) => {
+                if (
+                  directory.dev !== current.directoryDevice ||
+                  directory.ino !== current.directoryInode
+                )
+                  throw new Error("directory-changed");
+                return fs.rename(temporaryPath, evidencePath(lease.leasePath));
+              })
+              .then(() => syncDirectory(lease.leasePath));
           },
           catch: () =>
             new WriterLeaseMarkError({

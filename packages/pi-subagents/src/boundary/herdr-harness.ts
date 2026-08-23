@@ -1,14 +1,8 @@
 // Herdr runtime harness, private authentication copy, and pane-environment policy live here.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/cryptoRandomBytes:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/preferSchemaOverJson:off
 import { randomBytes } from "node:crypto";
-import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -46,6 +40,8 @@ import {
 } from "./harness-shared.ts";
 import { approvedCodexApiKey as approvedApiKey } from "./local-cli-harness.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
+
+const { isAbsolute, join } = nodePath;
 
 const HARNESS_ROOT = "herdr-host-v1";
 const MAX_INTEGRATION_BYTES = 256 * 1024;
@@ -211,24 +207,34 @@ const integrationPath = (
   }
 };
 
-const validateIntegration = async (path: string, runtime: SubagentRuntime): Promise<void> => {
+const validateIntegration = (path: string, runtime: SubagentRuntime): Promise<void> => {
   if (!isAbsolute(path) || path.length > MAX_PATH_CHARS || hasControlCharacter(path))
-    throw new Error("invalid-integration-path");
-  const stat = await fs.lstat(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_INTEGRATION_BYTES)
-    throw new Error("invalid-integration-file");
-  const source = await fs.readFile(path, "utf8");
-  const markers = source
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/^\s*(?:\/\/|#)\s*/u, "").trim());
-  if (
-    !source.includes("installed by herdr") ||
-    !markers.includes(`HERDR_INTEGRATION_ID=${runtime}`) ||
-    !markers.includes(
-      `HERDR_INTEGRATION_VERSION=${HERDR_080_INTEGRATION_VERSIONS[runtime].toString()}`,
-    )
-  )
-    throw new Error("integration-marker-mismatch");
+    return Promise.reject(new Error("invalid-integration-path"));
+  return fs
+    .lstat(path)
+    .then((stat) => {
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        stat.size < 1 ||
+        stat.size > MAX_INTEGRATION_BYTES
+      )
+        throw new Error("invalid-integration-file");
+      return fs.readFile(path, "utf8");
+    })
+    .then((source) => {
+      const markers = source
+        .split(/\r?\n/u)
+        .map((line) => line.replace(/^\s*(?:\/\/|#)\s*/u, "").trim());
+      if (
+        !source.includes("installed by herdr") ||
+        !markers.includes(`HERDR_INTEGRATION_ID=${runtime}`) ||
+        !markers.includes(
+          `HERDR_INTEGRATION_VERSION=${HERDR_080_INTEGRATION_VERSIONS[runtime].toString()}`,
+        )
+      )
+        throw new Error("integration-marker-mismatch");
+    });
 };
 
 const fixedEnvironmentCommand = (
@@ -398,7 +404,7 @@ interface PreparedHarnessResource {
   readonly cleanupAuthorized: () => boolean;
 }
 
-const prepareHarness = async (
+const prepareHarness = (
   options: HerdrHarnessLayerOptions,
   runtime: SubagentRuntime,
   request: BackendLaunchRequest,
@@ -406,205 +412,250 @@ const prepareHarness = async (
 ): Promise<PreparedHarnessResource> => {
   const environment = options.environment ?? process.env;
   if (Object.values(environment).some((value) => value && hasControlCharacter(value)))
-    throw new Error("herdr-environment-invalid");
+    return Promise.reject(new Error("herdr-environment-invalid"));
   if ((options.platform ?? process.platform) === "win32")
-    throw new Error("herdr-platform-unsupported");
-  const agentDirectory = await safeAgentDirectory(options.agentDirectory);
-  const packageRoot = join(agentDirectory, "subagents");
-  const root = join(packageRoot, HARNESS_ROOT);
-  await ensurePrivateDirectory(packageRoot);
-  await ensurePrivateDirectory(root);
-  const nonce = randomBytes(12).toString("hex");
-  const directory = join(root, `${runtime}-${request.runId}-${nonce}`);
-  await fs.mkdir(directory, { mode: 0o700 });
-  try {
-    let cleanupAuthorized = false;
-    const authorizeCleanup = () => {
-      cleanupAuthorized = true;
-    };
-    const resource = (
-      harness: Omit<HerdrPreparedHarness, "authorizeCleanup">,
-    ): PreparedHarnessResource => ({
-      harness: { ...harness, authorizeCleanup },
-      cleanupAuthorized: () => cleanupAuthorized,
-    });
-    const integration = integrationPath(options, runtime, agentDirectory, environment);
-    await validateIntegration(integration, runtime);
-    const environmentReadyMarker = `pi-subagents-env-${nonce}`;
-    const secretReadyMarker = `pi-subagents-secret-${nonce}`;
-    const environmentCommand = (topology: {
-      readonly paneId: string;
-      readonly tabId: string;
-      readonly workspaceId: string;
-    }) => fixedEnvironmentCommand(environment, topology, environmentReadyMarker);
-    const activationProbe = (attempt: number) => {
-      const marker = `pi-subagents-activate-${nonce}-${attempt.toString()}`;
-      return { command: printMarkerCommand(marker), marker };
-    };
-    const shellReadinessProbe = (phase: "environment" | "secrets") => {
-      const marker = `pi-subagents-shell-${phase}-${nonce}`;
-      return { command: printMarkerCommand(marker), marker };
-    };
-    const promptPath = join(directory, "system-prompt.md");
-    await writeExclusive(promptPath, request.systemPrompt);
+    return Promise.reject(new Error("herdr-platform-unsupported"));
+  return safeAgentDirectory(options.agentDirectory).then((agentDirectory) => {
+    const packageRoot = join(agentDirectory, "subagents");
+    const root = join(packageRoot, HARNESS_ROOT);
+    const nonce = randomBytes(12).toString("hex");
+    const directory = join(root, `${runtime}-${request.runId}-${nonce}`);
+    return ensurePrivateDirectory(packageRoot)
+      .then(() => ensurePrivateDirectory(root))
+      .then(() => fs.mkdir(directory, { mode: 0o700 }))
+      .then(() => {
+        let cleanupAuthorized = false;
+        const authorizeCleanup = () => {
+          cleanupAuthorized = true;
+        };
+        const resource = (
+          harness: Omit<HerdrPreparedHarness, "authorizeCleanup">,
+        ): PreparedHarnessResource => ({
+          harness: { ...harness, authorizeCleanup },
+          cleanupAuthorized: () => cleanupAuthorized,
+        });
+        const integration = integrationPath(options, runtime, agentDirectory, environment);
+        const environmentReadyMarker = `pi-subagents-env-${nonce}`;
+        const secretReadyMarker = `pi-subagents-secret-${nonce}`;
+        const environmentCommand = (topology: {
+          readonly paneId: string;
+          readonly tabId: string;
+          readonly workspaceId: string;
+        }) => fixedEnvironmentCommand(environment, topology, environmentReadyMarker);
+        const activationProbe = (attempt: number) => {
+          const marker = `pi-subagents-activate-${nonce}-${attempt.toString()}`;
+          return { command: printMarkerCommand(marker), marker };
+        };
+        const shellReadinessProbe = (phase: "environment" | "secrets") => {
+          const marker = `pi-subagents-shell-${phase}-${nonce}`;
+          return { command: printMarkerCommand(marker), marker };
+        };
+        const promptPath = join(directory, "system-prompt.md");
 
-    if (runtime === "claude") {
-      const settingsPath = join(directory, "claude-settings.json");
-      const mcpPath = join(directory, "claude-mcp.json");
-      const base = claudeSettings(request, claudeWriterCwdPolicy(request.cwd));
-      const settings = {
-        ...base,
-        // Herdr Claude remains authenticated through the inherited native credential boundary.
-        // Its fixed process environment disables interactive transcript and prompt-history writes.
-        env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
-        hooks: {
-          SessionStart: [
-            {
-              matcher: "*",
-              hooks: [
+        const buildClaude = (): Promise<PreparedHarnessResource> => {
+          const settingsPath = join(directory, "claude-settings.json");
+          const mcpPath = join(directory, "claude-mcp.json");
+          const base = claudeSettings(request, claudeWriterCwdPolicy(request.cwd));
+          const settings = {
+            ...base,
+            // Herdr Claude remains authenticated through the inherited native credential boundary.
+            // Its fixed process environment disables interactive transcript and prompt-history writes.
+            env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
+            hooks: {
+              SessionStart: [
                 {
-                  type: "command",
-                  command: `bash ${shellQuote(integration)} session`,
-                  timeout: 10,
+                  matcher: "*",
+                  hooks: [
+                    {
+                      type: "command",
+                      command: `bash ${shellQuote(integration)} session`,
+                      timeout: 10,
+                    },
+                  ],
                 },
               ],
             },
-          ],
-        },
-      };
-      await writeExclusive(settingsPath, `${JSON.stringify(settings)}\n`);
-      if (options.harnessFault === "after-claude-settings")
-        throw new Error("fixture-after-claude-settings");
-      await writeExclusive(mcpPath, `${JSON.stringify(supervisor.claudeMcp)}\n`);
-      return resource({
-        directory,
-        runtime,
-        argv: controlFreeArgv(claudeArgv(request, settingsPath, mcpPath, promptPath)),
-        environmentCommand: (topology) =>
-          fixedEnvironmentCommand(environment, topology, environmentReadyMarker, {
-            CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1",
-          }),
-        environmentReadyMarker,
-        activationProbe,
-        shellReadinessProbe,
-      });
-    }
+          };
+          return writeExclusive(settingsPath, `${JSON.stringify(settings)}\n`)
+            .then(() => {
+              if (options.harnessFault === "after-claude-settings")
+                throw new Error("fixture-after-claude-settings");
+              return writeExclusive(mcpPath, `${JSON.stringify(supervisor.claudeMcp)}\n`);
+            })
+            .then(() =>
+              resource({
+                directory,
+                runtime,
+                argv: controlFreeArgv(claudeArgv(request, settingsPath, mcpPath, promptPath)),
+                environmentCommand: (topology) =>
+                  fixedEnvironmentCommand(environment, topology, environmentReadyMarker, {
+                    CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1",
+                  }),
+                environmentReadyMarker,
+                activationProbe,
+                shellReadinessProbe,
+              }),
+            );
+        };
 
-    if (runtime === "pi") {
-      const sessionDirectory = join(directory, "pi-sessions");
-      await fs.mkdir(sessionDirectory, { mode: 0o700 });
-      const secretPath = join(directory, "pi-environment.sh");
-      const provider = request.model.slice(0, request.model.indexOf("/"));
-      const secretSource = [
-        request.runtimeApiKey
-          ? `export PI_SUBAGENT_RUNTIME_API_KEY=${shellQuote(Redacted.value(request.runtimeApiKey))}`
-          : "unset PI_SUBAGENT_RUNTIME_API_KEY",
-        request.runtimeApiKey
-          ? `export PI_SUBAGENT_RUNTIME_API_PROVIDER=${shellQuote(provider)}`
-          : "unset PI_SUBAGENT_RUNTIME_API_PROVIDER",
-        "",
-      ].join("\n");
-      await writeExclusive(secretPath, secretSource);
-      return resource({
-        directory,
-        runtime,
-        argv: controlFreeArgv(
-          piArgv(
-            request,
-            sessionDirectory,
-            integration,
-            supervisor.connectionConfigPath,
-            promptPath,
-          ),
-        ),
-        environmentCommand,
-        environmentReadyMarker,
-        activationProbe,
-        shellReadinessProbe,
-        secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
-        secretReadyMarker,
-      });
-    }
+        const buildPi = (): Promise<PreparedHarnessResource> => {
+          const sessionDirectory = join(directory, "pi-sessions");
+          const secretPath = join(directory, "pi-environment.sh");
+          const provider = request.model.slice(0, request.model.indexOf("/"));
+          const secretSource = [
+            request.runtimeApiKey
+              ? `export PI_SUBAGENT_RUNTIME_API_KEY=${shellQuote(Redacted.value(request.runtimeApiKey))}`
+              : "unset PI_SUBAGENT_RUNTIME_API_KEY",
+            request.runtimeApiKey
+              ? `export PI_SUBAGENT_RUNTIME_API_PROVIDER=${shellQuote(provider)}`
+              : "unset PI_SUBAGENT_RUNTIME_API_PROVIDER",
+            "",
+          ].join("\n");
+          return fs
+            .mkdir(sessionDirectory, { mode: 0o700 })
+            .then(() => writeExclusive(secretPath, secretSource))
+            .then(() =>
+              resource({
+                directory,
+                runtime,
+                argv: controlFreeArgv(
+                  piArgv(
+                    request,
+                    sessionDirectory,
+                    integration,
+                    supervisor.connectionConfigPath,
+                    promptPath,
+                  ),
+                ),
+                environmentCommand,
+                environmentReadyMarker,
+                activationProbe,
+                shellReadinessProbe,
+                secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
+                secretReadyMarker,
+              }),
+            );
+        };
 
-    const codexHome = join(directory, "codex-home");
-    await fs.mkdir(codexHome, { mode: 0o700 });
-    const auth = await readValidatedCodexAuth(environment);
-    const apiKey = approvedApiKey(environment);
-    if (auth) await writeExclusive(join(codexHome, "auth.json"), auth);
-    else if (!apiKey) throw new Error("codex-auth-unavailable");
-    if (options.harnessFault === "after-codex-auth") throw new Error("fixture-after-codex-auth");
-    const sessionHook = fileURLToPath(new URL("./herdr-codex-session-hook.mjs", import.meta.url));
-    const fallbackTranscript = join(directory, "codex-session-anchor.jsonl");
-    await writeExclusive(fallbackTranscript, "\n");
-    const hookCommand = [
-      shellQuote(process.execPath),
-      shellQuote(sessionHook),
-      shellQuote(integration),
-      shellQuote(fallbackTranscript),
-    ].join(" ");
-    const hooksPath = join(codexHome, "hooks.json");
-    const configPath = join(codexHome, "config.toml");
-    const hooks = {
-      hooks: {
-        SessionStart: [
-          {
-            matcher: "startup",
-            hooks: [{ type: "command", command: hookCommand, timeout: 10 }],
-          },
-        ],
-      },
-    };
-    await writeExclusive(hooksPath, `${JSON.stringify(hooks)}\n`);
-    await writeExclusive(configPath, codexConfig(request, supervisor, integration));
-    await Effect.runPromise(
-      options.codexHooks!.establishTrust({
-        codexHome,
-        configPath,
-        hooksPath,
-        cwd: request.cwd,
-        command: hookCommand,
-      }),
-    );
-    const secretPath = join(directory, "codex-environment.sh");
-    await writeExclusive(
-      secretPath,
-      [
-        `export CODEX_HOME=${shellQuote(codexHome)}`,
-        apiKey ? `export OPENAI_API_KEY=${shellQuote(apiKey)}` : "unset OPENAI_API_KEY",
-        "",
-      ].join("\n"),
-    );
-    return resource({
-      directory,
-      runtime,
-      argv: controlFreeArgv(codexArgv(request)),
-      environmentCommand,
-      environmentReadyMarker,
-      activationProbe,
-      shellReadinessProbe,
-      secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
-      secretReadyMarker,
-    });
-  } catch (error) {
-    if (isHerdrCodexHooksError(error) && error.code === "codex_herdr_hook_cleanup_unconfirmed")
-      throw harnessCleanupUnconfirmed(error);
-    try {
-      if (options.harnessCleanupFault) throw new Error("fixture-harness-cleanup-failure");
-      await removeHarness(directory);
-    } catch (cleanupError) {
-      // Keep the private directory fail-closed. Suppressing this failure would permit candidate
-      // fallback even though credentials or harness state may still be present.
-      throw harnessCleanupUnconfirmed(cleanupError);
-    }
-    throw error;
-  }
+        const buildCodex = (): Promise<PreparedHarnessResource> => {
+          const codexHome = join(directory, "codex-home");
+          return fs
+            .mkdir(codexHome, { mode: 0o700 })
+            .then(() => readValidatedCodexAuth(environment))
+            .then((auth) => {
+              const apiKey = approvedApiKey(environment);
+              const writeAuth = auth
+                ? writeExclusive(join(codexHome, "auth.json"), auth)
+                : apiKey
+                  ? Promise.resolve()
+                  : Promise.reject(new Error("codex-auth-unavailable"));
+              return writeAuth.then(() => {
+                if (options.harnessFault === "after-codex-auth")
+                  throw new Error("fixture-after-codex-auth");
+                const sessionHook = fileURLToPath(
+                  new URL("./herdr-codex-session-hook.mjs", import.meta.url),
+                );
+                const fallbackTranscript = join(directory, "codex-session-anchor.jsonl");
+                const hookCommand = [
+                  shellQuote(process.execPath),
+                  shellQuote(sessionHook),
+                  shellQuote(integration),
+                  shellQuote(fallbackTranscript),
+                ].join(" ");
+                const hooksPath = join(codexHome, "hooks.json");
+                const configPath = join(codexHome, "config.toml");
+                const hooks = {
+                  hooks: {
+                    SessionStart: [
+                      {
+                        matcher: "startup",
+                        hooks: [{ type: "command", command: hookCommand, timeout: 10 }],
+                      },
+                    ],
+                  },
+                };
+                const secretPath = join(directory, "codex-environment.sh");
+                return writeExclusive(fallbackTranscript, "\n")
+                  .then(() => writeExclusive(hooksPath, `${JSON.stringify(hooks)}\n`))
+                  .then(() =>
+                    writeExclusive(configPath, codexConfig(request, supervisor, integration)),
+                  )
+                  .then(() =>
+                    Effect.runPromise(
+                      options.codexHooks!.establishTrust({
+                        codexHome,
+                        configPath,
+                        hooksPath,
+                        cwd: request.cwd,
+                        command: hookCommand,
+                      }),
+                    ),
+                  )
+                  .then(() =>
+                    writeExclusive(
+                      secretPath,
+                      [
+                        `export CODEX_HOME=${shellQuote(codexHome)}`,
+                        apiKey
+                          ? `export OPENAI_API_KEY=${shellQuote(apiKey)}`
+                          : "unset OPENAI_API_KEY",
+                        "",
+                      ].join("\n"),
+                    ),
+                  )
+                  .then(() =>
+                    resource({
+                      directory,
+                      runtime,
+                      argv: controlFreeArgv(codexArgv(request)),
+                      environmentCommand,
+                      environmentReadyMarker,
+                      activationProbe,
+                      shellReadinessProbe,
+                      secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
+                      secretReadyMarker,
+                    }),
+                  );
+              });
+            });
+        };
+
+        return validateIntegration(integration, runtime)
+          .then(() => writeExclusive(promptPath, request.systemPrompt))
+          .then(() =>
+            runtime === "claude" ? buildClaude() : runtime === "pi" ? buildPi() : buildCodex(),
+          )
+          .catch((error) => {
+            if (
+              isHerdrCodexHooksError(error) &&
+              error.code === "codex_herdr_hook_cleanup_unconfirmed"
+            )
+              throw harnessCleanupUnconfirmed(error);
+            return Promise.resolve()
+              .then(() => {
+                if (options.harnessCleanupFault) throw new Error("fixture-harness-cleanup-failure");
+                return removeHarness(directory);
+              })
+              .then(
+                () => {
+                  throw error;
+                },
+                (cleanupError) => {
+                  // Keep the private directory fail-closed. Suppressing this failure would permit
+                  // candidate fallback even though credentials or harness state may still be present.
+                  throw harnessCleanupUnconfirmed(cleanupError);
+                },
+              );
+          });
+      });
+  });
 };
 
-const removeHarness = async (directory: string): Promise<void> => {
-  const stat = await fs.lstat(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
-  await fs.rm(directory, { recursive: true, force: false });
-};
+const removeHarness = (directory: string): Promise<void> =>
+  fs.lstat(directory).then((stat) => {
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
+    return fs.rm(directory, { recursive: true, force: false });
+  });
 
 export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnessContract => {
   // Select and sanitize inherited auth/session inputs exactly once for this session service.
@@ -694,13 +745,15 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
           );
           const helper = fileURLToPath(new URL("./supervisor-mcp-helper.mjs", import.meta.url));
           yield* Effect.tryPromise({
-            try: async () => {
-              for (const path of [extension, helper]) {
-                const stat = await fs.lstat(path);
-                if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1)
-                  throw new Error("missing-bridge");
-              }
-            },
+            try: () =>
+              fs.lstat(extension).then((extensionStat) =>
+                fs.lstat(helper).then((helperStat) => {
+                  for (const stat of [extensionStat, helperStat]) {
+                    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1)
+                      throw new Error("missing-bridge");
+                  }
+                }),
+              ),
             catch: () =>
               readinessError(
                 "pi_bridge_unavailable",
@@ -713,11 +766,11 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
             new URL("./herdr-codex-session-hook.mjs", import.meta.url),
           );
           yield* Effect.tryPromise({
-            try: async () => {
-              const stat = await fs.lstat(sessionHook);
-              if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1)
-                throw new Error("missing-codex-session-hook");
-            },
+            try: () =>
+              fs.lstat(sessionHook).then((stat) => {
+                if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1)
+                  throw new Error("missing-codex-session-hook");
+              }),
             catch: () =>
               readinessError(
                 "codex_herdr_hook_unavailable",

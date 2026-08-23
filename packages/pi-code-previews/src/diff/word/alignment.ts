@@ -85,7 +85,7 @@ export function prefixAlignedPairs(
       j--;
     }
   }
-  return pairs.reverse();
+  return pairs.toReversed();
 }
 
 export function suffixAlignmentScore(

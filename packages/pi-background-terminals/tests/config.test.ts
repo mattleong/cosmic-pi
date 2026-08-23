@@ -1,10 +1,14 @@
 // Deterministic config-store suite: each test is a Layer entry point for the store runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { AgentDirectory, JsonDocumentStore, type JsonDocumentStoreContract } from "pi-cosmic-core";
+import {
+  AgentDirectory,
+  JsonDocumentStore,
+  provideBuiltLayer,
+  type JsonDocumentStoreContract,
+} from "pi-cosmic-core";
 import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
 import { normalizeConfig } from "../src/config/options.ts";
 import { DEFAULT_BACKGROUND_TERMINAL_CONFIG } from "../src/config/schema.ts";
@@ -95,7 +99,7 @@ describe("background terminal config store", () => {
         enabled: false,
         showFooterStatus: false,
       });
-    }).pipe(Effect.provide(storeLayer(recordingService(memory, operations), false)));
+    }).pipe(provideBuiltLayer(storeLayer(recordingService(memory, operations), false)));
   });
 
   it.effect("trusted resolution still overlays the project document over the global one", () => {
@@ -110,6 +114,6 @@ describe("background terminal config store", () => {
       expect(config.stopGraceMs).toBe(1_000);
       expect(operations.some((operation) => operation === `exists:${PROJECT_PATH}`)).toBe(true);
       expect(operations.some((operation) => operation === `read:${PROJECT_PATH}`)).toBe(true);
-    }).pipe(Effect.provide(storeLayer(recordingService(memory, operations), true)));
+    }).pipe(provideBuiltLayer(storeLayer(recordingService(memory, operations), true)));
   });
 });

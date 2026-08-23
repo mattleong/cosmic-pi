@@ -7,8 +7,8 @@
 - `src/extension.ts` — thin Pi registration entrypoint.
 - `src/layer.ts` — session Layer composition.
 - `src/application.ts` — session lifecycle, deferred tool registration, and `/ask-user` wiring.
-- `src/boundary/host-dialogs.ts` — TUI and RPC dialog boundary with abort-aware Promise adaptation.
-- `src/boundary/host-external-editor.ts` — narrow Pi settings plus scoped Effect temporary-directory and inherited-terminal child-process ownership.
+- `src/boundary/host-dialogs.ts` — dialog boundary: the RPC flow is Effect-native (each Pi dialog call is adapted with an interruption-linked abort signal); the TUI overlay stays a Promise-shaped callback boundary adapted once at the service edge.
+- `src/boundary/host-external-editor.ts` — narrow Pi settings plus scoped Effect temporary-directory and inherited-terminal child-process ownership; each invocation runs through its own disposed `ManagedRuntime` entry point.
 - `src/boundary/host-ui.ts` — synchronous active-dialog/status bridge used to resume a hidden overlay without a raw terminal listener.
 - `src/boundary/host-commands.ts` — `/ask-user` host command registration.
 - `src/questionnaire/` — immutable answer/state contracts, semantic validation, pure reducer, typed errors, and serialized Effect service.

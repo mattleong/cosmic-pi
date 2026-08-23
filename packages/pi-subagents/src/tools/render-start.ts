@@ -286,15 +286,31 @@ const receiptHeader = (
 };
 
 class StartReceiptComponent implements Component {
+  private readonly progress: string;
+  private readonly cards: ReadonlyArray<SubagentRunCard>;
+  private readonly failures: ReadonlyArray<SubagentStartFailure>;
+  private readonly entries: ReadonlyArray<SubagentStartEntry>;
+  private readonly partial: boolean;
+  private readonly expanded: boolean;
+  private readonly theme: Theme;
+
   constructor(
-    private readonly progress: string,
-    private readonly cards: ReadonlyArray<SubagentRunCard>,
-    private readonly failures: ReadonlyArray<SubagentStartFailure>,
-    private readonly entries: ReadonlyArray<SubagentStartEntry>,
-    private readonly partial: boolean,
-    private readonly expanded: boolean,
-    private readonly theme: Theme,
-  ) {}
+    progress: string,
+    cards: ReadonlyArray<SubagentRunCard>,
+    failures: ReadonlyArray<SubagentStartFailure>,
+    entries: ReadonlyArray<SubagentStartEntry>,
+    partial: boolean,
+    expanded: boolean,
+    theme: Theme,
+  ) {
+    this.progress = progress;
+    this.cards = cards;
+    this.failures = failures;
+    this.entries = entries;
+    this.partial = partial;
+    this.expanded = expanded;
+    this.theme = theme;
+  }
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);

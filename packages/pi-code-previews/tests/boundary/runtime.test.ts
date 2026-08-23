@@ -1,5 +1,4 @@
 // Test assertion boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
 import assert from "node:assert/strict";
 import { describe, it } from "@effect/vitest";
 import { test } from "vitest";

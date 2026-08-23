@@ -1,11 +1,16 @@
 // Pi session and inherited Herdr process state are captured at the host boundary.
-// @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-import { lstatSync } from "node:fs";
-import { basename, isAbsolute } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureSessionHost } from "pi-cosmic-core";
 import { selectHerdrEnvironment } from "./herdr-client.ts";
+
+// Synchronous host-boundary session validation needs raw Node fs/path semantics
+// (lstat without a scoped Effect runtime); Effect FileSystem cannot express this
+// pre-runtime capture contract.
+const nodeFs = process.getBuiltinModule("node:fs");
+const nodePath = process.getBuiltinModule("node:path");
+if (!nodeFs || !nodePath) throw new Error("Node fs/path builtins are unavailable.");
+const { lstatSync } = nodeFs;
+const { basename, isAbsolute } = nodePath;
 
 const MAX_SESSION_PATH_CHARS = 4_096;
 

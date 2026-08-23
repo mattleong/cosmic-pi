@@ -1,8 +1,8 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { readSchemaDocument } from "../src/platform/schema-document.ts";
+import { provideBuiltLayer } from "../src/runtime/layers.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 
 const ConfigSchema = Schema.Struct({ enabled: Schema.Boolean });
@@ -15,7 +15,7 @@ it.effect("decodes schema documents and exposes unknown fields on the raw docume
     const current = yield* readSchemaDocument("/config.json", ConfigSchema);
     expect(current?.value.enabled).toBe(true);
     expect(current?.raw.future).toEqual({ value: 1 });
-  }).pipe(Effect.provide(memory.layer));
+  }).pipe(provideBuiltLayer(memory.layer));
 });
 
 it.effect("returns undefined for a missing document", () => {
@@ -23,7 +23,7 @@ it.effect("returns undefined for a missing document", () => {
   return Effect.gen(function* () {
     const current = yield* readSchemaDocument("/config.json", ConfigSchema);
     expect(current).toBeUndefined();
-  }).pipe(Effect.provide(memory.layer));
+  }).pipe(provideBuiltLayer(memory.layer));
 });
 
 it.effect("reports malformed documents with a path but without the rejected value", () => {
@@ -35,7 +35,7 @@ it.effect("reports malformed documents with a path but without the rejected valu
       expect(result.failure.message).toContain("$.enabled");
       expect(result.failure.message).not.toContain("secret-value");
     }
-  }).pipe(Effect.provide(memory.layer));
+  }).pipe(provideBuiltLayer(memory.layer));
 });
 
 it.effect("bounds diagnostics for wide schema issue trees", () => {
@@ -51,7 +51,7 @@ it.effect("bounds diagnostics for wide schema issue trees", () => {
       expect(result.failure.message.length).toBeLessThan(512);
       expect(result.failure.message).not.toContain("secret-value");
     }
-  }).pipe(Effect.provide(memory.layer));
+  }).pipe(provideBuiltLayer(memory.layer));
 });
 
 it.effect("redacts dynamic path segments regardless of their length", () => {
@@ -78,5 +78,5 @@ it.effect("redacts dynamic path segments regardless of their length", () => {
         expect(result.failure.message.length).toBeLessThan(512);
       }
     }
-  }).pipe(Effect.provide(memory.layer));
+  }).pipe(provideBuiltLayer(memory.layer));
 });

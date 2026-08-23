@@ -148,10 +148,13 @@ function formatToolCallDuration(ms: number): string {
 }
 
 export class TimingPreservedComponent implements Component {
-  constructor(
-    readonly component: Component,
-    private readonly state: TimingState,
-  ) {}
+  readonly component: Component;
+  private readonly state: TimingState;
+
+  constructor(component: Component, state: TimingState) {
+    this.component = component;
+    this.state = state;
+  }
 
   render(width: number): string[] {
     return this.component.render(width);
@@ -163,11 +166,15 @@ export class TimingPreservedComponent implements Component {
 }
 
 class ToolTimingFooter implements Component {
-  constructor(
-    private readonly component: Component,
-    private readonly footer: string,
-    private readonly state: TimingState,
-  ) {}
+  private readonly component: Component;
+  private readonly footer: string;
+  private readonly state: TimingState;
+
+  constructor(component: Component, footer: string, state: TimingState) {
+    this.component = component;
+    this.footer = footer;
+    this.state = state;
+  }
 
   render(width: number): string[] {
     return [...this.component.render(width), truncateToWidth(this.footer, width, "")];

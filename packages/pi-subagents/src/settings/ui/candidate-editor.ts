@@ -1,5 +1,4 @@
 // Settings model discovery is a Promise-shaped Pi host boundary.
-// @effect-diagnostics effect/asyncFunction:off
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { LocalCliRuntime } from "../../boundary/local-cli-process.ts";
@@ -81,47 +80,55 @@ const pickerContext = (input: CandidateModelEditorInput): ProfileModelPickerCont
   runtime: input.candidate.runtime,
 });
 
-const loadNativeModels = async (
-  input: CandidateModelEditorInput,
-): Promise<CandidateModelPickerData> => {
+const loadNativeModels = (input: CandidateModelEditorInput): Promise<CandidateModelPickerData> => {
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const runtime = input.candidate.runtime as LocalCliRuntime;
-  let models: ReadonlyArray<NativeRuntimeModel>;
-  let warning: string | undefined;
-  try {
-    const advertised = input.signal
-      ? await input.listNativeModels(runtime, input.signal)
-      : await input.listNativeModels(runtime);
-    models = advertised.filter((model) => isSafeNativeModelSelector(model.selector));
-    if (models.length !== advertised.length)
-      warning = "Some advertised models used unsafe selectors and were omitted.";
-  } catch (error) {
-    warning =
-      error instanceof Error
-        ? `${error.message} Showing current/default model choices instead.`
-        : `Could not load the ${runtime} model catalog. Showing current/default choices instead.`;
-    models = [];
-  }
-  const catalog = new Map<string, NativeRuntimeModel>();
-  for (const model of [...models, ...nativeFallbackModels(runtime, input.candidate.model)])
-    if (!catalog.has(model.selector)) catalog.set(model.selector, model);
-  return (() => {
-    const baseResult = {
-      choices: createNativeModelChoices([...catalog.values()], input.candidate.model),
-      current: input.candidate.model,
-      defaultSelector:
-        models.find((model) => model.isDefault)?.selector ??
-        models[0]?.selector ??
-        input.candidate.model,
-      context: pickerContext(input),
-    };
-    const withWarning = warning ? { ...baseResult, warning } : baseResult;
-    return withWarning;
-  })();
+  return Promise.resolve()
+    .then(() =>
+      input.signal
+        ? input.listNativeModels(runtime, input.signal)
+        : input.listNativeModels(runtime),
+    )
+    .then(
+      (advertised) => {
+        const models = advertised.filter((model) => isSafeNativeModelSelector(model.selector));
+        return {
+          models,
+          warning:
+            models.length !== advertised.length
+              ? "Some advertised models used unsafe selectors and were omitted."
+              : undefined,
+        };
+      },
+      (error) => ({
+        // SAFETY: The empty fallback list trivially satisfies the declared element contract.
+        models: [] as ReadonlyArray<NativeRuntimeModel>,
+        warning:
+          error instanceof Error
+            ? `${error.message} Showing current/default model choices instead.`
+            : `Could not load the ${runtime} model catalog. Showing current/default choices instead.`,
+      }),
+    )
+    .then(({ models, warning }) => {
+      const catalog = new Map<string, NativeRuntimeModel>();
+      for (const model of [...models, ...nativeFallbackModels(runtime, input.candidate.model)])
+        if (!catalog.has(model.selector)) catalog.set(model.selector, model);
+      const baseResult = {
+        choices: createNativeModelChoices([...catalog.values()], input.candidate.model),
+        current: input.candidate.model,
+        defaultSelector:
+          models.find((model) => model.isDefault)?.selector ??
+          models[0]?.selector ??
+          input.candidate.model,
+        context: pickerContext(input),
+      };
+      const withWarning = warning ? { ...baseResult, warning } : baseResult;
+      return withWarning;
+    });
 };
 
 /** Loads runtime-specific choices for the workspace's full-page searchable model picker. */
-export async function loadCandidateModelPicker(
+export function loadCandidateModelPicker(
   ctx: ExtensionCommandContext,
   input: CandidateModelEditorInput,
 ): Promise<CandidateModelPickerData> {
@@ -215,12 +222,14 @@ export async function loadCandidateModelPicker(
       : undefined,
     choices.length === 0 ? "No authenticated canonical Pi models are available." : undefined,
   ].filter((warning): warning is string => warning !== undefined);
-  return (() => {
-    const baseResult = { choices, current: candidate.model, context: pickerContext(input) };
-    const withWarning =
-      warnings.length > 0 ? { ...baseResult, warning: warnings.join(" ") } : baseResult;
-    return withWarning;
-  })();
+  return Promise.resolve(
+    (() => {
+      const baseResult = { choices, current: candidate.model, context: pickerContext(input) };
+      const withWarning =
+        warnings.length > 0 ? { ...baseResult, warning: warnings.join(" ") } : baseResult;
+      return withWarning;
+    })(),
+  );
 }
 
 /** Applies a full-page picker selection through the route editor's normalization rules. */

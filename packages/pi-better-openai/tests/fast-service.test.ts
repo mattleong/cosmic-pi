@@ -1,4 +1,3 @@
-// @effect-diagnostics effect/strictEffectProvide:off
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
@@ -8,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import { AgentDirectory } from "pi-cosmic-core";
+import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
 import { jsonHttpTestLayer, makeInMemoryDocuments, yieldUntil } from "pi-cosmic-core/testing";
 import { FastModeService } from "../src/fast/service.ts";
 import { initialFastSnapshot, type FastSnapshot } from "../src/fast/controller.ts";
@@ -125,7 +124,7 @@ describe("FastModeService", () => {
         active: true,
         desiredActive: true,
       });
-    }).pipe(Effect.provide(fastLayer));
+    }).pipe(provideBuiltLayer(fastLayer));
   });
 
   it.effect("tracks desired state across model eligibility and closes synchronous ingress", () => {
@@ -165,7 +164,7 @@ describe("FastModeService", () => {
           yield* yieldUntil(
             () => MutableRef.get(projection).lastInjectedModel === "openai/gpt-5.5",
           );
-        }).pipe(Effect.provide(fastLayer)),
+        }).pipe(provideBuiltLayer(fastLayer)),
       );
 
       const closedSnapshot = MutableRef.get(projection);

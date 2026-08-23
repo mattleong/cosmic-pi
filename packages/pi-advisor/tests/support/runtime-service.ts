@@ -1,5 +1,4 @@
 // Test harness boundary: controllable child stubs stay Promise-shaped behind Effect layers.
-// @effect-diagnostics effect/asyncFunction:off
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { vi, type Mock } from "vitest";
@@ -65,10 +64,11 @@ export function controllableRuntimeService(
     const index = runtimes.length;
     const instance: ControllableRuntimeInstance = {
       driver: {
-        start: vi.fn(async (_options: AdvisorRuntimeStartOptions) => {
-          if (options.startError) throw options.startError;
-          await options.startPromises?.[index];
-        }),
+        start: vi.fn((_options: AdvisorRuntimeStartOptions) =>
+          options.startError
+            ? Promise.reject(options.startError)
+            : Promise.resolve(options.startPromises?.[index]).then(() => undefined),
+        ),
         checkpoint: vi.fn((request: AdvisorCheckpointRequest) => {
           instance.requests.push(request);
           requests.push(request);
@@ -77,12 +77,12 @@ export function controllableRuntimeService(
           pending.push(wait);
           return wait.promise;
         }),
-        steer: vi.fn(async () => true),
-        reprime: vi.fn(async () => undefined),
-        abort: vi.fn(async () => undefined),
-        dispose: vi.fn(async () => {
-          await options.disposePromises?.[index];
-        }),
+        steer: vi.fn(() => Promise.resolve(true)),
+        reprime: vi.fn(() => Promise.resolve(undefined)),
+        abort: vi.fn(() => Promise.resolve(undefined)),
+        dispose: vi.fn(() =>
+          Promise.resolve(options.disposePromises?.[index]).then(() => undefined),
+        ),
       },
       requests: [],
       pending: [],

@@ -1,16 +1,12 @@
 // Explicit test entry-point Layer provision owns each scoped store runtime.
-// @effect-diagnostics effect/strictEffectProvide:off
-// @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/nodeBuiltinImport:off
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Schema from "effect/Schema";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach } from "vitest";
 import {
   CodeModeConfigStore,
   type CodeModeConfigStoreContract,
@@ -19,12 +15,26 @@ import {
 } from "../src/config/store.ts";
 import { DEFAULT_CODE_MODE_CONFIG } from "../src/config/schema.ts";
 
+// Raw Node builtin access for synchronous test scaffolding, mirroring pi-cosmic-core's
+// platform boundary; the Effect FileSystem service does not expose these sync contracts.
+const nodeFsModule = process.getBuiltinModule("node:fs");
+const nodePathModule = process.getBuiltinModule("node:path");
+if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
+const { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = nodeFsModule;
+const { dirname, join } = nodePathModule;
+
 const tempDirectories: string[] = [];
 const runtimes: { dispose: () => Promise<void> }[] = [];
-afterEach(async () => {
-  for (const runtime of runtimes.splice(0)) await runtime.dispose();
-  for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true });
-});
+const disposeRuntimes = (): Promise<void> => {
+  const runtime = runtimes.shift();
+  if (!runtime) return Promise.resolve();
+  return runtime.dispose().then(disposeRuntimes);
+};
+afterEach(() =>
+  disposeRuntimes().then(() => {
+    for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true });
+  }),
+);
 
 function harness(projectTrusted: boolean) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-code-mode-cwd-"));
@@ -56,161 +66,194 @@ function harness(projectTrusted: boolean) {
 }
 
 describe("code mode config store", () => {
-  it("resolves locked defaults, seeds an empty global document, and freezes the state", async () => {
-    const h = harness(true);
-    const state = await h.use((store) => store.state);
-    expect(state.config).toEqual(DEFAULT_CODE_MODE_CONFIG);
-    expect(state.available).toBe(true);
-    expect(state.projectTrusted).toBe(true);
-    expect(state.diagnostics).toEqual([]);
-    expect(Object.isFrozen(state)).toBe(true);
-    expect(Object.isFrozen(state.config)).toBe(true);
-    expect(h.readDoc(h.globalPath)).toEqual({});
-    expect(h.published.length).toBeGreaterThan(0);
-  });
+  it.effect("resolves locked defaults, seeds an empty global document, and freezes the state", () =>
+    Effect.gen(function* () {
+      const h = harness(true);
+      const state = yield* Effect.promise(() => h.use((store) => store.state));
+      expect(state.config).toEqual(DEFAULT_CODE_MODE_CONFIG);
+      expect(state.available).toBe(true);
+      expect(state.projectTrusted).toBe(true);
+      expect(state.diagnostics).toEqual([]);
+      expect(Object.isFrozen(state)).toBe(true);
+      expect(Object.isFrozen(state.config)).toBe(true);
+      expect(h.readDoc(h.globalPath)).toEqual({});
+      expect(h.published.length).toBeGreaterThan(0);
+    }),
+  );
 
-  it("resolves project fields over global fields one field at a time", async () => {
-    const h = harness(true);
-    h.writeDoc(h.globalPath, { timeoutMs: 60_000, enabled: false, maxOutputBytes: 1_024 });
-    h.writeDoc(h.projectPath, { enabled: true, maxToolCalls: 64 });
-    const state = await h.use((store) => store.state);
-    expect(state.config.enabled).toBe(true);
-    expect(state.provenance.enabled).toBe("project");
-    expect(state.config.timeoutMs).toBe(60_000);
-    expect(state.provenance.timeoutMs).toBe("global");
-    expect(state.config.maxToolCalls).toBe(64);
-    expect(state.config.maxOutputBytes).toBe(1_024);
-    expect(state.config.maxSourceBytes).toBe(DEFAULT_CODE_MODE_CONFIG.maxSourceBytes);
-    expect(state.provenance.maxSourceBytes).toBe("default");
-  });
+  it.effect("resolves project fields over global fields one field at a time", () =>
+    Effect.gen(function* () {
+      const h = harness(true);
+      h.writeDoc(h.globalPath, { timeoutMs: 60_000, enabled: false, maxOutputBytes: 1_024 });
+      h.writeDoc(h.projectPath, { enabled: true, maxToolCalls: 64 });
+      const state = yield* Effect.promise(() => h.use((store) => store.state));
+      expect(state.config.enabled).toBe(true);
+      expect(state.provenance.enabled).toBe("project");
+      expect(state.config.timeoutMs).toBe(60_000);
+      expect(state.provenance.timeoutMs).toBe("global");
+      expect(state.config.maxToolCalls).toBe(64);
+      expect(state.config.maxOutputBytes).toBe(1_024);
+      expect(state.config.maxSourceBytes).toBe(DEFAULT_CODE_MODE_CONFIG.maxSourceBytes);
+      expect(state.provenance.maxSourceBytes).toBe("default");
+    }),
+  );
 
-  it("drops malformed fields independently with bounded, path-only diagnostics", async () => {
-    const h = harness(true);
-    h.writeDoc(h.globalPath, {
-      timeoutMs: "soon",
-      maxToolCalls: 64,
-      catalogBudget: 999_999_999,
-    });
-    h.writeDoc(h.projectPath, { enabled: "yes", maxOutputBytes: 2_048 });
-    const state = await h.use((store) => store.state);
-    expect(state.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
-    expect(state.config.catalogBudget).toBe(DEFAULT_CODE_MODE_CONFIG.catalogBudget);
-    expect(state.config.maxToolCalls).toBe(64);
-    expect(state.config.enabled).toBe(true);
-    expect(state.config.maxOutputBytes).toBe(2_048);
-    const paths = state.diagnostics.map((diagnostic) => diagnostic.path);
-    expect(paths).toContain("global.config.timeoutMs");
-    expect(paths).toContain("global.config.catalogBudget");
-    expect(paths).toContain("project.config.enabled");
-    for (const diagnostic of state.diagnostics) {
-      expect(Object.keys(diagnostic).sort()).toEqual(["issue", "path"]);
-      expect(diagnostic.issue).toBe("invalid");
-    }
-    expect(state.diagnostics.length).toBeLessThanOrEqual(32);
-  });
+  it.effect("drops malformed fields independently with bounded, path-only diagnostics", () =>
+    Effect.gen(function* () {
+      const h = harness(true);
+      h.writeDoc(h.globalPath, {
+        timeoutMs: "soon",
+        maxToolCalls: 64,
+        catalogBudget: 999_999_999,
+      });
+      h.writeDoc(h.projectPath, { enabled: "yes", maxOutputBytes: 2_048 });
+      const state = yield* Effect.promise(() => h.use((store) => store.state));
+      expect(state.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
+      expect(state.config.catalogBudget).toBe(DEFAULT_CODE_MODE_CONFIG.catalogBudget);
+      expect(state.config.maxToolCalls).toBe(64);
+      expect(state.config.enabled).toBe(true);
+      expect(state.config.maxOutputBytes).toBe(2_048);
+      const paths = state.diagnostics.map((diagnostic) => diagnostic.path);
+      expect(paths).toContain("global.config.timeoutMs");
+      expect(paths).toContain("global.config.catalogBudget");
+      expect(paths).toContain("project.config.enabled");
+      for (const diagnostic of state.diagnostics) {
+        expect(Object.keys(diagnostic).sort()).toEqual(["issue", "path"]);
+        expect(diagnostic.issue).toBe("invalid");
+      }
+      expect(state.diagnostics.length).toBeLessThanOrEqual(32);
+    }),
+  );
 
-  it("never reads the project document in an untrusted project", async () => {
-    const h = harness(false);
-    h.writeDoc(h.globalPath, { timeoutMs: 45_000 });
-    h.writeDoc(h.projectPath, { enabled: true, timeoutMs: 1_000 });
-    const state = await h.use((store) => store.state);
-    expect(state.config.timeoutMs).toBe(45_000);
-    expect(state.projectValues).toEqual({});
-    expect(state.provenance.enabled).toBe("default");
-    expect(state.available).toBe(false);
-  });
+  it.effect("never reads the project document in an untrusted project", () =>
+    Effect.gen(function* () {
+      const h = harness(false);
+      h.writeDoc(h.globalPath, { timeoutMs: 45_000 });
+      h.writeDoc(h.projectPath, { enabled: true, timeoutMs: 1_000 });
+      const state = yield* Effect.promise(() => h.use((store) => store.state));
+      expect(state.config.timeoutMs).toBe(45_000);
+      expect(state.projectValues).toEqual({});
+      expect(state.provenance.enabled).toBe("default");
+      expect(state.available).toBe(false);
+    }),
+  );
 
-  it("computes availability as trusted AND enabled across the matrix", async () => {
-    const trustedDefault = harness(true);
-    expect((await trustedDefault.use((store) => store.state)).available).toBe(true);
+  it.effect("computes availability as trusted AND enabled across the matrix", () =>
+    Effect.gen(function* () {
+      const stateOf = (h: ReturnType<typeof harness>) =>
+        Effect.promise(() => h.use((store) => store.state));
 
-    const trustedDisabledGlobal = harness(true);
-    trustedDisabledGlobal.writeDoc(trustedDisabledGlobal.globalPath, { enabled: false });
-    expect((await trustedDisabledGlobal.use((store) => store.state)).available).toBe(false);
+      const trustedDefault = harness(true);
+      expect((yield* stateOf(trustedDefault)).available).toBe(true);
 
-    const trustedDisabledProject = harness(true);
-    trustedDisabledProject.writeDoc(trustedDisabledProject.globalPath, { enabled: true });
-    trustedDisabledProject.writeDoc(trustedDisabledProject.projectPath, { enabled: false });
-    expect((await trustedDisabledProject.use((store) => store.state)).available).toBe(false);
+      const trustedDisabledGlobal = harness(true);
+      trustedDisabledGlobal.writeDoc(trustedDisabledGlobal.globalPath, { enabled: false });
+      expect((yield* stateOf(trustedDisabledGlobal)).available).toBe(false);
 
-    // A global enabled: true never grants availability in an untrusted project.
-    const untrustedEnabledGlobal = harness(false);
-    untrustedEnabledGlobal.writeDoc(untrustedEnabledGlobal.globalPath, { enabled: true });
-    expect((await untrustedEnabledGlobal.use((store) => store.state)).available).toBe(false);
+      const trustedDisabledProject = harness(true);
+      trustedDisabledProject.writeDoc(trustedDisabledProject.globalPath, { enabled: true });
+      trustedDisabledProject.writeDoc(trustedDisabledProject.projectPath, { enabled: false });
+      expect((yield* stateOf(trustedDisabledProject)).available).toBe(false);
 
-    const untrustedEnabledProject = harness(false);
-    untrustedEnabledProject.writeDoc(untrustedEnabledProject.projectPath, { enabled: true });
-    expect((await untrustedEnabledProject.use((store) => store.state)).available).toBe(false);
-  });
+      // A global enabled: true never grants availability in an untrusted project.
+      const untrustedEnabledGlobal = harness(false);
+      untrustedEnabledGlobal.writeDoc(untrustedEnabledGlobal.globalPath, { enabled: true });
+      expect((yield* stateOf(untrustedEnabledGlobal)).available).toBe(false);
 
-  it("writes, resets, and inherits fields per scope through the single door", async () => {
-    const h = harness(true);
-    const afterGlobal = await h.use((store) => store.setSetting("global", "timeoutMs", "60000"));
-    expect(afterGlobal.config.timeoutMs).toBe(60_000);
-    expect(afterGlobal.provenance.timeoutMs).toBe("global");
-    expect(h.readDoc(h.globalPath)).toEqual({ timeoutMs: 60_000 });
+      const untrustedEnabledProject = harness(false);
+      untrustedEnabledProject.writeDoc(untrustedEnabledProject.projectPath, { enabled: true });
+      expect((yield* stateOf(untrustedEnabledProject)).available).toBe(false);
+    }),
+  );
 
-    const afterProject = await h.use((store) => store.setSetting("project", "timeoutMs", "45000"));
-    expect(afterProject.config.timeoutMs).toBe(45_000);
-    expect(afterProject.provenance.timeoutMs).toBe("project");
-    expect(h.readDoc(h.projectPath)).toEqual({ timeoutMs: 45_000 });
-
-    const afterClearProject = await h.use((store) => store.clearSetting("project", "timeoutMs"));
-    expect(afterClearProject.config.timeoutMs).toBe(60_000);
-    expect(afterClearProject.provenance.timeoutMs).toBe("global");
-    expect(h.readDoc(h.projectPath)).toEqual({});
-
-    const afterClearGlobal = await h.use((store) => store.clearSetting("global", "timeoutMs"));
-    expect(afterClearGlobal.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
-    expect(afterClearGlobal.provenance.timeoutMs).toBe("default");
-    expect(h.readDoc(h.globalPath)).toEqual({});
-    expect(h.published.at(-1)?.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
-  });
-
-  it("preserves unrelated JSON fields on writes and clears", async () => {
-    const h = harness(true);
-    h.writeDoc(h.globalPath, { future: { keep: true }, timeoutMs: 15_000 });
-    await h.use((store) => store.setSetting("global", "maxToolCalls", "8"));
-    expect(h.readDoc(h.globalPath)).toEqual({
-      future: { keep: true },
-      timeoutMs: 15_000,
-      maxToolCalls: 8,
-    });
-    await h.use((store) => store.clearSetting("global", "timeoutMs"));
-    expect(h.readDoc(h.globalPath)).toEqual({ future: { keep: true }, maxToolCalls: 8 });
-  });
-
-  it("refuses project-scope writes while the project is untrusted", async () => {
-    const h = harness(false);
-    const error = await h.use((store) =>
-      store.setSetting("project", "enabled", "true").pipe(Effect.flip),
-    );
-    expect(error._tag).toBe("CodeModeUntrustedScopeError");
-    const clearError = await h.use((store) =>
-      store.clearSetting("project", "enabled").pipe(Effect.flip),
-    );
-    expect(clearError._tag).toBe("CodeModeUntrustedScopeError");
-    expect(existsSync(h.projectPath)).toBe(false);
-  });
-
-  it("does not persist invalid or out-of-range integers", async () => {
-    const h = harness(true);
-    h.writeDoc(h.globalPath, { timeoutMs: 15_000 });
-    for (const raw of ["nope", "1.5", "999999999"]) {
-      const error: CodeModeSettingsError = await h.use((store) =>
-        store.setSetting("global", "timeoutMs", raw).pipe(Effect.flip),
+  it.effect("writes, resets, and inherits fields per scope through the single door", () =>
+    Effect.gen(function* () {
+      const h = harness(true);
+      const afterGlobal = yield* Effect.promise(() =>
+        h.use((store) => store.setSetting("global", "timeoutMs", "60000")),
       );
-      expect(error._tag).toBe("InvalidCodeModeSettingError");
-    }
-    expect(h.readDoc(h.globalPath)).toEqual({ timeoutMs: 15_000 });
-  });
+      expect(afterGlobal.config.timeoutMs).toBe(60_000);
+      expect(afterGlobal.provenance.timeoutMs).toBe("global");
+      expect(h.readDoc(h.globalPath)).toEqual({ timeoutMs: 60_000 });
 
-  it("rejects unknown setting identifiers without touching documents", async () => {
-    const h = harness(true);
-    const error = await h.use((store) =>
-      store.setSetting("global", "notASetting", "1").pipe(Effect.flip),
-    );
-    expect(error._tag).toBe("CodeModeConfigError");
-    expect(h.readDoc(h.globalPath)).toEqual({});
-  });
+      const afterProject = yield* Effect.promise(() =>
+        h.use((store) => store.setSetting("project", "timeoutMs", "45000")),
+      );
+      expect(afterProject.config.timeoutMs).toBe(45_000);
+      expect(afterProject.provenance.timeoutMs).toBe("project");
+      expect(h.readDoc(h.projectPath)).toEqual({ timeoutMs: 45_000 });
+
+      const afterClearProject = yield* Effect.promise(() =>
+        h.use((store) => store.clearSetting("project", "timeoutMs")),
+      );
+      expect(afterClearProject.config.timeoutMs).toBe(60_000);
+      expect(afterClearProject.provenance.timeoutMs).toBe("global");
+      expect(h.readDoc(h.projectPath)).toEqual({});
+
+      const afterClearGlobal = yield* Effect.promise(() =>
+        h.use((store) => store.clearSetting("global", "timeoutMs")),
+      );
+      expect(afterClearGlobal.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
+      expect(afterClearGlobal.provenance.timeoutMs).toBe("default");
+      expect(h.readDoc(h.globalPath)).toEqual({});
+      expect(h.published.at(-1)?.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
+    }),
+  );
+
+  it.effect("preserves unrelated JSON fields on writes and clears", () =>
+    Effect.gen(function* () {
+      const h = harness(true);
+      h.writeDoc(h.globalPath, { future: { keep: true }, timeoutMs: 15_000 });
+      yield* Effect.promise(() =>
+        h.use((store) => store.setSetting("global", "maxToolCalls", "8")),
+      );
+      expect(h.readDoc(h.globalPath)).toEqual({
+        future: { keep: true },
+        timeoutMs: 15_000,
+        maxToolCalls: 8,
+      });
+      yield* Effect.promise(() => h.use((store) => store.clearSetting("global", "timeoutMs")));
+      expect(h.readDoc(h.globalPath)).toEqual({ future: { keep: true }, maxToolCalls: 8 });
+    }),
+  );
+
+  it.effect("refuses project-scope writes while the project is untrusted", () =>
+    Effect.gen(function* () {
+      const h = harness(false);
+      const error = yield* Effect.promise(() =>
+        h.use((store) => store.setSetting("project", "enabled", "true").pipe(Effect.flip)),
+      );
+      expect(error._tag).toBe("CodeModeUntrustedScopeError");
+      const clearError = yield* Effect.promise(() =>
+        h.use((store) => store.clearSetting("project", "enabled").pipe(Effect.flip)),
+      );
+      expect(clearError._tag).toBe("CodeModeUntrustedScopeError");
+      expect(existsSync(h.projectPath)).toBe(false);
+    }),
+  );
+
+  it.effect("does not persist invalid or out-of-range integers", () =>
+    Effect.gen(function* () {
+      const h = harness(true);
+      h.writeDoc(h.globalPath, { timeoutMs: 15_000 });
+      for (const raw of ["nope", "1.5", "999999999"]) {
+        const error: CodeModeSettingsError = yield* Effect.promise(() =>
+          h.use((store) => store.setSetting("global", "timeoutMs", raw).pipe(Effect.flip)),
+        );
+        expect(error._tag).toBe("InvalidCodeModeSettingError");
+      }
+      expect(h.readDoc(h.globalPath)).toEqual({ timeoutMs: 15_000 });
+    }),
+  );
+
+  it.effect("rejects unknown setting identifiers without touching documents", () =>
+    Effect.gen(function* () {
+      const h = harness(true);
+      const error = yield* Effect.promise(() =>
+        h.use((store) => store.setSetting("global", "notASetting", "1").pipe(Effect.flip)),
+      );
+      expect(error._tag).toBe("CodeModeConfigError");
+      expect(h.readDoc(h.globalPath)).toEqual({});
+    }),
+  );
 });
