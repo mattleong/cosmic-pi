@@ -119,6 +119,7 @@ export const makeSupervisorRpcServerProtocol = (
         supportsAck: true,
         supportsTransferables: false,
         supportsSpanPropagation: true,
+        supportsNotifications: true,
       });
     });
 

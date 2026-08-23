@@ -180,6 +180,7 @@ export {
 export {
   BoundedProcessError,
   confirmEffectProcessClose,
+  effectProcessExit,
   nodeProcessLayer,
   provideNodeProcess,
   runBoundedProcess,
@@ -187,6 +188,7 @@ export {
   runBoundedProcessScoped,
   type BoundedProcessRequest,
   type BoundedProcessResult,
+  type EffectProcessExit,
 } from "./src/platform/process.ts";
 export { awaitProcessClose, type ProcessCloseSource } from "./src/platform/process-close.ts";
 export { synchronousNow } from "./src/platform/native-clock.ts";

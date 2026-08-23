@@ -2,8 +2,9 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
+import { nodeFsConstants as constants, nodeFsPromises as fs } from "./node-builtins.ts";
 import { isStrictlyInsidePath } from "./paths.ts";
 
 export class SafeFileError extends Schema.TaggedError<SafeFileError>()("SafeFileError", {
@@ -57,6 +58,7 @@ const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(
   containmentRoot: string,
   maximumBytes: number,
 ) {
+  const paths = yield* Path.Path;
   const maximumSize = yield* Effect.try({
     try: () => BigInt(maximumBytes),
     catch: safeFileError("size", "Unable to open a stable regular file."),
@@ -107,7 +109,7 @@ const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(
           { concurrency: 2 },
         );
         if (
-          nodePath.resolve(resolvedRoot) !== nodePath.resolve(containmentRoot) ||
+          paths.resolve(resolvedRoot) !== paths.resolve(containmentRoot) ||
           !isStrictlyInsidePath(resolvedRoot, resolvedPath)
         )
           return yield* failRead();
@@ -150,8 +152,14 @@ export class SafeFile extends Context.Service<SafeFile, SafeFileContract>()(
 ) {
   static readonly layer = Layer.effect(
     this,
-    Effect.succeed(this.of({ readContainedRegularFile })).pipe(
-      Effect.withSpan("pi-cosmic-core.safe-file.initialize"),
-    ),
+    Effect.gen(function* () {
+      const paths = yield* Path.Path;
+      return SafeFile.of({
+        readContainedRegularFile: (path, containmentRoot, maximumBytes) =>
+          readContainedRegularFile(path, containmentRoot, maximumBytes).pipe(
+            Effect.provideService(Path.Path, paths),
+          ),
+      });
+    }).pipe(Effect.withSpan("pi-cosmic-core.safe-file.initialize")),
   );
 }

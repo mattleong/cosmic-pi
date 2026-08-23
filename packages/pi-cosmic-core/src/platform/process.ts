@@ -97,16 +97,24 @@ const boundedOutput = (
     ),
   );
 
-const signalFromExit = (exit: Exit.Exit<unknown, unknown>): string | null => {
-  if (Exit.isSuccess(exit)) return null;
+export interface EffectProcessExit {
+  readonly code: number | null;
+  readonly signal: string | null;
+}
+
+/** Decodes the public Effect child-process exit channel without leaking PlatformError. */
+export const effectProcessExit = (
+  exit: Exit.Exit<ChildProcessSpawner.ExitCode, PlatformError.PlatformError>,
+): EffectProcessExit => {
+  if (Exit.isSuccess(exit)) return { code: Number(exit.value), signal: null };
   const failure = Cause.squash(exit.cause);
   const source =
     failure instanceof PlatformError.PlatformError && "cause" in failure.reason
       ? failure.reason.cause
       : failure;
   const message = source instanceof Error ? source.message : String(source);
-  // Pinned rc.108 exposes the signal only through this stable nested cause text.
-  return /receipt of signal: '([^']+)'/u.exec(message)?.[1] ?? null;
+  // Pinned rc.111 exposes the signal only through this stable nested cause text.
+  return { code: null, signal: /receipt of signal: '([^']+)'/u.exec(message)?.[1] ?? null };
 };
 
 const decodeOutput = (collector: OutputCollector): string => {
@@ -244,9 +252,10 @@ export const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     const cleanupConfirmed = request.sweepProcessTreeOnExit
       ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
       : true;
+    const processExit = effectProcessExit(outcome.exit);
     return {
-      code: Exit.isSuccess(outcome.exit) ? Number(outcome.exit.value) : null,
-      signal: signalFromExit(outcome.exit),
+      code: processExit.code,
+      signal: processExit.signal,
       stdout: decodeOutput(stdout),
       stderr: decodeOutput(stderr),
       overflowed: false,

@@ -9,6 +9,24 @@ import { LocalProcess, makeBackgroundProcessEnvironment } from "../src/boundary/
 const withLocalProcess = <A, E>(effect: Effect.Effect<A, E, LocalProcess | Scope.Scope>) =>
   effect.pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
 
+const processAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const awaitProcessDeath = (pid: number) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (!processAlive(pid)) return true;
+      yield* Effect.sleep("10 millis");
+    }
+    return !processAlive(pid);
+  });
+
 describe("local process boundary", () => {
   it("requests color from compatible CLIs unless the environment explicitly configures it", () => {
     expect(
@@ -64,6 +82,27 @@ describe("local process boundary", () => {
           }),
         );
         expect(result._tag).toBe("Failure");
+      }),
+    ),
+  );
+
+  it.effect("redacts the command when Effect reports a spawn failure", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        const processes = yield* LocalProcess;
+        const result = yield* Effect.result(
+          processes.spawn({
+            command: "echo api_key=FAKE_SECRET_123",
+            cwd: ".",
+            shellPath: "/definitely/missing/pi-background-shell",
+            ingressBufferBytes: 64 * 1024,
+          }),
+        );
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure.message).toBe("Unable to spawn local process.");
+          expect(String(result.failure)).not.toContain("FAKE_SECRET_123");
+        }
       }),
     ),
   );
@@ -159,6 +198,30 @@ describe("local process boundary", () => {
     ),
   );
 
+  it.live("scope release terminates a running leader and descendant", () =>
+    Effect.gen(function* () {
+      const pids = yield* Effect.gen(function* () {
+        const processes = yield* LocalProcess;
+        const handle = yield* processes.spawn({
+          command: `node -e "const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); process.stdout.write(String(child.pid)); setInterval(()=>{},1000)"`,
+          cwd: ".",
+          ingressBufferBytes: 64 * 1024,
+        });
+        const events = yield* handle.output.pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.timeout("5 seconds"),
+        );
+        const descendant = Number([...events][0]?.text.trim());
+        expect(Number.isSafeInteger(descendant)).toBe(true);
+        return { leader: handle.pid, descendant };
+      }).pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
+
+      expect(yield* awaitProcessDeath(pids.leader)).toBe(true);
+      expect(yield* awaitProcessDeath(pids.descendant)).toBe(true);
+    }),
+  );
+
   it.effect("force-terminates a running process", () =>
     withLocalProcess(
       Effect.gen(function* () {
@@ -170,7 +233,7 @@ describe("local process boundary", () => {
         });
         yield* handle.terminate("force");
         const exit = yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
-        expect(exit.exitCode).toBeNull();
+        expect(exit).toMatchObject({ exitCode: null, signal: "SIGKILL" });
       }),
     ),
   );

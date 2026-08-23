@@ -5,10 +5,12 @@ import * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { ReadOnlyFileSystem } from "./read-only-fs.ts";
 
+const readOnlyFileSystemLayer = ReadOnlyFileSystem.layer.pipe(Layer.provide(NodePath.layer));
+
 export const advisorPlatformLayer = Layer.mergeAll(
   nodeFilePlatformLayer,
   NodePath.layer,
-  ReadOnlyFileSystem.layer,
+  readOnlyFileSystemLayer,
 );
 export type AdvisorPlatform = Layer.Success<typeof advisorPlatformLayer>;
 

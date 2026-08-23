@@ -1,5 +1,6 @@
 // Security adapter coverage intentionally uses real Node filesystem primitives.
 import { tmpdir } from "node:os";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,7 +10,7 @@ import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
 import { closeSafeFileHandle } from "../src/platform/safe-file.ts";
 import { capturedTelemetrySnapshot, makeCapturedTracer } from "../testing.ts";
 
-const { mkdtemp, realpath, rm, writeFile } = nodeFsPromises;
+const { mkdir, mkdtemp, realpath, rm, symlink, writeFile } = nodeFsPromises;
 const { join } = nodePath;
 
 class TestFileSystemError extends Schema.TaggedError<TestFileSystemError>()("TestFileSystemError", {
@@ -53,7 +54,11 @@ it.live("reads a stable file and captures a path-free resource span", () => {
       );
       expect(capturedTelemetrySnapshot(captured)).not.toContain(file);
     }),
-  ).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(captured.layer))));
+  ).pipe(
+    provideBuiltLayer(
+      SafeFile.layer.pipe(Layer.provide(NodePath.layer), Layer.provide(captured.layer)),
+    ),
+  );
 });
 
 it.live("fails safely when the file exceeds the configured limit", () =>
@@ -67,7 +72,38 @@ it.live("fails safely when the file exceeds the configured limit", () =>
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") expect(String(result.failure)).not.toContain(file);
     }),
-  ).pipe(provideBuiltLayer(SafeFile.layer)),
+  ).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
+);
+
+it.live("rejects symlinked roots, leaf symlinks, and files outside the containment root", () =>
+  withDirectory((directory) =>
+    Effect.gen(function* () {
+      const root = yield* testFileSystem("resolve temp directory", () => realpath(directory));
+      const workspace = join(root, "workspace");
+      const outside = join(root, "outside.txt");
+      const file = join(workspace, "input.txt");
+      const leafLink = join(workspace, "leaf-link.txt");
+      const rootLink = join(root, "workspace-link");
+      yield* testFileSystem("create workspace", () => mkdir(workspace));
+      yield* testFileSystem("write contained fixture", () => writeFile(file, "safe"));
+      yield* testFileSystem("write outside fixture", () => writeFile(outside, "outside"));
+      yield* testFileSystem("create leaf symlink", () => symlink(file, leafLink));
+      yield* testFileSystem("create root symlink", () => symlink(workspace, rootLink, "dir"));
+      const safeFile = yield* SafeFile;
+
+      for (const attempt of [
+        safeFile.readContainedRegularFile(leafLink, workspace, 32),
+        safeFile.readContainedRegularFile(outside, workspace, 32),
+        safeFile.readContainedRegularFile(file, rootLink, 32),
+      ]) {
+        const result = yield* Effect.result(attempt);
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(String(result.failure)).not.toContain(root);
+        }
+      }
+    }),
+  ).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
 );
 
 it.effect("maps close rejection to a redacted typed failure before deliberate recovery", () =>

@@ -9,7 +9,7 @@ Effectful tests use the exact RC-compatible `@effect/vitest` API:
 - `layer(...)` for a shared test Layer,
 - ordinary Vitest tests for total deterministic functions.
 
-Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpers are not exported by `@effect/vitest@4.0.0-rc.108`.
+Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpers are not exported by `@effect/vitest@4.0.0-rc.111`.
 
 ## Required coverage
 

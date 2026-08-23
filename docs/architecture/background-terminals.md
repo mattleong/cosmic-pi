@@ -282,7 +282,7 @@ Job completion never produces a user notification and never triggers an agent tu
 
 The MVP uses a local process adapter under `boundary/`. Do not use `pi.exec()` or the public `BashOperations` API as the owner: those APIs expose completion, not the long-lived child handle needed for status, output subscriptions, and process-tree shutdown.
 
-The adapter owns Node's `ChildProcess` and exposes an Effect-native contract to the domain service.
+The adapter owns an Effect `ChildProcessHandle` and exposes a narrower Effect-native contract to the domain service. Effect owns detached spawn, standard-stream consumption, force escalation, and scoped release; the adapter retains byte-bounded UTF-8 decoding plus immediate graceful signal and post-leader tree-sweep operations.
 
 ```ts
 interface LocalProcessHandle {
@@ -302,8 +302,8 @@ Spawn requirements:
 - Create a process group where supported.
 - On POSIX, terminate the process group rather than only the shell PID.
 - On Windows, use `taskkill /T` for active process trees and retry it during finalization. Cleanup after a shell leader has already exited is best effort until a native Job Object boundary is introduced.
-- Handle spawn error, exit, close, abort, timeout, and late output without double settlement.
-- Remove listeners and decoder state in a finalizer.
+- Handle spawn failure, exit, abort, timeout, and late output without double settlement.
+- Unref the upstream handle only when bounded release begins, so its fallback finalizer cannot extend session shutdown after this boundary's cleanup deadline.
 
 Termination policy:
 
@@ -321,7 +321,7 @@ Termination policy:
 - `BackgroundTerminalService` is the sole owner of the job registry and child scopes.
 - Each job gets a child scope containing its process handle, output fiber, timeout fiber, and completion Deferred.
 - Registry mutation is serialized. Concurrent start/stop/exit/shutdown events cannot produce duplicate settlement or lose a job.
-- Use `Deferred` for spawn readiness, exit, and log waiters.
+- Use Effect child-process acquisition for spawn readiness and `Deferred` for exit and log waiters.
 - Use `SubscriptionRef` or an equivalent revisioned projection for TUI/footer updates.
 - Use `Clock` for timeouts, durations, and stop escalation so tests can use `TestClock`.
 - Run Effects only at named Pi/Node boundary executors.

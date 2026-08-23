@@ -1,17 +1,20 @@
-// Node process ownership is intentionally isolated at this platform boundary. Raw builtin
-// access is required here: detached process groups, tree termination, and decoder-level
-// ingress backpressure are contracts the Effect ChildProcess service cannot express.
+// Long-lived shell output is decoded into a byte-bounded queue here. Effect owns spawn,
+// streams, forced cleanup, and scope lifetime; only immediate signal dispatch and the
+// post-leader process-group sweep remain raw platform operations.
 import { StringDecoder } from "node:string_decoder";
-import { awaitProcessClose } from "pi-cosmic-core";
+import { effectProcessExit, nodeProcessLayer } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import type { BackgroundLogStream } from "../job/model.ts";
 import { utf8ByteLength, utf8Tail } from "../job/utf8.ts";
 
@@ -20,9 +23,8 @@ const nodeFsModule = process.getBuiltinModule("node:fs");
 if (!childProcessModule || !nodeFsModule) {
   throw new Error("Node child_process/fs builtins are unavailable.");
 }
-const { spawn } = childProcessModule;
+const { spawn: spawnWindowsTreeTerminator } = childProcessModule;
 const { stat } = nodeFsModule.promises;
-type ChildProcess = InstanceType<typeof childProcessModule.ChildProcess>;
 
 const INGRESS_CHUNKS = 32;
 const BLOCKED_ENVIRONMENT_KEYS = new Set(["BASH_ENV", "ENV", "NODE_OPTIONS", "NODE_PATH"]);
@@ -65,10 +67,10 @@ export interface LocalProcessContract {
   ) => Effect.Effect<LocalProcessHandle, LocalProcessError, Scope.Scope>;
 }
 
-const processError = <ErrorInput>(operation: string, error: ErrorInput) =>
+const processError = <ErrorInput>(operation: string, _error: ErrorInput) =>
   new LocalProcessError({
     operation,
-    message: error instanceof Error ? error.message : `Unable to ${operation} local process.`,
+    message: `Unable to ${operation} local process.`,
   });
 
 export function makeBackgroundProcessEnvironment(
@@ -95,39 +97,87 @@ export function makeBackgroundProcessEnvironment(
   return environment;
 }
 
-function terminateTree(child: ChildProcess, mode: "graceful" | "force"): void {
-  const pid = child.pid;
-  if (!pid) return;
+function dispatchGracefulTermination(pid: number): void {
   if (process.platform === "win32") {
-    const args = ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])];
-    const killer = spawn("taskkill", args, { stdio: "ignore", windowsHide: true });
+    const killer = spawnWindowsTreeTerminator("taskkill", ["/pid", String(pid), "/T"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
     killer.on("error", () => {});
     killer.unref();
     return;
   }
-  const signal = mode === "force" ? "SIGKILL" : "SIGTERM";
   try {
-    process.kill(-pid, signal);
+    process.kill(-pid, "SIGTERM");
   } catch {
-    if (child.exitCode === null && child.signalCode === null) {
-      try {
-        child.kill(signal);
-      } catch {
-        // Exit and termination can race; final settlement is observed separately.
-      }
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Exit and termination can race; final settlement is observed separately.
     }
   }
 }
 
-function terminateLingeringGroup(child: ChildProcess): void {
-  const pid = child.pid;
-  if (!pid || process.platform === "win32") return;
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    // A group-free normal exit is the common case.
-  }
-}
+const terminateWindowsTree = (
+  pid: number,
+  mode: "graceful" | "force",
+): Effect.Effect<void, LocalProcessError> =>
+  Effect.callback<void, LocalProcessError>((resume) => {
+    let killer: ReturnType<typeof spawnWindowsTreeTerminator>;
+    try {
+      killer = spawnWindowsTreeTerminator(
+        "taskkill",
+        ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])],
+        { stdio: "ignore", windowsHide: true },
+      );
+    } catch (error) {
+      resume(Effect.fail(processError("terminate", error)));
+      return Effect.void;
+    }
+    let settled = false;
+    const cleanup = () => {
+      killer.off("error", onError);
+      killer.off("close", onClose);
+    };
+    const finish = (effect: Effect.Effect<void, LocalProcessError>) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resume(effect);
+    };
+    const onError = (error: Error) => finish(Effect.fail(processError("terminate", error)));
+    const onClose = (code: number | null) =>
+      finish(
+        code === 0
+          ? Effect.void
+          : Effect.fail(processError("terminate", "taskkill did not confirm cleanup")),
+      );
+    killer.once("error", onError);
+    killer.once("close", onClose);
+    return Effect.sync(() => {
+      cleanup();
+      if (!settled) killer.kill("SIGKILL");
+    });
+  }).pipe(
+    Effect.timeoutOption("2 seconds"),
+    Effect.flatMap((outcome) =>
+      outcome._tag === "Some"
+        ? Effect.void
+        : Effect.fail(processError("terminate", "taskkill timed out")),
+    ),
+  );
+
+const terminateLingeringGroup = (pid: number): Effect.Effect<void> => {
+  if (process.platform === "win32")
+    return terminateWindowsTree(pid, "force").pipe(Effect.catch(() => Effect.void));
+  return Effect.sync(() => {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // A group-free normal exit is the common case.
+    }
+  });
+};
 
 const verifyCwd = (cwd: string) =>
   Effect.tryPromise({
@@ -146,11 +196,13 @@ const verifyCwd = (cwd: string) =>
     ),
   );
 
-const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: LocalProcessRequest) {
+const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  request: LocalProcessRequest,
+) {
   yield* verifyCwd(request.cwd);
   const ingressBufferBytes = Math.max(1, Math.floor(request.ingressBufferBytes));
   const outputQueue = yield* Queue.dropping<LocalProcessOutput, Cause.Done>(INGRESS_CHUNKS);
-  const ready = yield* Deferred.make<void, LocalProcessError>();
   const exited = yield* Deferred.make<LocalProcessExit>();
   const stdoutDecoder = new StringDecoder("utf8");
   const stderrDecoder = new StringDecoder("utf8");
@@ -158,21 +210,24 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   let totalDroppedBytes = 0;
   let reportedDroppedBytes = 0;
   let outputClosed = false;
-  let cleaned = false;
-  let spawnError: string | undefined;
 
-  const child = yield* Effect.try({
-    try: () =>
-      spawn(request.command, {
-        cwd: request.cwd,
-        detached: process.platform !== "win32",
-        env: makeBackgroundProcessEnvironment(process.env),
-        shell: request.shellPath ?? true,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      }),
-    catch: (error) => processError("spawn", error),
+  const command = ChildProcess.make(request.command, [], {
+    cwd: request.cwd,
+    detached: process.platform !== "win32",
+    env: makeBackgroundProcessEnvironment(process.env),
+    extendEnv: false,
+    shell: request.shellPath ?? true,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    windowsHide: true,
+    killSignal: "SIGTERM",
+    forceKillAfter: 1_000,
   });
+  const child = yield* spawner
+    .spawn(command)
+    .pipe(Effect.mapError((error) => processError("spawn", error)));
+  const pid = Number(child.pid);
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;
@@ -213,64 +268,73 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     outputClosed = true;
     Queue.endUnsafe(outputQueue);
   };
-  const onStdout = (chunk: Buffer) => offer("stdout", stdoutDecoder.write(chunk));
-  const onStderr = (chunk: Buffer) => offer("stderr", stderrDecoder.write(chunk));
-  const onSpawn = () => {
-    Deferred.doneUnsafe(ready, Effect.void);
-  };
-  const onError = (error: Error) => {
-    spawnError = error.message;
-    Deferred.doneUnsafe(ready, Effect.fail(processError("spawn", error)));
-    Deferred.doneUnsafe(exited, Effect.succeed({ exitCode: null, error: error.message }));
-    closeOutput();
-    cleanup();
-  };
-  const settleExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    const baseExit = { exitCode: code };
-    const exitWithSignal = signal ? { ...baseExit, signal } : baseExit;
-    const exitWithSpawnError = spawnError
-      ? { ...exitWithSignal, error: spawnError }
-      : exitWithSignal;
-    return Deferred.doneUnsafe(exited, Effect.succeed(exitWithSpawnError));
-  };
-  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    terminateLingeringGroup(child);
-    settleExit(code, signal);
-  };
-  const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
-    closeOutput();
-    settleExit(code, signal);
-  };
-  const cleanup = () => {
-    if (cleaned) return;
-    cleaned = true;
-    child.stdout?.off("data", onStdout);
-    child.stderr?.off("data", onStderr);
-    child.off("spawn", onSpawn);
-    child.off("error", onError);
-    child.off("exit", onExit);
-    child.off("close", onClose);
-    child.stdout?.destroy();
-    child.stderr?.destroy();
-    closeOutput();
-  };
+  const observe = (
+    stream: "stdout" | "stderr",
+    decoder: StringDecoder,
+    source: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
+  ) =>
+    source.pipe(
+      Stream.runForEach((chunk) =>
+        Effect.sync(() => offer(stream, decoder.write(Buffer.from(chunk)))),
+      ),
+      Effect.catch(() =>
+        Effect.sync(() => {
+          offer("stderr", `\nLocal process ${stream} stream failed.\n`);
+        }),
+      ),
+    );
 
-  child.stdout?.on("data", onStdout);
-  child.stderr?.on("data", onStderr);
-  child.once("spawn", onSpawn);
-  child.once("error", onError);
-  child.once("exit", onExit);
-  child.once("close", onClose);
+  yield* Effect.all(
+    [
+      observe("stdout", stdoutDecoder, child.stdout),
+      observe("stderr", stderrDecoder, child.stderr),
+    ],
+    { concurrency: 2, discard: true },
+  ).pipe(Effect.ensuring(Effect.sync(closeOutput)), Effect.forkScoped({ startImmediately: true }));
+  yield* Effect.exit(child.exitCode).pipe(
+    Effect.flatMap((exit) =>
+      terminateLingeringGroup(pid).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            const observed = effectProcessExit(exit);
+            const baseExit = { exitCode: observed.code };
+            const result = observed.signal ? { ...baseExit, signal: observed.signal } : baseExit;
+            Deferred.doneUnsafe(exited, Effect.succeed(result));
+          }),
+        ),
+      ),
+    ),
+    Effect.forkScoped({ startImmediately: true }),
+  );
 
-  yield* Deferred.await(ready);
-  const pid = child.pid;
-  if (!pid) return yield* processError("spawn", "Process did not expose a pid.");
-
+  const forceTermination =
+    process.platform === "win32"
+      ? terminateWindowsTree(pid, "force")
+      : child.isRunning.pipe(
+          Effect.catch(() => Effect.succeed(true)),
+          Effect.flatMap((running) =>
+            running
+              ? child.kill({ killSignal: "SIGKILL" }).pipe(
+                  Effect.timeoutOption("2 seconds"),
+                  Effect.flatMap((outcome) =>
+                    outcome._tag === "Some"
+                      ? Effect.void
+                      : Effect.fail(processError("terminate", "cleanup timed out")),
+                  ),
+                )
+              : terminateLingeringGroup(pid),
+          ),
+          Effect.mapError((error) =>
+            error instanceof LocalProcessError ? error : processError("terminate", error),
+          ),
+        );
   const terminate = (mode: "graceful" | "force") =>
-    Effect.try({
-      try: () => terminateTree(child, mode),
-      catch: (error) => processError("terminate", error),
-    });
+    mode === "force"
+      ? forceTermination
+      : Effect.try({
+          try: () => dispatchGracefulTermination(pid),
+          catch: (error) => processError("terminate", error),
+        });
 
   const output = Stream.fromQueue(outputQueue).pipe(
     Stream.mapEffect((event) =>
@@ -287,11 +351,12 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     awaitExit: Deferred.await(exited),
     droppedOutputBytes: () => totalDroppedBytes,
     terminate,
-    release: terminate("force").pipe(
-      Effect.andThen(awaitProcessClose(child, 2_000)),
+    release: child.unref.pipe(
+      Effect.andThen(terminate("force")),
+      Effect.timeoutOption("2500 millis"),
+      Effect.catch(() => Effect.succeedNone),
       Effect.asVoid,
-      Effect.catch(() => Effect.void),
-      Effect.ensuring(Effect.sync(cleanup)),
+      Effect.ensuring(Effect.sync(closeOutput)),
     ),
   };
 });
@@ -299,10 +364,16 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
 export class LocalProcess extends Context.Service<LocalProcess, LocalProcessContract>()(
   "pi-background-terminals/boundary/local-process/LocalProcess",
 ) {
-  static readonly layer = Layer.succeed(this, {
-    spawn: (request) =>
-      Effect.acquireRelease(acquireProcess(request), (handle) => handle.release).pipe(
-        Effect.map(({ release: _release, ...handle }) => handle),
-      ),
-  });
+  static readonly layer = Layer.effect(
+    this,
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      return LocalProcess.of({
+        spawn: (request) =>
+          Effect.acquireRelease(acquireProcess(spawner, request), (handle) => handle.release).pipe(
+            Effect.map(({ release: _release, ...handle }) => handle),
+          ),
+      });
+    }),
+  ).pipe(Layer.provide(nodeProcessLayer));
 }

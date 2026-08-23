@@ -54,7 +54,7 @@ The runtime is vendored from the OpenCode repository
 `d4704347465c1ee63d0c213ed00e648e7f0231c5`, package `packages/codemode`
 (`@opencode-ai/codemode@1.18.16`, MIT). Upstream file structure and behavior are
 preserved for diffability; the mechanical local deviations (Effect
-4.0.0-rc.108, TypeScript 6.0.3, Node + Effect-backed Vitest, oxfmt formatting,
+4.0.0-rc.111, TypeScript 6.0.3, Node + Effect-backed Vitest, oxfmt formatting,
 OpenAPI removal, explicit erasable TypeScript syntax, closed owned failure
 channels, Effect subpath imports, and host/guest clock separation) are enumerated
 in `packages/pi-code-mode/runtime/PROVENANCE.md`. These adaptations require no

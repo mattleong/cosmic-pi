@@ -34,6 +34,7 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
 - `src/boundary/host-review-cards.ts` — Pi `appendEntry`, `registerEntryRenderer`, hidden guidance, tombstones, and active-branch restoration.
 - `src/boundary/host-onboarding.ts` — authenticated-model discovery and first-run setup UI.
 - Other `src/boundary/host-*` modules — guarded Pi command, context, notifier, status, and event adapters.
+- `src/boundary/read-only-fs.ts` and `executor.ts` — capability-narrow raw Node reads for `O_NOFOLLOW` and bigint inode checks with Effect `Path.Path` normalization, composed without process authority; `node.ts` retains only pure synchronous configuration/log path arithmetic.
 - `src/ui/review-card.ts` — pure strict card/action decode, sanitization, compact projection, and renderer.
 - `src/ui/projection.ts` — frozen synchronous controller snapshot projection (the sole dashboard input).
 - `src/settings/controller.ts` — exact `/advisor` parser.

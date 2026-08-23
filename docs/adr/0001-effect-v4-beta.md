@@ -23,11 +23,11 @@ Cosmic-pi will be rearchitected around Effect v4 prereleases through the release
 
 ## Version policy
 
-The implementation kickoff pinned Effect v4 beta.99. On 2026-08-13, the workspace advanced to the first release candidate and now pins:
+The implementation kickoff pinned Effect v4 beta.99. On 2026-08-13, the workspace advanced to the release-candidate line; on 2026-08-20 it advanced to:
 
-- `effect@4.0.0-rc.108`
-- `@effect/platform-node@4.0.0-rc.108`
-- `@effect/vitest@4.0.0-rc.108`
+- `effect@4.0.0-rc.111`
+- `@effect/platform-node@4.0.0-rc.111`
+- `@effect/vitest@4.0.0-rc.111`
 - `@effect/language-service@0.87.2`
 - `typescript@6.0.3`
 
@@ -46,6 +46,6 @@ Jointly released Effect ecosystem packages are synchronized in the pnpm catalog.
 - [Effect v4 RC announcement](https://www.effect.website/blog/releases/effect/40-rc)
 - [Effect v4 migration instructions](https://github.com/Effect-TS/effect/blob/main/MIGRATION.md)
 - [Effect language-service setup](https://effect.website/docs/getting-started/devtools/#effect-lsp)
-- [Effect v4 rc.108 Context source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.108/packages/effect/src/Context.ts)
-- [Effect v4 rc.108 Layer source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.108/packages/effect/src/Layer.ts)
-- [Effect v4 rc.108 ManagedRuntime source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.108/packages/effect/src/ManagedRuntime.ts)
+- [Effect v4 rc.111 Context source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.111/packages/effect/src/Context.ts)
+- [Effect v4 rc.111 Layer source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.111/packages/effect/src/Layer.ts)
+- [Effect v4 rc.111 ManagedRuntime source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.111/packages/effect/src/ManagedRuntime.ts)
