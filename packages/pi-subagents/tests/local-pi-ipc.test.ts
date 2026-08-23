@@ -1,13 +1,26 @@
 import { describe, expect, it } from "@effect/vitest";
+import { fileURLToPath } from "node:url";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import type { LocalPiContact, LocalPiParentControl } from "../src/backend/local-pi-protocol.ts";
 import {
+  attachLocalPiParentIpc,
   makeLocalPiChildIpcChannel,
   makeLocalPiParentIpcChannel,
   type LocalPiIpcPort,
 } from "../src/boundary/local-pi-ipc.ts";
+import { nodeSpawn as spawn } from "./support/node-builtins.ts";
+
+const childFixture = fileURLToPath(new URL("./fixtures/local-pi-ipc-child.mjs", import.meta.url));
+
+class IpcIntegrationTestError extends Schema.TaggedError<IpcIntegrationTestError>()(
+  "IpcIntegrationTestError",
+  { message: Schema.String },
+) {}
 
 type TestMessageListener = <MessageInput>(message: MessageInput) => void;
 type SendBehavior = "success" | "error" | "pending" | "throw";
@@ -151,6 +164,123 @@ describe("Local Pi IPC boundary", () => {
       yield* TestClock.adjust("10 seconds");
       const failure = yield* Fiber.join(sending);
       expect(failure.code).toBe("transport_outcome_uncertain");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("exchanges typed contacts and controls with a real IPC child", () =>
+    Effect.gen(function* () {
+      const child = spawn(process.execPath, [childFixture], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+        windowsHide: true,
+      });
+      let detach = () => {};
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          detach();
+          child.stderr?.destroy();
+          if (child.exitCode === null) child.kill("SIGKILL");
+        }),
+      );
+
+      const closed = yield* Deferred.make<
+        { readonly code: number | null; readonly signal: NodeJS.Signals | null },
+        IpcIntegrationTestError
+      >();
+      let stderr = "";
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      });
+      child.once("error", (error) => {
+        Deferred.doneUnsafe(
+          closed,
+          Effect.fail(new IpcIntegrationTestError({ message: error.message })),
+        );
+      });
+      child.once("close", (code, signal) => {
+        Deferred.doneUnsafe(closed, Effect.succeed({ code, signal }));
+      });
+
+      const contacts = yield* Queue.unbounded<LocalPiContact>();
+      const protocolErrors: string[] = [];
+      let disconnects = 0;
+      const ipc = attachLocalPiParentIpc(child, {
+        onContact: (contact) => {
+          Queue.offerUnsafe(contacts, contact);
+        },
+        onProtocolError: (message) => {
+          protocolErrors.push(message);
+        },
+        onDisconnect: () => {
+          disconnects += 1;
+        },
+      });
+      detach = ipc.detach;
+
+      const initial: LocalPiContact[] = [];
+      for (let index = 0; index < 4; index += 1) {
+        const hasReady = initial.some(
+          (contact) => contact.type === "contact_parent" && contact.message === "child-ready",
+        );
+        const hasQuestion = initial.some(
+          (contact) => contact.type === "contact_parent" && contact.kind === "question",
+        );
+        if (hasReady && hasQuestion) break;
+        initial.push(yield* Queue.take(contacts).pipe(Effect.timeout("5 seconds")));
+      }
+      const question = initial.find(
+        (contact) => contact.type === "contact_parent" && contact.kind === "question",
+      );
+      if (!question || question.type !== "contact_parent")
+        return yield* new IpcIntegrationTestError({
+          message: `Real IPC child did not ask its question: ${stderr}`,
+        });
+
+      yield* ipc.sendControl({
+        channel: "pi-subagents",
+        type: "peer_notice",
+        message: "peer-live",
+      });
+      yield* ipc.sendControl({
+        channel: "pi-subagents",
+        type: "parent_reply",
+        requestId: question.requestId,
+        message: "reply-live",
+      });
+
+      const responses: LocalPiContact[] = [];
+      for (let index = 0; index < 4; index += 1) {
+        const hasPeer = responses.some(
+          (contact) => contact.type === "contact_parent" && contact.message === "peer:peer-live",
+        );
+        const hasReply = responses.some(
+          (contact) =>
+            contact.type === "contact_parent" &&
+            contact.message === `reply:${question.requestId}:reply-live`,
+        );
+        if (hasPeer && hasReply) break;
+        responses.push(yield* Queue.take(contacts).pipe(Effect.timeout("5 seconds")));
+      }
+
+      expect(
+        responses.some(
+          (contact) => contact.type === "contact_parent" && contact.message === "peer:peer-live",
+        ),
+      ).toBe(true);
+      expect(
+        responses.some(
+          (contact) =>
+            contact.type === "contact_parent" &&
+            contact.message === `reply:${question.requestId}:reply-live`,
+        ),
+      ).toBe(true);
+      expect(yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))).toEqual({
+        code: 0,
+        signal: null,
+      });
+      expect(protocolErrors).toEqual([]);
+      expect(disconnects).toBe(1);
+      expect(stderr).toBe("");
     }).pipe(Effect.scoped),
   );
 
