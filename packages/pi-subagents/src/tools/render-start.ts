@@ -7,11 +7,10 @@ import {
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
+import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { managerNoticeGlyph, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
-import { synchronousNow } from "../boundary/native-clock.ts";
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
-import { sanitizeTerminalLine } from "../ui/sanitize.ts";
-import type { SubagentRunCard, SubagentStartEntry } from "./details.ts";
+import type { SubagentStartEntry } from "./details.ts";
 import { formatToolModel, formatToolRoute } from "./format.ts";
 import { failureRecovery } from "./render-management.ts";
 import type { SubagentStartSpec } from "./schema.ts";
@@ -89,109 +88,10 @@ export const renderStartFailures = (
     })
     .join("\n");
 
-const selectedRoute = (entry: SubagentStartEntry): boolean =>
-  entry.routeStatus === "selected" &&
-  entry.host !== undefined &&
-  entry.runtime !== undefined &&
-  entry.model !== undefined &&
-  entry.effort !== undefined;
+type SelectedStartEntry = Extract<SubagentStartEntry, { readonly routeStatus: "selected" }>;
 
-const hydrateEntry = (
-  entry: SubagentStartEntry,
-  cards: ReadonlyArray<SubagentRunCard>,
-): SubagentStartEntry => {
-  if (selectedRoute(entry) || entry.status !== "started") return entry;
-  const card = entry.runId
-    ? cards.find((candidate) => candidate.id === entry.runId)
-    : cards.find((candidate) => candidate.name === entry.name);
-  if (!card || card.host === undefined || card.runtime === undefined) return entry;
-  return (() => {
-    const baseResult = {
-      ...entry,
-      profile: card.profile ?? entry.profile,
-      routeStatus: "selected" as const,
-      host: card.host,
-      runtime: card.runtime,
-      model: card.model,
-      effort: card.effort,
-    };
-    const withFastMode = card.fastMode ? { ...baseResult, fastMode: true as const } : baseResult;
-    const withCandidateIndex =
-      card.selection.candidateIndex === undefined
-        ? withFastMode
-        : { ...withFastMode, candidateIndex: card.selection.candidateIndex };
-    const withRunId = { ...withCandidateIndex, runId: card.id };
-    return withRunId;
-  })();
-};
-
-const legacyEntries = (
-  cards: ReadonlyArray<SubagentRunCard>,
-  failures: ReadonlyArray<SubagentStartFailure>,
-): ReadonlyArray<SubagentStartEntry> => {
-  const failedIndexes = new Set(failures.map((failure) => Math.max(0, Math.floor(failure.index))));
-  let nextSuccessIndex = 0;
-  const successes = cards.map((card): SubagentStartEntry => {
-    while (failedIndexes.has(nextSuccessIndex)) nextSuccessIndex += 1;
-    const index = nextSuccessIndex++;
-    return (() => {
-      const baseResult = {
-        index,
-        name: card.name,
-        profile: card.profile ?? "generalist",
-        status: "started" as const,
-        routeStatus:
-          card.host !== undefined && card.runtime !== undefined
-            ? ("selected" as const)
-            : ("unavailable" as const),
-      };
-      const withHost = card.host === undefined ? baseResult : { ...baseResult, host: card.host };
-      const withRuntime =
-        card.runtime === undefined ? withHost : { ...withHost, runtime: card.runtime };
-      const withModelAndEffort = { ...withRuntime, model: card.model, effort: card.effort };
-      const withFastMode = card.fastMode
-        ? { ...withModelAndEffort, fastMode: true as const }
-        : withModelAndEffort;
-      const withCandidateIndex =
-        card.selection.candidateIndex === undefined
-          ? withFastMode
-          : { ...withFastMode, candidateIndex: card.selection.candidateIndex };
-      const withRunId = { ...withCandidateIndex, runId: card.id };
-      return withRunId;
-    })();
-  });
-  return [
-    ...successes,
-    ...failures.map(
-      (failure): SubagentStartEntry => ({
-        index: Math.max(0, Math.floor(failure.index)),
-        name: failure.name ?? `launch ${failure.index + 1}`,
-        profile: "generalist",
-        status: "failed",
-        routeStatus: "unavailable",
-      }),
-    ),
-  ];
-};
-
-const reconcileEntries = (
-  explicit: ReadonlyArray<SubagentStartEntry>,
-  cards: ReadonlyArray<SubagentRunCard>,
-  failures: ReadonlyArray<SubagentStartFailure>,
-): ReadonlyArray<SubagentStartEntry> => {
-  if (explicit.length === 0) return legacyEntries(cards, failures);
-  const recovered = legacyEntries(cards, failures).filter((candidate) =>
-    candidate.status === "failed"
-      ? !explicit.some((entry) => entry.status === "failed" && entry.index === candidate.index)
-      : !explicit.some(
-          (entry) =>
-            entry.status === "started" &&
-            ((entry.runId !== undefined && entry.runId === candidate.runId) ||
-              (entry.runId === undefined && entry.name === candidate.name)),
-        ),
-  );
-  return [...explicit, ...recovered];
-};
+const selectedRoute = (entry: SubagentStartEntry): entry is SelectedStartEntry =>
+  entry.routeStatus === "selected";
 
 const routeLabel = (entry: SubagentStartEntry): string => {
   if (selectedRoute(entry))
@@ -222,7 +122,7 @@ const receiptRow = (entry: SubagentStartEntry, width: number, theme: Theme): str
   const name = sanitizeTerminalLine(entry.name);
   const profile = sanitizeTerminalLine(entry.profile || "generalist");
   const route = routeLabel(entry);
-  const id = entry.runId ? sanitizeTerminalLine(shortRunId(entry.runId)) : "";
+  const id = entry.status === "started" ? sanitizeTerminalLine(shortRunId(entry.runId)) : "";
   const raw = `${glyph} ${name} · ${profile} · ${route}${id ? ` · ${id}` : ""}`;
   if (visibleWidth(raw) <= safeWidth)
     return [
@@ -251,8 +151,6 @@ const receiptRow = (entry: SubagentStartEntry, width: number, theme: Theme): str
 const receiptHeader = (
   entries: ReadonlyArray<SubagentStartEntry>,
   partial: boolean,
-  fallbackProgress: string,
-  exactEntries: boolean,
   theme: Theme,
 ): string => {
   const total = entries.length;
@@ -261,10 +159,7 @@ const receiptHeader = (
   const pending = total - started - failed;
   if (partial) {
     const frame = Math.floor(synchronousNow() / 160);
-    const progress =
-      exactEntries && total > 0
-        ? `Launching ${started + failed} of ${total} · ${started} started · ${failed} failed · ${pending} pending`
-        : fallbackProgress;
+    const progress = `Launching ${started + failed} of ${total} · ${started} started · ${failed} failed · ${pending} pending`;
     return theme.fg("warning", `${startingSpinnerFrame(frame)} ${progress}`);
   }
   if (total === 0)
@@ -286,8 +181,6 @@ const receiptHeader = (
 };
 
 class StartReceiptComponent implements Component {
-  private readonly progress: string;
-  private readonly cards: ReadonlyArray<SubagentRunCard>;
   private readonly failures: ReadonlyArray<SubagentStartFailure>;
   private readonly entries: ReadonlyArray<SubagentStartEntry>;
   private readonly partial: boolean;
@@ -295,16 +188,12 @@ class StartReceiptComponent implements Component {
   private readonly theme: Theme;
 
   constructor(
-    progress: string,
-    cards: ReadonlyArray<SubagentRunCard>,
     failures: ReadonlyArray<SubagentStartFailure>,
     entries: ReadonlyArray<SubagentStartEntry>,
     partial: boolean,
     expanded: boolean,
     theme: Theme,
   ) {
-    this.progress = progress;
-    this.cards = cards;
     this.failures = failures;
     this.entries = entries;
     this.partial = partial;
@@ -314,14 +203,12 @@ class StartReceiptComponent implements Component {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
-    const entries = [...reconcileEntries(this.entries, this.cards, this.failures)]
-      .sort((left, right) => left.index - right.index)
-      .map((entry) => hydrateEntry(entry, this.cards));
+    const entries = this.entries;
     const started = entries.filter((entry) => entry.status === "started").length;
     const failureDetails = this.expanded
       ? entries.flatMap((entry) => {
           const fallback =
-            entry.candidateIndex !== undefined && entry.candidateIndex > 0
+            selectedRoute(entry) && entry.candidateIndex !== undefined && entry.candidateIndex > 0
               ? `${entry.status === "started" ? "Selected" : "Attempted"} candidate ${entry.candidateIndex + 1} after ${entry.candidateIndex} earlier candidate${entry.candidateIndex === 1 ? " was" : "s were"} unavailable.`
               : undefined;
           const failure =
@@ -359,10 +246,7 @@ class StartReceiptComponent implements Component {
         })
       : [];
     return [
-      truncateToWidth(
-        receiptHeader(entries, this.partial, this.progress, this.entries.length > 0, this.theme),
-        safeWidth,
-      ),
+      truncateToWidth(receiptHeader(entries, this.partial, this.theme), safeWidth),
       ...entries.flatMap((entry) => receiptRow(entry, safeWidth, this.theme)),
       ...failureDetails,
       ...(!this.expanded && this.failures.length > 0
@@ -380,18 +264,15 @@ class StartReceiptComponent implements Component {
 }
 
 export const renderStartProgressComponent = (
-  progress: string,
-  runs: ReadonlyArray<SubagentRunCard>,
   failures: ReadonlyArray<SubagentStartFailure>,
   entries: ReadonlyArray<SubagentStartEntry>,
   expanded: boolean,
   theme: Theme,
-): Component => new StartReceiptComponent(progress, runs, failures, entries, true, expanded, theme);
+): Component => new StartReceiptComponent(failures, entries, true, expanded, theme);
 
 export const renderStartReceiptComponent = (
-  runs: ReadonlyArray<SubagentRunCard>,
   failures: ReadonlyArray<SubagentStartFailure>,
   entries: ReadonlyArray<SubagentStartEntry>,
   expanded: boolean,
   theme: Theme,
-): Component => new StartReceiptComponent("", runs, failures, entries, false, expanded, theme);
+): Component => new StartReceiptComponent(failures, entries, false, expanded, theme);

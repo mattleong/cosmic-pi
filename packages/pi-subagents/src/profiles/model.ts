@@ -1,10 +1,12 @@
+import { supportsFastModel } from "pi-better-openai/fast-models";
 import * as Equivalence from "effect/Equivalence";
-import type {
-  SubagentContextMode,
-  SubagentEffort,
-  SubagentHost,
-  SubagentRuntime,
-  SubagentWriteIntent,
+import {
+  subagentRuntimeSupportsEffort,
+  type SubagentContextMode,
+  type SubagentEffort,
+  type SubagentHost,
+  type SubagentRuntime,
+  type SubagentWriteIntent,
 } from "../domain/routing.ts";
 
 export const PROFILE_IDS = [
@@ -25,6 +27,12 @@ export const isProfileId = (value: string): value is ProfileId =>
 export const normalizeProfileId = (value: string): ProfileId | undefined =>
   isProfileId(value) ? value : undefined;
 
+export const MAX_PROFILE_CANDIDATES = 32;
+export const MAX_PROFILE_MODEL_SELECTOR_CHARS = 256;
+export const PROFILE_CANDIDATE_HOSTS = ["local", "herdr"] as const;
+export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude", "codex"] as const;
+export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
+export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
 export const PROFILE_CANDIDATE_EFFORTS = [
   "default",
   "off",
@@ -35,7 +43,33 @@ export const PROFILE_CANDIDATE_EFFORTS = [
   "xhigh",
   "max",
 ] as const;
+export const PROFILE_NATIVE_MODEL_DEFAULTS = {
+  claude: "claude-opus-5",
+  codex: "gpt-5.6-codex",
+} as const;
 export type ProfileCandidateEffort = (typeof PROFILE_CANDIDATE_EFFORTS)[number];
+
+const SAFE_NATIVE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*(?:\[[1-9][0-9]*[kKmM]\])?$/;
+
+/** Syntax-only argv/config safety grammar; catalog availability is a runtime rule. */
+export const isSafeNativeModelSelector = (selector: string): boolean =>
+  selector.length <= MAX_PROFILE_MODEL_SELECTOR_CHARS && SAFE_NATIVE_MODEL_SELECTOR.test(selector);
+
+/** Runtime-specific native selector grammar; catalog canonicalization remains a runtime rule. */
+export const isNativeProfileModelSelector = (runtime: string, selector: string): boolean => {
+  if (!isSafeNativeModelSelector(selector)) return false;
+  if (selector === "parent") return runtime === "pi";
+  if (runtime !== "pi") return true;
+  const slash = selector.indexOf("/");
+  if (slash <= 0 || slash >= selector.length - 1) return false;
+  const provider = selector.slice(0, slash);
+  const model = selector.slice(slash + 1);
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/.test(provider) &&
+    /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(model) &&
+    model.split("/").every((segment) => segment !== "." && segment !== ".." && segment.length > 0)
+  );
+};
 
 /** A v4 route candidate. Every routing and capability choice is profile-owned. */
 export interface ProfileCandidate {
@@ -80,6 +114,85 @@ export const cloneProfileCandidates = (
 export const cloneProfileRoute = (route: ProfileRoute): ProfileRoute => ({
   candidates: cloneProfileCandidates(route.candidates),
 });
+
+export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
+  if (route === "disabled") return { candidates: [] };
+  // SAFETY: Configuration decoding validates the persisted declaration before this typed access.
+  const candidates = Array.isArray(route)
+    ? (route as ReadonlyArray<DeclaredProfileCandidate>)
+    : [route as DeclaredProfileCandidate];
+  return { candidates: cloneProfileCandidates(candidates) };
+};
+
+export const isLocalPiProfileCandidate = (
+  candidate: Pick<ProfileCandidate, "host" | "runtime">,
+): boolean => candidate.host === "local" && candidate.runtime === "pi";
+
+export const isRetainableProfileCandidate = (
+  candidate: Pick<ProfileCandidate, "host" | "writeIntent">,
+): boolean => candidate.host === "herdr" && candidate.writeIntent === "read-only";
+
+const splitPiModelSelector = (
+  selector: string,
+): { readonly provider: string; readonly model: string } | undefined => {
+  const slash = selector.indexOf("/");
+  if (slash <= 0 || slash >= selector.length - 1) return undefined;
+  return { provider: selector.slice(0, slash), model: selector.slice(slash + 1) };
+};
+
+/**
+ * Static persisted-route policy. `parent` is deferred to the live parent-model check, explicit Pi
+ * selectors must already be priority-tier eligible, and Codex defers tier support to its catalog.
+ */
+export const supportsProfileFastModeStatically = (
+  candidate: Pick<ProfileCandidate, "runtime" | "model">,
+): boolean => {
+  if (candidate.runtime === "codex") return isNativeProfileModelSelector("codex", candidate.model);
+  if (candidate.runtime !== "pi") return false;
+  if (candidate.model === "parent") return true;
+  const selected = splitPiModelSelector(candidate.model);
+  return selected ? supportsFastModel(selected.provider, selected.model) : false;
+};
+
+export const PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES = [
+  "model_selector_invalid",
+  "parent_requires_local_pi",
+  "fork_requires_local_pi",
+  "retention_requires_herdr_read_only",
+  "fast_mode_unsupported",
+  "effort_unsupported",
+] as const;
+export type ProfileCandidateValidationIssueCode =
+  (typeof PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES)[number];
+export interface ProfileCandidateValidationIssue {
+  readonly code: ProfileCandidateValidationIssueCode;
+}
+
+/** Exhaustive candidate issues in the repair and user-message order. */
+export const profileCandidateValidationIssues = (
+  candidate: ProfileCandidate,
+): ReadonlyArray<ProfileCandidateValidationIssue> => {
+  const issues: ProfileCandidateValidationIssue[] = [];
+  if (!isNativeProfileModelSelector(candidate.runtime, candidate.model))
+    issues.push({ code: "model_selector_invalid" });
+  if (candidate.model === "parent" && !isLocalPiProfileCandidate(candidate))
+    issues.push({ code: "parent_requires_local_pi" });
+  if (candidate.context === "fork" && !isLocalPiProfileCandidate(candidate))
+    issues.push({ code: "fork_requires_local_pi" });
+  if (!candidate.closeOnReport && !isRetainableProfileCandidate(candidate))
+    issues.push({ code: "retention_requires_herdr_read_only" });
+  if (candidate.fastMode && !supportsProfileFastModeStatically(candidate))
+    issues.push({ code: "fast_mode_unsupported" });
+  if (
+    candidate.effort !== "default" &&
+    !subagentRuntimeSupportsEffort(candidate.runtime, candidate.effort)
+  )
+    issues.push({ code: "effort_unsupported" });
+  return issues;
+};
+
+export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
+  `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:fastMode=${candidate.fastMode}:closeOnReport=${candidate.closeOnReport}`;
 
 const candidateEquivalences = {
   host: Equivalence.strictEqual<SubagentHost>(),

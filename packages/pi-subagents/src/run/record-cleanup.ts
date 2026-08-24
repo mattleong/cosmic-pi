@@ -414,5 +414,3 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
     closeExitedScope,
   };
 }
-
-export type RunRecordCleanup = ReturnType<typeof makeRunRecordCleanup>;

@@ -8,14 +8,20 @@ import {
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
+import {
+  sanitizeTerminalLine,
+  stripTerminalControls as sanitizeTerminalText,
+} from "pi-cosmic-core";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
-import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
-import type { SubagentRunCard } from "./details.ts";
+import {
+  decodeCompactToolDetails,
+  decodeStartAwaitCardDetails,
+  type SubagentRunCard,
+} from "./details.ts";
 import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
 import {
   renderCompactResultComponent,
@@ -460,25 +466,18 @@ export const renderSubagentResult = (
       );
     return renderAwaitProgressComponent(details.cards, details.awaitUntil, theme);
   }
-  if (isPartial && details?.action === "start") {
-    const rawProgress = joinTextContent(result.content, " ");
-    const progress = sanitizeTerminalLine(rawProgress || "Starting subagents…");
+  if (isPartial && details?.action === "start")
     return renderStartProgressComponent(
-      progress,
-      details.cards,
       details.startFailures ?? [],
-      details.startEntries ?? [],
+      details.startEntries,
       expanded,
       theme,
     );
-  }
   if (!isPartial && details) {
-    const failures = details.startFailures ?? [];
     if (details.action === "start")
       return renderStartReceiptComponent(
-        details.cards,
-        failures,
-        details.startEntries ?? [],
+        details.startFailures ?? [],
+        details.startEntries,
         expanded,
         theme,
       );
@@ -487,11 +486,11 @@ export const renderSubagentResult = (
       details.contentOmitted,
     );
     if (expanded) {
-      const rendered = renderExpandedStartAwaitResult(details.cards, theme, failures, banner);
+      const rendered = renderExpandedStartAwaitResult(details.cards, theme, [], banner);
       if (!details.contentOmitted) return rendered;
       return recoveredOmittedFallback(result.content, theme) ?? rendered;
     }
-    return renderStartAwaitOverviewComponent(details.cards, theme, failures, banner);
+    return renderStartAwaitOverviewComponent(details.cards, theme, [], banner);
   }
   const compact = decodeCompactToolDetails(result.details);
   if (compact?.action === "models" && compact.profiles)

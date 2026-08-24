@@ -1,9 +1,11 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
-import { decodeProfileCandidate, MAX_PROFILE_CANDIDATES } from "../config/schema.ts";
+import { decodeProfileCandidate } from "../config/schema.ts";
+import { MAX_PROFILE_CANDIDATES } from "./model.ts";
 import {
   cloneProfileRoute,
   PROFILE_IDS,
@@ -63,6 +65,57 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
 });
 const exactDecodeOptions = { onExcessProperty: "error" as const };
 
+type OwnDataProperty =
+  | { readonly valid: true; readonly present: false }
+  | { readonly valid: true; readonly present: true; readonly value: unknown }
+  | { readonly valid: false };
+
+const ownDataProperty = <ValueInput>(value: ValueInput, key: string): OwnDataProperty => {
+  if (!Predicate.isObjectKeyword(value)) return { valid: true, present: false };
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor) return { valid: true, present: false };
+    return "value" in descriptor
+      ? { valid: true, present: true, value: descriptor.value }
+      : { valid: false };
+  } catch {
+    return { valid: false };
+  }
+};
+
+/** Rejects known oversized candidate arrays before Schema can traverse any candidate element. */
+const preflightSessionOverrideCandidateLengths = <ValueInput>(value: ValueInput): boolean => {
+  const overrides = ownDataProperty(value, "overrides");
+  if (!overrides.valid) return false;
+  if (!overrides.present) return true;
+  for (const profile of PROFILE_IDS) {
+    const route = ownDataProperty(overrides.value, profile);
+    if (!route.valid) return false;
+    if (!route.present) continue;
+    const candidates = ownDataProperty(route.value, "candidates");
+    if (!candidates.valid) return false;
+    if (!candidates.present) continue;
+    let isArray: boolean;
+    try {
+      isArray = Array.isArray(candidates.value);
+    } catch {
+      return false;
+    }
+    if (!isArray) continue;
+    const length = ownDataProperty(candidates.value, "length");
+    if (
+      !length.valid ||
+      !length.present ||
+      !Predicate.isNumber(length.value) ||
+      !Number.isSafeInteger(length.value) ||
+      length.value < 0 ||
+      length.value > MAX_PROFILE_CANDIDATES
+    )
+      return false;
+  }
+  return true;
+};
+
 export const emptySessionProfileOverrideSeed = (): SessionProfileOverrideSeed =>
   freezeSnapshot({ revision: 0, overrides: {} });
 
@@ -81,6 +134,7 @@ export const cloneSessionProfileOverrideSeed = (
 export const decodeSessionProfileOverrideSeed = <ValueInput>(
   value: ValueInput,
 ): SessionProfileOverrideSeed | undefined => {
+  if (!preflightSessionOverrideCandidateLengths(value)) return undefined;
   const decoded = Schema.decodeUnknownOption(
     SessionProfileOverrideSeedInputSchema,
     exactDecodeOptions,

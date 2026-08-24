@@ -1,13 +1,12 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { synchronousNow } from "../boundary/native-clock.ts";
+import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import {
   animatedRunStateGlyph,
   runStateColor,
   runStateGlyph,
   runStateLabel,
 } from "../ui/run-state.ts";
-import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import type { SubagentRunCard } from "./details.ts";
 import { formatCost, formatDuration, formatTokenCount, formatUsage } from "../ui/metrics.ts";
 
@@ -21,7 +20,11 @@ const displayAge = (later: number, earlier: number | undefined): string => {
   return age >= 0 && age <= MAX_SESSION_DISPLAY_AGE ? formatDuration(age) : "";
 };
 
-export const runTiming = (run: SubagentRunCard): string => {
+export const runTiming = (run: {
+  readonly endedAt?: number | undefined;
+  readonly lastActivityAt?: number | undefined;
+  readonly startedAt?: number | undefined;
+}): string => {
   const now = synchronousNow();
   const elapsed = displayAge(run.endedAt ?? now, run.startedAt);
   const activeAge = run.endedAt === undefined ? displayAge(now, run.lastActivityAt) : "";

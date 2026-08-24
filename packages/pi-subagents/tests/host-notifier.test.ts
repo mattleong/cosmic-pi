@@ -52,7 +52,6 @@ describe("subagent host notifier", () => {
     };
 
     expect(notify(notification)?.deliveredCompletionKeys).toEqual(["agent-1:2"]);
-    expect(notify(notification)?.deliveredCompletionKeys).toEqual([]);
     expect(sendMessage).toHaveBeenCalledOnce();
     expect(sendMessage.mock.calls[0]?.[0].content).toContain(
       "reported generation 2 and remains available for guidance",
@@ -128,7 +127,7 @@ describe("subagent host notifier", () => {
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
 
-    notify({
+    const delivery = notify({
       type: "question",
       id: "agent-7",
       name: "reviewer",
@@ -137,6 +136,7 @@ describe("subagent host notifier", () => {
       generation: 1,
     });
 
+    expect(delivery?.actionAccepted).toBe(true);
     expect(sendMessage).toHaveBeenCalledOnce();
     expect(sendMessage.mock.calls[0]?.[0].content).toContain(
       'subagent_reply({ runId: "agent-7", message: "..." })',
@@ -162,7 +162,7 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("Completed without a final report.");
   });
 
-  it("coalesces completion rendering and deduplicates generations", () => {
+  it("coalesces completion rendering", () => {
     const sendMessage = vi.fn();
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
@@ -183,7 +183,6 @@ describe("subagent host notifier", () => {
       },
     ];
 
-    notify({ type: "completed", runs });
     notify({ type: "completed", runs });
 
     expect(sendMessage).toHaveBeenCalledOnce();
@@ -230,41 +229,6 @@ describe("subagent host notifier", () => {
     );
   });
 
-  it("deduplicates completion receipts by exact generation even when delivery is out of order", () => {
-    const sendMessage = vi.fn();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
-    const generationTwo = {
-      type: "completed" as const,
-      runs: [
-        {
-          id: "agent-1",
-          name: "reader",
-          generation: 2,
-          outcome: "completed" as const,
-          finalText: "Second.",
-        },
-      ],
-    };
-    const generationOne = {
-      type: "completed" as const,
-      runs: [
-        {
-          id: "agent-1",
-          name: "reader",
-          generation: 1,
-          outcome: "completed" as const,
-          finalText: "First.",
-        },
-      ],
-    };
-
-    expect(notify(generationTwo)?.deliveredCompletionKeys).toEqual(["agent-1:2"]);
-    expect(notify(generationOne)?.deliveredCompletionKeys).toEqual(["agent-1:1"]);
-    expect(notify(generationTwo)?.deliveredCompletionKeys).toEqual([]);
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-  });
-
   it("chunks large completion batches without losing later run IDs", () => {
     const sendMessage = vi.fn();
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
@@ -303,33 +267,37 @@ describe("subagent host notifier", () => {
     expect(delivery?.deliveredCompletionKeys).toEqual(["agent-1:1", "agent-2:1"]);
   });
 
-  it("acknowledges only successful completion chunks and can retry after reset", () => {
-    let fail = true;
+  it("acknowledges only the first chunk when the second send accepts then throws", () => {
+    let sendOrdinal = 0;
     const sendMessage = vi.fn((): void => {
-      if (fail) throw new Error("stale session");
+      sendOrdinal += 1;
+      if (sendOrdinal === 2) throw new Error("accepted before host callback threw");
     });
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
-    const completion = {
-      type: "completed" as const,
-      runs: [
-        {
-          id: "agent-1",
-          name: "reader",
-          generation: 1,
-          outcome: "completed" as const,
-          finalText: "Done.",
-        },
-      ],
-    };
+    const report = "x".repeat(32 * 1024);
+    const runs = [
+      {
+        id: "agent-1",
+        name: "reader",
+        generation: 1,
+        outcome: "completed" as const,
+        finalText: report,
+      },
+      {
+        id: "agent-2",
+        name: "tester",
+        generation: 1,
+        outcome: "completed" as const,
+        finalText: report,
+      },
+    ];
 
-    expect(notify(completion)?.deliveredCompletionKeys).toEqual([]);
-    fail = false;
-    expect(notify(completion)?.deliveredCompletionKeys).toEqual(["agent-1:1"]);
-    expect(notify(completion)?.deliveredCompletionKeys).toEqual([]);
-
-    notify.reset();
-    expect(notify(completion)?.deliveredCompletionKeys).toEqual(["agent-1:1"]);
+    expect(notify({ type: "completed", runs })?.deliveredCompletionKeys).toEqual(["agent-1:1"]);
+    expect(notify({ type: "completed", runs: [runs[1]!] })?.deliveredCompletionKeys).toEqual([
+      "agent-2:1",
+    ]);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
   });
 
   it("does not retain raw outcome secrets in custom-message metadata", () => {

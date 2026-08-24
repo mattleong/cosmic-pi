@@ -297,6 +297,36 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect("continues a session-owned launch after its waiter is interrupted", () =>
+    Effect.gen(function* () {
+      const spawnGate = yield* Deferred.make<void>();
+      const fake = fakeChildLayer(Deferred.await(spawnGate));
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({
+        publish: (projection) => projections.push(projection),
+      }).pipe(Layer.provide(fake.layer));
+
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const waiting = yield* service
+          .startSessionOwned(request({ name: "cancelled-session-waiter" }))
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "starting");
+        const id = projections.at(-1)?.runs[0]?.id;
+        if (!id) return yield* Effect.die("session-owned launch id was not published");
+
+        yield* Fiber.interrupt(waiting);
+        yield* Deferred.succeed(spawnGate, undefined);
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+        expect(yield* service.status(id)).toMatchObject({
+          id,
+          name: "cancelled-session-waiter",
+          state: "running",
+        });
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }),
+  );
+
   it.effect("settles interrupted startup as stopped without a warning", () => {
     const fake = fakeChildLayer(Effect.void, { dropInitialState: true });
     const notifications: SubagentNotification[] = [];

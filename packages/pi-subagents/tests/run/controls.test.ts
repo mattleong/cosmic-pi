@@ -793,9 +793,7 @@ describe("SubagentService", () => {
         attempts += 1;
         if (attempts === 1) throw new Error("transient parent delivery failure");
         delivered.push(notification);
-        return {
-          deliveredActionKeys: [`${notification.id}:question:default:${notification.generation}`],
-        };
+        return { actionAccepted: true };
       },
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
@@ -838,13 +836,7 @@ describe("SubagentService", () => {
       notify: (notification) => {
         if (notification.type === "completed") return undefined;
         attempts.push(notification);
-        return notification.requestId === "stale-question"
-          ? { deliveredActionKeys: [] }
-          : {
-              deliveredActionKeys: [
-                `${notification.id}:question:default:${notification.generation}`,
-              ],
-            };
+        return { actionAccepted: notification.requestId !== "stale-question" };
       },
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
@@ -879,13 +871,7 @@ describe("SubagentService", () => {
       notify: (notification) => {
         if (notification.type === "completed") return undefined;
         attempts.push(notification);
-        return notification.requestId === "sleepy-question"
-          ? { deliveredActionKeys: [] }
-          : {
-              deliveredActionKeys: [
-                `${notification.id}:question:default:${notification.generation}`,
-              ],
-            };
+        return { actionAccepted: notification.requestId !== "sleepy-question" };
       },
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {

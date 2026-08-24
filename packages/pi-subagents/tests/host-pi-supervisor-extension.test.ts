@@ -7,13 +7,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import registerBridge, {
   type PiSupervisorBridgeExtensionDependencies,
 } from "../src/boundary/host-pi-supervisor-extension.ts";
-import type {
-  SupervisorToolArgumentsByName,
-  SupervisorToolName,
-} from "../src/boundary/pi-supervisor-bridge-client.ts";
+import type { PiSupervisorBridgeClient } from "../src/boundary/pi-supervisor-bridge-client.ts";
+import type { SupervisorMcpToolArgumentsByName as SupervisorToolArgumentsByName } from "../src/supervisor/mcp-contract.ts";
+import { RpcSessionTransportError } from "../src/boundary/rpc-session.ts";
 import { extensionApiFixture, extensionContextFixture, modelFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 
+type SupervisorToolName = keyof SupervisorToolArgumentsByName;
 type BridgeCall = {
   readonly [Name in SupervisorToolName]: {
     readonly name: Name;
@@ -23,33 +23,35 @@ type BridgeCall = {
 
 const bridgeCalls: BridgeCall[] = [];
 let reportFailuresRemaining = 0;
-const close = vi.fn();
+const releaseBridge = vi.fn();
 const openBridge = vi.fn(
   (_: string) =>
     Effect.acquireRelease(
-      Effect.succeed({
+      Effect.succeed<PiSupervisorBridgeClient>({
         call: <Name extends SupervisorToolName>(
           name: Name,
           input: SupervisorToolArgumentsByName[Name],
-        ) => {
-          // SAFETY: The generic name/input pair is correlated by SupervisorToolArgumentsByName.
-          bridgeCalls.push({ name, input } as BridgeCall);
-          if (name === "supervisor_submit_report" && reportFailuresRemaining > 0) {
-            reportFailuresRemaining -= 1;
-            return Promise.reject(new Error("uncertain report delivery"));
-          }
-          return Promise.resolve("accepted");
-        },
-        close,
+        ) =>
+          Effect.suspend(() => {
+            // SAFETY: The generic name/input pair is correlated by SupervisorToolArgumentsByName.
+            bridgeCalls.push({ name, input } as BridgeCall);
+            if (name === "supervisor_submit_report" && reportFailuresRemaining > 0) {
+              reportFailuresRemaining -= 1;
+              return Effect.fail(
+                new RpcSessionTransportError({ message: "uncertain report delivery" }),
+              );
+            }
+            return Effect.succeed("accepted");
+          }),
       }),
-      (bridge) => Effect.sync(bridge.close),
-    ) satisfies Effect.Effect<unknown, never, Scope.Scope>,
+      () => Effect.sync(releaseBridge),
+    ) satisfies Effect.Effect<PiSupervisorBridgeClient, never, Scope.Scope>,
 );
 
 afterEach(() => {
   bridgeCalls.length = 0;
   reportFailuresRemaining = 0;
-  close.mockClear();
+  releaseBridge.mockClear();
   openBridge.mockClear();
   vi.unstubAllEnvs();
 });
@@ -421,8 +423,7 @@ describe("Herdr-hosted Pi bridge extension", () => {
               call: <Name extends SupervisorToolName>(
                 _name: Name,
                 _input: SupervisorToolArgumentsByName[Name],
-              ) => Promise.resolve("accepted"),
-              close: vi.fn(),
+              ) => Effect.succeed("accepted"),
             };
           }),
           () => Effect.sync(release),
@@ -441,6 +442,51 @@ describe("Herdr-hosted Pi bridge extension", () => {
 
       expect(release).toHaveBeenCalledOnce();
       expect(tools).toEqual([]);
+    },
+  );
+
+  effectTest(
+    "interrupts and joins an active bridge call before releasing the helper on shutdown",
+    function* () {
+      const callStarted = Deferred.makeUnsafe<void>();
+      const blocked = Deferred.makeUnsafe<void>();
+      const callInterrupted = vi.fn();
+      const helperReleased = vi.fn();
+      const activeOpen: PiSupervisorBridgeExtensionDependencies["openBridge"] = () =>
+        Effect.acquireRelease(
+          Effect.succeed<PiSupervisorBridgeClient>({
+            call: () =>
+              Effect.gen(function* () {
+                Deferred.doneUnsafe(callStarted, Effect.void);
+                yield* Deferred.await(blocked);
+                return "accepted";
+              }).pipe(Effect.onInterrupt(() => Effect.sync(callInterrupted))),
+          }),
+          () => Effect.sync(helperReleased),
+        );
+      const { handlers, tools } = bridgeHarness(activeOpen);
+      yield* settle(() =>
+        handlers.get("session_start")?.(
+          {},
+          extensionContextFixture({ cwd: "/project", isProjectTrusted: () => false, hasUI: false }),
+        ),
+      );
+      const progress = tools.find((tool) => tool.name === "supervisor_progress")!;
+      const activeCall = progress.execute("progress-active", { message: "Still working" }).then(
+        () => "accepted" as const,
+        () => "interrupted" as const,
+      );
+      yield* step(() => Effect.runPromise(Deferred.await(callStarted)));
+
+      yield* settle(() => handlers.get("session_shutdown")?.({}, bridgeContext));
+      expect(yield* step(() => activeCall)).toBe("interrupted");
+      expect(callInterrupted).toHaveBeenCalledOnce();
+      expect(helperReleased).toHaveBeenCalledOnce();
+      yield* step(() =>
+        expect(progress.execute("progress-stale", { message: "Late message" })).rejects.toThrow(
+          "unavailable",
+        ),
+      );
     },
   );
 
@@ -463,6 +509,6 @@ describe("Herdr-hosted Pi bridge extension", () => {
     yield* settle(() => handlers.get("agent_settled")?.({}, bridgeContext));
 
     expect(bridgeCalls).toEqual([]);
-    expect(close).toHaveBeenCalledOnce();
+    expect(releaseBridge).toHaveBeenCalledOnce();
   });
 });

@@ -24,7 +24,6 @@ import {
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
   MAX_SUPERVISOR_CONFIG_BYTES,
   SUPERVISOR_CHANNEL_VERSION,
-  SUPERVISOR_MCP_SERVER_NAME,
   SupervisorAuthTokenSchema,
   SupervisorChannelConfigSchema,
   SupervisorChannelIdSchema,
@@ -37,10 +36,14 @@ import {
   SupervisorOpenSessionRpc,
   SupervisorRpcFailure,
   SupervisorRpcGroup,
-  validSupervisorMessage,
   validSupervisorReply,
-  validSupervisorReport,
 } from "../supervisor/protocol.ts";
+import {
+  isSupervisorMcpMessage,
+  isSupervisorMcpReport,
+  SUPERVISOR_MCP_REGISTRATION,
+  SUPERVISOR_MCP_TOOL_NAMES,
+} from "../supervisor/mcp-contract.ts";
 import {
   ensurePrivateDirectory,
   nodeErrorCode,
@@ -79,7 +82,7 @@ export class SupervisorChannelError extends Schema.TaggedError<SupervisorChannel
 
 export interface ClaudeSupervisorMcpMetadata {
   readonly mcpServers: {
-    readonly [SUPERVISOR_MCP_SERVER_NAME]: {
+    readonly [SUPERVISOR_MCP_REGISTRATION]: {
       readonly type: "stdio";
       readonly command: string;
       readonly args: ReadonlyArray<string>;
@@ -89,7 +92,7 @@ export interface ClaudeSupervisorMcpMetadata {
 }
 
 export interface CodexSupervisorMcpMetadata {
-  readonly serverName: typeof SUPERVISOR_MCP_SERVER_NAME;
+  readonly serverName: typeof SUPERVISOR_MCP_REGISTRATION;
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly enabledTools: ReadonlyArray<string>;
@@ -209,6 +212,12 @@ interface NodeChannelState {
 
 const channelError = (operation: string, code: string, message: string) =>
   new SupervisorChannelError({ operation, code, message });
+const configWriteError = () =>
+  channelError(
+    "write channel config",
+    "config_write_failed",
+    "Unable to publish private supervisor configuration.",
+  );
 
 const rpcFailure = (code: string, message: string) => new SupervisorRpcFailure({ code, message });
 
@@ -234,12 +243,7 @@ const makeMetadata = (
   const helperPath = fileURLToPath(new URL("./supervisor-mcp-helper.mjs", import.meta.url));
   const command = process.execPath;
   const args = [helperPath, "--config", connectionConfigPath] as const;
-  const enabledTools = [
-    "supervisor_progress",
-    "supervisor_warning",
-    "supervisor_question",
-    "supervisor_submit_report",
-  ] as const;
+  const enabledTools = SUPERVISOR_MCP_TOOL_NAMES;
   return {
     runId,
     host: LOOPBACK_HOST,
@@ -249,7 +253,7 @@ const makeMetadata = (
     helperPath,
     claudeMcp: {
       mcpServers: {
-        [SUPERVISOR_MCP_SERVER_NAME]: {
+        [SUPERVISOR_MCP_REGISTRATION]: {
           type: "stdio",
           command,
           args,
@@ -258,12 +262,12 @@ const makeMetadata = (
       },
     },
     codexMcp: {
-      serverName: SUPERVISOR_MCP_SERVER_NAME,
+      serverName: SUPERVISOR_MCP_REGISTRATION,
       command,
       args,
       enabledTools,
       tomlFragment: [
-        `[mcp_servers.${SUPERVISOR_MCP_SERVER_NAME}]`,
+        `[mcp_servers.${SUPERVISOR_MCP_REGISTRATION}]`,
         `command = ${tomlString(command)}`,
         `args = [${args.map(tomlString).join(", ")}]`,
         "required = true",
@@ -518,7 +522,7 @@ const offerContact = (
   message: string,
 ): Effect.Effect<string, SupervisorRpcFailure> =>
   Effect.suspend(() => {
-    if (!validSupervisorMessage(message))
+    if (!isSupervisorMcpMessage(message))
       return Effect.fail(rpcFailure("invalid_message", "Supervisor message is invalid."));
     const offered =
       Queue.sizeUnsafe(state.events) < CONTACT_EVENT_CAPACITY &&
@@ -646,7 +650,7 @@ const makeRpcHandlers = (state: NodeChannelState) =>
           yield* authorize(state, guard, options.client.id, payload);
           yield* requirePeer(state, options.client.id);
           yield* requireAssignedEpoch(state, payload.assignmentEpoch);
-          if (!validSupervisorMessage(payload.message))
+          if (!isSupervisorMcpMessage(payload.message))
             return yield* rpcFailure("invalid_question", "Supervisor question is invalid.");
           if (state.pendingQuestion)
             return yield* rpcFailure(
@@ -730,7 +734,7 @@ const makeRpcHandlers = (state: NodeChannelState) =>
           yield* authorize(state, guard, options.client.id, payload);
           yield* requirePeer(state, options.client.id);
           yield* requireAssignedEpoch(state, payload.assignmentEpoch);
-          if (!validSupervisorReport(payload.text))
+          if (!isSupervisorMcpReport(payload.text))
             return yield* rpcFailure("invalid_report", "Supervisor report is invalid.");
           const previous = state.reports.get(payload.deliveryId);
           if (previous) {
@@ -969,15 +973,13 @@ const acquireNodeChannelEffect = (
           token: Redacted.value(token),
         });
         if (options.beforeConfigCommit)
-          yield* Effect.promise(() => options.beforeConfigCommit!(metadata));
+          yield* Effect.tryPromise({
+            try: () => options.beforeConfigCommit!(metadata),
+            catch: configWriteError,
+          });
         yield* Effect.tryPromise({
           try: () => writePrivateConfig(connectionConfigPath!, config),
-          catch: () =>
-            channelError(
-              "write channel config",
-              "config_write_failed",
-              "Unable to publish private supervisor configuration.",
-            ),
+          catch: configWriteError,
         });
         // Deliver interruption only after the config writer has settled, while acquisition still
         // owns failure cleanup for the listener, token document, and private state directory.

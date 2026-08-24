@@ -6,14 +6,19 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { resolveSubagentConfig } from "../src/config/options.ts";
-import {
-  decodeSubagentConfig,
-  isNativeProfileModelSelector,
-  SUBAGENT_CONFIG_VERSION,
-} from "../src/config/schema.ts";
+import { decodeSubagentConfig, SUBAGENT_CONFIG_VERSION } from "../src/config/schema.ts";
 import { SubagentConfigStore } from "../src/config/store.ts";
 import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
-import { PROFILE_IDS, type DeclaredProfileCandidate } from "../src/profiles/model.ts";
+import {
+  isLocalPiProfileCandidate,
+  isNativeProfileModelSelector,
+  isRetainableProfileCandidate,
+  normalizeProfileCandidate,
+  PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES,
+  PROFILE_IDS,
+  profileCandidateValidationIssues,
+  type DeclaredProfileCandidate,
+} from "../src/profiles/model.ts";
 import { resolveProfileContinuationPlan, resolveProfilePlan } from "../src/profiles/resolve.ts";
 import { SubagentProfileService, subagentProfileServiceLayer } from "../src/profiles/service.ts";
 
@@ -139,6 +144,21 @@ describe("subagent v4 profile configuration and resolution", () => {
     );
     expect(supportedPi.file.profiles?.generalist).toMatchObject({ fastMode: true });
 
+    const parent = decodeSubagentConfig(
+      document({ profiles: { generalist: candidate({ model: "parent", fastMode: true }) } }),
+    );
+    expect(parent.file.profiles?.generalist).toMatchObject({ fastMode: true });
+
+    const unsupportedPi = decodeSubagentConfig(
+      document({
+        profiles: {
+          generalist: candidate({ model: "other-provider/not-priority", fastMode: true }),
+        },
+      }),
+    );
+    expect(unsupportedPi.file.profiles?.generalist).toBeUndefined();
+    expect(unsupportedPi.invalidProfileRoutes).toEqual(["generalist"]);
+
     const futureCodex = decodeSubagentConfig(
       document({
         profiles: {
@@ -147,6 +167,15 @@ describe("subagent v4 profile configuration and resolution", () => {
       }),
     );
     expect(futureCodex.file.profiles?.generalist).toMatchObject({ fastMode: true });
+
+    const unsafeCodex = decodeSubagentConfig(
+      document({
+        profiles: {
+          generalist: candidate({ runtime: "codex", model: "-option", fastMode: true }),
+        },
+      }),
+    );
+    expect(unsafeCodex.file.profiles?.generalist).toBeUndefined();
 
     const unsupportedClaude = decodeSubagentConfig(
       document({
@@ -157,6 +186,40 @@ describe("subagent v4 profile configuration and resolution", () => {
     );
     expect(unsupportedClaude.file.profiles?.generalist).toBeUndefined();
     expect(unsupportedClaude.invalidProfileRoutes).toEqual(["generalist"]);
+  });
+
+  it("owns exhaustive ordered candidate issues and accepts valid local/retained shapes", () => {
+    const issues = profileCandidateValidationIssues(
+      normalizeProfileCandidate(
+        candidate({
+          host: "herdr",
+          runtime: "claude",
+          model: "parent",
+          effort: "minimal",
+          context: "fork",
+          writeIntent: "writer",
+          fastMode: true,
+          closeOnReport: false,
+        }),
+      ),
+    );
+    expect(issues.map((issue) => issue.code)).toEqual(PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES);
+
+    const localPi = normalizeProfileCandidate(candidate({ context: "fork" }));
+    expect(isLocalPiProfileCandidate(localPi)).toBe(true);
+    expect(profileCandidateValidationIssues(localPi)).toEqual([]);
+
+    const retained = normalizeProfileCandidate(
+      candidate({
+        host: "herdr",
+        runtime: "claude",
+        model: "sonnet",
+        effort: "high",
+        closeOnReport: false,
+      }),
+    );
+    expect(isRetainableProfileCandidate(retained)).toBe(true);
+    expect(profileCandidateValidationIssues(retained)).toEqual([]);
   });
 
   it("accepts every host/runtime name syntactically and bounded native selectors", () => {
@@ -351,6 +414,48 @@ describe("subagent v4 profile configuration and resolution", () => {
     });
   });
 
+  it("guards hostile candidate getters and proxies with structural paths", () => {
+    let unknownRead = false;
+    const throwingCandidate = { ...candidate() };
+    Object.defineProperty(throwingCandidate, "model", {
+      enumerable: true,
+      get: () => {
+        throw new Error("private model getter");
+      },
+    });
+    const getterDecoded = decodeSubagentConfig(
+      hostileDocument({ version: 4, profiles: { worker: throwingCandidate } }),
+      "project",
+    );
+    expect(getterDecoded.invalidProfileRoutes).toEqual(["worker"]);
+    expect(getterDecoded.diagnostics).toContain("project.profiles.worker");
+
+    const unknownCandidate = { ...candidate() };
+    Object.defineProperty(unknownCandidate, "unknown", {
+      enumerable: true,
+      get: () => {
+        unknownRead = true;
+        return "private";
+      },
+    });
+    expect(
+      decodeSubagentConfig(
+        hostileDocument({ version: 4, profiles: { scout: unknownCandidate } }),
+        "global",
+      ).invalidProfileRoutes,
+    ).toEqual(["scout"]);
+    expect(unknownRead).toBe(false);
+
+    const revoked = Proxy.revocable([candidate()], {});
+    revoked.revoke();
+    const proxyDecoded = decodeSubagentConfig(
+      hostileDocument({ version: 4, profiles: { reviewer: revoked.proxy } }),
+      "global",
+    );
+    expect(proxyDecoded.invalidProfileRoutes).toEqual(["reviewer"]);
+    expect(proxyDecoded.diagnostics).toContain("global.profiles.reviewer");
+  });
+
   it("bounds route arrays before traversal", () => {
     let accesses = 0;
     const candidates: unknown[] = [];
@@ -377,6 +482,43 @@ describe("subagent v4 profile configuration and resolution", () => {
     expect(v3.diagnostics).toEqual(expect.arrayContaining(["global.version", "global.<unknown>"]));
     for (const version of [1, 2, "4", null, false, 4.5])
       expect(decodeSubagentConfig({ version }, "global").unsupportedVersion).toBe(true);
+  });
+
+  it("activates loaded base configuration when publication throws", () => {
+    const config = resolved(
+      document({ profiles: { reviewer: candidate({ model: "openai/base-after-throw" }) } }),
+    );
+    const store = Layer.succeed(SubagentConfigStore, {
+      paths: () =>
+        Effect.succeed({
+          global: "/agent/pi-subagents.json",
+          project: "/repo/.pi/pi-subagents.json",
+        }),
+      load: () => Effect.succeed(config),
+      inspect: () => Effect.die("unused"),
+      patchProfile: () => Effect.die("unused"),
+    });
+    let attempts = 0;
+    return Effect.runPromise(
+      SubagentProfileService.use((service) => service.capture).pipe(
+        provideBuiltLayer(
+          subagentProfileServiceLayer({
+            cwd: "/repo",
+            agentDirectory: "/agent",
+            projectTrusted: true,
+            publishBaseConfig: () => {
+              attempts += 1;
+              throw new Error("hostile base publication");
+            },
+          }).pipe(Layer.provide(store)),
+        ),
+      ),
+    ).then((snapshot) => {
+      expect(attempts).toBe(1);
+      expect(snapshot.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
+        "openai/base-after-throw",
+      );
+    });
   });
 
   it("logs only path-safe diagnostics from loaded v4 configuration", () => {

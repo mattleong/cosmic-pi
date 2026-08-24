@@ -1,8 +1,8 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import { resolveSubagentConfig } from "../src/config/options.ts";
-import { decodeSubagentConfig, isNativeProfileModelSelector } from "../src/config/schema.ts";
-import type { ProfileCandidate } from "../src/profiles/model.ts";
+import { decodeSubagentConfig } from "../src/config/schema.ts";
+import { isNativeProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
 import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
   addRouteCandidate,
@@ -311,6 +311,16 @@ describe("profile candidate normalization and validation", () => {
   });
 
   it("uses exact runtime capabilities and resets effort or fast mode when a model cannot use them", () => {
+    expect(candidateValidationError(candidate("parent", { fastMode: true }))).toBeUndefined();
+    expect(
+      candidateValidationError(candidate("other-provider/plain", { fastMode: true })),
+    ).toContain("Fast mode");
+    expect(
+      candidateValidationError(candidate("future-codex", { runtime: "codex", fastMode: true })),
+    ).toBeUndefined();
+    expect(
+      candidateValidationError(candidate("claude-opus-5", { runtime: "claude", fastMode: true })),
+    ).toContain("Fast mode");
     expect(runtimeEfforts("claude")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(runtimeEfforts("codex")).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
     expect(runtimeEfforts("claude", ["minimal", "low", "high"])).toEqual(["low", "high"]);

@@ -1,6 +1,11 @@
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { subagentBackendRegistryLayer } from "./backend/local.ts";
+import { makeHerdrBackendDriver } from "./backend/herdr.ts";
+import { makeLocalClaudeBackendDriver } from "./backend/local-claude.ts";
+import { makeLocalCodexBackendDriver } from "./backend/local-codex.ts";
+import { makeLocalPiBackendDriver } from "./backend/local-pi.ts";
+import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "./backend/service.ts";
 import { ChildProcess } from "./boundary/child-process.ts";
 import { HerdrCli } from "./boundary/herdr-cli.ts";
 import { captureHerdrEnvironment } from "./boundary/herdr-environment.ts";
@@ -20,6 +25,25 @@ import { subagentProfileServiceLayer } from "./profiles/service.ts";
 import type { SessionProfileOverrideSeed } from "./profiles/session-overrides.ts";
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService } from "./run/service.ts";
+
+/** One memoized registry owns all six implemented drivers and their shared boundary services. */
+const subagentBackendRegistryLayer = Layer.effect(
+  SubagentBackendRegistry,
+  Effect.gen(function* () {
+    const children = yield* ChildProcess;
+    const localCli = yield* LocalCliProcess;
+    const supervisor = yield* SupervisorChannel;
+    const herdr = yield* HerdrHost;
+    return makeSubagentBackendRegistry([
+      makeLocalPiBackendDriver(children),
+      makeLocalClaudeBackendDriver(localCli, supervisor),
+      makeLocalCodexBackendDriver(localCli, supervisor),
+      makeHerdrBackendDriver("pi", herdr, supervisor),
+      makeHerdrBackendDriver("claude", herdr, supervisor),
+      makeHerdrBackendDriver("codex", herdr, supervisor),
+    ]);
+  }),
+);
 
 export interface SubagentLayerOptions {
   readonly cwd: string;

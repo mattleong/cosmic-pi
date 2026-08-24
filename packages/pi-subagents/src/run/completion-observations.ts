@@ -2,7 +2,11 @@ import * as Effect from "effect/Effect";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
 import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
-import { isAssignmentFinishedRunState, type SubagentRunView } from "./model.ts";
+import {
+  isAssignmentFinishedRunState,
+  type SubagentProjection,
+  type SubagentRunView,
+} from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type {
   SubagentAwaitUntil,
@@ -17,16 +21,13 @@ export interface RunCompletionObservationDependencies {
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** The shared completion gate serializing claim acquisition against delivery. */
   readonly withCompletionGate: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** Synchronously captured under the shared lock to prevent missed publications. */
-  readonly currentRevision: () => number;
+  /** The stored immutable snapshot, captured under the shared lock to prevent missed publications. */
+  readonly currentProjection: () => SubagentProjection;
   /** Waits for a service publication strictly newer than the supplied revision. */
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
   /** Claim-token allocation stays owned by the service. */
   readonly allocateClaimToken: () => string;
-  readonly delivery: Pick<
-    RunNotificationDelivery,
-    "removeCompletionLocked" | "requeueCompletionLocked" | "scheduleCompletionFlush"
-  >;
+  readonly delivery: Pick<RunNotificationDelivery, "wakeCompletionLocked">;
 }
 
 /**
@@ -39,7 +40,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     records,
     withLock,
     withCompletionGate,
-    currentRevision,
+    currentProjection,
     waitForRevision,
     allocateClaimToken,
     delivery,
@@ -59,12 +60,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
 
   const observeRecord = (record: RunRecord, claimToken?: string): SubagentRunObservation => {
     const generation = record.completionGeneration;
-    if (
-      record.view.state !== "completed" &&
-      record.view.state !== "reported" &&
-      record.view.state !== "failed"
-    )
-      return { run: snapshotView(record.view) };
+    if (!isAssignmentFinishedRunState(record.view.state)) return { run: snapshotView(record.view) };
     const unresolved = record.completionGenerations.has(generation);
     const owns =
       unresolved &&
@@ -93,15 +89,16 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       Effect.sync(() => {
         for (const receipt of receipts) {
           const record = records.get(receipt.id);
+          const completion = record?.completionGenerations.get(receipt.generation);
           if (
             !record ||
-            !record.completionGenerations.has(receipt.generation) ||
+            !completion ||
             completionClaimOwner(record, receipt.generation) !== receipt.claimToken
           )
             continue;
+          if (record.completionGenerations.get(receipt.generation) !== completion) continue;
           record.completionGenerations.delete(receipt.generation);
           record.completionClaims.delete(receipt.generation);
-          delivery.removeCompletionLocked(record.view.id, receipt.generation);
         }
       }),
     );
@@ -166,8 +163,6 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
           const claimed = desired.filter(({ record, generation }) =>
             claimCompletion(record, generation, claimToken),
           );
-          for (const claim of claimed)
-            delivery.removeCompletionLocked(claim.record.view.id, claim.generation);
           return { claimToken, selected, claimed, missingIds } satisfies CompletionClaim;
         }),
       ),
@@ -177,9 +172,9 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       Effect.sync(() => {
         for (const claimed of claim.claimed)
           if (releaseCompletionClaim(claimed.record, claimed.generation, claim.claimToken))
-            delivery.requeueCompletionLocked(claimed.record, claimed.generation);
+            delivery.wakeCompletionLocked();
       }),
-    ).pipe(Effect.andThen(delivery.scheduleCompletionFlush));
+    );
   const waitForTerminalObservations = (
     claim: CompletionClaim,
     until: SubagentAwaitUntil,
@@ -214,7 +209,11 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
               parentAttentionRequired ||
               (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
             if (done) return { done: true as const, runs, observations };
-            return { done: false as const, runs, revision: currentRevision() };
+            return {
+              done: false as const,
+              runs,
+              revision: currentProjection().revision,
+            };
           }),
         ).pipe(
           Effect.tap(({ runs }) => emitUpdate(runs)),
@@ -274,5 +273,3 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     withStatusObservations,
   };
 }
-
-export type RunCompletionObservations = ReturnType<typeof makeRunCompletionObservations>;

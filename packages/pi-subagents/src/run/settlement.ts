@@ -5,6 +5,7 @@ import type * as Scope from "effect/Scope";
 import { type SubagentError, SubagentProcessError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import { isTerminalRunState, type SubagentRunView, type SubagentUsage } from "./model.ts";
+import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import { addUsage, MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
 import { foldRunWarnings } from "./warnings.ts";
@@ -22,10 +23,9 @@ export interface RunSettlementDependencies {
 
 /**
  * Owns event-driven view mutation, pause commits, and terminal settlement.
- * `settle` performs one locked transaction covering completion generation
- * allocation, outbox insertion, question invalidation, warning folding,
- * deferred-initialization settlement, and idempotence; post-commit scheduling
- * and peer notification stay outside the lock.
+ * `settle` performs one locked transaction covering completion insertion and
+ * wakeup, question invalidation, warning folding, pause completion, projection,
+ * deferred initialization, and idempotence. Peer notification stays outside.
  */
 export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   const { ownerScope, withLock, publish, delivery, closeRecordScope, sendPeerNotices } =
@@ -125,7 +125,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
               view: snapshotView(record.view),
             };
           }
-          const settlement = record.settlement;
           const pauseOutcome = record.pauseOutcome;
           const completedScope =
             state === "completed" && record.process !== undefined ? record.scope : undefined;
@@ -134,13 +133,16 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           record.pauseRequested = false;
           record.activeTools.clear();
           const hasDeliverableOutcome = state === "completed" || state === "failed";
-          const completionGeneration = hasDeliverableOutcome
+          const recordDeliverableOutcome =
+            hasDeliverableOutcome &&
+            record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS;
+          const completionGeneration = recordDeliverableOutcome
             ? ++record.completionGeneration
             : record.completionGeneration;
           const completionWarning = foldRunWarnings(record.warningSlots);
-          if (hasDeliverableOutcome)
-            record.completionGenerations.set(
-              completionGeneration,
+          if (recordDeliverableOutcome)
+            delivery.insertCompletionLocked(
+              record,
               (() => {
                 const baseResult = { generation: completionGeneration, outcome: state };
                 const withFinalText =
@@ -154,8 +156,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
                 const withWarning = completionWarning
                   ? { ...withError, warning: completionWarning }
                   : withError;
-                const withRetained = { ...withWarning, retained: false };
-                return withRetained;
+                return { ...withWarning, retained: false };
               })(),
             );
           record.notificationGeneration += 1;
@@ -184,29 +185,16 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
                 : completedView;
           yield* publish;
           const view = snapshotView(record.view);
-          const completionQueued = hasDeliverableOutcome;
-          if (completionQueued) delivery.queueCompletionLocked(record, completionGeneration);
+          if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
           return {
             transitioned: true as const,
             view,
-            settlement,
-            pauseOutcome,
             completedScope,
-            completionQueued,
           };
         }),
-      ).pipe(
-        Effect.tap((transition) =>
-          transition.transitioned && transition.completionQueued
-            ? delivery.scheduleCompletionFlush
-            : Effect.void,
-        ),
-        Effect.uninterruptible,
       );
       const view = result.view;
       if (!result.transitioned) return view;
-      Deferred.doneUnsafe(result.settlement, Effect.succeed(view));
-      if (result.pauseOutcome) Deferred.doneUnsafe(result.pauseOutcome, Effect.succeed(view));
       yield* sendPeerNotices(record.view.id);
       if (result.completedScope)
         yield* closeRecordScope(record, result.completedScope).pipe(
@@ -249,11 +237,9 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     /** Commits a requested pause exactly once for the active running assignment. */
     pauseFromEvent,
     failPendingResponses,
-    /** One locked idempotent terminal transaction plus post-commit delivery/peer scheduling. */
+    /** One locked idempotent terminal transaction plus post-commit peer notification. */
     settle,
     /** Marks cleanup, cancels pending responses, force-terminates, then settles failed. */
     failRun,
   };
 }
-
-export type RunSettlement = ReturnType<typeof makeRunSettlement>;

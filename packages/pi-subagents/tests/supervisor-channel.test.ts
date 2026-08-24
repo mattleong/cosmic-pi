@@ -312,6 +312,31 @@ describe("private supervisor channel", () => {
     expect(stderr).toBe("Private supervisor helper configuration argument is invalid.\n");
   });
 
+  effectTest("publishes bounded-input rejection before the helper shuts down", function* () {
+    const opened = yield* step(() => openChannel("agent-supervisor-input-overflow"));
+    const { child, rpc } = spawnHelper(opened.handle);
+    yield* step(() => initialize(rpc));
+    const rejected = rpc.next(
+      (value) =>
+        value !== null &&
+        hasObjectRuntimeType(value) &&
+        !Array.isArray(value) &&
+        value.id === null &&
+        value.error !== null &&
+        hasObjectRuntimeType(value.error) &&
+        !Array.isArray(value.error) &&
+        value.error.code === -32600,
+    );
+    child.stdin.write(`${"x".repeat(512 * 1_024 + 1)}\n`);
+
+    expect(yield* step(() => rejected)).toMatchObject({
+      id: null,
+      error: { code: -32600 },
+    });
+    expect((yield* step(() => waitForExit(child))).signal).toBeNull();
+    yield* step(() => Effect.runPromise(Scope.close(opened.scope, Exit.void)));
+  });
+
   effectTest(
     "rejects invalid run identities, relative state roots, and symlink state roots",
     function* () {
@@ -456,6 +481,51 @@ describe("private supervisor channel", () => {
     },
   );
 
+  effectTest("maps rejected config publication and removes every acquired stage", function* () {
+    const root = yield* step(() =>
+      mkdtemp(join(tmpdir(), "pi-subagents-supervisor-config-rejection-")),
+    );
+    temporaryDirectories.push(root);
+    const agentDirectory = join(root, "agent-home");
+    yield* step(() => mkdir(agentDirectory, { mode: 0o700 }));
+    const scope = yield* step(() => Effect.runPromise(Scope.make()));
+    let metadata: SupervisorChannelHandle["metadata"] | undefined;
+    const channel = makeSupervisorChannel({
+      agentDirectory,
+      beforeConfigCommit: (acquired) => {
+        metadata = acquired;
+        return Promise.reject(new Error("hostile config publication rejection"));
+      },
+    });
+
+    yield* step(() =>
+      expect(
+        Effect.runPromise(
+          channel
+            .open({ runId: "agent-supervisor-config-rejection" })
+            .pipe(Effect.provideService(Scope.Scope, scope)),
+        ),
+      ).rejects.toMatchObject({
+        operation: "write channel config",
+        code: "config_write_failed",
+      }),
+    );
+    const acquired = metadata;
+    if (!acquired) throw new Error("rejected config metadata was not captured");
+    yield* step(() =>
+      expect(stat(acquired.stateDirectory)).rejects.toMatchObject({ code: "ENOENT" }),
+    );
+    const refusedCell = Deferred.makeUnsafe<boolean>();
+    const socket = connect({ host: acquired.host, port: acquired.port });
+    socket.once("connect", () => {
+      socket.destroy();
+      Deferred.doneUnsafe(refusedCell, Effect.succeed(false));
+    });
+    socket.once("error", () => Deferred.doneUnsafe(refusedCell, Effect.succeed(true)));
+    expect(yield* step(() => Effect.runPromise(Deferred.await(refusedCell)))).toBe(true);
+    yield* step(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+  });
+
   effectTest("closes an unauthenticated peer at the scoped authentication deadline", function* () {
     const opened = yield* step(() =>
       openChannel("agent-supervisor-auth-deadline", {
@@ -537,13 +607,40 @@ describe("private supervisor channel", () => {
       expect(listed).toMatchObject({
         result: {
           tools: [
-            { name: "supervisor_progress" },
-            { name: "supervisor_warning" },
-            { name: "supervisor_question" },
-            { name: "supervisor_submit_report" },
+            {
+              name: "supervisor_progress",
+              inputSchema: { properties: { message: { pattern: ".*\\S.*" } } },
+            },
+            {
+              name: "supervisor_warning",
+              inputSchema: { properties: { message: { pattern: ".*\\S.*" } } },
+            },
+            {
+              name: "supervisor_question",
+              inputSchema: { properties: { message: { pattern: ".*\\S.*" } } },
+            },
+            {
+              name: "supervisor_submit_report",
+              inputSchema: {
+                required: ["delivery_id", "report"],
+                properties: {
+                  delivery_id: { pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$" },
+                  report: { pattern: ".*\\S.*" },
+                },
+              },
+            },
           ],
         },
       });
+
+      expect(
+        yield* step(() =>
+          toolCall(rpc, "camel-case-report", "supervisor_submit_report", {
+            deliveryId: "delivery-main",
+            report: "Bounded final report.",
+          }),
+        ),
+      ).toMatchObject({ result: { isError: true } });
 
       const questionResponse = toolCall(rpc, "question-1", "supervisor_question", {
         message: "Which implementation should I use?",
@@ -913,6 +1010,66 @@ describe("private supervisor channel", () => {
       yield* step(() => initialize(replacement.rpc));
       yield* step(() => Effect.runPromise(handle.awaitReady));
       yield* step(() => Effect.runPromise(handle.setAssignmentEpoch(2)));
+      yield* step(() => Effect.runPromise(handle.close));
+      yield* step(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+    },
+    20_000,
+  );
+
+  effectTest(
+    "writes exactly one response when cancellation arrives after a backpressured reply",
+    function* () {
+      const { handle, scope } = yield* step(() => openChannel("agent-supervisor-one-response"));
+      const { child, rpc } = spawnHelper(handle);
+      yield* step(() => initialize(rpc));
+      yield* step(() => Effect.runPromise(handle.awaitReady));
+      yield* step(() => Effect.runPromise(handle.setAssignmentEpoch(1)));
+
+      const response = toolCall(rpc, "question-after-reply", "supervisor_question", {
+        message: "Choose after stdout is backpressured.",
+      });
+      const question = yield* step(() => takeEvent(handle));
+      if (question.type !== "supervisor_contact") throw new Error("expected question");
+
+      child.stdout.pause();
+      for (let index = 0; index < 48; index += 1)
+        rpc.send({
+          jsonrpc: "2.0",
+          id: `backpressure-${index}`,
+          method: "tools/list",
+          params: {},
+        });
+      yield* step(() =>
+        Effect.runPromise(handle.reply(question.requestId, "Use the stable path.")),
+      );
+      yield* step(() => wait(20));
+      rpc.send({
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: "question-after-reply" },
+      });
+      child.stdout.resume();
+
+      expect(yield* step(() => response)).toMatchObject({
+        id: "question-after-reply",
+        result: { content: [{ text: "Parent reply: Use the stable path." }] },
+      });
+      expect(
+        yield* step(() =>
+          rpc.request({ jsonrpc: "2.0", id: "ping-after-reply-race", method: "ping", params: {} }),
+        ),
+      ).toMatchObject({ result: {} });
+      yield* step(() => wait(20));
+      expect(
+        rpc.messages.filter(
+          (message) =>
+            message !== null &&
+            hasObjectRuntimeType(message) &&
+            "id" in message &&
+            message.id === "question-after-reply",
+        ),
+      ).toHaveLength(1);
+
       yield* step(() => Effect.runPromise(handle.close));
       yield* step(() => Effect.runPromise(Scope.close(scope, Exit.void)));
     },

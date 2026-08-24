@@ -8,6 +8,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import {
+  SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
+  type SupervisorMcpToolArgumentsByName,
+} from "../supervisor/mcp-contract.ts";
+import {
   makeNdjsonRpcSession,
   type InboundClassification,
   type NdjsonRpcSession,
@@ -15,6 +19,8 @@ import {
   type RpcSessionError,
   RpcSessionTransportError,
 } from "./rpc-session.ts";
+
+type SupervisorMcpToolName = keyof SupervisorMcpToolArgumentsByName;
 
 const MAX_LINE_BYTES = 512 * 1024;
 const MAX_BRIDGE_TEXT_CHARS = 64 * 1024 + 128;
@@ -24,28 +30,6 @@ const CALL_TIMEOUT_MILLIS = 15_000;
 const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const INITIALIZE_REQUEST_ID = "pi-bridge-initialize";
 const packagedHelperPath = fileURLToPath(new URL("./supervisor-mcp-helper.mjs", import.meta.url));
-
-export type SupervisorToolName =
-  | "supervisor_progress"
-  | "supervisor_warning"
-  | "supervisor_question"
-  | "supervisor_submit_report";
-
-export interface SupervisorMessageArguments {
-  readonly message: string;
-}
-
-export interface SupervisorReportArguments {
-  readonly delivery_id: string;
-  readonly report: string;
-}
-
-export interface SupervisorToolArgumentsByName {
-  readonly supervisor_progress: SupervisorMessageArguments;
-  readonly supervisor_warning: SupervisorMessageArguments;
-  readonly supervisor_question: SupervisorMessageArguments;
-  readonly supervisor_submit_report: SupervisorReportArguments;
-}
 
 interface BridgeInitializeRequest {
   readonly jsonrpc: "2.0";
@@ -64,13 +48,13 @@ interface BridgeInitializedNotification {
   readonly params: object;
 }
 
-interface BridgeToolCallRequest<Name extends SupervisorToolName = SupervisorToolName> {
+interface BridgeToolCallRequest<Name extends SupervisorMcpToolName = SupervisorMcpToolName> {
   readonly jsonrpc: "2.0";
   readonly id: string;
   readonly method: "tools/call";
   readonly params: {
     readonly name: Name;
-    readonly arguments: SupervisorToolArgumentsByName[Name];
+    readonly arguments: SupervisorMcpToolArgumentsByName[Name];
   };
 }
 
@@ -168,12 +152,10 @@ const classifyBridgeLine = (line: string): InboundClassification<BridgeReply> =>
 };
 
 export interface PiSupervisorBridgeClient {
-  readonly call: <Name extends SupervisorToolName>(
+  readonly call: <Name extends SupervisorMcpToolName>(
     name: Name,
-    input: SupervisorToolArgumentsByName[Name],
-    signal?: AbortSignal,
-  ) => Promise<string>;
-  readonly close: () => void;
+    input: SupervisorMcpToolArgumentsByName[Name],
+  ) => Effect.Effect<string, RpcSessionError>;
 }
 
 export interface PiSupervisorBridgeOpenOptions {
@@ -193,10 +175,10 @@ const initializeRequest = (): BridgeInitializeRequest => ({
   },
 });
 
-const toolCallRequest = <Name extends SupervisorToolName>(
+const toolCallRequest = <Name extends SupervisorMcpToolName>(
   id: string,
   name: Name,
-  input: SupervisorToolArgumentsByName[Name],
+  input: SupervisorMcpToolArgumentsByName[Name],
 ): BridgeToolCallRequest<Name> => ({
   jsonrpc: "2.0",
   id,
@@ -215,17 +197,17 @@ const initializedNotificationFrame = (): string =>
 const makeBridgeClientDoor = (session: OpenBridgeSession): PiSupervisorBridgeClient => {
   let nextId = 0;
   return {
-    call: <Name extends SupervisorToolName>(
+    call: <Name extends SupervisorMcpToolName>(
       name: Name,
-      input: SupervisorToolArgumentsByName[Name],
-      signal?: AbortSignal,
-    ): Promise<string> => {
-      nextId += 1;
-      const requestId = `pi-bridge-${nextId}`;
-      const timeoutMillis =
-        name === "supervisor_question" ? QUESTION_TIMEOUT_MILLIS : CALL_TIMEOUT_MILLIS;
-      return Effect.runPromise(
-        session
+      input: SupervisorMcpToolArgumentsByName[Name],
+    ): Effect.Effect<string, RpcSessionError> =>
+      Effect.suspend(() => {
+        const requestId = `pi-bridge-${++nextId}`;
+        const timeoutMillis =
+          name === SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2]
+            ? QUESTION_TIMEOUT_MILLIS
+            : CALL_TIMEOUT_MILLIS;
+        return session
           .call(requestId, encodeFrame(toolCallRequest(requestId, name, input)), timeoutMillis)
           .pipe(
             Effect.flatMap((reply) =>
@@ -237,20 +219,12 @@ const makeBridgeClientDoor = (session: OpenBridgeSession): PiSupervisorBridgeCli
                     }),
                   ),
             ),
-          ),
-        { signal },
-      );
-    },
-    close: (): void => {
-      void Effect.runPromise(session.close().pipe(Effect.ignore));
-    },
+          );
+      }),
   };
 };
 
-/**
- * Opens one initialized bridge session bound to the caller's Scope. The helper process dies
- * with that scope; explicit `client.close` remains available for early teardown.
- */
+/** Opens one initialized bridge session bound to the caller's Scope. */
 export const openPiSupervisorBridge = (
   configPath: string,
   options: PiSupervisorBridgeOpenOptions = {},

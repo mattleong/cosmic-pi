@@ -3,69 +3,59 @@ import * as Context from "effect/Context";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import {
-  hasObjectRuntimeType,
-  makePiManagedRuntime,
-  makePiSessionRuntimeSlot,
-} from "pi-cosmic-core";
+import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
 import { defineTool, type AgentEndEvent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
 import { herdrAssignmentEpoch } from "../backend/herdr-assignment.ts";
+import {
+  isSupervisorMcpMessageArguments,
+  isSupervisorMcpReportArguments,
+  MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
+  MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+  MAX_SUPERVISOR_MCP_REPORT_CHARS,
+  SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
+  SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
+  SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+  SUPERVISOR_MCP_TOOL_NAMES,
+  type SupervisorMcpReportArguments,
+  type SupervisorMcpToolArgumentsByName,
+} from "../supervisor/mcp-contract.ts";
 import { Type } from "typebox";
 import {
   openPiSupervisorBridge,
   type PiSupervisorBridgeClient,
 } from "./pi-supervisor-bridge-client.ts";
+import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import type { RpcSessionError } from "./rpc-session.ts";
 
-const MAX_MESSAGE_CHARS = 16 * 1024;
-const MAX_REPORT_CHARS = 32 * 1024;
-const DELIVERY_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$";
-
 const MessageParameters = Type.Object(
-  { message: Type.String({ minLength: 1, maxLength: MAX_MESSAGE_CHARS, pattern: ".*\\S.*" }) },
+  {
+    message: Type.String({
+      minLength: 1,
+      maxLength: MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+      pattern: SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+    }),
+  },
   { additionalProperties: false },
 );
 const ReportParameters = Type.Object(
   {
-    delivery_id: Type.String({ minLength: 1, maxLength: 256, pattern: DELIVERY_PATTERN }),
-    report: Type.String({ minLength: 1, maxLength: MAX_REPORT_CHARS, pattern: ".*\\S.*" }),
+    delivery_id: Type.String({
+      minLength: 1,
+      maxLength: MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
+      pattern: SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
+    }),
+    report: Type.String({
+      minLength: 1,
+      maxLength: MAX_SUPERVISOR_MCP_REPORT_CHARS,
+      pattern: SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+    }),
   },
   { additionalProperties: false },
 );
 
-const exactMessage = <InputInput>(
-  input: InputInput,
-): input is InputInput & { readonly message: string } =>
-  Boolean(
-    input &&
-    hasObjectRuntimeType(input) &&
-    !Array.isArray(input) &&
-    Object.keys(input).length === 1 &&
-    "message" in input &&
-    Predicate.isString(input.message) &&
-    input.message.trim() &&
-    input.message.length <= MAX_MESSAGE_CHARS,
-  );
-const exactReport = <InputInput>(
-  input: InputInput,
-): input is InputInput & { readonly delivery_id: string; readonly report: string } =>
-  Boolean(
-    input &&
-    hasObjectRuntimeType(input) &&
-    !Array.isArray(input) &&
-    Object.keys(input).length === 2 &&
-    "delivery_id" in input &&
-    Predicate.isString(input.delivery_id) &&
-    new RegExp(DELIVERY_PATTERN).test(input.delivery_id) &&
-    "report" in input &&
-    Predicate.isString(input.report) &&
-    input.report.trim() &&
-    input.report.length <= MAX_REPORT_CHARS,
-  );
-
-type ReportInput = { readonly delivery_id: string; readonly report: string };
+type SupervisorMcpToolName = keyof SupervisorMcpToolArgumentsByName;
+type ReportInput = SupervisorMcpReportArguments;
 
 interface AssignmentReportState {
   readonly generation: number;
@@ -88,7 +78,7 @@ const finalAssistantText = (event: AgentEndEvent): string | undefined => {
     .flatMap((content) => (content.type === "text" ? [content.text] : []))
     .join("\n\n")
     .trim();
-  return text ? text.slice(0, MAX_REPORT_CHARS) : undefined;
+  return text ? text.slice(0, MAX_SUPERVISOR_MCP_REPORT_CHARS) : undefined;
 };
 
 export interface PiSupervisorBridgeExtensionDependencies {
@@ -102,15 +92,6 @@ class SupervisorBridge extends Context.Service<SupervisorBridge, PiSupervisorBri
 interface SupervisorBridgeSessionInput {
   readonly configPath: string;
 }
-
-/** Reads and scrubs the one-shot runtime API credentials from the given environment snapshot. */
-const consumeRuntimeApiCredentials = (environment: NodeJS.ProcessEnv) => {
-  const apiKey = environment.PI_SUBAGENT_RUNTIME_API_KEY;
-  const provider = environment.PI_SUBAGENT_RUNTIME_API_PROVIDER;
-  delete environment.PI_SUBAGENT_RUNTIME_API_KEY;
-  delete environment.PI_SUBAGENT_RUNTIME_API_PROVIDER;
-  return { apiKey, provider };
-};
 
 export default function registerPiSubagentSupervisorBridge(
   pi: ExtensionAPI,
@@ -126,26 +107,19 @@ export default function registerPiSubagentSupervisorBridge(
     default: false,
   });
   const fastMode = pi.getFlag("pi-subagents-fast-mode") === true;
-  let client: PiSupervisorBridgeClient | undefined;
   const slot = makePiSessionRuntimeSlot<
     SupervisorBridgeSessionInput,
     SupervisorBridge,
     never,
-    RpcSessionError,
-    PiSupervisorBridgeClient
+    RpcSessionError
   >({
     makeRuntime: ({ configPath }) =>
       makePiManagedRuntime(pi, Layer.effect(SupervisorBridge, dependencies.openBridge(configPath))),
-    startup: () => SupervisorBridge.use((bridge) => Effect.succeed(bridge)),
-    onActivated: (_input, _token, bridge) => {
-      client = bridge;
-    },
-    onDeactivated: () => {
-      client = undefined;
-    },
+    startup: () => SupervisorBridge.use(() => Effect.void),
   });
   let started = false;
   let shuttingDown = false;
+  let currentToken: number | undefined;
   let assignment: AssignmentReportState = {
     generation: 0,
     accepted: false,
@@ -166,7 +140,28 @@ export default function registerPiSubagentSupervisorBridge(
     };
   };
 
+  const callBridge = <Name extends SupervisorMcpToolName>(
+    token: number,
+    name: Name,
+    input: SupervisorMcpToolArgumentsByName[Name],
+    signal?: AbortSignal,
+  ): Promise<string> => {
+    if (shuttingDown || !slot.isCurrent(token))
+      return Promise.reject(new Error("Supervisor bridge is unavailable."));
+    return slot
+      .run(
+        SupervisorBridge.use((bridge) => bridge.call(name, input)),
+        signal,
+      )
+      .then((text) => {
+        if (shuttingDown || !slot.isCurrent(token))
+          throw new Error("Supervisor bridge is unavailable.");
+        return text;
+      });
+  };
+
   const submitReport = (
+    token: number,
     state: AssignmentReportState,
     input: ReportInput,
     signal?: AbortSignal,
@@ -177,11 +172,10 @@ export default function registerPiSubagentSupervisorBridge(
       );
     if (state.accepted) return Promise.resolve("Supervisor report already accepted.");
     if (state.inFlight) return state.inFlight.promise;
-    const bridge = client;
-    if (!bridge || shuttingDown)
+    if (shuttingDown || !slot.isCurrent(token))
       return Promise.reject(new Error("Supervisor bridge is unavailable."));
     state.deliveryInput = input;
-    const promise = bridge.call("supervisor_submit_report", input, signal).then((text) => {
+    const promise = callBridge(token, SUPERVISOR_MCP_TOOL_NAMES[3], input, signal).then((text) => {
       state.accepted = true;
       return text;
     });
@@ -193,18 +187,7 @@ export default function registerPiSubagentSupervisorBridge(
     return promise;
   };
 
-  pi.on("before_provider_request", (event, ctx) => {
-    if (
-      !fastMode ||
-      !ctx.model ||
-      !supportsFastModel(ctx.model.provider, ctx.model.id) ||
-      !event.payload ||
-      !hasObjectRuntimeType(event.payload) ||
-      Array.isArray(event.payload)
-    )
-      return undefined;
-    return { ...event.payload, service_tier: FAST_SERVICE_TIER };
-  });
+  registerChildPiFastModeHook(pi, fastMode);
 
   pi.on("session_start", (_event, ctx) => {
     if (started) return;
@@ -229,13 +212,14 @@ export default function registerPiSubagentSupervisorBridge(
           ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
         return;
       }
+      currentToken = token;
       return loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())
         .catch(() => undefined)
         .then(() => {
-          if (shuttingDown || !slot.isCurrent(token) || !client) return;
+          if (shuttingDown || !slot.isCurrent(token)) return;
 
           const messageTool = (
-            name: "supervisor_progress" | "supervisor_warning" | "supervisor_question",
+            name: (typeof SUPERVISOR_MCP_MESSAGE_TOOL_NAMES)[number],
             label: string,
             description: string,
           ) =>
@@ -245,35 +229,33 @@ export default function registerPiSubagentSupervisorBridge(
               description,
               parameters: MessageParameters,
               execute(_id, input, signal) {
-                if (!exactMessage(input))
+                if (!isSupervisorMcpMessageArguments(input))
                   return Promise.reject(
                     new Error("Supervisor message input is malformed or excessive."),
                   );
-                return Promise.resolve(client?.call(name, { message: input.message }, signal)).then(
-                  (text) => ({
-                    content: [{ type: "text" as const, text: text ?? "Supervisor unavailable." }],
-                    details: {},
-                  }),
-                );
+                return callBridge(token, name, { message: input.message }, signal).then((text) => ({
+                  content: [{ type: "text" as const, text }],
+                  details: {},
+                }));
               },
             });
 
           const report = defineTool({
-            name: "supervisor_submit_report",
+            name: SUPERVISOR_MCP_TOOL_NAMES[3],
             label: "Submit Supervisor Report",
             description:
               "Submit one complete final report for the current assignment with a fresh stable delivery identity. This is the only completion signal.",
             promptSnippet: "Submit the complete final report to the parent supervisor",
             promptGuidelines: [
-              "Call supervisor_submit_report exactly once after completing the assignment. Use a fresh bounded delivery_id for each later retained assignment.",
+              `Call ${SUPERVISOR_MCP_TOOL_NAMES[3]} exactly once after completing the assignment. Use a fresh bounded delivery_id for each later retained assignment.`,
             ],
             parameters: ReportParameters,
             execute(_id, input, signal) {
-              if (!exactReport(input))
+              if (!isSupervisorMcpReportArguments(input))
                 return Promise.reject(
                   new Error("Supervisor report input is malformed or excessive."),
                 );
-              return submitReport(assignment, input, signal).then((text) => ({
+              return submitReport(token, assignment, input, signal).then((text) => ({
                 content: [{ type: "text" as const, text }],
                 details: {},
               }));
@@ -282,17 +264,17 @@ export default function registerPiSubagentSupervisorBridge(
 
           const tools = [
             messageTool(
-              "supervisor_progress",
+              SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
               "Supervisor Progress",
               "Send bounded progress to the parent projection without blocking.",
             ),
             messageTool(
-              "supervisor_warning",
+              SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1],
               "Supervisor Warning",
               "Record a bounded non-blocking warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
             ),
             messageTool(
-              "supervisor_question",
+              SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
               "Ask Supervisor",
               "Ask this assignment's one exact correlated blocking parent question and wait for its reply.",
             ),
@@ -345,8 +327,10 @@ export default function registerPiSubagentSupervisorBridge(
           }
         : undefined);
     if (!input) return;
+    const token = currentToken;
+    if (token === undefined || !slot.isCurrent(token)) return;
     state.fallbackStarted = true;
-    return submitReport(state, input).then(
+    return submitReport(token, state, input).then(
       () => undefined,
       () => undefined,
     );
@@ -354,7 +338,7 @@ export default function registerPiSubagentSupervisorBridge(
 
   pi.on("session_shutdown", () => {
     shuttingDown = true;
-    client = undefined;
+    currentToken = undefined;
     return slot.shutdown();
   });
 }

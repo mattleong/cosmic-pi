@@ -63,7 +63,6 @@ export interface RunRecord {
     | { readonly scope: Scope.Closeable; readonly settled: Deferred.Deferred<void> }
     | undefined;
   readonly activeTools: Map<string, string>;
-  settlement: Deferred.Deferred<SubagentRunView>;
   /** Resolves only after backend/process/writer cleanup is confirmed or quarantined. */
   cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
   readonly routeContinuation?: ProfileRouteContinuation | undefined;

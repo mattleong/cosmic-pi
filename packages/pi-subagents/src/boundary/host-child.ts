@@ -1,7 +1,5 @@
 // The child-only Pi/Node bridge is intentionally Promise- and callback-shaped.
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -11,6 +9,7 @@ import { Type } from "typebox";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
 import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
+import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { isSubagentChildProcess } from "./host-environment.ts";
 import {
   openLocalPiChildIpc,
@@ -23,15 +22,6 @@ const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
-
-/** Reads and scrubs the one-shot runtime API credentials from the given environment snapshot. */
-const consumeRuntimeApiCredentials = (environment: NodeJS.ProcessEnv) => {
-  const apiKey = environment.PI_SUBAGENT_RUNTIME_API_KEY;
-  const provider = environment.PI_SUBAGENT_RUNTIME_API_PROVIDER;
-  delete environment.PI_SUBAGENT_RUNTIME_API_KEY;
-  delete environment.PI_SUBAGENT_RUNTIME_API_PROVIDER;
-  return { apiKey, provider };
-};
 
 type ContactParentEnvelope = Extract<LocalPiContact, { readonly type: "contact_parent" }>;
 type ContactCancelEnvelope = Extract<LocalPiContact, { readonly type: "contact_cancel" }>;
@@ -102,18 +92,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
     pending.clear();
   };
 
-  pi.on("before_provider_request", (event, ctx) => {
-    if (
-      !fastMode ||
-      !ctx.model ||
-      !supportsFastModel(ctx.model.provider, ctx.model.id) ||
-      !event.payload ||
-      !hasObjectRuntimeType(event.payload) ||
-      Array.isArray(event.payload)
-    )
-      return undefined;
-    return { ...event.payload, service_tier: FAST_SERVICE_TIER };
-  });
+  registerChildPiFastModeHook(pi, fastMode);
 
   pi.on("session_start", () => {
     if (detachIpc) return;

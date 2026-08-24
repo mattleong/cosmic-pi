@@ -2,9 +2,11 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { BackendLaunchRequest, BackendStartupState } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
+import { isRetainableProfileCandidate } from "../profiles/model.ts";
 import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { processCapacityError, writerConflictError } from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
@@ -122,10 +124,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             code: "task_required",
             message: "Subagent task is required.",
           });
-        if (
-          request.closeOnReport === false &&
-          (request.host !== "herdr" || request.writeIntent !== "read-only")
-        )
+        if (request.closeOnReport === false && !isRetainableProfileCandidate(request))
           return yield* new InvalidSubagentRequestError({
             code: "retained_report_capability_invalid",
             message: "closeOnReport=false requires a Herdr-hosted read-only backend.",
@@ -241,7 +240,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             if (evicted) {
               evicted.evictionClaim = undefined;
               records.delete(evicted.view.id);
-              delivery.discardRunQuestionsLocked(evicted.view.id);
+              delivery.discardQuestionLocked(evicted.view.id);
             }
             // Run scopes are service-owned rather than automatically parent-closed so shutdown
             // can observe backend cleanup before authorizing the separately scoped writer lease
@@ -255,7 +254,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               ? Deferred.makeUnsafe<void>()
               : undefined;
             const initializationSettled = Deferred.makeUnsafe<void>();
-            const settlement = yield* Deferred.make<SubagentRunView>();
             const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
             const { id, name } = allocateRunIdentity(requestedName);
             const assignmentAttemptToken = allocateAssignmentAttemptToken();
@@ -351,7 +349,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 driver,
                 launch,
                 activeTools: new Map(),
-                settlement,
                 cleanupSettlement,
                 routeContinuation: request.routeContinuation,
                 retryExhausted: false,
@@ -598,15 +595,12 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const outcome = yield* Deferred.make<SubagentRunView, SubagentError>();
-        yield* start(request).pipe(
-          Effect.exit,
-          Effect.flatMap((exit) => Deferred.done(outcome, exit)),
+        const fiber = yield* start(request).pipe(
           Effect.forkIn(ownerScope, { startImmediately: true }),
         );
         // Public start is admission-only. A report racing prompt confirmation remains unresolved
         // for exact-once await/notifier delivery and is never exposed or claimed here.
-        return redactCompletionReport(yield* restore(Deferred.await(outcome)));
+        return redactCompletionReport(yield* restore(Fiber.join(fiber)));
       }),
     );
 
@@ -617,5 +611,3 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     startSessionOwned,
   };
 }
-
-export type RunLaunch = ReturnType<typeof makeRunLaunch>;

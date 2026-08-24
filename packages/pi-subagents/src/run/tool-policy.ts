@@ -4,13 +4,7 @@ import { InvalidSubagentRequestError } from "./errors.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import type { StartSubagentRequest } from "./model.ts";
 
-/**
- * Orchestration tools a child must never receive.
- *
- * Applied twice on purpose: the tool resolves the parent's active tools against it, and the child
- * process boundary passes it again as `--exclude-tools`.
- */
-export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
+export const SUBAGENT_TOOL_NAMES = [
   "subagent_models",
   "subagent_start",
   "subagent_list",
@@ -20,6 +14,16 @@ export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
   "subagent_reply",
   "subagent_lifecycle",
   "subagent_rename",
+] as const;
+
+/**
+ * Orchestration tools a child must never receive.
+ *
+ * Applied twice on purpose: the tool resolves the parent's active tools against it, and the child
+ * process boundary passes it again as `--exclude-tools`.
+ */
+export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
+  ...SUBAGENT_TOOL_NAMES,
   "herdr_agent_start",
   "herdr_agent_list",
   "herdr_agent_status",

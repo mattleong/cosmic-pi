@@ -3,23 +3,21 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import {
+  MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate,
+  PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
+  PROFILE_CANDIDATE_HOSTS,
+  PROFILE_CANDIDATE_RUNTIMES,
+  PROFILE_CANDIDATE_WRITE_INTENTS,
   PROFILE_IDS,
+  profileCandidateValidationIssues,
   type DeclaredProfileRoute,
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
-import { supportsSubagentFastMode } from "../run/fast-mode.ts";
-import { subagentRuntimeSupportsEffort } from "../domain/routing.ts";
-import {
-  isSafeNativeModelSelector,
-  MAX_NATIVE_MODEL_SELECTOR_CHARS,
-} from "../run/native-model-selector.ts";
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
 export const SUBAGENT_CONFIG_VERSION = 4;
-export const MAX_PROFILE_CANDIDATES = 32;
-export const MAX_MODEL_SELECTOR_CHARS = MAX_NATIVE_MODEL_SELECTOR_CHARS;
 
 export interface SubagentConfigFile {
   readonly version?: number | undefined;
@@ -34,30 +32,27 @@ export interface DecodedSubagentConfig {
   readonly unsupportedVersion: boolean;
 }
 
-export const ProfileHostSchema = Schema.Literals(["local", "herdr"] as const);
-export const ProfileRuntimeSchema = Schema.Literals(["pi", "claude", "codex"] as const);
+export const ProfileHostSchema = Schema.Literals(PROFILE_CANDIDATE_HOSTS);
+export const ProfileRuntimeSchema = Schema.Literals(PROFILE_CANDIDATE_RUNTIMES);
 export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
-export const ProfileContextSchema = Schema.Literals(["fresh", "fork"] as const);
-export const ProfileWriteIntentSchema = Schema.Literals(["read-only", "writer"] as const);
+export const ProfileContextSchema = Schema.Literals(PROFILE_CANDIDATE_CONTEXTS);
+export const ProfileWriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
 
-const containsNoTerminalControls = (value: string): boolean => {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code < 32 || (code >= 127 && code <= 159)) return false;
-  }
-  return true;
-};
-const hasNoTerminalControls = Schema.makeFilter(containsNoTerminalControls);
-const NativeModelSchema = Schema.String.check(
-  Schema.isNonEmpty(),
-  Schema.isMaxLength(MAX_MODEL_SELECTOR_CHARS),
-  Schema.isPattern(/\S/),
-  hasNoTerminalControls,
-);
+const CANDIDATE_KEYS = [
+  "host",
+  "runtime",
+  "model",
+  "effort",
+  "context",
+  "writeIntent",
+  "fastMode",
+  "closeOnReport",
+] as const;
+const CANDIDATE_KEYS_SET = new Set<string>(CANDIDATE_KEYS);
 const CandidateContractSchema = Schema.Struct({
   host: ProfileHostSchema,
   runtime: ProfileRuntimeSchema,
-  model: NativeModelSchema,
+  model: Schema.String,
   effort: ProfileEffortSchema,
   context: ProfileContextSchema,
   writeIntent: ProfileWriteIntentSchema,
@@ -74,10 +69,14 @@ const ownKeysAre = (record: Readonly<JsonObject>, allowed: ReadonlySet<string>):
 };
 
 const decodedRecord = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
-  if (!hasObjectRuntimeType(value) || value === null || Array.isArray(value)) return undefined;
-  // SAFETY: This is a shallow hostile-input view used only for guarded field reads; every field
-  // is decoded into its concrete domain type before it can enter SubagentConfigFile.
-  return value as ValueInput & Readonly<JsonObject>;
+  try {
+    if (!hasObjectRuntimeType(value) || value === null || Array.isArray(value)) return undefined;
+    // SAFETY: This is a shallow hostile-input view used only for guarded field reads; every field
+    // is decoded into its concrete domain type before it can enter SubagentConfigFile.
+    return value as ValueInput & Readonly<JsonObject>;
+  } catch {
+    return undefined;
+  }
 };
 
 const readField = (
@@ -95,63 +94,66 @@ const readField = (
   }
 };
 
-/** Syntax-only native selector validation. Catalog availability remains a launch-time boundary. */
-export const isNativeProfileModelSelector = (runtime: string, selector: string): boolean => {
-  const value = selector;
-  if (!isSafeNativeModelSelector(value)) return false;
-  if (value === "parent") return runtime === "pi";
-  if (runtime !== "pi") return true;
-  const slash = value.indexOf("/");
-  if (slash <= 0 || slash >= value.length - 1 || /\s/.test(value)) return false;
-  const provider = value.slice(0, slash);
-  const model = value.slice(slash + 1);
-  return (
-    /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/.test(provider) &&
-    /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(model) &&
-    model.split("/").every((segment) => segment !== "." && segment !== ".." && segment.length > 0)
-  );
+const readCandidateField = (record: Readonly<JsonObject>, key: (typeof CANDIDATE_KEYS)[number]) => {
+  try {
+    if (!Object.prototype.hasOwnProperty.call(record, key))
+      return { readable: true as const, present: false as const };
+    return { readable: true as const, present: true as const, value: record[key] };
+  } catch {
+    return { readable: false as const, present: true as const };
+  }
 };
 
 export const decodeProfileCandidate = <ValueInput>(
   value: ValueInput,
 ): ProfileCandidate | undefined => {
   const record = decodedRecord(value);
+  if (!record || !ownKeysAre(record, CANDIDATE_KEYS_SET)) return undefined;
+  const host = readCandidateField(record, "host");
+  const runtime = readCandidateField(record, "runtime");
+  const model = readCandidateField(record, "model");
+  const effort = readCandidateField(record, "effort");
+  const context = readCandidateField(record, "context");
+  const writeIntent = readCandidateField(record, "writeIntent");
+  const fastMode = readCandidateField(record, "fastMode");
+  const closeOnReport = readCandidateField(record, "closeOnReport");
   if (
-    !record ||
-    !ownKeysAre(
-      record,
-      new Set([
-        "host",
-        "runtime",
-        "model",
-        "effort",
-        "context",
-        "writeIntent",
-        "fastMode",
-        "closeOnReport",
-      ]),
-    )
+    !host.readable ||
+    !host.present ||
+    !runtime.readable ||
+    !runtime.present ||
+    !model.readable ||
+    !model.present ||
+    !effort.readable ||
+    !effort.present ||
+    !context.readable ||
+    !context.present ||
+    !writeIntent.readable ||
+    !writeIntent.present ||
+    !fastMode.readable ||
+    !closeOnReport.readable
   )
     return undefined;
-  const decoded = Schema.decodeUnknownOption(CandidateContractSchema)(record);
-  if (Option.isNone(decoded)) return undefined;
-  const candidate = normalizeProfileCandidate(decoded.value);
-  const { closeOnReport, fastMode, model } = candidate;
-  if (!isNativeProfileModelSelector(candidate.runtime, model)) return undefined;
-  if (
-    candidate.effort !== "default" &&
-    !subagentRuntimeSupportsEffort(candidate.runtime, candidate.effort)
-  )
+  const base = {
+    host: host.value,
+    runtime: runtime.value,
+    model: model.value,
+    effort: effort.value,
+    context: context.value,
+    writeIntent: writeIntent.value,
+  };
+  const withFastMode = fastMode.present ? { ...base, fastMode: fastMode.value } : base;
+  const plain = closeOnReport.present
+    ? { ...withFastMode, closeOnReport: closeOnReport.value }
+    : withFastMode;
+  try {
+    const decoded = Schema.decodeUnknownOption(CandidateContractSchema)(plain);
+    if (Option.isNone(decoded)) return undefined;
+    const candidate = normalizeProfileCandidate(decoded.value);
+    return profileCandidateValidationIssues(candidate).length === 0 ? candidate : undefined;
+  } catch {
     return undefined;
-  if (model === "parent" && (candidate.host !== "local" || candidate.runtime !== "pi"))
-    return undefined;
-  if (candidate.context === "fork" && (candidate.host !== "local" || candidate.runtime !== "pi"))
-    return undefined;
-  if (!closeOnReport && (candidate.host !== "herdr" || candidate.writeIntent !== "read-only"))
-    return undefined;
-  if (fastMode && model !== "parent" && !supportsSubagentFastMode(candidate.runtime, model))
-    return undefined;
-  return candidate;
+  }
 };
 
 const decodeRoute = <ValueInput>(
@@ -160,23 +162,39 @@ const decodeRoute = <ValueInput>(
   diagnostics: string[],
 ): DeclaredProfileRoute | undefined => {
   if (value === "disabled") return "disabled";
-  if (!Array.isArray(value)) {
+  let isArray: boolean;
+  try {
+    isArray = Array.isArray(value);
+  } catch {
+    diagnostics.push(path);
+    return undefined;
+  }
+  if (!isArray) {
     const candidate = decodeProfileCandidate(value);
     if (!candidate) diagnostics.push(path);
     return candidate;
   }
-  if (value.length === 0 || value.length > MAX_PROFILE_CANDIDATES) {
+  // SAFETY: The guarded native Array check above established this hostile-input view.
+  const values = value as ValueInput & ReadonlyArray<unknown>;
+  let length: number;
+  try {
+    length = values.length;
+  } catch {
+    diagnostics.push(path);
+    return undefined;
+  }
+  if (length === 0 || length > MAX_PROFILE_CANDIDATES) {
     diagnostics.push(
-      value.length > MAX_PROFILE_CANDIDATES ? `${path}[${MAX_PROFILE_CANDIDATES}+]` : path,
+      length > MAX_PROFILE_CANDIDATES ? `${path}[${MAX_PROFILE_CANDIDATES}+]` : path,
     );
     return undefined;
   }
   const candidates: ProfileCandidate[] = [];
   let invalid = false;
-  for (let index = 0; index < Math.min(value.length, MAX_PROFILE_CANDIDATES); index += 1) {
+  for (let index = 0; index < length; index += 1) {
     let item: unknown;
     try {
-      item = value[index];
+      item = values[index];
     } catch {
       diagnostics.push(`${path}[${index}]`);
       invalid = true;
@@ -225,15 +243,11 @@ export function decodeSubagentConfig<InputInput>(
   const unsupportedVersion = version !== SUBAGENT_CONFIG_VERSION;
   if (unsupportedVersion) diagnostics.push(`${scope}.version`);
 
+  let file: SubagentConfigFile = {};
+  if (version === SUBAGENT_CONFIG_VERSION) file = { version };
+  if (Object.keys(profiles).length > 0) file = { ...file, profiles };
   return {
-    file: (() => {
-      const baseResult = {};
-      const withVersion =
-        version === SUBAGENT_CONFIG_VERSION ? { ...baseResult, version } : baseResult;
-      const withProfiles =
-        Object.keys(profiles).length > 0 ? { ...withVersion, profiles } : withVersion;
-      return withProfiles;
-    })(),
+    file,
     diagnostics: [...new Set(diagnostics)],
     invalidProfileRoutes,
     unsupportedVersion,

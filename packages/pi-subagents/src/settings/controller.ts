@@ -1,18 +1,23 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { completeSettingsArguments, isProjectTrusted } from "pi-cosmic-core";
+import {
+  completeSettingsArguments,
+  hasObjectRuntimeType,
+  isProjectTrusted,
+  synchronousNow,
+} from "pi-cosmic-core";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
-import { synchronousNow } from "../boundary/native-clock.ts";
 import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
-import { normalizeDeclaredProfileRoute } from "../config/options.ts";
 import type { SubagentProfilePatch } from "../config/store.ts";
-import type { ProfileCandidate, ProfileId } from "../profiles/model.ts";
+import {
+  normalizeDeclaredProfileRoute,
+  type ProfileCandidate,
+  type ProfileId,
+} from "../profiles/model.ts";
 import {
   SessionProfileConflictError,
   type SessionProfilePatch,
@@ -27,12 +32,18 @@ import {
   type ProfileSettingsInspection,
   type ProfileSettingsScope,
 } from "./profile-route-editor.ts";
-import { loadCandidateModelPicker } from "./ui/candidate-editor.ts";
+import {
+  loadCandidateModelPicker,
+  preferredHerdrPiSelector,
+  ProfileModelCatalog,
+  type ProfileModelCatalogSnapshot,
+} from "./profile-model-catalog.ts";
 import { createProfileModelChoices } from "./ui/model-picker.ts";
 import {
   ProfileWorkspaceComponent,
+  type ProfileWorkspaceOptions,
   type ProfileWorkspaceSaveResult,
-} from "./ui/profile-workspace.ts";
+} from "./profile-workspace.ts";
 
 export interface FleetManagerActions {
   readonly isAvailable: () => boolean;
@@ -130,27 +141,35 @@ function openFleetManager(
   );
 }
 
+const projectedParentModel = (
+  snapshot: ProfileModelCatalogSnapshot,
+  parentSelector: string | undefined,
+) =>
+  parentSelector
+    ? snapshot.piModels.find((model) => `${model.provider}/${model.id}` === parentSelector)
+    : undefined;
+
 const availablePiModelsForHost = (
-  models: ReadonlyArray<Model<Api>>,
+  snapshot: ProfileModelCatalogSnapshot,
   host: ProfileCandidate["host"],
-  extensionProviders: ReadonlySet<string> | undefined,
 ) =>
   host === "local"
-    ? models
-    : extensionProviders
-      ? models.filter((model) => !extensionProviders.has(model.provider))
+    ? snapshot.piModels
+    : snapshot.extensionProviderIds
+      ? snapshot.piModels.filter(
+          (model) => !snapshot.extensionProviderIds?.includes(model.provider),
+        )
       : [];
 
 const supportedPiEfforts = (
   candidate: ProfileCandidate,
-  models: ReadonlyArray<Model<Api>>,
-  parentModel: Model<Api> | undefined,
-  extensionProviders: ReadonlySet<string> | undefined,
+  snapshot: ProfileModelCatalogSnapshot,
+  parentSelector: string | undefined,
 ): ReadonlyArray<SubagentEffort> | undefined => {
   if (candidate.runtime !== "pi") return undefined;
   const choices = createProfileModelChoices({
-    models: availablePiModelsForHost(models, candidate.host, extensionProviders),
-    parentModel,
+    models: availablePiModelsForHost(snapshot, candidate.host),
+    parentModel: projectedParentModel(snapshot, parentSelector),
     currentSelector: candidate.model,
     allowParent: candidate.host === "local",
   });
@@ -162,19 +181,22 @@ const supportedPiEfforts = (
 };
 
 const fastModeAvailable = (
-  ctx: ExtensionCommandContext,
   candidate: ProfileCandidate,
-  extensionProviders: ReadonlySet<string> | undefined,
+  snapshot: ProfileModelCatalogSnapshot,
+  parentSelector: string | undefined,
 ): boolean => {
   if (candidate.runtime === "pi" && candidate.host === "herdr") {
     const slash = candidate.model.indexOf("/");
     const provider = slash > 0 ? candidate.model.slice(0, slash) : undefined;
-    if (!provider || !extensionProviders || extensionProviders.has(provider)) return false;
+    if (
+      !provider ||
+      !snapshot.extensionProviderIds ||
+      snapshot.extensionProviderIds.includes(provider)
+    )
+      return false;
   }
   if (candidate.runtime === "pi" && candidate.model === "parent")
-    return ctx.model
-      ? supportsSubagentFastMode("pi", `${ctx.model.provider}/${ctx.model.id}`)
-      : false;
+    return parentSelector ? supportsSubagentFastMode("pi", parentSelector) : false;
   return supportsSubagentFastMode(candidate.runtime, candidate.model);
 };
 
@@ -224,10 +246,7 @@ function openProfileSettings(
     (initialInspection) => {
       let inspection: ProfileSettingsInspection = initialInspection;
 
-      let availableModels = ctx.modelRegistry.getAvailable();
-      let parentCatalogModel = ctx.model
-        ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
-        : undefined;
+      const modelCatalog = new ProfileModelCatalog(ctx.modelRegistry);
       let requestWorkspaceRender: (() => void) | undefined;
       let modelRefreshNotified = false;
       const modelRefreshController = new AbortController();
@@ -235,39 +254,22 @@ function openProfileSettings(
         if (modelRefreshNotified || modelRefreshController.signal.aborted) return;
         modelRefreshNotified = true;
         ctx.ui.notify(
-          "Could not refresh Pi model catalogs; showing the last authenticated snapshot.",
+          "Could not refresh Pi model catalogs; showing the last coherent snapshot.",
           "warning",
         );
       };
-      const refreshModels = (): Promise<void> =>
-        Promise.resolve()
-          .then(() => ctx.modelRegistry.refresh({ signal: modelRefreshController.signal }))
-          .then(() => {
-            if (modelRefreshController.signal.aborted) return;
-            if (ctx.modelRegistry.getError()) {
-              notifyModelRefreshFailure();
-              return;
-            }
-            availableModels = ctx.modelRegistry.getAvailable();
-            parentCatalogModel = ctx.model
-              ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
-              : undefined;
-            requestWorkspaceRender?.();
-          })
-          .catch(() => notifyModelRefreshFailure());
-      void refreshModels();
-      // Catalog I/O must never hold the settings overlay closed. Immediately resolved refreshes still
-      // update the initial snapshot; slower providers finish while the workspace is already visible.
+      void modelCatalog.refresh(modelRefreshController.signal).then((result) => {
+        if (result === "failed") notifyModelRefreshFailure();
+        else if (result === "updated" && !modelRefreshController.signal.aborted)
+          requestWorkspaceRender?.();
+      });
+      // Catalog I/O never delays the overlay. Every action captures one immutable catalog generation.
       return Promise.resolve().then(() => {
-        let extensionProviders: ReadonlySet<string> | undefined;
-        try {
-          extensionProviders = new Set(ctx.modelRegistry.getRegisteredProviderIds());
-        } catch {
+        if (!modelCatalog.capture().extensionProviderIds)
           ctx.ui.notify(
             "Could not inspect Pi provider provenance; Herdr Pi model choices are unavailable.",
             "warning",
           );
-        }
         let parentEffort: SubagentEffort = "high";
         if (ctx.model) {
           try {
@@ -277,16 +279,6 @@ function openProfileSettings(
           }
         }
         const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-        const herdrModelSelectors = createProfileModelChoices({
-          models: extensionProviders
-            ? availableModels.filter((model) => !extensionProviders.has(model.provider))
-            : [],
-          allowParent: false,
-        }).flatMap((choice) => (choice.choice.kind === "model" ? [choice.choice.selector] : []));
-        const preferredPiModel =
-          parentModel && herdrModelSelectors.includes(parentModel)
-            ? parentModel
-            : herdrModelSelectors[0];
         const refreshInspection = (conflictMessage?: string): Promise<ProfileWorkspaceSaveResult> =>
           Promise.resolve()
             .then(() => actions.inspectProfiles(isProjectTrusted(ctx)))
@@ -388,82 +380,65 @@ function openProfileSettings(
             ctx.ui.custom<boolean>(
               (tui, theme, keybindings, done) => {
                 requestWorkspaceRender = () => tui.requestRender();
+                const baseOptions: ProfileWorkspaceOptions = {
+                  theme,
+                  inspection,
+                  projectTrusted,
+                  initialScope: selectedInitialScope,
+                  parentEffort,
+                  preferredPiModel: () =>
+                    preferredHerdrPiSelector(modelCatalog.capture(), parentModel),
+                  getHeight: () => tui.terminal.rows,
+                  requestRender: () => tui.requestRender(),
+                  matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
+                    keybindings.matches(data, id),
+                  keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
+                    fullScreenKeybindingLabel(
+                      id,
+                      fallback,
+                      Predicate.isFunction(keybindings.getKeys)
+                        ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+                        : undefined,
+                    ),
+                  close: done,
+                  saveDraft,
+                  clearSessionOverrides,
+                  loadModelPicker: (
+                    profile: ProfileId,
+                    candidateIndex: number,
+                    candidate: ProfileCandidate,
+                    signal?: AbortSignal,
+                  ) => {
+                    const baseInput = {
+                      profile,
+                      candidateIndex,
+                      candidate,
+                      listNativeModels: actions.listNativeModels,
+                      piCatalog: modelCatalog.capture(),
+                    };
+                    const withParent = parentModel
+                      ? { ...baseInput, parentSelector: parentModel }
+                      : baseInput;
+                    return loadCandidateModelPicker(
+                      signal ? { ...withParent, signal } : withParent,
+                    );
+                  },
+                  supportedPiEfforts: (candidate: ProfileCandidate) => {
+                    const snapshot = modelCatalog.capture();
+                    return supportedPiEfforts(candidate, snapshot, parentModel);
+                  },
+                  fastModeAvailable: (candidate: ProfileCandidate) => {
+                    const snapshot = modelCatalog.capture();
+                    return fastModeAvailable(candidate, snapshot, parentModel);
+                  },
+                  reload: () => requestProfileReload(ctx, bridge),
+                  onDispose: () => {
+                    requestWorkspaceRender = undefined;
+                    modelRefreshController.abort();
+                  },
+                };
                 return new ProfileWorkspaceComponent(
-                  (() => {
-                    const baseResult = {
-                      theme,
-                      inspection,
-                      projectTrusted,
-                      initialScope: selectedInitialScope,
-                      parentEffort,
-                    };
-                    const withPiModel = preferredPiModel
-                      ? { ...baseResult, piModel: preferredPiModel }
-                      : baseResult;
-                    const withParentModel = parentModel
-                      ? { ...withPiModel, parentModel }
-                      : withPiModel;
-                    const withGetHeightAndAdditionalFields = {
-                      ...withParentModel,
-                      getHeight: () => tui.terminal.rows,
-                      requestRender: () => tui.requestRender(),
-                      matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
-                        keybindings.matches(data, id),
-                      keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
-                        fullScreenKeybindingLabel(
-                          id,
-                          fallback,
-                          Predicate.isFunction(keybindings.getKeys)
-                            ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
-                            : undefined,
-                        ),
-                      close: done,
-                      saveDraft,
-                      clearSessionOverrides,
-                      loadModelPicker: (
-                        profile: ProfileId,
-                        candidateIndex: number,
-                        candidate: ProfileCandidate,
-                        signal?: AbortSignal,
-                      ) =>
-                        loadCandidateModelPicker(
-                          ctx,
-                          (() => {
-                            const baseResult = {
-                              profile,
-                              candidateIndex,
-                              candidate,
-                              listNativeModels: actions.listNativeModels,
-                              piModels: availableModels,
-                            };
-                            const withPiParentModel = parentCatalogModel
-                              ? { ...baseResult, piParentModel: parentCatalogModel }
-                              : baseResult;
-                            const withAdditionalFields = {
-                              ...withPiParentModel,
-                              ...(extensionProviders
-                                ? { registeredPiProviderIds: [...extensionProviders] }
-                                : { piProviderInspectionFailed: true }),
-                            };
-                            const withSignal = signal
-                              ? { ...withAdditionalFields, signal }
-                              : withAdditionalFields;
-                            return withSignal;
-                          })(),
-                        ),
-                      supportedPiEfforts: (candidate: ProfileCandidate) =>
-                        supportedPiEfforts(
-                          candidate,
-                          availableModels,
-                          parentCatalogModel,
-                          extensionProviders,
-                        ),
-                      fastModeAvailable: (candidate: ProfileCandidate) =>
-                        fastModeAvailable(ctx, candidate, extensionProviders),
-                      reload: () => requestProfileReload(ctx, bridge),
-                    };
-                    return withGetHeightAndAdditionalFields;
-                  })(),
+                  parentModel ? { ...baseOptions, parentModel } : baseOptions,
                 );
               },
               {

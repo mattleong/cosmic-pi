@@ -8,7 +8,6 @@ const MAX_ID_CHARS = 256;
 const MAX_NAME_CHARS = 256;
 const MAX_TEXT_CHARS = 1024 * 1024;
 const INTERRUPT_MARKER = "[Request interrupted by user]";
-const SUPERVISOR_SERVER = "pi_subagents_supervisor";
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_ID_CHARS));
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_NAME_CHARS));
 const Text = Schema.String.check(Schema.isMaxLength(MAX_TEXT_CHARS));
@@ -194,13 +193,6 @@ export interface ClaudeNativeInitialization {
 }
 
 export const CLAUDE_INTERRUPT_MARKER = INTERRUPT_MARKER;
-export const CLAUDE_SUPERVISOR_SERVER_NAME = SUPERVISOR_SERVER;
-export const CLAUDE_SUPERVISOR_TOOL_NAMES = [
-  "supervisor_progress",
-  "supervisor_warning",
-  "supervisor_question",
-  "supervisor_submit_report",
-] as const;
 
 const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
   Predicate.isString(content)

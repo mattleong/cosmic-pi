@@ -1,4 +1,4 @@
-import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
+import { MAX_PROFILE_CANDIDATES } from "../../profiles/model.ts";
 import type { ProfileId } from "../../profiles/model.ts";
 import {
   addRouteCandidate,

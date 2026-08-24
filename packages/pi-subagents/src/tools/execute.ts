@@ -1,5 +1,5 @@
 // Pi tool execution is a Promise-shaped host boundary.
-import type { JsonObject } from "pi-cosmic-core";
+import { sanitizeTerminalLine, type JsonObject } from "pi-cosmic-core";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -12,8 +12,12 @@ import {
   resolveProfileRetry,
   resolveProfileStart,
 } from "../boundary/host-profile-resolution.ts";
-import { normalizeProfileId, PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
-import { profileCandidateLabel } from "../profiles/resolve.ts";
+import {
+  normalizeProfileId,
+  profileCandidateLabel,
+  PROFILE_IDS,
+  type ProfileId,
+} from "../profiles/model.ts";
 import {
   SubagentProfileService,
   type SubagentProfileServiceContract,
@@ -34,20 +38,22 @@ import {
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import {
+  makeAwaitDetails,
   makeCompactToolDetails,
-  makeStartAwaitCardDetails,
+  makeStartDetails,
   type SubagentStartEntry,
 } from "./details.ts";
-import { attentionRecoveryText, boundToolOutput, joinBoundedToolText } from "./format.ts";
 import {
+  attentionRecoveryText,
+  boundToolOutput,
   formatActionFailures,
   formatDetailedRuns,
   formatRun,
   formatStartResult,
+  joinBoundedToolText,
   renderedCompletionReceipts,
-} from "./output.ts";
+} from "./format.ts";
 import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
@@ -188,23 +194,13 @@ const profileDiscovery = (
     const candidates: ProfileCandidateDiscovery[] = route.candidates.map((candidate, index) => {
       const attempt = attempts.find((value) => value.candidateIndex === index);
       const omitted = skipped.find((value) => value.candidateIndex === index);
-      return (() => {
-        const baseResult: Pick<ProfileCandidateDiscovery, "order" | "candidate" | "status"> = {
-          order: index + 1,
-          candidate: profileCandidateLabel(candidate),
-          status: attempt ? "eligible" : "skipped",
-        };
-        const withEffectiveContext = attempt
-          ? { ...baseResult, effectiveContext: attempt.effectiveContext }
-          : baseResult;
-        const withReason = {
-          ...withEffectiveContext,
-          reason: attempt
-            ? "Candidate adapter is statically eligible before native authentication/integration/harness readiness."
-            : (omitted?.reason ?? "Candidate was not eligible."),
-        };
-        return withReason;
-      })();
+      return {
+        ...candidate,
+        status: attempt ? "eligible" : "skipped",
+        reason: attempt
+          ? "Candidate adapter is statically eligible before native authentication/integration/harness readiness."
+          : (omitted?.reason ?? "Candidate was not eligible."),
+      };
     });
     return [
       (() => {
@@ -241,8 +237,8 @@ const formatProfileDiscovery = (
       `  source=${profile.source} · defaults: context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
       ...(profile.candidates.length > 0
         ? profile.candidates.map(
-            (candidate) =>
-              `  ${candidate.order}. ${candidate.candidate} · ${candidate.status}${candidate.effectiveContext ? ` · context=${candidate.effectiveContext}` : ""}\n     ${candidate.reason}`,
+            (candidate, index) =>
+              `  ${index + 1}. ${profileCandidateLabel(candidate)} · ${candidate.status}\n     ${candidate.reason}`,
           )
         : ["  disabled · no candidates"]),
       "",
@@ -339,7 +335,6 @@ export const executeSubagentAction = (
         details: makeCompactToolDetails({
           action: input.action,
           profiles,
-          profileIds: profiles.map((profile) => profile.id),
           fallbackProfile: snapshot.effectiveConfig.fallbackProfile,
         }),
       };
@@ -448,11 +443,22 @@ export const executeSubagentAction = (
                 const withRunId = { ...withCandidateIndex, runId: outcome.run.id };
                 return withRunId;
               })();
+            if (outcome.resolvedRoute) {
+              const { candidateIndex, ...route } = outcome.resolvedRoute;
+              const selectedFailure = {
+                ...base,
+                status: "failed" as const,
+                routeStatus: "selected" as const,
+                ...route,
+              };
+              return candidateIndex === undefined
+                ? selectedFailure
+                : { ...selectedFailure, candidateIndex };
+            }
             return {
               ...base,
               status: "failed" as const,
-              routeStatus: outcome.resolvedRoute ? ("selected" as const) : ("unavailable" as const),
-              ...outcome.resolvedRoute,
+              routeStatus: "unavailable" as const,
             };
           });
         const failureFor = (
@@ -496,21 +502,15 @@ export const executeSubagentAction = (
           );
           const pending = pendingEntries.length;
           const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pending > 0 ? ` · ${pending} pending (${pendingEntries.join(", ")})` : ""}.`;
+          const updateDetailsBase = { startEntries: startEntriesFor(partialOutcomes) };
+          const updateDetailsInput =
+            failures.length > 0
+              ? { ...updateDetailsBase, startFailures: failures }
+              : updateDetailsBase;
           return Effect.sync(() =>
             onUpdate?.({
               content: [{ type: "text", text: summary }],
-              details: makeStartAwaitCardDetails(
-                (() => {
-                  const baseResult = {
-                    action: "start" as const,
-                    runs: launched,
-                    startEntries: startEntriesFor(partialOutcomes),
-                  };
-                  const withStartFailures =
-                    failures.length > 0 ? { ...baseResult, startFailures: failures } : baseResult;
-                  return withStartFailures;
-                })(),
-              ),
+              details: makeStartDetails(updateDetailsInput),
             }),
           ).pipe(
             Effect.catchDefect(() => Effect.void),
@@ -570,11 +570,7 @@ export const executeSubagentAction = (
           lastUpdate = text;
           onUpdate?.({
             content: [{ type: "text", text }],
-            details: makeStartAwaitCardDetails({
-              action: "await",
-              runs,
-              awaitUntil: until,
-            }),
+            details: makeAwaitDetails({ runs, awaitUntil: until }),
           });
         };
         return yield* service.withAwaitTerminalObservations(
@@ -686,8 +682,7 @@ export const executeSubagentAction = (
       const text = [summary, attention].filter(Boolean).join("\n\n");
       onUpdate?.({
         content: [{ type: "text", text }],
-        details: makeStartAwaitCardDetails({
-          action: "await",
+        details: makeAwaitDetails({
           runs: latestAwaitRuns,
           awaitUntil: requestedAwaitUntil,
           cancelled: true,
@@ -718,46 +713,34 @@ export const executeSubagentAction = (
         const startFailures = executionResult.startFailures ?? [];
         const startEntries = executionResult.startEntries;
         const actionFailures = executionResult.actionFailures ?? [];
+        const startDetailsBase = {
+          // Every start result contains the complete request-ordered receipt.
+          startEntries: startEntries ?? [],
+        };
+        const startDetailsInput =
+          startFailures.length > 0 ? { ...startDetailsBase, startFailures } : startDetailsBase;
+        const awaitDetailsBase = {
+          runs,
+          awaitUntil: input.action === "await" ? input.until : ("all_finished" as const),
+        };
+        const awaitDetailsInput = attentionRequired
+          ? { ...awaitDetailsBase, attentionRequired: true as const }
+          : awaitDetailsBase;
+        const compactDetailsBase = {
+          action:
+            input.action === "start" || input.action === "await" ? ("list" as const) : input.action,
+          runs,
+        };
+        const compactDetailsInput =
+          actionFailures.length > 0
+            ? { ...compactDetailsBase, actionFailures }
+            : compactDetailsBase;
         const details: unknown =
           input.action === "start"
-            ? makeStartAwaitCardDetails(
-                (() => {
-                  const baseResult = { action: "start" as const, runs };
-                  const withStartEntries = startEntries
-                    ? { ...baseResult, startEntries }
-                    : baseResult;
-                  const withStartFailures =
-                    startFailures.length > 0
-                      ? { ...withStartEntries, startFailures }
-                      : withStartEntries;
-                  return withStartFailures;
-                })(),
-              )
+            ? makeStartDetails(startDetailsInput)
             : input.action === "await"
-              ? makeStartAwaitCardDetails(
-                  (() => {
-                    const baseResult = { action: "await" as const, runs, awaitUntil: input.until };
-                    const withAttentionRequired = attentionRequired
-                      ? { ...baseResult, attentionRequired: true }
-                      : baseResult;
-                    return withAttentionRequired;
-                  })(),
-                )
-              : makeCompactToolDetails(
-                  (() => {
-                    const baseResult = {
-                      action: input.action,
-                      runs,
-                      includeReports: input.action === "status",
-                    };
-                    const withActionFailures =
-                      actionFailures.length > 0 ? { ...baseResult, actionFailures } : baseResult;
-                    const withAttentionRequired = attentionRequired
-                      ? { ...withActionFailures, attentionRequired: true }
-                      : withActionFailures;
-                    return withAttentionRequired;
-                  })(),
-                );
+              ? makeAwaitDetails(awaitDetailsInput)
+              : makeCompactToolDetails(compactDetailsInput);
         const text =
           input.action === "start"
             ? (formattedText ?? formatStartResult(runs, startFailures))

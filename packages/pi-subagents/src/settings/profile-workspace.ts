@@ -6,14 +6,14 @@ import {
   FullScreenKeymap,
   pageSteps,
 } from "pi-cosmic-ui/manager/keymap";
-import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
+import { MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
 import {
   PROFILE_IDS,
   sameProfileCandidate,
   type ProfileCandidate,
   type ProfileId,
-} from "../../profiles/model.ts";
-import type { SubagentEffort } from "../../domain/routing.ts";
+} from "../profiles/model.ts";
+import type { SubagentEffort } from "../domain/routing.ts";
 import {
   declaredRouteForDraft,
   inheritProjectDraft,
@@ -25,12 +25,12 @@ import {
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
   type ProfileSettingsScope,
-} from "../profile-route-editor.ts";
+} from "./profile-route-editor.ts";
 import {
   updateCandidateFromModelChoice,
   type CandidateModelPickerData,
-} from "./candidate-editor.ts";
-import { makeProfileModelPickerPage, type ProfileModelChoice } from "./model-picker.ts";
+} from "./profile-model-catalog.ts";
+import { makeProfileModelPickerPage, type ProfileModelChoice } from "./ui/model-picker.ts";
 import {
   PROFILE_WORKSPACE_FIELDS,
   PROFILE_WORKSPACE_SHORTCUTS,
@@ -40,18 +40,21 @@ import {
   profileSourceLabel,
   type ProfileWorkspaceField,
   type ProfileWorkspacePane,
-} from "./profile-workspace-model.ts";
+} from "./ui/profile-workspace-model.ts";
 import {
   applyProfileWorkspaceDraftAction,
   profileWorkspaceConfirmation,
   type ProfileWorkspaceDraftAction,
-} from "./profile-workspace-actions.ts";
-import { renderProfileWorkspace } from "./profile-workspace-render.ts";
+} from "./ui/profile-workspace-actions.ts";
+import { renderProfileWorkspace } from "./ui/profile-workspace-render.ts";
 import {
   makeCandidateFieldSelector,
   makeProfileSearchSelector,
-} from "./profile-workspace-selectors.ts";
-import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
+} from "./ui/profile-workspace-selectors.ts";
+import {
+  SearchableSelectPage,
+  type SettingsSelectKeybindingId,
+} from "./ui/searchable-select-page.ts";
 
 export type ProfileWorkspaceSaveResult =
   | {
@@ -65,7 +68,8 @@ export interface ProfileWorkspaceOptions {
   readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
   readonly initialScope?: ProfileSettingsScope | undefined;
-  readonly piModel?: string | undefined;
+  /** Resolved from the latest catalog snapshot when a controlling field action runs. */
+  readonly preferredPiModel: () => string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
   readonly getHeight: () => number;
@@ -94,6 +98,7 @@ export interface ProfileWorkspaceOptions {
   ) => ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable: (candidate: ProfileCandidate) => boolean;
   readonly reload: () => Promise<boolean>;
+  readonly onDispose?: (() => void) | undefined;
 }
 
 type PendingAction = "remove" | "disable" | "reset" | "clear-session";
@@ -128,6 +133,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private modelPicker: ReturnType<typeof makeProfileModelPickerPage> | undefined;
   private selectPage: SearchableSelectPage<string> | undefined;
   private _focused = false;
+  private disposed = false;
   private readonly keymap = new FullScreenKeymap();
   private readonly options: ProfileWorkspaceOptions;
 
@@ -144,6 +150,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   }
 
   set focused(value: boolean) {
+    if (this.disposed) return;
     this._focused = value;
     if (this.modelPicker) this.modelPicker.focused = value;
     if (this.selectPage) this.selectPage.focused = value;
@@ -173,6 +180,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   }
 
   private renderSoon(): void {
+    if (this.disposed) return;
     this.reconcile();
     this.options.requestRender();
   }
@@ -297,6 +305,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     void this.options
       .saveDraft(scope, profile, next)
       .then((result) => {
+        if (this.disposed) return;
         this.busy = false;
         if (scope !== "session") this.reloadRequired = true;
         this.candidateIndex = preferredCandidateIndex;
@@ -317,6 +326,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         this.renderSoon();
       })
       .catch((error) => {
+        if (this.disposed) return;
         this.optimisticDraft = undefined;
         this.optimisticProfile = undefined;
         this.optimisticScope = undefined;
@@ -337,6 +347,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     void this.options
       .clearSessionOverrides()
       .then((result) => {
+        if (this.disposed) return;
         this.busy = false;
         if ("refreshError" in result) {
           this.refreshBlocked = true;
@@ -354,6 +365,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         this.renderSoon();
       })
       .catch((error) => {
+        if (this.disposed) return;
         this.busy = false;
         this.refreshBlocked = true;
         const message =
@@ -437,7 +449,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           candidate,
           field,
           fieldIndex: this.fieldIndex,
-          piModel: this.options.piModel,
+          piModel: this.options.preferredPiModel(),
           parentModel: this.options.parentModel,
           parentEffort: this.options.parentEffort,
           supportedEfforts,
@@ -492,7 +504,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   }
 
   private finishCatalogLoad(controller: AbortController): boolean {
-    if (this.catalogLoad !== controller) return false;
+    if (this.disposed || this.catalogLoad !== controller) return false;
     this.catalogLoad = undefined;
     this.busy = false;
     return true;
@@ -737,6 +749,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     void this.options
       .reload()
       .then((reloaded) => {
+        if (this.disposed) return;
         this.busy = false;
         if (reloaded) {
           this.reloadRequired = false;
@@ -747,6 +760,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         this.renderSoon();
       })
       .catch((error) => {
+        if (this.disposed) return;
         this.busy = false;
         this.setMessage("error", error instanceof Error ? error.message : "Reload failed.");
         this.renderSoon();
@@ -779,6 +793,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   }
 
   handleInput(data: string): void {
+    if (this.disposed) return;
     if (this.modelPicker) {
       this.modelPicker.handleInput(data);
       return;
@@ -937,6 +952,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   }
 
   render(width: number): string[] {
+    if (this.disposed) return [];
     if (this.modelPicker) return this.modelPicker.render(width);
     if (this.selectPage) return this.selectPage.render(width);
     this.reconcile();
@@ -1013,12 +1029,22 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   }
 
   invalidate(): void {
+    if (this.disposed) return;
     this.modelPicker?.invalidate();
     this.selectPage?.invalidate();
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.catalogLoad?.abort();
     this.catalogLoad = undefined;
+    this.modelPicker = undefined;
+    this.selectPage = undefined;
+    try {
+      this.options.onDispose?.();
+    } catch {
+      // Host disposal is best effort and cannot reactivate a closed settings surface.
+    }
   }
 }

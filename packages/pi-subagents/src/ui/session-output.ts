@@ -10,6 +10,10 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import {
+  sanitizeTerminalLine,
+  stripTerminalControls as sanitizeTerminalText,
+} from "pi-cosmic-core";
+import {
   hasSubagentCapability,
   isActiveRunState,
   type SubagentRunView,
@@ -17,7 +21,6 @@ import {
 } from "../run/model.ts";
 import { formatDuration, formatUsage } from "./metrics.ts";
 import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
-import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
 
 export interface SessionOutputRenderOptions {
   readonly now?: number;

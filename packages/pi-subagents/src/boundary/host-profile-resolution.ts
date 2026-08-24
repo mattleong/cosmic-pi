@@ -27,6 +27,7 @@ import {
 import type { RuntimeApiKey, StartSubagentRequest } from "../run/model.ts";
 import type { SubagentRetryClaim } from "../run/retry.ts";
 import {
+  profileCandidateLabel,
   PROFILE_IDS,
   type ProfileCandidate,
   type ProfileDefinition,
@@ -35,7 +36,6 @@ import {
   type SubagentSelectionProvenance,
 } from "../profiles/model.ts";
 import {
-  profileCandidateLabel,
   resolveProfileContinuationPlan,
   type ProfileCandidateAttempt,
   type ProfileResolutionEnvironment,

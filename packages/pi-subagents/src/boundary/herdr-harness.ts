@@ -13,7 +13,8 @@ import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT } from "../run/tool-policy.ts";
 import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
 import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import { subagentRuntimeEfforts, type SubagentRuntime } from "../domain/routing.ts";
-import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
+import { SUPERVISOR_MCP_TOOL_NAMES } from "../supervisor/mcp-contract.ts";
+import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import {
   claudeAllowedTools,
   claudeSettings,
@@ -75,12 +76,6 @@ const HERDR_080_INTEGRATION_VERSIONS = {
   claude: 7,
   codex: 7,
 } satisfies Readonly<Record<SubagentRuntime, number>>;
-const PI_SUPERVISOR_TOOLS = [
-  "supervisor_progress",
-  "supervisor_warning",
-  "supervisor_question",
-  "supervisor_submit_report",
-] as const;
 const CODEX_BOOTSTRAP_PROMPT =
   "Initialize the private Herdr lifecycle hook. This bootstrap turn must stop before inference.";
 const CODEX_DISABLED_FEATURES = [
@@ -319,7 +314,7 @@ const piArgv = (
     "ls",
     "bash",
     ...(request.writeIntent === "writer" ? ["edit", "write"] : []),
-    ...PI_SUPERVISOR_TOOLS,
+    ...SUPERVISOR_MCP_TOOL_NAMES,
   ];
   return [
     "--name",

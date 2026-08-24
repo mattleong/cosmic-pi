@@ -7,9 +7,10 @@ import {
   MAX_BACKEND_REPORT_TEXT_CHARS,
   type BackendReport,
 } from "../backend/model.ts";
-import { type SubagentError, SubagentProcessError } from "./errors.ts";
+import { SubagentProcessError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
+import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import {
@@ -23,9 +24,6 @@ import { foldRunWarnings, setRunWarning } from "./warnings.ts";
 export type RetainedReportTransition = {
   readonly transitioned: true;
   readonly view: SubagentRunView;
-  readonly settlement: Deferred.Deferred<SubagentRunView>;
-  readonly pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
-  readonly generation: number;
 };
 
 export interface RunReportLifecycleDependencies {
@@ -51,7 +49,7 @@ export interface RunReportLifecycleDependencies {
  * Owns the backend report lifecycle: sequence/deliveryId watermark validation,
  * pending report buffering during `issuing`, retained-report commits, and the
  * `run_started`/`run_settled` backend transitions. `commitRetainedReportLocked`
- * requires the caller to hold the service lock.
+ * inserts and wakes the sole completion outbox while the caller holds the lock.
  */
 export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependencies) {
   const { withLock, publish, delivery, settle, pauseFromEvent, sendPeerNotices } = dependencies;
@@ -90,26 +88,24 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     report: BackendReport,
     now: number,
   ): RetainedReportTransition => {
-    const settlement = record.settlement;
     const pauseOutcome = record.pauseOutcome;
     record.pauseOutcome = undefined;
     record.pauseRequested = false;
     record.activeTools.clear();
-    const generation = ++record.completionGeneration;
+    const recordsCompletion = record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS;
+    const generation = recordsCompletion
+      ? ++record.completionGeneration
+      : record.completionGeneration;
     const text = report.text;
     const completionWarning = foldRunWarnings(record.warningSlots);
-    record.completionGenerations.set(
-      generation,
-      (() => {
-        const baseResult = { generation, outcome: "completed" as const };
-        const withFinalText = text ? { ...baseResult, finalText: text } : baseResult;
-        const withWarning = completionWarning
-          ? { ...withFinalText, warning: completionWarning }
-          : withFinalText;
-        const withRetained = { ...withWarning, retained: true };
-        return withRetained;
-      })(),
-    );
+    if (recordsCompletion) {
+      const baseResult = { generation, outcome: "completed" as const };
+      const withFinalText = text ? { ...baseResult, finalText: text } : baseResult;
+      const withWarning = completionWarning
+        ? { ...withFinalText, warning: completionWarning }
+        : withFinalText;
+      delivery.insertCompletionLocked(record, { ...withWarning, retained: true });
+    }
     record.notificationGeneration += 1;
     delivery.discardQuestionLocked(record.view.id);
     record.replyPendingRequestId = undefined;
@@ -133,24 +129,13 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
       finalText: text,
       error: undefined,
     };
-    return {
-      transitioned: true,
-      view: snapshotView(record.view),
-      settlement,
-      pauseOutcome,
-      generation,
-    };
+    const view = snapshotView(record.view);
+    if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
+    return { transitioned: true, view };
   };
 
   const finishRetainedReport = (record: RunRecord, result: RetainedReportTransition) =>
-    Effect.gen(function* () {
-      Deferred.doneUnsafe(result.settlement, Effect.succeed(result.view));
-      if (result.pauseOutcome)
-        Deferred.doneUnsafe(result.pauseOutcome, Effect.succeed(result.view));
-      yield* delivery.queueCompletion(record, result.generation);
-      yield* sendPeerNotices(record.view.id);
-      return result.view;
-    });
+    sendPeerNotices(record.view.id).pipe(Effect.as(result.view));
 
   const acceptBackendReport = (record: RunRecord, rawReport: BackendReport) =>
     Effect.gen(function* () {
@@ -343,7 +328,7 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
   return {
     /** Caller must hold the service lock; commits one retained report generation. */
     commitRetainedReportLocked,
-    /** Post-commit settlement/pause resolution, outbox queueing, and peer notices. */
+    /** Post-commit peer notice and retained view return. */
     finishRetainedReport,
     /** Serialized watermark-checked report acceptance, buffering, and completion. */
     acceptBackendReport,
@@ -351,5 +336,3 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     runSettledFromBackend,
   };
 }
-
-export type RunReportLifecycle = ReturnType<typeof makeRunReportLifecycle>;

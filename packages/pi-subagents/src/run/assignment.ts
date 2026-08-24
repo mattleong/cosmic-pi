@@ -200,5 +200,3 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
     retainUncertainAssignment,
   };
 }
-
-export type RunAssignment = ReturnType<typeof makeRunAssignment>;

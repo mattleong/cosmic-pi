@@ -6,7 +6,7 @@ import {
   startingSpinnerFrame,
 } from "pi-cosmic-ui/manager";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
-import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
+import { MAX_PROFILE_CANDIDATES } from "../../profiles/model.ts";
 
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, sameProfileCandidates, type ProfileId } from "../../profiles/model.ts";

@@ -41,11 +41,7 @@ export interface SubagentProfileServiceContract {
 export class SubagentProfileService extends Context.Service<
   SubagentProfileService,
   SubagentProfileServiceContract
->()("pi-subagents/profiles/service/SubagentProfileService") {
-  static override readonly use = <A, E>(
-    f: (service: SubagentProfileServiceContract) => Effect.Effect<A, E>,
-  ) => Effect.flatMap(this, f);
-}
+>()("pi-subagents/profiles/service/SubagentProfileService") {}
 
 export interface SubagentProfileLayerOptions {
   readonly cwd: string;
@@ -62,10 +58,7 @@ const publishSeed = (
   snapshot: SessionProfileSnapshot,
 ): Effect.Effect<void> =>
   publish
-    ? Effect.sync(() => publish(sessionProfileSeed(snapshot))).pipe(
-        Effect.catchDefect(() => Effect.void),
-        Effect.asVoid,
-      )
+    ? Effect.try(() => publish(sessionProfileSeed(snapshot))).pipe(Effect.ignore)
     : Effect.void;
 
 export const makeSubagentProfileService = (
@@ -82,13 +75,9 @@ export const makeSubagentProfileService = (
     const commit = <E>(
       transition: (current: SessionProfileSnapshot) => Effect.Effect<SessionProfileSnapshot, E>,
     ): Effect.Effect<SessionProfileSnapshot, E> =>
-      SynchronizedRef.modifyEffect(state, (current) =>
+      SynchronizedRef.updateAndGetEffect(state, (current) =>
         transition(current).pipe(
-          Effect.flatMap((next) =>
-            publishSeed(options.publishSessionOverrides, next).pipe(
-              Effect.as([next, next] as const),
-            ),
-          ),
+          Effect.tap((next) => publishSeed(options.publishSessionOverrides, next)),
         ),
       );
     return SubagentProfileService.of({
@@ -115,9 +104,7 @@ export const subagentProfileServiceLayer = (options: SubagentProfileLayerOptions
         options.baseConfig ??
         (yield* store.load(options.cwd, options.agentDirectory, options.projectTrusted));
       if (options.publishBaseConfig)
-        yield* Effect.sync(() => options.publishBaseConfig?.(config)).pipe(
-          Effect.catchDefect(() => Effect.void),
-        );
+        yield* Effect.try(() => options.publishBaseConfig?.(config)).pipe(Effect.ignore);
       if (config.diagnostics.length > 0)
         yield* Effect.logWarning(
           `Invalid Subagents configuration fields were ignored or failed closed: ${config.diagnostics.join(", ")}.`,

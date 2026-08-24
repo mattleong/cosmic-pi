@@ -21,7 +21,7 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import { PI_SUBAGENT_CAPABILITIES, type SubagentUsage } from "../run/model.ts";
-import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
+import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import {
   assistantText,
   decodeAssistantMessage,

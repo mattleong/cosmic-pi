@@ -18,6 +18,10 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
+import {
+  SUPERVISOR_MCP_REGISTRATION,
+  SUPERVISOR_MCP_TOOL_NAMES,
+} from "../supervisor/mcp-contract.ts";
 import { herdrAssignmentEpochLine } from "./herdr-assignment.ts";
 import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
 
@@ -44,8 +48,8 @@ export const withHerdrSupervisorInstructions = (
   systemPrompt: [
     request.systemPrompt,
     "You are a session-scoped Herdr-hosted subagent. Never delegate, launch another agent, or use unowned integrations, plugins, apps, hooks, skills, browser automation, remote control, or orchestration tools.",
-    "Use only the private pi_subagents_supervisor tools for parent communication: supervisor_progress, supervisor_warning, supervisor_question, and supervisor_submit_report. The generic contact_parent instruction refers to these tools.",
-    "supervisor_submit_report is the only completion signal. Submit exactly one complete bounded report for each assignment with a fresh stable delivery_id. Raw assistant text and native idle/done status never complete the run.",
+    `Use only the private ${SUPERVISOR_MCP_REGISTRATION} tools for parent communication: ${SUPERVISOR_MCP_TOOL_NAMES.join(", ")}. The generic contact_parent instruction refers to these tools.`,
+    `${SUPERVISOR_MCP_TOOL_NAMES[3]} is the only completion signal. Submit exactly one complete bounded report for each assignment with a fresh stable delivery_id. Raw assistant text and native idle/done status never complete the run.`,
     request.writeIntent === "read-only"
       ? runtime === "pi"
         ? "Read-only Bash is available for inspection and validation. Pi does not provide a filesystem sandbox, so this is a behavioral policy: do not mutate project files or run destructive commands, and use a writer assignment for intentional project changes."
@@ -59,9 +63,9 @@ const assignmentPrompt = (runtime: SubagentRuntime, message: string, epoch: numb
     herdrAssignmentEpochLine(epoch),
     message,
     runtime === "pi"
-      ? "Use supervisor_progress, supervisor_warning, supervisor_question, and supervisor_submit_report for parent communication."
-      : "Use only the pi_subagents_supervisor MCP tools for parent communication.",
-    "When complete, call supervisor_submit_report exactly once with a fresh delivery_id. Do not treat native final text as delivery.",
+      ? `Use ${SUPERVISOR_MCP_TOOL_NAMES.join(", ")} for parent communication.`
+      : `Use only the ${SUPERVISOR_MCP_REGISTRATION} MCP tools for parent communication.`,
+    `When complete, call ${SUPERVISOR_MCP_TOOL_NAMES[3]} exactly once with a fresh delivery_id. Do not treat native final text as delivery.`,
   ].join("\n\n");
 
 const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (

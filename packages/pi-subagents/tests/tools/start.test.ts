@@ -15,7 +15,7 @@ import { PROFILE_IDS } from "../../src/profiles/model.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../../src/run/errors.ts";
 import { decodeSubagentEffort } from "../../src/domain/routing.ts";
-import { type StartSubagentRequest, type SubagentRunView } from "../../src/run/model.ts";
+import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { type SubagentServiceContract } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
@@ -728,11 +728,11 @@ describe("subagent tool", () => {
         "call",
         {
           agents: [
-            { task: "Review auth", name: "auth" },
+            { task: "Review auth", name: "duplicate" },
             { task: "Fail launch", name: "broken" },
             {
               task: "Review storage",
-              name: "storage",
+              name: "duplicate",
             },
           ],
         },
@@ -760,11 +760,12 @@ describe("subagent tool", () => {
     expect(result?.content[0]?.text).toContain("agent-1");
     expect(result?.content[0]?.text).toContain("agent-3");
     expect(result?.details).toMatchObject({
+      version: 2,
       action: "start",
-      cards: [{ id: "agent-1" }, { id: "agent-3" }],
       startEntries: [
         {
           index: 0,
+          name: "duplicate",
           profile: "generalist",
           status: "started",
           routeStatus: "selected",
@@ -775,6 +776,7 @@ describe("subagent tool", () => {
         },
         {
           index: 1,
+          name: "broken",
           profile: "generalist",
           status: "failed",
           routeStatus: "selected",
@@ -784,6 +786,7 @@ describe("subagent tool", () => {
         },
         {
           index: 2,
+          name: "duplicate",
           profile: "generalist",
           status: "started",
           routeStatus: "selected",
@@ -792,6 +795,7 @@ describe("subagent tool", () => {
       ],
       startFailures: [{ index: 1, name: "broken", message: "simulated launch failure" }],
     });
+    expect(result?.details).not.toHaveProperty("cards");
   });
 
   effectTest("rejects per-launch routing overrides before side effects", function* () {
@@ -929,9 +933,13 @@ describe("subagent tool", () => {
     expect(requests).toHaveLength(12);
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const details = result?.details as
-      | { readonly cards?: ReadonlyArray<SubagentRunView> }
+      | { readonly startEntries?: ReadonlyArray<{ readonly index: number }> }
       | undefined;
-    expect(details?.cards).toHaveLength(12);
+    expect(details?.startEntries).toHaveLength(12);
+    expect(details?.startEntries?.map((entry) => entry.index)).toEqual(
+      Array.from({ length: 12 }, (_, index) => index),
+    );
+    expect(details).not.toHaveProperty("cards");
   });
 
   effectTest("rejects forged routing fields again at the host profile boundary", function* () {

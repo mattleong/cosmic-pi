@@ -82,6 +82,31 @@ describe("session profile overrides", () => {
       }),
   );
 
+  it.effect("commits session state when publication throws", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const service = yield* makeSubagentProfileService(baseConfig(), {
+        publishSessionOverrides: () => {
+          attempts += 1;
+          throw new Error("hostile session publication");
+        },
+      });
+      const committed = yield* service.patchSessionProfile({
+        profile: "reviewer",
+        route: route("openai/session-after-throw"),
+        expectedRevision: 0,
+      });
+      const captured = yield* service.capture;
+
+      expect(attempts).toBe(1);
+      expect(committed.revision).toBe(1);
+      expect(captured).toEqual(committed);
+      expect(captured.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
+        "openai/session-after-throw",
+      );
+    }),
+  );
+
   it.effect(
     "supports temporary disable, clear-all, no-op revisions, and stale-write rejection",
     () =>

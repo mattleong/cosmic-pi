@@ -101,8 +101,6 @@ export const LocalPiContactSchema = Schema.Union([ContactParentSchema, ContactCa
 export const LocalPiParentControlSchema = Schema.Union([ParentReplySchema, PeerNoticeSchema]);
 export type LocalPiContact = Schema.Schema.Type<typeof LocalPiContactSchema>;
 export type LocalPiParentControl = Schema.Schema.Type<typeof LocalPiParentControlSchema>;
-export type ParentReply = Schema.Schema.Type<typeof ParentReplySchema>;
-export type PeerNotice = Schema.Schema.Type<typeof PeerNoticeSchema>;
 export const decodeLocalPiContactOption = Schema.decodeUnknownOption(LocalPiContactSchema);
 export const decodeLocalPiParentControlOption = Schema.decodeUnknownOption(
   LocalPiParentControlSchema,

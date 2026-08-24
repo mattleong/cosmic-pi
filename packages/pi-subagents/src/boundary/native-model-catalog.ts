@@ -542,8 +542,9 @@ const loadNativeModelCatalog =
 export const makeNativeModelCatalog = (
   options: NativeModelCatalogLayerOptions = {},
 ): Effect.Effect<NativeModelCatalogContract> =>
+  // One session cwd can cache one key for each of the two native runtimes.
   Cache.makeWith(loadNativeModelCatalog(options), {
-    capacity: Number.POSITIVE_INFINITY,
+    capacity: 2,
     timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
   }).pipe(
     Effect.map((cache) => ({

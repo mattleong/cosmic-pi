@@ -5,18 +5,18 @@ import { withCodePreviewShell } from "pi-code-previews";
 import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { startHostUiTicker } from "../boundary/host-ui.ts";
-import type { ProfileId, ProfileRouteSource } from "../profiles/model.ts";
+import type { ProfileCandidate, ProfileId, ProfileRouteSource } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type {
-  SubagentContextMode,
   SubagentEffort,
   SubagentHost,
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
 import type { SubagentRunView } from "../run/model.ts";
+import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { SubagentService } from "../run/service.ts";
-import { decodeStartAwaitCardDetails } from "./details-decode.ts";
+import { decodeStartAwaitCardDetails } from "./details.ts";
 import { executeSubagentAction } from "./execute.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
@@ -48,18 +48,6 @@ export type {
   SubagentStatusInput,
   SubagentToolInput,
 } from "./schema.ts";
-
-export const SUBAGENT_TOOL_NAMES = [
-  "subagent_models",
-  "subagent_start",
-  "subagent_list",
-  "subagent_status",
-  "subagent_await",
-  "subagent_send",
-  "subagent_reply",
-  "subagent_lifecycle",
-  "subagent_rename",
-] as const;
 
 export interface SubagentStartFailure {
   readonly index: number;
@@ -98,11 +86,8 @@ export interface SubagentActionFailure {
   readonly code?: string;
 }
 
-export interface ProfileCandidateDiscovery {
-  readonly order: number;
-  readonly candidate: string;
+export interface ProfileCandidateDiscovery extends ProfileCandidate {
   readonly status: "eligible" | "skipped";
-  readonly effectiveContext?: SubagentContextMode | undefined;
   readonly reason: string;
 }
 
@@ -144,7 +129,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   };
 
   const models = defineTool({
-    name: "subagent_models",
+    name: SUBAGENT_TOOL_NAMES[0],
     label: "Inspect Profile Routes",
     description:
       "Static preflight of complete version 4 profile candidates in declared order, including host, runtime, model, effort, context, write intent, fast mode, closeOnReport, and implementation eligibility. All local and Herdr Pi/Claude/Codex adapters are implemented; runtime authentication, native integration, and private-harness readiness are checked at launch.",
@@ -157,7 +142,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const start = defineTool({
-    name: "subagent_start",
+    name: SUBAGENT_TOOL_NAMES[1],
     label: "Start Subagents",
     description:
       "Launch one to twelve session-scoped background subagents for bounded, independent workstreams such as codebase reconnaissance, external research, planning, and independent review. Start is nonblocking: launch a batch early and continue working. Every task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Each item accepts only task, optional profile, and optional name. The selected profile supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through. Successful launches remain active when a peer launch fails.",
@@ -182,7 +167,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const list = defineTool({
-    name: "subagent_list",
+    name: SUBAGENT_TOOL_NAMES[2],
     label: "List Subagents",
     description: "List every session-scoped subagent run in compact form.",
     parameters: ListParameters,
@@ -193,7 +178,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const status = defineTool({
-    name: "subagent_status",
+    name: SUBAGENT_TOOL_NAMES[3],
     label: "Subagent Status",
     description:
       "Inspect up to twelve specific subagent run IDs, including each run's capabilities.",
@@ -210,7 +195,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const awaitTool = defineTool({
-    name: "subagent_await",
+    name: SUBAGENT_TOOL_NAMES[4],
     label: "Await Subagents",
     description:
       "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Returns early if a subagent needs a parent reply, then call it again after subagent_reply. A retained run in reported state counts as finished for its current assignment.",
@@ -231,7 +216,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const send = defineTool({
-    name: "subagent_send",
+    name: SUBAGENT_TOOL_NAMES[5],
     label: "Send Subagent Guidance",
     description:
       "Send the same guidance message to one or more running subagents. For a reported retained run, this begins its next assignment and report generation. Mixed-target calls report each success and failure.",
@@ -248,7 +233,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const reply = defineTool({
-    name: "subagent_reply",
+    name: SUBAGENT_TOOL_NAMES[6],
     label: "Reply to Subagent",
     description: "Answer a blocking parent question from one subagent.",
     parameters: ReplyParameters,
@@ -260,7 +245,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const lifecycle = defineTool({
-    name: "subagent_lifecycle",
+    name: SUBAGENT_TOOL_NAMES[7],
     label: "Manage Subagents",
     description:
       "Interrupt, resume, stop, or explicitly continue failed subagents on their next configured profile candidate. Retry creates a new linked run from the immutable launch-time route, never re-attempts the failed candidate, and fails closed on uncertain execution or cleanup. Use generalist only after retry reports route exhaustion. Interrupt and resume require reported capabilities; stop is available for active runs. Message is accepted only for resume. Mixed-target calls report each success and failure.",
@@ -286,7 +271,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const rename = defineTool({
-    name: "subagent_rename",
+    name: SUBAGENT_TOOL_NAMES[8],
     label: "Rename Subagent",
     description: "Change one subagent's local display name.",
     parameters: RenameParameters,

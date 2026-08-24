@@ -3,6 +3,10 @@
 // Effect and no Node process/filesystem APIs; platform cwd validation stays in the boundary
 // path adapter, which passes its prevalidated policy result to these builders.
 import type { SubagentEffort, SubagentWriteIntent } from "../domain/routing.ts";
+import {
+  SUPERVISOR_MCP_REGISTRATION,
+  SUPERVISOR_MCP_TOOL_NAMES,
+} from "../supervisor/mcp-contract.ts";
 
 const MAX_CLAUDE_WRITER_CWD_CHARS = 4_096;
 const UNSUPPORTED_CLAUDE_RULE_CHARACTERS = [
@@ -40,12 +44,9 @@ export const claudeWriterCwdRulePolicy = (cwd: string): ClaudeWriterCwdPolicy | 
   return { cwd, scopedEditRule: `Edit(/${cwd}/**)` };
 };
 
-const SUPERVISOR_NATIVE_TOOLS = [
-  "mcp__pi_subagents_supervisor__supervisor_progress",
-  "mcp__pi_subagents_supervisor__supervisor_warning",
-  "mcp__pi_subagents_supervisor__supervisor_question",
-  "mcp__pi_subagents_supervisor__supervisor_submit_report",
-] as const;
+const SUPERVISOR_NATIVE_TOOLS = SUPERVISOR_MCP_TOOL_NAMES.map(
+  (name) => `mcp__${SUPERVISOR_MCP_REGISTRATION}__${name}`,
+);
 export const CLAUDE_INSPECTION_TOOLS: ReadonlyArray<string> = [
   "Glob",
   "Grep",

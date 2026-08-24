@@ -1,11 +1,13 @@
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import type { ProfileSettingsInspection, ProfileSettingsScope } from "../profile-route-editor.ts";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
-import type {
-  ProfileCandidate,
-  ProfileCandidateEffort,
-  ProfileId,
-  ProfileRouteSource,
+import {
+  isLocalPiProfileCandidate,
+  isRetainableProfileCandidate,
+  type ProfileCandidate,
+  type ProfileCandidateEffort,
+  type ProfileId,
+  type ProfileRouteSource,
 } from "../../profiles/model.ts";
 import { supportsSubagentFastMode } from "../../run/fast-mode.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
@@ -178,8 +180,8 @@ export const candidateFieldRows = (
   parentEffort: SubagentEffort = "high",
   parentModel?: string | undefined,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
-  const localPi = candidate.host === "local" && candidate.runtime === "pi";
-  const retainedAllowed = candidate.host === "herdr" && candidate.writeIntent === "read-only";
+  const localPi = isLocalPiProfileCandidate(candidate);
+  const retainedAllowed = isRetainableProfileCandidate(candidate);
   const fastModel =
     candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
   const fastAvailable =
@@ -303,7 +305,7 @@ export const candidateFieldChoices = (
     ];
   }
   if (field === "context")
-    return candidate.host === "local" && candidate.runtime === "pi"
+    return isLocalPiProfileCandidate(candidate)
       ? [
           { value: "fresh", label: "Fresh", description: "Start with a new context" },
           { value: "fork", label: "Fork", description: "Fork the active parent context" },
@@ -336,7 +338,7 @@ export const candidateFieldChoices = (
         : []),
     ];
   }
-  return candidate.host === "herdr" && candidate.writeIntent === "read-only"
+  return isRetainableProfileCandidate(candidate)
     ? [
         {
           value: "true",

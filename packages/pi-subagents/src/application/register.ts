@@ -25,8 +25,9 @@ import {
 } from "../layer.ts";
 import type { SubagentProjection } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
+import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
-import { registerSubagentTools, SUBAGENT_TOOL_NAMES } from "../tools/subagent.ts";
+import { registerSubagentTools } from "../tools/subagent.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
 
@@ -92,7 +93,6 @@ export function registerSubagentApplication(
 ): void {
   const bridge = makeSubagentProjectionBridge(pi.events);
   const notify = makeHostNotifier(pi);
-  let currentContext: ExtensionContext | undefined;
   let currentActivation: CapturedActivation | undefined;
   let startupFailureTools: ReadonlyArray<string> = [];
   let preparationGeneration = 0;
@@ -150,7 +150,6 @@ export function registerSubagentApplication(
       ),
     startup: () => SubagentService.use((service) => service.projection),
     onActivated: (activation, _token, projection) => {
-      currentContext = activation.ctx;
       bridge.publish(projection);
       currentActivation = activation;
       if (activation.reloadHandoffKey) profileReloadHandoff.clear(activation.reloadHandoffKey);
@@ -160,9 +159,7 @@ export function registerSubagentApplication(
     },
     onDeactivated: () => {
       rememberDisabledTools(deactivateSubagentTools(pi));
-      currentContext = undefined;
       currentActivation = undefined;
-      notify.reset();
       bridge.clear();
     },
     onStartFailure: (activation) => {
@@ -349,8 +346,7 @@ export function registerSubagentApplication(
   });
 
   pi.on("turn_end", (_event, ctx) => {
-    if (!currentContext) return;
-    currentContext = ctx;
+    if (!currentActivation) return;
     bridge.setContext(ctx);
   });
 

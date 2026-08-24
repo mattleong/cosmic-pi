@@ -1,25 +1,25 @@
-import { MAX_PROFILE_CANDIDATES, isNativeProfileModelSelector } from "../config/schema.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import {
   cloneProfileCandidates as cloneCandidates,
+  MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate as cloneCandidate,
+  PROFILE_NATIVE_MODEL_DEFAULTS,
+  profileCandidateValidationIssues,
   type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
   type ProfileCandidate,
-  type ProfileCandidateEffort,
+  type ProfileCandidateValidationIssueCode,
   type ProfileId,
 } from "../profiles/model.ts";
 import {
   subagentRuntimeEfforts,
-  subagentRuntimeSupportsEffort,
   type SubagentEffort,
   type SubagentHost,
   type SubagentRuntime,
 } from "../domain/routing.ts";
-import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 
 export type ProfileSettingsScope = "session" | SubagentConfigScope;
 
@@ -45,11 +45,6 @@ export interface CandidateUpdate {
   readonly notices: ReadonlyArray<string>;
   readonly error?: string | undefined;
 }
-
-export const NATIVE_MODEL_DEFAULTS = {
-  claude: "claude-opus-5",
-  codex: "gpt-5.6-codex",
-} as const;
 
 export const runtimeEfforts = (
   runtime: SubagentRuntime,
@@ -222,36 +217,30 @@ export const duplicateRouteCandidate = (
 export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
   cloneCandidate(BUILTIN_PROFILE_ROUTES[profile].candidates[0]!);
 
-const effortAllowedForRuntime = (
-  runtime: SubagentRuntime,
-  effort: ProfileCandidateEffort,
-): boolean => effort === "default" || subagentRuntimeSupportsEffort(runtime, effort);
+const candidateIssueMessage = (
+  candidate: ProfileCandidate,
+  code: ProfileCandidateValidationIssueCode,
+): string => {
+  switch (code) {
+    case "model_selector_invalid":
+      return `Model is not a valid bounded ${candidate.runtime} selector.`;
+    case "parent_requires_local_pi":
+      return "Parent model is valid only for local Pi.";
+    case "fork_requires_local_pi":
+      return "Fork context is valid only for local Pi.";
+    case "retention_requires_herdr_read_only":
+      return "Retaining a reported run is valid only for Herdr read-only candidates.";
+    case "fast_mode_unsupported":
+      return `Fast mode is unavailable for ${candidate.runtime}/${candidate.model}.`;
+    case "effort_unsupported":
+      return `${candidate.runtime} does not support effort ${candidate.effort}.`;
+  }
+};
 
-export function candidateValidationError(candidate: ProfileCandidate): string | undefined {
-  if (
-    !isSafeNativeModelSelector(candidate.model) ||
-    !isNativeProfileModelSelector(candidate.runtime, candidate.model)
-  )
-    return `Model is not a valid bounded ${candidate.runtime} selector.`;
-  if (candidate.model === "parent" && (candidate.host !== "local" || candidate.runtime !== "pi"))
-    return "Parent model is valid only for local Pi.";
-  if (candidate.context === "fork" && (candidate.host !== "local" || candidate.runtime !== "pi"))
-    return "Fork context is valid only for local Pi.";
-  if (
-    !candidate.closeOnReport &&
-    (candidate.host !== "herdr" || candidate.writeIntent !== "read-only")
-  )
-    return "Retaining a reported run is valid only for Herdr read-only candidates.";
-  if (
-    candidate.fastMode &&
-    candidate.model !== "parent" &&
-    !supportsSubagentFastMode(candidate.runtime, candidate.model)
-  )
-    return `Fast mode is unavailable for ${candidate.runtime}/${candidate.model}.`;
-  if (!effortAllowedForRuntime(candidate.runtime, candidate.effort))
-    return `${candidate.runtime} does not support effort ${candidate.effort}.`;
-  return undefined;
-}
+export const candidateValidationError = (candidate: ProfileCandidate): string | undefined => {
+  const issue = profileCandidateValidationIssues(candidate)[0];
+  return issue ? candidateIssueMessage(candidate, issue.code) : undefined;
+};
 
 const replacementPiModel = (
   host: SubagentHost,
@@ -274,7 +263,7 @@ export function updateCandidateControls(
     const model =
       patch.runtime === "pi"
         ? replacementPiModel(next.host, defaults)
-        : NATIVE_MODEL_DEFAULTS[patch.runtime];
+        : PROFILE_NATIVE_MODEL_DEFAULTS[patch.runtime];
     if (!model)
       return {
         notices,
@@ -284,39 +273,39 @@ export function updateCandidateControls(
     notices.push(`Model reset to ${model} for ${patch.runtime}.`);
   }
 
-  if (next.runtime === "pi" && next.model === "parent" && next.host !== "local") {
-    if (!defaults.piModel)
-      return {
-        notices: [],
-        error: "Herdr Pi requires an authenticated canonical Pi model, but none is available.",
-      };
-    next = { ...next, model: defaults.piModel };
-    notices.push(`Parent is local-only; model reset to ${defaults.piModel}.`);
+  for (;;) {
+    const issue = profileCandidateValidationIssues(next)[0];
+    if (!issue) return { candidate: next, notices };
+    switch (issue.code) {
+      case "model_selector_invalid":
+        return { notices, error: candidateIssueMessage(next, issue.code) };
+      case "parent_requires_local_pi":
+        if (!defaults.piModel)
+          return {
+            notices: [],
+            error: "Herdr Pi requires an authenticated canonical Pi model, but none is available.",
+          };
+        next = { ...next, model: defaults.piModel };
+        notices.push(`Parent is local-only; model reset to ${defaults.piModel}.`);
+        break;
+      case "fork_requires_local_pi":
+        next = { ...next, context: "fresh" };
+        notices.push("Fork is local-Pi-only; context reset to fresh.");
+        break;
+      case "retention_requires_herdr_read_only":
+        next = { ...next, closeOnReport: true };
+        notices.push("Only Herdr read-only runs may be retained; close-on-report reset to true.");
+        break;
+      case "fast_mode_unsupported":
+        next = { ...next, fastMode: false };
+        notices.push("Fast mode is unavailable for the selected runtime/model; reset to off.");
+        break;
+      case "effort_unsupported":
+        notices.push(`Effort ${next.effort} is unavailable for ${next.runtime}; reset to default.`);
+        next = { ...next, effort: "default" };
+        break;
+    }
   }
-
-  if (next.context === "fork" && (next.host !== "local" || next.runtime !== "pi")) {
-    next = { ...next, context: "fresh" };
-    notices.push("Fork is local-Pi-only; context reset to fresh.");
-  }
-  if (!next.closeOnReport && (next.host !== "herdr" || next.writeIntent !== "read-only")) {
-    next = { ...next, closeOnReport: true };
-    notices.push("Only Herdr read-only runs may be retained; close-on-report reset to true.");
-  }
-  if (
-    next.fastMode &&
-    next.model !== "parent" &&
-    !supportsSubagentFastMode(next.runtime, next.model)
-  ) {
-    next = { ...next, fastMode: false };
-    notices.push("Fast mode is unavailable for the selected runtime/model; reset to off.");
-  }
-  if (!effortAllowedForRuntime(next.runtime, next.effort)) {
-    next = { ...next, effort: "default" };
-    notices.push(
-      `Effort ${candidate.effort} is unavailable for ${next.runtime}; reset to default.`,
-    );
-  }
-  return { candidate: next, notices };
 }
 
 export function updateCandidateModel(

@@ -32,27 +32,14 @@ export type SubagentNotification =
 
 export interface SubagentNotificationDelivery {
   readonly deliveredCompletionKeys?: ReadonlyArray<string> | undefined;
-  readonly deliveredActionKeys?: ReadonlyArray<string> | undefined;
+  readonly actionAccepted?: boolean | undefined;
 }
 
-export interface SubagentNotifier {
-  (notification: SubagentNotification): SubagentNotificationDelivery | undefined;
-  reset(): void;
-}
+export type SubagentNotifier = (
+  notification: SubagentNotification,
+) => SubagentNotificationDelivery | undefined;
 
 const MAX_NOTIFICATION_CHARS = 32 * 1024;
-const MAX_DEDUPE_KEYS = 1_024;
-const completionKey = (run: SubagentCompletionNotification): string =>
-  `${run.id}:${run.generation}`;
-
-const remember = <A>(map: Map<string, A>, key: string, value: A): void => {
-  if (!map.has(key) && map.size >= MAX_DEDUPE_KEYS) {
-    const oldest = map.keys().next().value;
-    if (oldest !== undefined) map.delete(oldest);
-  }
-  map.delete(key);
-  map.set(key, value);
-};
 
 const clip = (value: string, maximumLength = MAX_NOTIFICATION_CHARS): string => {
   const sanitized = sanitizeDiagnosticContent(value, { maximumLength: maximumLength + 2 }).trim();
@@ -184,17 +171,10 @@ const completionChunks = (
 };
 
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
-  const deliveredCompletions = new Map<string, true>();
-  const deliveredActions = new Map<string, number>();
-
-  const notify: SubagentNotifier = (notification) => {
+  return (notification) => {
     if (notification.type === "completed") {
-      const fresh = notification.runs.filter(
-        (run) => !deliveredCompletions.has(completionKey(run)),
-      );
-      if (fresh.length === 0) return { deliveredCompletionKeys: [] };
       const deliveredCompletionKeys: string[] = [];
-      for (const chunk of completionChunks(fresh)) {
+      for (const chunk of completionChunks(notification.runs)) {
         try {
           pi.sendMessage(
             {
@@ -206,24 +186,16 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
             // parent. Host acceptance is synchronous; model consumption may occur later.
             { deliverAs: "steer", triggerTurn: true },
           );
-          for (const run of chunk.runs) {
-            const key = completionKey(run);
-            remember(deliveredCompletions, key, true);
-            deliveredCompletionKeys.push(key);
-          }
+          for (const run of chunk.runs) deliveredCompletionKeys.push(`${run.id}:${run.generation}`);
         } catch {
-          // Session shutdown can race with a final child notification. Leave this
-          // chunk and later chunks unacknowledged so the service can retry them.
+          // Host acceptance may have happened before a throw. Leave this chunk and later chunks
+          // unacknowledged so the service owns the uncertain retry.
           break;
         }
       }
       return { deliveredCompletionKeys };
     }
 
-    const actionIdentity = `${notification.id}:question:default`;
-    const actionKey = `${actionIdentity}:${notification.generation}`;
-    if ((deliveredActions.get(actionIdentity) ?? 0) >= notification.generation)
-      return { deliveredActionKeys: [actionKey] };
     const content = clip(
       `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent_reply({ runId: "${notification.id}", message: "..." }), then call subagent_await again.`,
     );
@@ -236,17 +208,10 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
         },
         { deliverAs: "steer", triggerTurn: true },
       );
-      remember(deliveredActions, actionIdentity, notification.generation);
-      return { deliveredActionKeys: [actionKey] };
+      return { actionAccepted: true };
     } catch {
       // Session shutdown can race with an actionable notification. The service retains it.
-      return { deliveredActionKeys: [] };
+      return { actionAccepted: false };
     }
   };
-
-  notify.reset = () => {
-    deliveredCompletions.clear();
-    deliveredActions.clear();
-  };
-  return notify;
 }

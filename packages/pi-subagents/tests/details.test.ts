@@ -1,58 +1,136 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { SubagentRunView } from "../src/run/model.ts";
 import {
+  SUBAGENT_CARD_DETAILS_VERSION,
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
-} from "../src/tools/details-decode.ts";
-import { makeCompactToolDetails, makeStartAwaitCardDetails } from "../src/tools/details.ts";
+  makeAwaitDetails,
+  makeCompactToolDetails,
+  makeStartDetails,
+  type ProfileCandidateDetailsInput,
+  type SubagentStartEntry,
+} from "../src/tools/details.ts";
 
-const run = (index = 1): SubagentRunView => ({
-  id: `agent-r1-${index}`,
-  name: `reader-${index}`,
-  task: "Secret full task that must not persist in card details.",
-  selection: {
-    source: "profile-candidate",
-    routeSource: "session",
+const run = (index = 1, cost?: number): SubagentRunView => {
+  const usageBase = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 };
+  const usage = cost === undefined ? usageBase : { ...usageBase, cost };
+  return {
+    id: `agent-r2-${index}`,
+    name: `reader-${index}`,
+    task: "Secret full task that must not persist in card details.",
+    selection: {
+      source: "profile-candidate",
+      routeSource: "session",
+      host: "herdr",
+      runtime: "claude",
+      closeOnReport: false,
+      candidateIndex: 1,
+      reason: "Selected in configured order.",
+      skippedCandidates: [
+        { candidateIndex: 0, candidate: "first", code: "unavailable", reason: "Unavailable." },
+      ],
+    },
+    predecessorRunId: "private-predecessor",
+    supersededByRunId: "private-successor",
+    remainingCandidateCount: 2,
+    retryExhausted: true,
+    retryBlocked: true,
+    cwd: "/private/project",
+    state: "reported",
+    context: "fresh",
+    writeIntent: "read-only",
+    fastMode: false,
     host: "herdr",
     runtime: "claude",
     closeOnReport: false,
-    candidateIndex: 0,
-    reason: "Selected in configured order.",
-    skippedCandidates: [{ candidate: "first", code: "unavailable", reason: "Unavailable." }],
-  },
-  cwd: "/private/project",
-  state: "reported",
-  context: "fresh",
-  writeIntent: "read-only",
+    reportGeneration: 1,
+    capabilities: ["resume"],
+    model: "provider/model",
+    effort: "high",
+    sessionId: "private-session",
+    sessionFile: "/private/session.jsonl",
+    startedAt: 1,
+    endedAt: 2,
+    lastActivityAt: 2,
+    question: { requestId: "private-question", message: "May I continue?", createdAt: 2 },
+    sessionEvents: [{ type: "assistant", text: "private transcript", createdAt: 2 }],
+    finalText: `Report ${index}: ${"x".repeat(32_000)}`,
+    usage,
+  };
+};
+
+const profileCandidate = (overrides: Partial<ProfileCandidateDetailsInput> = {}) => ({
+  host: "local" as const,
+  runtime: "pi" as const,
+  model: "openai/model",
+  effort: "default" as const,
+  context: "fresh" as const,
+  writeIntent: "read-only" as const,
   fastMode: false,
-  host: "herdr",
-  runtime: "claude",
-  closeOnReport: false,
-  reportGeneration: 1,
-  capabilities: ["resume"],
-  model: "provider/model",
-  effort: "high",
-  sessionId: "private-session",
-  sessionFile: "/private/session.jsonl",
-  startedAt: 1,
-  endedAt: 2,
-  lastActivityAt: 2,
-  sessionEvents: [{ type: "assistant", text: "private transcript", createdAt: 2 }],
-  finalText: `Report ${index}: ${"x".repeat(32_000)}`,
-  usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: 0 },
+  closeOnReport: true,
+  status: "eligible" as const,
+  reason: "Ready.",
+  ...overrides,
 });
 
-describe("persisted subagent card details", () => {
-  it("stores only rendered fields in a versioned, deeply frozen aggregate-bound projection", () => {
-    const details = makeStartAwaitCardDetails({
-      action: "await",
+const startedEntry = (index = 0, name = "review"): SubagentStartEntry => ({
+  index,
+  name,
+  profile: "reviewer",
+  status: "started",
+  routeStatus: "selected",
+  host: "local",
+  runtime: "pi",
+  model: "openai-codex/gpt-5.6-sol",
+  effort: "high",
+  fastMode: false,
+  candidateIndex: 1,
+  runId: `agent-r2-${index + 1}`,
+});
+
+type Mutable<Value> =
+  Value extends ReadonlyArray<infer Item>
+    ? Array<Mutable<Item>>
+    : Value extends object
+      ? { -readonly [Key in keyof Value]: Mutable<Value[Key]> }
+      : Value;
+
+const clone = <Value>(value: Value): Mutable<Value> => {
+  // SAFETY: JSON parsing returns the mutable plain-data clone described by the recursive test type.
+  return JSON.parse(JSON.stringify(value)) as Mutable<Value>;
+};
+
+const expectDeeplyFrozen = <ValueInput>(value: ValueInput): void => {
+  expect(Object.isFrozen(value)).toBe(true);
+  if (Array.isArray(value)) {
+    for (const child of value) expectDeeplyFrozen(child);
+    return;
+  }
+  if (!hasObjectRuntimeType(value) || value === null) return;
+  for (const child of Object.values(value)) expectDeeplyFrozen(child);
+};
+
+describe("persisted subagent details version 2", () => {
+  it("makes and decodes aggregate-bounded, deeply frozen private await cards", () => {
+    const details = makeAwaitDetails({
       runs: Array.from({ length: 12 }, (_, index) => run(index + 1)),
       awaitUntil: "all_finished",
     });
     const serialized = JSON.stringify(details);
 
-    expect(details.version).toBe(1);
+    expect(details.version).toBe(SUBAGENT_CARD_DETAILS_VERSION);
+    expect(details.action).toBe("await");
     expect(details.cards).toHaveLength(12);
+    expect(serialized.length).toBeLessThanOrEqual(48_000);
+    expect(serialized).not.toContain("Secret full task");
+    expect(serialized).not.toContain("/private/project");
+    expect(serialized).not.toContain("private-session");
+    expect(serialized).not.toContain("private transcript");
+    expect(serialized).not.toContain("private-predecessor");
+    expect(serialized).not.toContain("private-successor");
+    expect(serialized).not.toContain("routeSource");
+    expect(serialized).not.toContain('candidateIndex":0');
     expect(details.cards[0]).toMatchObject({
       host: "herdr",
       runtime: "claude",
@@ -64,248 +142,402 @@ describe("persisted subagent card details", () => {
       startedAt: 1,
       lastActivityAt: 2,
       usage: { totalTokens: 2 },
-      finalTextTruncated: true,
-      selection: {
-        routeSource: "session",
-        host: "herdr",
-        runtime: "claude",
-        closeOnReport: false,
-      },
+      question: { message: "May I continue?" },
+      selection: { source: "profile-candidate", candidateIndex: 1 },
     });
-    expect(serialized.length).toBeLessThanOrEqual(48_000);
-    expect(serialized).not.toContain("Secret full task");
-    expect(serialized).not.toContain("/private/project");
-    expect(serialized).not.toContain("private-session");
-    expect(serialized).not.toContain("private transcript");
-    expect(Object.isFrozen(details)).toBe(true);
-    expect(Object.isFrozen(details.cards)).toBe(true);
-    expect(Object.isFrozen(details.cards[0]?.selection.skippedCandidates)).toBe(true);
+    expectDeeplyFrozen(details);
+
+    const decoded = decodeStartAwaitCardDetails(details);
+    expect(decoded).toEqual(details);
+    expect(JSON.stringify(decoded).length).toBeLessThanOrEqual(48_000);
+    expectDeeplyFrozen(decoded);
   });
 
-  it("bounds serialized escaping expansion and unsupported explicit versions", () => {
-    const hostile = `${"\\".repeat(20_000)}${"\ud800".repeat(4_000)}`;
-    const details = makeStartAwaitCardDetails({
-      action: "start",
-      runs: Array.from({ length: 12 }, (_, index) => ({
-        ...run(index + 1),
-        id: `${index}-${hostile}`,
-        name: hostile,
-        model: hostile,
-        finalText: hostile,
-        selection: {
-          source: "profile-candidate" as const,
-          reason: hostile,
-          skippedCandidates: [{ candidate: hostile, code: hostile, reason: hostile }],
-        },
-      })),
-    });
-    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
-    expect(details.contentOmitted || details.cards.some((card) => card.finalTextTruncated)).toBe(
-      true,
-    );
-    expect(Object.isFrozen(details.cards)).toBe(true);
+  it("strips unknown keys without invoking their getters", () => {
+    const source = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "any_finished" }));
+    const rootGetter = vi.fn(() => "private root value");
+    const cardGetter = vi.fn(() => "private card value");
+    Object.defineProperty(source, "privateRoot", { enumerable: true, get: rootGetter });
+    Object.defineProperty(source.cards[0]!, "task", { enumerable: true, get: cardGetter });
 
+    const decoded = decodeStartAwaitCardDetails(source);
+
+    expect(decoded).toBeDefined();
+    expect(rootGetter).not.toHaveBeenCalled();
+    expect(cardGetter).not.toHaveBeenCalled();
+    expect(decoded).not.toHaveProperty("privateRoot");
+    expect(decoded?.action === "await" ? decoded.cards[0] : undefined).not.toHaveProperty("task");
+  });
+
+  it("returns undefined for known throwing getters and proxies", () => {
+    const throwing = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
+    Object.defineProperty(throwing, "cards", {
+      enumerable: true,
+      get: () => {
+        throw new Error("hostile getter");
+      },
+    });
+    expect(() => decodeStartAwaitCardDetails(throwing)).not.toThrow();
+    expect(decodeStartAwaitCardDetails(throwing)).toBeUndefined();
+
+    const proxied = new Proxy(
+      clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" })),
+      {
+        get() {
+          throw new Error("hostile proxy");
+        },
+      },
+    );
+    expect(() => decodeStartAwaitCardDetails(proxied)).not.toThrow();
+    expect(decodeStartAwaitCardDetails(proxied)).toBeUndefined();
+  });
+
+  it("rejects oversized known arrays before reading their elements", () => {
+    let rootElementReads = 0;
+    const oversizedCards = new Proxy(
+      Array.from({ length: 13 }, () => run()),
+      {
+        get(target, key) {
+          if (key === "length") return target.length;
+          rootElementReads += 1;
+          throw new Error("array element was read");
+        },
+      },
+    );
+    expect(
+      decodeStartAwaitCardDetails({
+        version: 2,
+        action: "await",
+        cards: oversizedCards,
+        awaitUntil: "all_finished",
+      }),
+    ).toBeUndefined();
+    expect(rootElementReads).toBe(0);
+
+    const source = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
+    let capabilityReads = 0;
+    // SAFETY: The forged oversized array deliberately violates the decoded capability contract.
+    source.cards[0]!.capabilities = new Proxy(Array(8).fill("resume"), {
+      get(target, key) {
+        if (key === "length") return target.length;
+        capabilityReads += 1;
+        throw new Error("capability element was read");
+      },
+    }) as (typeof source.cards)[number]["capabilities"];
+    expect(decodeStartAwaitCardDetails(source)).toBeUndefined();
+    expect(capabilityReads).toBe(0);
+  });
+
+  it("rejects old versions, unsupported versions, wrong discriminants, and wrong shapes", () => {
+    const awaitDetails = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
+    expect(decodeStartAwaitCardDetails({ ...awaitDetails, version: 1 })).toBeUndefined();
+    expect(decodeStartAwaitCardDetails({ ...awaitDetails, version: 3 })).toBeUndefined();
+    expect(decodeStartAwaitCardDetails({ ...awaitDetails, action: "start" })).toBeUndefined();
+    expect(
+      decodeStartAwaitCardDetails({
+        version: 2,
+        action: "await",
+        cards: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeStartAwaitCardDetails({
+        version: 2,
+        action: "await",
+        cards: [],
+        awaitUntil: "all_finished",
+        startEntries: [startedEntry()],
+      }),
+    ).toBeUndefined();
     expect(
       decodeStartAwaitCardDetails({
         version: 2,
         action: "start",
-        runs: [run()],
-        cards: [run()],
+        startEntries: [startedEntry()],
+        cards: [],
       }),
     ).toBeUndefined();
+    expect(decodeStartAwaitCardDetails(null)).toBeUndefined();
+    expect(decodeStartAwaitCardDetails([])).toBeUndefined();
   });
 
-  it("preserves bounded immutable start receipts through projection and hostile decoding", () => {
-    const details = makeStartAwaitCardDetails({
-      action: "start",
-      runs: [],
+  it("rejects malformed fields and children without partial salvage", () => {
+    const malformedCard = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
+    // SAFETY: This forged child deliberately violates the persisted card model type.
+    malformedCard.cards.push({ ...malformedCard.cards[0]!, model: 42 } as never);
+    expect(decodeStartAwaitCardDetails(malformedCard)).toBeUndefined();
+
+    const malformedCapability = clone(
+      makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }),
+    );
+    // SAFETY: This forged enum value deliberately violates the capability schema.
+    malformedCapability.cards[0]!.capabilities = ["resume", "forged"] as never;
+    expect(decodeStartAwaitCardDetails(malformedCapability)).toBeUndefined();
+
+    const malformedFailure = clone(
+      makeCompactToolDetails({
+        action: "send",
+        runs: [run()],
+        actionFailures: [{ id: "missing", message: "Missing." }],
+      }),
+    );
+    if (malformedFailure.action !== "models")
+      malformedFailure.actionFailures = [
+        ...(malformedFailure.actionFailures ?? []),
+        // SAFETY: This forged child deliberately violates the action-failure message type.
+        { id: "bad", message: 42 } as never,
+      ];
+    expect(decodeCompactToolDetails(malformedFailure)).toBeUndefined();
+
+    const malformedProfile = clone(
+      makeCompactToolDetails({
+        action: "models",
+        fallbackProfile: "generalist",
+        profiles: [
+          {
+            id: "reviewer",
+            description: "Review route.",
+            source: "builtin",
+            isDefault: false,
+            defaultContext: "fresh",
+            defaultWriteIntent: "read-only",
+            candidates: [profileCandidate()],
+          },
+        ],
+      }),
+    );
+    if (malformedProfile.action !== "models") throw new Error("Expected model details.");
+    // SAFETY: This forged child deliberately violates the profile-candidate reason type.
+    malformedProfile.profiles[0]!.candidates[0]!.reason = 42 as never;
+    expect(decodeCompactToolDetails(malformedProfile)).toBeUndefined();
+  });
+
+  it("requires structured model candidates, applies cross-field policy, and strips private fields", () => {
+    const details = clone(
+      makeCompactToolDetails({
+        action: "models",
+        fallbackProfile: "generalist",
+        profiles: [
+          {
+            id: "reviewer",
+            description: "Review route.",
+            source: "builtin",
+            isDefault: false,
+            defaultContext: "fresh",
+            defaultWriteIntent: "read-only",
+            candidates: [profileCandidate()],
+          },
+        ],
+      }),
+    );
+    if (details.action !== "models") throw new Error("Expected model details.");
+    const rawCandidate = details.profiles[0]!.candidates[0]!;
+
+    const missing = clone(details);
+    // SAFETY: This forged mutable view removes a required wire field for decoder coverage.
+    delete (missing.profiles[0]!.candidates[0] as { model?: string }).model;
+    expect(decodeCompactToolDetails(missing)).toBeUndefined();
+
+    const crossField = clone(details);
+    Object.assign(crossField.profiles[0]!.candidates[0]!, {
+      host: "herdr",
+      runtime: "pi",
+      model: "parent",
+    });
+    expect(decodeCompactToolDetails(crossField)).toBeUndefined();
+
+    const oldProse = clone(details);
+    // SAFETY: This cast injects the removed prose card shape into a current-version wire fixture.
+    oldProse.profiles[0]!.candidates[0] = {
+      order: 1,
+      candidate: "local/pi/openai/model:default:fresh:read-only",
+      status: "eligible",
+      reason: "Ready.",
+    } as never;
+    expect(decodeCompactToolDetails(oldProse)).toBeUndefined();
+
+    let privateReads = 0;
+    Object.defineProperty(rawCandidate, "privatePath", {
+      enumerable: true,
+      get: () => {
+        privateReads += 1;
+        return "/private/project";
+      },
+    });
+    const stripped = decodeCompactToolDetails(details);
+    expect(stripped).toBeDefined();
+    expect(JSON.stringify(stripped)).not.toContain("privatePath");
+    expect(JSON.stringify(stripped)).not.toContain("/private/project");
+    expect(privateReads).toBe(0);
+    expectDeeplyFrozen(stripped);
+  });
+
+  it("requires exact request-ordered start entries and matching failures", () => {
+    const details = makeStartDetails({
       startEntries: [
-        {
-          index: 0,
-          name: "auth-review",
-          profile: "reviewer",
-          status: "started",
-          routeStatus: "selected",
-          host: "herdr",
-          runtime: "claude",
-          model: "m".repeat(2_000),
-          effort: "high",
-          fastMode: true,
-          candidateIndex: 2,
-          runId: "agent-r1-1",
-        },
+        startedEntry(0, "same-name"),
         {
           index: 1,
-          name: "future-review",
-          profile: "future-profile",
+          name: "same-name",
+          profile: "reviewer",
           status: "failed",
           routeStatus: "unavailable",
         },
       ],
+      startFailures: [{ index: 1, name: "same-name", code: "unavailable", message: "No route." }],
     });
-    expect(details.startEntries?.[0]).toMatchObject({
-      profile: "reviewer",
-      routeStatus: "selected",
+
+    expect(details).not.toHaveProperty("cards");
+    expect(details.startEntries.map((entry) => [entry.index, entry.name])).toEqual([
+      [0, "same-name"],
+      [1, "same-name"],
+    ]);
+    expect(details.startEntries[0]).toMatchObject({ runId: "agent-r2-1" });
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+    expectDeeplyFrozen(details);
+
+    const reordered = clone(details);
+    reordered.startEntries.reverse();
+    expect(decodeStartAwaitCardDetails(reordered)).toBeUndefined();
+
+    const missingFailure = clone(details);
+    delete missingFailure.startFailures;
+    expect(decodeStartAwaitCardDetails(missingFailure)).toBeUndefined();
+
+    const forgedFailure = clone(details);
+    forgedFailure.startFailures![0]!.index = 0;
+    expect(decodeStartAwaitCardDetails(forgedFailure)).toBeUndefined();
+  });
+
+  it("fits hostile start identities without dropping entries or failures", () => {
+    const hostile = `${"\\".repeat(20_000)}${"\ud800".repeat(4_000)}`;
+    const entries: SubagentStartEntry[] = Array.from({ length: 12 }, (_, index) => ({
+      ...startedEntry(index, hostile),
+      profile: hostile,
+      model: hostile,
+      runId: `${index}-${hostile}`,
+    }));
+    entries[5] = {
+      index: 5,
+      name: hostile,
+      profile: hostile,
+      status: "failed",
+      routeStatus: "unavailable",
+    };
+    const details = makeStartDetails({
+      startEntries: entries,
+      startFailures: [{ index: 5, name: hostile, code: hostile, message: hostile }],
+    });
+
+    expect(details.startEntries).toHaveLength(12);
+    expect(details.startFailures).toHaveLength(1);
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+  });
+
+  it("preserves omission evidence, capabilities, routes, questions, and cost semantics", () => {
+    const details = makeAwaitDetails({
+      runs: [run(1, undefined), run(2, 0)],
+      awaitUntil: "all_finished",
+    });
+
+    expect(details.contentOmitted).toBe(true);
+    expect(details.cards[0]).toMatchObject({
+      finalTextTruncated: true,
+      capabilities: ["resume"],
       host: "herdr",
       runtime: "claude",
-      effort: "high",
-      candidateIndex: 2,
+      model: "provider/model",
+      closeOnReport: false,
+      question: { message: "May I continue?" },
     });
-    expect(details.startEntries?.[0]?.model).toHaveLength(512);
-    expect(details.startEntries?.[1]).toMatchObject({
-      profile: "future-profile",
-      routeStatus: "unavailable",
-    });
-    expect(Object.isFrozen(details.startEntries)).toBe(true);
-    expect(decodeStartAwaitCardDetails(details)?.startEntries).toEqual(details.startEntries);
+    expect(details.cards[0]?.usage.cost).toBeUndefined();
+    expect(details.cards[1]?.usage.cost).toBe(0);
 
+    const decoded = decodeStartAwaitCardDetails(details);
+    expect(decoded?.action === "await" ? decoded.cards[0]?.usage.cost : 1).toBeUndefined();
+    expect(decoded?.action === "await" ? decoded.cards[1]?.usage.cost : undefined).toBe(0);
+  });
+
+  it("makes discriminated non-start details without removed root wire fields", () => {
+    const status = makeCompactToolDetails({ action: "status", runs: [run()] });
+    expect(status).toMatchObject({ version: 2, action: "status", runCount: 1 });
+    expect(status).not.toHaveProperty("runIds");
+    expect(status).not.toHaveProperty("profileIds");
+    expect(status).not.toHaveProperty("timedOut");
+    expect(status).not.toHaveProperty("attentionRequired");
+    expect(JSON.stringify(status).length).toBeLessThanOrEqual(48_000);
+    expect(decodeCompactToolDetails(status)).toEqual(status);
+
+    expect(decodeCompactToolDetails({ ...clone(status), action: "models" })).toBeUndefined();
     expect(
-      decodeStartAwaitCardDetails({
-        version: 1,
-        action: "start",
-        cards: [],
-        startEntries: [
-          {
-            index: 0,
-            name: "hostile",
-            status: "started",
-            routeStatus: "selected",
-            host: "unknown",
-            runtime: "shell",
-            model: "forged",
-            effort: "extreme",
-          },
-        ],
-      })?.startEntries?.[0],
-    ).toMatchObject({ profile: "generalist", routeStatus: "unavailable" });
+      decodeCompactToolDetails({ ...clone(status), profiles: [], fallbackProfile: "generalist" }),
+    ).toBeUndefined();
   });
 
-  it("keeps hostile receipt identity and route fields inside the aggregate JSON bound", () => {
-    const hostile = `${"\\".repeat(20_000)}${"\ud800".repeat(4_000)}`;
-    const details = makeStartAwaitCardDetails({
-      action: "start",
-      runs: [],
-      startEntries: Array.from({ length: 12 }, (_, index) => ({
-        index,
-        name: hostile,
-        profile: hostile,
-        status: "started" as const,
-        routeStatus: "selected" as const,
-        host: "local" as const,
-        runtime: "pi" as const,
-        model: hostile,
-        effort: "high" as const,
-        runId: hostile,
-      })),
-      startFailures: Array.from({ length: 12 }, (_, index) => ({
-        index,
-        name: hostile,
-        code: hostile,
-        message: hostile,
-      })),
-    });
-    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
-    expect(details.startEntries).toHaveLength(12);
-    expect(details.startEntries?.every((entry) => entry.profile.length > 0)).toBe(true);
-    expect(details.startEntries?.every((entry) => entry.routeStatus === "selected")).toBe(true);
-    expect(Object.isFrozen(details.startEntries)).toBe(true);
-  });
-
-  it("keeps non-card tool details compact, frozen, and serialization-bounded", () => {
+  it("bounds profile route details through the shared semantic selector", () => {
     const hostile = `${"\\".repeat(2_000)}${"\ud800".repeat(500)}`;
     const details = makeCompactToolDetails({
-      action: hostile,
-      runs: Array.from({ length: 12 }, (_, index) => ({
-        ...run(index + 1),
-        id: `${index}-${hostile}`,
-        name: hostile,
-        model: hostile,
-        finalText: hostile,
-      })),
-      profileIds: Array.from({ length: 20 }, () => hostile),
+      action: "models",
       fallbackProfile: "generalist",
-      actionFailures: Array.from({ length: 12 }, (_, index) => ({
-        id: `${index}-${hostile}`,
-        code: hostile,
-        message: hostile,
+      profiles: (
+        ["scout", "researcher", "planner", "worker", "reviewer", "oracle", "generalist"] as const
+      ).map((id) => ({
+        id,
+        description: hostile,
+        source: "session" as const,
+        isDefault: id === "generalist",
+        defaultContext: "fresh" as const,
+        defaultWriteIntent: "read-only" as const,
+        defaultEffort: "high" as const,
+        candidates: Array.from({ length: 32 }, () =>
+          profileCandidate({ model: hostile, reason: hostile }),
+        ),
       })),
     });
+
+    expect(details.action).toBe("models");
+    if (details.action !== "models") throw new Error("Expected model details.");
+    expect(details.profiles).toHaveLength(7);
+    expect(details.profiles[0]?.candidates).toHaveLength(32);
+    expect(details.profiles.flatMap((profile) => profile.candidates)).toHaveLength(7 * 32);
+    expect(details.contentOmitted).toBe(true);
+    const projected = details.profiles[0]!.candidates[0]!;
+    expect(projected).toMatchObject({
+      host: "local",
+      runtime: "pi",
+      effort: "default",
+      context: "fresh",
+      writeIntent: "read-only",
+      fastMode: false,
+      closeOnReport: true,
+      status: "eligible",
+    });
+    expect(projected).not.toHaveProperty("order");
+    expect(projected).not.toHaveProperty("candidate");
+    expect(projected).not.toHaveProperty("effectiveContext");
+    expect(projected.model).toMatch(/^[\x20-\x7e]+$/);
+    expect(projected.reason).toMatch(/^[\x20-\x7e]+$/);
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
-    expect(details).toMatchObject({ version: 1 });
-    expect(Object.isFrozen(details)).toBe(true);
-    expect(decodeCompactToolDetails(details)).toMatchObject({
-      action: details.action.slice(0, 32),
-      runCount: 12,
+    expectDeeplyFrozen(details);
+  });
+
+  it("rejects canonical decoded details larger than 48,000 characters", () => {
+    const valid = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
+    valid.cards = Array.from({ length: 12 }, (_, index) => ({
+      ...valid.cards[0]!,
+      id: `agent-${index}`,
+      finalText: "x".repeat(20_000),
+    }));
+    expect(decodeStartAwaitCardDetails(valid)).toBeUndefined();
+
+    Object.defineProperty(valid, "unknownLargeValue", {
+      enumerable: true,
+      value: "private".repeat(20_000),
     });
-  });
-
-  it("accepts only current-version persisted details and rejects malformed details", () => {
-    expect(decodeStartAwaitCardDetails({ action: "start", runs: [run()] })).toBeUndefined();
-    expect(() =>
-      decodeStartAwaitCardDetails({
-        version: 1,
-        action: "await",
-        cards: [{ id: { hostile: true }, state: "running" }],
-      }),
-    ).not.toThrow();
-    expect(
-      decodeStartAwaitCardDetails({
-        version: 1,
-        action: "await",
-        cards: [{ id: { hostile: true }, state: "running" }],
-      }),
-    ).toBeUndefined();
-    expect(decodeStartAwaitCardDetails({ action: "await", runs: "not-an-array" })).toBeUndefined();
-    expect(
-      decodeCompactToolDetails({
-        version: 1,
-        action: "models",
-        profileIds: ["delegate"],
-        fallbackProfile: "delegate",
-      }),
-    ).toMatchObject({ action: "models" });
-  });
-
-  it("preserves capabilities and unknown cost through the compact card fallback", () => {
-    // Hostile escaping in identity/model/reason fields forces the compact
-    // fallback stage without dropping the whole card list.
-    const hostile = `${"\\".repeat(4_000)}`;
-    const details = makeStartAwaitCardDetails({
-      action: "await",
-      runs: Array.from({ length: 12 }, (_, index) => ({
-        ...run(index + 1),
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
-        selection: {
-          source: "profile-candidate" as const,
-          reason: hostile,
-          skippedCandidates: [
-            { candidate: hostile, code: "unavailable", reason: hostile },
-            { candidate: hostile, code: "unavailable", reason: hostile },
-          ],
-        },
-      })),
-    });
-    expect(details.cards.length).toBeGreaterThan(0);
-    for (const card of details.cards) {
-      // The compact stage was reached: provenance collapsed to its bounded form.
-      expect(card.selection.skippedCandidates).toEqual([]);
-      expect(card.selection.reason.length).toBeLessThanOrEqual(96);
-      // Compact fallback keeps capability evidence so renderers stay neutral
-      // instead of treating the run as definitely non-resumable.
-      expect(card.capabilities).toEqual(["resume"]);
-      // Unknown cost stays absent instead of becoming a fabricated known $0.
-      expect(card.usage?.cost).toBeUndefined();
-      expect(card.usage?.totalTokens).toBe(2);
-    }
-    const decoded = decodeStartAwaitCardDetails(details);
-    expect(decoded?.cards[0]?.capabilities).toEqual(["resume"]);
-    expect(decoded?.cards[0]?.usage?.cost).toBeUndefined();
-  });
-
-  it("round-trips a known zero cost distinctly from an unknown cost", () => {
-    const details = makeStartAwaitCardDetails({ action: "await", runs: [run()] });
-    expect(details.cards[0]?.usage?.cost).toBe(0);
-    const decoded = decodeStartAwaitCardDetails(details);
-    expect(decoded?.cards[0]?.usage?.cost).toBe(0);
+    delete valid.cards[0]!.finalText;
+    valid.cards = [valid.cards[0]!];
+    const stripped = decodeStartAwaitCardDetails(valid);
+    expect(stripped).toBeDefined();
+    expect(JSON.stringify(stripped).length).toBeLessThanOrEqual(48_000);
   });
 });

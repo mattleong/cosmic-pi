@@ -7,10 +7,8 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  openPiSupervisorBridge,
-  type SupervisorToolArgumentsByName,
-} from "../src/boundary/pi-supervisor-bridge-client.ts";
+import { openPiSupervisorBridge } from "../src/boundary/pi-supervisor-bridge-client.ts";
+import type { SupervisorMcpToolArgumentsByName as SupervisorToolArgumentsByName } from "../src/supervisor/mcp-contract.ts";
 import { makeSupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../src/run/limits.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
@@ -84,6 +82,31 @@ describe("packaged delegated-Pi supervisor bridge", () => {
       }));
   }
 
+  it("kills a successfully initialized helper when its scope closes", () =>
+    fs.mkdtemp(join(tmpdir(), "pi-subagents-pi-bridge-scope-")).then((directory) => {
+      directories.push(directory);
+      const scenario = join(directory, "scenario.json");
+      return fs
+        .writeFile(scenario, JSON.stringify({ mode: "open" }))
+        .then(() =>
+          Effect.runPromise(
+            Effect.scoped(
+              openPiSupervisorBridge(scenario, {
+                helperPath: openFixture,
+                initializeTimeoutMillis: 1_000,
+              }),
+            ),
+          ),
+        )
+        .then(() => fs.readFile(`${scenario}.pid`, "utf8"))
+        .then((value) => Number(value))
+        .then((pid) =>
+          waitForDead(pid).then(() => {
+            expect(processAlive(pid)).toBe(false);
+          }),
+        );
+    }));
+
   it("supports concurrent progress, exact question/reply, and report delivery", () =>
     fs.mkdtemp(join(tmpdir(), "pi-subagents-pi-bridge-")).then((directory) => {
       directories.push(directory);
@@ -94,16 +117,15 @@ describe("packaged delegated-Pi supervisor bridge", () => {
               runId: "agent-pi-bridge",
             });
             const client = yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath);
-            yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
             yield* channel.awaitReady;
             yield* channel.setAssignmentEpoch(1);
 
-            const question = yield* Effect.tryPromise(() =>
-              client.call("supervisor_question", { message: "Which branch?" }),
-            ).pipe(Effect.forkScoped);
-            const progress = yield* Effect.tryPromise(() =>
-              client.call("supervisor_progress", { message: "Inspecting branches" }),
-            ).pipe(Effect.forkScoped);
+            const question = yield* client
+              .call("supervisor_question", { message: "Which branch?" })
+              .pipe(Effect.forkScoped);
+            const progress = yield* client
+              .call("supervisor_progress", { message: "Inspecting branches" })
+              .pipe(Effect.forkScoped);
 
             const first = yield* Queue.take(channel.events);
             const second = yield* Queue.take(channel.events);
@@ -123,12 +145,12 @@ describe("packaged delegated-Pi supervisor bridge", () => {
             expect(yield* Fiber.join(question)).toContain("Parent reply: main");
             expect(yield* Fiber.join(progress)).toContain("Progress delivered");
 
-            const reportCall = yield* Effect.tryPromise(() =>
-              client.call("supervisor_submit_report", {
+            const reportCall = yield* client
+              .call("supervisor_submit_report", {
                 delivery_id: "generation-1",
                 report: "Complete report",
-              }),
-            ).pipe(Effect.forkScoped);
+              })
+              .pipe(Effect.forkScoped);
             const report = yield* Queue.take(channel.events);
             expect(report).toMatchObject({
               type: "report",
@@ -154,13 +176,12 @@ describe("packaged delegated-Pi supervisor bridge", () => {
               runId: "agent-pi-max-reply",
             });
             const client = yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath);
-            yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
             yield* channel.awaitReady;
             yield* channel.setAssignmentEpoch(1);
 
-            const question = yield* Effect.tryPromise(() =>
-              client.call("supervisor_question", { message: "Return the maximum reply" }),
-            ).pipe(Effect.forkScoped);
+            const question = yield* client
+              .call("supervisor_question", { message: "Return the maximum reply" })
+              .pipe(Effect.forkScoped);
             const questionEvent = yield* Queue.take(channel.events);
             if (questionEvent.type !== "supervisor_contact")
               return yield* Effect.die("missing maximum-reply question");
@@ -183,33 +204,26 @@ describe("packaged delegated-Pi supervisor bridge", () => {
               runId: "agent-pi-cancel",
             });
             const client = yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath);
-            yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
             yield* channel.awaitReady;
             yield* channel.setAssignmentEpoch(1);
 
-            const controller = new AbortController();
-            const question = client.call(
-              "supervisor_question",
-              { message: "Cancel this exact question" },
-              controller.signal,
-            );
+            const question = yield* client
+              .call("supervisor_question", { message: "Cancel this exact question" })
+              .pipe(Effect.forkScoped);
             const questionEvent = yield* Queue.take(channel.events);
             expect(questionEvent).toMatchObject({
               type: "supervisor_contact",
               kind: "question",
               assignmentEpoch: 1,
             });
-            controller.abort();
-            yield* Effect.tryPromise(() => question).pipe(Effect.flip);
+            yield* Fiber.interrupt(question);
             expect(yield* Queue.take(channel.events)).toMatchObject({
               type: "supervisor_question_cancelled",
               assignmentEpoch: 1,
             });
 
             expect(
-              yield* Effect.tryPromise(() =>
-                client.call("supervisor_progress", { message: "Bridge remains live" }),
-              ),
+              yield* client.call("supervisor_progress", { message: "Bridge remains live" }),
             ).toContain("Progress delivered");
             expect(yield* Queue.take(channel.events)).toMatchObject({
               type: "supervisor_contact",
@@ -231,7 +245,6 @@ describe("packaged delegated-Pi supervisor bridge", () => {
               runId: "agent-pi-invalid",
             });
             const client = yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath);
-            yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
             yield* channel.awaitReady;
             yield* channel.setAssignmentEpoch(1);
             // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
@@ -240,10 +253,11 @@ describe("packaged delegated-Pi supervisor bridge", () => {
               input: SupervisorToolArgumentsByName["supervisor_progress"] & {
                 readonly extra: boolean;
               },
-            ) => Promise<string>;
-            const error = yield* Effect.tryPromise(() =>
-              callHostileInput("supervisor_progress", { message: "ok", extra: true }),
-            ).pipe(Effect.flip);
+            ) => ReturnType<typeof client.call>;
+            const error = yield* callHostileInput("supervisor_progress", {
+              message: "ok",
+              extra: true,
+            }).pipe(Effect.flip);
             expect(error).toBeInstanceOf(Error);
           }),
         ),

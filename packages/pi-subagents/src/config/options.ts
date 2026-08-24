@@ -2,10 +2,8 @@ import { freezeSnapshot } from "pi-cosmic-core";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import {
   cloneProfileRoute,
-  normalizeProfileCandidate,
+  normalizeDeclaredProfileRoute,
   PROFILE_IDS,
-  type DeclaredProfileCandidate,
-  type DeclaredProfileRoute,
   type ProfileId,
   type ProfileRoute,
   type ProfileRouteSource,
@@ -23,15 +21,6 @@ export interface ResolvedSubagentConfig {
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   readonly diagnostics: ReadonlyArray<string>;
 }
-
-export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
-  if (route === "disabled") return { candidates: [] };
-  // SAFETY: Configuration decoding validates the persisted value before this typed access.
-  const candidates = Array.isArray(route)
-    ? (route as ReadonlyArray<DeclaredProfileCandidate>)
-    : [route as DeclaredProfileCandidate];
-  return { candidates: candidates.map(normalizeProfileCandidate) };
-};
 
 export interface ResolveSubagentConfigInput {
   readonly globalConfigPath: string;

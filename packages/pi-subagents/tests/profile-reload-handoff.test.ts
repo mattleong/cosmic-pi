@@ -73,6 +73,29 @@ describe("profile reload handoff", () => {
     expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
   });
 
+  it("rejects oversized candidate arrays before reading any candidate element", () => {
+    let candidateElementReads = 0;
+    const candidates = new Proxy(
+      Array.from({ length: 33 }, () => null),
+      {
+        get(target, key) {
+          if (key === "length") return target.length;
+          candidateElementReads += 1;
+          throw new Error("candidate element should not be read");
+        },
+      },
+    );
+    processState[reloadSlot] = {
+      version: 1,
+      sessionKey: "session-one",
+      seed: { revision: 1, overrides: { reviewer: { candidates } } },
+    };
+
+    expect(handoff.capture("session-one")).toBeUndefined();
+    expect(candidateElementReads).toBe(0);
+    expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
+  });
+
   it("clears conditionally without deleting a different session handoff", () => {
     handoff.publish("session-one", { revision: 0, overrides: {} });
     handoff.clear("session-two");

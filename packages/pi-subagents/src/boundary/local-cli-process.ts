@@ -16,7 +16,7 @@ import {
   type SubagentRuntime,
   type SubagentWriteIntent,
 } from "../domain/routing.ts";
-import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
+import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
 import { readValidatedCodexAuth, safeAgentDirectory } from "./harness-shared.ts";
 import {

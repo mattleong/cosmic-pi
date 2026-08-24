@@ -90,9 +90,8 @@ describe("subagent tool", () => {
       expect(text).not.toContain("Activity:");
       expect(text.match(/Viewport report\./g)).toHaveLength(1);
       expect(result?.details).toMatchObject({
-        version: 1,
+        version: 2,
         action: "status",
-        runIds: ["agent-1"],
         runCount: 1,
         cards: [{ id: "agent-1", finalText: "Viewport report." }],
       });
@@ -103,9 +102,8 @@ describe("subagent tool", () => {
           ?.execute("call", {}, undefined, undefined, context),
       );
       expect(listed?.details).toMatchObject({
-        version: 1,
+        version: 2,
         action: "list",
-        runIds: ["agent-1"],
         runCount: 1,
         cards: [{ id: "agent-1" }],
       });
@@ -296,9 +294,9 @@ describe("subagent tool", () => {
       expect(sendResult?.content[0]?.text).toContain("Failed targets (1)");
       expect(sendResult?.content[0]?.text).toContain("agent-2 [not_running]: agent-2 is paused");
       expect(sendResult?.details).toMatchObject({
-        version: 1,
+        version: 2,
         action: "send",
-        runIds: ["agent-1"],
+        runCount: 1,
         actionFailures: [{ id: "agent-2", code: "not_running" }],
       });
 
@@ -801,7 +799,7 @@ describe("subagent tool", () => {
     );
     expect(result?.details).toMatchObject({
       action: "retry",
-      cards: [{ id: "agent-2", predecessorRunId: "agent-1" }],
+      cards: [{ id: "agent-2" }],
     });
   });
 

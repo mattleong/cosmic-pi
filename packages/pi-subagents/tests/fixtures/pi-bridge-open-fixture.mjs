@@ -18,18 +18,18 @@ if (scenario.mode === "malformed") {
   lines.on("line", (line) => {
     const request = JSON.parse(line);
     if (request.method !== "initialize") return;
-    closeSync(0);
+    if (scenario.mode === "notification-close") closeSync(0);
     process.stdout.write(
       `${JSON.stringify({
         jsonrpc: "2.0",
         id: request.id,
         result: {
           protocolVersion: "2025-06-18",
-          capabilities: {},
+          capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "fixture", version: "1" },
         },
       })}\n`,
-      () => process.exit(0),
+      scenario.mode === "notification-close" ? () => process.exit(0) : undefined,
     );
   });
   setInterval(() => {}, 1_000);

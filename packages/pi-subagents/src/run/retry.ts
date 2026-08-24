@@ -183,5 +183,3 @@ export function makeRunRetry(dependencies: RunRetryDependencies) {
     blockRetryClaim,
   };
 }
-
-export type RunRetry = ReturnType<typeof makeRunRetry>;

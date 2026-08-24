@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
+import { MAX_COMPLETION_DELIVERY_BATCH } from "../../src/run/limits.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { provideBuiltLayer } from "pi-cosmic-core";
@@ -596,7 +597,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.effect("caps one retained run at 64 unresolved report generations", () => {
+  it.effect("reserves generation 64 for terminal failure after 63 retained reports", () => {
     const backend = fakeRetainedBackendLayer();
     const projections: SubagentProjection[] = [];
     const layer = retainedServiceLayer(backend, {
@@ -615,7 +616,7 @@ describe("SubagentService", () => {
           effortWasExplicit: false,
         }),
       );
-      for (let generation = 1; generation <= 64; generation += 1) {
+      for (let generation = 1; generation <= 63; generation += 1) {
         backend.controls[0]?.offer({
           type: "report",
           runId: run.id,
@@ -624,14 +625,42 @@ describe("SubagentService", () => {
           text: `Backlog report ${generation}.`,
         });
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === generation);
-        if (generation < 64) yield* service.send(run.id, `Begin assignment ${generation + 1}.`);
+        if (generation < 63) yield* service.send(run.id, `Begin assignment ${generation + 1}.`);
       }
       const failure = yield* service.send(run.id, "Exceed the backlog.").pipe(Effect.flip);
       expect(failure).toMatchObject({
         _tag: "InvalidSubagentRequestError",
         code: "report_delivery_backlog",
       });
-      expect((yield* service.list)[0]?.reportGeneration).toBe(64);
+
+      backend.controls[0]?.offer({
+        type: "exit",
+        exitCode: 1,
+        diagnostic: "Retained backend failed after its final admitted report.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      const terminalGeneration = yield* service.withStatusObservations(
+        [run.id],
+        ({ observations }) => {
+          const receipt = observations[0]?.completionReceipt;
+          return receipt
+            ? service.consumeCompletions([receipt]).pipe(Effect.as(receipt.generation))
+            : Effect.void;
+        },
+      );
+      expect(terminalGeneration).toBe(64);
+
+      backend.controls[0]?.offer({
+        type: "exit",
+        exitCode: 1,
+        diagnostic: "Duplicate terminal evidence.",
+      });
+      yield* Effect.yieldNow;
+      const afterDuplicate = yield* service.withStatusObservations([run.id], ({ observations }) =>
+        Effect.succeed(observations[0]),
+      );
+      expect(afterDuplicate?.completionReceipt).toBeUndefined();
+      expect(afterDuplicate?.run.reportGeneration).toBe(63);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
@@ -873,6 +902,187 @@ describe("SubagentService", () => {
         state: "reported",
         finalText: "Applied despite uncertain response.",
         warning: expect.stringContaining("may already have applied"),
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("drains completion generations in deterministic batches of twelve", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const batches: number[][] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+      notify: (notification) => {
+        if (notification.type !== "completed") return undefined;
+        batches.push(notification.runs.map((run) => run.generation));
+        return {
+          deliveredCompletionKeys: notification.runs.map((run) => `${run.id}:${run.generation}`),
+        };
+      },
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      const generationCount = MAX_COMPLETION_DELIVERY_BATCH + 1;
+      for (let generation = 1; generation <= generationCount; generation += 1) {
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: generation,
+          runId: run.id,
+          sequence: generation,
+          deliveryId: `batch-${generation}`,
+          text: `Report ${generation}.`,
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === generation);
+        if (generation < generationCount)
+          yield* service.send(run.id, `Begin assignment ${generation + 1}.`);
+      }
+
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => batches.length === 1);
+      expect(batches[0]).toEqual(
+        Array.from({ length: MAX_COMPLETION_DELIVERY_BATCH }, (_, index) => index + 1),
+      );
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => batches.length === 2);
+      expect(batches[1]).toEqual([generationCount]);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("consumes a stopped retained report claim without a later notification", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const notifications: SubagentNotification[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+      notify: (notification) => void notifications.push(notification),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "stopped-claim",
+        text: "Retained before stop.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+      expect((yield* service.stop(run.id)).state).toBe("stopped");
+
+      const claimed = yield* service.status(run.id);
+      expect(claimed).toMatchObject({ state: "stopped", finalText: "Retained before stop." });
+      expect(yield* service.status(run.id)).not.toHaveProperty("finalText");
+      yield* TestClock.adjust("1 second");
+      expect(notifications).toEqual([]);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("keeps an atomically committed retained report deliverable after stop", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const notifications: SubagentNotification[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+      notify: (notification) => void notifications.push(notification),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "committed-before-stop",
+        text: "Committed before event-fiber cleanup.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+      expect((yield* service.stop(run.id)).state).toBe("stopped");
+      expect(backend.controls[0]?.released()).toBe(1);
+
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+      expect(notifications[0]).toMatchObject({
+        type: "completed",
+        runs: [
+          {
+            id: run.id,
+            generation: 1,
+            retained: true,
+            finalText: "Committed before event-fiber cleanup.",
+          },
+        ],
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("lets an accepted retained report settle a pending pause atomically", () => {
+    const interruptStarted = Deferred.makeUnsafe<void>();
+    const interruptGate = Deferred.makeUnsafe<void>();
+    const backend = fakeRetainedBackendLayer({
+      interruptGate,
+      onInterruptStarted: () => Deferred.doneUnsafe(interruptStarted, Effect.void),
+      capabilities: ["steer", "interrupt", "rename-display"],
+    });
+    const projections: SubagentProjection[] = [];
+    const notifications: SubagentNotification[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+      notify: (notification) => void notifications.push(notification),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      const interrupting = yield* service.interrupt(run.id).pipe(Effect.forkScoped);
+      yield* Deferred.await(interruptStarted);
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "report-wins-pause",
+        text: "Report won the pause race.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+      expect(yield* Fiber.join(interrupting).pipe(Effect.flip)).toMatchObject({
+        code: "interrupt_outcome_uncertain",
+      });
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+      expect(notifications[0]).toMatchObject({
+        type: "completed",
+        runs: [{ id: run.id, finalText: "Report won the pause race." }],
       });
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });

@@ -150,7 +150,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
             const prompt = message?.trim()
               ? yield* validateParentMessage(message, "Resume message is required.")
               : "Continue the assigned task from the current session state.";
-            const nextSettlement = yield* Deferred.make<SubagentRunView>();
             const now = yield* Clock.currentTimeMillis;
             const claimed = yield* withLock(
               Effect.gen(function* () {
@@ -202,13 +201,12 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     });
                 }
                 const attemptToken = allocateAssignmentAttemptToken();
-                selected.settlement = nextSettlement;
                 selected.pauseRequested = false;
                 selected.pauseOutcome = undefined;
                 selected.pausedAssignmentEpoch = undefined;
                 selected.activeTools.clear();
                 selected.notificationGeneration += 1;
-                delivery.discardRunQuestionsLocked(selected.view.id);
+                delivery.discardQuestionLocked(selected.view.id);
                 selected.replyPendingRequestId = undefined;
                 selected.initializationPending = needsRespawn;
                 selected.initializationSettled = needsRespawn
@@ -406,5 +404,3 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
     resume,
   };
 }
-
-export type RunResume = ReturnType<typeof makeRunResume>;

@@ -1,12 +1,16 @@
 import * as Schema from "effect/Schema";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import type { BackendEvent } from "../backend/model.ts";
-import { MAX_BACKEND_REPORT_ID_CHARS, MAX_BACKEND_REPORT_TEXT_CHARS } from "../backend/model.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
+import {
+  MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
+  MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+  MAX_SUPERVISOR_MCP_REPORT_CHARS,
+  SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
+  SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+} from "./mcp-contract.ts";
 
 export const SUPERVISOR_CHANNEL_VERSION = 2 as const;
-export const SUPERVISOR_MCP_SERVER_NAME = "pi_subagents_supervisor" as const;
-export const MAX_SUPERVISOR_MESSAGE_CHARS = 16 * 1024;
 export const MAX_SUPERVISOR_CHANNEL_ID_CHARS = 128;
 export const MAX_SUPERVISOR_RUN_ID_CHARS = 80;
 export const MAX_SUPERVISOR_CHANNEL_LINE_BYTES = 512 * 1024;
@@ -15,7 +19,8 @@ export const SUPERVISOR_AUTH_TOKEN_CHARS = 64;
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 const CHANNEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const DELIVERY_ID_PATTERN = new RegExp(SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE);
+const NONBLANK_PATTERN = new RegExp(SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE);
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 
 export const SupervisorRunIdSchema = Schema.String.check(
@@ -44,7 +49,7 @@ export type SupervisorAuthToken = Schema.Schema.Type<typeof SupervisorAuthTokenS
 
 export const SupervisorDeliveryIdSchema = Schema.String.check(
   Schema.isMinLength(1),
-  Schema.isMaxLength(MAX_BACKEND_REPORT_ID_CHARS),
+  Schema.isMaxLength(MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS),
   Schema.isPattern(DELIVERY_ID_PATTERN),
 ).pipe(Schema.brand("SupervisorDeliveryId"));
 export type SupervisorDeliveryId = Schema.Schema.Type<typeof SupervisorDeliveryIdSchema>;
@@ -55,7 +60,8 @@ export const SupervisorAssignmentEpochSchema = Schema.Number.check(
 );
 export const SupervisorMessageSchema = Schema.String.check(
   Schema.isMinLength(1),
-  Schema.isMaxLength(MAX_SUPERVISOR_MESSAGE_CHARS),
+  Schema.isMaxLength(MAX_SUPERVISOR_MCP_MESSAGE_CHARS),
+  Schema.isPattern(NONBLANK_PATTERN),
 );
 export const SupervisorReplySchema = Schema.String.check(
   Schema.isMinLength(1),
@@ -63,7 +69,8 @@ export const SupervisorReplySchema = Schema.String.check(
 );
 export const SupervisorReportTextSchema = Schema.String.check(
   Schema.isMinLength(1),
-  Schema.isMaxLength(MAX_BACKEND_REPORT_TEXT_CHARS),
+  Schema.isMaxLength(MAX_SUPERVISOR_MCP_REPORT_CHARS),
+  Schema.isPattern(NONBLANK_PATTERN),
 );
 
 export const SupervisorChannelConfigSchema = Schema.Struct({
@@ -198,9 +205,5 @@ export type SupervisorEvent = Extract<
   { readonly type: "supervisor_contact" | "supervisor_question_cancelled" | "report" }
 >;
 
-export const validSupervisorMessage = (value: string): boolean =>
-  value.trim().length > 0 && value.length <= MAX_SUPERVISOR_MESSAGE_CHARS;
 export const validSupervisorReply = (value: string): boolean =>
   value.trim().length > 0 && value.length <= MAX_PARENT_MESSAGE_CHARS;
-export const validSupervisorReport = (value: string): boolean =>
-  value.trim().length > 0 && value.length <= MAX_BACKEND_REPORT_TEXT_CHARS;

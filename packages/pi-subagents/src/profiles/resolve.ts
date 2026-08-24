@@ -9,7 +9,9 @@ import type {
 } from "../domain/routing.ts";
 import { profileDefinition } from "./definitions.ts";
 import {
+  isLocalPiProfileCandidate,
   normalizeProfileId,
+  profileCandidateLabel,
   type ProfileCandidate,
   type ProfileId,
   type ProfileRoute,
@@ -70,9 +72,6 @@ export interface ProfileResolutionFailure {
 }
 
 export type ProfileResolution = ProfileResolutionPlan | ProfileResolutionFailure;
-
-export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
-  `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:fastMode=${candidate.fastMode}:closeOnReport=${candidate.closeOnReport}`;
 
 const skip = (
   candidate: string,
@@ -160,7 +159,7 @@ const resolveCandidate = (
 
   // Unsupported adapters remain syntactically and statically representable. Host resolution
   // dynamically classifies them so ordered fallback is visible in launch provenance.
-  if (candidate.host !== "local" || candidate.runtime !== "pi")
+  if (!isLocalPiProfileCandidate(candidate))
     return {
       attempt: baseAttempt(
         profile,

@@ -1,15 +1,24 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { synchronousNow } from "../boundary/native-clock.ts";
+import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
-import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details.ts";
 import { aggregateRunUsage, renderResponsiveRunRows, runTiming } from "./render-run-rows.ts";
 
+interface AwaitProgressRun {
+  readonly id: string;
+  readonly name: string;
+  readonly state: SubagentRunCard["state"];
+  readonly currentTool?: string | undefined;
+  readonly startedAt?: number | undefined;
+  readonly lastActivityAt?: number | undefined;
+  readonly endedAt?: number | undefined;
+}
+
 const awaitProgressHeader = (
-  runs: ReadonlyArray<SubagentRunCard>,
+  runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
 ): string => {
   const finished = runs.filter((run) => isAssignmentFinishedRunState(run.state)).length;
@@ -33,13 +42,13 @@ const awaitProgressHeader = (
   return `${condition} · ${finished} of ${runs.length} subagents finished${activeSummary ? ` · ${activeSummary}` : ""}`;
 };
 
-const awaitRunStatus = (run: SubagentRunCard): string =>
+const awaitRunStatus = (run: AwaitProgressRun): string =>
   sanitizeTerminalLine(
     [runStateLabel(run.state), run.currentTool, runTiming(run)].filter(Boolean).join(" · "),
   );
 
 export const formatAwaitProgress = (
-  runs: ReadonlyArray<SubagentRunCard>,
+  runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
 ): string =>
   [
@@ -111,9 +120,9 @@ export const syncAwaitProgressTicker = (
   if (!context?.state) return;
   const shouldAnimate =
     isPartial &&
-    details?.cancelled !== true &&
     (details?.action === "start" ||
       (details?.action === "await" &&
+        details.cancelled !== true &&
         details.cards.some((run) => run.state === "starting" || run.state === "running")));
   if (shouldAnimate) {
     context.state.piSubagentsAwaitInvalidate = context.invalidate;

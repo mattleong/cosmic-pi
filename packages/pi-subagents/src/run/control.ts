@@ -18,7 +18,7 @@ import {
   SubagentNotFoundError,
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
-import { hasCompletionGenerationCapacity } from "./completion.ts";
+import { hasRetainedAssignmentCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
@@ -102,7 +102,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
   const send = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const normalized = yield* validateParentMessage(message, "Guidance message is required.");
-      const nextSettlement = yield* Deferred.make<SubagentRunView>();
       const selected = yield* withLock(
         Effect.gen(function* () {
           const selected = yield* requireRecord(id);
@@ -117,7 +116,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               message: `Subagent ${id} already has a parent reply in flight.`,
             });
           if (selected.view.state === "reported" && selected.view.closeOnReport === false) {
-            if (!hasCompletionGenerationCapacity(selected))
+            if (!hasRetainedAssignmentCapacity(selected))
               return yield* new InvalidSubagentRequestError({
                 code: "report_delivery_backlog",
                 message: `Subagent ${id} has ${selected.completionGenerations.size} unresolved report generations; wait for parent delivery or claim the latest report before beginning another assignment.`,
@@ -125,7 +124,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             const attemptToken = allocateAssignmentAttemptToken();
             const previous = {
               view: snapshotView(selected.view),
-              settlement: selected.settlement,
               latestAssistantText: selected.latestAssistantText,
               warningSlots: { ...selected.warningSlots },
               assignment: { ...selected.assignment },
@@ -134,7 +132,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               pauseOutcome: selected.pauseOutcome,
               replyPendingRequestId: selected.replyPendingRequestId,
             };
-            selected.settlement = nextSettlement;
             selected.pausedAssignmentEpoch = undefined;
             selected.latestAssistantText = undefined;
             selected.warningSlots = emptyRunWarningSlots();
@@ -200,7 +197,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   if (record.assignment.attemptToken !== selected.attemptToken) return;
                   const sessionEvents = record.view.sessionEvents;
                   record.view = { ...selected.previous.view, sessionEvents };
-                  record.settlement = selected.previous.settlement;
                   record.latestAssistantText = selected.previous.latestAssistantText;
                   record.warningSlots = selected.previous.warningSlots;
                   record.assignment = selected.previous.assignment;

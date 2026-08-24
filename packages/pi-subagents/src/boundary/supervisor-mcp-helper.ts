@@ -2,6 +2,7 @@
 // The executable MCP edge deliberately owns native stdio and no-follow config reads.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
+import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -17,7 +18,7 @@ import { RpcClient, RpcClientError, RpcSerialization } from "effect/unstable/rpc
 import { Socket } from "effect/unstable/socket";
 import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "pi-cosmic-core";
 import { randomUUID } from "node:crypto";
-import { StringDecoder } from "node:string_decoder";
+import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { nodeFsConstants as constants, nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
@@ -29,6 +30,19 @@ import {
   SupervisorRpcFailure,
   SupervisorRpcGroup,
 } from "../supervisor/protocol.ts";
+import {
+  isSupervisorMcpMessageArguments,
+  isSupervisorMcpReportArguments,
+  MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
+  MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+  MAX_SUPERVISOR_MCP_REPORT_CHARS,
+  SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
+  SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
+  SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
+  SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+  SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
+  SUPERVISOR_MCP_TOOL_NAMES,
+} from "../supervisor/mcp-contract.ts";
 
 const { lstat, open } = nodeFsPromises;
 const { dirname, isAbsolute, resolve } = nodePath;
@@ -61,15 +75,12 @@ const startupFailure = (diagnostic: string) => new HelperStartupFailure({ diagno
 const SERVER_VERSION = "2.0.0";
 const MAX_CONFIG_BYTES = 4 * 1024;
 const MAX_LINE_BYTES = 512 * 1024;
-const MAX_MESSAGE_CHARS = 16 * 1024;
-const MAX_REPORT_CHARS = 32 * 1024;
+const MAX_QUEUED_INPUT_BYTES = 2 * MAX_LINE_BYTES;
 const MAX_ID_CHARS = 256;
-const MAX_DELIVERY_ID_CHARS = 256;
 const MAX_CONCURRENT_CALLS = 16;
 const MAX_PENDING_WRITES = 64;
 const CHANNEL_TIMEOUT_MILLIS = 10_000;
 const CONNECT_TIMEOUT_MILLIS = 5_000;
-const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 
 type RpcId = string | number;
 
@@ -219,7 +230,11 @@ const readConfig = (path: string): Effect.Effect<SupervisorChannelConfig, Helper
           if (Option.isNone(decoded)) return yield* helperConfigError("invalid-config");
           return decoded.value;
         }),
-      (handle) => Effect.promise(() => handle.close()).pipe(Effect.ignore),
+      (handle) =>
+        Effect.tryPromise({
+          try: () => handle.close(),
+          catch: () => helperConfigError("config-close-failed"),
+        }).pipe(Effect.ignore),
     );
   });
 
@@ -287,59 +302,6 @@ const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerializedWriter
   } satisfies SerializedWriter;
 });
 
-const attachLineReader = (
-  stream: NodeJS.ReadableStream,
-  onLine: (line: string) => void,
-  onFailure: () => void,
-): (() => void) => {
-  const decoder = new StringDecoder("utf8");
-  let buffered = "";
-  let failed = false;
-  const fail = (): void => {
-    if (failed) return;
-    failed = true;
-    buffered = "";
-    onFailure();
-  };
-  const emit = (final: boolean): void => {
-    while (!failed) {
-      const newline = buffered.indexOf("\n");
-      if (newline < 0) break;
-      let line = buffered.slice(0, newline);
-      buffered = buffered.slice(newline + 1);
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES) return fail();
-      if (line) onLine(line);
-    }
-    if (failed || Buffer.byteLength(buffered, "utf8") > MAX_LINE_BYTES) return fail();
-    if (final && buffered) {
-      let line = buffered;
-      buffered = "";
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES) return fail();
-      if (line) onLine(line);
-    }
-  };
-  const onData = (chunk: string | Buffer): void => {
-    if (failed) return;
-    buffered += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    emit(false);
-  };
-  const onEnd = (): void => {
-    if (failed) return;
-    buffered += decoder.end();
-    emit(true);
-  };
-  stream.on("data", onData);
-  stream.once("end", onEnd);
-  return () => {
-    failed = true;
-    stream.off("data", onData);
-    stream.off("end", onEnd);
-    buffered = "";
-  };
-};
-
 let config: SupervisorChannelConfig;
 let stdout: SerializedWriter;
 let activeCalls: FiberMap.FiberMap<string>;
@@ -366,10 +328,10 @@ const sendRpc = <MessageInput>(message: MessageInput): Promise<void> =>
 const rpcError = (id: RpcId | null, code: number, message: string): Promise<void> =>
   sendRpc({ jsonrpc: "2.0", id, error: { code, message } });
 
-const toolResult = (id: RpcId, text: string, isError = false): Promise<void> => {
+const toolResult = (text: string, isError = false): McpToolResult => {
   const result: McpToolResult = { content: [{ type: "text", text }] };
   if (isError) result.isError = true;
-  return sendRpc({ jsonrpc: "2.0", id, result });
+  return result;
 };
 
 const authenticatedPayload = () => ({
@@ -477,59 +439,48 @@ const callReport = (
   );
 };
 
+const messageInputSchema = {
+  type: "object",
+  properties: {
+    message: {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+      pattern: SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+    },
+  },
+  required: SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
+  additionalProperties: false,
+} as const;
+const toolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
 const toolDefinitions = [
   {
-    name: "supervisor_progress",
+    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
     description: "Publish bounded assignment progress to the parent projection.",
-    inputSchema: {
-      type: "object",
-      properties: { message: { type: "string", minLength: 1, maxLength: MAX_MESSAGE_CHARS } },
-      required: ["message"],
-      additionalProperties: false,
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    inputSchema: messageInputSchema,
+    annotations: toolAnnotations,
   },
   {
-    name: "supervisor_warning",
+    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1],
     description:
       "Record one bounded non-blocking assignment warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
-    inputSchema: {
-      type: "object",
-      properties: { message: { type: "string", minLength: 1, maxLength: MAX_MESSAGE_CHARS } },
-      required: ["message"],
-      additionalProperties: false,
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    inputSchema: messageInputSchema,
+    annotations: toolAnnotations,
   },
   {
-    name: "supervisor_question",
+    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
     description:
       "Ask the parent this assignment's one correlated blocking question and wait for its exact reply.",
-    inputSchema: {
-      type: "object",
-      properties: { message: { type: "string", minLength: 1, maxLength: MAX_MESSAGE_CHARS } },
-      required: ["message"],
-      additionalProperties: false,
-    },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    inputSchema: messageInputSchema,
+    annotations: toolAnnotations,
   },
   {
-    name: "supervisor_submit_report",
+    name: SUPERVISOR_MCP_TOOL_NAMES[3],
     description:
       "Submit the complete bounded final report with a stable delivery identity for explicit idempotent retry.",
     inputSchema: {
@@ -538,20 +489,20 @@ const toolDefinitions = [
         delivery_id: {
           type: "string",
           minLength: 1,
-          maxLength: MAX_DELIVERY_ID_CHARS,
-          pattern: DELIVERY_ID_PATTERN.source,
+          maxLength: MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
+          pattern: SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
         },
-        report: { type: "string", minLength: 1, maxLength: MAX_REPORT_CHARS },
+        report: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_SUPERVISOR_MCP_REPORT_CHARS,
+          pattern: SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+        },
       },
-      required: ["delivery_id", "report"],
+      required: SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
       additionalProperties: false,
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: { ...toolAnnotations, idempotentHint: true },
   },
 ];
 
@@ -559,23 +510,15 @@ const decodeToolArguments = <ValueInput>(
   name: string,
   value: ValueInput,
 ): DecodedToolArguments | undefined => {
-  if (name === "supervisor_submit_report") {
-    if (
-      !exactKeys(value, ["delivery_id", "report"], ["delivery_id", "report"]) ||
-      !Predicate.isString(value.delivery_id) ||
-      value.delivery_id.length > MAX_DELIVERY_ID_CHARS ||
-      !DELIVERY_ID_PATTERN.test(value.delivery_id) ||
-      !boundedString(value.report, MAX_REPORT_CHARS)
-    )
-      return undefined;
+  if (name === SUPERVISOR_MCP_TOOL_NAMES[3]) {
+    if (!isSupervisorMcpReportArguments(value)) return undefined;
     const deliveryId = SupervisorDeliveryIdSchema.makeOption(value.delivery_id);
     if (Option.isNone(deliveryId)) return undefined;
     return { kind: "report", deliveryId: deliveryId.value, report: value.report };
   }
   if (
-    !["supervisor_progress", "supervisor_warning", "supervisor_question"].includes(name) ||
-    !exactKeys(value, ["message"], ["message"]) ||
-    !boundedString(value.message, MAX_MESSAGE_CHARS)
+    !SUPERVISOR_MCP_MESSAGE_TOOL_NAMES.some((toolName) => toolName === name) ||
+    !isSupervisorMcpMessageArguments(value)
   )
     return undefined;
   return { kind: "message", message: value.message };
@@ -645,32 +588,31 @@ const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | un
   }
 };
 
-const executeTool = (request: ToolCall, signal: AbortSignal): Promise<void> => {
+const executeTool = (request: ToolCall, signal: AbortSignal): Promise<McpToolResult> => {
   const args = decodeToolArguments(request.name, request.arguments);
   const malformed = () =>
-    toolResult(request.id, "Tool input is malformed, excessive, or unsupported.", true);
+    Promise.resolve(toolResult("Tool input is malformed, excessive, or unsupported.", true));
   if (!args) return malformed();
   switch (request.name) {
-    case "supervisor_progress":
+    case SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0]:
       if (args.kind !== "message") break;
       return callProgress(args.message, signal).then(() =>
-        toolResult(request.id, "Progress delivered to the parent projection."),
+        toolResult("Progress delivered to the parent projection."),
       );
-    case "supervisor_warning":
+    case SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1]:
       if (args.kind !== "message") break;
       return callWarning(args.message, signal).then(() =>
-        toolResult(request.id, "Warning recorded in parent-visible run status."),
+        toolResult("Warning recorded in parent-visible run status."),
       );
-    case "supervisor_question":
+    case SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2]:
       if (args.kind !== "message") break;
       return callQuestion(args.message, signal).then((result) =>
-        toolResult(request.id, `Parent reply: ${result.message}`),
+        toolResult(`Parent reply: ${result.message}`),
       );
-    case "supervisor_submit_report":
+    case SUPERVISOR_MCP_TOOL_NAMES[3]:
       if (args.kind !== "report") break;
       return callReport(args.deliveryId, args.report, signal).then((result) =>
         toolResult(
-          request.id,
           `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
         ),
       );
@@ -697,6 +639,33 @@ const isCancellationCode = (code: string | undefined): boolean =>
   code === "question_cancelled" ||
   code === "question_cancelled_by_report" ||
   code === "question_assignment_advanced";
+
+const toolResponseFromExit = (id: RpcId, exit: Exit.Exit<McpToolResult, McpToolCallFailure>) => {
+  if (Exit.isSuccess(exit)) return { jsonrpc: "2.0", id, result: exit.value };
+  if (Cause.hasInterruptsOnly(exit.cause))
+    return {
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32800, message: "MCP request was cancelled." },
+    };
+  const wrapped = Cause.findErrorOption(exit.cause);
+  const failure = Option.isSome(wrapped) ? wrapped.value.failure : undefined;
+  const code = failureCode(failure);
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: {
+      code: isCancellationCode(code) ? -32800 : -32000,
+      message: failureMessage(failure) ?? "Private supervisor tool delivery failed.",
+    },
+  };
+};
+
+const writeToolResponse = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
+  Effect.tryPromise({
+    try: () => stdout.write(value),
+    catch: () => new McpWriteFailure({ reason: "stream" }),
+  }).pipe(Effect.catch(() => Effect.sync(failChannel)));
 
 const dispatchMcp = (request: DecodedMcpMessage): void => {
   switch (request.method) {
@@ -741,22 +710,16 @@ const dispatchMcp = (request: DecodedMcpMessage): void => {
         void rpcError(request.id, -32600, "An MCP request with this id is already active.");
         return;
       }
-      const call = Effect.tryPromise({
+      const operation = Effect.tryPromise({
         try: (signal) => executeTool(request, signal),
         catch: <FailureInput>(failure: FailureInput) => new McpToolCallFailure({ failure }),
-      }).pipe(
-        Effect.catch((wrapped) => {
-          const code = failureCode(wrapped.failure);
-          return Effect.promise(() =>
-            rpcError(
-              request.id,
-              isCancellationCode(code) ? -32800 : -32000,
-              failureMessage(wrapped.failure) ?? "Private supervisor tool delivery failed.",
-            ),
-          );
-        }),
-        Effect.onInterrupt(() =>
-          Effect.promise(() => rpcError(request.id, -32800, "MCP request was cancelled.")),
+      });
+      // Only the supervisor operation is interruptible. Once its Exit is selected, one narrow
+      // uninterruptible writer commit publishes and acknowledges exactly one JSON-RPC response.
+      const call = Effect.uninterruptibleMask((restore) =>
+        Effect.exit(restore(operation)).pipe(
+          Effect.map((exit) => toolResponseFromExit(request.id, exit)),
+          Effect.flatMap(writeToolResponse),
         ),
       );
       void Effect.runPromise(
@@ -854,13 +817,22 @@ const main = Effect.gen(function* () {
     }
     dispatchMcp(request);
   };
+  let inputFailureStarted = false;
   const onInputFailure = (): void => {
-    void rpcError(null, -32600, "JSON-RPC input exceeds the bounded line limit.");
-    process.stdin.destroy();
+    if (inputFailureStarted || inputClosed) return;
+    inputFailureStarted = true;
+    void rpcError(null, -32600, "JSON-RPC input exceeds its bounded capacity.").finally(() => {
+      process.stdin.destroy();
+    });
   };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
-      detachStdin = attachLineReader(process.stdin, onLine, onInputFailure);
+      detachStdin = attachBoundedLineParser(process.stdin, {
+        maxLineBytes: MAX_LINE_BYTES,
+        maxQueuedBytes: MAX_QUEUED_INPUT_BYTES,
+        onLine,
+        onOverflow: onInputFailure,
+      });
       process.stdin.once("end", closeInput);
       process.stdin.once("close", closeInput);
     }),

@@ -1,6 +1,6 @@
 # Routing, candidate planning, and the public launch contract
 
-Part of the [pi-subagents](../README.md) architecture documentation. See [ARCHITECTURE.md](../ARCHITECTURE.md) for the package purpose, the complete source map, and the invariant summaries linking every topic document.
+Part of the [pi-subagents](../README.md) architecture documentation. See [ARCHITECTURE.md](../ARCHITECTURE.md) for the ownership map and cross-cutting invariants.
 
 ## Version-4 routing domain
 
@@ -11,7 +11,7 @@ All six `local|herdr` × `pi|claude|codex` combinations are syntactically repres
 - fork outside local Pi;
 - parent-model selection outside local Pi;
 - `closeOnReport: false` outside Herdr read-only candidates;
-- fast mode outside supported Pi OpenAI routes or Codex's priority-tier-capable native path;
+- fast mode for Claude, an unsupported explicit Pi selector, or malformed Codex syntax. Local-Pi `parent` remains statically valid for the active-model check, explicit Pi selectors must match the existing priority-eligible policy, and syntactically valid Codex selectors defer `priority` support to the authenticated native catalog and launch confirmation;
 - unknown candidate keys, runtime-incompatible effort levels, or malformed native selectors (Pi registry IDs may use bounded `@` context variants such as `cursor/gpt-5.5@1m`; Claude's exact numeric long-context suffixes such as `[1m]` are supported without admitting general glob syntax).
 
 A present-invalid route fails closed. Missing trusted-project routes inherit global routes; missing global routes use built-ins. A complete in-memory session route overlays that loaded persistent result and records source `session`; removing it reveals the exact activation-time base again. Every built-in is an explicit local Pi parent candidate using profile context, write-intent, and effort defaults with `fastMode: false` and `closeOnReport: true`. Omitted launch profiles always resolve to `generalist`; only the seven declared profile IDs are accepted.
@@ -24,7 +24,7 @@ Pure planning preserves declared order and resolves Pi model catalog/auth compat
 
 All six adapters are implemented. The shared registry resolves host/runtime/context and performs bounded executable/auth/model-effort/write-policy/integration/harness readiness before a run scope, writer lease, supervisor channel, topology mutation, or backend process is owned. Herdr readiness additionally requires an exact calling pane inherited by the parent Pi; missing or mismatched pane evidence skips that candidate before mutation. Once `SubagentService.start` begins, lease marking, topology mutation, spawn, transport uncertainty, or control errors never trigger candidate fallthrough.
 
-Selected host, runtime, route source, `fastMode`, and `closeOnReport` are retained in selection provenance, the internal start request, the run view, status output, and card details. Start-entry details additionally preserve the requested profile and concrete actual route/model for success, the attempted route/model after post-selection failure, or an explicit resolving/no-eligible-route discriminant. Each public start batch captures one immutable profile snapshot before resolving its agents, so concurrent session edits cannot split a batch across route revisions. Persisted cards decode only at the current details version.
+Selected host, runtime, route source, `fastMode`, and `closeOnReport` remain in launch provenance, the internal request, and the run view. Version-2 persisted run cards keep the direct host/runtime/model/effort route and retention fields without duplicating them inside selection provenance. Version-2 start details contain no cards. They require one request-ordered discriminated entry per input, preserving the requested profile and concrete actual route/model for success, the attempted route/model after post-selection failure, or an explicit resolving/no-eligible-route state. Each public start batch captures one immutable profile snapshot before resolving its agents, so concurrent session edits cannot split a batch across route revisions. Current-version details pass through the strict schema and canonical 48,000-character privacy bound. Older or unsupported details use bounded terminal-sanitized text fallback and are never reconstructed.
 
 ## Explicit route continuation
 
@@ -48,13 +48,13 @@ Start is always background and nonblocking. The public tool executes all admitte
 
 Main-agent prompt metadata follows a read-only-first adoption policy: before substantial work, check for at least two independent workstreams; launch one to three bounded read-only assignments early; skip delegation for trivial or tightly serial work; continue independent parent work after launch; and await only at a dependency or final-synthesis barrier because unclaimed completion reports are delivered automatically. Worker launches remain explicit implementation handoffs: the prompt requires the main agent not to edit and preserves the one-shared-cwd-writer rule.
 
-`subagent_models` projects all complete v4 candidates as statically eligible when their adapter/context contract matches; dynamic executable/auth/integration/harness and inherited Herdr calling-pane readiness remain launch-time.
+`subagent_models` projects every complete v4 candidate as a flat structured version-2 card with `host`, `runtime`, `model`, `effort`, `context`, `writeIntent`, `fastMode`, `closeOnReport`, `status`, and `reason`. It does not persist candidate prose or derived order/context fields. Model-visible text labels candidates only at the output boundary, and the renderer formats the structured fields directly. Dynamic executable/auth/catalog/service-tier/integration/harness and inherited Herdr calling-pane readiness remain launch-time.
 
 ## Module responsibilities
 
 Detailed responsibilities of the source files owning the behavior above:
 
 - `src/domain/routing.ts` — import-free leaf routing vocabulary: context/write-intent/host/runtime types, the effort scale, the shared runtime-native effort policy, and host-effort decoding. Profiles, config, run, backends, boundaries, and settings all import it directly, so the profile and run models stay cycle-free.
-- `src/profiles/` — fixed definitions, explicit built-in routes, ordered candidate planning, and a revisioned Effect-owned session override service. `session-overrides.ts` owns immutable overlay snapshots and conflict transitions.
+- `src/profiles/` — fixed definitions, explicit built-in routes, ordered candidate planning, and a revisioned Effect-owned session override service. `model.ts` alone owns candidate constants, native-selector grammar, normalization/equality, structural fast-mode support, local-Pi/retainability predicates, ordered issue policy, route normalization, and labels. Runtime effort vocabulary stays in `domain/routing.ts`; authenticated fast-tier/catalog policy stays under `run/`. `session-overrides.ts` owns immutable overlay snapshots and conflict transitions.
 - `src/boundary/host-profile-resolution.ts` — Pi model/auth capture (local or Herdr), initial ordered candidate consumption, and fresh-environment resolution of frozen retry continuations. Typed readiness failures fall through only before service start.
 - `src/run/retry.ts` and `src/run/launch.ts` — exclusive failed-run claims, cleanup/exhaustion gates, retry/eviction exclusion, and atomic predecessor/successor admission lineage.

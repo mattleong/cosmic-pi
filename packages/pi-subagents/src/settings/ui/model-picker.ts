@@ -1,12 +1,11 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
-import type { ProfileId } from "../../profiles/model.ts";
+import { isSafeNativeModelSelector, type ProfileId } from "../../profiles/model.ts";
 import { SUBAGENT_FAST_SERVICE_TIER, supportsSubagentFastMode } from "../../run/fast-mode.ts";
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
-import { isSafeNativeModelSelector } from "../../run/native-model-selector.ts";
+import type { ProjectedPiModel } from "../profile-model-catalog.ts";
 import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 export type ProfileModelChoice =
@@ -33,8 +32,8 @@ const boundedMiddle = (value: string, maximum: number): string => {
 
 /** Authenticated canonical Pi models, plus local Pi's special parent selector. */
 export function createProfileModelChoices(input: {
-  readonly models: readonly Model<Api>[];
-  readonly parentModel?: Model<Api> | undefined;
+  readonly models: ReadonlyArray<ProjectedPiModel>;
+  readonly parentModel?: ProjectedPiModel | undefined;
   readonly currentSelector?: string | undefined;
   readonly allowParent: boolean;
 }): ProfileModelPickerChoice[] {
@@ -43,22 +42,25 @@ export function createProfileModelChoices(input: {
     const canonical = input.parentModel
       ? `${input.parentModel.provider}/${input.parentModel.id}`
       : undefined;
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const efforts = input.parentModel
-      ? (getSupportedThinkingLevels(input.parentModel) as ReadonlyArray<SubagentEffort>)
-      : undefined;
+    const efforts = input.parentModel?.supportedEfforts;
     result.push(
       (() => {
         const baseResult = {
           choice: { kind: "parent" as const },
           item: {
             value: "parent",
-            label: `Parent model${input.currentSelector === "parent" ? " (current)" : ""}`,
-            description: canonical
-              ? `${boundedMiddle(canonical, 72)} · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
-              : "Uses the active parent model at launch",
+            label: sanitizeTerminalLine(
+              `Parent model${input.currentSelector === "parent" ? " (current)" : ""}`,
+            ),
+            description: sanitizeTerminalLine(
+              canonical
+                ? `${boundedMiddle(sanitizeTerminalLine(canonical), 72)} · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
+                : "Uses the active parent model at launch",
+            ),
           },
-          searchText: `parent ${canonical ?? "active model"} ${input.parentModel?.name ?? ""}`,
+          searchText: sanitizeTerminalLine(
+            `parent ${canonical ?? "active model"} ${input.parentModel?.name ?? ""}`,
+          ),
         };
         const withSupportedEfforts =
           efforts === undefined ? baseResult : { ...baseResult, supportedEfforts: efforts };
@@ -78,16 +80,19 @@ export function createProfileModelChoices(input: {
   for (const model of input.models) {
     const canonical = `${model.provider}/${model.id}`;
     if (!isSafeNativeModelSelector(canonical)) continue;
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const efforts = getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>;
+    const efforts = model.supportedEfforts;
     result.push({
       choice: { kind: "model", selector: canonical },
       item: {
         value: canonical,
-        label: `${boundedMiddle(canonical, 88)}${input.currentSelector === canonical ? " (current)" : ""}`,
-        description: `${model.name && model.name !== model.id ? `${boundedMiddle(model.name, 48)} · ` : ""}${model.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}${supportsSubagentFastMode("pi", canonical) ? " · fast mode available" : ""}`,
+        label: sanitizeTerminalLine(
+          `${boundedMiddle(sanitizeTerminalLine(canonical), 88)}${input.currentSelector === canonical ? " (current)" : ""}`,
+        ),
+        description: sanitizeTerminalLine(
+          `${model.name && model.name !== model.id ? `${boundedMiddle(sanitizeTerminalLine(model.name), 48)} · ` : ""}${model.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}${supportsSubagentFastMode("pi", canonical) ? " · fast mode available" : ""}`,
+        ),
       },
-      searchText: `${canonical} ${model.name ?? ""}`,
+      searchText: sanitizeTerminalLine(`${canonical} ${model.name ?? ""}`),
       supportedEfforts: efforts,
       fastModeAvailable: supportsSubagentFastMode("pi", canonical),
     });
@@ -105,10 +110,16 @@ export const createNativeModelChoices = (
       choice: { kind: "model", selector: model.selector },
       item: {
         value: model.selector,
-        label: `${boundedMiddle(model.label || model.selector, 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
-        description: `${boundedMiddle(model.selector, 72)}${model.description ? ` · ${boundedMiddle(model.description, 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(SUBAGENT_FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
+        label: sanitizeTerminalLine(
+          `${boundedMiddle(sanitizeTerminalLine(model.label || model.selector), 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
+        ),
+        description: sanitizeTerminalLine(
+          `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${model.description ? ` · ${boundedMiddle(sanitizeTerminalLine(model.description), 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(SUBAGENT_FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
+        ),
       },
-      searchText: `${model.selector} ${model.label} ${model.description}`,
+      searchText: sanitizeTerminalLine(
+        `${model.selector} ${model.label} ${model.description ?? ""}`,
+      ),
       supportedEfforts: model.supportedEfforts,
       fastModeAvailable: model.supportedServiceTiers.includes(SUBAGENT_FAST_SERVICE_TIER),
     }));

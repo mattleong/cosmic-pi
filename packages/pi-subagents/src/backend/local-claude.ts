@@ -37,8 +37,6 @@ import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
 import {
   CLAUDE_INTERRUPT_MARKER,
-  CLAUDE_SUPERVISOR_SERVER_NAME,
-  CLAUDE_SUPERVISOR_TOOL_NAMES,
   claudeInitializeFrame,
   claudeInterruptFrame,
   claudeMcpStatusFrame,
@@ -49,6 +47,10 @@ import {
   type ClaudeControlRequestFrame,
   type ClaudeNativeInitialization,
 } from "./local-claude-protocol.ts";
+import {
+  SUPERVISOR_MCP_REGISTRATION,
+  SUPERVISOR_MCP_TOOL_NAMES,
+} from "../supervisor/mcp-contract.ts";
 
 const EVENT_CAPACITY = 512;
 const CONTROL_TIMEOUT = "10 seconds";
@@ -807,11 +809,11 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         ),
       );
       const server = status.mcpServers.find(
-        (candidate) => candidate.name === CLAUDE_SUPERVISOR_SERVER_NAME,
+        (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
       );
       if (server?.status === "connected") {
         const inventory = new Set(server.tools?.map((tool) => tool.name) ?? []);
-        if (CLAUDE_SUPERVISOR_TOOL_NAMES.every((tool) => inventory.has(tool))) {
+        if (SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool))) {
           supervisorReady = true;
           break;
         }

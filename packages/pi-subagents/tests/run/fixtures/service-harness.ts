@@ -24,11 +24,7 @@ import {
   makeSubagentProfileService,
   SubagentProfileService,
 } from "../../../src/profiles/service.ts";
-import type {
-  ParentReply,
-  PeerNotice,
-  RpcCommand,
-} from "../../../src/backend/local-pi-protocol.ts";
+import type { LocalPiParentControl, RpcCommand } from "../../../src/backend/local-pi-protocol.ts";
 import {
   ChildProcess,
   type ChildLaunchRequest,
@@ -45,7 +41,7 @@ type IpcWireValue = Extract<ChildWireEvent, { readonly type: "parent_contact" }>
 export interface FakeChildControl {
   readonly launch: ChildLaunchRequest;
   readonly commands: RpcCommand[];
-  readonly ipc: Array<ParentReply | PeerNotice>;
+  readonly ipc: LocalPiParentControl[];
   readonly terminations: Array<"graceful" | "force">;
   readonly released: () => number;
   readonly failNext: (type: RpcCommand["type"], error: string) => void;
@@ -112,7 +108,7 @@ export function fakeChildLayer(
             SubagentProcessError
           >();
           const commands: RpcCommand[] = [];
-          const ipc: Array<ParentReply | PeerNotice> = [];
+          const ipc: LocalPiParentControl[] = [];
           const terminations: Array<"graceful" | "force"> = [];
           let releaseCount = 0;
           let releaseGate: Deferred.Deferred<void, never> | undefined;
@@ -477,6 +473,8 @@ export interface FakeRetainedControl {
 export function fakeRetainedBackendLayer(
   options: {
     readonly initialStartGate?: Deferred.Deferred<void, never> | undefined;
+    readonly interruptGate?: Deferred.Deferred<void, never> | undefined;
+    readonly onInterruptStarted?: (() => void) | undefined;
     readonly capabilities?: BackendDriver["capabilities"] | undefined;
   } = {},
 ) {
@@ -552,7 +550,11 @@ export function fakeRetainedBackendLayer(
                   }),
                 steer: (message: string) =>
                   Effect.sync(() => void prompts.push(`steer:${message}`)),
-                interrupt: Effect.void,
+                interrupt: Effect.sync(() => options.onInterruptStarted?.()).pipe(
+                  Effect.andThen(
+                    options.interruptGate ? Deferred.await(options.interruptGate) : Effect.void,
+                  ),
+                ),
                 renameDisplay: () => Effect.void,
                 reply: () => Effect.void,
                 notifyPeers: () => Effect.void,

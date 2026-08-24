@@ -1,7 +1,7 @@
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Context from "effect/Context";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -167,13 +167,16 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
-  const revisionRef = yield* SubscriptionRef.make(0);
+  const initialProjection: SubagentProjection = Object.freeze({
+    revision: 0,
+    runs: Object.freeze([]),
+  });
+  const projectionRef = yield* SubscriptionRef.make(initialProjection);
   const runtimeNamespace = allocateRuntimeNamespace();
   let nextRunOrdinal = 1;
   let nextClaimOrdinal = 1;
   let nextRetryClaimOrdinal = 1;
   let nextAssignmentAttemptOrdinal = 1;
-  let revision = 0;
   let closed = false;
 
   const withLock = lock.withPermits(1);
@@ -190,36 +193,30 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       name: requestedName || `subagent-${ordinal}`,
     };
   };
-  const currentProjection = (): SubagentProjection => ({
-    revision,
-    runs: sortRuns([...records.values()].map((record) => snapshotView(record.view))),
-  });
   // Each run view is already deeply frozen by snapshotView, so only the fresh
   // top-level container and array need freezing before publication.
-  const frozenProjection = (): SubagentProjection => {
-    const projection = currentProjection();
-    return Object.freeze({ revision: projection.revision, runs: Object.freeze(projection.runs) });
-  };
+  const frozenProjection = (revision: number): SubagentProjection =>
+    Object.freeze({
+      revision,
+      runs: Object.freeze(
+        sortRuns([...records.values()].map((record) => snapshotView(record.view))),
+      ),
+    });
   const publish = Effect.uninterruptible(
     Effect.suspend(() => {
-      revision += 1;
-      const projection = frozenProjection();
-      return SubscriptionRef.set(revisionRef, revision).pipe(
+      const projection = frozenProjection(SubscriptionRef.getUnsafe(projectionRef).revision + 1);
+      return SubscriptionRef.set(projectionRef, projection).pipe(
         Effect.andThen(
-          Effect.sync(() => {
-            try {
-              options.publish?.(projection);
-            } catch {
-              // Host projection delivery cannot own the fleet lifecycle.
-            }
-          }),
+          options.publish
+            ? Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore)
+            : Effect.void,
         ),
       );
     }),
   );
   const waitForRevision = (after: number): Effect.Effect<void, SubagentRuntimeClosedError> =>
-    SubscriptionRef.changes(revisionRef).pipe(
-      Stream.dropWhile((current) => current <= after),
+    SubscriptionRef.changes(projectionRef).pipe(
+      Stream.dropWhile((current) => current.revision <= after),
       Stream.runHead,
       Effect.flatMap((next) =>
         Option.isSome(next)
@@ -235,7 +232,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       // Host transcript delivery is acknowledged only when the boundary returned normally.
       return notification.type === "completed"
         ? { deliveredCompletionKeys: [] }
-        : { deliveredActionKeys: [] };
+        : { actionAccepted: false };
     }
   };
   const requireRecord = (id: string): Effect.Effect<RunRecord, SubagentNotFoundError> =>
@@ -255,7 +252,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     records,
     withLock,
     withCompletionGate,
-    currentRevision: () => revision,
+    currentProjection: () => SubscriptionRef.getUnsafe(projectionRef),
     waitForRevision,
     allocateClaimToken,
     delivery,
@@ -380,21 +377,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] = (request) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const outcome = yield* Deferred.make<SubagentRunView, SubagentError>();
-        yield* start(request).pipe(
-          Effect.exit,
-          Effect.flatMap((exit) =>
-            retry
-              .releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken)
-              .pipe(Effect.andThen(Deferred.done(outcome, exit))),
+        const fiber = yield* start(request).pipe(
+          Effect.ensuring(
+            retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
           ),
           Effect.forkIn(ownerScope, { startImmediately: true }),
         );
-        return observations.redactCompletionReport(yield* restore(Deferred.await(outcome)));
+        return observations.redactCompletionReport(yield* restore(Fiber.join(fiber)));
       }),
     );
 
-  const list = withLock(Effect.sync(() => currentProjection().runs));
+  const list = SubscriptionRef.get(projectionRef).pipe(Effect.map((current) => current.runs));
   const status: SubagentServiceContract["status"] = (id) =>
     observations
       .withStatusObservations([id], ({ observations: selected }) => {
@@ -446,7 +439,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     settle,
   });
 
-  const projection = withLock(Effect.sync(() => frozenProjection()));
+  const projection = SubscriptionRef.get(projectionRef);
 
   const service: SubagentServiceContract = {
     start,
@@ -504,7 +497,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         ),
       ),
       Effect.asVoid,
-      Effect.ensuring(PubSub.shutdown(revisionRef.pubsub)),
+      Effect.ensuring(PubSub.shutdown(projectionRef.pubsub)),
     ),
   );
 
@@ -516,8 +509,4 @@ export class SubagentService extends Context.Service<SubagentService, SubagentSe
 ) {
   static readonly layer = (options: SubagentServiceOptions = {}) =>
     Layer.effect(this, makeService(options));
-
-  static override readonly use = <A, E>(
-    f: (service: SubagentServiceContract) => Effect.Effect<A, E>,
-  ) => Effect.flatMap(this, f);
 }

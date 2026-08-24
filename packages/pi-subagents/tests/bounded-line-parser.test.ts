@@ -32,6 +32,40 @@ describe("bounded child line parser", () => {
     });
   });
 
+  it("preserves CRLF, suppresses empty lines, and flushes a final frame", () => {
+    const stream = new PassThrough();
+    const lines: string[] = [];
+    const overflow = vi.fn();
+    attachBoundedLineParser(stream, {
+      maxLineBytes: 1_024,
+      maxQueuedBytes: 2_048,
+      onLine: (line) => lines.push(line),
+      onOverflow: overflow,
+    });
+    const ended = once(stream, "end");
+    stream.end("\r\nfirst\r\n\nsecond\r");
+    return ended.then(() => {
+      expect(lines).toEqual(["first", "second"]);
+      expect(overflow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("detaches input listeners idempotently", () => {
+    const stream = new PassThrough();
+    const lines: string[] = [];
+    const detach = attachBoundedLineParser(stream, {
+      maxLineBytes: 64,
+      maxQueuedBytes: 128,
+      onLine: (line) => lines.push(line),
+      onOverflow: vi.fn(),
+    });
+    stream.emit("data", Buffer.from("before\n", "utf8"));
+    detach();
+    detach();
+    stream.emit("data", Buffer.from("after\n", "utf8"));
+    expect(lines).toEqual(["before"]);
+  });
+
   it("bounds ordinary sequential line backlog until downstream acknowledgement", () => {
     const stream = new PassThrough();
     const queue = Effect.runSync(Queue.dropping<object>(512));

@@ -1,13 +1,17 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { managerStateGlyph } from "pi-cosmic-ui/manager";
-import { sanitizeTerminalLine } from "../ui/sanitize.ts";
-import { formatToolModel, formatToolRoute } from "./format.ts";
+import { formatToolRoute } from "./format.ts";
 import type {
   CompactSubagentToolDetails,
+  SubagentProfileCandidateCard,
   SubagentProfileRouteCard,
   SubagentRunCard,
 } from "./details.ts";
+
+type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
+type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
 
 export interface SemanticOutcomeBanner {
   readonly color: "warning" | "success" | "error" | "accent";
@@ -85,25 +89,14 @@ export const failureRecovery = (
   return "Review the failure detail and current subagent_status before retrying.";
 };
 
-const friendlyCandidateRoute = (value: string, fastModeApplied: boolean): string => {
-  const match =
-    /^(.*):([^:]+):(fresh|fork):(read-only|writer):fastMode=(true|false):closeOnReport=(true|false)$/.exec(
-      value,
-    );
-  if (!match) return value;
-  const [, route, effort, context, intent, fast, close] = match;
-  const parts = /^(local|herdr)\/(pi|claude|codex)\/(.+)$/.exec(route ?? "");
-  const model = parts
-    ? formatToolRoute(
-        parts[1] ?? "",
-        parts[2] ?? "",
-        parts[3] ?? "",
-        effort ?? "",
-        fast === "true" && fastModeApplied,
-      )
-    : formatToolModel(route ?? "", effort ?? "", fast === "true" && fastModeApplied);
-  return `${model} · ${context} · ${intent} · ${close === "true" ? "close after report" : "retain after report"}`;
-};
+const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): string =>
+  `${formatToolRoute(
+    candidate.host,
+    candidate.runtime,
+    candidate.model,
+    candidate.effort,
+    candidate.fastMode && candidate.status === "eligible",
+  )} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.closeOnReport ? "close after report" : "retain after report"}`;
 
 const profileSource = (source: SubagentProfileRouteCard["source"]): string => {
   switch (source) {
@@ -124,11 +117,11 @@ const profileSource = (source: SubagentProfileRouteCard["source"]): string => {
 };
 
 class ProfileRoutesComponent implements Component {
-  private readonly details: CompactSubagentToolDetails;
+  private readonly details: ModelsToolDetails;
   private readonly expanded: boolean;
   private readonly theme: Theme;
 
-  constructor(details: CompactSubagentToolDetails, expanded: boolean, theme: Theme) {
+  constructor(details: ModelsToolDetails, expanded: boolean, theme: Theme) {
     this.details = details;
     this.expanded = expanded;
     this.theme = theme;
@@ -150,9 +143,7 @@ class ProfileRoutesComponent implements Component {
       const invalid = profile.source.endsWith("-invalid");
       const color = invalid || eligible === 0 ? "warning" : "success";
       const firstCandidate = profile.candidates[0];
-      const first = firstCandidate
-        ? friendlyCandidateRoute(firstCandidate.candidate, firstCandidate.status === "eligible")
-        : undefined;
+      const first = firstCandidate ? formattedCandidateRoute(firstCandidate) : undefined;
       lines.push(
         this.theme.fg(
           color,
@@ -167,11 +158,11 @@ class ProfileRoutesComponent implements Component {
           `  Defaults · ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${profile.defaultEffort ?? "inherit effort"}`,
         ),
       );
-      for (const candidate of profile.candidates) {
+      for (const [index, candidate] of profile.candidates.entries()) {
         lines.push(
           this.theme.fg(
             candidate.status === "eligible" ? "success" : "warning",
-            `  ${candidate.status === "eligible" ? "✓" : "–"} ${candidate.order}. ${friendlyCandidateRoute(candidate.candidate, candidate.status === "eligible")}${candidate.effectiveContext ? ` · effective context=${candidate.effectiveContext}` : ""}`,
+            `  ${candidate.status === "eligible" ? "✓" : "–"} ${index + 1}. ${formattedCandidateRoute(candidate)}`,
           ),
         );
         lines.push(this.theme.fg("dim", `     ${candidate.reason}`));
@@ -179,6 +170,8 @@ class ProfileRoutesComponent implements Component {
     }
     if (profiles.length === 0)
       lines.push(this.theme.fg("muted", "No profile route details were persisted."));
+    if (this.details.contentOmitted)
+      lines.push(this.theme.fg("warning", "Long model or route-detail text was omitted."));
     lines.push(
       this.theme.fg(
         "dim",
@@ -195,7 +188,7 @@ class ProfileRoutesComponent implements Component {
   }
 }
 
-const actionSummary = (details: CompactSubagentToolDetails): SemanticOutcomeBanner => {
+const actionSummary = (details: RunToolDetails): SemanticOutcomeBanner => {
   const count = details.runCount ?? details.cards?.length ?? 0;
   const failed = details.actionFailures?.length ?? 0;
   const plural = count === 1 ? "" : "s";
@@ -259,7 +252,7 @@ const actionSummary = (details: CompactSubagentToolDetails): SemanticOutcomeBann
 };
 
 const renderActionFailures = (
-  details: CompactSubagentToolDetails,
+  details: RunToolDetails,
   width: number,
   theme: Theme,
 ): ReadonlyArray<string> =>
@@ -286,13 +279,13 @@ export type SemanticRunRenderer = (
 ) => Component;
 
 class CompactResultComponent implements Component {
-  private readonly details: CompactSubagentToolDetails;
+  private readonly details: RunToolDetails;
   private readonly expanded: boolean;
   private readonly theme: Theme;
   private readonly renderRuns: SemanticRunRenderer;
 
   constructor(
-    details: CompactSubagentToolDetails,
+    details: RunToolDetails,
     expanded: boolean,
     theme: Theme,
     renderRuns: SemanticRunRenderer,
@@ -337,13 +330,13 @@ class CompactResultComponent implements Component {
 }
 
 export const renderProfileRoutesComponent = (
-  details: CompactSubagentToolDetails,
+  details: ModelsToolDetails,
   expanded: boolean,
   theme: Theme,
 ): Component => new ProfileRoutesComponent(details, expanded, theme);
 
 export const renderCompactResultComponent = (
-  details: CompactSubagentToolDetails,
+  details: RunToolDetails,
   expanded: boolean,
   theme: Theme,
   renderRuns: SemanticRunRenderer,

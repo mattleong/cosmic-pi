@@ -5,5 +5,9 @@ export const MAX_TOOL_OUTPUT_CHARS = 48_000;
 export const MAX_PARENT_MESSAGE_CHARS = 64 * 1024;
 export const MAX_PROTOCOL_ID_CHARS = 1_024;
 export const MAX_UNRESOLVED_REPORT_GENERATIONS = 64;
+/** Retained assignments reserve the final slot for a later terminal backend failure. */
+export const MAX_UNRESOLVED_REPORTS_BEFORE_RETAINED_ASSIGNMENT =
+  MAX_UNRESOLVED_REPORT_GENERATIONS - 1;
+export const MAX_COMPLETION_DELIVERY_BATCH = 12;
 export const COMPLETION_RETRY_INITIAL_MILLIS = 100;
 export const COMPLETION_RETRY_MAX_MILLIS = 30_000;

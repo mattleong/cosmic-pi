@@ -12,6 +12,7 @@ import {
   type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import {
   FullScreenKeymap,
@@ -40,7 +41,6 @@ import {
 } from "../run/model.ts";
 import { formatRelativeAge, renderSubagentSessionOutput } from "./session-output.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
-import { sanitizeTerminalLine } from "./sanitize.ts";
 
 export type FleetMessageMode = "guidance" | "reply" | "next-assignment";
 
