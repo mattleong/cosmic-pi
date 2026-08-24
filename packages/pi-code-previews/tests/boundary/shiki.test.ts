@@ -16,8 +16,10 @@ import {
 } from "../../src/boundary/shiki";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { getShikiStatus } from "../../src/syntax/render";
-import { disposeShikiEffect, initializeShikiEffect } from "../../src/syntax/shiki";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
+
+const initializeSyntax = (theme: string) =>
+  CodePreviewSyntaxService.use((service) => service.initialize(theme));
 
 const highlighterFixture = <Fixture extends object>(
   fixture: Fixture,
@@ -83,8 +85,7 @@ describe("Shiki adapter lifecycle", () => {
     });
     return Effect.gen(function* () {
       setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
-      yield* disposeShikiEffect;
-      yield* initializeShikiEffect("dark-plus");
+      yield* initializeSyntax("dark-plus");
       assert.equal(getShikiStatus().initialized, false);
     }).pipe(
       provideBuiltLayer(
@@ -101,7 +102,7 @@ describe("Shiki adapter lifecycle", () => {
     });
     return Effect.gen(function* () {
       setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
-      const fiber = yield* initializeShikiEffect("dark-plus").pipe(Effect.forkScoped);
+      const fiber = yield* initializeSyntax("dark-plus").pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* Fiber.interrupt(fiber);
       assert.equal(released, 1);

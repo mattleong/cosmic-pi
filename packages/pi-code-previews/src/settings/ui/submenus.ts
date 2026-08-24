@@ -134,7 +134,11 @@ function createToolToggleItems(
     }
 
     const description =
-      status?.state === "active" ? "Currently active." : "Takes effect after /reload.";
+      status?.state === "installed"
+        ? "Preview replacement installed."
+        : status?.state === "registration-error"
+          ? "Registration failed; retry with /reload."
+          : "Takes effect after /reload.";
     return {
       id: toolToggleId(tool),
       label: `${tool} preview`,

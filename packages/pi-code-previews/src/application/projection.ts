@@ -1,32 +1,25 @@
-let sessionActive = false;
-let deferTask: ((task: () => void) => () => void) | undefined;
-let scheduleTask: ((interval: number, task: () => void) => () => void) | undefined;
+export interface CodePreviewSchedulerProjection {
+  readonly defer: (task: () => void) => () => void;
+  readonly schedule: (interval: number, task: () => void) => () => void;
+}
+
+let schedulerProjection: CodePreviewSchedulerProjection | undefined;
+
+export function publishCodePreviewSchedulerProjection(
+  projection: CodePreviewSchedulerProjection | undefined,
+): void {
+  schedulerProjection = projection;
+}
 
 /** Plain synchronous lifecycle projection for renderer fallback decisions. */
-export function publishCodePreviewSessionActive(active: boolean): void {
-  sessionActive = active;
-}
-
 export function isCodePreviewSessionActive(): boolean {
-  return sessionActive;
-}
-
-export function publishCodePreviewDefer(
-  defer: ((task: () => void) => () => void) | undefined,
-): void {
-  deferTask = defer;
+  return schedulerProjection !== undefined;
 }
 
 export function deferProjectedCodePreview(task: () => void): () => void {
-  return deferTask?.(task) ?? (() => undefined);
-}
-
-export function publishCodePreviewSchedule(
-  schedule: ((interval: number, task: () => void) => () => void) | undefined,
-): void {
-  scheduleTask = schedule;
+  return schedulerProjection?.defer(task) ?? (() => undefined);
 }
 
 export function scheduleProjectedCodePreview(interval: number, task: () => void): () => void {
-  return scheduleTask?.(interval, task) ?? (() => undefined);
+  return schedulerProjection?.schedule(interval, task) ?? (() => undefined);
 }

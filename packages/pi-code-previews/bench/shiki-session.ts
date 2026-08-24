@@ -11,7 +11,6 @@ import {
 } from "../src/application/capability";
 import { previewScheduleEffect } from "../src/application/scheduler";
 import { CodePreviewEnvironmentService } from "../src/config/env";
-import { initializeShikiEffect } from "../src/syntax/shiki";
 import { CodePreviewSyntaxService } from "../src/syntax/service";
 
 /**
@@ -44,25 +43,26 @@ export function startBenchmarkShikiSession(
     }),
   );
   const runtime = ManagedRuntime.make(layer);
-  return runtime.runPromise(initializeShikiEffect(theme)).then(() => {
-    // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
-    const capability = {
-      token: 1,
-      run: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
-        runtime.runPromise(effect, signal ? { signal } : undefined),
-      defer: (task: () => void) => {
-        const fiber = runtime.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
-        return () => fiber.interruptUnsafe();
-      },
-      schedule: (interval: number, task: () => void) => {
-        const fiber = runtime.runFork(previewScheduleEffect(interval, task));
-        return () => fiber.interruptUnsafe();
-      },
-    } as CodePreviewSessionCapability;
-    installCodePreviewSessionCapability(capability);
-    return () => {
-      clearCodePreviewSessionCapability(1);
-      return runtime.dispose();
-    };
-  });
+  return runtime
+    .runPromise(CodePreviewSyntaxService.use((service) => service.initialize(theme)))
+    .then(() => {
+      // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+      const capability = {
+        run: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
+          runtime.runPromise(effect, signal ? { signal } : undefined),
+        defer: (task: () => void) => {
+          const fiber = runtime.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
+          return () => fiber.interruptUnsafe();
+        },
+        schedule: (interval: number, task: () => void) => {
+          const fiber = runtime.runFork(previewScheduleEffect(interval, task));
+          return () => fiber.interruptUnsafe();
+        },
+      } as CodePreviewSessionCapability;
+      installCodePreviewSessionCapability(capability);
+      return () => {
+        clearCodePreviewSessionCapability();
+        return runtime.dispose();
+      };
+    });
 }

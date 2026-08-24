@@ -1,113 +1,106 @@
-import * as Predicate from "effect/Predicate";
-
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { getBuiltinToolOptions, type BuiltinToolOptions } from "../builtin-options";
 import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../names";
 import { getEnabledCodePreviewTools } from "../selection";
 import { resetCodePreviewToolStatuses, setCodePreviewToolStatus } from "../status";
-import { registerBash } from "./bash";
-import { registerEdit } from "./edit";
-import { registerFind } from "./find";
-import { registerGrep } from "./grep";
-import { registerLs } from "./ls";
-import { registerRead } from "./read";
-import { registerWrite } from "./write";
+import { createBashPreviewTool } from "./bash";
+import { createEditPreviewTool } from "./edit";
+import { createFindPreviewTool } from "./find";
+import { createGrepPreviewTool } from "./grep";
+import { createLsPreviewTool } from "./ls";
+import { createReadPreviewTool } from "./read";
+import { createWritePreviewTool } from "./write";
 
 export interface RegisterToolRenderersOptions {
-  registeredTools?: Set<CodePreviewToolName>;
-  activatedTools?: Set<CodePreviewToolName>;
+  ownedTools?: Set<CodePreviewToolName>;
+  installedTools?: Set<CodePreviewToolName>;
   toolOptions?: BuiltinToolOptions;
   projectTrusted?: boolean;
 }
 
-type ToolRendererRegistration = (
+type ToolInstallerFactory = (
   pi: ExtensionAPI,
   cwd: string,
   options: BuiltinToolOptions,
-) => void;
+) => () => void;
 
-const TOOL_RENDERER_REGISTRATIONS = {
-  bash: (pi, cwd, options) => registerBash(pi, cwd, options.bash),
-  read: (pi, cwd, options) => registerRead(pi, cwd, options.read),
-  write: (pi, cwd) => registerWrite(pi, cwd),
-  edit: (pi, cwd) => registerEdit(pi, cwd),
-  grep: (pi, cwd) => registerGrep(pi, cwd),
-  find: (pi, cwd) => registerFind(pi, cwd),
-  ls: (pi, cwd) => registerLs(pi, cwd),
-} satisfies Record<CodePreviewToolName, ToolRendererRegistration>;
+const TOOL_INSTALLER_FACTORIES = {
+  bash: (pi, cwd, options) => {
+    const definition = createBashPreviewTool(cwd, options.bash);
+    return () => pi.registerTool(definition);
+  },
+  read: (pi, cwd, options) => {
+    const definition = createReadPreviewTool(cwd, options.read);
+    return () => pi.registerTool(definition);
+  },
+  write: (pi, cwd) => {
+    const definition = createWritePreviewTool(cwd);
+    return () => pi.registerTool(definition);
+  },
+  edit: (pi, cwd) => {
+    const definition = createEditPreviewTool(cwd);
+    return () => pi.registerTool(definition);
+  },
+  grep: (pi, cwd) => {
+    const definition = createGrepPreviewTool(cwd);
+    return () => pi.registerTool(definition);
+  },
+  find: (pi, cwd) => {
+    const definition = createFindPreviewTool(cwd);
+    return () => pi.registerTool(definition);
+  },
+  ls: (pi, cwd) => {
+    const definition = createLsPreviewTool(cwd);
+    return () => pi.registerTool(definition);
+  },
+} satisfies Record<CodePreviewToolName, ToolInstallerFactory>;
+
+type PlannedTool = {
+  readonly name: CodePreviewToolName;
+  readonly install: () => void;
+};
 
 export function registerToolRenderers(
   pi: ExtensionAPI,
   cwd: string,
   options: RegisterToolRenderersOptions = {},
-) {
+): void {
   const enabledTools = getEnabledCodePreviewTools();
   resetCodePreviewToolStatuses(enabledTools);
   const existingTools = getExistingToolsByName(pi);
   const toolOptions =
     options.toolOptions ?? getBuiltinToolOptions(cwd, options.projectTrusted ?? false);
-  const activePreviewTools = new Set<CodePreviewToolName>();
+  const plan: PlannedTool[] = [];
 
-  for (const tool of ALL_CODE_PREVIEW_TOOLS) {
-    if (!enabledTools.has(tool)) continue;
-    if (options.registeredTools?.has(tool)) {
-      setCodePreviewToolStatus(tool, { state: "active" });
-      activePreviewTools.add(tool);
+  for (const name of ALL_CODE_PREVIEW_TOOLS) {
+    if (!enabledTools.has(name)) continue;
+    if (options.installedTools?.has(name)) {
+      setCodePreviewToolStatus(name, { state: "installed" });
       continue;
     }
 
-    const existing = existingTools.get(tool);
-    if (existing && existing.sourceInfo.source !== "builtin") {
-      setCodePreviewToolStatus(tool, { state: "skipped-conflict", owner: existing.sourceInfo });
+    const existing = existingTools.get(name);
+    if (existing && existing.sourceInfo.source !== "builtin" && !options.ownedTools?.has(name)) {
+      setCodePreviewToolStatus(name, { state: "skipped-conflict", owner: existing.sourceInfo });
       continue;
     }
 
-    TOOL_RENDERER_REGISTRATIONS[tool](pi, cwd, toolOptions);
-    options.registeredTools?.add(tool);
-    activePreviewTools.add(tool);
-    setCodePreviewToolStatus(tool, { state: "active" });
+    plan.push({ name, install: TOOL_INSTALLER_FACTORIES[name](pi, cwd, toolOptions) });
   }
 
-  syncActiveCodePreviewTools(pi, activePreviewTools, options.activatedTools);
-}
-
-function syncActiveCodePreviewTools(
-  pi: ExtensionAPI,
-  desiredTools: Set<CodePreviewToolName>,
-  activatedTools: Set<CodePreviewToolName> | undefined,
-): void {
-  if (desiredTools.size === 0 && (!activatedTools || activatedTools.size === 0)) return;
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const getActiveTools = (pi as Partial<ExtensionAPI>).getActiveTools;
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const setActiveTools = (pi as Partial<ExtensionAPI>).setActiveTools;
-  if (!Predicate.isFunction(getActiveTools) || !Predicate.isFunction(setActiveTools)) return;
-  try {
-    const current = getActiveTools.call(pi);
-    const currentSet = new Set(current);
-    const additions = [...desiredTools].filter((tool) => !currentSet.has(tool));
-    const removals = activatedTools
-      ? [...activatedTools].filter((tool) => !desiredTools.has(tool))
-      : [];
-    const removalsInCurrent = new Set(removals.filter((tool) => currentSet.has(tool)));
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const next = current.filter((tool) => !removalsInCurrent.has(tool as CodePreviewToolName));
-    next.push(...additions);
-    if (additions.length > 0 || removalsInCurrent.size > 0) setActiveTools.call(pi, next);
-    for (const tool of additions) activatedTools?.add(tool);
-    for (const tool of removals) activatedTools?.delete(tool);
-  } catch {
-    // Tool activation is best effort for older pi versions.
+  for (const { name, install } of plan) {
+    try {
+      options.ownedTools?.add(name);
+      install();
+    } catch {
+      setCodePreviewToolStatus(name, { state: "registration-error" });
+      continue;
+    }
+    options.installedTools?.add(name);
+    setCodePreviewToolStatus(name, { state: "installed" });
   }
 }
 
 function getExistingToolsByName(pi: ExtensionAPI): Map<string, ToolInfo> {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const getAllTools = (pi as Partial<ExtensionAPI>).getAllTools;
-  if (!Predicate.isFunction(getAllTools)) return new Map();
-  try {
-    return new Map(getAllTools.call(pi).map((tool) => [tool.name, tool]));
-  } catch {
-    return new Map();
-  }
+  return new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
 }

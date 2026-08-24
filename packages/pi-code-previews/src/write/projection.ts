@@ -42,7 +42,3 @@ export function lookupBeforeWrite(toolCallId: string): CodePreviewBeforeWrite {
   }
   return undefined;
 }
-
-export function writeProjectionSize(): number {
-  return activeSnapshot?.entries.length ?? 0;
-}

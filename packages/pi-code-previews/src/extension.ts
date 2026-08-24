@@ -5,10 +5,3 @@ import { registerCodePreviewApplication } from "./application/lifecycle";
 export function codePreviews(pi: ExtensionAPI): Promise<void> {
   return registerCodePreviewApplication(pi);
 }
-
-export {
-  codePreviewsWithDependencies,
-  codePreviewExtensionTesting,
-  type CodePreviewExtensionDependencies,
-  type CodePreviewRuntime,
-} from "./application/lifecycle";

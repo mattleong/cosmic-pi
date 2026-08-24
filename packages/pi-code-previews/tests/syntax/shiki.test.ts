@@ -20,7 +20,7 @@ import {
   syntaxProjection,
 } from "../../src/syntax/projection";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
-import { isExactShikiCacheHit } from "../../src/syntax/render";
+import { getShikiStatus, isExactShikiCacheHit, renderWithShiki } from "../../src/syntax/render";
 
 const highlighter = (dispose: () => void) => {
   const fixture = {
@@ -29,6 +29,33 @@ const highlighter = (dispose: () => void) => {
   };
   // SAFETY: Syntax tests invoke only dispose and codeToTokensBase on this fixture.
   return fixture as typeof fixture & ShikiHighlighter;
+};
+
+const renderInSyntaxSession = (marker: string, rendered: () => void) => {
+  const fixture = {
+    dispose: () => undefined,
+    codeToTokensBase: (code: string) => {
+      rendered();
+      return [[{ content: `${marker}:${code}`, color: "#ffffff" }]];
+    },
+  };
+  // SAFETY: This cache scenario invokes only dispose and codeToTokensBase.
+  const owned = fixture as typeof fixture & ShikiHighlighter;
+  const adapter = ShikiAdapter.of({
+    create: () => Effect.succeed(owned),
+    loadLanguage: () => Effect.void,
+  });
+  return CodePreviewSyntaxService.use((service) =>
+    service
+      .initialize("dark-plus")
+      .pipe(
+        Effect.andThen(Effect.sync(() => renderWithShiki("same source", "typescript")?.join("\n"))),
+      ),
+  ).pipe(
+    provideBuiltLayer(
+      CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+    ),
+  );
 };
 
 describe("session syntax service", () => {
@@ -65,7 +92,7 @@ describe("session syntax service", () => {
         },
       );
       assert.equal(created, 1);
-      assert.equal((yield* service.status).initialized, true);
+      assert.equal(getShikiStatus().initialized, true);
       assert.ok(captured.spans.some((span) => span.name === "pi-code-previews.shiki.initialize"));
       assert.equal(
         Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
@@ -190,7 +217,7 @@ describe("session syntax service", () => {
           yield* service.initialize("dark-plus");
           assert.equal(creates, 2);
           assert.equal(interrupted, 1);
-          assert.equal((yield* service.status).initialized, true);
+          assert.equal(getShikiStatus().initialized, true);
         }),
       ).pipe(
         provideBuiltLayer(
@@ -440,6 +467,107 @@ describe("session syntax service", () => {
         assert.deepEqual(events, ["language-stopped", "dispose"]);
         assert.equal(disposeAttempts, 1);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("render cache follows highlighter identity across session scopes", () => {
+    let firstRenders = 0;
+    let secondRenders = 0;
+    return Effect.gen(function* () {
+      setCodePreviewSettings({
+        ...codePreviewSettings,
+        syntaxHighlighting: true,
+        shikiTheme: "dark-plus",
+      });
+      const first = yield* renderInSyntaxSession("first", () => firstRenders++);
+      const second = yield* renderInSyntaxSession("second", () => secondRenders++);
+      assert.match(first ?? "", /first:same source/);
+      assert.match(second ?? "", /second:same source/);
+      assert.equal(firstRenders, 1);
+      assert.equal(secondRenders, 1);
+    });
+  });
+
+  it.effect("session finalization discards cache entries owned by its highlighter", () => {
+    let renders = 0;
+    const fixture = {
+      dispose: () => undefined,
+      codeToTokensBase: (code: string) => {
+        renders++;
+        return [[{ content: `${renders}:${code}`, color: "#ffffff" }]];
+      },
+    };
+    // SAFETY: This cache scenario invokes only dispose and codeToTokensBase.
+    const reused = fixture as typeof fixture & ShikiHighlighter;
+    const adapter = ShikiAdapter.of({
+      create: () => Effect.succeed(reused),
+      loadLanguage: () => Effect.void,
+    });
+    const renderSession = CodePreviewSyntaxService.use((service) =>
+      service
+        .initialize("dark-plus")
+        .pipe(Effect.andThen(Effect.sync(() => renderWithShiki("same source", "typescript")))),
+    ).pipe(
+      provideBuiltLayer(
+        CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      setCodePreviewSettings({
+        ...codePreviewSettings,
+        syntaxHighlighting: true,
+        shikiTheme: "dark-plus",
+      });
+      yield* renderSession;
+      yield* renderSession;
+      assert.equal(renders, 2);
+    });
+  });
+
+  it.effect("stale highlighter cleanup preserves a newer highlighter's cache", () =>
+    Effect.gen(function* () {
+      setCodePreviewSettings({
+        ...codePreviewSettings,
+        syntaxHighlighting: true,
+        shikiTheme: "dark-plus",
+      });
+      const staleCandidate = yield* Deferred.make<ShikiHighlighter>();
+      let currentRenders = 0;
+      const currentFixture = {
+        dispose: () => undefined,
+        codeToTokensBase: (code: string) => {
+          currentRenders++;
+          return [[{ content: `current:${code}`, color: "#ffffff" }]];
+        },
+      };
+      // SAFETY: This cache scenario invokes only dispose and codeToTokensBase.
+      const current = currentFixture as typeof currentFixture & ShikiHighlighter;
+      const adapter = ShikiAdapter.of({
+        create: (theme) =>
+          theme === "github-dark" ? Deferred.await(staleCandidate) : Effect.succeed(current),
+        loadLanguage: () => Effect.void,
+      });
+
+      yield* CodePreviewSyntaxService.use((service) =>
+        Effect.gen(function* () {
+          const stale = yield* service.initialize("github-dark").pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+          yield* service.initialize("dark-plus");
+          assert.ok(renderWithShiki("same source", "typescript"));
+          yield* Deferred.succeed(
+            staleCandidate,
+            highlighter(() => undefined),
+          );
+          yield* Fiber.join(stale);
+          assert.ok(renderWithShiki("same source", "typescript"));
+          assert.equal(currentRenders, 1);
+        }),
+      ).pipe(
+        provideBuiltLayer(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+        ),
+      );
+    }).pipe(Effect.scoped),
   );
 
   it.effect("interrupts in-flight initialization", () => {

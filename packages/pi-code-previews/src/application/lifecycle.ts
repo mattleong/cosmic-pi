@@ -1,33 +1,32 @@
 /** Effect-managed Pi boundary for code previews. */
-import * as Predicate from "effect/Predicate";
-
-import {
-  getAgentDir,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
+  captureSessionHost,
+  isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
+  notifyAtHostBoundary,
   type PiManagedRuntime,
 } from "pi-cosmic-core";
 import {
   codePreviewApplicationLayer,
-  makeCodePreviewApplicationLayer,
   type CodePreviewApplication,
   type CodePreviewRuntimeError,
 } from "../layer";
 import { registerHealthCommand } from "../commands/health";
+import { makeSettingsAdmission, type SettingsAdmission } from "../config/coordinator";
+import type { CodePreviewSettings } from "../config/schema";
+import { CodePreviewSettingsService } from "../config/store";
+import { codePreviewSettings } from "../config/state";
 import { registerSettingsCommand } from "../settings/controller";
+import { CodePreviewSyntaxService } from "../syntax/service";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
 } from "./capability";
 import { CodePreviewSchedulerService, type CodePreviewSchedulerServiceContract } from "./scheduler";
-import { CodePreviewSession } from "./service";
-import { codePreviewSettings } from "../config/state";
 import type { CodePreviewToolName } from "../tools/names";
 import { registerToolRenderers } from "../tools/renderers/registration";
 export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRuntimeError>;
@@ -35,6 +34,7 @@ export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePr
 type SessionInput = {
   readonly cwd: string;
   readonly projectTrusted: boolean;
+  readonly settingsAdmission: SettingsAdmission;
   readonly signal?: AbortSignal;
   readonly notifyFailure: () => void;
 };
@@ -46,35 +46,6 @@ class CodePreviewRendererRegistrationError extends Schema.TaggedError<CodePrevie
     message: Schema.String,
   },
 ) {}
-
-type CapturedSessionHost =
-  | {
-      readonly kind: "Captured";
-      readonly cwd: string;
-      readonly signal: AbortSignal | undefined;
-      readonly aborted: boolean;
-    }
-  | { readonly kind: "Unavailable" };
-
-function captureSessionHost(ctx: Pick<ExtensionContext, "cwd" | "signal">): CapturedSessionHost {
-  try {
-    const cwd = ctx.cwd;
-    const signal = ctx.signal;
-    if (!Predicate.isString(cwd) || cwd.length === 0) return { kind: "Unavailable" };
-    return { kind: "Captured", cwd, signal, aborted: signal?.aborted === true };
-  } catch {
-    return { kind: "Unavailable" };
-  }
-}
-
-function readProjectTrust(ctx: { readonly isProjectTrusted?: () => boolean }): boolean {
-  try {
-    const isProjectTrusted = ctx.isProjectTrusted;
-    return !Predicate.isFunction(isProjectTrusted) || isProjectTrusted.call(ctx) === true;
-  } catch {
-    return false;
-  }
-}
 
 function registerRenderersAtHostBoundary(register: () => void) {
   return Effect.try({
@@ -89,6 +60,14 @@ function registerRenderersAtHostBoundary(register: () => void) {
 
 export interface CodePreviewExtensionDependencies {
   readonly makeRuntime: (pi: ExtensionAPI) => CodePreviewRuntime;
+  readonly loadSettings: (
+    admission: SettingsAdmission,
+    cwd: string,
+    projectTrusted: boolean,
+  ) => Effect.Effect<CodePreviewSettings, never, CodePreviewSettingsService>;
+  readonly initializeSyntax: (
+    theme: string,
+  ) => Effect.Effect<void, never, CodePreviewSyntaxService>;
   readonly registerHealth: typeof registerHealthCommand;
   readonly registerSettings: typeof registerSettingsCommand;
   readonly registerRenderers: typeof registerToolRenderers;
@@ -100,6 +79,11 @@ const defaultDependencies: CodePreviewExtensionDependencies = {
       agentDirectory: getAgentDir,
       packageName: "pi-code-previews",
     }),
+  loadSettings: (admission, cwd, projectTrusted) =>
+    CodePreviewSettingsService.use((service) =>
+      service.load(admission, { projectCwd: cwd, projectTrusted }),
+    ),
+  initializeSyntax: (theme) => CodePreviewSyntaxService.use((service) => service.initialize(theme)),
   registerHealth: registerHealthCommand,
   registerSettings: registerSettingsCommand,
   registerRenderers: registerToolRenderers,
@@ -114,24 +98,20 @@ export function codePreviewsWithDependencies(
   pi: ExtensionAPI,
   dependencies: CodePreviewExtensionDependencies,
 ): Promise<void> {
-  const registeredTools = new Set<CodePreviewToolName>();
-  const activatedTools = new Set<CodePreviewToolName>();
+  const ownedTools = new Set<CodePreviewToolName>();
+  const installedTools = new Set<CodePreviewToolName>();
   dependencies.registerHealth(pi);
   dependencies.registerSettings(pi);
 
   const startup = (input: SessionInput) =>
     Effect.gen(function* () {
-      const service = yield* CodePreviewSession;
-      yield* service.loadSettings(input.cwd, input.projectTrusted).pipe(
-        Effect.tap(() =>
-          registerRenderersAtHostBoundary(() =>
-            dependencies.registerRenderers(pi, input.cwd, {
-              registeredTools,
-              activatedTools,
-              projectTrusted: input.projectTrusted,
-            }),
-          ),
-        ),
+      yield* dependencies.loadSettings(input.settingsAdmission, input.cwd, input.projectTrusted);
+      yield* registerRenderersAtHostBoundary(() =>
+        dependencies.registerRenderers(pi, input.cwd, {
+          ownedTools,
+          installedTools,
+          projectTrusted: input.projectTrusted,
+        }),
       );
       return yield* CodePreviewSchedulerService;
     });
@@ -144,23 +124,17 @@ export function codePreviewsWithDependencies(
   >({
     makeRuntime: () => dependencies.makeRuntime(pi),
     startup,
-    onActivated: (input, token, scheduler) => {
+    onActivated: (input, _token, scheduler) => {
       installCodePreviewSessionCapability({
-        token,
         run: (effect, signal) => slot.run(effect, signal),
         defer: scheduler.defer,
         schedule: scheduler.schedule,
       });
       if (codePreviewSettings.syntaxHighlighting)
-        slot.fork(
-          CodePreviewSession.use((service) =>
-            service.initializeSyntax(codePreviewSettings.shikiTheme),
-          ),
-          input.signal,
-        );
+        slot.fork(dependencies.initializeSyntax(codePreviewSettings.shikiTheme), input.signal);
     },
-    onDeactivated: (_input, token) => {
-      clearCodePreviewSessionCapability(token);
+    onDeactivated: () => {
+      clearCodePreviewSessionCapability();
     },
     onStartFailure: (input) => {
       clearCodePreviewSessionCapability();
@@ -169,35 +143,28 @@ export function codePreviewsWithDependencies(
   });
 
   pi.on("session_start", (_event, ctx) => {
-    const notifyFailure = () => {
-      try {
-        ctx.ui.notify("Code previews failed to start.", "warning");
-      } catch {
-        // Host notification failure cannot block disposal.
-      }
-    };
+    const notifyFailure = () =>
+      notifyAtHostBoundary(ctx, "Code previews failed to start.", "warning");
     const capturedHost = captureSessionHost(ctx);
-    if (capturedHost.kind === "Unavailable") {
+    if (capturedHost["_tag"] === "Unavailable") {
       notifyFailure();
       return slot.shutdown().then(() => undefined);
     }
     if (capturedHost.aborted) notifyFailure();
-    const projectTrusted = readProjectTrust(ctx);
+    const projectTrusted = isProjectTrusted(ctx);
+    const settingsAdmission = makeSettingsAdmission();
     const input: SessionInput = capturedHost.signal
       ? {
           cwd: capturedHost.cwd,
           projectTrusted,
+          settingsAdmission,
           signal: capturedHost.signal,
           notifyFailure,
         }
-      : { cwd: capturedHost.cwd, projectTrusted, notifyFailure };
+      : { cwd: capturedHost.cwd, projectTrusted, settingsAdmission, notifyFailure };
     return slot.start(input, capturedHost.signal).then(() => undefined);
   });
 
   pi.on("session_shutdown", () => slot.shutdown());
   return Promise.resolve();
 }
-
-export const codePreviewExtensionTesting = {
-  makeApplicationLayer: makeCodePreviewApplicationLayer,
-};

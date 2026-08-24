@@ -4,7 +4,6 @@ import {
   clearWriteProjection,
   lookupBeforeWrite,
   publishWriteProjection,
-  writeProjectionSize,
 } from "../../src/write/projection";
 
 describe("write projection ownership", () => {
@@ -24,8 +23,12 @@ describe("write projection ownership", () => {
     clearWriteProjection(stale);
 
     expect(lookupBeforeWrite("call")).toEqual({ kind: "content", content: "current" });
-    expect(writeProjectionSize()).toBe(1);
     clearWriteProjection(current);
+
+    publishWriteProjection(stale, {
+      entries: [["call", { kind: "content", content: "after-current-clear" }]],
+    });
+    expect(lookupBeforeWrite("call")).toBeUndefined();
   });
 
   it("lets a newer owner replace a stale owner that never cleared", () => {

@@ -22,14 +22,10 @@ export interface CodePreviewWriteServiceContract {
     toolCallId: string,
     before: CodePreviewBeforeWrite,
   ) => Effect.Effect<void, ProjectionError>;
-  readonly acknowledgeBeforeWrite: (
-    toolCallId: string,
-  ) => Effect.Effect<CodePreviewBeforeWrite, ProjectionError>;
   readonly withPathLock: <A, E, R>(
     path: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
-  readonly cacheSize: Effect.Effect<number>;
 }
 
 export class CodePreviewWriteService extends Context.Service<
@@ -61,18 +57,8 @@ export class CodePreviewWriteService extends Context.Service<
             ] as const);
           });
 
-        const acknowledgeBeforeWrite = (toolCallId: string) =>
-          projection.transition((current) => {
-            const before = current.entries.find(([id]) => id === toolCallId)?.[1];
-            return Effect.succeed([
-              before,
-              { entries: current.entries.filter(([id]) => id !== toolCallId) },
-            ] as const);
-          });
-
         const service = CodePreviewWriteService.of({
           rememberBeforeWrite,
-          acknowledgeBeforeWrite,
           withPathLock: (path, effect) =>
             Effect.scopedWith((leaseScope) =>
               RcMap.get(pathLocks, path).pipe(
@@ -80,7 +66,6 @@ export class CodePreviewWriteService extends Context.Service<
                 Effect.flatMap((lock) => lock.withPermit(effect)),
               ),
             ),
-          cacheSize: projection.getState.pipe(Effect.map((state) => state.entries.length)),
         });
         return { service, projectionOwner };
       }),

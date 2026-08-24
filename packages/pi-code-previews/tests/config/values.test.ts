@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
+import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../../src/config/schema";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { normalizeSettings, updateSetting } from "../../src/config/values";
+import { normalizeSettingsWithDiagnostics, updateSetting } from "../../src/config/values";
+
+type SettingsFixtureValue = string | number | boolean | readonly string[] | undefined;
+
+const settingsFrom = (
+  data: Readonly<Record<string, SettingsFixtureValue>>,
+  fallback: CodePreviewSettings = codePreviewSettings,
+): CodePreviewSettings => normalizeSettingsWithDiagnostics(data, fallback).settings;
 
 test("settings normalization and reset preserve defaults", () => {
-  const normalized = normalizeSettings({
+  const normalized = settingsFrom({
     syntaxHighlighting: false,
     secretWarnings: false,
     bashWarnings: false,
@@ -48,17 +56,14 @@ test("settings normalization falls back to accumulated settings for invalid over
     shikiTheme: "github-dark",
     readCollapsedLines: 40,
   };
-  const invalidOverride = normalizeSettings(
+  const invalidOverride = settingsFrom(
     { shikiTheme: "not-a-theme", readCollapsedLines: -1 },
     fallback,
   );
   assert.equal(invalidOverride.shikiTheme, "github-dark");
   assert.equal(invalidOverride.readCollapsedLines, 40);
 
-  const validOverride = normalizeSettings(
-    { shikiTheme: "dark-plus", readCollapsedLines: 20 },
-    fallback,
-  );
+  const validOverride = settingsFrom({ shikiTheme: "dark-plus", readCollapsedLines: 20 }, fallback);
   assert.equal(validOverride.shikiTheme, "dark-plus");
   assert.equal(validOverride.readCollapsedLines, 20);
   assert.equal(updateSetting(validOverride, "wordEmphasis", "all").wordEmphasis, "all");
@@ -78,21 +83,58 @@ test("settings normalization falls back to accumulated settings for invalid over
     updateSetting(validOverride, "toolCallBackground", "border").toolCallBackground,
     "border",
   );
-  assert.equal(normalizeSettings({ wordEmphasis: "off" }, fallback).wordEmphasis, "off");
+  assert.equal(settingsFrom({ wordEmphasis: "off" }, fallback).wordEmphasis, "off");
   assert.equal(
-    normalizeSettings({ toolCallBackground: "border" }, fallback).toolCallBackground,
+    settingsFrom({ toolCallBackground: "border" }, fallback).toolCallBackground,
     "border",
   );
-  assert.deepEqual(normalizeSettings({ tools: ["read", "grep"] }, fallback).tools, [
+  assert.deepEqual(settingsFrom({ tools: ["read", "grep"] }, fallback).tools, ["read", "grep"]);
+  // Legacy value shapes (boolean toolCallBackground, CSV tools) are invalid, not coerced.
+  assert.equal(
+    settingsFrom({ toolCallBackground: true }, fallback).toolCallBackground,
+    fallback.toolCallBackground,
+  );
+  assert.deepEqual(settingsFrom({ tools: "read,grep" }, fallback).tools, [...fallback.tools]);
+});
+
+test("settings recover valid siblings and expose bounded path-only diagnostics", () => {
+  const fallback = {
+    ...defaultCodePreviewSettings,
+    shikiTheme: "github-dark",
+    tools: ["write" as const],
+  };
+  const normalized = normalizeSettingsWithDiagnostics(
+    {
+      shikiTheme: "private-theme-token",
+      readCollapsedLines: 19,
+      tools: ["write", "private-tool"],
+    },
+    fallback,
+  );
+  assert.equal(normalized.settings.shikiTheme, "github-dark");
+  assert.equal(normalized.settings.readCollapsedLines, 19);
+  assert.deepEqual(normalized.settings.tools, ["write"]);
+  assert.deepEqual(normalized.diagnostics, [
+    { path: "settings.shikiTheme", issue: "invalid" },
+    { path: "settings.tools", issue: "invalid" },
+  ]);
+  assert.equal(JSON.stringify(normalized.diagnostics).includes("private"), false);
+
+  const bounded = normalizeSettingsWithDiagnostics(
+    Object.fromEntries(CODE_PREVIEW_SETTING_KEYS.map((key) => [key, "private-value"])),
+    fallback,
+  );
+  assert.equal(bounded.diagnostics.length, 16);
+  assert.equal(JSON.stringify(bounded.diagnostics).includes("private-value"), false);
+});
+
+test("valid tool arrays are deduplicated and invalid arrays use the complete fallback", () => {
+  const fallback = { ...defaultCodePreviewSettings, tools: ["write" as const] };
+  assert.deepEqual(settingsFrom({ tools: ["grep", "read", "grep"] }, fallback).tools, [
     "read",
     "grep",
   ]);
-  // Legacy value shapes (boolean toolCallBackground, CSV tools) are invalid, not coerced.
-  assert.equal(
-    normalizeSettings({ toolCallBackground: true }, fallback).toolCallBackground,
-    fallback.toolCallBackground,
-  );
-  assert.deepEqual(normalizeSettings({ tools: "read,grep" }, fallback).tools, [...fallback.tools]);
+  assert.deepEqual(settingsFrom({ tools: ["grep", "unknown"] }, fallback).tools, ["write"]);
 });
 
 test("setCodePreviewSettings publishes a new frozen snapshot", () => {
@@ -115,7 +157,7 @@ test("setCodePreviewSettings publishes a new frozen snapshot", () => {
 });
 
 test("disabled preview settings keep corresponding tool renderers enabled", () => {
-  const normalized = normalizeSettings(
+  const normalized = settingsFrom(
     {
       readContentPreview: false,
       writeContentPreview: false,

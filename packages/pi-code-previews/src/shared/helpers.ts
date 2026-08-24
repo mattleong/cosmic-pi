@@ -1,12 +1,10 @@
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
+import * as Predicate from "effect/Predicate";
 
 /** Small shared helpers used across preview rendering paths. */
 
 export function getObjectValue<ValueInput>(value: ValueInput, key: string) {
-  const FieldSchema = Schema.Struct({ [key]: Schema.optional(Schema.Unknown) });
-  const decoded = Schema.decodeUnknownOption(FieldSchema)(value);
-  return Option.isSome(decoded) ? decoded.value[key] : undefined;
+  if (!Predicate.isObject(value) || !Object.hasOwn(value, key)) return undefined;
+  return value[key];
 }
 
 export function isToolOutputNoticeLine(line: string): boolean {

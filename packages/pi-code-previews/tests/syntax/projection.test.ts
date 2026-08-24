@@ -51,6 +51,15 @@ describe("syntax projection ownership", () => {
     expect(syntaxProjection()?.theme).toBe("current");
     expect(calls).toEqual(["current-initialize", "current-language"]);
     clearSyntaxProjection(current);
+
+    publishSyntaxProjection(stale, snapshot("after-current-clear"));
+    installSyntaxRequests(stale, {
+      initialize: () => calls.push("retired-initialize"),
+      language: () => calls.push("retired-language"),
+    });
+    requestSyntaxInitialize("theme");
+    expect(syntaxProjection()).toBeUndefined();
+    expect(calls).toEqual(["current-initialize", "current-language"]);
   });
 
   it("lets a newer owner replace an abandoned owner", () => {

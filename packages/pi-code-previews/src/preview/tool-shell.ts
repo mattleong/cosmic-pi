@@ -18,38 +18,19 @@ import {
 } from "./tool-timing";
 import { type ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
-
-export {
-  hiddenPreviewExpandHintForShell,
-  renderHiddenPreviewExpandHint,
-} from "./bordered-tool-call";
-
-interface PreviewRenderContext<TState, TArgs> {
-  args: TArgs;
-  toolCallId: string;
-  invalidate: () => void;
-  lastComponent: Component | undefined;
-  state: TState;
-  cwd: string;
-  executionStarted: boolean;
-  argsComplete: boolean;
-  isPartial: boolean;
-  expanded: boolean;
-  showImages: boolean;
-  isError: boolean;
-}
+import type { ToolRenderContext } from "../tools/renderers/shared/types";
 
 export interface CodePreviewToolShell {
   renderShell: "default" | "self";
   renderCall<TState, TArgs>(
-    context: PreviewRenderContext<TState, TArgs> | undefined,
+    context: ToolRenderContext<TState, TArgs>,
     theme: Theme,
-    render: (context: PreviewRenderContext<TState, TArgs> | undefined) => Component,
+    render: (context: ToolRenderContext<TState, TArgs>) => Component,
   ): Component;
   renderResult<TState, TArgs>(
-    context: PreviewRenderContext<TState, TArgs>,
+    context: ToolRenderContext<TState, TArgs>,
     theme: Theme,
-    render: (context: PreviewRenderContext<TState, TArgs>) => Component,
+    render: (context: ToolRenderContext<TState, TArgs>) => Component,
   ): Component;
 }
 
@@ -65,16 +46,14 @@ export function createCodePreviewToolShell(
 
 function renderCodePreviewCall<TState, TArgs>(
   mode: ToolCallBackgroundMode,
-  context: PreviewRenderContext<TState, TArgs> | undefined,
+  context: ToolRenderContext<TState, TArgs>,
   theme: Theme,
-  render: (context: PreviewRenderContext<TState, TArgs> | undefined) => Component,
+  render: (context: ToolRenderContext<TState, TArgs>) => Component,
 ): Component {
-  if (!context) return render(context);
   if (mode !== "border") {
     const state = timingState(context);
     if (
-      context.isPartial === true &&
-      state &&
+      context.isPartial &&
       isToolCallTimingOnlyRender(state) &&
       state.codePreviewTimingCallComponent
     ) {
@@ -84,16 +63,12 @@ function renderCodePreviewCall<TState, TArgs>(
     const component = render(
       withLastComponent(context, unwrapTimingComponent(context.lastComponent)),
     );
-    const previousWrapped = state?.codePreviewTimingCallComponent;
+    const previousWrapped = state.codePreviewTimingCallComponent;
     const wrapped =
-      state &&
-      previousWrapped instanceof TimingPreservedComponent &&
-      previousWrapped.component === component
+      previousWrapped instanceof TimingPreservedComponent && previousWrapped.component === component
         ? previousWrapped
-        : state
-          ? new TimingPreservedComponent(component, state)
-          : component;
-    if (state) state.codePreviewTimingCallComponent = wrapped;
+        : new TimingPreservedComponent(component, state);
+    state.codePreviewTimingCallComponent = wrapped;
     updateToolCallTiming(context, { animate: false, formatLabel: false });
     return wrapped;
   }
@@ -123,9 +98,9 @@ function renderCodePreviewCall<TState, TArgs>(
 
 function renderCodePreviewResult<TState, TArgs>(
   mode: ToolCallBackgroundMode,
-  context: PreviewRenderContext<TState, TArgs>,
+  context: ToolRenderContext<TState, TArgs>,
   theme: Theme,
-  render: (context: PreviewRenderContext<TState, TArgs>) => Component,
+  render: (context: ToolRenderContext<TState, TArgs>) => Component,
 ): Component {
   const timing = updateToolCallTiming(context);
   if (mode !== "border") {

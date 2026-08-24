@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { bundledThemesInfo } from "shiki";
+import type { ShikiHighlighter } from "../boundary/shiki";
 import { hashString } from "../shared/helpers";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { codePreviewSettings } from "../config/state";
@@ -20,9 +21,32 @@ type RenderCacheEntry = {
   readonly value: string[];
   readonly size: number;
 };
+type RenderCacheOwner = {
+  readonly highlighter: ShikiHighlighter;
+  readonly theme: string;
+};
+
 const renderCache = new Map<string, RenderCacheEntry>();
 let renderCacheChars = 0;
-let renderGeneration = -1;
+let renderCacheOwner: RenderCacheOwner | undefined;
+
+function clearRenderCache(): void {
+  renderCache.clear();
+  renderCacheChars = 0;
+}
+
+function claimRenderCache(highlighter: ShikiHighlighter, theme: string): void {
+  if (renderCacheOwner?.highlighter === highlighter && renderCacheOwner.theme === theme) return;
+  clearRenderCache();
+  renderCacheOwner = { highlighter, theme };
+}
+
+/** Discards cache entries only when this highlighter still owns them. */
+export function discardShikiRenderCache(highlighter: ShikiHighlighter): void {
+  if (renderCacheOwner?.highlighter !== highlighter) return;
+  clearRenderCache();
+  renderCacheOwner = undefined;
+}
 
 export function renderHighlightedText(
   text: string,
@@ -47,11 +71,7 @@ export function renderWithShiki(
     requestSyntaxInitialize(codePreviewSettings.shikiTheme, invalidate);
     return undefined;
   }
-  if (renderGeneration !== snapshot.generation) {
-    renderGeneration = snapshot.generation;
-    renderCache.clear();
-    renderCacheChars = 0;
-  }
+  claimRenderCache(snapshot.highlighter, snapshot.theme);
   const language = normalizePreviewLanguageAlias(lang);
   const key = `${snapshot.theme}\0${language}\0${code.length}\0${hashString(code)}`;
   const cached = renderCache.get(key);
@@ -103,7 +123,11 @@ export function getShikiStatus(): ShikiStatus {
   if (!snapshot) return EMPTY_STATUS;
   return {
     ...snapshot.status,
-    cacheSize: renderGeneration === snapshot.generation ? renderCache.size : 0,
+    cacheSize:
+      renderCacheOwner?.highlighter === snapshot.highlighter &&
+      renderCacheOwner?.theme === snapshot.theme
+        ? renderCache.size
+        : 0,
     cacheLimit: codePreviewPerformanceConfig.cacheLimit,
     maxHighlightChars: codePreviewPerformanceConfig.maxHighlightChars,
   };

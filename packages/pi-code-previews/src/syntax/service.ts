@@ -6,17 +6,14 @@ import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
-import { codePreviewPerformanceConfig } from "../config/env";
 import { codePreviewSettings } from "../config/state";
 import { makeSyntaxIngress } from "./ingress";
 import {
   clearSyntaxProjection,
   publishSyntaxProjection,
   type CodePreviewSyntaxSnapshot,
-  type ShikiStatus,
 } from "./projection";
-
-export type { ShikiStatus } from "./projection";
+import { discardShikiRenderCache } from "./render";
 
 const PRELOADED_SHIKI_LANGUAGES = [
   "bash",
@@ -33,14 +30,12 @@ const PRELOADED_SHIKI_LANGUAGES = [
 type InitializationOutcome = "Completed" | "Interrupted";
 type InitializationFlight = {
   readonly theme: string;
-  readonly version: number;
   readonly done: Deferred.Deferred<InitializationOutcome>;
 };
 type SyntaxState = {
   readonly highlighter: ShikiHighlighter | undefined;
   readonly theme: string | undefined;
   readonly generation: number;
-  readonly initVersion: number;
   readonly initialization: InitializationFlight | undefined;
   readonly loadedLanguages: ReadonlySet<string>;
   readonly pendingLanguages: ReadonlySet<string>;
@@ -59,8 +54,6 @@ type LanguageDecision =
 
 export interface CodePreviewSyntaxServiceContract {
   readonly initialize: (theme: string) => Effect.Effect<void>;
-  readonly status: Effect.Effect<Omit<ShikiStatus, "cacheSize">>;
-  readonly dispose: Effect.Effect<void>;
 }
 
 const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
@@ -77,6 +70,14 @@ const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
     }),
   });
 
+/** Clears only this highlighter's render cache before requesting third-party disposal. */
+const releaseHighlighter = (highlighter: ShikiHighlighter | undefined): Effect.Effect<void> => {
+  if (!highlighter) return Effect.void;
+  return Effect.sync(() => discardShikiRenderCache(highlighter)).pipe(
+    Effect.andThen(disposeShikiHighlighter(highlighter)),
+  );
+};
+
 export class CodePreviewSyntaxService extends Context.Service<
   CodePreviewSyntaxService,
   CodePreviewSyntaxServiceContract
@@ -90,7 +91,6 @@ export class CodePreviewSyntaxService extends Context.Service<
         highlighter: undefined,
         theme: undefined,
         generation: 0,
-        initVersion: 0,
         initialization: undefined,
         loadedLanguages: new Set(),
         pendingLanguages: new Set(),
@@ -112,13 +112,12 @@ export class CodePreviewSyntaxService extends Context.Service<
 
       const dispose = highlighterLifecycle.withPermits(1)(
         modify((current) =>
-          disposeShikiHighlighter(current.highlighter).pipe(
+          releaseHighlighter(current.highlighter).pipe(
             Effect.as([
               undefined,
               {
                 ...initial,
                 generation: current.generation + 1,
-                initVersion: current.initVersion + 1,
                 statusVersion: current.statusVersion + 1,
               },
             ] as const),
@@ -140,11 +139,10 @@ export class CodePreviewSyntaxService extends Context.Service<
                 current,
               ] as const;
             const done = yield* Deferred.make<InitializationOutcome>();
-            const version = current.initVersion + 1;
-            const flight = { theme, version, done } satisfies InitializationFlight;
+            const flight = { theme, done } satisfies InitializationFlight;
             return [
               { tag: "Start" as const, flight },
-              { ...current, initVersion: version, initialization: flight },
+              { ...current, initialization: flight },
             ] as const;
           }),
         );
@@ -159,7 +157,7 @@ export class CodePreviewSyntaxService extends Context.Service<
         const clearInterruptedFlight = modify((current) =>
           Effect.succeed([
             undefined,
-            current.initialization?.version === flight.version
+            current.initialization === flight
               ? {
                   ...current,
                   initialization: undefined,
@@ -173,7 +171,7 @@ export class CodePreviewSyntaxService extends Context.Service<
             Effect.matchEffect({
               onFailure: () =>
                 modify((current) => {
-                  if (current.initVersion !== flight.version)
+                  if (current.initialization !== flight)
                     return Effect.succeed([undefined, current] as const);
                   // Replacement is transactional: a failed candidate only clears its flight.
                   // The working highlighter and renderer projection remain installed.
@@ -195,11 +193,11 @@ export class CodePreviewSyntaxService extends Context.Service<
               onSuccess: (next) =>
                 highlighterLifecycle.withPermits(1)(
                   modify((current) => {
-                    if (current.initVersion !== flight.version)
-                      return disposeShikiHighlighter(next).pipe(
+                    if (current.initialization !== flight)
+                      return releaseHighlighter(next).pipe(
                         Effect.as([undefined, current] as const),
                       );
-                    return disposeShikiHighlighter(current.highlighter).pipe(
+                    return releaseHighlighter(current.highlighter).pipe(
                       Effect.as([
                         undefined,
                         {
@@ -300,20 +298,7 @@ export class CodePreviewSyntaxService extends Context.Service<
         language: requestLanguage,
       });
 
-      const service = CodePreviewSyntaxService.of({
-        initialize,
-        status: SynchronizedRef.get(state).pipe(
-          Effect.map((current) => ({
-            initialized: current.highlighter !== undefined,
-            cacheLimit: codePreviewPerformanceConfig.cacheLimit,
-            maxHighlightChars: codePreviewPerformanceConfig.maxHighlightChars,
-            loadedLanguages: current.loadedLanguages.size,
-            pendingLanguages: current.pendingLanguages.size,
-            statusVersion: current.statusVersion,
-          })),
-        ),
-        dispose,
-      });
+      const service = CodePreviewSyntaxService.of({ initialize });
 
       return yield* Effect.acquireRelease(Effect.succeed(service), () =>
         ingress.shutdown.pipe(

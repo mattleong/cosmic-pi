@@ -5,7 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { provideBuiltLayer } from "pi-cosmic-core";
-import { lookupBeforeWrite, writeProjectionSize } from "../../src/write/projection";
+import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
 
 it.effect("bounds correlation entries and replaces reused call identifiers atomically", () =>
@@ -16,8 +16,11 @@ it.effect("bounds correlation entries and replaces reused call identifiers atomi
           kind: "content",
           content: String(index),
         });
-      assert.equal(writeProjectionSize(), 64);
       assert.equal(lookupBeforeWrite("tool-0"), undefined);
+      assert.deepEqual(lookupBeforeWrite("tool-1"), {
+        kind: "content",
+        content: "1",
+      });
       yield* service.rememberBeforeWrite("tool-64", {
         kind: "content",
         content: "replacement",
@@ -133,7 +136,6 @@ it.effect("before-write snapshots are cleared when the owning session scope clos
       CodePreviewWriteService.use((service) =>
         Effect.gen(function* () {
           yield* service.rememberBeforeWrite("tool", { kind: "content", content: "secret" });
-          assert.equal(writeProjectionSize(), 1);
           assert.deepEqual(lookupBeforeWrite("tool"), {
             kind: "content",
             content: "secret",
@@ -142,15 +144,9 @@ it.effect("before-write snapshots are cleared when the owning session scope clos
             kind: "content",
             content: "secret",
           });
-          assert.equal(yield* service.cacheSize, 1);
-          assert.deepEqual(yield* service.acknowledgeBeforeWrite("tool"), {
-            kind: "content",
-            content: "secret",
-          });
-          assert.equal(writeProjectionSize(), 0);
         }),
       ).pipe(provideBuiltLayer(CodePreviewWriteService.layer)),
     );
-    assert.equal(writeProjectionSize(), 0);
+    assert.equal(lookupBeforeWrite("tool"), undefined);
   }),
 );

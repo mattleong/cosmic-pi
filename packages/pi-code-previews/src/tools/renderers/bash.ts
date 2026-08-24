@@ -1,10 +1,9 @@
 import * as Predicate from "effect/Predicate";
 
-import type { BashToolOptions, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { BashToolOptions } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { previewFooter, showingFooter, trimSingleTrailingNewline } from "../../preview/format";
-import { createCodePreviewToolShell } from "../../preview/tool-shell";
 import { codePreviewSettings } from "../../config/state";
 import { countLabel } from "../../shared/helpers";
 import { getObjectValue } from "../../shared/helpers";
@@ -13,6 +12,7 @@ import { getFirstShellCommandName } from "../../tools/shell-command";
 import { renderHighlightedText } from "../../syntax/render";
 import { getTextContent, isTruncated } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
+import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { shouldHideShellResultByCommand } from "../shell-result-policy";
 import { getBashWarnings } from "../../warnings/bash";
 import { renderSelectedOutputLines } from "./shared/preview-text";
@@ -27,73 +27,64 @@ function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
   );
 }
 
-export function registerBash(pi: ExtensionAPI, cwd: string, options?: BashToolOptions) {
+export function createBashPreviewTool(cwd: string, options?: BashToolOptions) {
   const originalBash = createBashToolDefinition(cwd, options);
-  const previewShell = createCodePreviewToolShell();
 
-  pi.registerTool({
-    ...originalBash,
-    renderShell: previewShell.renderShell,
-
-    renderCall(args, theme, context) {
-      return previewShell.renderCall(context, theme, (renderContext) => {
-        if (!renderContext) throw new TypeError("Code preview render context is required.");
-        const command = Predicate.isString(args.command) ? args.command : "";
-        const timeout = Predicate.isNumber(args.timeout)
-          ? theme.fg("muted", ` (timeout ${args.timeout}s)`)
-          : "";
-        const highlighted = renderHighlightedText(
-          command || "...",
-          "bash",
-          theme,
-          renderContext.invalidate,
-        ).join("\n");
-        const warnings = codePreviewSettings.bashWarnings ? getBashWarnings(command) : [];
-        const warningText = warnings.length
-          ? `${theme.fg("warning", `⚠ Preview ${countLabel(warnings.length, "warning")}: ${warnings.join(", ")}`)}\n`
-          : "";
-        return new Text(
-          `${warningText}${renderCodePreviewToolTitle("bash", theme)} ${highlighted}${timeout}`,
-          0,
-          0,
-        );
-      });
+  return createCodePreviewToolDefinition(originalBash, {
+    renderCall(args, theme, renderContext) {
+      const command = Predicate.isString(args.command) ? args.command : "";
+      const timeout = Predicate.isNumber(args.timeout)
+        ? theme.fg("muted", ` (timeout ${args.timeout}s)`)
+        : "";
+      const highlighted = renderHighlightedText(
+        command || "...",
+        "bash",
+        theme,
+        renderContext.invalidate,
+      ).join("\n");
+      const warnings = codePreviewSettings.bashWarnings ? getBashWarnings(command) : [];
+      const warningText = warnings.length
+        ? `${theme.fg("warning", `⚠ Preview ${countLabel(warnings.length, "warning")}: ${warnings.join(", ")}`)}\n`
+        : "";
+      return new Text(
+        `${warningText}${renderCodePreviewToolTitle("bash", theme)} ${highlighted}${timeout}`,
+        0,
+        0,
+      );
     },
 
-    renderResult(result, { expanded, isPartial }, theme, context) {
-      return previewShell.renderResult(context, theme, (renderContext) => {
-        const prelude = renderResultPrelude({
-          isPartial,
-          theme,
-          loadingLabel: "Running…",
-        });
-        if (prelude) return prelude;
-        const hiddenPrelude = renderHiddenPreviewPrelude({
-          expanded,
-          state: renderContext.state,
-          theme,
-          hidePreview: !renderContext.isError && shouldHideBashResult(renderContext.args),
-        });
-        if (hiddenPrelude) return hiddenPrelude;
-        const output = trimSingleTrailingNewline(getTextContent(result.content));
-        const rawLines = output ? output.split("\n") : [];
-        const limit = expanded ? rawLines.length : 8;
-        const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
-          chunk.map((line) =>
-            theme.fg(renderContext.isError ? "error" : "muted", escapeControlChars(line)),
-          ),
-        );
-        let text = preview.lines.length
-          ? withSecretWarning(output, theme, preview.lines.join("\n"))
-          : theme.fg("muted", "No output");
-        if (preview.hidden > 0)
-          text += showingFooter(theme, preview.shown, rawLines.length, "output lines");
-        if (isTruncated(result.details)) text += previewFooter(theme, "Output truncated by bash");
-        const fullOutputPath = getObjectValue(result.details, "fullOutputPath");
-        if (Predicate.isString(fullOutputPath))
-          text += previewFooter(theme, `Full output: ${escapeControlChars(fullOutputPath)}`);
-        return new Text(text, 0, 0);
+    renderResult(result, { expanded, isPartial }, theme, renderContext) {
+      const prelude = renderResultPrelude({
+        isPartial,
+        theme,
+        loadingLabel: "Running…",
       });
+      if (prelude) return prelude;
+      const hiddenPrelude = renderHiddenPreviewPrelude({
+        expanded,
+        state: renderContext.state,
+        theme,
+        hidePreview: !renderContext.isError && shouldHideBashResult(renderContext.args),
+      });
+      if (hiddenPrelude) return hiddenPrelude;
+      const output = trimSingleTrailingNewline(getTextContent(result.content));
+      const rawLines = output ? output.split("\n") : [];
+      const limit = expanded ? rawLines.length : 8;
+      const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
+        chunk.map((line) =>
+          theme.fg(renderContext.isError ? "error" : "muted", escapeControlChars(line)),
+        ),
+      );
+      let text = preview.lines.length
+        ? withSecretWarning(output, theme, preview.lines.join("\n"))
+        : theme.fg("muted", "No output");
+      if (preview.hidden > 0)
+        text += showingFooter(theme, preview.shown, rawLines.length, "output lines");
+      if (isTruncated(result.details)) text += previewFooter(theme, "Output truncated by bash");
+      const fullOutputPath = getObjectValue(result.details, "fullOutputPath");
+      if (Predicate.isString(fullOutputPath))
+        text += previewFooter(theme, `Full output: ${escapeControlChars(fullOutputPath)}`);
+      return new Text(text, 0, 0);
     },
   });
 }

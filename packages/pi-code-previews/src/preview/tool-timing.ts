@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { synchronousNow } from "../boundary/clock";
+import { synchronousNow } from "pi-cosmic-core";
 import { deferProjectedCodePreview, scheduleProjectedCodePreview } from "../application/projection";
 import { codePreviewSettings } from "../config/state";
 import type { RendererState } from "../tools/renderers/shared/types";
@@ -36,7 +36,6 @@ export function renderTimedResultFooter<TContext extends ToolTimingRenderContext
   timingLabel: string | undefined,
 ): Component {
   const state = timingState(context);
-  if (!state) return render(context);
   const reusedResult = isToolCallTimingOnlyRender(state)
     ? state.codePreviewTimingResultComponent
     : undefined;
@@ -58,7 +57,6 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   options: { animate?: boolean; formatLabel?: boolean } = {},
 ): ToolCallTiming | undefined {
   const state = timingState(context);
-  if (!state) return undefined;
   if (!codePreviewSettings.toolCallTiming) {
     clearToolCallTimingInterval(state);
     return undefined;
@@ -66,7 +64,7 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   if (
     context.executionStarted &&
     state.codePreviewTimingStartedAt === undefined &&
-    context.isPartial !== false
+    context.isPartial
   ) {
     state.codePreviewTimingStartedAt = synchronousNow();
     state.codePreviewTimingEndedAt = undefined;
@@ -88,13 +86,13 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   return { label: `${label} ${formatToolCallDuration(endTime - startedAt)}` };
 }
 
-export function timingState(context: { state?: unknown } | undefined): TimingState | undefined {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  return context?.state as TimingState | undefined;
+export function timingState(context: { state: unknown }): TimingState {
+  // SAFETY: Pi initializes renderer state as an object shared by the call and result slots.
+  return context.state as TimingState;
 }
 
-export function isToolCallTimingOnlyRender(state: TimingState | undefined): boolean {
-  return state?.codePreviewTimingOnlyRenderToken !== undefined;
+export function isToolCallTimingOnlyRender(state: TimingState): boolean {
+  return state.codePreviewTimingOnlyRenderToken !== undefined;
 }
 
 export function unwrapTimingComponent(component: Component | undefined): Component | undefined {

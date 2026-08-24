@@ -7,7 +7,7 @@
 export { codePreviews as default } from "./src/extension";
 
 /** Load persisted code-preview settings into the runtime singleton and return a defensive copy. */
-export { loadCodePreviewSettings } from "./src/settings/bootstrap";
+export { loadCodePreviewSettings } from "./src/config/store";
 
 /** Decorate a package-owned tool, capturing the current visual shell mode at wrapping time. */
 export { withCodePreviewShell, type CodePreviewShellOptions } from "./src/tools/cooperative-tools";

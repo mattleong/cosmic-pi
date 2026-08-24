@@ -1,16 +1,15 @@
 import * as Predicate from "effect/Predicate";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createLsToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
 import { renderDisplayPath } from "../../paths/display";
 import { codePreviewSettings } from "../../config/state";
 import { renderCodePreviewToolTitle } from "../presentation";
-import { registerPathListTool } from "./shared/path-list-tool";
+import { createPathListPreviewTool } from "./shared/path-list-tool";
 
-export function registerLs(pi: ExtensionAPI, cwd: string) {
-  registerPathListTool(pi, cwd, {
+export function createLsPreviewTool(cwd: string) {
+  return createPathListPreviewTool(cwd, {
     createToolDefinition: createLsToolDefinition,
     renderCall(args, theme, renderCwd) {
       const path = Predicate.isString(args.path) && args.path ? args.path : ".";

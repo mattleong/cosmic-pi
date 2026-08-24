@@ -9,7 +9,7 @@ import { getTextContent } from "./data/results";
 import { type ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
-import { createCodePreviewToolShell } from "../preview/tool-shell";
+import { createCodePreviewToolDefinition } from "./renderer-adapter";
 
 export interface CodePreviewShellOptions {
   /**
@@ -25,7 +25,7 @@ export interface CodePreviewShellOptions {
   preserveSelfShell?: boolean;
 }
 
-type AnyToolDefinition = ToolDefinition<any, any, any>;
+type ToolSchema = ToolDefinition["parameters"];
 
 /**
  * Decorate a cooperating tool definition with pi-code-previews' tool-call shell.
@@ -34,48 +34,39 @@ type AnyToolDefinition = ToolDefinition<any, any, any>;
  * underlying tool definition, including execute(), schemas, prompt metadata, and custom renderers.
  * Load trusted project settings before calling this function because shell mode is captured here.
  */
-export function withCodePreviewShell<TTool extends AnyToolDefinition>(
-  tool: TTool,
+export function withCodePreviewShell<
+  TParams extends ToolSchema,
+  TDetails,
+  TState,
+  TTool extends ToolDefinition<TParams, TDetails, TState>,
+>(
+  tool: ToolDefinition<TParams, TDetails, TState> & TTool,
   options: CodePreviewShellOptions = {},
 ): TTool {
   const mode = options.mode ?? codePreviewSettings.toolCallBackground;
   const preserveSelfShell = options.preserveSelfShell ?? true;
   if (preserveSelfShell && tool.renderShell === "self") return tool;
 
-  const previewShell = createCodePreviewToolShell(mode);
   const originalRenderCall = tool.renderCall;
   const originalRenderResult = tool.renderResult;
 
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  return {
-    ...tool,
-    renderShell: previewShell.renderShell,
-    renderCall(args, theme, context) {
-      return previewShell.renderCall(context, theme, (renderContext) => {
-        if (originalRenderCall)
-          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-          return originalRenderCall.call(tool, args, theme, renderContext as never);
-        return renderFallbackToolCall(tool, theme);
-      });
-    },
-    renderResult(result, resultOptions, theme, context) {
-      return previewShell.renderResult(context, theme, (renderContext) => {
-        if (originalRenderResult)
-          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-          return originalRenderResult.call(
-            tool,
-            result,
-            resultOptions,
-            theme,
-            renderContext as never,
-          );
-        return renderFallbackToolResult(result, resultOptions, theme, renderContext.isError);
-      });
-    },
-  } as TTool;
+  return createCodePreviewToolDefinition(tool, {
+    mode,
+    renderCall: (args, theme, context) =>
+      originalRenderCall
+        ? originalRenderCall(args, theme, context)
+        : renderFallbackToolCall(tool, theme),
+    renderResult: (result, resultOptions, theme, context) =>
+      originalRenderResult
+        ? originalRenderResult(result, resultOptions, theme, context)
+        : renderFallbackToolResult(result, resultOptions, theme, context.isError),
+  });
 }
 
-function renderFallbackToolCall(tool: AnyToolDefinition, theme: Theme): Component {
+function renderFallbackToolCall(
+  tool: { readonly name: string; readonly label: string },
+  theme: Theme,
+): Component {
   return new Text(theme.fg("toolTitle", theme.bold(tool.label || tool.name)), 0, 0);
 }
 

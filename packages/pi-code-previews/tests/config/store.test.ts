@@ -9,9 +9,10 @@ import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
 } from "../../src/application/capability";
+import { makeSettingsAdmission, withSettingsCoordinator } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { loadCodePreviewSettings } from "../../src/settings/bootstrap";
+import { loadCodePreviewSettings } from "../../index";
 import {
   cleanupTestTempDirectories,
   createTestTempDirectory,
@@ -39,7 +40,7 @@ const processEnv: NodeJS.ProcessEnv = process.env;
 const loadSettingsFromDisk = (options: LoadSettingsOptions = {}) =>
   step(() =>
     runOneShotSettingsEffect(
-      CodePreviewSettingsService.use((service) => service.loadFromDisk(options)),
+      CodePreviewSettingsService.use((service) => service.load(makeSettingsAdmission(), options)),
     ),
   );
 
@@ -47,7 +48,7 @@ const saveSettingsToDisk = (settings: CodePreviewSettings, options: LoadSettings
   step(() =>
     runOneShotSettingsEffect(
       CodePreviewSettingsService.use((service) =>
-        service.loadFromDisk(options).pipe(Effect.andThen(service.save(settings))),
+        service.save(settings, makeSettingsAdmission(), { rehydrate: options }),
       ),
     ),
   );
@@ -75,6 +76,7 @@ afterEach(() => {
   if (originalHome === undefined) delete processEnv.HOME;
   else processEnv.HOME = originalHome;
   process.chdir(originalCwd);
+  clearCodePreviewSessionCapability();
   setCodePreviewSettings(defaultCodePreviewSettings);
   return cleanupTestTempDirectories();
 });
@@ -377,6 +379,41 @@ effectTest(
   },
 );
 
+effectTest("deduplicated public loads return isolated settings and tools clones", function* () {
+  const loadResult = Deferred.makeUnsafe<CodePreviewSettings>();
+  const pending = Effect.runPromise(Deferred.await(loadResult));
+  let runs = 0;
+  installCodePreviewSessionCapability({
+    run: <A>() => {
+      runs++;
+      // SAFETY: This fixture resolves with the settings value requested by both load Effects.
+      return pending as Promise<A>;
+    },
+    defer: () => () => undefined,
+    schedule: () => () => undefined,
+  });
+
+  const firstLoad = loadCodePreviewSettings("/project", true);
+  const secondLoad = loadCodePreviewSettings("/project", true);
+  Deferred.doneUnsafe(
+    loadResult,
+    Effect.succeed({
+      ...defaultCodePreviewSettings,
+      readCollapsedLines: 31,
+      tools: [...defaultCodePreviewSettings.tools],
+    }),
+  );
+  const [first, second] = yield* step(() => Promise.all([firstLoad, secondLoad]));
+
+  assert.equal(runs, 1);
+  assert.notEqual(first, second);
+  assert.notEqual(first.tools, second.tools);
+  first.readCollapsedLines = 99;
+  first.tools.length = 0;
+  assert.equal(second.readCollapsedLines, 31);
+  assert.deepEqual(second.tools, defaultCodePreviewSettings.tools);
+});
+
 effectTest(
   "loadCodePreviewSettings falls back when a replaced session capability rejects",
   function* () {
@@ -390,9 +427,7 @@ effectTest(
       codePreview: { readCollapsedLines: 31 },
     });
 
-    const token = 991;
     installCodePreviewSessionCapability({
-      token,
       run: () => Promise.reject(new Error("session replaced")),
       defer: () => () => undefined,
       schedule: () => () => undefined,
@@ -401,10 +436,45 @@ effectTest(
       const loaded = yield* loadPreviewSettings(project, true);
       assert.equal(loaded.readCollapsedLines, 31);
     } finally {
-      clearCodePreviewSessionCapability(token);
+      clearCodePreviewSessionCapability();
     }
   },
 );
+
+effectTest("an older live fallback cannot replace a newer successful publication", function* () {
+  const root = yield* makeTempDirectory("pi-code-previews-stale-fallback-");
+  const agentDir = join(root, "agent");
+  const project = join(root, "project");
+  processEnv.PI_CODING_AGENT_DIR = agentDir;
+  yield* writeJson(join(agentDir, "code-previews.json"), { readCollapsedLines: 11 });
+
+  const rejectLiveAttempt = Deferred.makeUnsafe<void>();
+  const liveFailure = Effect.runPromise(Deferred.await(rejectLiveAttempt)).then(() => {
+    throw new Error("session replaced");
+  });
+  installCodePreviewSessionCapability({
+    run: <A>() => {
+      // SAFETY: This host fixture rejects every requested Effect with the same replacement failure.
+      return liveFailure as Promise<A>;
+    },
+    defer: () => () => undefined,
+    schedule: () => () => undefined,
+  });
+  const oldSignal = new AbortController().signal;
+  const older = loadCodePreviewSettings(project, true, oldSignal);
+  clearCodePreviewSessionCapability();
+
+  yield* writeJson(join(agentDir, "code-previews.json"), { readCollapsedLines: 22 });
+  const newer = yield* loadPreviewSettings(project, true);
+  assert.equal(newer.readCollapsedLines, 22);
+  assert.equal(codePreviewSettings.readCollapsedLines, 22);
+
+  yield* writeJson(join(agentDir, "code-previews.json"), { readCollapsedLines: 11 });
+  Deferred.doneUnsafe(rejectLiveAttempt, Effect.void);
+  const staleResult = yield* step(() => older);
+  assert.equal(staleResult.readCollapsedLines, 11);
+  assert.equal(codePreviewSettings.readCollapsedLines, 22);
+});
 
 effectTest("the one-shot settings boundary forwards cancellation to Effect", function* () {
   const controller = new AbortController();
@@ -414,24 +484,28 @@ effectTest("the one-shot settings boundary forwards cancellation to Effect", fun
 });
 
 effectTest(
-  "a queued one-shot settings call can be cancelled before it acquires the permit",
+  "a queued settings call can be cancelled before its coordinator work starts",
   function* () {
     const started = Deferred.makeUnsafe<void>();
     const release = Deferred.makeUnsafe<void>();
     const first = runOneShotSettingsEffect(
-      Effect.suspend(() => {
-        Deferred.doneUnsafe(started, Effect.void);
-        return Deferred.await(release);
-      }),
+      withSettingsCoordinator(makeSettingsAdmission(), () =>
+        Effect.suspend(() => {
+          Deferred.doneUnsafe(started, Effect.void);
+          return Deferred.await(release);
+        }),
+      ),
     );
     yield* Deferred.await(started);
 
     let secondRan = false;
     const controller = new AbortController();
     const second = runOneShotSettingsEffect(
-      Effect.sync(() => {
-        secondRan = true;
-      }),
+      withSettingsCoordinator(makeSettingsAdmission(), () =>
+        Effect.sync(() => {
+          secondRan = true;
+        }),
+      ),
       controller.signal,
     );
     controller.abort();
@@ -454,9 +528,7 @@ effectTest(
     const controller = new AbortController();
     controller.abort();
     let receivedSignal: AbortSignal | undefined;
-    const token = 992;
     installCodePreviewSessionCapability({
-      token,
       run: (_effect, signal) => {
         receivedSignal = signal;
         return Promise.reject(new Error("session startup was interrupted"));
@@ -468,7 +540,7 @@ effectTest(
       yield* step(() => assert.rejects(loadCodePreviewSettings(project, true, controller.signal)));
       assert.equal(receivedSignal, controller.signal);
     } finally {
-      clearCodePreviewSessionCapability(token);
+      clearCodePreviewSessionCapability();
     }
   },
 );

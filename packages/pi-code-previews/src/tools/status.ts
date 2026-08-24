@@ -4,9 +4,10 @@ import { formatToolsSettingValue } from "./policy";
 
 export type CodePreviewToolStatus =
   | { state: "pending" }
-  | { state: "active" }
+  | { state: "installed" }
   | { state: "disabled-by-config" }
-  | { state: "skipped-conflict"; owner: SourceInfo };
+  | { state: "skipped-conflict"; owner: SourceInfo }
+  | { state: "registration-error" };
 
 const toolStatuses = new Map<CodePreviewToolName, CodePreviewToolStatus>();
 
@@ -32,8 +33,14 @@ export function getCodePreviewToolStatuses(): Map<CodePreviewToolName, CodePrevi
   return new Map(toolStatuses);
 }
 
-export function formatActiveCodePreviewTools(statuses = getCodePreviewToolStatuses()): string {
-  return formatToolsWithState(statuses, "active");
+export function formatInstalledCodePreviewTools(statuses = getCodePreviewToolStatuses()): string {
+  return formatToolsWithState(statuses, "installed");
+}
+
+export function formatRegistrationErrorCodePreviewTools(
+  statuses = getCodePreviewToolStatuses(),
+): string {
+  return formatToolsWithState(statuses, "registration-error");
 }
 
 export function formatDisabledCodePreviewTools(statuses = getCodePreviewToolStatuses()): string {

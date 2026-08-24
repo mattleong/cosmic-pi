@@ -2,18 +2,12 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import type { CodePreviewSession } from "./service";
 import type { CodePreviewSettingsService } from "../config/service";
 import type { CodePreviewSyntaxService } from "../syntax/service";
 import type { CodePreviewWriteService } from "../write/service";
-import {
-  publishCodePreviewDefer,
-  publishCodePreviewSchedule,
-  publishCodePreviewSessionActive,
-} from "./projection";
+import { publishCodePreviewSchedulerProjection } from "./projection";
 
 type SessionRequirements =
-  | CodePreviewSession
   | CodePreviewSettingsService
   | CodePreviewSyntaxService
   | CodePreviewWriteService
@@ -25,7 +19,6 @@ export class CodePreviewSessionUnavailable extends Schema.TaggedError<CodePrevie
 ) {}
 
 export interface CodePreviewSessionCapability {
-  readonly token: number;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SessionRequirements>,
     signal?: AbortSignal,
@@ -40,18 +33,14 @@ export function installCodePreviewSessionCapability(
   capability: CodePreviewSessionCapability | undefined,
 ): void {
   activeCapability = capability;
-  publishCodePreviewSessionActive(capability !== undefined);
-  publishCodePreviewDefer(capability?.defer);
-  publishCodePreviewSchedule(capability?.schedule);
+  publishCodePreviewSchedulerProjection(
+    capability ? { defer: capability.defer, schedule: capability.schedule } : undefined,
+  );
 }
 
-export function clearCodePreviewSessionCapability(token?: number): void {
-  if (token === undefined || activeCapability?.token === token) {
-    activeCapability = undefined;
-    publishCodePreviewSessionActive(false);
-    publishCodePreviewDefer(undefined);
-    publishCodePreviewSchedule(undefined);
-  }
+export function clearCodePreviewSessionCapability(): void {
+  activeCapability = undefined;
+  publishCodePreviewSchedulerProjection(undefined);
 }
 
 export function hasCodePreviewSessionCapability(): boolean {

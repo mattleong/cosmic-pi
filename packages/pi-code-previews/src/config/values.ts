@@ -1,31 +1,43 @@
 import * as Predicate from "effect/Predicate";
-
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { decodeTolerantFields, type TolerantFieldDiagnostic } from "pi-cosmic-core";
 import {
   ALL_CODE_PREVIEW_TOOLS,
+  parseCodePreviewTools,
   parseToolToggleId,
   type CodePreviewToolName,
 } from "../tools/names";
 import { formatToolsSettingValue, getEffectiveCodePreviewTools } from "../tools/policy";
-import {
-  CODE_PREVIEW_SETTING_DEFINITIONS,
-  CODE_PREVIEW_SETTING_KEYS,
-  getSettingDefinition,
-  type CodePreviewSettingDescriptor,
-} from "./definitions";
 import { defaultCodePreviewSettings } from "./defaults";
+import {
+  CodePreviewSettingsSchema,
+  ToolCallBackgroundModeSchema,
+  type CodePreviewEditableSettingId,
+  type CodePreviewSettings,
+  type ToolCallBackgroundMode,
+} from "./schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "./state";
-import type { CodePreviewEditableSettingId, CodePreviewSettings } from "./schema";
 
 export const ON_OFF_VALUES = ["on", "off"] as const;
 export type OnOffValue = (typeof ON_OFF_VALUES)[number];
+
+const MAX_SETTINGS_DIAGNOSTICS = 16;
+
+export interface NormalizedCodePreviewSettings {
+  readonly settings: CodePreviewSettings;
+  readonly diagnostics: readonly TolerantFieldDiagnostic[];
+}
 
 export function formatOnOff(value: boolean): OnOffValue {
   return value ? "on" : "off";
 }
 
-export { isToolCallBackgroundMode, parseToolCallBackgroundMode } from "./schema";
+export function isToolCallBackgroundMode<ValueInput>(
+  value: ValueInput,
+): value is ValueInput & ToolCallBackgroundMode {
+  return Schema.is(ToolCallBackgroundModeSchema)(value);
+}
 
 export function formatSettingValue(
   settings: CodePreviewSettings,
@@ -38,35 +50,51 @@ export function formatSettingValue(
   return String(value);
 }
 
-const SettingsRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
-type SettingsRecord = typeof SettingsRecordSchema.Type;
-
-export function normalizeSettings<DataInput>(
+export function normalizeSettingsWithDiagnostics<DataInput>(
   data: DataInput,
   fallback: CodePreviewSettings = codePreviewSettings,
-): CodePreviewSettings {
-  const decoded = Option.getOrElse(
-    Schema.decodeUnknownOption(SettingsRecordSchema)(data),
-    () => ({}),
-  );
-  // SAFETY: Configuration decoding validates the persisted value before this typed access.
-  const next = {} as CodePreviewSettings;
-  for (const key of CODE_PREVIEW_SETTING_KEYS) normalizeSetting(next, decoded, fallback, key);
-  return withRequiredToolRenderers(next);
+): NormalizedCodePreviewSettings {
+  const decoded = decodeTolerantFields(data, CodePreviewSettingsSchema.fields, {
+    path: "settings",
+    maxDiagnostics: MAX_SETTINGS_DIAGNOSTICS,
+  });
+  const next = cloneCodePreviewSettings(fallback);
+  Object.assign(next, decoded.value);
+  next.tools = decoded.value.tools ? [...new Set(decoded.value.tools)] : [...fallback.tools];
+  return {
+    settings: withRequiredToolRenderers(next),
+    diagnostics: decoded.diagnostics,
+  };
 }
 
-function normalizeSetting<K extends keyof CodePreviewSettings>(
-  next: CodePreviewSettings,
-  data: Readonly<SettingsRecord>,
-  fallback: CodePreviewSettings,
+function parseUiSettingValue<K extends keyof CodePreviewSettings>(
+  current: CodePreviewSettings,
   key: K,
+  value: string,
+): CodePreviewSettings[K] | undefined {
+  const currentValue = current[key];
+  let candidate: unknown = value;
+  if (key === "tools") {
+    const tools = parseCodePreviewTools(value);
+    candidate = tools ? [...tools] : undefined;
+  } else if (key === "editCollapsedLines") {
+    candidate = value === "all" ? value : Number(value);
+  } else if (Predicate.isBoolean(currentValue)) {
+    candidate = value === "on" ? true : value === "off" ? false : undefined;
+  } else if (Predicate.isNumber(currentValue)) {
+    candidate = Number(value);
+  }
+  const decoded = Schema.decodeUnknownOption(CodePreviewSettingsSchema.fields[key])(candidate);
+  // SAFETY: The selected authoritative field schema corresponds to the requested settings key.
+  return Option.isSome(decoded) ? (decoded.value as CodePreviewSettings[K]) : undefined;
+}
+
+function setSetting<K extends keyof CodePreviewSettings>(
+  settings: CodePreviewSettings,
+  key: K,
+  value: CodePreviewSettings[K],
 ): void {
-  // SAFETY: Configuration decoding validates the persisted value before this typed access.
-  const definition = CODE_PREVIEW_SETTING_DEFINITIONS[key] as CodePreviewSettingDescriptor<K>;
-  const decoded = Schema.decodeUnknownOption(definition.schema)(data[key]);
-  next[key] = Option.isSome(decoded)
-    ? definition.normalize(decoded.value, fallback[key])
-    : fallback[key];
+  settings[key] = value;
 }
 
 export function updateSetting(
@@ -78,9 +106,12 @@ export function updateSetting(
     return cloneCodePreviewSettings(defaultCodePreviewSettings);
 
   const next = cloneCodePreviewSettings(current);
-  const definition = getSettingDefinition(id);
-  if (definition) definition.update(next, current, value);
-  else {
+  if (Object.hasOwn(CodePreviewSettingsSchema.fields, id)) {
+    // SAFETY: The own-property check narrows id to a field in the authoritative settings schema.
+    const key = id as keyof CodePreviewSettings;
+    const parsed = parseUiSettingValue(current, key, value);
+    if (parsed !== undefined) setSetting(next, key, parsed);
+  } else {
     const tool = parseToolToggleId(id);
     if (tool) next.tools = updateToolToggle(current.tools, tool, value);
   }

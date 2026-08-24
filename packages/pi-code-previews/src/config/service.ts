@@ -1,61 +1,46 @@
 /** Internal Effect settings service room. Public persistence door: `store.ts`. */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
-import * as Semaphore from "effect/Semaphore";
+import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import {
   AgentDirectory,
   freezeSnapshot,
   JsonDocumentStore,
-  makeFrozenProjection,
   type JsonDocumentError,
-  type ProjectionError,
 } from "pi-cosmic-core";
-import { CodePreviewEnvironmentService } from "./env";
-import { cloneCodePreviewSettings, setCodePreviewSettings } from "./state";
 import {
-  CodePreviewSettingsLoadError,
+  flushSettingsCoordinator,
+  type SettingsAdmission,
+  withSettingsCoordinator,
+} from "./coordinator";
+import {
   defaultSettingsSaveContext,
-  loadSettingsStateEffect,
+  loadSettingsSaveContextEffect,
   saveSettingsStateEffect,
   type LoadSettingsOptions,
   type SettingsSaveContext,
 } from "./document-store";
+import { CodePreviewEnvironmentService } from "./env";
 import type { CodePreviewSettings } from "./schema";
+import { cloneCodePreviewSettings, setCodePreviewSettings } from "./state";
 
-export interface CodePreviewSettingsState {
-  readonly settings: CodePreviewSettings;
-  readonly saveContext: SettingsSaveContext;
+export interface SaveSettingsOptions {
+  readonly rehydrate?: LoadSettingsOptions;
 }
 
 export interface CodePreviewSettingsServiceContract {
   readonly load: (
+    admission: SettingsAdmission,
     options?: LoadSettingsOptions,
-  ) => Effect.Effect<CodePreviewSettings, ProjectionError>;
-  readonly loadFromDisk: (
-    options?: LoadSettingsOptions,
-  ) => Effect.Effect<
-    CodePreviewSettings | undefined,
-    CodePreviewSettingsLoadError | ProjectionError
-  >;
+  ) => Effect.Effect<CodePreviewSettings>;
   readonly save: (
     settings: CodePreviewSettings,
-    context?: SettingsSaveContext,
-  ) => Effect.Effect<void, JsonDocumentError | ProjectionError>;
-  readonly flush: Effect.Effect<void, ProjectionError>;
-  readonly snapshot: Effect.Effect<CodePreviewSettingsState>;
-}
-
-let saveContextProjection: SettingsSaveContext | undefined;
-
-function publishState(state: CodePreviewSettingsState): void {
-  setCodePreviewSettings(state.settings);
-  saveContextProjection = state.saveContext;
-}
-
-export function settingsSaveContextProjection(): SettingsSaveContext | undefined {
-  return saveContextProjection;
+    admission: SettingsAdmission,
+    options?: SaveSettingsOptions,
+  ) => Effect.Effect<void, JsonDocumentError>;
+  readonly flush: Effect.Effect<void>;
 }
 
 export class CodePreviewSettingsService extends Context.Service<
@@ -74,63 +59,58 @@ export class CodePreviewSettingsService extends Context.Service<
         Context.add(JsonDocumentStore, documents),
         Context.add(Path.Path, path),
       );
-      // Every session starts from its own environment defaults. The process projection is output
-      // only and must never seed a later session's persistence context.
-      const initial: CodePreviewSettingsState = {
-        settings: cloneCodePreviewSettings(environment.defaults),
-        saveContext: defaultSettingsSaveContext(environment.defaults),
-      };
-      const state = yield* makeFrozenProjection(initial, (current) => current, publishState);
-      const operations = yield* Semaphore.make(1);
+      // The Ref starts private. Layer construction must not publish settings from an unstarted runtime.
+      const state = yield* Ref.make(
+        freezeSnapshot(defaultSettingsSaveContext(environment.defaults)),
+      );
+      const readFromDisk = (options: LoadSettingsOptions) =>
+        loadSettingsSaveContextEffect(options).pipe(Effect.provide(dependencies));
 
-      const loadFromDisk = (options: LoadSettingsOptions = {}) =>
-        operations.withPermits(1)(
-          state.transition(() =>
-            loadSettingsStateEffect(options).pipe(
-              Effect.provide(dependencies),
-              Effect.map((loaded) => {
-                const settings = cloneCodePreviewSettings(loaded.settings ?? environment.defaults);
-                return [loaded.settings, { settings, saveContext: loaded.saveContext }] as const;
-              }),
-            ),
-          ),
-        );
-
-      const load = (options: LoadSettingsOptions = {}) =>
-        loadFromDisk(options).pipe(
-          Effect.map((saved) => cloneCodePreviewSettings(saved ?? environment.defaults)),
-        );
-
-      const save = (settings: CodePreviewSettings, context?: SettingsSaveContext) =>
-        operations.withPermits(1)(
+      const load = (admission: SettingsAdmission, options: LoadSettingsOptions = {}) =>
+        withSettingsCoordinator(admission, (coordinator) =>
           Effect.gen(function* () {
-            const current = yield* state.getState;
-            yield* saveSettingsStateEffect(
-              settings,
-              context ?? current.saveContext,
-              (saveContext) => {
-                // This callback is evaluated before the document write. Preflight the exact plain
-                // projection now so the post-rename hook performs only an invariant-safe swap.
-                const committedState = freezeSnapshot<CodePreviewSettingsState>({
-                  settings: cloneCodePreviewSettings(saveContext.loaded),
-                  saveContext,
-                });
-                return state
-                  .transition(() => Effect.succeed([undefined, committedState] as const))
-                  .pipe(Effect.orDie);
-              },
-            ).pipe(Effect.provide(dependencies));
+            const loaded = freezeSnapshot(yield* readFromDisk(options));
+            yield* Ref.set(state, loaded);
+            yield* Effect.sync(() => {
+              coordinator.publishIfCurrent(() => setCodePreviewSettings(loaded.loaded));
+            });
+            return cloneCodePreviewSettings(loaded.loaded);
+          }),
+        );
+
+      const save = (
+        settings: CodePreviewSettings,
+        admission: SettingsAdmission,
+        options: SaveSettingsOptions = {},
+      ) =>
+        withSettingsCoordinator(admission, (coordinator) =>
+          Effect.gen(function* () {
+            // A newer successful publication makes this save obsolete before document mutation.
+            if (!coordinator.isCurrent()) return;
+            let current = yield* Ref.get(state);
+            if (options.rehydrate !== undefined) {
+              current = freezeSnapshot(yield* readFromDisk(options.rehydrate));
+              yield* Ref.set(state, current);
+            }
+            yield* saveSettingsStateEffect(settings, current, (nextContext) => {
+              // Preflight the complete plain state before rename. afterCommit already holds the
+              // coordinator and document locks, so it must not reacquire either one.
+              const committed = freezeSnapshot<SettingsSaveContext>(nextContext);
+              return Ref.set(state, committed).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    coordinator.publishIfCurrent(() => setCodePreviewSettings(committed.loaded));
+                  }),
+                ),
+              );
+            }).pipe(Effect.provide(dependencies));
           }),
         );
 
       return CodePreviewSettingsService.of({
         load,
-        loadFromDisk,
         save,
-        // The operation semaphore is a FIFO barrier behind every save/load that has entered the
-        // service. The Promise-shaped Pi close edge awaits this before disposal.
-        flush: operations.withPermits(1)(Effect.void),
-        snapshot: state.getState,
+        flush: flushSettingsCoordinator,
       });
     }),
   );

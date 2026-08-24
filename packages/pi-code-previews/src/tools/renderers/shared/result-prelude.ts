@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { escapeControlChars } from "../../../shared/terminal-text";
-import { renderHiddenPreviewExpandHint } from "../../../preview/tool-shell";
+import { renderHiddenPreviewExpandHint } from "../../../preview/bordered-tool-call";
 import type { RendererState } from "./types";
 
 export function renderResultPrelude(options: {

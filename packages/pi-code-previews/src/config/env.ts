@@ -4,8 +4,17 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { defaultsFromEnvironment } from "./defaults";
-import type { CodePreviewSettings } from "./schema";
+import * as Schema from "effect/Schema";
+import {
+  defaultCodePreviewPerformanceConfig,
+  defaultCodePreviewSettings,
+  type CodePreviewPerformanceConfig,
+} from "./defaults";
+import {
+  CodePreviewSettingsSchema,
+  type CodePreviewSettings,
+  type ToolCallBackgroundMode,
+} from "./schema";
 
 export function parsePositiveInteger(value: string | undefined): number | undefined {
   const parsed = Number(value);
@@ -27,6 +36,16 @@ export function parseBoolean(value: string | undefined): boolean | undefined {
     default:
       return undefined;
   }
+}
+
+export function parseToolCallBackgroundMode(
+  value: string | undefined,
+): ToolCallBackgroundMode | undefined {
+  const normalized = value?.toLowerCase();
+  if (normalized === "on" || normalized === "border" || normalized === "off") return normalized;
+  if (normalized === "1" || normalized === "true" || normalized === "yes") return "on";
+  if (normalized === "0" || normalized === "false" || normalized === "no") return "off";
+  return undefined;
 }
 
 const ENVIRONMENT_KEYS = [
@@ -87,29 +106,69 @@ export const loadCodePreviewEnvironment = description.pipe(
   }),
 );
 
-export interface CodePreviewPerformanceConfig {
-  readonly asyncRenderChars: number;
-  readonly maxHighlightChars: number;
-  readonly cacheLimit: number;
-  readonly cacheCharLimit: number;
-  readonly contentLanguageDetectionChars: number;
-  readonly diffWrapRows: number;
-  readonly secretScanChars: number;
-  readonly maxWriteDiffBytes: number;
-  readonly maxWriteDiffChangedLineCells: number;
+type EnvironmentSettingCandidate = string | number | boolean | undefined;
+
+function environmentField<K extends keyof CodePreviewSettings>(
+  key: K,
+  candidate: EnvironmentSettingCandidate,
+): CodePreviewSettings[K] {
+  const decoded = Schema.decodeUnknownOption(CodePreviewSettingsSchema.fields[key])(candidate);
+  // SAFETY: The selected authoritative field schema corresponds to the requested settings key.
+  return Option.isSome(decoded)
+    ? (decoded.value as CodePreviewSettings[K])
+    : defaultCodePreviewSettings[key];
 }
 
-export const defaultCodePreviewPerformanceConfig: CodePreviewPerformanceConfig = Object.freeze({
-  asyncRenderChars: 8_000,
-  maxHighlightChars: 80_000,
-  cacheLimit: 192,
-  cacheCharLimit: 4_000_000,
-  contentLanguageDetectionChars: 50_000,
-  diffWrapRows: 3,
-  secretScanChars: 200_000,
-  maxWriteDiffBytes: 200_000,
-  maxWriteDiffChangedLineCells: 1_000_000,
-});
+/** Every fallback comes from the canonical default object, never a repeated setting literal. */
+export function defaultsFromEnvironment(environment: CodePreviewEnvironment): CodePreviewSettings {
+  const value = (name: keyof CodePreviewEnvironment) => environment[name];
+  const boolean = <K extends keyof CodePreviewSettings>(
+    name: keyof CodePreviewEnvironment,
+    key: K,
+  ) => environmentField(key, parseBoolean(value(name)));
+  const integer = <K extends keyof CodePreviewSettings>(
+    name: keyof CodePreviewEnvironment,
+    key: K,
+  ) => environmentField(key, parsePositiveInteger(value(name)));
+  const editLines = value("CODE_PREVIEW_EDIT_LINES");
+  return {
+    shikiTheme: environmentField("shikiTheme", value("CODE_PREVIEW_THEME")),
+    diffIntensity: environmentField(
+      "diffIntensity",
+      value("CODE_PREVIEW_DIFF_INTENSITY")?.toLowerCase(),
+    ),
+    wordEmphasis: environmentField(
+      "wordEmphasis",
+      value("CODE_PREVIEW_WORD_EMPHASIS")?.toLowerCase(),
+    ),
+    toolCallBackground: environmentField(
+      "toolCallBackground",
+      parseToolCallBackgroundMode(value("CODE_PREVIEW_TOOL_CALL_BACKGROUND")),
+    ),
+    toolCallTiming: boolean("CODE_PREVIEW_TOOL_CALL_TIMING", "toolCallTiming"),
+    readCollapsedLines: integer("CODE_PREVIEW_READ_LINES", "readCollapsedLines"),
+    readContentPreview: boolean("CODE_PREVIEW_READ_CONTENT", "readContentPreview"),
+    writeContentPreview: boolean("CODE_PREVIEW_WRITE_CONTENT", "writeContentPreview"),
+    writeCollapsedLines: integer("CODE_PREVIEW_WRITE_LINES", "writeCollapsedLines"),
+    editDiffPreview: boolean("CODE_PREVIEW_EDIT_DIFF", "editDiffPreview"),
+    editCollapsedLines: environmentField(
+      "editCollapsedLines",
+      editLines === "all" ? "all" : parsePositiveInteger(editLines),
+    ),
+    grepCollapsedLines: integer("CODE_PREVIEW_GREP_LINES", "grepCollapsedLines"),
+    grepResultPreview: boolean("CODE_PREVIEW_GREP_RESULTS", "grepResultPreview"),
+    findResultPreview: boolean("CODE_PREVIEW_FIND_RESULTS", "findResultPreview"),
+    lsResultPreview: boolean("CODE_PREVIEW_LS_RESULTS", "lsResultPreview"),
+    pathListCollapsedLines: integer("CODE_PREVIEW_PATH_LIST_LINES", "pathListCollapsedLines"),
+    readLineNumbers: boolean("CODE_PREVIEW_READ_LINE_NUMBERS", "readLineNumbers"),
+    bashResultPreview: boolean("CODE_PREVIEW_BASH_RESULTS", "bashResultPreview"),
+    bashWarnings: boolean("CODE_PREVIEW_BASH_WARNINGS", "bashWarnings"),
+    syntaxHighlighting: boolean("CODE_PREVIEW_SYNTAX", "syntaxHighlighting"),
+    secretWarnings: boolean("CODE_PREVIEW_SECRET_WARNINGS", "secretWarnings"),
+    pathIcons: environmentField("pathIcons", value("CODE_PREVIEW_PATH_ICONS")?.toLowerCase()),
+    tools: [...defaultCodePreviewSettings.tools],
+  };
+}
 
 export let codePreviewPerformanceConfig = defaultCodePreviewPerformanceConfig;
 export let codePreviewToolsEnvironmentValue: string | undefined;
@@ -157,9 +216,7 @@ export function publishCodePreviewEnvironmentProjection(
 }
 
 export interface CodePreviewEnvironmentContract {
-  readonly values: CodePreviewEnvironment;
   readonly defaults: CodePreviewSettings;
-  readonly performance: CodePreviewPerformanceConfig;
 }
 
 export class CodePreviewEnvironmentService extends Context.Service<
@@ -170,20 +227,17 @@ export class CodePreviewEnvironmentService extends Context.Service<
     this,
     Effect.gen(function* () {
       const values = yield* loadCodePreviewEnvironment;
-      const service = CodePreviewEnvironmentService.of({
-        values,
-        defaults: Object.freeze(defaultsFromEnvironment(values)),
-        performance: performanceConfigFromEnvironment(values),
-      });
-      publishCodePreviewEnvironmentProjection(service.performance, values.CODE_PREVIEW_TOOLS);
-      return service;
+      const defaults = Object.freeze(defaultsFromEnvironment(values));
+      const performance = performanceConfigFromEnvironment(values);
+      publishCodePreviewEnvironmentProjection(performance, values.CODE_PREVIEW_TOOLS);
+      return CodePreviewEnvironmentService.of({ defaults });
     }),
   );
 
-  static readonly layerFrom = (environment: Readonly<Record<string, string>>) =>
+  static readonly layerFrom = (environment: Record<string, string | undefined>) =>
     this.layer.pipe(
       Layer.provide(
-        Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env: environment })),
+        Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord(environment)),
       ),
     );
 }

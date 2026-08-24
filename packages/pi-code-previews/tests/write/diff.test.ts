@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { test } from "vitest";
 import { effectTest, step } from "../support/effect-test";
-import { defaultCodePreviewPerformanceConfig } from "../../src/config/env";
+import { defaultCodePreviewPerformanceConfig } from "../../src/config/defaults";
 import {
   getWriteDiffSkipReason,
   readExistingFileForPreviewEffect,

@@ -19,7 +19,6 @@ afterEach(() => clearCodePreviewSessionCapability());
 function installTestCapability(): void {
   // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
   const capability = {
-    token: 1,
     run: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
       Effect.runPromise(effect, signal ? { signal } : undefined),
     defer: (task: () => void) => {

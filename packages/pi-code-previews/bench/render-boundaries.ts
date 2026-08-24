@@ -3,9 +3,11 @@ import { performance } from "node:perf_hooks";
 import { Text } from "@earendil-works/pi-tui";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import { synchronousNow as previewNow } from "../src/boundary/clock";
+import * as Predicate from "effect/Predicate";
+import { synchronousNow as previewNow } from "pi-cosmic-core";
 import { createSimpleDiff } from "../src/diff/structured";
 import { DeferredPreview } from "../src/preview/deferred";
+import { getObjectValue } from "../src/shared/helpers";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
@@ -23,6 +25,16 @@ import {
 } from "./helpers";
 
 printBenchHeader("render boundaries");
+const propertyFixtures: unknown[] = Array.from({ length: 256 }, (_, index) =>
+  index % 4 === 0
+    ? { value: index }
+    : index % 4 === 1
+      ? Object.create({ value: index })
+      : index % 4 === 2
+        ? [index]
+        : null,
+);
+let propertySink = 0;
 const cases = [
   runBench("synchronous clock", "render", "native-boundary", () => {
     previewNow();
@@ -32,6 +44,12 @@ const cases = [
   }),
   runBench("invalid JSON language probe", "render", "pure-boundary", () => {
     resolvePreviewLanguage({ content: '{"name":}' });
+  }),
+  runBench("256 own-property reads", "render", "batched-pure-boundary", () => {
+    for (const fixture of propertyFixtures) {
+      const value = getObjectValue(fixture, "value");
+      if (Predicate.isNumber(value)) propertySink += value;
+    }
   }),
 ];
 printLayerSummary(cases);
@@ -65,7 +83,6 @@ if (cpuBlockMs > 50)
 
 // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const capability = {
-  token: 1,
   run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
   defer: (task: () => void) => {
     const fiber = Effect.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
@@ -104,5 +121,5 @@ if (computed) throw new Error("Cancelled deferred preview still computed.");
 if (cancellationLatencyMs > 100)
   throw new Error(`Deferred cancellation latency exceeded 100ms: ${cancellationLatencyMs}`);
 benchLog(
-  `deferred method=3-warmup+9-sample-median baselineMs=${committedBaselineMedianMs.toFixed(3)} regressionLimitMs=${regressionLimitMs.toFixed(3)} cpuSamplesMs=${cpuSamplesMs.map((sample) => sample.toFixed(3)).join(",")} cpuMedianMs=${cpuBlockMs.toFixed(3)} cancellationSamplesMs=${cancellationSamplesMs.map((sample) => sample.toFixed(3)).join(",")} cancellationMedianMs=${cancellationLatencyMs.toFixed(3)} worker=not-justified`,
+  `deferred method=3-warmup+9-sample-median baselineMs=${committedBaselineMedianMs.toFixed(3)} regressionLimitMs=${regressionLimitMs.toFixed(3)} cpuSamplesMs=${cpuSamplesMs.map((sample) => sample.toFixed(3)).join(",")} cpuMedianMs=${cpuBlockMs.toFixed(3)} cancellationSamplesMs=${cancellationSamplesMs.map((sample) => sample.toFixed(3)).join(",")} cancellationMedianMs=${cancellationLatencyMs.toFixed(3)} worker=not-justified propertySink=${propertySink}`,
 );

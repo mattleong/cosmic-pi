@@ -44,7 +44,7 @@ type SettingsGroupDefinition = {
   ) => SettingItem[];
 };
 
-const SETTINGS_CATEGORY_GROUPS: SettingsGroupDefinition[] = [
+const SETTINGS_CATEGORY_GROUPS = [
   {
     name: "appearance",
     label: "Appearance",
@@ -74,23 +74,18 @@ const SETTINGS_CATEGORY_GROUPS: SettingsGroupDefinition[] = [
     summarize: () => "file & defaults",
     items: (current) => createSettingListItems(current, ADVANCED_SETTING_IDS),
   },
-];
+] as const satisfies readonly SettingsGroupDefinition[];
 
 export function createSettingsCategoryItems(
   current: CodePreviewSettings,
   getCurrent: SettingsProvider,
   onSettingChange: SettingChangeHandler,
 ): SettingItem[] {
-  const groupItem = (name: string) =>
-    createSettingsGroupItemFromDefinition(
-      settingsGroupDefinition(name),
-      current,
-      getCurrent,
-      onSettingChange,
-    );
+  const groupItem = (definition: SettingsGroupDefinition) =>
+    createSettingsGroupItemFromDefinition(definition, current, getCurrent, onSettingChange);
   return [
-    groupItem("appearance"),
-    groupItem("outputPreviews"),
+    groupItem(SETTINGS_CATEGORY_GROUPS[0]),
+    groupItem(SETTINGS_CATEGORY_GROUPS[1]),
     {
       id: "tools",
       label: "Enabled tools",
@@ -100,15 +95,9 @@ export function createSettingsCategoryItems(
       submenu: (_currentValue, done) =>
         new ToolPreviewSettingsSubmenu(formatSettingValue(getCurrent(), "tools"), done),
     },
-    groupItem("warningsSafety"),
-    groupItem("advanced"),
+    groupItem(SETTINGS_CATEGORY_GROUPS[2]),
+    groupItem(SETTINGS_CATEGORY_GROUPS[3]),
   ];
-}
-
-function settingsGroupDefinition(name: string): SettingsGroupDefinition {
-  const definition = SETTINGS_CATEGORY_GROUPS.find((group) => group.name === name);
-  if (definition === undefined) throw new RangeError(`Missing settings group ${name}`);
-  return definition;
 }
 
 function createSettingsGroupItemFromDefinition(

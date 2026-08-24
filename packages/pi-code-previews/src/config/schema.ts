@@ -1,5 +1,4 @@
-import * as Predicate from "effect/Predicate";
-
+import { bundledThemes } from "shiki";
 import * as Schema from "effect/Schema";
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
 
@@ -13,6 +12,7 @@ export const DiffWordEmphasisSchema = Schema.Literals(DIFF_WORD_EMPHASES);
 export const ToolCallBackgroundModeSchema = Schema.Literals(TOOL_CALL_BACKGROUND_MODES);
 export const PathIconModeSchema = Schema.Literals(PATH_ICON_MODES);
 export const CodePreviewToolNameSchema = Schema.Literals(ALL_CODE_PREVIEW_TOOLS);
+export const BundledShikiThemeSchema = Schema.Literals(Object.keys(bundledThemes));
 
 export const PositiveIntegerSchema = Schema.Number.check(
   Schema.isFinite(),
@@ -28,7 +28,7 @@ export const EditCollapsedLinesSchema = Schema.Union([
 export const CodePreviewToolsSchema = Schema.Array(CodePreviewToolNameSchema);
 
 export const CodePreviewSettingsSchema = Schema.Struct({
-  shikiTheme: Schema.String,
+  shikiTheme: BundledShikiThemeSchema,
   diffIntensity: DiffBackgroundIntensitySchema,
   wordEmphasis: DiffWordEmphasisSchema,
   toolCallBackground: ToolCallBackgroundModeSchema,
@@ -64,24 +64,9 @@ export type ToolCallBackgroundMode = typeof ToolCallBackgroundModeSchema.Type;
 export type PathIconMode = typeof PathIconModeSchema.Type;
 export type CodePreviewEditableSettingId = keyof CodePreviewSettings | "resetToDefaults";
 
-export function parseToolCallBackgroundMode<ValueInput>(
-  value: ValueInput,
-): ToolCallBackgroundMode | undefined {
-  if (Predicate.isBoolean(value)) return value ? "on" : "off";
-  if (!Predicate.isString(value)) return undefined;
+const codePreviewSettingKeys = (): readonly (keyof CodePreviewSettings)[] => {
+  // SAFETY: The authoritative struct fields and CodePreviewSettings are derived from the same schema.
+  return Object.keys(CodePreviewSettingsSchema.fields) as readonly (keyof CodePreviewSettings)[];
+};
 
-  const normalized = value.toLowerCase();
-  if (isToolCallBackgroundMode(normalized)) return normalized;
-  if (normalized === "1" || normalized === "true" || normalized === "yes") return "on";
-  if (normalized === "0" || normalized === "false" || normalized === "no") return "off";
-  return undefined;
-}
-
-export function isToolCallBackgroundMode<ValueInput>(
-  value: ValueInput,
-): value is ValueInput & ToolCallBackgroundMode {
-  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-  return (
-    Predicate.isString(value) && (TOOL_CALL_BACKGROUND_MODES as readonly string[]).includes(value)
-  );
-}
+export const CODE_PREVIEW_SETTING_KEYS = Object.freeze(codePreviewSettingKeys());

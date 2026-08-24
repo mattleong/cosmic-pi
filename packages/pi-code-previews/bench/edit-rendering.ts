@@ -7,6 +7,7 @@ import type {
   createEditToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
+import type { ToolRenderContext } from "../src/tools/renderers/shared/types";
 import {
   benchLog,
   benchTheme,
@@ -38,20 +39,7 @@ type Renderer = {
   ) => Component;
 };
 
-type RenderContext = {
-  args?: unknown;
-  argsComplete: boolean;
-  cwd: string;
-  executionStarted: boolean;
-  expanded: boolean;
-  invalidate: () => void;
-  isError: boolean;
-  isPartial: boolean;
-  lastComponent?: Component;
-  showImages: boolean;
-  state: EditBenchmarkState;
-  toolCallId: string;
-};
+type RenderContext = ToolRenderContext<EditBenchmarkState, EditToolInput>;
 
 type ToolResult = AgentToolResult<EditToolDetails | undefined>;
 
@@ -83,7 +71,7 @@ try {
         const component = edit.renderCall!(
           benchCase.args,
           theme,
-          callContext(benchCase.expanded, {}),
+          callContext(benchCase.args, benchCase.expanded, {}),
         );
         sink += renderComponent(component, WIDTH).length;
       }),
@@ -91,7 +79,11 @@ try {
 
     const state: EditBenchmarkState = {};
     const warm = () =>
-      edit.renderCall!(benchCase.args, theme, callContext(benchCase.expanded, state));
+      edit.renderCall!(
+        benchCase.args,
+        theme,
+        callContext(benchCase.args, benchCase.expanded, state),
+      );
     sink += renderComponent(warm(), WIDTH).length;
     results.push(
       runBench(benchCase.name, "renderCall+cachedComponent", benchCase.mode, () => {
@@ -131,6 +123,50 @@ try {
     );
   }
 
+  const shellArgs = editArgs(1, 1);
+  for (const mode of ["on", "off", "border"] as const) {
+    setCodePreviewSettings({
+      ...codePreviewSettings,
+      toolCallBackground: mode,
+      toolCallTiming: false,
+    });
+    const shellEdit = findRenderer(registerRenderers(), "edit");
+    const state: EditBenchmarkState = {};
+    results.push(
+      runBench("single edit shell adapter", "renderCall+component", mode, () => {
+        const component = shellEdit.renderCall!(
+          shellArgs,
+          theme,
+          callContext(shellArgs, false, state),
+        );
+        sink += renderComponent(component, WIDTH).length;
+      }),
+    );
+  }
+
+  setCodePreviewSettings({
+    ...codePreviewSettings,
+    toolCallBackground: "off",
+    toolCallTiming: true,
+  });
+  const timingEdit = findRenderer(registerRenderers(), "edit");
+  const timingState: EditBenchmarkState = {};
+  const timingContext = {
+    ...callContext(shellArgs, false, timingState),
+    executionStarted: true,
+  };
+  const firstTimingComponent = timingEdit.renderCall!(shellArgs, theme, timingContext);
+  Object.assign(timingState, { codePreviewTimingOnlyRenderToken: 1 });
+  results.push(
+    runBench("single edit shell adapter", "renderCall+component", "timing-only cached", () => {
+      const component = timingEdit.renderCall!(shellArgs, theme, {
+        ...timingContext,
+        lastComponent: firstTimingComponent,
+      });
+      sink += renderComponent(component, WIDTH).length;
+    }),
+  );
+
   printLayerSummary(results);
   benchLog(
     "Cold rows create fresh renderer state, render the preview component, and render it to TUI rows.",
@@ -149,6 +185,7 @@ function registerRenderers(): Renderer[] {
   // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   registerToolRenderers(
     {
+      getAllTools: () => [],
       registerTool: <Tool>(tool: Tool) => {
         // SAFETY: The benchmark captures the renderer definition registered by this package.
         registered.push(tool as Tool & Renderer);
@@ -165,8 +202,13 @@ function findRenderer(renderers: Renderer[], name: string): Renderer {
   return renderer;
 }
 
-function callContext(expanded: boolean, state: EditBenchmarkState): RenderContext {
+function callContext(
+  args: EditToolInput,
+  expanded: boolean,
+  state: EditBenchmarkState,
+): RenderContext {
   return {
+    args,
     argsComplete: true,
     cwd: "/tmp/project",
     executionStarted: false,
@@ -174,6 +216,7 @@ function callContext(expanded: boolean, state: EditBenchmarkState): RenderContex
     invalidate: () => undefined,
     isError: false,
     isPartial: true,
+    lastComponent: undefined,
     showImages: true,
     state,
     toolCallId: "bench-edit",
@@ -186,8 +229,7 @@ function resultContext(
   state: EditBenchmarkState,
 ): RenderContext {
   return {
-    ...callContext(expanded, state),
-    args,
+    ...callContext(args, expanded, state),
     executionStarted: true,
     isPartial: false,
   };

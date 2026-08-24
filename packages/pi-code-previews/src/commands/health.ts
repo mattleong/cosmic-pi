@@ -8,9 +8,10 @@ import { getSettingsPath } from "../config/store";
 import { getShikiStatus } from "../syntax/render";
 import { formatEnabledCodePreviewTools } from "../tools/selection";
 import {
-  formatActiveCodePreviewTools,
   formatDisabledCodePreviewTools,
+  formatInstalledCodePreviewTools,
   formatPendingCodePreviewTools,
+  formatRegistrationErrorCodePreviewTools,
   formatSkippedCodePreviewToolLines,
 } from "../tools/status";
 
@@ -37,7 +38,8 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
         `Bash result preview: ${formatOnOff(codePreviewSettings.bashResultPreview)}`,
         `Word-level diff emphasis: ${codePreviewSettings.wordEmphasis}`,
         `Configured tools: ${formatEnabledCodePreviewTools()}`,
-        `Active previews: ${formatActiveCodePreviewTools()}`,
+        `Installed previews: ${formatInstalledCodePreviewTools()}`,
+        `Registration errors: ${formatRegistrationErrorCodePreviewTools()}`,
         `Skipped previews: ${skippedLines.length ? "" : "none"}`,
         ...skippedLines,
         `Disabled by config: ${formatDisabledCodePreviewTools()}`,
