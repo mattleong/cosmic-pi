@@ -1,25 +1,121 @@
-/**
- * Host-facing `code_mode` tool controller: definition assembly, registration, and active-list
- * reconciliation that only ever adds or removes the one extension-owned tool name.
- */
-import {
-  defineTool,
-  type ExtensionAPI,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+/** Host-facing definition, registration, and activation controller for `code_mode`. */
+import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getKeybindings } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
+import { hasObjectRuntimeType, sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { Type } from "typebox";
 import { renderCodeModeToolCall, renderCodeModeToolResult } from "../ui/tool-renderer.ts";
-import {
-  codeModeAnimationFrame,
-  shouldAnimateCodeModeResult,
-  syncCodeModeProgressTicker,
-} from "./animation.ts";
 import { describeCodeModeCatalog } from "./catalog.ts";
 import type { CodeModeToolExecute } from "./execution.ts";
-import { MAX_INTENT_LENGTH } from "./format.ts";
+import { MAX_INTENT_LENGTH, truncateDisplay } from "./format.ts";
 
 export const CODE_MODE_TOOL_NAME = "code_mode";
+const SPINNER_INTERVAL_MS = 160;
+type StartUiTicker = (intervalMs: number, tick: () => void) => () => void;
+type RendererState = {
+  piCodeModeProgressTicker?: (() => void) | undefined;
+  piCodeModeProgressInvalidate?: (() => void) | undefined;
+};
+type RendererContext = {
+  readonly state?: unknown;
+  readonly invalidate?: (() => void) | undefined;
+};
+
+const syncProgressTicker = (
+  shouldAnimate: boolean,
+  context: RendererContext | undefined,
+  startTicker: StartUiTicker,
+): void => {
+  try {
+    const rawState = context?.state;
+    const invalidate = context?.invalidate;
+    if (!hasObjectRuntimeType(rawState) || rawState === null || !Predicate.isFunction(invalidate))
+      return;
+    // SAFETY: Renderer state is host-owned extensible object storage; every property is guarded.
+    const state = rawState as RendererState;
+    if (!shouldAnimate) {
+      let stop: unknown;
+      try {
+        stop = state.piCodeModeProgressTicker;
+        state.piCodeModeProgressTicker = undefined;
+        state.piCodeModeProgressInvalidate = undefined;
+      } catch {}
+      if (Predicate.isFunction(stop))
+        try {
+          stop();
+        } catch {}
+      return;
+    }
+    state.piCodeModeProgressInvalidate = invalidate;
+    if (Predicate.isFunction(state.piCodeModeProgressTicker)) return;
+    const weakState = new WeakRef(state);
+    let stopped = false;
+    let stopTimer: () => void = () => undefined;
+    const cleanup = () => {
+      if (stopped) return;
+      stopped = true;
+      try {
+        stopTimer();
+      } catch {}
+    };
+    const tick = () => {
+      const active = weakState.deref();
+      if (!active) return cleanup();
+      try {
+        active.piCodeModeProgressInvalidate?.();
+      } catch {
+        try {
+          active.piCodeModeProgressTicker = undefined;
+          active.piCodeModeProgressInvalidate = undefined;
+        } catch {}
+        cleanup();
+      }
+    };
+    try {
+      const stop = startTicker(SPINNER_INTERVAL_MS, tick);
+      if (!Predicate.isFunction(stop)) return cleanup();
+      stopTimer = stop;
+      if (stopped) {
+        try {
+          stop();
+        } catch {}
+        return;
+      }
+      state.piCodeModeProgressTicker = cleanup;
+    } catch {
+      try {
+        state.piCodeModeProgressInvalidate = undefined;
+      } catch {}
+      cleanup();
+    }
+  } catch {
+    // Animation is optional presentation.
+  }
+};
+
+const animationFrame = (): number => {
+  try {
+    return Math.floor(Math.max(0, synchronousNow()) / SPINNER_INTERVAL_MS);
+  } catch {
+    return 0;
+  }
+};
+
+const expandKeys = (): string[] => {
+  try {
+    const keys: unknown = getKeybindings().getKeys("app.tools.expand");
+    return Array.isArray(keys)
+      ? keys.slice(0, 4).flatMap((key) => {
+          if (!Predicate.isString(key)) return [];
+          const bounded = truncateDisplay(sanitizeTerminalLine(key), 32);
+          return bounded.length === 0 ? [] : [bounded];
+        })
+      : [];
+  } catch {
+    return [];
+  }
+};
 
 const parameters = Type.Object({
   code: Type.String({
@@ -63,8 +159,8 @@ export interface CodeModeToolDefinitionInput {
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
 }
 
-/** Builds the one extension-owned `code_mode` tool definition (unwrapped). */
 export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) {
+  const capturedExpandKeys = expandKeys();
   return defineTool({
     name: CODE_MODE_TOOL_NAME,
     label: "Code Mode",
@@ -86,38 +182,21 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
     execute: input.execute,
     renderCall: (args, theme, context) => renderCodeModeToolCall(args, theme, context),
     renderResult: (result, options, theme, context) => {
-      syncCodeModeProgressTicker(
-        shouldAnimateCodeModeResult(options.isPartial, result),
+      const rendered = renderCodeModeToolResult(
+        result,
+        options,
+        theme,
         context,
-        input.startUiTicker ?? startHostUiTicker,
+        animationFrame(),
+        capturedExpandKeys,
       );
-      return renderCodeModeToolResult(result, options, theme, context, codeModeAnimationFrame());
+      syncProgressTicker(rendered.shouldAnimate, context, input.startUiTicker ?? startHostUiTicker);
+      return rendered.component;
     },
   });
 }
-export type CodeModeToolDefinition = ToolDefinition<any, any, any>;
+export type CodeModeToolDefinition = ReturnType<typeof buildCodeModeToolDefinition>;
 
-/**
- * Removes only `code_mode` from the active tool list, preserving every other active tool
- * exactly. Returns whether the tool was active before removal; a hostile host yields `false`
- * without throwing.
- */
-export function deactivateCodeModeTool(pi: ExtensionAPI): boolean {
-  try {
-    const active = pi.getActiveTools();
-    if (!active.includes(CODE_MODE_TOOL_NAME)) return false;
-    pi.setActiveTools(active.filter((name) => name !== CODE_MODE_TOOL_NAME));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Registers (or re-registers) the wrapped definition. Same-extension re-registration
- * replaces the previous implementation for the same name. Returns `false` (after removing
- * the name from the active list) when the host refuses registration.
- */
 export function registerCodeModeTool(
   pi: ExtensionAPI,
   definition: CodeModeToolDefinition,
@@ -126,7 +205,7 @@ export function registerCodeModeTool(
     pi.registerTool(definition);
     return true;
   } catch {
-    deactivateCodeModeTool(pi);
+    reconcileCodeModeToolActivation(pi, false);
     return false;
   }
 }
@@ -140,9 +219,9 @@ export function registerCodeModeTool(
 export function reconcileCodeModeToolActivation(pi: ExtensionAPI, desiredActive: boolean): boolean {
   try {
     const active = pi.getActiveTools();
-    if (desiredActive) {
-      pi.setActiveTools([...new Set([...active, CODE_MODE_TOOL_NAME])]);
-    } else if (active.includes(CODE_MODE_TOOL_NAME)) {
+    if (desiredActive && !active.includes(CODE_MODE_TOOL_NAME)) {
+      pi.setActiveTools([...active, CODE_MODE_TOOL_NAME]);
+    } else if (!desiredActive && active.includes(CODE_MODE_TOOL_NAME)) {
       pi.setActiveTools(active.filter((name) => name !== CODE_MODE_TOOL_NAME));
     }
     return desiredActive;
@@ -151,11 +230,6 @@ export function reconcileCodeModeToolActivation(pi: ExtensionAPI, desiredActive:
   }
 }
 
-/**
- * True when the user (or another surface) deliberately deactivated `code_mode` after this
- * extension last left it active. Observed at session boundaries before this extension
- * touches the active list, so lifecycle removals are never misread as user intent.
- */
 export function observeCodeModeToolActive(pi: ExtensionAPI): boolean {
   try {
     return pi.getActiveTools().includes(CODE_MODE_TOOL_NAME);

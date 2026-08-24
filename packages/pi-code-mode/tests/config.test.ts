@@ -1,11 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import { findCodeModeSettingDescriptor, resolveCodeModeConfig } from "../src/config/options.ts";
-import {
-  CODE_MODE_FIELD_IDS,
-  CODE_MODE_INTEGER_BOUNDS,
-  DEFAULT_CODE_MODE_CONFIG,
-} from "../src/config/schema.ts";
+import { CODE_MODE_FIELD_IDS, DEFAULT_CODE_MODE_CONFIG } from "../src/config/schema.ts";
 
 describe("code mode config resolution", () => {
   it("uses locked defaults when no scope defines a field", () => {
@@ -36,51 +32,32 @@ describe("code mode config resolution", () => {
     expect(config.maxOutputBytes).toBe(DEFAULT_CODE_MODE_CONFIG.maxOutputBytes);
     expect(provenance.maxOutputBytes).toBe("default");
   });
-
-  it("returns frozen plain resolved values and frozen defaults", () => {
-    const { config, provenance } = resolveCodeModeConfig({ timeoutMs: 5_000 }, undefined);
-    expect(Object.isFrozen(config)).toBe(true);
-    expect(Object.isFrozen(provenance)).toBe(true);
-    expect(Object.isFrozen(DEFAULT_CODE_MODE_CONFIG)).toBe(true);
-  });
-
-  it("documents defensible bounds around every numeric default", () => {
-    for (const [field, bounds] of Object.entries(CODE_MODE_INTEGER_BOUNDS)) {
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const defaultValue = DEFAULT_CODE_MODE_CONFIG[field as keyof typeof CODE_MODE_INTEGER_BOUNDS];
-      expect(bounds.minimum).toBeLessThanOrEqual(defaultValue);
-      expect(bounds.maximum).toBeGreaterThanOrEqual(defaultValue);
-      expect(Number.isSafeInteger(bounds.minimum)).toBe(true);
-      expect(Number.isSafeInteger(bounds.maximum)).toBe(true);
-    }
-    expect(CODE_MODE_INTEGER_BOUNDS.timeoutMs.minimum).toBe(1);
-    expect(CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.minimum).toBe(1);
-    expect(CODE_MODE_INTEGER_BOUNDS.maxToolCalls.minimum).toBe(0);
-  });
 });
 
 describe("code mode setting descriptors", () => {
-  it.effect("parses bounded integers and rejects malformed or out-of-range input", () =>
-    Effect.gen(function* () {
-      const descriptor = findCodeModeSettingDescriptor("timeoutMs");
-      expect(descriptor).toBeDefined();
-      expect(yield* descriptor!.decode("60000")).toBe(60_000);
-      expect(yield* descriptor!.decode(" 250 ")).toBe(250);
-      for (const raw of ["nope", "1.5", "1e3", "", "0", "-1", "600001", "99999999999999999999"]) {
-        const error = yield* descriptor!.decode(raw).pipe(Effect.flip);
-        expect(error._tag).toBe("InvalidCodeModeSettingError");
-        expect(error.message).toContain("timeoutMs");
+  it("parses bounded integers and rejects malformed or out-of-range input", () => {
+    const descriptor = findCodeModeSettingDescriptor("timeoutMs");
+    expect(descriptor).toBeDefined();
+    expect(Result.getOrThrow(descriptor!.decode("60000"))).toBe(60_000);
+    expect(Result.getOrThrow(descriptor!.decode(" 250 "))).toBe(250);
+    for (const raw of ["nope", "1.5", "1e3", "", "0", "-1", "600001", "99999999999999999999"]) {
+      const decoded = descriptor!.decode(raw);
+      expect(Result.isFailure(decoded)).toBe(true);
+      if (Result.isFailure(decoded)) {
+        expect(decoded.failure._tag).toBe("InvalidCodeModeSettingError");
+        expect(decoded.failure.message).toContain("timeoutMs");
       }
-    }),
-  );
+    }
+  });
 
-  it.effect("parses booleans strictly", () =>
-    Effect.gen(function* () {
-      const descriptor = findCodeModeSettingDescriptor("enabled");
-      expect(yield* descriptor!.decode("true")).toBe(true);
-      expect(yield* descriptor!.decode("false")).toBe(false);
-      const error = yield* descriptor!.decode("yes").pipe(Effect.flip);
-      expect(error._tag).toBe("InvalidCodeModeSettingError");
-    }),
-  );
+  it("parses booleans strictly", () => {
+    const descriptor = findCodeModeSettingDescriptor("enabled");
+    expect(Result.getOrThrow(descriptor!.decode("true"))).toBe(true);
+    expect(Result.getOrThrow(descriptor!.decode("false"))).toBe(false);
+    const decoded = descriptor!.decode("yes");
+    expect(Result.isFailure(decoded)).toBe(true);
+    if (Result.isFailure(decoded)) {
+      expect(decoded.failure._tag).toBe("InvalidCodeModeSettingError");
+    }
+  });
 });

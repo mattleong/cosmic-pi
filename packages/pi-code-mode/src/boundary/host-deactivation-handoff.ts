@@ -46,8 +46,8 @@ export type CodeModeSessionKey = string;
 const HandoffEnvelopeSchema = Schema.Struct({
   version: Schema.Literal(2),
   key: Schema.String.check(Schema.isNonEmpty()),
-  deactivated: Schema.Boolean,
-  expiresAt: Schema.Number,
+  deactivated: Schema.Literal(true),
+  expiresAt: Schema.Finite,
 });
 type HandoffEnvelope = typeof HandoffEnvelopeSchema.Type;
 
@@ -59,19 +59,27 @@ interface CodeModeHandoffGlobalState {
 const processState = (): typeof globalThis & CodeModeHandoffGlobalState =>
   globalThis as typeof globalThis & CodeModeHandoffGlobalState;
 
+const clearEnvelope = (): void => {
+  try {
+    Reflect.deleteProperty(processState(), HANDOFF_SLOT_KEY);
+  } catch {
+    // A malformed process slot must not escape this best-effort handoff boundary.
+  }
+};
+
 const readEnvelope = (): HandoffEnvelope | undefined => {
-  const state = processState();
-  const value = state[HANDOFF_SLOT_KEY];
-  const decoded = Schema.decodeUnknownOption(HandoffEnvelopeSchema)(value);
-  if (Option.isNone(decoded)) {
-    if (value !== undefined) delete state[HANDOFF_SLOT_KEY];
+  try {
+    const value = processState()[HANDOFF_SLOT_KEY];
+    const decoded = Schema.decodeUnknownOption(HandoffEnvelopeSchema)(value);
+    if (Option.isNone(decoded) || synchronousNow() > decoded.value.expiresAt) {
+      if (value !== undefined) clearEnvelope();
+      return undefined;
+    }
+    return decoded.value;
+  } catch {
+    clearEnvelope();
     return undefined;
   }
-  if (synchronousNow() > decoded.value.expiresAt) {
-    delete state[HANDOFF_SLOT_KEY];
-    return undefined;
-  }
-  return decoded.value;
 };
 
 /**
@@ -91,31 +99,27 @@ export const codeModeSessionKey = (ctx: ExtensionContext): CodeModeSessionKey | 
   return undefined;
 };
 
-export interface CodeModeDeactivationHandoff {
-  /**
-   * Consumes any published intent for `key` (clearing the slot). Returns the restored flag,
-   * or undefined when nothing was published for this identity.
-   */
-  readonly capture: (key: CodeModeSessionKey | undefined) => boolean | undefined;
-  /** Publishes the observed intent for `key` so a recreated instance can restore it. */
-  readonly publish: (key: CodeModeSessionKey | undefined, deactivated: boolean) => void;
-}
+/**
+ * Consumes any published intent for `key` and clears the slot. Returns undefined when this
+ * process has no matching unexpired entry.
+ */
+export const captureCodeModeDeactivation = (
+  key: CodeModeSessionKey | undefined,
+): true | undefined => {
+  if (key === undefined) return undefined;
+  const envelope = readEnvelope();
+  if (envelope === undefined || envelope.key !== key) return undefined;
+  clearEnvelope();
+  return envelope.deactivated;
+};
 
-export const makeCodeModeDeactivationHandoff = (): CodeModeDeactivationHandoff => ({
-  capture: (key) => {
-    if (key === undefined) return undefined;
-    const envelope = readEnvelope();
-    if (envelope === undefined || envelope.key !== key) return undefined;
-    delete processState()[HANDOFF_SLOT_KEY];
-    return envelope.deactivated;
-  },
-  publish: (key, deactivated) => {
-    if (key === undefined) return;
-    processState()[HANDOFF_SLOT_KEY] = Object.freeze({
-      version: 2,
-      key,
-      deactivated,
-      expiresAt: synchronousNow() + SESSION_KEY_TTL_MS,
-    } satisfies HandoffEnvelope);
-  },
-});
+/** Publishes a deliberate deactivation for a recreated extension instance to consume. */
+export const publishCodeModeDeactivation = (key: CodeModeSessionKey | undefined): void => {
+  if (key === undefined) return;
+  processState()[HANDOFF_SLOT_KEY] = Object.freeze({
+    version: 2,
+    key,
+    deactivated: true,
+    expiresAt: synchronousNow() + SESSION_KEY_TTL_MS,
+  } satisfies HandoffEnvelope);
+};

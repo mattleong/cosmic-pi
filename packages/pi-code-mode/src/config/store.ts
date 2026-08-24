@@ -1,10 +1,11 @@
 /** The single Code Mode configuration persistence door: scoped reads, writes, and resolution. */
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import {
@@ -157,14 +158,14 @@ const toState = (resolved: ResolvedCodeModeDocuments, projectTrusted: boolean): 
 const requireDescriptor = (id: string) => {
   const descriptor = findCodeModeSettingDescriptor(id);
   return descriptor === undefined
-    ? Effect.fail(
+    ? Result.fail(
         new CodeModeConfigError({
           operation: "setting",
           path: id,
           message: `Unknown Code Mode setting: ${id}.`,
         }),
       )
-    : Effect.succeed(descriptor);
+    : Result.succeed(descriptor);
 };
 
 /** Pre-commit snapshot of the scope that is not being committed. */
@@ -287,7 +288,7 @@ export class CodeModeConfigStore extends Context.Service<
                   : options.projectTrusted
                     ? yield* readOtherScope(current.projectConfigPath, current.projectConfigExists)
                     : ABSENT_OTHER_SCOPE;
-              const publishFailure = MutableRef.make<ProjectionError | undefined>(undefined);
+              const publication = yield* Deferred.make<CodeModeState, ProjectionError>();
               yield* provideDependencies(
                 store.modifyConfig(targetPath, (document) => {
                   const committed = mutate(document);
@@ -295,33 +296,33 @@ export class CodeModeConfigStore extends Context.Service<
                   return {
                     value: undefined,
                     document: committed,
-                    afterCommit: projection
-                      .transition(() => Effect.succeed([undefined, next] as const))
-                      .pipe(
-                        Effect.catch((error) =>
-                          Effect.sync(() => MutableRef.set(publishFailure, error)),
-                        ),
-                      ),
+                    afterCommit: Deferred.complete(
+                      publication,
+                      projection
+                        .transition(() => Effect.succeed([undefined, next] as const))
+                        .pipe(Effect.andThen(Effect.sync(projection.getSnapshot))),
+                    ).pipe(Effect.asVoid),
                   };
                 }),
               );
-              const failure = MutableRef.get(publishFailure);
-              if (failure !== undefined) {
-                return yield* new CodeModeConfigError({
-                  operation: "publish",
-                  path: failure.path,
-                  message: failure.message,
-                });
-              }
-              return projection.getSnapshot();
+              return yield* Deferred.await(publication).pipe(
+                Effect.mapError(
+                  (failure) =>
+                    new CodeModeConfigError({
+                      operation: "publish",
+                      path: failure.path,
+                      message: failure.message,
+                    }),
+                ),
+              );
             }),
           );
 
         const setSetting: CodeModeConfigStoreContract["setSetting"] = (scope, id, rawValue) =>
           Effect.gen(function* () {
             yield* guardScope(scope);
-            const descriptor = yield* requireDescriptor(id);
-            const value = yield* descriptor.decode(rawValue);
+            const descriptor = yield* Effect.fromResult(requireDescriptor(id));
+            const value = yield* Effect.fromResult(descriptor.decode(rawValue));
             return yield* applyChange(scope, (document) => ({
               ...document,
               [descriptor.id]: value,
@@ -331,7 +332,7 @@ export class CodeModeConfigStore extends Context.Service<
         const clearSetting: CodeModeConfigStoreContract["clearSetting"] = (scope, id) =>
           Effect.gen(function* () {
             yield* guardScope(scope);
-            const descriptor = yield* requireDescriptor(id);
+            const descriptor = yield* Effect.fromResult(requireDescriptor(id));
             return yield* applyChange(scope, (document) => {
               const next = { ...document };
               delete next[descriptor.id];

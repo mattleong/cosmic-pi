@@ -12,18 +12,14 @@ export type CodeModeSettingsDispatch =
       readonly value: string;
     }
   | { readonly _tag: "Clear"; readonly scope: CodeModeSettingScope; readonly id: string }
-  | { readonly _tag: "Invalid"; readonly reason: "missing-value"; readonly id: string }
-  | { readonly _tag: "Invalid"; readonly reason: "unknown-setting"; readonly id: string };
+  | { readonly _tag: "Invalid" };
 
 /**
  * Grammar: empty opens the interactive surface; `help` and `status` (alias `diagnostics`) are
  * reserved; an optional leading `global`/`project` token selects the scope (default `global`);
  * the literal value `inherit` clears the field in the selected scope.
  */
-export const dispatchCodeModeSettings = (
-  args: string,
-  ids: ReadonlyArray<string>,
-): CodeModeSettingsDispatch => {
+export const dispatchCodeModeSettings = (args: string): CodeModeSettingsDispatch => {
   const trimmed = args.trim();
   if (!trimmed) return { _tag: "OpenInteractive" };
   if (trimmed === "help") return { _tag: "Help" };
@@ -35,10 +31,9 @@ export const dispatchCodeModeSettings = (
     tokens.shift();
   }
   const [id = "", ...parts] = tokens;
-  if (!id) return { _tag: "Invalid", reason: "missing-value", id: scope };
-  if (!ids.includes(id)) return { _tag: "Invalid", reason: "unknown-setting", id };
+  if (!id) return { _tag: "Invalid" };
   const value = parts.join(" ").trim();
-  if (!value) return { _tag: "Invalid", reason: "missing-value", id };
+  if (!value) return { _tag: "Invalid" };
   if (value === "inherit") return { _tag: "Clear", scope, id };
   return { _tag: "Apply", scope, id, value };
 };

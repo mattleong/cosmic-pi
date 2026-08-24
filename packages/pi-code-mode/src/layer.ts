@@ -1,20 +1,18 @@
 /** Effect composition root for one Code Mode session runtime. */
-import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { CodeModeConfigStore, type CodeModeState } from "./config/store.ts";
 
-export interface CodeModeSessionInput {
-  readonly ctx: ExtensionContext;
+export interface CodeModeLayerInput {
   readonly cwd: string;
   readonly projectTrusted: boolean;
 }
 
-export interface CodeModeLayerOptions {
-  readonly publish: (state: CodeModeState) => void;
-}
-
-export const makeCodeModeLayer = (input: CodeModeSessionInput, options: CodeModeLayerOptions) => {
+export const makeCodeModeLayer = (
+  input: CodeModeLayerInput,
+  publish: (state: CodeModeState) => void,
+) => {
   const platform = Layer.merge(
     nodeFilePlatformLayer,
     AgentDirectory.layerFromHost(() => getAgentDir()),
@@ -22,10 +20,9 @@ export const makeCodeModeLayer = (input: CodeModeSessionInput, options: CodeMode
   return CodeModeConfigStore.layer({
     cwd: input.cwd,
     projectTrusted: input.projectTrusted,
-    publish: options.publish,
+    publish,
   }).pipe(Layer.provide(platform));
 };
 
-export type CodeModeApplicationLayer = ReturnType<typeof makeCodeModeLayer>;
-export type CodeModeApplication = Layer.Success<CodeModeApplicationLayer>;
-export type CodeModeRuntimeError = Layer.Error<CodeModeApplicationLayer>;
+export type CodeModeApplication = Layer.Success<ReturnType<typeof makeCodeModeLayer>>;
+export type CodeModeRuntimeError = Layer.Error<ReturnType<typeof makeCodeModeLayer>>;

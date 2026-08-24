@@ -17,19 +17,11 @@ const details = (tool: string) => ({
 });
 
 describe("failure details retention", () => {
-  it("defensively retains and consumes details once", () => {
-    const retention = makeFailureDetailsRetention();
-    const value = details("pi.read");
-    retention.retain("a", value);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.toolCalls[0] as { tool: string }).tool = "mutated";
-    expect(retention.consume("a")?.toolCalls[0]?.tool).toBe("pi.read");
-    expect(retention.consume("a")).toBeUndefined();
-  });
-
   it("reattaches only owned thrown-error details and consumes them once", () => {
     const retention = makeFailureDetailsRetention();
-    retention.retain("owned", details("pi.bash"));
+    const original = details("pi.bash");
+    retention.retain("owned", original);
+    retention.retain("sibling", original);
     expect(
       applyRetainedCodeModeFailureDetails(retention, {
         toolName: "read",
@@ -44,20 +36,19 @@ describe("failure details retention", () => {
         isError: false,
       }),
     ).toBeUndefined();
-    expect(
-      applyRetainedCodeModeFailureDetails(retention, {
-        toolName: "code_mode",
-        toolCallId: "owned",
-        isError: true,
-      })?.details.toolCalls[0]?.tool,
-    ).toBe("pi.bash");
-    expect(
-      applyRetainedCodeModeFailureDetails(retention, {
-        toolName: "code_mode",
-        toolCallId: "owned",
-        isError: true,
-      }),
-    ).toBeUndefined();
+    original.toolCalls[0]!.tool = "mutated-input";
+    original.counts.total = 99;
+    const consumed = applyRetainedCodeModeFailureDetails(retention, {
+      toolName: "code_mode",
+      toolCallId: "owned",
+      isError: true,
+    })?.details;
+    expect(consumed?.toolCalls[0]?.tool).toBe("pi.bash");
+    expect(consumed?.counts?.total).toBe(1);
+    Reflect.set(consumed?.toolCalls[0] ?? {}, "tool", "mutated-output");
+    Reflect.set(consumed?.counts ?? {}, "total", 77);
+    expect(retention.consume("sibling")?.toolCalls[0]?.tool).toBe("pi.bash");
+    expect(retention.consume("owned")).toBeUndefined();
   });
 
   it("evicts the oldest entry at capacity", () => {

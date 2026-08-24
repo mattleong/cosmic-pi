@@ -1,258 +1,144 @@
 # Architecture
 
-`pi-code-mode` is the Effect-managed Pi extension for Code Mode. It owns scoped configuration,
-the trusted-project availability policy, the session runtime lifecycle, `/code-mode-settings`,
-and the one extension-owned `code_mode` agent tool: one confined, interpreted JavaScript
-program per tool call, orchestrating all seven Pi built-ins under `tools.pi` (`read`, `bash`,
-`edit`, `write`, `grep`, `find`, `ls`) plus the runtime-owned `tools.$codemode.search`.
+`pi-code-mode` owns one Effect-managed Pi extension. It provides trusted-project configuration,
+the session lifecycle, `/code-mode-settings`, and one `code_mode` tool. A tool call runs one
+confined JavaScript program over exactly seven supplied Pi built-ins under `tools.pi`: `read`,
+`bash`, `edit`, `write`, `grep`, `find`, and `ls`. The private runtime also supplies
+`tools.$codemode.search`.
 
-The confined interpreter itself is the private, host-neutral `pi-code-mode-runtime`
-workspace package **nested at `runtime/` inside this package** (ADR 0003). Its TypeScript
-`runtime/src/` tree ships inside this package's tarball and Pi/Jiti loads it directly. This
-package imports it only by relative path through `src/boundary/codemode-runtime.ts` — never by
-package name — so packed consumers resolve it without a registry dependency and share one
-`effect` instance. Only `runtime/src/` plus the runtime's legal/provenance docs ship; the
-nested workspace manifest stays repository-only, and this package declares the runtime's
-external dependencies.
+The interpreter is the nested `pi-code-mode-runtime` workspace package under `runtime/` (ADR
+0003). Its TypeScript source ships in this package and loads through one computed relative import
+in `src/boundary/codemode-runtime.ts`. The nested package name is never resolved at runtime, so a
+packed install needs no private registry package and uses the extension's single Effect instance.
+Only runtime source and legal or provenance documents ship.
 
-## Source map
+## Grouped ownership
 
-- `src/extension.ts` — thin Pi registration entrypoint.
-- `src/layer.ts` — Effect composition root; platform + `CodeModeConfigStore` per session.
-- `src/application.ts` — session lifecycle (runtime slot), boundary state snapshot, command
-  wiring, and `code_mode` registration orchestration (availability gating, preview-settings
-  ordering, generation/currency re-checks after every await, user-deactivation policy).
-- `src/tools/controller.ts` — host-facing `code_mode` controller: definition assembly (TypeBox
-  parameters including the optional bounded `intent`, model-facing description with the
-  budgeted catalog, and the humanized custom renderers from `src/ui/tool-renderer.ts`),
-  registration, and active-list reconciliation that only ever adds or removes the one
-  `code_mode` name.
-- `src/tools/execution.ts` — one execution: defensive stale/availability gating, host limits,
-  guest catalog assembly, runtime execution with composed cancellation, and bounded live
-  lifecycle progress (queued/running/succeeded/failed/cancelled, human-readable activity,
-  and duration) plus model-safe result/diagnostic mapping; modern lifecycle/start/end overlap is
-  collapsed before host publication.
-- `src/tools/catalog.ts` — the exact guest tool tree (`pi` namespace, Effect Schema inputs),
-  cumulative-output admission composition, and the description-only catalog renderer.
-- `src/tools/limits.ts` — pure host limits: UTF-8 program-source budget, the concurrency-safe
-  cumulative nested-output budget (exact threshold, counted exactly once), and
-  `clampModelVisibleText` — the single final code-point-safe UTF-8 bound over the entire
-  model-visible tool text (success and thrown failure), with truncation markers reserved
-  inside the budget.
-- `src/tools/format.ts` — pure model-visible formatting: success output with logs, normalized
-  diagnostics (kind/location/suggestions), accurate lifecycle counters, and bounded progress
-  selection that retains active/problem/recent rows without ever storing nested output.
-- `src/tools/animation.ts` — per-tool weak host ticker ownership and shared-cadence frame
-  projection for visible running nested calls.
-- `src/tools/retention.ts` — bounded one-shot in-memory handoff that reattaches structured
-  Code Mode details in `tool_result` after Pi converts a thrown execution error to its generic
-  error result; it does not modify error text or `isError` semantics.
-- `src/ui/tool-renderer.ts` — pure humanized TUI presentation for the `code_mode` tool: the
-  sanitized intent headline (`Code Mode · <intent>` with a neutral fallback), the bounded
-  nested-call activity summaries (`Read <path>`, `Search <pattern> in <path>`, …), and the
-  collapsed/expanded call/result projections with a defensive details decode and a plain
-  fail-soft result when custom result projection fails, before Pi can select its raw generic
-  fallback.
-- `src/ui/result-output.ts` — pure presentation-only projection of extension-identified
-  structured results: small top-level objects containing only string fields and at least one
-  multiline value become labeled sections; malformed, mixed, noncanonical, ambiguous,
-  oversized, or field-heavy values stay on the complete plain
-  output path. Presentation only: neither UI module has Effect services, host registration, or
-  influence on model-visible text or any execution limit.
-- `src/boundary/codemode-runtime.ts` — the single computed relative-path import door for the
-  nested private runtime TypeScript source (`runtime/src/`). Its small owned structural contract
-  names only fields consumed by the integration while the vendored tree stays under its separately
-  checked workspace project.
-- `src/boundary/host-deactivation-handoff.ts` — process-memory bridge (globalThis symbol slot)
-  that preserves a deliberate `code_mode` deactivation across Pi recreating the extension
-  module on reload/new/resume/fork, keyed **only** by the stable Pi session id (no cwd or
-  other ambient-identity fallback; see the lifecycle notes below).
-- `src/boundary/host-builtin-tools.ts` — adapters over all seven Pi built-in definition
-  factories: deliberate direct dispatch against fresh definitions with a composed abort
-  signal, Schema-validated result conversion to plain guest text, image refusal, and
-  model-safe `toolError` mapping. This boundary does not inherit middleware, registered
-  overrides, or session-specific operations (ADR 0004).
-- `src/boundary/host-tool-update.ts` — guarded semantic-leading-edge and frame-coalesced
-  `onUpdate` publisher (new rows can join Pi's already-pending next render; undefined hosts,
-  sync throws, and rejecting thenables are contained; latest pending snapshot flushes on settle;
-  each publisher owns a closeable scope for pending frame fibers, and no updates survive settle or
-  replacement).
-- `src/config/schema.ts` — configuration shape, locked defaults, documented bounds, field codecs.
-- `src/config/options.ts` — field-wise project/global/default resolution with provenance, and
-  the setting descriptors (labels, descriptions, bounded integer parsing).
-- `src/config/store.ts` — the single persistence door: `CodeModeConfigStore` Effect service over
-  the shared scoped JSON document store, plus the published immutable `CodeModeState`.
-- `src/boundary/host-ui.ts` — package-local guarded adapters for `ctx.ui.select`,
-  `ctx.ui.input`, `ctx.ui.custom`, and synchronous render/list callbacks; hostile or
-  rejecting host callbacks resolve to bounded outcomes and never escape or hang. The
-  custom-surface factory is wrapped inside the boundary: a hostile, stale, or deferred host
-  invocation of a throwing factory yields an inert no-op component plus a bounded failed
-  outcome, and the host `done` callback is guarded wherever the caller invokes it.
-- `src/settings/dispatch.ts` — pure `/code-mode-settings` argument grammar.
-- `src/settings/controller.ts` — command registration, completions, non-TUI notification
-  fallbacks (never prompting; a no-op where notifications are not rendered), the interactive
-  per-scope settings surface, and the `custom…` free-integer input flow. The shared
-  `pi-cosmic-ui` settings surface receives this package's `invokeHostCallback` as the
-  caller-owned bridge guard, so render/invalidate/input delegation and the cancel-path
-  `done` invocation stay contained at this host boundary.
-- `tests/**/*.test.ts` — dispatch, config, store, store-atomic, settings-controller,
-  application, lifecycle, limits (incl. the final model-visible clamp), format, tool-adapters,
-  tool-execution (real interpreter integration, incl. final byte-bound cases), tool-lifecycle,
-  host-tool-update (leading/frame/trailing publication semantics), tool-renderer (humanized
-  presentation incl. hostile-input containment), and
-  deactivation-handoff (module-recreation reload/new/resume/fork) suites.
-  `vitest.config.ts` scopes discovery to this package's `tests/`; the nested runtime package
-  runs its own vendored suites (incl. `confinement.test.ts`).
-- `runtime/` — the nested private `pi-code-mode-runtime` workspace package (vendored
-  interpreter; see its `ARCHITECTURE.md` and `PROVENANCE.md`).
+- `src/extension.ts`, `application.ts`, and `layer.ts` own Pi registration, session replacement,
+  the private runtime slot input, the synchronous state projection, and Layer composition.
+- `src/config/` owns field schemas, defaults, bounds, tolerant scope resolution, provenance, and
+  the only persistence door, `CodeModeConfigStore`.
+- `src/settings/` owns command dispatch, completions, list behavior, custom integer flow, and
+  notifications. `src/boundary/host-ui.ts` is the Promise and callback adapter for Pi dialogs.
+- `src/tools/` owns the exact guest catalog, execution admission, UTF-8 limits, progress state,
+  result formatting, failure-detail retention, tool registration, active-list reconciliation,
+  and renderer ticker cleanup.
+- `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
+  legacy details, `tool-renderer.ts` renders calls and results, and `result-output.ts` projects
+  small structured results without changing model-visible text.
+- `src/boundary/` contains the runtime import, all seven fresh Pi built-in adapters, the guarded
+  progress publisher, Pi dialog adapters, and the process-memory deactivation handoff.
+- `tests/` covers configuration, atomic commits, lifecycle races, dialogs, adapters, limits,
+  interpreter integration, progress, retention, and fail-soft rendering. `runtime/tests/` remains
+  owned by the private runtime package.
 
-## Trust and settings resolution
+## Trust and configuration
 
-- Configuration documents: `<agent-dir>/extensions/pi-code-mode.json` (global) and
-  `<cwd>/.pi/extensions/pi-code-mode.json` (project).
-- Fields resolve project-over-global-over-default **per field**, with provenance recorded for
-  each field. Tolerant decoding drops malformed or out-of-bounds fields independently and keeps
-  bounded, path-only diagnostics (no values are ever recorded).
-- In untrusted projects no project-document filesystem I/O happens at all: the project path is
-  calculated as inert metadata but is never stat'd, read, or written. `/code-mode-settings`
-  offers the global scope only and states that Code Mode stays unavailable until the project is
-  trusted. Writes preserve unrelated JSON fields and go through the shared atomic JSON document
-  store.
-- Availability is published as `state.available = projectTrusted && config.enabled`. It is
-  captured at `session_start` (trust and cwd are read once at the Pi boundary) and republished
-  after every persisted settings change.
+Global configuration is `<agent-dir>/extensions/pi-code-mode.json`. Project configuration is
+`<cwd>/.pi/extensions/pi-code-mode.json`. Fields resolve project over global over default, one
+field at a time. Malformed fields fall back independently and produce bounded path-only
+diagnostics. Writes preserve unknown fields.
 
-## Lifecycle
+An untrusted project performs no project-document I/O. The project path may exist as inert
+metadata, but the extension never stats, reads, or writes it. Availability is
+`projectTrusted && config.enabled`.
 
-`session_start` captures cwd/trust/signal via `captureSessionHost`/`isProjectTrusted`, then starts
-one `makePiSessionRuntimeSlot`-owned managed runtime whose layer resolves the configuration and
-publishes the initial frozen `CodeModeState` into a boundary `MutableRef`. Reload, new, resume,
-and fork all arrive as a fresh `session_start`, which atomically replaces (and disposes) any
-previous runtime; `session_shutdown` disposes it idempotently and clears the snapshot.
+`CodeModeConfigStore` serializes writes with one semaphore. Before commit it captures the other
+scope's document. The committed document then resolves to the next state without post-commit I/O.
+A Deferred carries publication from the JSON rename's narrow uninterruptible `afterCommit` region
+back to the caller. The renamed document and authoritative frozen projection therefore advance as
+one commit. A hostile publication callback becomes a typed `CodeModeConfigError`; the committed
+file remains, the prior projection stays authoritative, and a later write re-derives from disk.
 
-Settings mutations are one serialized commit: a semaphore serializes writers, the other scope's
-raw document is captured before the commit, and the exact committed JSON document resolves
-deterministically into the next `CodeModeState` with no post-commit filesystem read. The
-authoritative projection publication runs as the document rename's no-fail `afterCommit` action
-inside the same uninterruptible commit region, so interruption can never observe the renamed
-document without the matching published state. A publication failure (for example a hostile
-publish callback) surfaces as a typed `CodeModeConfigError` with operation `"publish"`: the
-committed document stays on disk, the previously published snapshot remains authoritative, and
-the next successful operation re-derives from the committed document.
+## Session lifecycle and publication
 
-## The `code_mode` tool
+`session_start` captures cwd, trust, and an owned signal before replacing the prior runtime. A
+capture failure shuts the old slot down. Each private slot input carries its own
+`MutableRef<boolean>` publication owner, created immediately before `slot.start`. The Layer
+publisher writes `stateRef` only while that owner is true.
 
-- Exactly one extension-owned agent tool (`code_mode`) exists, registered per `session_start`
-  and only when `CodeModeState.available` (trusted project AND `enabled`). Untrusted,
-  disabled, startup-failed, and shut-down sessions expose nothing: registration is skipped
-  and only the `code_mode` name is removed from the active tool list (all other active tools
-  are preserved exactly).
-- Pi offers no tool unregistration, so a stale same-extension definition can outlive its
-  session. Every registered implementation therefore self-gates in `execute`: it re-checks
-  its captured generation, the session slot's currency token, and the live
-  `CodeModeState.available` before running, and refuses model-safely otherwise. A slow
-  `session_start` re-checks generation/currency after **every** await (slot start, preview
-  settings) so a replaced session can never register an old-cwd implementation.
-- `loadCodePreviewSettings(cwd, projectTrusted)` completes before `withCodePreviewShell`
-  wraps the definition (the shell captures its mode at wrap time), per the repository tool
-  rendering rule.
-- The unwrapped definition carries its own humanized `renderCall`/`renderResult`
-  (`src/ui/tool-renderer.ts`); `withCodePreviewShell` preserves them and its cooperative
-  shell delegates to them. Successful execution details record only whether the returned value
-  was text or structured data, allowing `src/ui/result-output.ts` to project multiline object
-  fields without guessing from model-visible JSON text. Collapsed, the call shows
-  `Code Mode · <intent>` (the optional
-  bounded `intent` parameter, neutral fallback otherwise) and the result shows sanitized
-  activity rows that reuse `pi-code-previews`' standalone built-in tool emojis alongside status
-  (`◌` queued, a shared animated Braille running spinner, `✓` success, `✗` failure, `⊘`
-  cancelled), optional duration suffixes, an exact lifecycle footer, and `+N earlier` while
-  prioritizing active,
-  failed, cancelled, and recent rows beyond the bound, plus a dim hint naming the configured
-  `app.tools.expand` key when
-  bound (`▸ output · ctrl+o expand`, keyless otherwise); expanded, the full sanitized
-  program source and the complete
-  model-visible output/error stay inspectable. Rendering is pure presentation: it never
-  mutates model-visible text, result details, or any execution limit, and every displayed
-  string is sanitized against terminal control injection.
-- Deliberate user deactivation is preserved: active-list membership is observed at session
-  boundaries _before_ this extension's own removals, so a user who turned `code_mode` off
-  keeps it off across re-registration until they re-enable it (see `application.ts`). Because
-  Pi recreates the extension module on reload/new/resume/fork (discarding that closure), the
-  observed intent is bridged through `boundary/host-deactivation-handoff.ts`: the old module
-  publishes it on `session_shutdown` and the fresh module consumes it on `session_start`. The
-  slot is process memory only (Pi re-instantiates extensions in the same process; there is no
-  cross-process persistence), keyed **only** by the stable Pi session id
-  (`ctx.sessionManager.getSessionId()`) so a genuinely different session never inherits
-  another's intent — a matching id (reload, resume of the same session) restores, a different
-  id (new, fork) starts at the default. When no session id is exposed nothing is preserved
-  and the tool resets to activated (the safe direction); there is deliberately no cwd
-  fallback, because a cwd key would let a different session in the same project inherit
-  another session's intent. Entries are consumed on capture and carry a bounded TTL.
-- Settings that flip `enabled` mid-session take effect immediately: the config store
-  republishes `CodeModeState` on every commit, and `execute` re-reads `state.available` on
-  every call, so a program submitted after Code Mode is disabled is refused model-safely
-  before any interpreter work.
-- Configured limits apply exactly: `timeoutMs`, `maxToolCalls`, and `maxOutputBytes` go to
-  the runtime as execution limits (the runtime keeps the guest result/logs within
-  `maxOutputBytes`, reserving its truncation markers inside the budget; the extension
-  pretty-prints the returned JSON value only while the pretty form still fits `maxOutputBytes`,
-  falling back to the exact compact form the runtime bounded). The extension then applies one
-  **final** code-point-safe UTF-8 clamp (`clampModelVisibleText`) over the _entire_
-  model-visible text — success string or thrown-failure string, including logs, separators,
-  and diagnostic kind/location/suggestions framing the runtime never sees — so the text the
-  model receives never exceeds `maxOutputBytes` (zero → empty; exact fit admitted; markers
-  reserved inside the budget). A hostile thrown string is clamped before the `Error` is
-  constructed, so it never materializes in full. The same clamp covers every early path
-  where a current configuration exists: pre-abort and mid-run cancellation text, the
-  `maxSourceBytes` refusal, the current-but-unavailable (disabled/untrusted) refusal, and
-  the unexpected-runtime-error message. The only unclamped model-visible text is the
-  stale/no-state refusal, which fires when no current configuration exists to clamp
-  against and is therefore a short fixed bounded constant
-  (`CODE_MODE_UNAVAILABLE_MESSAGE`). `maxSourceBytes` rejects oversized programs
-  before execution; and
-  `maxCumulativeChildOutputBytes` bounds the exact UTF-8 bytes of successful nested output and
-  catchable nested failure text entering the guest, counted synchronously and exactly under
-  the runtime's fixed nested concurrency of 8. This post-settlement bound cannot prevent or
-  undo side effects. `catalogBudget`
-  bounds the description's discovery catalog at registration time. The runtime's fixed
-  constants (concurrency 8, data depth 32) are not configurable here.
-- Cancellation composes the outer execute signal, session replacement/shutdown (managed
-  runtime disposal interrupts the fiber), and the runtime timeout. Nested built-in calls
-  receive a per-call `AbortSignal.any` of the outer signal and Effect interruption.
-- Progress begins with one immediate `Starting…` snapshot, then goes through a guarded
-  semantic-leading-edge and 16 ms frame-coalesced `onUpdate` publisher. New row admissions and
-  decoded-running labels publish synchronously so they can join Pi's already-scheduled next
-  host render instead of sitting behind a second frame timer; only the latest status-only
-  snapshot is retained between frames, and settlement synchronously flushes that latest state.
-  Nested output is never included, undefined/throwing/rejecting-thenable host callbacks are
-  tolerated, and publication stays silent after settle or replacement. Modern runtimes publish
-  queued, decoded-running, and authoritative terminal states once each; the legacy start/end
-  hooks remain a fallback when a reload-cached runtime emits no lifecycle events. Sub-frame
-  calls are never artificially delayed merely to preserve a transient running animation and
-  may first paint as completed. Thrown execution failures retain their final bounded rows
-  through the extension-owned one-shot `tool_result` handoff.
+`onDeactivated` first sets the owner false, then clears `stateRef` and deactivates `code_mode`.
+This ordering blocks a prior session's uninterruptible commit from publishing after replacement
+has begun. State remains unavailable until the replacement Layer publishes.
 
-## Full built-in catalog and middleware bypass (ADR 0004)
+Startup acquires the store and, only when the live snapshot is available, runs preview settings
+through `bestEffortHostBootstrap`. The bootstrap is interruptible, contains foreign failures, and
+detaches a Promise that ignores cancellation. Startup returns `void`. `onActivated` first checks
+both publication ownership and slot-token currency, then rereads the guarded live `stateRef`.
+Definition construction, wrapping, registration, and activation retain currency checks before and
+after host work. Preview settings always finish before `withCodePreviewShell` wraps the tool.
 
-- The guest catalog is exactly all seven `tools.pi.{read,bash,edit,write,grep,find,ls}` leaves
-  plus runtime-owned `tools.$codemode.search`. MCP and arbitrary dynamic dispatch remain
-  outside the package.
-- Nested calls dispatch **directly** against fresh built-in definitions and deliberately
-  bypass `tool_call`/`tool_result` middleware, approval and preview extensions, registered
-  overrides, and session-specific operations. Nested Bash is Pi's default local
-  implementation, not a configured prefix, shell hook, sandbox, or remote override.
-- Interpreter confinement limits the JavaScript language, not supplied-tool authority. Bash
-  grants full local-user process, network, environment, and filesystem authority; read,
-  edit, and write accept unrestricted relative, absolute, and home-relative paths. No tool
-  effect is project-confined.
-- Bash owns per-command timeout, output-tail truncation, PID tracking, and process-tree kill
-  attempts. Oversized full output is persisted to an unbounded temporary log named in its
-  text result, and fully daemonized descendants may escape process-group cleanup.
-- Edit and write share Pi's same-file in-process mutation queue; different files remain
-  concurrent, reads are not queued with mutations, writes are non-atomic, and cancellation
-  cannot roll back an applied mutation. Canonical guest edit input requires non-empty
-  `edits[]`; top-level legacy `prepareArguments` compatibility is not reproduced.
-- Nested result conversion keeps only text. Image content is refused, while edit diff/patch
-  details and Bash details are dropped. Nested tools receive no streaming `onUpdate`; the
-  outer progress projection records bounded start/end activity, and interruption may leave a
-  child row displayed as running while the final outer result is marked cancelled.
+Replacement and shutdown revoke publication, interrupt startup and session fibers, dispose the
+runtime, clear state, and deactivate only `code_mode`. Pi has no unregister operation, so every
+old definition also checks its token and the current live availability before execution.
+
+User deactivation survives module recreation through `host-deactivation-handoff.ts`. The old
+instance publishes a true-only, TTL-bounded entry keyed only by Pi's stable session id. The next
+instance consumes a matching entry. A different or missing id starts active; cwd is never an
+identity fallback. Unrelated active-tool names and their order are preserved.
+
+## Settings workflow
+
+The bare TUI command submits one outer session Effect. It selects scope, opens the list, handles a
+custom integer prompt, applies the value, and reopens from a fresh snapshot. Pi has one editor
+slot, so `done(PromptInteger)` closes the list before `ctx.ui.input` opens.
+
+Every list iteration records the Promises started by preset and `inherit` callbacks. Once the
+custom list settles, the outer Effect joins all recorded writes before handling Closed or
+PromptInteger, opening input, reading a new snapshot, or reopening. `applySetting` makes these
+Promises nonrejecting. The join remains interruptible, so session disposal can end the outer
+workflow even while a foreign callback settles late. A preset commit already inside the store's
+uninterruptible commit region finishes publication before custom input continues.
+
+All settings checks use one guarded `signalAborted` helper. It invokes the host getter through
+`invokeHostCallback` and falls back to `true`. A throwing `aborted` getter therefore exits without
+UI, persistence, or notification work. The same guard covers command admission, the active write
+callback, list callbacks, input application, and reopen checks.
+
+`host-ui.ts` adapts select, input, and custom dialogs. The custom adapter owns a callback
+`AbortController` and exact-once latches. Its finalizer revokes callbacks and calls an available
+`done(Closed)` once. A normal PromptInteger remains authoritative. A late factory receives an
+inert component. Preset writes use the list signal, ignore stale callbacks, and restore the
+persisted row after an active failure.
+
+## Tool execution and limits
+
+The catalog is exactly the seven `tools.pi` leaves plus runtime-owned search. Inputs pass Effect
+Schema before dispatch. Fresh Pi definitions execute directly, so nested calls bypass Pi
+`tool_call` and `tool_result` middleware, approvals, previews, registered overrides, and
+session-specific operations (ADR 0004).
+
+Interpreter confinement limits JavaScript, not supplied-tool authority. Bash has full local-user
+process, environment, network, and filesystem authority. Read, edit, and write accept relative,
+absolute, and home-relative paths. Mutations happen immediately and cancellation cannot roll them
+back. Nested results carry text only; images are refused and built-in result details are dropped.
+
+Each execution applies source, time, call-count, result, cumulative child-output, and discovery
+budgets. The final `clampModelVisibleText` bounds all model-visible success, failure, cancellation,
+source-refusal, and unexpected-error text by exact UTF-8 bytes without splitting a code point.
+Zero bytes yields empty text. Only the stale or missing-state refusal uses a fixed bounded message
+because no current configuration exists. Successful nested text and catchable failure text share
+one cumulative budget. An output-overrun refusal is itself admitted through `admitFailure`, so
+repeated caught overruns cannot create free diagnostic text.
+
+Progress starts immediately. Queued admission and decoded running labels publish synchronously;
+status-only changes coalesce to a 16 ms host frame, and settlement flushes the latest snapshot.
+Rows never contain nested output. Selection prioritizes active, failed, cancelled, and recent rows
+within 32 visible slots, while exact counts include hidden calls. Selected rows and counts are
+copied before host publication, so a hostile `onUpdate` cannot alter execution state.
+
+The renderer owns a weak 160 ms ticker. Missing or hostile state, invalidation, keybindings, clock,
+and ticker callbacks fall back without affecting execution. The controller captures sanitized
+expand keys once when it builds the definition. Pure render code always returns a component, even
+when hostile details force its emergency path.
+
+Thrown executions retain copied final rows and counts in a bounded one-shot map. The `tool_result`
+hook consumes another copy for the matching Code Mode call because Pi otherwise replaces details
+with `{}`. Text and `isError` semantics are unchanged.
+
+## Shipping and validation
+
+The package runs from TypeScript source under Pi/Jiti. `package.json` ships `runtime/src/` and the
+runtime's legal or provenance files, but not its workspace manifest or tests. Package gates include
+typecheck, Effect diagnostics, lint, format, tests, and a dry pack. Workspace validation also
+checks layout, versions, source loading, and packed runtime contents.

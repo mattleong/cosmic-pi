@@ -24,6 +24,7 @@ import {
   describeNestedActivity,
   formatCodeModeFailure,
   formatCodeModeSuccess,
+  formatForeignRejection,
   progressResult,
   type CodeModeCallCounts,
   type CodeModeCallEntry,
@@ -119,11 +120,11 @@ const settlePendingAsCancelled = (
 // The cancellation text goes through the same authoritative clamp as every other
 // model-visible result (maxOutputBytes = 0 yields empty text).
 const cancelledResult = (
-  calls: ReadonlyArray<CodeModeCallEntry>,
+  details: ReturnType<typeof callEntryDetails>,
   maxOutputBytes: number,
 ): AgentToolResult<CodeModeToolDetails> => ({
   content: [{ type: "text", text: clampModelVisibleText("Execution cancelled.", maxOutputBytes) }],
-  details: { ...callEntryDetails(calls), cancelled: true },
+  details: { ...details, cancelled: true },
 });
 
 export type CodeModeToolExecute = (
@@ -173,7 +174,7 @@ export const makeCodeModeToolExecute =
         return true;
       };
       const aborted = () => signal?.aborted === true;
-      if (aborted()) return cancelledResult([], config.maxOutputBytes);
+      if (aborted()) return cancelledResult(callEntryDetails([], counts), config.maxOutputBytes);
 
       const sourceRefusal = checkSourceSize(params.code, config.maxSourceBytes);
       if (sourceRefusal !== undefined) {
@@ -191,7 +192,6 @@ export const makeCodeModeToolExecute =
           definitions: environment.definitions,
           ctx,
           toolCallId,
-          signal,
         });
 
         const execution = (environment.executeCodeMode ?? CodeMode.execute)({
@@ -227,16 +227,17 @@ export const makeCodeModeToolExecute =
                 if (entry !== undefined) {
                   transitionCall(entry, nextStatus, counts);
                   if (event.status !== "running") entry.durationMs = event.durationMs;
-                } else {
-                  if (event.status !== "running") {
-                    counts.queued -= 1;
-                    counts[statusCountKey(nextStatus)] += 1;
-                  }
+                } else if (event.status === "running") {
+                  counts.queued -= 1;
+                  counts.running += 1;
+                  // The start hook immediately follows and publishes the exact hidden counts.
                   return;
+                } else {
+                  counts[event.started ? "running" : "queued"] -= 1;
+                  counts[statusCountKey(nextStatus)] += 1;
                 }
-                // The start hook immediately follows the modern running event and enriches the
-                // row with decoded activity. Publish that one snapshot instead of two equivalent
-                // running updates; terminal lifecycle events remain authoritative.
+                // The start hook immediately follows a tracked running event and enriches the
+                // row. Publish that one snapshot instead of two equivalent running updates.
                 if (event.status === "running") return;
               }
               if (event.status === "queued") publishNow();
@@ -287,19 +288,21 @@ export const makeCodeModeToolExecute =
             }),
         });
 
-        const settleAfterFailure = (message: string): AgentToolResult<CodeModeToolDetails> => {
+        const settleProgress = (): ReturnType<typeof callEntryDetails> => {
           const changed = settlePendingAsCancelled(calls, counts);
           counts.cancelled += counts.queued + counts.running;
           counts.queued = 0;
           counts.running = 0;
-          const details = callEntryDetails(snapshotCalls(calls), counts);
-          if (changed) publisher.publish(progressResult(snapshotCalls(calls), counts));
+          const snapshot = snapshotCalls(calls);
+          if (changed) publisher.publish(progressResult(snapshot, counts));
           publisher.settle();
+          return callEntryDetails(snapshot, counts);
+        };
+
+        const settleAfterFailure = (message: string): AgentToolResult<CodeModeToolDetails> => {
+          const details = settleProgress();
           if (aborted() || !environment.isCurrent()) {
-            return {
-              ...cancelledResult(snapshotCalls(calls), config.maxOutputBytes),
-              details: { ...callEntryDetails(snapshotCalls(calls), counts), cancelled: true },
-            };
+            return cancelledResult(details, config.maxOutputBytes);
           }
           environment.retainFailureDetails?.(toolCallId, details);
           throw new Error(
@@ -313,22 +316,11 @@ export const makeCodeModeToolExecute =
         const settleAfterSuccess = (
           result: CodeModeResult,
         ): AgentToolResult<CodeModeToolDetails> => {
-          const changed = settlePendingAsCancelled(calls, counts);
-          counts.cancelled += counts.queued + counts.running;
-          counts.queued = 0;
-          counts.running = 0;
-          if (changed) publisher.publish(progressResult(snapshotCalls(calls), counts));
-          publisher.settle();
-          if (aborted()) {
-            return {
-              ...cancelledResult(snapshotCalls(calls), config.maxOutputBytes),
-              details: { ...callEntryDetails(snapshotCalls(calls), counts), cancelled: true },
-            };
-          }
+          const settledDetails = settleProgress();
+          if (aborted()) return cancelledResult(settledDetails, config.maxOutputBytes);
 
-          const callEntry = callEntryDetails(snapshotCalls(calls), counts);
           const baseDetails: CodeModeToolDetails =
-            result.truncated === true ? { ...callEntry, truncated: true } : callEntry;
+            result.truncated === true ? { ...settledDetails, truncated: true } : settledDetails;
           if (!result.ok) {
             environment.retainFailureDetails?.(toolCallId, baseDetails);
             throw new Error(
@@ -355,9 +347,7 @@ export const makeCodeModeToolExecute =
 
         return environment
           .runInSession(execution, signal)
-          .then(settleAfterSuccess, (error) =>
-            settleAfterFailure(error instanceof Error ? error.message : String(error)),
-          );
+          .then(settleAfterSuccess, (error) => settleAfterFailure(formatForeignRejection(error)));
       };
       return Promise.resolve()
         .then(attempt)

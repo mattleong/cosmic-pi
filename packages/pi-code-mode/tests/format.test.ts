@@ -1,14 +1,33 @@
 // Pure model-visible formatting: diagnostics, logs, and bounded progress containment.
 import { describe, expect, it } from "vitest";
 import {
-  boundedCallEntries,
   callEntryDetails,
+  describeNestedActivity,
   formatCodeModeFailure,
   formatCodeModeSuccess,
+  formatForeignRejection,
   MAX_PROGRESS_ENTRIES,
   progressResult,
   type CodeModeCallEntry,
 } from "../src/tools/format.ts";
+
+describe("defensive formatters", () => {
+  it("normalizes foreign rejections without escaping hostile coercion", () => {
+    const hostile = {
+      toString: () => {
+        throw new Error("toString escaped");
+      },
+    };
+    expect(formatForeignRejection(new Error("ordinary"))).toBe("ordinary");
+    expect(formatForeignRejection("string")).toBe("string");
+    expect(formatForeignRejection(hostile)).toBe("Unknown rejection");
+  });
+
+  it("derives bounded activity from decoded inputs", () => {
+    expect(describeNestedActivity("pi.read", { path: "src/a.ts" })).toBe("Read src/a.ts");
+    expect(describeNestedActivity("pi.grep", { pattern: "TODO" })).toBe("Search TODO in cwd");
+  });
+});
 
 describe("formatCodeModeSuccess", () => {
   it("returns string values verbatim and appends logs", () => {
@@ -80,17 +99,6 @@ describe("progress containment", () => {
     expect(text.length).toBeLessThan(2_000);
   });
 
-  it("defensively copies bounded entries (including activity) so later mutation is not observable", () => {
-    const calls: CodeModeCallEntry[] = [{ tool: "pi.read", status: "running", activity: "Read a" }];
-    const bounded = boundedCallEntries(calls);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (calls[0] as { status: string }).status = "completed";
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (calls[0] as { activity: string }).activity = "Read b";
-    expect(bounded[0]?.status).toBe("running");
-    expect(bounded[0]?.activity).toBe("Read a");
-  });
-
   it("keeps problem and active rows plus recent successes beyond the display bound", () => {
     const calls: CodeModeCallEntry[] = [
       ...Array.from({ length: 40 }, (_, index) => ({
@@ -111,7 +119,8 @@ describe("progress containment", () => {
 
   it("records the true total only when calls exceed the bounded entries", () => {
     const few: CodeModeCallEntry[] = [{ tool: "pi.read", status: "completed" }];
-    expect(callEntryDetails(few)).toEqual({
+    const fewDetails = callEntryDetails(few);
+    expect(fewDetails).toEqual({
       toolCalls: few,
       counts: {
         total: 1,
@@ -122,12 +131,14 @@ describe("progress containment", () => {
         cancelled: 0,
       },
     });
+    expect(fewDetails.toolCalls[0]).not.toBe(few[0]);
     const many: CodeModeCallEntry[] = Array.from({ length: MAX_PROGRESS_ENTRIES + 8 }, () => ({
       tool: "pi.read",
       status: "completed" as const,
     }));
     const details = callEntryDetails(many);
     expect(details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
+    expect(details.toolCalls.at(-1)).not.toBe(many.at(-1));
     expect(details.totalToolCalls).toBe(MAX_PROGRESS_ENTRIES + 8);
   });
 });

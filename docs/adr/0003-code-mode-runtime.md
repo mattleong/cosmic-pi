@@ -40,12 +40,11 @@ host concerns, and without depending on an unpublished upstream package.
    the nested workspace manifest is repository-only.
 2. `packages/pi-code-mode/` is the public Pi extension that owns registration,
    trusted-project-only scoped settings, session lifecycle,
-   `/code-mode-settings`, the read-only Pi tool adapters
-   (`tools.pi.read/grep/find/ls` over the built-in
-   `create{Read,Grep,Find,Ls}ToolDefinition` factories), and the one outer
-   `code_mode` agent tool (registered per session start when
-   `CodeModeState.available`, wrapped with the `pi-code-previews` cooperative
-   shell after `loadCodePreviewSettings` completes).
+   `/code-mode-settings`, all seven Pi built-in adapters under ADR 0004
+   (`tools.pi.read/bash/edit/write/grep/find/ls` over fresh built-in definition
+   factories), and the one outer `code_mode` agent tool (registered per session
+   start when `CodeModeState.available`, wrapped with the `pi-code-previews`
+   cooperative shell after `loadCodePreviewSettings` completes).
 
 ### Vendored OpenCode 2 runtime at a pinned commit
 
@@ -168,8 +167,8 @@ of that limitation; they do not remove it.
   JavaScript `async`, `Promise`, and `Date` remain guest-language behavior inside
   the interpreter rather than host test-runner behavior. The `pi-code-mode`
   extension suites additionally run real interpreter integration tests over
-  the source-loaded runtime, including the final model-visible byte-bound (all early
-  paths) and deactivation-handoff cases.
+  the source-loaded runtime, including compact early-path clamp wiring and the
+  deactivation handoff. Pure limit tests cover the full clamp boundary matrix.
 - The nested-package layout is reflected in `pnpm-workspace.yaml`
   (`packages/pi-code-mode/runtime`), the layout/version check scripts, and the
   packed-tarball smoke test, which asserts the runtime TypeScript source and its

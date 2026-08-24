@@ -23,6 +23,7 @@ export type CodeModeToolCallLifecycleEvent =
       readonly id: number;
       readonly name: string;
       readonly status: "succeeded" | "failed" | "cancelled";
+      readonly started: boolean;
       readonly durationMs: number;
     };
 
@@ -114,7 +115,6 @@ interface ToolApi {
 interface RuntimeModule {
   readonly CodeMode: CodeModeApi;
   readonly Tool: ToolApi;
-  readonly ToolError: new (args: { readonly message: string }) => ToolError;
   readonly toolError: (message: string) => ToolError;
 }
 
@@ -129,7 +129,6 @@ if (
   !Predicate.isFunction(candidate.CodeMode?.execute) ||
   !Predicate.isFunction(candidate.CodeMode.make) ||
   !Predicate.isFunction(candidate.Tool?.make) ||
-  !Predicate.isFunction(candidate.ToolError) ||
   !Predicate.isFunction(candidate.toolError)
 ) {
   throw new Error("Code Mode runtime source is missing its required public API.");
@@ -137,5 +136,4 @@ if (
 
 export const CodeMode: CodeModeApi = candidate.CodeMode;
 export const Tool: ToolApi = candidate.Tool;
-export const ToolError: RuntimeModule["ToolError"] = candidate.ToolError;
 export const toolError: RuntimeModule["toolError"] = candidate.toolError;

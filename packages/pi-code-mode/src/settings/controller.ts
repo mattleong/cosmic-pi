@@ -1,6 +1,4 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
-import * as Predicate from "effect/Predicate";
-
 import {
   getSettingsListTheme,
   type ExtensionAPI,
@@ -8,8 +6,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import {
   completeSettingsArguments,
+  invokeHostCallback,
   notifyAtHostBoundary,
   type CapturedHostSignal,
   type HostNotificationLevel,
@@ -19,9 +19,7 @@ import {
   type SettingsSurfaceItem,
 } from "pi-cosmic-ui/manager/settings-surface";
 import {
-  hasCustomSurface,
   inputAtHostBoundary,
-  invokeHostCallback,
   openSettingsSurfaceAtHostBoundary,
   selectAtHostBoundary,
 } from "../boundary/host-ui.ts";
@@ -32,21 +30,20 @@ import {
 } from "../config/options.ts";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import { CodeModeConfigStore, type CodeModeState } from "../config/store.ts";
-import { dispatchCodeModeSettings } from "./dispatch.ts";
+import { dispatchCodeModeSettings, type CodeModeSettingsDispatch } from "./dispatch.ts";
 
 const COMMAND = "code-mode-settings";
 const UNAVAILABLE_MESSAGE = "Code Mode settings are unavailable.";
 const INHERIT_VALUE = "inherit";
+/** A throwing host getter is treated as aborted, so settings fail closed without side effects. */
+const signalAborted = (signal: AbortSignal | undefined): boolean =>
+  invokeHostCallback(() => signal?.aborted === true, true);
 /** Interactive-list sentinel that prompts for any in-bounds integer via `ctx.ui.input`. */
 export const CUSTOM_VALUE = "custom…";
 
 export const CODE_MODE_UNTRUSTED_NOTICE =
   "This project is not trusted: global settings can be edited, but Code Mode remains " +
   "unavailable in this project until the project is trusted.";
-
-const SETTING_IDS: readonly string[] = CODE_MODE_SETTING_DESCRIPTORS.map(
-  (descriptor) => descriptor.id,
-);
 
 // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 const COMPLETION_DESCRIPTORS = CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => ({
@@ -94,15 +91,7 @@ const scopeDisplayValue = (
   return value === undefined ? INHERIT_VALUE : String(value);
 };
 
-type ApplyRequest =
-  | {
-      readonly kind: "set";
-      readonly scope: CodeModeSettingScope;
-      readonly id: string;
-      readonly value: string;
-    }
-  | { readonly kind: "clear"; readonly scope: CodeModeSettingScope; readonly id: string };
-
+type ApplyRequest = Extract<CodeModeSettingsDispatch, { readonly _tag: "Apply" | "Clear" }>;
 type ApplyOutcome =
   | { readonly _tag: "Applied"; readonly state: CodeModeState }
   | { readonly _tag: "Rejected"; readonly message: string };
@@ -131,7 +120,7 @@ export function registerCodeModeSettingsController(
   const helpLines = (state: CodeModeState | undefined): string[] => [
     "Code Mode settings (the code_mode tool runs confined programs over all Pi built-ins)",
     ...CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => {
-      const current = state ? `=${descriptor.format(state.config)}` : "";
+      const current = state ? `=${String(state.config[descriptor.id])}` : "";
       return `  ${descriptor.id}${current}  — ${descriptor.description}`;
     }),
     "",
@@ -151,7 +140,7 @@ export function registerCodeModeSettingsController(
     "Code Mode settings — effective values",
     ...CODE_MODE_SETTING_DESCRIPTORS.map(
       (descriptor) =>
-        `  ${descriptor.id} = ${descriptor.format(state.config)} (${state.provenance[descriptor.id]})`,
+        `  ${descriptor.id} = ${String(state.config[descriptor.id])} (${state.provenance[descriptor.id]})`,
     ),
     availabilityLine(state),
     ...(state.projectTrusted ? [] : [CODE_MODE_UNTRUSTED_NOTICE]),
@@ -159,9 +148,54 @@ export function registerCodeModeSettingsController(
 
   const showStatus = (ctx: ExtensionCommandContext): Promise<void> => {
     const state = snapshot();
-    if (!state) return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
-    return feedback(ctx, statusLines(state).join("\n"), "info");
+    return state
+      ? feedback(ctx, statusLines(state).join("\n"), "info")
+      : feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
   };
+
+  const settingEffect = (
+    request: ApplyRequest,
+  ): Effect.Effect<ApplyOutcome, never, CodeModeConfigStore> =>
+    CodeModeConfigStore.use((store) =>
+      request._tag === "Apply"
+        ? store.setSetting(request.scope, request.id, request.value)
+        : store.clearSetting(request.scope, request.id),
+    ).pipe(
+      Effect.map((state): ApplyOutcome => ({ _tag: "Applied", state })),
+      Effect.catch((error) =>
+        Effect.succeed<ApplyOutcome>({ _tag: "Rejected", message: error.message }),
+      ),
+    );
+
+  const applySettingEffect = (
+    ctx: ExtensionCommandContext,
+    request: ApplyRequest,
+    active: () => boolean,
+    updateDisplay?: (currentValue: string) => void,
+    notifySuccess = true,
+  ): Effect.Effect<void, never, CodeModeConfigStore> =>
+    settingEffect(request).pipe(
+      Effect.tap((outcome) =>
+        Effect.sync(() => {
+          if (!active()) return;
+          if (outcome._tag === "Rejected") {
+            notifyAtHostBoundary(ctx, outcome.message, "error");
+            invokeHostCallback(
+              () => updateDisplay?.(scopeDisplayValue(snapshot(), request.scope, request.id)),
+              undefined,
+            );
+            return;
+          }
+          const display = scopeDisplayValue(outcome.state, request.scope, request.id);
+          if (updateDisplay) invokeHostCallback(() => updateDisplay(display), undefined);
+          else if (notifySuccess)
+            notifyAtHostBoundary(ctx, `${request.scope} ${request.id} = ${display}`, "info");
+          if (request.id === "enabled")
+            notifyAtHostBoundary(ctx, availabilityLine(outcome.state), "info");
+        }),
+      ),
+      Effect.asVoid,
+    );
 
   const applySetting = (
     ctx: ExtensionCommandContext,
@@ -169,95 +203,22 @@ export function registerCodeModeSettingsController(
     signal: AbortSignal | undefined,
     updateDisplay?: (currentValue: string) => void,
   ): Promise<void> => {
-    const revertOptimisticDisplay = () => {
-      updateDisplay?.(scopeDisplayValue(snapshot(), request.scope, request.id));
-    };
-    const effect = CodeModeConfigStore.use((store) =>
-      request.kind === "set"
-        ? store.setSetting(request.scope, request.id, request.value)
-        : store.clearSetting(request.scope, request.id),
-    ).pipe(
-      Effect.map((state): ApplyOutcome => ({ _tag: "Applied", state })),
-      Effect.catch(
-        (error): Effect.Effect<ApplyOutcome> =>
-          Effect.succeed({ _tag: "Rejected", message: error.message }),
-      ),
-    );
-    return run(effect, signal)
-      .then((outcome) => {
-        if (outcome._tag === "Rejected") {
-          notifyAtHostBoundary(ctx, outcome.message, "error");
-          revertOptimisticDisplay();
-          return;
-        }
-        const display = scopeDisplayValue(outcome.state, request.scope, request.id);
-        if (updateDisplay) updateDisplay(display);
-        else notifyAtHostBoundary(ctx, `${request.scope} ${request.id} = ${display}`, "info");
-        if (request.id === "enabled") {
-          notifyAtHostBoundary(ctx, availabilityLine(outcome.state), "info");
-        }
-      })
+    if (signalAborted(signal)) return Promise.resolve();
+    const active = () => !signalAborted(signal);
+    return Promise.resolve()
+      .then(() => run(applySettingEffect(ctx, request, active, updateDisplay), signal))
       .catch(() => {
+        if (!active()) return;
         notifyAtHostBoundary(ctx, UNAVAILABLE_MESSAGE, "warning");
-        try {
-          revertOptimisticDisplay();
-        } catch {
-          // Hostile list/render callbacks stay contained at the host boundary.
-        }
+        invokeHostCallback(
+          () => updateDisplay?.(scopeDisplayValue(snapshot(), request.scope, request.id)),
+          undefined,
+        );
       });
   };
 
-  /**
-   * `custom…` flow for integer settings: prompt for a free value with `ctx.ui.input`.
-   * Cancelled, invalid, and hostile input never persists anything; the optimistic display
-   * always returns to the persisted value.
-   */
-  const promptCustomInteger = (
-    ctx: ExtensionCommandContext,
-    scope: CodeModeSettingScope,
-    id: string,
-    signal: AbortSignal | undefined,
-    updateDisplay: (currentValue: string) => void,
-  ): Promise<void> => {
-    const revert = () => updateDisplay(scopeDisplayValue(snapshot(), scope, id));
-    const descriptor = findCodeModeSettingDescriptor(id);
-    if (descriptor === undefined || descriptor.kind !== "integer") {
-      revert();
-      return Promise.resolve();
-    }
-    const bounds = CODE_MODE_INTEGER_BOUNDS[descriptor.id];
-    const state = snapshot();
-    return inputAtHostBoundary(
-      ctx,
-      `${descriptor.id}: integer between ${bounds.minimum} and ${bounds.maximum}`,
-      state === undefined ? undefined : descriptor.format(state.config),
-    ).then((result) => {
-      if (result._tag === "Unavailable") {
-        notifyAtHostBoundary(ctx, `Unable to read a custom value for ${id}.`, "warning");
-        revert();
-        return;
-      }
-      if (result._tag === "Cancelled") {
-        revert();
-        return;
-      }
-      return applySetting(
-        ctx,
-        { kind: "set", scope, id, value: result.value },
-        signal,
-        updateDisplay,
-      );
-    });
-  };
-
-  const openScopeSettings = (
-    ctx: ExtensionCommandContext,
-    scope: CodeModeSettingScope,
-    signal: AbortSignal | undefined,
-  ): Promise<void> => {
-    const state = snapshot();
-    if (!state) return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
-    const items: SettingsSurfaceItem[] = CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => ({
+  const surfaceItems = (state: CodeModeState, scope: CodeModeSettingScope): SettingsSurfaceItem[] =>
+    CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => ({
       id: descriptor.id,
       label: descriptor.label,
       currentValue: scopeDisplayValue(state, scope, descriptor.id),
@@ -266,79 +227,123 @@ export function registerCodeModeSettingsController(
         ...(descriptor.kind === "integer" ? [CUSTOM_VALUE] : []),
         INHERIT_VALUE,
       ],
-      description: `${descriptor.description} Effective: ${descriptor.format(state.config)} (${state.provenance[descriptor.id]}).`,
+      description: `${descriptor.description} Effective: ${String(state.config[descriptor.id])} (${state.provenance[descriptor.id]}).`,
     }));
-    return openSettingsSurfaceAtHostBoundary(
-      ctx,
-      (tui, theme, keybindings, done) =>
-        createSettingsListSurface({
-          header: new Text(
-            theme.fg("accent", theme.bold(`Code Mode Settings — ${scope} scope`)),
-            1,
-            1,
-          ),
-          items,
-          height: Math.min(12, items.length + 2),
-          listTheme: getSettingsListTheme(),
-          // SettingsList shows the cycled value optimistically; both apply outcomes route
-          // through the same display update, so failures restore the persisted value.
-          onChange: (id, value, list) => {
-            // Hostile list/render callbacks stay contained at the host boundary.
-            const show = (currentValue: string) => {
-              invokeHostCallback(() => {
-                list.updateValue(id, currentValue);
-                tui.requestRender();
-              }, undefined);
-            };
-            if (value === CUSTOM_VALUE) {
-              void promptCustomInteger(ctx, scope, id, signal, show);
-              return;
-            }
-            const request: ApplyRequest =
-              value === INHERIT_VALUE
-                ? { kind: "clear", scope, id }
-                : { kind: "set", scope, id, value };
-            void applySetting(ctx, request, signal, show);
-          },
-          onCancel: () => invokeHostCallback(() => done(undefined), undefined),
-          matchesKeybinding: invokeHostCallback(
-            () => Predicate.isFunction(keybindings?.matches),
-            false,
-          )
-            ? (data, id) => invokeHostCallback(() => keybindings.matches(data, id), false)
-            : undefined,
-          requestRender: () => invokeHostCallback(() => tui.requestRender(), undefined),
-          dim: (text) => invokeHostCallback(() => theme.fg("dim", text), text),
-          // The composed surface delegates render/invalidate/input through this caller-owned
-          // guard, so hostile or malformed host invocations resolve to neutral fallbacks.
-          bridge: { invoke: invokeHostCallback },
-        }).surface,
-    ).then((outcome) => {
-      if (outcome === "failed") {
-        notifyAtHostBoundary(ctx, "Unable to open Code Mode settings.", "warning");
+
+  const openScopeSettings = (
+    ctx: ExtensionCommandContext,
+    scope: CodeModeSettingScope,
+    commandSignal: AbortSignal | undefined,
+  ): Effect.Effect<void, never, CodeModeConfigStore> =>
+    Effect.gen(function* () {
+      while (!signalAborted(commandSignal)) {
+        const state = snapshot();
+        if (state === undefined) return;
+        const items = surfaceItems(state, scope);
+        const pendingWrites: Promise<void>[] = [];
+        const outcome = yield* openSettingsSurfaceAtHostBoundary(
+          ctx,
+          (tui, theme, keybindings, done, surfaceSignal) =>
+            createSettingsListSurface({
+              header: new Text(
+                theme.fg("accent", theme.bold(`Code Mode Settings — ${scope} scope`)),
+                1,
+                1,
+              ),
+              items,
+              height: Math.min(12, items.length + 2),
+              listTheme: getSettingsListTheme(),
+              onChange: (id, value, list) => {
+                if (signalAborted(surfaceSignal)) return;
+                if (value === CUSTOM_VALUE) {
+                  done({ _tag: "PromptInteger", id });
+                  return;
+                }
+                const show = (currentValue: string) => {
+                  if (signalAborted(surfaceSignal)) return;
+                  invokeHostCallback(() => {
+                    list.updateValue(id, currentValue);
+                    tui.requestRender();
+                  }, undefined);
+                };
+                const request: ApplyRequest =
+                  value === INHERIT_VALUE
+                    ? { _tag: "Clear", scope, id }
+                    : { _tag: "Apply", scope, id, value };
+                pendingWrites.push(applySetting(ctx, request, surfaceSignal, show));
+              },
+              onCancel: () => invokeHostCallback(() => done({ _tag: "Closed" }), undefined),
+              matchesKeybinding: invokeHostCallback(
+                () => Predicate.isFunction(keybindings?.matches),
+                false,
+              )
+                ? (data, id) => invokeHostCallback(() => keybindings.matches(data, id), false)
+                : undefined,
+              requestRender: () => {
+                if (!signalAborted(surfaceSignal))
+                  invokeHostCallback(() => tui.requestRender(), undefined);
+              },
+              dim: (text) => invokeHostCallback(() => theme.fg("dim", text), text),
+              bridge: { invoke: invokeHostCallback },
+            }).surface,
+        );
+        // `applySetting` absorbs every failure, so this interruptible join cannot reject.
+        yield* Effect.promise(() => Promise.all(pendingWrites));
+        if (outcome._tag === "Failed") {
+          notifyAtHostBoundary(ctx, "Unable to open Code Mode settings.", "warning");
+          return;
+        }
+        if (outcome._tag === "Closed") return;
+
+        const descriptor = findCodeModeSettingDescriptor(outcome.id);
+        if (descriptor === undefined || descriptor.kind !== "integer") continue;
+        const current = snapshot();
+        if (current === undefined) return;
+        const bounds = CODE_MODE_INTEGER_BOUNDS[descriptor.id];
+        const result = yield* inputAtHostBoundary(
+          ctx,
+          `${descriptor.id}: integer between ${bounds.minimum} and ${bounds.maximum}`,
+          String(current.config[descriptor.id]),
+        );
+        if (result._tag === "Unavailable")
+          notifyAtHostBoundary(
+            ctx,
+            `Unable to read a custom value for ${descriptor.id}.`,
+            "warning",
+          );
+        if (result._tag !== "Answered") continue;
+        if (snapshot() === undefined) return;
+        yield* applySettingEffect(
+          ctx,
+          { _tag: "Apply", scope, id: descriptor.id, value: result.value },
+          () => !signalAborted(commandSignal),
+          undefined,
+          false,
+        );
       }
     });
-  };
 
   const openInteractiveSettings = (ctx: ExtensionCommandContext): Promise<void> => {
     const state = snapshot();
     if (!state) return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
-    const capturedSignal = captureSignal(ctx);
-    if (capturedSignal._tag === "Unavailable") return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
-    if (!state.projectTrusted) {
-      // Untrusted projects only ever see the global scope.
-      notifyAtHostBoundary(ctx, CODE_MODE_UNTRUSTED_NOTICE, "warning");
-      return openScopeSettings(ctx, "global", capturedSignal.signal);
-    }
-    return selectAtHostBoundary(ctx, "Code Mode settings scope", ["global", "project"]).then(
-      (choice) => {
-        if (choice._tag === "Cancelled") return;
-        // A host without a usable selector degrades to the global scope instead of failing.
-        const scope: CodeModeSettingScope =
-          choice._tag === "Answered" && choice.value === "project" ? "project" : "global";
-        return openScopeSettings(ctx, scope, capturedSignal.signal);
-      },
-    );
+    const captured = captureSignal(ctx);
+    if (captured._tag === "Unavailable") return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
+    if (signalAborted(captured.signal)) return Promise.resolve();
+    const workflow = Effect.gen(function* () {
+      if (!state.projectTrusted) {
+        notifyAtHostBoundary(ctx, CODE_MODE_UNTRUSTED_NOTICE, "warning");
+        return yield* openScopeSettings(ctx, "global", captured.signal);
+      }
+      const choice = yield* selectAtHostBoundary(ctx, "Code Mode settings scope", [
+        "global",
+        "project",
+      ]);
+      if (choice._tag === "Cancelled") return;
+      const scope: CodeModeSettingScope =
+        choice._tag === "Answered" && choice.value === "project" ? "project" : "global";
+      return yield* openScopeSettings(ctx, scope, captured.signal);
+    });
+    return run(workflow, captured.signal).catch(() => undefined);
   };
 
   pi.registerCommand(COMMAND, {
@@ -360,13 +365,13 @@ export function registerCodeModeSettingsController(
       return completeSettingsArguments(prefix, COMPLETION_DESCRIPTORS, EXTRA_COMPLETIONS);
     },
     handler: (args, ctx) => {
-      const dispatch = dispatchCodeModeSettings(args, SETTING_IDS);
+      const dispatch = dispatchCodeModeSettings(args);
       switch (dispatch._tag) {
         case "OpenInteractive":
-          // Outside an interactive TUI the bare command never prompts or blocks: help is
-          // delivered through `ctx.ui.notify`, which RPC hosts receive as a notification
-          // and print/JSON modes drop (making the bare command a non-blocking no-op there).
-          return invokeHostCallback(() => ctx.mode === "tui", false) && hasCustomSurface(ctx)
+          return invokeHostCallback(
+            () => ctx.mode === "tui" && Predicate.isFunction(ctx.ui.custom),
+            false,
+          )
             ? openInteractiveSettings(ctx)
             : feedback(ctx, helpLines(snapshot()).join("\n"), "info");
         case "Help":
@@ -374,32 +379,22 @@ export function registerCodeModeSettingsController(
         case "Status":
           return showStatus(ctx);
         case "Invalid":
-          return dispatch.reason === "unknown-setting"
-            ? feedback(ctx, `Unknown setting: ${dispatch.id}`, "error")
-            : feedback(
-                ctx,
-                "Usage: /code-mode-settings [global|project] <id> <value|inherit>",
-                "error",
-              );
+          return feedback(
+            ctx,
+            "Usage: /code-mode-settings [global|project] <id> <value|inherit>",
+            "error",
+          );
         case "Apply":
         case "Clear": {
+          if (findCodeModeSettingDescriptor(dispatch.id) === undefined)
+            return feedback(ctx, `Unknown setting: ${dispatch.id}`, "error");
           const state = snapshot();
           if (!state) return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
           if (dispatch.scope === "project" && !state.projectTrusted)
             return feedback(ctx, CODE_MODE_UNTRUSTED_NOTICE, "warning");
-          const capturedSignal = captureSignal(ctx);
-          if (capturedSignal._tag === "Unavailable")
-            return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
-          const request: ApplyRequest =
-            dispatch._tag === "Clear"
-              ? { kind: "clear", scope: dispatch.scope, id: dispatch.id }
-              : {
-                  kind: "set",
-                  scope: dispatch.scope,
-                  id: dispatch.id,
-                  value: dispatch.value,
-                };
-          return applySetting(ctx, request, capturedSignal.signal);
+          const captured = captureSignal(ctx);
+          if (captured._tag === "Unavailable") return feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
+          return applySetting(ctx, dispatch, captured.signal);
         }
       }
     },

@@ -22,10 +22,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { formatForeignRejection } from "../tools/format.ts";
 import { toolError, type ToolError } from "./codemode-runtime.ts";
 
-export const PI_GUEST_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
-export type PiGuestToolName = (typeof PI_GUEST_TOOL_NAMES)[number];
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 export type PiGuestToolInput = Parameters<AnyToolDefinition["execute"]>[1];
 
@@ -39,6 +38,8 @@ export interface NestedPiToolDefinitions {
   readonly find: AnyToolDefinition;
   readonly ls: AnyToolDefinition;
 }
+
+export type PiGuestToolName = keyof NestedPiToolDefinitions;
 
 /** Live factory: current built-in definitions bound to the session working directory. */
 export const makeNestedPiToolDefinitions = (cwd: string): NestedPiToolDefinitions => ({
@@ -97,8 +98,6 @@ export interface NestedDispatchOptions {
   readonly ctx: ExtensionContext;
   /** Outer `code_mode` tool-call id; nested ids derive from it deterministically. */
   readonly toolCallId: string;
-  /** Outer execute abort signal; composed with per-call Effect interruption. */
-  readonly signal: AbortSignal | undefined;
 }
 
 export type NestedPiToolDispatch = (
@@ -106,14 +105,18 @@ export type NestedPiToolDispatch = (
   input: PiGuestToolInput,
 ) => Effect.Effect<string, ToolError>;
 
+interface NestedToolRejection {
+  readonly _tag: "NestedToolRejection";
+  readonly rejection: unknown;
+}
+
 /**
  * Dispatches one nested call against the matching built-in definition.
  *
- * The nested tool receives a composed abort signal: the outer `code_mode` execute signal
- * plus this call's own Effect interruption (runtime timeout, session replacement or
- * shutdown, outer promise interruption). `AbortSignal.any` owns the listener lifetimes, so
- * no listener outlives the composed signal. Failures surface as model-safe `ToolError`
- * refusals, which the runtime reports as `ToolFailure` diagnostics.
+ * The nested tool receives the interrupt signal owned by `Effect.tryPromise`. Outer execute
+ * cancellation, runtime timeout, and session replacement all interrupt that Effect fiber.
+ * Failures surface as model-safe `ToolError` refusals, which the runtime reports as
+ * `ToolFailure` diagnostics.
  */
 export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): NestedPiToolDispatch => {
   let nestedCalls = 0;
@@ -123,17 +126,19 @@ export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): Nested
       const callId = `${options.toolCallId}/${name}/${nestedCalls}`;
       const definition = options.definitions[name];
       return Effect.tryPromise({
-        try: (interruptSignal) => {
-          const composed =
-            options.signal === undefined
-              ? interruptSignal
-              : AbortSignal.any([options.signal, interruptSignal]);
-          return definition.execute(callId, input, composed, undefined, options.ctx);
-        },
-        catch: (error) =>
-          toolError(
-            `Nested tool '${name}' failed: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-      }).pipe(Effect.flatMap((result) => nestedResultToGuestData(name, result)));
+        try: (interruptSignal) =>
+          definition.execute(callId, input, interruptSignal, undefined, options.ctx),
+        // This object construction is total. Formatting happens after tryPromise because a
+        // throwing catch mapper becomes an Effect defect in the pinned rc.111 implementation.
+        catch: (rejection): NestedToolRejection => ({
+          _tag: "NestedToolRejection",
+          rejection,
+        }),
+      }).pipe(
+        Effect.mapError((error) =>
+          toolError(`Nested tool '${name}' failed: ${formatForeignRejection(error.rejection)}`),
+        ),
+        Effect.flatMap((result) => nestedResultToGuestData(name, result)),
+      );
     });
 };

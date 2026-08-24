@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
 import {
+  bestEffortHostBootstrap,
   captureHostSignal,
   captureSessionHost,
   isProjectTrusted,
@@ -21,21 +22,21 @@ import {
   type NestedPiToolDefinitions,
 } from "./boundary/host-builtin-tools.ts";
 import {
+  captureCodeModeDeactivation,
   codeModeSessionKey,
-  makeCodeModeDeactivationHandoff,
+  publishCodeModeDeactivation,
   type CodeModeSessionKey,
 } from "./boundary/host-deactivation-handoff.ts";
 import { CodeModeConfigStore, type CodeModeState } from "./config/store.ts";
 import {
   makeCodeModeLayer,
   type CodeModeApplication,
+  type CodeModeLayerInput,
   type CodeModeRuntimeError,
-  type CodeModeSessionInput,
 } from "./layer.ts";
 import { registerCodeModeSettingsController } from "./settings/controller.ts";
 import {
   buildCodeModeToolDefinition,
-  deactivateCodeModeTool,
   observeCodeModeToolActive,
   reconcileCodeModeToolActivation,
   registerCodeModeTool,
@@ -47,21 +48,24 @@ import {
   makeFailureDetailsRetention,
 } from "./tools/retention.ts";
 
+interface CodeModeSessionInput extends CodeModeLayerInput {
+  readonly ctx: ExtensionContext;
+  /** Revoked before this session's runtime can finish a late uninterruptible publication. */
+  readonly publicationOwner: MutableRef.MutableRef<boolean>;
+}
+
 /** Host boundaries injected here so tests can control settings latency and nested tools. */
 export interface CodeModeApplicationBoundaries {
   /** Must resolve before the tool is wrapped: the preview shell captures mode at wrap time. */
   readonly loadSettings: (
     cwd: string,
     projectTrusted: boolean,
-  ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
+    signal: AbortSignal,
+  ) => ReturnType<typeof loadCodePreviewSettings>;
   readonly wrapTool: (tool: CodeModeToolDefinition) => CodeModeToolDefinition;
   readonly makeNestedDefinitions: (cwd: string) => NestedPiToolDefinitions;
-  /**
-   * Process-memory bridge for the deliberate deactivation intent across module recreation.
-   * Defaults to the globalThis-backed handoff; every instance shares one slot, so a recreated
-   * module restores what the old module published (see `host-deactivation-handoff.ts`).
-   */
-  readonly makeDeactivationHandoff?: () => ReturnType<typeof makeCodeModeDeactivationHandoff>;
+  /** Package-private lifecycle test seam; production always uses `makeCodeModeLayer`. */
+  readonly makeLayer?: typeof makeCodeModeLayer;
 }
 
 const LIVE_APPLICATION_BOUNDARIES: CodeModeApplicationBoundaries = {
@@ -80,25 +84,15 @@ export function registerCodeModeApplication(
    * is re-read defensively on every tool execution.
    */
   const stateRef = MutableRef.make<CodeModeState | undefined>(undefined);
-  /** Bumped by every session boundary; stale async continuations compare against it. */
-  let preparationGeneration = 0;
   /** Whether `code_mode` has ever been registered in this extension process. */
   let hasRegisteredTool = false;
   /** The activation this extension last put in effect (never reflects user changes). */
   let expectedActive = false;
-  /**
-   * Deliberate-deactivation policy: Pi keeps a dynamically registered tool's activation
-   * across re-registration but offers no unregister, so this extension removes only
-   * `code_mode` at session boundaries and re-adds it after re-registering. A user who
-   * deactivated the tool mid-session is observed here — active-list membership is read
-   * *before* any lifecycle removal in the same cycle — and their choice is preserved by
-   * re-registering without re-activating. Re-activating the tool clears the observation.
-   */
+  // Preserve user deactivation by observing membership before lifecycle removal.
   let userDeactivated = false;
   /** Handoff key for the session this instance is currently serving (for publish on exit). */
   let currentSessionKey: CodeModeSessionKey | undefined;
 
-  const handoff = (boundaries.makeDeactivationHandoff ?? makeCodeModeDeactivationHandoff)();
   const failureDetails = makeFailureDetailsRetention();
 
   // Pi correctly turns a thrown tool error into `isError: true`, but its generic catch path
@@ -108,7 +102,7 @@ export function registerCodeModeApplication(
 
   /** Removes `code_mode` from the active list and records that this extension did so. */
   const tearDownTool = (): void => {
-    deactivateCodeModeTool(pi);
+    reconcileCodeModeToolActivation(pi, false);
     expectedActive = false;
   };
 
@@ -118,12 +112,9 @@ export function registerCodeModeApplication(
     else if (expectedActive) userDeactivated = true;
   };
 
-  /**
-   * Publish the observed deactivation intent so a module Pi recreates on the next
-   * reload/new/resume/fork can restore it. Keyed by stable session identity where available.
-   */
-  const publishUserIntent = (key: CodeModeSessionKey | undefined): void => {
-    if (key !== undefined) handoff.publish(key, userDeactivated);
+  const publishUserIntent = (): void => {
+    if (userDeactivated) publishCodeModeDeactivation(currentSessionKey);
+    currentSessionKey = undefined;
   };
 
   const slot = makePiSessionRuntimeSlot<
@@ -135,13 +126,59 @@ export function registerCodeModeApplication(
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
-        makeCodeModeLayer(input, {
-          publish: (state) => MutableRef.set(stateRef, state),
+        (boundaries.makeLayer ?? makeCodeModeLayer)(input, (state) => {
+          if (MutableRef.get(input.publicationOwner)) MutableRef.set(stateRef, state);
         }),
         { agentDirectory: getAgentDir, packageName: "pi-code-mode" },
       ),
-    startup: () => CodeModeConfigStore.use(() => Effect.void),
-    onDeactivated: () => {
+    startup: (input) =>
+      CodeModeConfigStore.use((store) =>
+        store.snapshot().available
+          ? bestEffortHostBootstrap("pi-code-mode.preview-settings", (signal) =>
+              boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
+            )
+          : Effect.void,
+      ),
+    onActivated: (input, token) => {
+      const ownsPublication = () => MutableRef.get(input.publicationOwner);
+      const isCurrent = () => ownsPublication() && slot.isCurrent(token);
+      if (!isCurrent()) return;
+      const state = MutableRef.get(stateRef);
+      if (state === undefined || !state.available) return;
+      let wrapped: CodeModeToolDefinition;
+      try {
+        const definitions = boundaries.makeNestedDefinitions(input.cwd);
+        wrapped = boundaries.wrapTool(
+          buildCodeModeToolDefinition({
+            catalogBudget: state.config.catalogBudget,
+            execute: makeCodeModeToolExecute({
+              isCurrent,
+              getState: () => MutableRef.get(stateRef),
+              runInSession: (effect, signal) => slot.run(effect, signal),
+              definitions,
+              retainFailureDetails: failureDetails.retain,
+            }),
+          }),
+        );
+      } catch {
+        tearDownTool();
+        notifyAtHostBoundary(input.ctx, "Code Mode failed to register its tool.", "warning");
+        return;
+      }
+      if (!isCurrent()) return;
+      if (!registerCodeModeTool(pi, wrapped)) {
+        notifyAtHostBoundary(input.ctx, "Code Mode failed to register its tool.", "warning");
+        return;
+      }
+      hasRegisteredTool = true;
+      if (!isCurrent()) {
+        tearDownTool();
+        return;
+      }
+      expectedActive = reconcileCodeModeToolActivation(pi, !userDeactivated);
+    },
+    onDeactivated: (input) => {
+      MutableRef.set(input.publicationOwner, false);
       MutableRef.set(stateRef, undefined);
       tearDownTool();
     },
@@ -160,16 +197,14 @@ export function registerCodeModeApplication(
   });
 
   const activateSession = (ctx: ExtensionContext): Promise<void> => {
-    const generation = ++preparationGeneration;
     observeUserIntent();
-    // Restore a deliberate deactivation this session recorded before Pi recreated the
-    // extension module (reload/new/resume/fork). The handoff is keyed by stable session
-    // identity, so a genuinely different session never inherits another's intent; a fresh
-    // session with no published intent leaves the default (activated).
+    // Closure state belongs only to the same stable session. A fresh or unidentifiable session
+    // resets to active unless it consumes a matching true-only recreation handoff.
     const sessionKey = codeModeSessionKey(ctx);
+    const sameSession = sessionKey !== undefined && sessionKey === currentSessionKey;
+    const restored = captureCodeModeDeactivation(sessionKey);
+    userDeactivated = (sameSession && userDeactivated) || restored === true;
     currentSessionKey = sessionKey;
-    const restored = handoff.capture(sessionKey);
-    if (restored !== undefined) userDeactivated = restored;
     // No registered code_mode implementation may stay exposed while capture, startup,
     // settings, or replacement is pending; a stale definition also self-gates in execute.
     tearDownTool();
@@ -181,63 +216,18 @@ export function registerCodeModeApplication(
       return slot.shutdown().then(() => undefined);
     }
     const projectTrusted = isProjectTrusted(ctx);
-    return slot.start({ ctx, cwd: captured.cwd, projectTrusted }, captured.signal).then((token) => {
-      // Start failure already notified via onStartFailure; a superseded start stays silent.
-      if (token === undefined) return;
-      if (generation !== preparationGeneration || !slot.isCurrent(token)) return;
-
-      const state = MutableRef.get(stateRef);
-      // Untrusted or disabled sessions register nothing; the tool stays deactivated.
-      if (state === undefined || !state.available) return;
-
-      // Trusted project settings must finish loading before the wrap below: the preview
-      // shell captures its mode at wrapping time. Preview-settings failures degrade to
-      // preview defaults; they never block the tool.
-      return Promise.resolve()
-        .then(() => Promise.resolve(boundaries.loadSettings(captured.cwd, projectTrusted)))
-        .catch(() => undefined)
-        .then(() => {
-          // A slow settings load must never register an implementation bound to a replaced
-          // session (old cwd, old runtime): re-check currency after every settled promise.
-          if (generation !== preparationGeneration || !slot.isCurrent(token)) return;
-
-          const isCurrent = () => generation === preparationGeneration && slot.isCurrent(token);
-          const definition = buildCodeModeToolDefinition({
-            catalogBudget: state.config.catalogBudget,
-            execute: makeCodeModeToolExecute({
-              isCurrent,
-              getState: () => MutableRef.get(stateRef),
-              runInSession: (effect, signal) => slot.run(effect, signal),
-              definitions: boundaries.makeNestedDefinitions(captured.cwd),
-              retainFailureDetails: failureDetails.retain,
-            }),
-          });
-          let wrapped: CodeModeToolDefinition;
-          try {
-            wrapped = boundaries.wrapTool(definition);
-          } catch {
-            notifyAtHostBoundary(ctx, "Code Mode failed to register its tool.", "warning");
-            return;
-          }
-          if (!registerCodeModeTool(pi, wrapped)) {
-            notifyAtHostBoundary(ctx, "Code Mode failed to register its tool.", "warning");
-            return;
-          }
-          hasRegisteredTool = true;
-          expectedActive = reconcileCodeModeToolActivation(pi, !userDeactivated);
-        });
-    });
+    const publicationOwner = MutableRef.make(true);
+    return slot
+      .start({ ctx, cwd: captured.cwd, projectTrusted, publicationOwner }, captured.signal)
+      .then(() => undefined);
   };
 
   pi.on("session_start", (_event, ctx) => activateSession(ctx));
 
-  pi.on("session_shutdown", (_event, ctx: ExtensionContext | undefined) => {
-    ++preparationGeneration;
+  pi.on("session_shutdown", () => {
     observeUserIntent();
-    // Publish the observed intent before teardown so a module Pi recreates on the following
-    // reload/new/resume/fork restores it. Prefer the shutdown ctx's identity, falling back to
-    // the key captured at this session's start.
-    publishUserIntent((ctx ? codeModeSessionKey(ctx) : undefined) ?? currentSessionKey);
+    // Publish against the key captured at start, never a possibly different shutdown context.
+    publishUserIntent();
     tearDownTool();
     return slot.shutdown();
   });

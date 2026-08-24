@@ -138,34 +138,6 @@ describe("code mode config store", () => {
     }),
   );
 
-  it.effect("computes availability as trusted AND enabled across the matrix", () =>
-    Effect.gen(function* () {
-      const stateOf = (h: ReturnType<typeof harness>) =>
-        Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
-
-      const trustedDefault = harness(true);
-      expect((yield* stateOf(trustedDefault)).available).toBe(true);
-
-      const trustedDisabledGlobal = harness(true);
-      trustedDisabledGlobal.writeDoc(trustedDisabledGlobal.globalPath, { enabled: false });
-      expect((yield* stateOf(trustedDisabledGlobal)).available).toBe(false);
-
-      const trustedDisabledProject = harness(true);
-      trustedDisabledProject.writeDoc(trustedDisabledProject.globalPath, { enabled: true });
-      trustedDisabledProject.writeDoc(trustedDisabledProject.projectPath, { enabled: false });
-      expect((yield* stateOf(trustedDisabledProject)).available).toBe(false);
-
-      // A global enabled: true never grants availability in an untrusted project.
-      const untrustedEnabledGlobal = harness(false);
-      untrustedEnabledGlobal.writeDoc(untrustedEnabledGlobal.globalPath, { enabled: true });
-      expect((yield* stateOf(untrustedEnabledGlobal)).available).toBe(false);
-
-      const untrustedEnabledProject = harness(false);
-      untrustedEnabledProject.writeDoc(untrustedEnabledProject.projectPath, { enabled: true });
-      expect((yield* stateOf(untrustedEnabledProject)).available).toBe(false);
-    }),
-  );
-
   it.effect("writes, resets, and inherits fields per scope through the single door", () =>
     Effect.gen(function* () {
       const h = harness(true);

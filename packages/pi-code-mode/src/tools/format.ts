@@ -17,6 +17,29 @@ export const MAX_INTENT_LENGTH = 160;
 /** Display bound (code points) for one path/pattern/query inside an activity label. */
 export const MAX_ACTIVITY_FIELD_LENGTH = 48;
 
+const FOREIGN_REJECTION_FALLBACK = "Unknown rejection";
+
+/**
+ * Total formatter for rejected foreign Promises. Ordinary Error and string messages retain
+ * their text; hostile prototype, message, and string-coercion traps collapse to a fixed value.
+ */
+export const formatForeignRejection = <Rejection>(rejection: Rejection): string => {
+  if (Predicate.isString(rejection)) return rejection;
+  try {
+    if (rejection instanceof Error) {
+      const message = rejection.message;
+      return Predicate.isString(message) ? message : FOREIGN_REJECTION_FALLBACK;
+    }
+  } catch {
+    return FOREIGN_REJECTION_FALLBACK;
+  }
+  try {
+    return String(rejection);
+  } catch {
+    return FOREIGN_REJECTION_FALLBACK;
+  }
+};
+
 /** Code-point-safe truncation with a single-character ellipsis inside the budget. */
 export const truncateDisplay = (text: string, maxCodePoints: number): string => {
   const points = [...text];
@@ -126,7 +149,7 @@ export const countCallEntries = (calls: ReadonlyArray<CodeModeCallEntry>): CodeM
 
 /**
  * Keep active/problem rows plus the most recent successes, then restore chronological order.
- * Every returned row is copied so later mutations never affect retained progress snapshots.
+ * Every returned row is an owned shallow copy, including on the unbounded fast path.
  */
 export const boundedCallEntries = (
   calls: ReadonlyArray<CodeModeCallEntry>,

@@ -25,18 +25,20 @@ export const codeModeOutputText = (text: string): string => boundedTerminalText(
 
 const splitStructuredOutput = (
   text: string,
-): { readonly json: string; readonly logs?: string } | undefined => {
+): { readonly json: string; readonly parsed: unknown; readonly logs?: string } | undefined => {
   if (text.length > MAX_OUTPUT_DISPLAY_LENGTH) return undefined;
   try {
-    JSON.parse(text);
-    return { json: text };
+    return { json: text, parsed: JSON.parse(text) };
   } catch {
     const separator = text.indexOf(LOGS_SEPARATOR);
     if (separator < 0) return undefined;
     const json = text.slice(0, separator);
     try {
-      JSON.parse(json);
-      return { json, logs: text.slice(separator + LOGS_SEPARATOR.length) };
+      return {
+        json,
+        parsed: JSON.parse(json),
+        logs: text.slice(separator + LOGS_SEPARATOR.length),
+      };
     } catch {
       return undefined;
     }
@@ -56,7 +58,7 @@ export function projectStructuredCodeModeOutput(
   const split = splitStructuredOutput(text);
   if (split === undefined) return undefined;
   const decoded = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.String))(
-    JSON.parse(split.json),
+    split.parsed,
   );
   if (Option.isNone(decoded)) return undefined;
   const record = decoded.value;

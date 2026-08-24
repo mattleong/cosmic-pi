@@ -1,87 +1,64 @@
-/**
- * Package-local Pi UI host boundary for `/code-mode-settings`.
- *
- * Pi dialog and custom-surface APIs are Promise-shaped foreign code and may also throw
- * synchronously (hostile or stale hosts). Every adapter here resolves to a bounded plain
- * outcome instead of throwing or rejecting into extension code, so a hostile host callback
- * can never hang the session or escape a command handler.
- */
-import * as Predicate from "effect/Predicate";
-
+/** Interruptible Pi dialog boundaries for `/code-mode-settings`. */
 import type {
   ExtensionCommandContext,
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 
-/** Synchronous Pi render/list callbacks resolve to a neutral fallback when they throw. */
-export { invokeHostCallback } from "pi-cosmic-core";
-
-/** Outcome of a Promise-shaped Pi dialog at the host boundary. */
 export type HostDialogResult =
   | { readonly _tag: "Answered"; readonly value: string }
   | { readonly _tag: "Cancelled" }
   | { readonly _tag: "Unavailable" };
 
 const UNAVAILABLE: HostDialogResult = { _tag: "Unavailable" };
-
 const settled = <Value>(value: Value): HostDialogResult =>
   Predicate.isString(value) ? { _tag: "Answered", value } : { _tag: "Cancelled" };
 
-/** True when the host exposes a callable custom-surface API; hostile accessors read as false. */
-export function hasCustomSurface(ctx: ExtensionCommandContext): boolean {
-  try {
-    return Predicate.isFunction(ctx.ui.custom);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * One guarded Promise-shaped dialog invocation: missing APIs, synchronous throws, and
- * rejections all resolve to `Unavailable` instead of escaping into extension code.
- */
-function dialogAtHostBoundary<Result>(
+const dialogAtHostBoundary = <Result>(
   ctx: ExtensionCommandContext,
-  invoke: (ui: ExtensionCommandContext["ui"]) => Result,
-): Promise<HostDialogResult> {
-  try {
-    return Promise.resolve(invoke(ctx.ui)).then(settled, () => UNAVAILABLE);
-  } catch {
-    return Promise.resolve(UNAVAILABLE);
-  }
-}
+  invoke: (ui: ExtensionCommandContext["ui"], signal: AbortSignal) => Promise<Result>,
+): Effect.Effect<HostDialogResult> =>
+  Effect.tryPromise((signal) => invoke(ctx.ui, signal)).pipe(
+    Effect.map(settled),
+    Effect.catch(() => Effect.succeed(UNAVAILABLE)),
+  );
 
-/** Guarded `ctx.ui.select`. */
-export function selectAtHostBoundary(
+/** Guarded `ctx.ui.select`; Effect interruption dismisses the host dialog. */
+export const selectAtHostBoundary = (
   ctx: ExtensionCommandContext,
   title: string,
   options: readonly string[],
-): Promise<HostDialogResult> {
-  return dialogAtHostBoundary(ctx, (ui) => ui.select(title, [...options]));
-}
+): Effect.Effect<HostDialogResult> =>
+  dialogAtHostBoundary(ctx, (ui, signal) => ui.select(title, [...options], { signal }));
 
-/** Guarded `ctx.ui.input`. */
-export function inputAtHostBoundary(
+/** Guarded `ctx.ui.input`; Effect interruption dismisses the host dialog. */
+export const inputAtHostBoundary = (
   ctx: ExtensionCommandContext,
   title: string,
   placeholder?: string,
-): Promise<HostDialogResult> {
-  return dialogAtHostBoundary(ctx, (ui) => ui.input(title, placeholder));
-}
+): Effect.Effect<HostDialogResult> =>
+  dialogAtHostBoundary(ctx, (ui, signal) => ui.input(title, placeholder, { signal }));
 
-/** Factory shape accepted by the settings custom surface (`ctx.ui.custom<undefined>`). */
+export type SettingsSurfaceResult =
+  | { readonly _tag: "Closed" }
+  | { readonly _tag: "PromptInteger"; readonly id: string };
+
+export type HostSurfaceOutcome = SettingsSurfaceResult | { readonly _tag: "Failed" };
+
 export type SettingsSurfaceFactory = (
   tui: TUI,
   theme: Theme,
   keybindings: KeybindingsManager,
-  done: (result: undefined) => void,
+  done: (result: SettingsSurfaceResult) => void,
+  signal: AbortSignal,
 ) => Component & { dispose?(): void };
 
-export type HostSurfaceOutcome = "closed" | "failed";
+const CLOSED: SettingsSurfaceResult = { _tag: "Closed" };
+const FAILED: HostSurfaceOutcome = { _tag: "Failed" };
 
-/** Inert component handed to the host when the surface factory fails; every method is total. */
 const neutralSurfaceComponent = (): ReturnType<SettingsSurfaceFactory> => ({
   render: () => [],
   invalidate: () => undefined,
@@ -90,43 +67,59 @@ const neutralSurfaceComponent = (): ReturnType<SettingsSurfaceFactory> => ({
 });
 
 /**
- * Guarded `ctx.ui.custom`: a hostile TUI factory invocation, synchronous throw, or
- * rejected surface Promise resolves to `"failed"` so the caller can degrade with a
- * bounded warning instead of hanging or rethrowing.
- *
- * The host may invoke the factory later, outside this call stack, so the guard lives inside
- * the wrapped factory itself: a throwing caller factory yields an inert no-op component plus
- * a bounded failed outcome (after asking the host to close via the guarded `done`), and a
- * throwing host `done` callback stays contained wherever the caller invokes it.
+ * Pi's custom editor has no signal option. This boundary aborts callback authority and closes
+ * the editor exactly once when the owning Effect settles or is interrupted.
  */
-export function openSettingsSurfaceAtHostBoundary(
+export const openSettingsSurfaceAtHostBoundary = (
   ctx: ExtensionCommandContext,
   factory: SettingsSurfaceFactory,
-): Promise<HostSurfaceOutcome> {
-  let factoryFailed = false;
-  const guardedFactory: SettingsSurfaceFactory = (tui, theme, keybindings, done) => {
-    const guardedDone = (result: undefined): void => {
+): Effect.Effect<HostSurfaceOutcome> =>
+  Effect.suspend(() => {
+    const surface = new AbortController();
+    let closing = false;
+    let factoryInvoked = false;
+    let doneInvoked = false;
+    let hostDone: ((result: SettingsSurfaceResult) => void) | undefined;
+
+    const finish = (result: SettingsSurfaceResult): void => {
+      if (doneInvoked || hostDone === undefined) return;
+      doneInvoked = true;
       try {
-        done(result);
+        hostDone(result);
       } catch {
-        // A hostile host `done` callback stays contained at the host boundary.
+        // A hostile host callback cannot escape the finalizer.
       }
     };
-    try {
-      return factory(tui, theme, keybindings, guardedDone);
-    } catch {
-      factoryFailed = true;
-      // Close the broken surface if the host still honors `done`; rendering stays inert.
-      guardedDone(undefined);
-      return neutralSurfaceComponent();
-    }
-  };
-  try {
-    return Promise.resolve(ctx.ui.custom<undefined>(guardedFactory)).then(
-      (): HostSurfaceOutcome => (factoryFailed ? "failed" : "closed"),
-      (): HostSurfaceOutcome => "failed",
+    const close = (): void => {
+      closing = true;
+      try {
+        surface.abort();
+      } catch {
+        // Best effort at the foreign UI boundary.
+      }
+      finish(CLOSED);
+    };
+    const guardedFactory = (
+      tui: TUI,
+      theme: Theme,
+      keybindings: KeybindingsManager,
+      done: (result: SettingsSurfaceResult) => void,
+    ): ReturnType<SettingsSurfaceFactory> => {
+      if (factoryInvoked) {
+        close();
+        return neutralSurfaceComponent();
+      }
+      factoryInvoked = true;
+      hostDone = done;
+      if (closing) {
+        close();
+        return neutralSurfaceComponent();
+      }
+      return factory(tui, theme, keybindings, finish, surface.signal);
+    };
+
+    return Effect.tryPromise(() => ctx.ui.custom<SettingsSurfaceResult>(guardedFactory)).pipe(
+      Effect.ensuring(Effect.sync(close)),
+      Effect.catch(() => Effect.succeed(FAILED)),
     );
-  } catch {
-    return Promise.resolve("failed");
-  }
-}
+  });

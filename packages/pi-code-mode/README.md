@@ -12,8 +12,8 @@ environment, module, or timer APIs; programs can only call the supplied tool tre
 runtime's own `tools.$codemode.search` discovery tool. Supplied Bash, edit, and write tools
 intentionally confer full local-user process, network, environment, and unrestricted
 filesystem authority (ADR 0004). The interpreter lives in the private
-`pi-code-mode-runtime` workspace package nested at `runtime/` inside this package; its built
-output ships inside this package.
+`pi-code-mode-runtime` workspace package nested at `runtime/` inside this package; its
+TypeScript `runtime/src/` tree ships inside this package and Pi/Jiti loads it directly.
 
 Because the interpreter runs in the agent process, the runtime adds an in-process confinement
 layer so a single native operation cannot block the event loop for seconds (a synchronous
@@ -38,20 +38,22 @@ In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>` — t
 falling back to a neutral phrase. Execution publishes an immediate `Starting…` state. New
 nested rows and their enriched running labels bypass extension-side scheduling so they can join
 Pi's already-pending next render; status-only churn is coalesced to Pi's 16 ms host-render
-cadence, and settlement always flushes the latest state. This avoids stacking two frame delays
+cadence by one `Effect.runCallback` interruptor, and settlement always flushes the latest state. This avoids stacking two frame delays
 or slowing the program merely to preserve transient animation; a sub-frame call may still first
 paint as completed. While the program runs, nested calls appear as bounded activity rows
 derived from their inputs,
 reusing the standalone built-in tool emojis alongside status (`◌` queued, an animated Braille
 spinner while running, `✓` succeeded, `✗` failed, `⊘` cancelled), with settled durations and an
-exact lifecycle footer. Beyond 32 rows, active,
-failed, cancelled, and recent calls stay visible under a `+N earlier` marker. Expanding the call
+exact lifecycle footer. Beyond 32 rows, the visible slots prioritize active, failed, cancelled,
+and recent calls under a `+N earlier` marker; the bound can still hide rows. Exact counts include
+all hidden calls, including cancellation before a queued call starts. Expanding the call
 shows the full program source; expanding the result shows the complete model-visible output
 or error. Successful object results containing only top-level string fields, including at least
 one multiline value, are projected as labeled sections instead of escaped JSON, using
 extension-only result metadata so a string that merely
-contains JSON is never reinterpreted. The collapsed hint names the configured
-`app.tools.expand` key when one is bound (`▸ output · ctrl+o expand`). All displayed text is
+contains JSON is never reinterpreted. The tool definition captures, sanitizes, and bounds the
+configured `app.tools.expand` keys once; collapsed hints reuse that snapshot
+(`▸ output · ctrl+o expand`). All displayed text is
 sanitized against terminal control injection, and result-projection failures retain a fail-soft
 custom result instead of surrendering to Pi's raw generic fallback.
 Presentation never changes the model-visible result, details, or any execution limit.
@@ -79,15 +81,20 @@ Code Mode is trusted-project-only. Availability is `projectTrusted && enabled`:
   never grants availability.
 - The `code_mode` tool registers at session start only when available. Disabling Code Mode
   mid-session stops executions immediately; enabling it takes effect at the next session
-  start (`/reload`).
+  start (`/reload`). Each slot input owns a publication flag that is revoked before deactivation,
+  so a replaced session cannot publish from a late uninterruptible commit. Slot startup uses the
+  shared interruptible best-effort host bootstrap for preview settings and returns no state
+  snapshot. A preview host Promise that ignores cancellation detaches on interruption and cannot
+  delay replacement. `onActivated` requires the current owner and token, rereads the live guarded
+  state, then builds, wraps, registers, and activates the tool with repeated currency checks.
 - Deactivating the `code_mode` tool from Pi's tool list is respected: the extension
   re-registers the tool each session but does not re-activate it against a deliberate
   deactivation. That intent also survives Pi recreating the extension on
-  reload/new/resume/fork — it is bridged through a process-memory handoff keyed **only** by
-  the stable Pi session id, so a reloaded or resumed session keeps the tool off while a
-  genuinely new session starts fresh. When no session id is exposed nothing is preserved and
-  the tool starts activated (there is deliberately no cwd fallback, so a different session
-  in the same project can never inherit the intent).
+  reload/new/resume/fork — it is bridged through a true-only process-memory handoff keyed
+  **only** by the stable Pi session id captured at start, so a reloaded or resumed session keeps
+  the tool off while a genuinely new session starts fresh. The application preserves closure
+  intent only for the same stable key. A different or missing key resets active. There is no cwd
+  fallback, so a different session in the same project cannot inherit the intent.
 
 ## Execution limits
 
@@ -99,7 +106,7 @@ entire model-visible text — success or thrown failure, including logs and diag
 plus every early path (cancellation text, the `maxSourceBytes` refusal, unexpected runtime
 errors) — so what the model receives never exceeds `maxOutputBytes` (zero → empty; a hostile
 thrown string is bounded before it is ever surfaced). The one exception is the
-stale/unavailable refusal, which can fire when no current configuration exists and is
+stale or missing-state refusal, which can fire when no current configuration exists and is
 therefore a short fixed bounded message. `maxSourceBytes` rejects oversized programs
 (exact UTF-8 bytes) before execution; and
 `maxCumulativeChildOutputBytes` bounds the cumulative UTF-8 bytes of successful nested tool
@@ -115,7 +122,18 @@ and temporary full-output path remain visible.
 
 - `/code-mode-settings` — interactive editor in TUI mode (choose the scope, then edit values).
   Integer rows cycle their presets and offer a `custom…` entry that prompts for any integer
-  inside the documented bounds. Outside the interactive TUI the bare command never prompts:
+  inside the documented bounds. Pi has one editor slot, so choosing `custom…` returns a tagged
+  `PromptInteger` result and closes the list before input opens. Scope selection, list settlement,
+  custom input, application, and the fresh-snapshot reopen loop run as one outer session Effect
+  submitted once. Cancelled, unavailable, and rejected custom input all reopen the list unless the
+  session was interrupted, state disappeared, or the custom surface failed. Preset and `inherit`
+  writes remain live against the current list's callback signal and roll back that row on failure.
+  Each list iteration joins those nonrejecting write Promises after the list settles and before it
+  handles close or custom input, reads fresh state, or reopens. The join stays interruptible.
+  Every signal check uses one guarded getter that treats a throw as aborted, with no UI, store, or
+  notification work. The custom boundary uses `Effect.ensuring` to abort callback authority and invoke Pi's available
+  `done(Closed)` once; a normal `PromptInteger` result wins, and late factories get an inert
+  component. Outside the interactive TUI the bare command never prompts:
   RPC hosts receive the help text as notifications, and in print/JSON modes (where
   notifications are not rendered) it resolves as a non-blocking no-op.
 - `/code-mode-settings status` — effective values with per-field provenance

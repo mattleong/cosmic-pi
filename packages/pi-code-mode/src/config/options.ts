@@ -1,5 +1,5 @@
 /** Field-wise resolution, provenance, and settings descriptors for Code Mode configuration. */
-import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
   CODE_MODE_FIELD_IDS,
@@ -19,15 +19,9 @@ export type CodeModeProvenance = Readonly<Record<CodeModeFieldId, CodeModeFieldP
 type MutableCodeModeConfig = {
   -readonly [Field in keyof CodeModeConfig]: CodeModeConfig[Field];
 };
-interface MutableCodeModeProvenance {
-  enabled: CodeModeFieldProvenance;
-  timeoutMs: CodeModeFieldProvenance;
-  maxToolCalls: CodeModeFieldProvenance;
-  maxOutputBytes: CodeModeFieldProvenance;
-  maxSourceBytes: CodeModeFieldProvenance;
-  maxCumulativeChildOutputBytes: CodeModeFieldProvenance;
-  catalogBudget: CodeModeFieldProvenance;
-}
+type MutableCodeModeProvenance = {
+  -readonly [Field in CodeModeFieldId]: CodeModeFieldProvenance;
+};
 
 export interface CodeModeResolution {
   readonly config: CodeModeConfig;
@@ -90,8 +84,7 @@ interface CodeModeSettingDescriptorBase {
   readonly values: readonly string[];
   readonly decode: (
     rawValue: string,
-  ) => Effect.Effect<boolean | number, InvalidCodeModeSettingError>;
-  readonly format: (config: CodeModeConfig) => string;
+  ) => Result.Result<boolean | number, InvalidCodeModeSettingError>;
 }
 
 export interface CodeModeBooleanSettingDescriptor extends CodeModeSettingDescriptorBase {
@@ -111,9 +104,9 @@ export type CodeModeSettingDescriptor =
 
 const decodeBoolean = (id: CodeModeFieldId) => (rawValue: string) => {
   const trimmed = rawValue.trim();
-  if (trimmed === "true") return Effect.succeed(true);
-  if (trimmed === "false") return Effect.succeed(false);
-  return Effect.fail(
+  if (trimmed === "true") return Result.succeed(true);
+  if (trimmed === "false") return Result.succeed(false);
+  return Result.fail(
     new InvalidCodeModeSettingError({
       id,
       message: `Invalid value for ${id}. Expected true or false.`,
@@ -127,9 +120,9 @@ const decodeBoundedInteger = (id: CodeModeIntegerFieldId) => (rawValue: string) 
   const trimmed = rawValue.trim();
   const parsed = /^[+-]?\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (Number.isSafeInteger(parsed) && parsed >= bounds.minimum && parsed <= bounds.maximum) {
-    return Effect.succeed(parsed);
+    return Result.succeed(parsed);
   }
-  return Effect.fail(
+  return Result.fail(
     new InvalidCodeModeSettingError({
       id,
       message: `Invalid value for ${id}. Expected an integer between ${bounds.minimum} and ${bounds.maximum}.`,
@@ -149,7 +142,6 @@ const integerDescriptor = (options: {
   description: options.description,
   values: options.values,
   decode: decodeBoundedInteger(options.id),
-  format: (config) => String(config[options.id]),
 });
 
 export const CODE_MODE_SETTING_DESCRIPTORS: readonly CodeModeSettingDescriptor[] = [
@@ -160,7 +152,6 @@ export const CODE_MODE_SETTING_DESCRIPTORS: readonly CodeModeSettingDescriptor[]
     description: "Enable Code Mode in trusted projects. Untrusted projects always stay off.",
     values: ["true", "false"],
     decode: decodeBoolean("enabled"),
-    format: (config) => String(config.enabled),
   },
   integerDescriptor({
     id: "timeoutMs",
@@ -200,9 +191,5 @@ export const CODE_MODE_SETTING_DESCRIPTORS: readonly CodeModeSettingDescriptor[]
   }),
 ];
 
-const DESCRIPTORS_BY_ID = new Map<string, CodeModeSettingDescriptor>(
-  CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
-);
-
 export const findCodeModeSettingDescriptor = (id: string): CodeModeSettingDescriptor | undefined =>
-  DESCRIPTORS_BY_ID.get(id);
+  CODE_MODE_SETTING_DESCRIPTORS.find((descriptor) => descriptor.id === id);

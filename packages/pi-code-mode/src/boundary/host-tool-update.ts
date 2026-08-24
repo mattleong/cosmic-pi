@@ -11,9 +11,6 @@ import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
-import * as Scope from "effect/Scope";
 import type { CodeModeToolDetails } from "../tools/format.ts";
 
 /** Pi's TUI renders at most once per 16 ms frame; match that cadence at the host boundary. */
@@ -40,28 +37,24 @@ export interface GuardedToolUpdatePublisher {
   readonly settle: () => void;
 }
 
-const scheduleHostToolUpdate =
-  (scope: Scope.Scope): HostToolUpdateScheduler =>
-  (delayMs, callback) => {
-    const fiber = Fiber.runIn(
-      Effect.runFork(
-        Effect.sleep(Duration.millis(Math.max(0, delayMs))).pipe(
-          Effect.andThen(Effect.sync(callback)),
-        ),
+const scheduleHostToolUpdate: HostToolUpdateScheduler = (delayMs, callback) => {
+  let active = true;
+  const interrupt = Effect.runCallback(
+    Effect.sleep(Duration.millis(Math.max(0, delayMs))).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          if (!active) return;
+          active = false;
+          callback();
+        }),
       ),
-      scope,
-    );
-    let active = true;
-    return () => {
-      if (!active) return;
-      active = false;
-      fiber.interruptUnsafe();
-    };
+    ),
+  );
+  return () => {
+    if (!active) return;
+    active = false;
+    interrupt();
   };
-
-const closeScope = (scope: Scope.Closeable): void => {
-  const finalizer = Scope.closeUnsafe(scope, Exit.succeed(undefined));
-  if (finalizer !== undefined) void Effect.runFork(finalizer);
 };
 
 export const makeGuardedToolUpdatePublisher = (
@@ -70,8 +63,7 @@ export const makeGuardedToolUpdatePublisher = (
   options: GuardedToolUpdatePublisherOptions = {},
 ): GuardedToolUpdatePublisher => {
   const now = options.now ?? synchronousNow;
-  const ownership = options.schedule === undefined ? Scope.makeUnsafe("sequential") : undefined;
-  const schedule = options.schedule ?? scheduleHostToolUpdate(ownership!);
+  const schedule = options.schedule ?? scheduleHostToolUpdate;
   let settled = false;
   let lastDeliveredAt: number | undefined;
   let pending: AgentToolResult<CodeModeToolDetails> | undefined;
@@ -181,7 +173,6 @@ export const makeGuardedToolUpdatePublisher = (
       cancelPendingFlush();
       // Final state must never be stranded behind a frame timer, even for a sub-frame run.
       flushPending();
-      if (ownership !== undefined) closeScope(ownership);
     },
   };
 };

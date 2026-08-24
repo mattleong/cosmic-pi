@@ -6,12 +6,8 @@
  */
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { CodeMode, Tool, toolError, type ToolError } from "../boundary/codemode-runtime.ts";
-import type {
-  NestedPiToolDispatch,
-  PiGuestToolInput,
-  PiGuestToolName,
-} from "../boundary/host-builtin-tools.ts";
+import { CodeMode, Tool, toolError } from "../boundary/codemode-runtime.ts";
+import type { NestedPiToolDispatch, PiGuestToolName } from "../boundary/host-builtin-tools.ts";
 import type { CumulativeOutputBudget } from "./limits.ts";
 
 /** Input contracts validated by the runtime before any nested dispatch happens. */
@@ -90,12 +86,7 @@ const GUEST_TOOL_INPUTS = {
   ls: LsInput,
 } as const;
 
-export type GuestInvoke = (
-  name: PiGuestToolName,
-  input: PiGuestToolInput,
-) => Effect.Effect<string, ToolError>;
-
-const guestTool = <Name extends PiGuestToolName>(name: Name, invoke: GuestInvoke) =>
+const guestTool = <Name extends PiGuestToolName>(name: Name, invoke: NestedPiToolDispatch) =>
   Tool.make({
     description: GUEST_TOOL_DESCRIPTIONS[name],
     input: GUEST_TOOL_INPUTS[name],
@@ -104,7 +95,7 @@ const guestTool = <Name extends PiGuestToolName>(name: Name, invoke: GuestInvoke
   });
 
 /** The `pi` namespace exposed to programs; every leaf validates input with Effect Schema. */
-export const makeCodeModeGuestTools = (invoke: GuestInvoke) => ({
+export const makeCodeModeGuestTools = (invoke: NestedPiToolDispatch) => ({
   pi: {
     read: guestTool("read", invoke),
     bash: guestTool("bash", invoke),
@@ -133,7 +124,7 @@ export const makeExecutionGuestTools = (
         const admission = budget.admit(guestData);
         return admission.admitted
           ? Effect.succeed(guestData)
-          : Effect.fail(toolError(admission.message));
+          : Effect.fail(toolError(budget.admitFailure(admission.message)));
       }),
     ),
   );

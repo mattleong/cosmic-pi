@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
   makeGuardedToolUpdatePublisher,
@@ -10,8 +11,13 @@ const update = (text: string) => ({
   details: { toolCalls: [] } satisfies CodeModeToolDetails,
 });
 
+const textOf = (partial: AgentToolResult<CodeModeToolDetails>): string => {
+  const content = partial.content[0];
+  return content?.type === "text" ? content.text : "";
+};
+
 describe("guarded host tool updates", () => {
-  it("coalesces a frame and flushes its latest snapshot once at settlement", () => {
+  it("delivers leading, semantic, and latest trailing snapshots in order", () => {
     let now = 0;
     const callbacks: Array<() => void> = [];
     const cancellations: Array<ReturnType<typeof vi.fn>> = [];
@@ -23,58 +29,81 @@ describe("guarded host tool updates", () => {
     };
     const delivered: string[] = [];
     const publisher = makeGuardedToolUpdatePublisher(
-      (partial) =>
-        delivered.push(partial.content[0]?.type === "text" ? partial.content[0].text : ""),
+      (partial) => delivered.push(textOf(partial)),
       () => true,
       { schedule, now: () => now },
     );
 
     publisher.publish(update("leading"));
     now = 1;
-    publisher.publish(update("older"));
-    publisher.publish(update("latest"));
-    expect(callbacks).toHaveLength(1);
-
+    publisher.publish(update("stale pending"));
+    publisher.publishNow(update("semantic"));
+    publisher.publish(update("older trailing"));
+    publisher.publish(update("latest trailing"));
     publisher.settle();
     publisher.settle();
-    callbacks[0]?.();
-    publisher.publish(update("late"));
 
-    expect(delivered).toEqual(["leading", "latest"]);
-    expect(cancellations[0]).toHaveBeenCalledOnce();
+    for (const callback of callbacks) callback();
+    publisher.publish(update("after settle"));
+    publisher.publishNow(update("after settle now"));
+
+    expect(delivered).toEqual(["leading", "semantic", "latest trailing"]);
+    expect(cancellations).toHaveLength(2);
+    expect(cancellations.every((cancel) => cancel.mock.calls.length === 1)).toBe(true);
   });
 
-  it("does not retain a cancellation handle when a scheduler fires synchronously", () => {
-    let now = 0;
-    const cancel = vi.fn();
-    const delivered: string[] = [];
-    const publisher = makeGuardedToolUpdatePublisher(
-      (partial) =>
-        delivered.push(partial.content[0]?.type === "text" ? partial.content[0].text : ""),
-      () => true,
-      {
-        now: () => now,
-        schedule: (_delay, callback) => {
-          callback();
-          return cancel;
-        },
-      },
-    );
-
-    publisher.publish(update("leading"));
-    now = 1;
-    publisher.publish(update("scheduled"));
-    publisher.settle();
-
-    expect(delivered).toEqual(["leading", "scheduled"]);
-    expect(cancel).not.toHaveBeenCalled();
-  });
-
-  it("contains hostile update callbacks and scheduler failures", () => {
+  it("contains a synchronous throw from onUpdate", () => {
     const publisher = makeGuardedToolUpdatePublisher(
       () => {
         throw new Error("host update failed");
       },
+      () => true,
+    );
+
+    expect(() => {
+      publisher.publish(update("leading"));
+      publisher.publishNow(update("semantic"));
+      publisher.settle();
+    }).not.toThrow();
+  });
+
+  it("contains rejecting and throwing host thenables", () => {
+    const cases = [
+      new Proxy(
+        {},
+        {
+          get: (_target, key) =>
+            key === "then"
+              ? (_resolve: () => void, reject: (error: Error) => void) =>
+                  reject(new Error("host rejection"))
+              : undefined,
+        },
+      ),
+      new Proxy(
+        {},
+        {
+          get: (_target, key) => {
+            if (key === "then") throw new Error("then getter escaped");
+          },
+        },
+      ),
+    ];
+    for (const outcome of cases) {
+      const publisher = makeGuardedToolUpdatePublisher(
+        () => outcome,
+        () => true,
+      );
+      expect(() => {
+        publisher.publish(update("leading"));
+        publisher.settle();
+      }).not.toThrow();
+    }
+  });
+
+  it("falls back to immediate delivery when scheduling throws", () => {
+    const delivered: string[] = [];
+    const publisher = makeGuardedToolUpdatePublisher(
+      (partial) => delivered.push(textOf(partial)),
       () => true,
       {
         now: () => 0,
@@ -84,10 +113,9 @@ describe("guarded host tool updates", () => {
       },
     );
 
-    expect(() => {
-      publisher.publish(update("leading"));
-      publisher.publish(update("fallback"));
-      publisher.settle();
-    }).not.toThrow();
+    publisher.publish(update("leading"));
+    publisher.publish(update("fallback"));
+    publisher.settle();
+    expect(delivered).toEqual(["leading", "fallback"]);
   });
 });
