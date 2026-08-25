@@ -1,5 +1,5 @@
+import { stripTerminalControls } from "pi-cosmic-core";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
-import { safeText } from "../ui/render.ts";
 
 export function formatAskUserOutcome(outcome: AskUserOutcome): string {
   if (outcome.outcome === "cancelled") {
@@ -11,8 +11,8 @@ export function formatAskUserOutcome(outcome: AskUserOutcome): string {
       answer.kind === "choices"
         ? answer.values.map((item, index) => `${item} (${answer.labels[index] ?? item})`).join(", ")
         : answer.text;
-    lines.push(`- ${safeText(answer.key)}: ${safeText(value)}`);
-    if (answer.note) lines.push(`  Note: ${safeText(answer.note)}`);
+    lines.push(`- ${stripTerminalControls(answer.key)}: ${stripTerminalControls(value)}`);
+    if (answer.note) lines.push(`  Note: ${stripTerminalControls(answer.note)}`);
   }
   return lines.join("\n");
 }

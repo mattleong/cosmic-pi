@@ -6,7 +6,7 @@ import {
   reduceQuestionnaire,
   submitQuestionnaire,
 } from "../src/questionnaire/reducer.ts";
-import type { AskUserRequest } from "../src/tools/schema.ts";
+import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 
 const request: AskUserRequest = {
   questions: [
@@ -64,18 +64,32 @@ describe("questionnaire reducer", () => {
     });
   });
 
-  it("tracks multi-select order by authored choice order and clears an empty answer", () => {
+  it("tracks multi-select order by authored choice order and retains a separate note", () => {
     let state = createQuestionnaireState(request);
-    state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 1 });
-    state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
-    expect(state.drafts[1]?.answer).toEqual({
-      kind: "choices",
-      values: ["unit", "integration"],
-      labels: ["Unit tests", "Integration"],
+    state = reduceQuestionnaire(state, { type: "select-one", question: 0, choice: 0 });
+    state = reduceQuestionnaire(state, {
+      type: "set-note",
+      question: 1,
+      note: "Run both in CI.",
     });
     state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 1 });
     state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
-    expect(state.drafts[1]?.answer).toBeUndefined();
+    expect(isQuestionnaireComplete(state)).toBe(true);
+    expect(submitQuestionnaire(state)?.answers[1]).toEqual({
+      key: "checks",
+      kind: "choices",
+      values: ["unit", "integration"],
+      labels: ["Unit tests", "Integration"],
+      note: "Run both in CI.",
+    });
+    state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 1 });
+    state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
+    expect(isQuestionnaireComplete(state)).toBe(false);
+    state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
+    expect(submitQuestionnaire(state)?.answers[1]).toMatchObject({
+      values: ["unit"],
+      note: "Run both in CI.",
+    });
   });
 
   it("requires every question and discards drafts on cancellation", () => {

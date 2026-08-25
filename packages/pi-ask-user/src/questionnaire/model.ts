@@ -1,42 +1,25 @@
-import type { AskUserRequest } from "../tools/schema.ts";
+import type { AskUserRequest } from "./schema.ts";
 
-export interface ChoiceAnswer {
+type AnswerContent =
+  | {
+      readonly kind: "choices";
+      readonly values: ReadonlyArray<string>;
+      readonly labels: ReadonlyArray<string>;
+    }
+  | { readonly kind: "custom"; readonly text: string };
+
+export type AskUserAnswer = AnswerContent & {
   readonly key: string;
-  readonly kind: "choices";
-  readonly values: ReadonlyArray<string>;
-  readonly labels: ReadonlyArray<string>;
   readonly note?: string;
-}
-
-export interface CustomAnswer {
-  readonly key: string;
-  readonly kind: "custom";
-  readonly text: string;
-  readonly note?: string;
-}
-
-export type AskUserAnswer = ChoiceAnswer | CustomAnswer;
+};
 
 export type AskUserOutcome =
   | { readonly outcome: "submitted"; readonly answers: ReadonlyArray<AskUserAnswer> }
   | { readonly outcome: "cancelled"; readonly answers: readonly [] };
 
-export interface ChoiceDraft {
-  readonly kind: "choices";
-  readonly values: ReadonlyArray<string>;
-  readonly labels: ReadonlyArray<string>;
-}
-
-export interface CustomDraft {
-  readonly kind: "custom";
-  readonly text: string;
-}
-
-export type AnswerDraft = ChoiceDraft | CustomDraft;
-
 export interface QuestionDraft {
   readonly cursor: number;
-  readonly answer?: AnswerDraft;
+  readonly answer?: AnswerContent;
   readonly note?: string;
 }
 

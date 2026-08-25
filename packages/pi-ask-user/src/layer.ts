@@ -13,6 +13,6 @@ export interface AskUserSessionInput {
 export const makeAskUserLayer = (input: AskUserSessionInput, bridge: AskUserDialogBridge) =>
   AskUserService.layer.pipe(Layer.provide(HostDialogs.layer(input.ctx, bridge)));
 
-export type AskUserApplicationLayer = ReturnType<typeof makeAskUserLayer>;
+type AskUserApplicationLayer = ReturnType<typeof makeAskUserLayer>;
 export type AskUserApplication = Layer.Success<AskUserApplicationLayer>;
 export type AskUserRuntimeError = Layer.Error<AskUserApplicationLayer>;

@@ -1,7 +1,8 @@
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { AskUserChoice } from "../../tools/schema.ts";
-import { padLine, safeText } from "../render.ts";
+import { Markdown } from "@earendil-works/pi-tui";
+import { stripTerminalControls } from "pi-cosmic-core";
+import type { AskUserChoice } from "../questionnaire/schema.ts";
+import { padLine } from "./layout.ts";
 
 const MAX_PREVIEW_LINES = 20;
 
@@ -18,7 +19,7 @@ export class PreviewPane {
     if (choice === this.choice) return;
     this.choice = choice;
     this.markdown = choice?.preview
-      ? new Markdown(safeText(choice.preview), 0, 0, getMarkdownTheme())
+      ? new Markdown(stripTerminalControls(choice.preview), 0, 0, getMarkdownTheme())
       : undefined;
   }
 
@@ -28,7 +29,7 @@ export class PreviewPane {
     const border = (value: string) => this.theme.fg("borderMuted", value);
     const lines = [border(`┌${"─".repeat(Math.max(0, boxWidth - 2))}┐`)];
     const title = this.choice
-      ? `${this.theme.fg("accent", this.theme.bold("Preview"))} ${this.theme.fg("muted", safeText(this.choice.label))}`
+      ? `${this.theme.fg("accent", this.theme.bold("Preview"))} ${this.theme.fg("muted", stripTerminalControls(this.choice.label))}`
       : this.theme.fg("muted", "No preview for this choice");
     lines.push(`${border("│")} ${padLine(title, innerWidth)} ${border("│")}`);
     lines.push(`${border("│")} ${" ".repeat(innerWidth)} ${border("│")}`);
@@ -44,10 +45,7 @@ export class PreviewPane {
       );
     }
     for (const line of visible) {
-      const clipped = truncateToWidth(line, innerWidth, "");
-      lines.push(
-        `${border("│")} ${clipped}${" ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)))} ${border("│")}`,
-      );
+      lines.push(`${border("│")} ${padLine(line, innerWidth)} ${border("│")}`);
     }
     lines.push(border(`└${"─".repeat(Math.max(0, boxWidth - 2))}┘`));
     return lines;

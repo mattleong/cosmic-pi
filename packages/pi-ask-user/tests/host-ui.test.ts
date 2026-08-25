@@ -11,9 +11,9 @@ describe("ask-user dialog bridge", () => {
     const statuses: Array<string | undefined> = [];
     const bridge = makeAskUserDialogBridge();
     bridge.setContext(context((_key, value) => statuses.push(value)));
-    const first = bridge.activate({ resume: vi.fn() });
+    const first = bridge.activate(vi.fn());
     const resume = vi.fn();
-    const second = bridge.activate({ resume });
+    const second = bridge.activate(resume);
 
     bridge.clear(first);
     bridge.markCollapsed(second);
@@ -27,7 +27,7 @@ describe("ask-user dialog bridge", () => {
     const setStatus = vi.fn();
     const bridge = makeAskUserDialogBridge();
     bridge.setContext(context(setStatus));
-    const token = bridge.activate({ resume: vi.fn() });
+    const token = bridge.activate(vi.fn());
     bridge.clear(token);
     bridge.clear(token);
     expect(bridge.resume()).toBe(false);

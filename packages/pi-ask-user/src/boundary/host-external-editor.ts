@@ -6,13 +6,20 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import { nodeFilePlatformLayer, nodeProcessLayer } from "pi-cosmic-core";
+import { nodeFilePlatformLayer, nodeProcessLayer, stripTerminalControls } from "pi-cosmic-core";
 
 const externalEditorLayer = Layer.merge(nodeFilePlatformLayer, nodeProcessLayer);
+
+const inheritedTerminalOptions = {
+  stdin: "inherit",
+  stdout: "inherit",
+  stderr: "inherit",
+  killSignal: "SIGTERM",
+  forceKillAfter: 1_000,
+} satisfies ChildProcess.CommandOptions;
 
 class ExternalEditorError extends Schema.TaggedError<ExternalEditorError>()("ExternalEditorError", {
   message: Schema.String,
@@ -56,28 +63,17 @@ const editWithExternalEditorEffect = (
         () => restoreTui(tui),
       );
       const child = yield* process.platform === "win32"
-        ? ChildProcess.make(`${command} "${file}"`, {
-            shell: true,
-            stdin: "inherit",
-            stdout: "inherit",
-            stderr: "inherit",
-            killSignal: "SIGTERM",
-            forceKillAfter: 1_000,
-          })
+        ? ChildProcess.make(`${command} "${file}"`, { ...inheritedTerminalOptions, shell: true })
         : ChildProcess.make("/bin/sh", ["-c", `exec ${command} "$1"`, "pi-ask-user-editor", file], {
-            stdin: "inherit",
-            stdout: "inherit",
-            stderr: "inherit",
+            ...inheritedTerminalOptions,
             detached: false,
-            killSignal: "SIGTERM",
-            forceKillAfter: 1_000,
           });
       const status = yield* child.exitCode;
       if (status !== 0)
         return yield* new ExternalEditorError({
           message: `External editor exited with status ${status}.`,
         });
-      return (yield* fs.readFileString(file)).replace(/\n$/u, "");
+      return stripTerminalControls(yield* fs.readFileString(file)).replace(/\n$/u, "");
     }),
   );
 
@@ -88,16 +84,23 @@ export function editWithExternalEditor(
   signal: AbortSignal,
 ): Promise<string | undefined> {
   if (signal.aborted) return Promise.resolve(undefined);
-  // This runtime is the sole Effect entry point for one external-editor invocation.
-  const runtime = ManagedRuntime.make(externalEditorLayer);
-  return runtime
-    .runPromiseExit(editWithExternalEditorEffect(tui, configuredCommand, value), { signal })
-    .then((exit) => {
-      if (Exit.isSuccess(exit)) return exit.value;
-      if (signal.aborted) return undefined;
-      const failure = Cause.squash(exit.cause);
-      if (failure instanceof ExternalEditorError) throw failure;
-      throw new ExternalEditorError({ message: "External editor execution failed." });
-    })
-    .finally(() => runtime.dispose());
+  // Build and scope the file/process Layer before observing the exit.
+  return Effect.runPromiseExit(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(externalEditorLayer);
+        return yield* Effect.provide(
+          editWithExternalEditorEffect(tui, configuredCommand, value),
+          context,
+        );
+      }),
+    ),
+    { signal },
+  ).then((exit) => {
+    if (Exit.isSuccess(exit)) return exit.value;
+    if (signal.aborted) return undefined;
+    const failure = Cause.squash(exit.cause);
+    if (failure instanceof ExternalEditorError) throw failure;
+    throw new ExternalEditorError({ message: "External editor execution failed." });
+  });
 }

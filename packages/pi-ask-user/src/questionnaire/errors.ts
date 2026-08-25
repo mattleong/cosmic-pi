@@ -14,5 +14,3 @@ export class AskUserRuntimeClosedError extends Schema.TaggedError<AskUserRuntime
   "AskUserRuntimeClosedError",
   { message: Schema.String },
 ) {}
-
-export type AskUserError = AskUserValidationError | AskUserHostError | AskUserRuntimeClosedError;

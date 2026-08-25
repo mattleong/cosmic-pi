@@ -3,13 +3,9 @@ import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 
 const STATUS_KEY = "pi-ask-user";
 
-export interface ActiveQuestionnaireController {
-  readonly resume: () => void;
-}
-
 export interface AskUserDialogBridge {
   readonly setContext: (ctx: ExtensionContext | undefined) => void;
-  readonly activate: (controller: ActiveQuestionnaireController) => number;
+  readonly activate: (resume: () => void) => number;
   readonly markCollapsed: (token: number) => void;
   readonly resume: () => boolean;
   readonly clear: (token?: number) => void;
@@ -20,18 +16,16 @@ const setStatus = makeSetStatusSafely(STATUS_KEY);
 export function makeAskUserDialogBridge(): AskUserDialogBridge {
   let context: ExtensionContext | undefined;
   let nextToken = 1;
-  let active:
-    | { readonly token: number; readonly controller: ActiveQuestionnaireController }
-    | undefined;
+  let active: { readonly token: number; readonly resume: () => void } | undefined;
   return {
     setContext: (next) => {
       if (context && context !== next) setStatus(context, undefined);
       context = next;
       if (!active) setStatus(context, undefined);
     },
-    activate: (controller) => {
+    activate: (resume) => {
       const token = nextToken++;
-      active = { token, controller };
+      active = { token, resume };
       setStatus(context, undefined);
       return token;
     },
@@ -42,7 +36,7 @@ export function makeAskUserDialogBridge(): AskUserDialogBridge {
     resume: () => {
       if (!active) return false;
       try {
-        active.controller.resume();
+        active.resume();
         setStatus(context, undefined);
         return true;
       } catch {

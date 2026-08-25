@@ -1,22 +1,75 @@
-// Pi tool execution is a Promise-shaped host boundary.
+// Pi tool execution and synchronous rendering are host boundaries.
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { withCodePreviewShell } from "pi-code-previews";
+import { stripTerminalControls } from "pi-cosmic-core";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
-import { AskUserService } from "../questionnaire/service.ts";
-import { safeText } from "../ui/render.ts";
-import { AskUserParameters } from "./schema.ts";
+import {
+  AskUserParameters,
+  MAX_CHOICES,
+  MAX_QUESTIONS,
+  type AskUserRequest,
+} from "../questionnaire/schema.ts";
 import { formatAskUserOutcome } from "./response.ts";
 
-export interface AskUserToolRunner {
-  readonly run: <A, E>(
-    effect: Effect.Effect<A, E, AskUserService>,
-    signal?: AbortSignal,
-  ) => Promise<A>;
-}
+const CallTitlesProjection = Schema.Struct({
+  questions: Schema.Array(Schema.Struct({ title: Schema.String })).check(
+    Schema.isMaxLength(MAX_QUESTIONS),
+  ),
+});
 
-export function registerAskUserTool(pi: ExtensionAPI, runner: AskUserToolRunner): void {
+const RenderAnswerProjection = Schema.Union([
+  Schema.Struct({
+    key: Schema.String,
+    kind: Schema.Literal("choices"),
+    labels: Schema.Array(Schema.String).check(Schema.isMaxLength(MAX_CHOICES)),
+  }),
+  Schema.Struct({
+    key: Schema.String,
+    kind: Schema.Literal("custom"),
+    text: Schema.String,
+  }),
+]);
+
+const OutcomeDetailsProjection = Schema.Union([
+  Schema.Struct({ outcome: Schema.Literal("cancelled") }),
+  Schema.Struct({
+    outcome: Schema.Literal("submitted"),
+    answers: Schema.Array(RenderAnswerProjection).check(Schema.isMaxLength(MAX_QUESTIONS)),
+  }),
+]);
+
+const ContentProjection = Schema.Array(Schema.Unknown);
+const TextContentPartProjection = Schema.Struct({
+  type: Schema.Literal("text"),
+  text: Schema.String,
+});
+
+/** Decodes untrusted replay data; hostile unknown getters and mismatches yield undefined. */
+const projection = <S extends Schema.ConstraintDecoder<unknown>>(schema: S) => {
+  const decode = Schema.decodeUnknownOption(schema);
+  return <Input>(input: Input): S["Type"] | undefined => {
+    try {
+      return Option.getOrUndefined(decode(input));
+    } catch {
+      return undefined;
+    }
+  };
+};
+
+const decodeCallTitles = projection(CallTitlesProjection);
+const decodeOutcomeDetails = projection(OutcomeDetailsProjection);
+const decodeContent = projection(ContentProjection);
+const decodeTextContentPart = projection(TextContentPartProjection);
+
+type AskUserHandler = (
+  request: AskUserRequest,
+  signal: AbortSignal | undefined,
+) => Promise<AskUserOutcome>;
+
+export function registerAskUserTool(pi: ExtensionAPI, ask: AskUserHandler): void {
   const tool = defineTool({
     name: "ask_user",
     label: "Ask User",
@@ -35,19 +88,14 @@ export function registerAskUserTool(pi: ExtensionAPI, runner: AskUserToolRunner)
     parameters: AskUserParameters,
     executionMode: "sequential",
     execute(_toolCallId, input, signal) {
-      return runner
-        .run(
-          AskUserService.use((service) => service.ask(input)),
-          signal,
-        )
-        .then((outcome) => ({
-          content: [{ type: "text" as const, text: formatAskUserOutcome(outcome) }],
-          details: outcome satisfies AskUserOutcome,
-        }));
+      return ask(input, signal).then((outcome) => ({
+        content: [{ type: "text" as const, text: formatAskUserOutcome(outcome) }],
+        details: outcome satisfies AskUserOutcome,
+      }));
     },
     renderCall(args, theme) {
-      const questions = Array.isArray(args.questions) ? args.questions : [];
-      const titles = questions.map((question) => safeText(question.title)).join(", ");
+      const questions = decodeCallTitles(args)?.questions ?? [];
+      const titles = questions.map((question) => stripTerminalControls(question.title)).join(", ");
       return new Text(
         `${theme.fg("toolTitle", theme.bold("ask_user"))} ${theme.fg("muted", `${questions.length} question${questions.length === 1 ? "" : "s"}`)}${titles ? ` ${theme.fg("dim", `(${titles})`)}` : ""}`,
         0,
@@ -55,20 +103,22 @@ export function registerAskUserTool(pi: ExtensionAPI, runner: AskUserToolRunner)
       );
     },
     renderResult(result, _options, theme) {
-      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-      const details = result.details as AskUserOutcome | undefined;
+      const details = decodeOutcomeDetails(result.details);
       if (details?.outcome === "cancelled")
         return new Text(theme.fg("warning", "Questionnaire cancelled"), 0, 0);
       if (details?.outcome === "submitted") {
         const lines = details.answers.map((answer) => {
           const value = answer.kind === "choices" ? answer.labels.join(", ") : answer.text;
-          return `${theme.fg("success", "✓")} ${theme.fg("accent", safeText(answer.key))}: ${safeText(value)}`;
+          return `${theme.fg("success", "✓")} ${theme.fg("accent", stripTerminalControls(answer.key))}: ${stripTerminalControls(value)}`;
         });
         return new Text(lines.join("\n"), 0, 0);
       }
-      const text = result.content
-        .filter((part) => part.type === "text")
-        .map((part) => safeText(part.text))
+      const content = decodeContent(result.content) ?? [];
+      const text = content
+        .flatMap((part) => {
+          const textPart = decodeTextContentPart(part);
+          return textPart ? [stripTerminalControls(textPart.text)] : [];
+        })
         .join("\n");
       return new Text(text, 0, 0);
     },

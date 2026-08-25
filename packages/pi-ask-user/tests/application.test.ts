@@ -11,13 +11,9 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, expect, vi } from "vitest";
 import { askUserWithDependencies } from "../src/application.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
-import type { AskUserRequest } from "../src/tools/schema.ts";
+import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 
 type Handler = ExtensionHandler<any, any>;
-interface CapturedToolResult {
-  readonly content: readonly { readonly type: string; readonly text: string }[];
-  readonly details: AskUserOutcome;
-}
 interface CapturedTool {
   readonly execute: (
     id: string,
@@ -25,18 +21,23 @@ interface CapturedTool {
     signal: AbortSignal | undefined,
     update: undefined,
     ctx: ExtensionContext,
-  ) => Promise<CapturedToolResult>;
+  ) => Promise<{
+    readonly content: readonly { readonly type: string; readonly text: string }[];
+    readonly details: AskUserOutcome;
+  }>;
 }
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+interface CapturedCommand {
+  readonly handler: (args: string, ctx: ExtensionContext) => void | Promise<void>;
+}
 
-const deferred = () => {
+afterEach(() => vi.unstubAllEnvs());
+
+const controlled = () => {
   const handle = Deferred.makeUnsafe<void>();
   return {
     promise: Effect.runPromise(Deferred.await(handle)),
     resolve: () => {
-      Effect.runSync(Deferred.succeed(handle, void 0));
+      Effect.runSync(Deferred.succeed(handle, undefined));
     },
   };
 };
@@ -47,7 +48,6 @@ const harness = (
     projectTrusted: boolean,
     signal?: AbortSignal,
   ) => Promise<void>,
-  startupEffect: Effect.Effect<void> = Effect.void,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -55,19 +55,22 @@ const harness = (
     const agentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-ask-user-agent-" });
     yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory));
     const handlers = new Map<string, Handler>();
+    let command: CapturedCommand | undefined;
     let tool: CapturedTool | undefined;
     const fixture = {
       on(name: string, handler: Handler) {
         handlers.set(name, handler);
       },
-      registerCommand: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CapturedCommand) => {
+        if (name === "ask-user") command = definition;
+      }),
       registerTool: vi.fn((definition: CapturedTool) => {
         tool = definition;
       }),
     };
     // SAFETY: The application uses only the ExtensionAPI methods supplied by this lifecycle fixture.
     const pi = fixture as typeof fixture & ExtensionAPI;
-    askUserWithDependencies(pi, { loadPreviewSettings, startupEffect });
+    askUserWithDependencies(pi, loadPreviewSettings);
     const contextFixture = {
       cwd,
       hasUI: true,
@@ -82,72 +85,58 @@ const harness = (
       ctx,
       emit,
       fixture,
+      get command() {
+        return command;
+      },
       get tool() {
         return tool;
       },
     };
   });
 
+const request: AskUserRequest = {
+  questions: [
+    {
+      key: "choice",
+      title: "Choice",
+      prompt: "Choose.",
+      mode: "single",
+      choices: [{ value: "a", label: "A", description: "Choose A." }],
+    },
+  ],
+};
+
 layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
-  it.effect("loads preview settings before initializing the session runtime", () =>
+  it.effect("defers tool registration until preview settings resolve", () =>
     Effect.gen(function* () {
-      let loaded = false;
-      let initialized = 0;
-      const h = yield* harness(
-        () =>
-          Promise.resolve().then(() => {
-            loaded = true;
-          }),
-        Effect.sync(() => {
-          expect(loaded).toBe(true);
-          initialized += 1;
-        }),
-      );
+      const preview = controlled();
+      let loadSignal: AbortSignal | undefined;
+      const h = yield* harness((_cwd, _projectTrusted, signal) => {
+        loadSignal = signal;
+        return preview.promise;
+      });
 
-      yield* Effect.promise(() => h.emit("session_start"));
-      expect(initialized).toBe(1);
-      yield* Effect.promise(() => h.emit("session_shutdown"));
-    }),
-  );
-
-  it.effect("does not let an interrupted settings load initialize a replacement session", () =>
-    Effect.gen(function* () {
-      const first = deferred();
-      let loads = 0;
-      let initialized = 0;
-      const signals: AbortSignal[] = [];
-      const h = yield* harness(
-        (_cwd, _projectTrusted, signal) => {
-          loads += 1;
-          if (signal) signals.push(signal);
-          return loads === 1 ? first.promise : Promise.resolve();
-        },
-        Effect.sync(() => {
-          initialized += 1;
-        }),
-      );
-
-      const staleStart = h.emit("session_start");
+      const starting = h.emit("session_start");
       yield* Effect.promise(() =>
         vi.waitFor(() => {
-          expect(loads).toBe(1);
+          expect(loadSignal).toBeInstanceOf(AbortSignal);
         }),
       );
-      const currentStart = h.emit("session_start");
-      yield* Effect.promise(() => Promise.all([staleStart, currentStart]));
+      expect(loadSignal?.aborted).toBe(false);
+      expect(h.fixture.registerTool).not.toHaveBeenCalled();
+      expect(h.tool).toBeUndefined();
 
-      expect(loads).toBe(2);
-      expect(initialized).toBe(1);
-      expect(signals[0]?.aborted).toBe(true);
-      expect(signals[1]?.aborted).toBe(false);
-      first.resolve();
+      preview.resolve();
+      yield* Effect.promise(() => starting);
+      expect(h.fixture.registerTool).toHaveBeenCalledOnce();
+      expect(h.tool).toBeDefined();
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
   );
 
   it.effect("rejects a stale tool call while replacement startup is pending", () =>
     Effect.gen(function* () {
-      const replacement = deferred();
+      const replacement = controlled();
       let loads = 0;
       const h = yield* harness(() => {
         loads += 1;
@@ -165,32 +154,32 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         }),
       );
       yield* Effect.promise(() =>
-        expect(
-          tool.execute(
-            "call",
-            {
-              questions: [
-                {
-                  key: "choice",
-                  title: "Choice",
-                  prompt: "Choose.",
-                  mode: "single",
-                  choices: [
-                    { value: "a", label: "A", description: "Choose A." },
-                    { value: "b", label: "B", description: "Choose B." },
-                  ],
-                },
-              ],
-            },
-            undefined,
-            undefined,
-            h.ctx,
-          ),
-        ).rejects.toMatchObject({ _tag: "AskUserRuntimeClosedError" }),
+        expect(tool.execute("call", request, undefined, undefined, h.ctx)).rejects.toMatchObject({
+          _tag: "AskUserRuntimeClosedError",
+        }),
       );
 
       replacement.resolve();
       yield* Effect.promise(() => replacing);
+      yield* Effect.promise(() => h.emit("session_shutdown"));
+    }),
+  );
+
+  it.effect("activates past a rejected loader and contains a throwing inactive notification", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(() => Promise.reject(new Error("preview unavailable")));
+      yield* Effect.promise(() => h.emit("session_start"));
+      expect(h.fixture.registerTool).toHaveBeenCalledOnce();
+      const command = h.command;
+      if (!command) throw new Error("The ask-user command was not registered.");
+      const notify = vi.fn(() => {
+        throw new Error("stale UI");
+      });
+      // SAFETY: The captured handler reads only the notify field supplied here.
+      yield* Effect.promise(() =>
+        Promise.resolve(command.handler("", { ui: { notify } } as never)),
+      );
+      expect(notify).toHaveBeenCalledOnce();
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
   );

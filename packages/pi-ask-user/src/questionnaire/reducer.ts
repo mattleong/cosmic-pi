@@ -5,7 +5,7 @@ import type {
   QuestionnaireState,
   QuestionDraft,
 } from "./model.ts";
-import type { AskUserRequest } from "../tools/schema.ts";
+import type { AskUserRequest } from "./schema.ts";
 
 export const createQuestionnaireState = (request: AskUserRequest): QuestionnaireState => ({
   request,
@@ -40,7 +40,8 @@ export function reduceQuestionnaire(
     case "set-cursor":
       return updateDraft(state, action.question, (draft) => ({ ...draft, cursor: action.cursor }));
     case "select-one": {
-      const choice = state.request.questions[action.question]?.choices[action.choice];
+      const question = state.request.questions[action.question];
+      const choice = question?.choices[action.choice];
       if (!choice) return state;
       return updateDraft(state, action.question, (draft) => ({
         ...draft,
@@ -48,7 +49,8 @@ export function reduceQuestionnaire(
       }));
     }
     case "toggle-many": {
-      const choice = state.request.questions[action.question]?.choices[action.choice];
+      const question = state.request.questions[action.question];
+      const choice = question?.choices[action.choice];
       if (!choice) return state;
       return updateDraft(state, action.question, (draft) => {
         const current =
@@ -59,8 +61,8 @@ export function reduceQuestionnaire(
         const selectedValues = selected
           ? current.values.filter((value) => value !== choice.value)
           : [...current.values, choice.value];
-        const selectedChoices = state.request.questions[action.question]!.choices.filter(
-          (candidate) => selectedValues.includes(candidate.value),
+        const selectedChoices = question.choices.filter((candidate) =>
+          selectedValues.includes(candidate.value),
         );
         const values = selectedChoices.map((candidate) => candidate.value);
         const labels = selectedChoices.map((candidate) => candidate.label);
@@ -96,17 +98,7 @@ export function submitQuestionnaire(state: QuestionnaireState): AskUserOutcome |
     const answer = draft.answer;
     const question = state.request.questions[index];
     if (!answer || !question) return;
-    if (answer.kind === "custom") {
-      const submitted: AskUserAnswer = { key: question.key, kind: "custom", text: answer.text };
-      answers.push(draft.note ? { ...submitted, note: draft.note } : submitted);
-      return;
-    }
-    const submitted: AskUserAnswer = {
-      key: question.key,
-      kind: "choices",
-      values: answer.values,
-      labels: answer.labels,
-    };
+    const submitted: AskUserAnswer = { key: question.key, ...answer };
     answers.push(draft.note ? { ...submitted, note: draft.note } : submitted);
   });
   return { outcome: "submitted", answers };

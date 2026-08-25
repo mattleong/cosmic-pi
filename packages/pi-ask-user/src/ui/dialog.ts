@@ -19,21 +19,25 @@ import {
   reduceQuestionnaire,
   submitQuestionnaire,
 } from "../questionnaire/reducer.ts";
-import type { AskUserOutcome, QuestionnaireState } from "../questionnaire/model.ts";
+import type {
+  AskUserOutcome,
+  QuestionnaireAction,
+  QuestionnaireState,
+} from "../questionnaire/model.ts";
 import {
   MAX_CUSTOM_ANSWER_LENGTH,
   MAX_NOTE_LENGTH,
   type AskUserQuestion,
   type AskUserRequest,
-} from "../tools/schema.ts";
-import { PreviewPane } from "./components/preview-pane.ts";
-import { type DialogInputMode, renderQuestionnaireView } from "./dialog-render.ts";
+} from "../questionnaire/schema.ts";
+import { PreviewPane } from "./preview-pane.ts";
+import { type DialogInputMode, renderQuestionnaireView } from "./render.ts";
 
 const CHOICE_SHORTCUTS = ["1", "2", "3", "4"] as const;
 
 const DIALOG_SHORTCUTS = new Set(["b", "n"]);
 
-export interface AskUserDialogOptions {
+interface AskUserDialogOptions {
   readonly tui: TUI;
   readonly theme: Theme;
   readonly keybindings: KeybindingsManager;
@@ -55,7 +59,7 @@ const editorTheme = (theme: Theme): EditorTheme => ({
 });
 
 export class AskUserDialog implements Focusable {
-  private readonly options: AskUserDialogOptions;
+  private readonly options: Omit<AskUserDialogOptions, "request">;
   private state: QuestionnaireState;
   private input: DialogInputMode | undefined;
   private inputError: string | undefined;
@@ -67,9 +71,9 @@ export class AskUserDialog implements Focusable {
   private _focused = false;
   private overlayHandle: OverlayHandle | undefined;
 
-  constructor(options: AskUserDialogOptions) {
+  constructor({ request, ...options }: AskUserDialogOptions) {
+    this.state = createQuestionnaireState(request);
     this.options = options;
-    this.state = createQuestionnaireState(options.request);
     this.editor = new Editor(options.tui, editorTheme(options.theme), { paddingX: 1 });
     this.preview = new PreviewPane(options.theme);
     this.editor.onSubmit = (value) => this.commitInput(value);
@@ -90,13 +94,11 @@ export class AskUserDialog implements Focusable {
 
   resume(): void {
     this.overlayHandle?.setHidden(false);
-    this.overlayHandle?.focus();
     this.options.tui.requestRender(true);
   }
 
   collapse(): void {
     this.overlayHandle?.setHidden(true);
-    this.overlayHandle?.unfocus();
     this.options.onCollapse();
   }
 
@@ -104,30 +106,31 @@ export class AskUserDialog implements Focusable {
     this.options.tui.requestRender();
   }
 
-  private currentQuestion(): AskUserQuestion | undefined {
-    return this.options.request.questions[this.state.currentTab];
+  private dispatch(action: QuestionnaireAction): void {
+    this.state = reduceQuestionnaire(this.state, action);
   }
 
-  private cursorLimit(question: AskUserQuestion): number {
-    return question.choices.length + (question.mode === "multiple" ? 1 : 0);
+  private currentQuestion(): AskUserQuestion | undefined {
+    return this.state.request.questions[this.state.currentTab];
   }
 
   private setCursor(cursor: number): void {
     const question = this.currentQuestion();
     if (!question) return;
-    this.state = reduceQuestionnaire(this.state, {
+    const limit = question.choices.length + (question.mode === "multiple" ? 1 : 0);
+    this.dispatch({
       type: "set-cursor",
       question: this.state.currentTab,
-      cursor: Math.max(0, Math.min(this.cursorLimit(question), cursor)),
+      cursor: Math.max(0, Math.min(limit, cursor)),
     });
     this.inputError = undefined;
     this.refresh();
   }
 
   private advance(): void {
-    this.state = reduceQuestionnaire(this.state, {
+    this.dispatch({
       type: "set-tab",
-      tab: Math.min(this.options.request.questions.length, this.state.currentTab + 1),
+      tab: Math.min(this.state.request.questions.length, this.state.currentTab + 1),
     });
     this.inputError = undefined;
     this.refresh();
@@ -171,18 +174,11 @@ export class AskUserDialog implements Focusable {
       this.refresh();
       return;
     }
-    this.state =
+    this.dispatch(
       input.kind === "note"
-        ? reduceQuestionnaire(this.state, {
-            type: "set-note",
-            question: input.question,
-            note: trimmed,
-          })
-        : reduceQuestionnaire(this.state, {
-            type: "set-custom",
-            question: input.question,
-            text: trimmed,
-          });
+        ? { type: "set-note", question: input.question, note: trimmed }
+        : { type: "set-custom", question: input.question, text: trimmed },
+    );
     this.input = undefined;
     this.editor.focused = false;
     if (input.kind === "custom") this.advance();
@@ -194,25 +190,23 @@ export class AskUserDialog implements Focusable {
     this.externalEditorBusy = true;
     this.inputError = undefined;
     const active = this.input;
-    const settle = () => {
-      this.externalEditorBusy = false;
-      try {
-        this.refresh();
-      } catch {
-        // The dialog may have been disposed while the external editor was open.
-      }
-    };
-    void this.options.editExternally(this.editor.getExpandedText()).then(
-      (value) => {
+    void this.options
+      .editExternally(this.editor.getExpandedText())
+      .then((value) => {
         if (active && this.input === active && value !== undefined) this.editor.setText(value);
-        settle();
-      },
-      () => {
+      })
+      .catch(() => {
         if (active && this.input === active)
           this.inputError = "The external editor failed; your draft is unchanged.";
-        settle();
-      },
-    );
+      })
+      .finally(() => {
+        this.externalEditorBusy = false;
+        try {
+          this.refresh();
+        } catch {
+          // The dialog may have been disposed while the external editor was open.
+        }
+      });
   }
 
   handleInput(data: string): void {
@@ -246,7 +240,7 @@ export class AskUserDialog implements Focusable {
       if (resolution.key === "b") this.collapse();
       else if (
         resolution.key === "n" &&
-        this.state.currentTab < this.options.request.questions.length
+        this.state.currentTab < this.state.request.questions.length
       )
         this.openInput("note");
       return;
@@ -257,18 +251,18 @@ export class AskUserDialog implements Focusable {
         return;
       }
       if (resolution.action === "forward" || resolution.action === "next-pane") {
-        this.state = reduceQuestionnaire(this.state, { type: "move-tab", delta: 1 });
+        this.dispatch({ type: "move-tab", delta: 1 });
         this.refresh();
         return;
       }
       if (resolution.action === "back" || resolution.action === "previous-pane") {
-        this.state = reduceQuestionnaire(this.state, { type: "move-tab", delta: -1 });
+        this.dispatch({ type: "move-tab", delta: -1 });
         this.refresh();
         return;
       }
       if (resolution.action === "up" || resolution.action === "down") {
-        if (this.state.currentTab === this.options.request.questions.length) {
-          this.state = reduceQuestionnaire(this.state, {
+        if (this.state.currentTab === this.state.request.questions.length) {
+          this.dispatch({
             type: "set-review-cursor",
             cursor: this.state.reviewCursor === 0 ? 1 : 0,
           });
@@ -287,7 +281,7 @@ export class AskUserDialog implements Focusable {
       if (resolution.action === "quit") return;
     }
 
-    if (this.state.currentTab === this.options.request.questions.length) {
+    if (this.state.currentTab === this.state.request.questions.length) {
       this.handleReviewInput(data);
       return;
     }
@@ -302,7 +296,7 @@ export class AskUserDialog implements Focusable {
     }
     const unanswered = this.state.drafts.findIndex((draft) => draft.answer === undefined);
     if (unanswered >= 0) {
-      this.state = reduceQuestionnaire(this.state, { type: "set-tab", tab: unanswered });
+      this.dispatch({ type: "set-tab", tab: unanswered });
       this.inputError = "Answer this question to finish.";
       this.refresh();
       return;
@@ -347,13 +341,13 @@ export class AskUserDialog implements Focusable {
   }
 
   private activateChoice(question: AskUserQuestion, choice: number): void {
-    this.state = reduceQuestionnaire(this.state, {
+    this.dispatch({
       type: "set-cursor",
       question: this.state.currentTab,
       cursor: choice,
     });
     if (question.mode === "single") {
-      this.state = reduceQuestionnaire(this.state, {
+      this.dispatch({
         type: "select-one",
         question: this.state.currentTab,
         choice,
@@ -365,7 +359,7 @@ export class AskUserDialog implements Focusable {
   }
 
   private toggleMultiple(choice: number): void {
-    this.state = reduceQuestionnaire(this.state, {
+    this.dispatch({
       type: "toggle-many",
       question: this.state.currentTab,
       choice,
@@ -374,18 +368,12 @@ export class AskUserDialog implements Focusable {
   }
 
   render(width: number): string[] {
-    const baseModel = {
-      theme: this.options.theme,
-      request: this.options.request,
-      state: this.state,
-    };
-    const modelWithInput = this.input ? { ...baseModel, input: this.input } : baseModel;
-    const modelWithInputError = this.inputError
-      ? { ...modelWithInput, inputError: this.inputError }
-      : modelWithInput;
     return renderQuestionnaireView(
       {
-        ...modelWithInputError,
+        theme: this.options.theme,
+        state: this.state,
+        input: this.input,
+        inputError: this.inputError,
         alternateHelp: this.alternateHelp,
         externalEditorBusy: this.externalEditorBusy,
         editor: this.editor,
