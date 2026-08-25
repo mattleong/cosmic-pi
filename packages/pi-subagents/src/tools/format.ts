@@ -128,6 +128,16 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.selection.warning ? field("Route warning", run.selection.warning) : undefined,
     field("Context", run.context),
     field("Intent", run.writeIntent),
+    run.writeIntent === "writer"
+      ? field("Writes", run.writeClaims?.join(", ") || "exclusive whole cwd")
+      : undefined,
+    run.writeAdmissionPaused ? field("Admission", "paused after claim violation") : undefined,
+    run.writeAudit
+      ? field(
+          "Write audit",
+          `${run.writeAudit.observedFileWrites.length} native file path${run.writeAudit.observedFileWrites.length === 1 ? "" : "s"} observed · ${run.writeAudit.violations.length} violation${run.writeAudit.violations.length === 1 ? "" : "s"} · ${run.writeAudit.bashWriteHints} Bash heuristic notice${run.writeAudit.bashWriteHints === 1 ? "" : "s"}`,
+        )
+      : undefined,
     field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
     elapsed ? field("Elapsed", elapsed) : undefined,

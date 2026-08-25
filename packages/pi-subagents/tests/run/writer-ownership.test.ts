@@ -737,6 +737,129 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect(
+    "shares one cwd lease across disjoint exact-file writers until the last cleanup",
+    () => {
+      const fake = fakeChildLayer();
+      let acquisitions = 0;
+      let marks = 0;
+      let releases = 0;
+      const writerLeases = fakeWriterLeaseLayer({
+        onAcquire: () => {
+          acquisitions += 1;
+        },
+        onMark: () => {
+          marks += 1;
+        },
+        onRelease: () => {
+          releases += 1;
+        },
+      });
+      const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+        Layer.provide(fake.layer),
+      );
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const first = yield* service.start(
+          request({
+            name: "claimed-writer-one",
+            writeIntent: "writer",
+            writes: ["packages/auth/src/token.ts"],
+          }),
+        );
+        const second = yield* service.start(
+          request({
+            name: "claimed-writer-two",
+            writeIntent: "writer",
+            writes: ["packages/auth/tests/token.test.ts"],
+          }),
+        );
+        expect(first.writeClaims).toEqual(["packages/auth/src/token.ts"]);
+        expect(second.writeClaims).toEqual(["packages/auth/tests/token.test.ts"]);
+        expect(fake.controls).toHaveLength(2);
+        expect(acquisitions).toBe(1);
+        expect(marks).toBe(1);
+
+        yield* service.stop(first.id);
+        expect(releases).toBe(0);
+        yield* service.stop(second.id);
+        expect(releases).toBe(1);
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
+
+  it.effect("rejects overlapping claimed writers while admitting another exact file", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const first = yield* service.start(
+        request({
+          name: "claim-owner",
+          writeIntent: "writer",
+          writes: ["packages/auth/src/token.ts"],
+        }),
+      );
+      const conflict = yield* service
+        .start(
+          request({
+            name: "claim-collision",
+            writeIntent: "writer",
+            writes: ["packages/auth/src/TOKEN.ts"],
+          }),
+        )
+        .pipe(Effect.flip);
+      expect(conflict).toMatchObject({
+        _tag: "SubagentWriterConflictError",
+        activeId: first.id,
+        message: expect.stringContaining("already claims"),
+      });
+      const disjoint = yield* service.start(
+        request({
+          name: "claim-disjoint",
+          writeIntent: "writer",
+          writes: ["packages/auth/src/errors.ts"],
+        }),
+      );
+      expect(disjoint.state).toBe("running");
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("quarantines an entire claimed pool when one member cleanup defects", () => {
+    const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const defective = yield* service.start(
+        request({
+          name: "defective-claimed-writer",
+          writeIntent: "writer",
+          writes: ["src/a.ts"],
+        }),
+      );
+      yield* service.start(
+        request({ name: "claimed-peer", writeIntent: "writer", writes: ["src/b.ts"] }),
+      );
+      const stopped = yield* service.stop(defective.id);
+      expect(stopped.warning).toContain("ownership remain quarantined");
+
+      const conflict = yield* service
+        .start(
+          request({
+            name: "disjoint-but-quarantined",
+            writeIntent: "writer",
+            writes: ["src/c.ts"],
+          }),
+        )
+        .pipe(Effect.flip);
+      expect(conflict).toMatchObject({
+        _tag: "SubagentWriterConflictError",
+        message: expect.stringContaining("quarantined"),
+      });
+      expect(fake.controls).toHaveLength(2);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("quarantines writer ownership when child scope cleanup defects", () => {
     const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));

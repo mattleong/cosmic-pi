@@ -82,10 +82,10 @@ describe("subagent tool", () => {
       expect(tool?.renderShell).toBe("default");
       expect(tool?.renderCall).toBeTypeOf("function");
       expect(tool?.renderResult).toBeTypeOf("function");
-      expect(tool?.promptGuidelines?.join(" ")).toContain("one writer");
       expect(tool?.promptGuidelines?.join(" ")).toContain(
-        "Each agent item accepts task, optional profile, and optional name",
+        "parent coordinates and reviews but does not edit",
       );
+      expect(tool?.promptGuidelines?.join(" ")).toContain("pairwise-disjoint exact writes claims");
       expect(result?.content[0]?.text).toContain("agent-1");
       expect(request).toMatchObject({
         context: "fresh",
@@ -97,6 +97,107 @@ describe("subagent tool", () => {
       });
     },
   );
+
+  effectTest("threads exact writes claims only through writer profiles", function* () {
+    const requests: StartSubagentRequest[] = [];
+    const tools = captureSubagentTools(startCapturingService(requests));
+    const start = tools.get("subagent_start");
+
+    const result = yield* maybe(() =>
+      start?.execute(
+        "call",
+        {
+          agents: [
+            {
+              task: "Implement token parsing",
+              profile: "worker",
+              writes: ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+    expect(result?.content[0]?.text).toContain("agent-1");
+    expect(requests[0]).toMatchObject({
+      writeIntent: "writer",
+      writes: ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"],
+    });
+
+    const rejected = yield* maybe(() =>
+      start?.execute(
+        "call",
+        {
+          agents: [
+            { task: "Inspect auth", profile: "scout", writes: ["packages/auth/src/token.ts"] },
+          ],
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+    expect(rejected?.content[0]?.text).toContain(
+      "writes may be supplied only for a writer profile",
+    );
+    expect(requests).toHaveLength(1);
+  });
+
+  effectTest("skips read-only route candidates when exact writes require a writer", function* () {
+    const requests: StartSubagentRequest[] = [];
+    const profiles = profileServiceFor({
+      profiles: {
+        worker: [
+          {
+            host: "local",
+            runtime: "pi",
+            model: "parent",
+            effort: "default",
+            context: "fresh",
+            writeIntent: "read-only",
+          },
+          {
+            host: "local",
+            runtime: "pi",
+            model: "parent",
+            effort: "default",
+            context: "fresh",
+            writeIntent: "writer",
+          },
+        ],
+      },
+    });
+    const start = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
+      "subagent_start",
+    );
+    yield* maybe(() =>
+      start?.execute(
+        "call",
+        {
+          agents: [
+            {
+              task: "Implement auth",
+              profile: "worker",
+              writes: ["src/auth.ts"],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+    expect(requests[0]).toMatchObject({
+      writeIntent: "writer",
+      writes: ["src/auth.ts"],
+      selection: {
+        candidateIndex: 1,
+        skippedCandidates: [{ candidateIndex: 0, code: "write_claims_read_only" }],
+      },
+    });
+  });
 
   effectTest("does not request confirmation when launches use profile routing", function* () {
     const confirm = vi.fn(() => Promise.resolve(true));

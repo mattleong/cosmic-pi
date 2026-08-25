@@ -305,6 +305,14 @@ const managementAcknowledgement = (
           }
         })
         .join("\n");
+    case "claims":
+      return [
+        ...runs.map(
+          (run) =>
+            `${run.id}: ${run.writeClaims?.length ? run.writeClaims.join(", ") : run.writeIntent === "writer" ? "exclusive writer" : "read-only"}${run.writeAdmissionPaused ? " · admission paused" : ""}`,
+        ),
+        "For a waiting worker, send the resulting authoritative claim set in subagent_reply before work continues.",
+      ].join("\n");
     default:
       return runs.map((run) => formatRun(run, true)).join("\n\n");
   }
@@ -663,6 +671,20 @@ export const executeSubagentAction = (
       case "rename": {
         const id = yield* requiredRunId(input.action, input.runId);
         const outcome = yield* service.rename(id, input.name.trim()).pipe(matchActionOutcome(id));
+        return singleOutcome(outcome);
+      }
+      case "claims": {
+        const operation = input.operation;
+        if (operation.action === "list")
+          return yield* finishStatus(yield* requiredTargetIds(input.action, operation.runIds));
+        const id = yield* requiredRunId(input.action, operation.runId);
+        const effect =
+          operation.action === "grant"
+            ? service.grantWriteClaims(id, operation.paths)
+            : operation.action === "revoke"
+              ? service.revokeWriteClaims(id, operation.paths)
+              : service.resumeWriterAdmission(id);
+        const outcome = yield* effect.pipe(matchActionOutcome(id));
         return singleOutcome(outcome);
       }
     }

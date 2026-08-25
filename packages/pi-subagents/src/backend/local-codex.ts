@@ -245,8 +245,10 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                 toolCallId: event.item.id,
                 toolName: tool,
                 args:
-                  event.item.arguments ??
-                  (event.item.command ? { command: event.item.command } : {}),
+                  event.item.type === "fileChange"
+                    ? { changes: event.item.changes ?? [] }
+                    : (event.item.arguments ??
+                      (event.item.command ? { command: event.item.command } : {})),
               },
               raw,
             );

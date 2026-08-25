@@ -8,11 +8,12 @@ import type {
   BackendReport,
   BackendResumeToken,
 } from "../backend/model.ts";
-import type { CanonicalWriterCwd, WriterLease } from "../boundary/writer-lease.ts";
+import type { CanonicalWriterCwd } from "../boundary/writer-lease.ts";
 import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import type { SubagentError } from "./errors.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 import type { RunWarningSlots } from "./warnings.ts";
+import type { WriterPoolEntry } from "./writer-pool.ts";
 
 export interface PendingInitializationSettlement {
   readonly state: "completed" | "failed" | "stopped";
@@ -82,13 +83,15 @@ export interface RunRecord {
    * The claim also reserves the prospective process slot (and writer digest,
    * when present) while reclamation runs outside the lock.
    */
-  evictionClaim?: { readonly writerCwdDigest?: string | undefined } | undefined;
+  evictionClaim?:
+    | {
+        readonly writerCwdDigest?: string | undefined;
+        readonly writeClaims?: ReadonlyArray<string> | undefined;
+      }
+    | undefined;
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
-  writerLease?: WriterLease | undefined;
-  writerLeaseScope?: Scope.Closeable | undefined;
-  writerLeasePreparationState?: "pending" | "running" | "settled" | undefined;
-  writerLeasePreparationSettled?: Deferred.Deferred<void> | undefined;
-  writerLeaseReleaseState?: { authorized: boolean } | undefined;
+  writerPool?: WriterPoolEntry | undefined;
+  writeViolationContainmentStarted: boolean;
   closingScope?: Scope.Closeable | undefined;
   closingScopeSettled?: Deferred.Deferred<void> | undefined;
   initializationPending: boolean;

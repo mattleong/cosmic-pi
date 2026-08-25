@@ -474,6 +474,68 @@ describe("persisted subagent details version 2", () => {
     ).toBeUndefined();
   });
 
+  it("persists bounded optional write claims and audit data in version 2 cards", () => {
+    const claimed: SubagentRunView = {
+      ...run(),
+      writeIntent: "writer",
+      writeClaims: ["src/a.ts", "src/b.ts"],
+      writeAdmissionPaused: true,
+      writeAudit: {
+        observedFileWrites: ["src/a.ts", "src/outside.ts"],
+        violations: [{ path: "src/outside.ts", toolName: "edit", observedAt: 3 }],
+        bashWriteHints: 2,
+      },
+    };
+    const details = makeCompactToolDetails({ action: "claims", runs: [claimed] });
+    expect(details).toMatchObject({
+      version: 2,
+      action: "claims",
+      cards: [
+        {
+          writeClaims: ["src/a.ts", "src/b.ts"],
+          writeAdmissionPaused: true,
+          writeAudit: {
+            observedFileWrites: ["src/a.ts", "src/outside.ts"],
+            violations: [{ path: "src/outside.ts", toolName: "edit", observedAt: 3 }],
+            bashWriteHints: 2,
+          },
+        },
+      ],
+    });
+    const decoded = decodeCompactToolDetails(details);
+    expect(decoded).toEqual(details);
+    expect(Object.isFrozen(decoded)).toBe(true);
+
+    const oldCard = makeCompactToolDetails({ action: "status", runs: [run()] });
+    expect(decodeCompactToolDetails(oldCard)).toEqual(oldCard);
+  });
+
+  it("fits legal claim-heavy cards by preserving counts and explicit omission", () => {
+    const writeClaims = Array.from(
+      { length: 64 },
+      (_, index) => `src/${index}-${"x".repeat(490)}.ts`,
+    );
+    const claimed = (index: number): SubagentRunView => ({
+      ...run(index),
+      writeIntent: "writer",
+      writeClaims,
+      writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
+    });
+    const details = makeCompactToolDetails({
+      action: "status",
+      runs: [claimed(1), claimed(2)],
+    });
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+    if (details.action === "models") throw new Error("Expected run-card details.");
+    expect(details.cards).toHaveLength(2);
+    expect(details.cards[0]).toMatchObject({
+      writeClaimCount: 64,
+      writeClaimsOmitted: true,
+    });
+    expect(details.cards[0]?.writeClaims?.length).toBeLessThan(64);
+    expect(decodeCompactToolDetails(details)).toEqual(details);
+  });
+
   it("bounds profile route details through the shared semantic selector", () => {
     const hostile = `${"\\".repeat(2_000)}${"\ud800".repeat(500)}`;
     const details = makeCompactToolDetails({

@@ -7,6 +7,8 @@ const MAX_ID_CHARS = 256;
 const MAX_METHOD_CHARS = 128;
 const MAX_TEXT_CHARS = 1024 * 1024;
 const MAX_WARNING_TEXT_CHARS = 16 * 1024;
+const MAX_FILE_CHANGE_PATH_CHARS = 4_096;
+const MAX_FILE_CHANGES = 256;
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_ID_CHARS));
 const Method = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_METHOD_CHARS));
 const Text = Schema.String.check(Schema.isMaxLength(MAX_TEXT_CHARS));
@@ -121,6 +123,22 @@ const TurnStarted = Schema.Struct({
   threadId: Id,
   turn: Schema.Struct({ id: Id, status: Schema.String }),
 });
+const FileChangeKind = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("add") }),
+  Schema.Struct({ type: Schema.Literal("delete") }),
+  Schema.Struct({
+    type: Schema.Literal("update"),
+    move_path: Schema.Union([
+      Schema.String.check(Schema.isMaxLength(MAX_FILE_CHANGE_PATH_CHARS)),
+      Schema.Null,
+    ]),
+  }),
+]);
+const FileUpdateChange = Schema.Struct({
+  path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_FILE_CHANGE_PATH_CHARS)),
+  kind: FileChangeKind,
+});
+const FileChanges = Schema.Array(FileUpdateChange).check(Schema.isMaxLength(MAX_FILE_CHANGES));
 const Item = Schema.Struct({
   id: Id,
   type: Method,
@@ -130,6 +148,7 @@ const Item = Schema.Struct({
   tool: Schema.optional(Method),
   status: Schema.optional(Method),
   arguments: Schema.optional(Schema.Unknown),
+  changes: Schema.optional(FileChanges),
 });
 const ItemStarted = Schema.Struct({ threadId: Id, turnId: Id, item: Item });
 const ItemCompleted = Schema.Struct({ threadId: Id, turnId: Id, item: Item });

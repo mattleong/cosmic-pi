@@ -25,6 +25,7 @@ import {
   type SubagentRuntime,
 } from "../domain/routing.ts";
 import type { RuntimeApiKey, StartSubagentRequest } from "../run/model.ts";
+import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import type { SubagentRetryClaim } from "../run/retry.ts";
 import {
   profileCandidateLabel,
@@ -48,6 +49,7 @@ export interface SubagentProfileStartSpec {
   readonly task: string;
   readonly name?: string | undefined;
   readonly profile?: string | undefined;
+  readonly writes?: ReadonlyArray<string> | undefined;
 }
 
 export interface SubagentSessionEnvironment {
@@ -292,6 +294,14 @@ const resolvePlannedStart = (
         code: "launch_override_not_allowed",
         message: disallowedLaunchOverrideMessage(disallowedField),
       });
+    const normalizedClaims = input.rawInput.writes
+      ? normalizeWriteClaims(input.rawInput.writes)
+      : undefined;
+    if (normalizedClaims && !normalizedClaims.ok)
+      return yield* new InvalidSubagentRequestError({
+        code: normalizedClaims.code,
+        message: normalizedClaims.message,
+      });
 
     const tryAttempt = (
       index: number,
@@ -329,6 +339,20 @@ const resolvePlannedStart = (
         );
       }
       const precedingSkips = [...skippedCandidates, ...(attempt.skippedBefore ?? [])];
+      if (normalizedClaims && attempt.writeIntent !== "writer") {
+        const configuredCandidate = input.routeCandidates[attempt.candidateIndex];
+        return tryAttempt(index + 1, [
+          ...precedingSkips,
+          {
+            candidateIndex: attempt.candidateIndex,
+            candidate: configuredCandidate
+              ? profileCandidateLabel(configuredCandidate)
+              : `${attempt.host}/${attempt.runtime}/${attempt.model}:${attempt.effort}`,
+            code: "write_claims_read_only",
+            reason: "writes may be supplied only for a writer profile candidate.",
+          },
+        ]);
+      }
       return resolveConcreteModel(attempt, ctx, environment.cwd).pipe(
         Effect.matchEffect({
           onFailure: (error) =>
@@ -365,6 +389,11 @@ const resolvePlannedStart = (
         message: "Forked context requires a persisted parent session with a stable leaf.",
       });
     const concrete = selected.concrete;
+    if (normalizedClaims && selected.attempt.writeIntent !== "writer")
+      return yield* new InvalidSubagentRequestError({
+        code: "write_claims_read_only",
+        message: `Profile ${input.definition.id} resolved to read-only; writes may be supplied only for a writer profile.`,
+      });
     const routeContinuation = freezeSnapshot({
       profile: input.definition.id,
       routeSource: input.routeSource,
@@ -379,8 +408,11 @@ const resolvePlannedStart = (
       const withName = input.rawInput.name?.trim()
         ? { ...baseResult, name: input.rawInput.name.trim() }
         : baseResult;
+      const withWrites = normalizedClaims
+        ? { ...withName, writes: normalizedClaims.claims }
+        : withName;
       const withHostAndAdditionalFields = {
-        ...withName,
+        ...withWrites,
         host: concrete.host,
         runtime: concrete.runtime,
         closeOnReport: concrete.closeOnReport,
@@ -511,6 +543,7 @@ export const resolveProfileRetry = (
           task: claim.source.task,
           name: claim.source.name,
           profile: claim.continuation.profile,
+          writes: claim.source.writeClaims,
         },
         definition,
         plan,

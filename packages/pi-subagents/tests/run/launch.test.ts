@@ -384,6 +384,89 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect(
+    "quarantines reclaimed history when a writer-pool pause rejects phase-C admission",
+    () => {
+      let reclaimGate: Deferred.Deferred<void, never> | undefined;
+      const fake = fakeChildLayer(Effect.void, {
+        get reclaimGate() {
+          return reclaimGate;
+        },
+      });
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({
+        notify: (notification) =>
+          notification.type === "completed"
+            ? {
+                deliveredCompletionKeys: notification.runs.map(
+                  (run) => `${run.id}:${run.generation}`,
+                ),
+              }
+            : undefined,
+        publish: (projection) => projections.push(projection),
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        let oldestId = "";
+        for (let index = 0; index < 49; index += 1) {
+          const run = yield* service.start(request({ name: `phase-c-history-${index + 1}` }));
+          if (index === 0) oldestId = run.id;
+          fake.controls[index]?.offer({ type: "agent_settled" });
+          yield* yieldUntil(
+            () =>
+              projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
+              "completed",
+          );
+          yield* yieldUntil(() => fake.controls[index]?.released() === 1);
+        }
+        yield* TestClock.adjust("100 millis");
+        const activeWriter = yield* service.start(
+          request({
+            name: "phase-c-active-writer",
+            writeIntent: "writer",
+            writes: ["src/active.ts"],
+          }),
+        );
+        reclaimGate = yield* Deferred.make<void>();
+        const prospective = yield* service
+          .start(
+            request({
+              name: "phase-c-prospective-writer",
+              writeIntent: "writer",
+              writes: ["src/prospective.ts"],
+            }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => fake.reclaimedRunIds.includes(oldestId));
+
+        fake.controls[49]?.offer({
+          type: "tool_execution_start",
+          toolCallId: "phase-c-violation",
+          toolName: "edit",
+          args: { path: "src/outside.ts", edits: [] },
+        });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs.find((run) => run.id === activeWriter.id)?.state === "paused",
+        );
+        yield* Deferred.succeed(reclaimGate, undefined);
+        const rejected = yield* Fiber.join(prospective).pipe(Effect.flip);
+        expect(rejected).toMatchObject({ _tag: "SubagentWriterConflictError" });
+
+        const oldest = (yield* service.list).find((run) => run.id === oldestId);
+        expect(oldest).toMatchObject({
+          state: "completed",
+          warning: expect.stringContaining("remains quarantined"),
+        });
+        const resumeFailure = yield* service.resume(oldestId).pipe(Effect.flip);
+        expect(resumeFailure).toMatchObject({ code: "resume_state_reclaimed" });
+        expect((yield* service.list).some((run) => run.name === "phase-c-prospective-writer")).toBe(
+          false,
+        );
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
+
   it.effect("concurrent evicting starts never claim the same reclaim candidate", () => {
     let gate: Deferred.Deferred<void, never> | undefined;
     const fake = fakeChildLayer(Effect.void, {

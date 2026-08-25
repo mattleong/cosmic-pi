@@ -804,6 +804,43 @@ describe("subagent tool", () => {
   });
 
   effectTest(
+    "routes dedicated claim operations through the parent-only coordination tool",
+    function* () {
+      const grants: Array<{ readonly id: string; readonly paths: ReadonlyArray<string> }> = [];
+      const claimed = view({
+        id: "agent-claims",
+        writeIntent: "writer",
+        writeClaims: ["src/a.ts", "src/b.ts"],
+      });
+      const service = subagentServiceDouble({
+        ...startCapturingService([]),
+        grantWriteClaims: (id, paths) =>
+          Effect.sync(() => {
+            grants.push({ id, paths });
+            return claimed;
+          }),
+      });
+      const tool = captureSubagentTools(service).get("subagent_claims");
+      const result = yield* maybe(() =>
+        tool?.execute(
+          "call",
+          { action: "grant", runId: "agent-claims", paths: ["src/b.ts"] },
+          undefined,
+          undefined,
+          context,
+        ),
+      );
+      expect(grants).toEqual([{ id: "agent-claims", paths: ["src/b.ts"] }]);
+      expect(result?.content[0]?.text).toContain("src/a.ts, src/b.ts");
+      expect(result?.details).toMatchObject({
+        version: 2,
+        action: "claims",
+        cards: [{ id: "agent-claims", writeClaims: ["src/a.ts", "src/b.ts"] }],
+      });
+    },
+  );
+
+  effectTest(
     "enforces the final model-visible output bound for list, zero-run, and all-failure paths",
     function* () {
       const oversizedRuns = Array.from({ length: 12 }, (_, index) =>

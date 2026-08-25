@@ -14,6 +14,7 @@ export const SUBAGENT_TOOL_NAMES = [
   "subagent_reply",
   "subagent_lifecycle",
   "subagent_rename",
+  "subagent_claims",
 ] as const;
 
 /**
@@ -90,7 +91,16 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "Use contact_parent(kind=warning) to record a material non-blocking risk in parent-visible run status, and repeat that risk in the final report. Use kind=question instead when the parent must act before you can continue or the risk could invalidate work the parent is doing now.",
     "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.",
     request.writeIntent === "writer"
-      ? "You are the sole declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
+      ? request.writes
+        ? [
+            "You are one of several cooperative writers in a shared working directory. Native edit, write, and Bash remain available, but file claims are coordination rules rather than filesystem isolation.",
+            `Your exact write claims:\n${request.writes.map((path) => `- ${path}`).join("\n")}`,
+            "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently.",
+            "Use Bash for targeted validation and ordinary work, but do not mutate files outside your claims. Do not run Git mutation, package installation, broad formatting, snapshot updates, or broad code generation unless every affected file is explicitly claimed.",
+            "If another file is needed, contact the parent with kind=question, name the exact workspace-relative paths, and wait. Only a parent claim grant followed by its reply expands your scope. Peers cannot transfer claims.",
+            "Report every changed file, validation command, and any possible out-of-claim side effect in the final report.",
+          ].join("\n\n")
+        : "You are the exclusive declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
       : "Your run is declared read-only. When Bash is available, use it for inspection and validation only; do not use it to edit, write, patch, generate, or otherwise mutate project files. Use a writer assignment for intentional project changes.",
   ].join("\n\n");
 

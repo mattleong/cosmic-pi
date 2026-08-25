@@ -3,6 +3,7 @@ import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { PROFILE_IDS } from "../profiles/model.ts";
+import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
@@ -40,6 +41,23 @@ const StartSpecFields = {
       description:
         "Behavior and model-routing profile. Omit to use the fixed generalist fallback. The selected profile always determines the model route.",
     }),
+  ),
+  writes: Type.Optional(
+    Type.Array(
+      Type.String({
+        description: "Exact workspace-relative POSIX file path assigned to this writer.",
+        minLength: 1,
+        maxLength: MAX_WRITE_CLAIM_CHARS,
+        pattern: NONBLANK_PATTERN,
+      }),
+      {
+        description:
+          "Cooperative exact-file claims for writer profiles. Omit for exclusive whole-workspace writer ownership.",
+        minItems: 1,
+        maxItems: MAX_WRITE_CLAIMS,
+        uniqueItems: true,
+      },
+    ),
   ),
 } as const;
 
@@ -168,6 +186,36 @@ export const RenameParameters = Type.Object(
   strictObjectOptions,
 );
 
+const WritePathsParameters = Type.Array(
+  Type.String({ minLength: 1, maxLength: MAX_WRITE_CLAIM_CHARS, pattern: NONBLANK_PATTERN }),
+  { minItems: 1, maxItems: MAX_WRITE_CLAIMS, uniqueItems: true },
+);
+
+export const ClaimsParameters = Type.Union([
+  Type.Object(
+    {
+      action: Type.Literal("list"),
+      runIds: RunIdsParameters,
+    },
+    strictObjectOptions,
+  ),
+  Type.Object(
+    {
+      action: StringEnum(["grant", "revoke"] as const),
+      runId: RunIdParameter,
+      paths: WritePathsParameters,
+    },
+    strictObjectOptions,
+  ),
+  Type.Object(
+    {
+      action: Type.Literal("resume_admission"),
+      runId: RunIdParameter,
+    },
+    strictObjectOptions,
+  ),
+]);
+
 export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentModelsInput = Static<typeof ModelsParameters>;
 export type SubagentStartInput = Static<typeof StartParameters>;
@@ -178,6 +226,7 @@ export type SubagentSendInput = Static<typeof SendParameters>;
 export type SubagentReplyInput = Static<typeof ReplyParameters>;
 export type SubagentLifecycleInput = Static<typeof LifecycleParameters>;
 export type SubagentRenameInput = Static<typeof RenameParameters>;
+export type SubagentClaimsInput = Static<typeof ClaimsParameters>;
 
 export type SubagentToolInput =
   | ({ readonly action: "models" } & SubagentModelsInput)
@@ -188,7 +237,8 @@ export type SubagentToolInput =
   | ({ readonly action: "send" } & SubagentSendInput)
   | ({ readonly action: "reply" } & SubagentReplyInput)
   | SubagentLifecycleInput
-  | ({ readonly action: "rename" } & SubagentRenameInput);
+  | ({ readonly action: "rename" } & SubagentRenameInput)
+  | { readonly action: "claims"; readonly operation: SubagentClaimsInput };
 
 export const prepareSubagentStartArguments = <ArgsInput>(args: ArgsInput): SubagentStartInput => {
   // Pi performs the authoritative TypeBox validation immediately after this friendly preflight.

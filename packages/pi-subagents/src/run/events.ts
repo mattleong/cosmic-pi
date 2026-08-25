@@ -7,6 +7,14 @@ import { SubagentProcessError, SubagentProtocolError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
 import {
+  bashCommandMayMutate,
+  MAX_OBSERVED_WRITE_PATHS,
+  MAX_WRITE_CLAIM_VIOLATIONS,
+  observeFileWrite,
+  workspaceRelativeObservedPath,
+} from "./claims-observation.ts";
+import { writeClaimContains } from "../domain/write-claims.ts";
+import {
   appendAssistantSessionEvent,
   appendNoticeSessionEvent,
   finishToolSessionEvent,
@@ -54,6 +62,8 @@ export interface RunEventDependencies {
     message: string,
     pendingError?: SubagentError,
   ) => Effect.Effect<SubagentRunView>;
+  /** Starts asynchronous containment after an unambiguous native file-tool violation. */
+  readonly onWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
 }
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
@@ -68,6 +78,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     settle,
     notify,
     failRun,
+    onWriteClaimViolation,
   } = dependencies;
 
   const handleContact = (
@@ -190,23 +201,85 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       }
       case "tool_started":
         return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) =>
-            mutateView(record, event.assignmentEpoch, (current) => {
+          Effect.flatMap((now) => {
+            const observed = observeFileWrite(event.toolName, event.args);
+            const observedPaths = observed
+              ? observed.paths.length > 0
+                ? observed.paths.map((path) => ({
+                    relative: workspaceRelativeObservedPath(record.view.cwd, path),
+                  }))
+                : [{ relative: undefined }]
+              : [];
+            const violatingPaths =
+              record.view.writeClaims === undefined
+                ? []
+                : observedPaths.filter(
+                    ({ relative }) =>
+                      relative === undefined ||
+                      !writeClaimContains(record.view.writeClaims ?? [], relative),
+                  );
+            const bashHint = bashCommandMayMutate(event.toolName, event.args);
+            const violationMessage =
+              violatingPaths.length > 0
+                ? `Writer ${record.view.id} used ${event.toolName} outside its cooperative claims: ${violatingPaths
+                    .map(({ relative }) => relative ?? "<outside workspace>")
+                    .join(", ")}. The run is being interrupted and new writer admission is paused.`
+                : undefined;
+            return mutateView(record, event.assignmentEpoch, (current) => {
               if (current.state === "paused") return undefined;
               record.activeTools.set(event.toolCallId, event.toolName);
+              const writeAudit = current.writeAudit
+                ? {
+                    observedFileWrites: [
+                      ...new Set([
+                        ...current.writeAudit.observedFileWrites,
+                        ...observedPaths.map(({ relative }) => relative ?? "<outside workspace>"),
+                      ]),
+                    ].slice(-MAX_OBSERVED_WRITE_PATHS),
+                    violations: [
+                      ...current.writeAudit.violations,
+                      ...violatingPaths.map(({ relative }) => ({
+                        path: relative ?? "<outside workspace>",
+                        toolName: event.toolName,
+                        observedAt: now,
+                      })),
+                    ].slice(-MAX_WRITE_CLAIM_VIOLATIONS),
+                    bashWriteHints: Math.min(
+                      Number.MAX_SAFE_INTEGER,
+                      current.writeAudit.bashWriteHints + (bashHint ? 1 : 0),
+                    ),
+                  }
+                : undefined;
+              const warning = violationMessage;
+              if (warning)
+                record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
+              const sessionEvents = startToolSessionEvent(current.sessionEvents, {
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                args: event.args,
+                startedAt: now,
+              });
+              const withAudit = writeAudit ? { ...current, writeAudit } : current;
+              const withSessionEvents = warning
+                ? {
+                    ...withAudit,
+                    warning,
+                    sessionEvents: appendNoticeSessionEvent(sessionEvents, "warning", warning, now),
+                  }
+                : { ...withAudit, sessionEvents };
               return {
-                ...current,
+                ...withSessionEvents,
                 currentTool: [...record.activeTools.values()].at(-1),
                 lastActivityAt: now,
-                sessionEvents: startToolSessionEvent(current.sessionEvents, {
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                  args: event.args,
-                  startedAt: now,
-                }),
               };
-            }),
-          ),
+            }).pipe(
+              Effect.flatMap((updated) =>
+                updated && violationMessage
+                  ? onWriteClaimViolation(record, violationMessage)
+                  : Effect.void,
+              ),
+            );
+          }),
           Effect.asVoid,
         );
       case "tool_finished":

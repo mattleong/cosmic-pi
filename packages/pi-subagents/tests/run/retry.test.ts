@@ -214,6 +214,49 @@ describe("explicit profile-route retry", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect("reserves a failed writer's exact claims while retry resolution is in progress", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failedRun = yield* service.start(
+        request({
+          profile: "worker",
+          writeIntent: "writer",
+          writes: ["src/retry-owner.ts"],
+          routeContinuation: continuation(0),
+        }),
+      );
+      fake.controls[0]?.exit(1);
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      const claim = yield* service.claimRetryContinuation(failedRun.id);
+
+      const conflict = yield* service
+        .start(
+          request({
+            name: "retry-claim-collision",
+            writeIntent: "writer",
+            writes: ["src/RETRY-owner.ts"],
+          }),
+        )
+        .pipe(Effect.flip);
+      expect(conflict).toMatchObject({
+        _tag: "SubagentWriterConflictError",
+        activeId: failedRun.id,
+        message: expect.stringContaining("route retry"),
+      });
+      const disjoint = yield* service.start(
+        request({
+          name: "retry-claim-disjoint",
+          writeIntent: "writer",
+          writes: ["src/disjoint.ts"],
+        }),
+      );
+      expect(disjoint.state).toBe("running");
+      yield* service.releaseRetryClaim(failedRun.id, claim.claimToken);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("publishes exhaustion and blocks repeated continuation", () => {
     const fake = fakeChildLayer();
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));

@@ -14,6 +14,7 @@ import {
 import type { RunRecord } from "./internal.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { setRunWarning } from "./warnings.ts";
+import type { WriterPoolEntry } from "./writer-pool.ts";
 
 const mapWriterLeaseConflict = (error: WriterLeaseConflictError): SubagentWriterConflictError =>
   new SubagentWriterConflictError({
@@ -27,6 +28,7 @@ export interface RunRecordCleanupDependencies {
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly publish: Effect.Effect<void>;
   readonly writerLeases: WriterLeaseContract;
+  readonly writerPools: Map<string, WriterPoolEntry>;
 }
 
 /**
@@ -35,131 +37,152 @@ export interface RunRecordCleanupDependencies {
  * run record. Every field mutation stays under the shared service lock.
  */
 export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies) {
-  const { withLock, publish, writerLeases } = dependencies;
+  const { withLock, publish, writerLeases, writerPools } = dependencies;
 
   const prepareWriterLeaseForSpawn = (record: RunRecord): Effect.Effect<void, SubagentError> => {
     const canonicalCwd = record.canonicalWriterCwd;
-    const leaseScope = record.writerLeaseScope;
-    const releaseState = record.writerLeaseReleaseState;
+    const pool = record.writerPool;
     if (!canonicalCwd) return Effect.void;
-    if (!leaseScope || !releaseState)
+    if (!pool)
       return Effect.fail(
         new SubagentProcessError({
           operation: "prepare writer lease",
-          code: "writer_lease_state_missing",
-          message: `Subagent ${record.view.id} has no writer-lease preparation state.`,
+          code: "writer_pool_state_missing",
+          message: `Subagent ${record.view.id} has no writer-pool preparation state.`,
         }),
       );
     const cancelled = () =>
       new InvalidSubagentRequestError({
         code: "start_cancelled",
-        message: `Subagent ${record.view.id} lost writer-lease reservation ownership during startup.`,
+        message: `Subagent ${record.view.id} lost writer-pool membership during startup.`,
       });
     return Effect.gen(function* () {
-      const began = yield* withLock(
+      const role = yield* withLock(
         Effect.sync(() => {
           if (
-            record.writerLeaseScope !== leaseScope ||
-            record.writerLeaseReleaseState !== releaseState ||
-            record.writerLeasePreparationState !== "pending" ||
+            record.writerPool !== pool ||
+            !pool.members.has(record.view.id) ||
             record.stoppedByParent ||
             record.view.state === "stopping" ||
             record.view.state === "stopped"
           )
-            return false;
-          record.writerLeasePreparationState = "running";
-          return true;
+            return { kind: "cancelled" as const };
+          switch (pool.state) {
+            case "pending":
+              pool.state = "preparing";
+              return { kind: "owner" as const };
+            case "preparing":
+              return { kind: "wait" as const };
+            case "held":
+              return { kind: "ready" as const };
+            case "failed":
+              return { kind: "failed" as const, error: pool.preparationError ?? cancelled() };
+            case "releasing":
+            case "paused":
+            case "quarantined":
+              return { kind: "cancelled" as const };
+          }
         }),
       );
-      if (!began) return yield* cancelled();
-      let handedOff = false;
-      const lease = yield* Effect.acquireRelease(
-        writerLeases
-          .acquire({
-            cwd: canonicalCwd,
-            sessionId: record.launch.parentSessionId,
-            runId: record.view.id,
-          })
-          .pipe(
-            Effect.mapError((error) =>
-              error._tag === "WriterLeaseConflictError"
-                ? mapWriterLeaseConflict(error)
-                : new SubagentProcessError({
-                    operation: "acquire writer lease",
-                    code: "writer_lease_acquire_failed",
-                    message: error.message,
-                  }),
-            ),
+      if (role.kind === "cancelled") return yield* cancelled();
+      if (role.kind === "failed") return yield* role.error;
+      if (role.kind === "wait") {
+        yield* Deferred.await(pool.preparationSettled);
+        const attached = yield* withLock(
+          Effect.sync(
+            () =>
+              record.writerPool === pool &&
+              pool.members.has(record.view.id) &&
+              !record.stoppedByParent,
           ),
-        (ownedLease) =>
-          !handedOff || releaseState.authorized
-            ? writerLeases.release(ownedLease).pipe(Effect.interruptible, Effect.orDie)
-            : Effect.void,
-      ).pipe(Effect.provideService(Scope.Scope, leaseScope));
-      const attached = yield* withLock(
-        Effect.sync(() => {
-          if (
-            record.writerLeaseScope !== leaseScope ||
-            record.writerLeaseReleaseState !== releaseState
-          )
-            return "stale" as const;
-          record.writerLease = lease;
-          handedOff = true;
-          return record.stoppedByParent || record.view.state === "stopping"
-            ? ("cancelled" as const)
-            : ("attached" as const);
-        }),
-      );
-      if (attached === "stale") {
-        releaseState.authorized = true;
-        yield* Scope.close(leaseScope, Exit.void);
-        return yield* cancelled();
+        );
+        if (!attached) return yield* cancelled();
+        return;
       }
-      if (attached === "cancelled") return yield* cancelled();
+      if (role.kind === "ready") return;
 
-      const marked = yield* writerLeases.markSpawnStarted(lease).pipe(
-        Effect.mapError(
-          (error) =>
-            new SubagentProcessError({
-              operation: "mark writer spawn started",
-              code: "writer_lease_mark_failed",
-              message: error.message,
-            }),
-        ),
-      );
-      const confirmed = yield* withLock(
-        Effect.sync(() => {
-          if (
-            record.writerLeaseScope !== leaseScope ||
-            record.writerLeaseReleaseState !== releaseState ||
-            record.writerLease?.ownershipToken !== lease.ownershipToken ||
-            record.stoppedByParent ||
-            record.view.state === "stopping" ||
-            record.view.state === "stopped"
-          )
-            return false;
-          record.writerLease = marked;
-          return true;
-        }),
-      );
-      if (!confirmed) return yield* cancelled();
-    }).pipe(
-      Effect.ensuring(
-        withLock(
+      let handedOff = false;
+      let preparationError: SubagentError | undefined;
+      const prepareOwner = Effect.gen(function* () {
+        const lease = yield* Effect.acquireRelease(
+          writerLeases
+            .acquire({
+              cwd: canonicalCwd,
+              sessionId: record.launch.parentSessionId,
+              runId: record.view.id,
+            })
+            .pipe(
+              Effect.mapError((error) =>
+                error._tag === "WriterLeaseConflictError"
+                  ? mapWriterLeaseConflict(error)
+                  : new SubagentProcessError({
+                      operation: "acquire writer lease",
+                      code: "writer_lease_acquire_failed",
+                      message: error.message,
+                    }),
+              ),
+            ),
+          (ownedLease) =>
+            !handedOff || pool.releaseState.authorized
+              ? writerLeases.release(ownedLease).pipe(Effect.interruptible, Effect.orDie)
+              : Effect.void,
+        ).pipe(Effect.provideService(Scope.Scope, pool.leaseScope));
+        const attached = yield* withLock(
           Effect.sync(() => {
-            if (
-              record.writerLeaseScope === leaseScope &&
-              record.writerLeaseReleaseState === releaseState
-            ) {
-              record.writerLeasePreparationState = "settled";
-              const settled = record.writerLeasePreparationSettled;
-              record.writerLeasePreparationSettled = undefined;
-              if (settled) Deferred.doneUnsafe(settled, Effect.void);
-            }
+            if (record.writerPool !== pool || pool.state !== "preparing") return false;
+            pool.lease = lease;
+            handedOff = true;
+            return true;
+          }),
+        );
+        if (!attached) return yield* cancelled();
+        const marked = yield* writerLeases.markSpawnStarted(lease).pipe(
+          Effect.mapError(
+            (error) =>
+              new SubagentProcessError({
+                operation: "mark writer spawn started",
+                code: "writer_lease_mark_failed",
+                message: error.message,
+              }),
+          ),
+        );
+        yield* withLock(
+          Effect.sync(() => {
+            if (pool.state !== "preparing") return;
+            pool.lease = marked;
+            pool.state = "held";
+            Deferred.doneUnsafe(pool.preparationSettled, Effect.void);
+          }),
+        );
+        const ownerStillAttached = yield* withLock(
+          Effect.sync(
+            () =>
+              record.writerPool === pool &&
+              pool.members.has(record.view.id) &&
+              !record.stoppedByParent,
+          ),
+        );
+        if (!ownerStillAttached) return yield* cancelled();
+      }).pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            preparationError = error;
           }),
         ),
-      ),
-    );
+        Effect.ensuring(
+          withLock(
+            Effect.sync(() => {
+              if (pool.state !== "preparing") return;
+              const error = preparationError ?? cancelled();
+              pool.state = "failed";
+              pool.preparationError = error;
+              Deferred.doneUnsafe(pool.preparationSettled, Effect.fail(error));
+            }),
+          ),
+        ),
+      );
+      yield* prepareOwner;
+    });
   };
   const reclaimRecordRunState = (record: RunRecord) =>
     Effect.gen(function* () {
@@ -220,11 +243,6 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
         const cleanupSettlement = record.cleanupSettlement;
         record.cleanupPending = false;
         record.process = undefined;
-        record.writerLease = undefined;
-        record.writerLeaseScope = undefined;
-        record.writerLeasePreparationState = undefined;
-        record.writerLeasePreparationSettled = undefined;
-        record.writerLeaseReleaseState = undefined;
         const shouldReclaim =
           record.stoppedByParent ||
           record.view.state === "failed" ||
@@ -257,9 +275,13 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
         Effect.gen(function* () {
           if (record.scope !== scope) return false;
           const ownershipQuarantined =
-            record.process !== undefined ||
-            record.writerLease !== undefined ||
-            record.writerLeaseScope !== undefined;
+            record.process !== undefined || record.writerPool !== undefined;
+          if (record.writerPool) {
+            record.writerPool.state = "quarantined";
+            record.writerPool.admissionPaused = true;
+            record.writerPool.pauseReason =
+              "A writer process or lease cleanup could not be confirmed.";
+          }
           const warning = ownershipQuarantined
             ? "Subagent cleanup could not be confirmed; process capacity and writer ownership remain quarantined for this session."
             : "Subagent cleanup could not be fully confirmed; this run remains quarantined for the session.";
@@ -272,6 +294,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
                 ? true
                 : record.view.retryBlocked,
             warning,
+            writeAdmissionPaused: record.writerPool ? true : record.view.writeAdmissionPaused,
             sessionEvents: appendNoticeSessionEvent(
               record.view.sessionEvents,
               "warning",
@@ -288,37 +311,51 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
           Deferred.doneUnsafe(record.cleanupSettlement, Effect.succeed("quarantined"));
         });
     });
-  const waitForWriterLeasePreparation = (
-    record: RunRecord,
-    scope: Scope.Closeable,
-  ): Effect.Effect<void> =>
-    withLock(
-      Effect.sync(() =>
-        record.scope === scope && record.writerLeasePreparationState === "running"
-          ? record.writerLeasePreparationSettled
-          : undefined,
-      ),
-    ).pipe(Effect.flatMap((settled) => (settled ? Deferred.await(settled) : Effect.void)));
-  const releaseWriterLeaseAfterCleanup = (record: RunRecord, scope: Scope.Closeable) =>
-    waitForWriterLeasePreparation(record, scope).pipe(
-      Effect.andThen(
-        withLock(
-          Effect.sync(() => {
-            if (
-              record.scope !== scope ||
-              !record.writerLeaseScope ||
-              !record.writerLeaseReleaseState
-            )
-              return undefined;
-            if (record.writerLease) record.writerLeaseReleaseState.authorized = true;
-            return record.writerLeaseScope;
-          }),
+  const detachWriterPoolAfterCleanup = (record: RunRecord, scope: Scope.Closeable) =>
+    Effect.gen(function* () {
+      const pool = record.writerPool;
+      if (!pool) return;
+      const preparation = yield* withLock(
+        Effect.sync(() =>
+          record.scope === scope && pool.state === "preparing"
+            ? pool.preparationSettled
+            : undefined,
         ),
-      ),
-      Effect.flatMap((leaseScope) =>
-        leaseScope ? Scope.close(leaseScope, Exit.void) : Effect.void,
-      ),
-    );
+      );
+      if (preparation) yield* Deferred.await(preparation).pipe(Effect.catch(() => Effect.void));
+      const release = yield* withLock(
+        Effect.sync(() => {
+          if (record.scope !== scope || record.writerPool !== pool) return undefined;
+          if (!pool.members.has(record.view.id)) {
+            record.writerPool = undefined;
+            return undefined;
+          }
+          if (pool.members.size > 1) {
+            pool.members.delete(record.view.id);
+            record.writerPool = undefined;
+            return undefined;
+          }
+          pool.state = "releasing";
+          if (pool.lease) pool.releaseState.authorized = true;
+          return pool.leaseScope;
+        }),
+      );
+      if (!release) return;
+      yield* Scope.close(release, Exit.void);
+      yield* withLock(
+        Effect.sync(() => {
+          if (record.writerPool !== pool || pool.state !== "releasing") return;
+          pool.members.delete(record.view.id);
+          record.writerPool = undefined;
+          pool.lease = undefined;
+          if (pool.admissionPaused) {
+            pool.state = "paused";
+            return;
+          }
+          if (writerPools.get(pool.cwd.digest) === pool) writerPools.delete(pool.cwd.digest);
+        }),
+      );
+    });
   const closeRecordScope = (record: RunRecord, scope: Scope.Closeable = record.scope) =>
     Effect.gen(function* () {
       const closeSettled = yield* Deferred.make<void>();
@@ -331,12 +368,6 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             };
           record.closingScope = scope;
           record.closingScopeSettled = closeSettled;
-          if (record.writerLeasePreparationState === "pending") {
-            record.writerLeasePreparationState = "settled";
-            const preparationSettled = record.writerLeasePreparationSettled;
-            record.writerLeasePreparationSettled = undefined;
-            if (preparationSettled) Deferred.doneUnsafe(preparationSettled, Effect.void);
-          }
           return {
             close: true as const,
             settled: closeSettled,
@@ -353,7 +384,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
       }
       yield* (claim.spawnSettled ? Deferred.await(claim.spawnSettled) : Effect.void).pipe(
         Effect.andThen(Scope.close(scope, Exit.void)),
-        Effect.andThen(releaseWriterLeaseAfterCleanup(record, scope)),
+        Effect.andThen(detachWriterPoolAfterCleanup(record, scope)),
         Effect.exit,
         Effect.flatMap((exit) =>
           Exit.isSuccess(exit)

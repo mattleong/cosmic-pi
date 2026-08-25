@@ -24,10 +24,12 @@ import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { snapshotView } from "./state.ts";
 import { emptyRunWarningSlots } from "./warnings.ts";
+import type { WriterPoolEntry } from "./writer-pool.ts";
 
 export interface RunResumeDependencies {
   readonly ownerScope: Scope.Scope;
   readonly records: ReadonlyMap<string, RunRecord>;
+  readonly writerPools: Map<string, WriterPoolEntry>;
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly publish: Effect.Effect<void>;
@@ -80,6 +82,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
   const {
     ownerScope,
     records,
+    writerPools,
     withLock,
     publish,
     writerLeases,
@@ -160,6 +163,11 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     code: "resume_state_invalid",
                     message: `Subagent ${id} is being evicted by start admission and can no longer resume.`,
                   });
+                if (selected.runStateReclaimState === "reclaimed")
+                  return yield* new InvalidSubagentRequestError({
+                    code: "resume_state_reclaimed",
+                    message: `Subagent ${id} cannot resume because its private continuation state was already reclaimed.`,
+                  });
                 if (selected.view.state !== "paused" && selected.view.state !== "completed")
                   return yield* new InvalidSubagentRequestError({
                     code: "resume_state_invalid",
@@ -187,7 +195,13 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                       code: "writer_cwd_canonicalization_missing",
                       message: `Subagent ${id} has no canonical writer cwd ownership evidence.`,
                     });
-                  const writerFailure = writerConflictError(records, canonicalCwd, selected);
+                  const writerFailure = writerConflictError(
+                    records,
+                    writerPools,
+                    canonicalCwd,
+                    selected.view.writeClaims,
+                    selected,
+                  );
                   if (writerFailure) return yield* writerFailure;
                 }
                 const needsRespawn = selected.process === undefined;
@@ -242,35 +256,39 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
               if (claimed.needsRespawn) {
                 const nextScope = yield* Scope.make();
                 const nextCleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
-                const nextWriterLeaseScope = claimed.record.canonicalWriterCwd
-                  ? yield* Scope.make()
-                  : undefined;
-                const nextWriterLeaseReleaseState = nextWriterLeaseScope
-                  ? { authorized: false }
-                  : undefined;
-                const nextWriterLeasePreparationSettled = nextWriterLeaseScope
-                  ? Deferred.makeUnsafe<void>()
-                  : undefined;
                 const installed = yield* withLock(
-                  Effect.sync(() => {
+                  Effect.gen(function* () {
                     if (
                       record.stoppedByParent ||
                       record.view.state !== "starting" ||
                       record.process !== undefined
                     )
                       return false;
+                    let writerPool: WriterPoolEntry | undefined;
+                    if (record.canonicalWriterCwd) {
+                      writerPool = writerPools.get(record.canonicalWriterCwd.digest);
+                      if (!writerPool) {
+                        writerPool = {
+                          cwd: record.canonicalWriterCwd,
+                          leaseScope: yield* Scope.make(),
+                          releaseState: { authorized: false },
+                          preparationSettled: Deferred.makeUnsafe<void, SubagentError>(),
+                          members: new Map(),
+                          violationRunIds: new Set(),
+                          state: "pending",
+                          admissionPaused: false,
+                        };
+                        writerPools.set(record.canonicalWriterCwd.digest, writerPool);
+                      }
+                      writerPool.members.set(record.view.id, record.view.writeClaims);
+                    }
                     record.scope = nextScope;
                     record.cleanupSettlement = nextCleanupSettlement;
                     record.cleanupPending = false;
                     record.closingScope = undefined;
                     record.closingScopeSettled = undefined;
-                    record.writerLease = undefined;
-                    record.writerLeaseScope = nextWriterLeaseScope;
-                    record.writerLeasePreparationState = nextWriterLeaseScope
-                      ? "pending"
-                      : undefined;
-                    record.writerLeasePreparationSettled = nextWriterLeasePreparationSettled;
-                    record.writerLeaseReleaseState = nextWriterLeaseReleaseState;
+                    record.writerPool = writerPool;
+                    record.writeViolationContainmentStarted = false;
                     record.launch = {
                       ...record.launch,
                       resumeToken: record.resumeToken,
@@ -280,7 +298,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 );
                 if (!installed) {
                   yield* Scope.close(nextScope, Exit.void);
-                  if (nextWriterLeaseScope) yield* Scope.close(nextWriterLeaseScope, Exit.void);
                   return yield* new InvalidSubagentRequestError({
                     code: "resume_cancelled",
                     message: `Subagent ${id} stopped before its session could be restored.`,

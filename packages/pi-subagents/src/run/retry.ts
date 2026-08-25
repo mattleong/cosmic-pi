@@ -75,11 +75,7 @@ export function makeRunRetry(dependencies: RunRetryDependencies) {
               `Subagent ${id} may have accepted or executed its task; automatic next-candidate continuation is blocked. Inspect the run before deciding how to recover.`,
             );
           if (record.cleanupPending) return { waitForCleanup: record.cleanupSettlement } as const;
-          if (
-            record.process !== undefined ||
-            record.writerLease !== undefined ||
-            record.writerLeaseScope !== undefined
-          )
+          if (record.process !== undefined || record.writerPool !== undefined)
             return yield* invalid(
               "retry_cleanup_unconfirmed",
               `Subagent ${id} still owns backend or writer resources; next-candidate continuation fails closed.`,

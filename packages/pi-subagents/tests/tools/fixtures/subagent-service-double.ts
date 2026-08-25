@@ -16,6 +16,9 @@ type ObservationMethods = Pick<
   | "withAwaitTerminalObservations"
   | "withStatusObservations"
   | "consumeCompletions"
+  | "grantWriteClaims"
+  | "revokeWriteClaims"
+  | "resumeWriterAdmission"
 >;
 
 export type SubagentServiceDoubleInput = Omit<SubagentServiceContract, keyof ObservationMethods> &
@@ -82,6 +85,12 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
           }),
         ),
       ));
+  const grantWriteClaims: SubagentServiceContract["grantWriteClaims"] =
+    base.grantWriteClaims ?? ((id) => base.status(id));
+  const revokeWriteClaims: SubagentServiceContract["revokeWriteClaims"] =
+    base.revokeWriteClaims ?? ((id) => base.status(id));
+  const resumeWriterAdmission: SubagentServiceContract["resumeWriterAdmission"] =
+    base.resumeWriterAdmission ?? ((id) => base.status(id));
   const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] =
     base.withAwaitTerminalObservations ??
     ((ids, until, onUpdate, use) =>
@@ -97,6 +106,9 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     exhaustRetryClaim,
     blockRetryClaim,
     consumeCompletions,
+    grantWriteClaims,
+    revokeWriteClaims,
+    resumeWriterAdmission,
     withStatusObservations,
     withAwaitTerminalObservations,
   };

@@ -67,6 +67,14 @@ export const snapshotView = (view: SubagentRunView): SubagentRunView => {
       skippedCandidates: view.selection.skippedCandidates.map((candidate) => ({ ...candidate })),
     },
     sessionEvents: view.sessionEvents.map((event) => ({ ...event })),
+    writeClaims: view.writeClaims ? [...view.writeClaims] : undefined,
+    writeAudit: view.writeAudit
+      ? {
+          observedFileWrites: [...view.writeAudit.observedFileWrites],
+          violations: view.writeAudit.violations.map((violation) => ({ ...violation })),
+          bashWriteHints: view.writeAudit.bashWriteHints,
+        }
+      : undefined,
     usage: { ...view.usage },
   });
   frozenViewSnapshots.set(view, snapshot);

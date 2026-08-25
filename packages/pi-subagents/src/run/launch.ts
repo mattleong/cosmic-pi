@@ -8,6 +8,7 @@ import type { BackendLaunchRequest, BackendStartupState } from "../backend/model
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import { isRetainableProfileCandidate } from "../profiles/model.ts";
 import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
+import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import { processCapacityError, writerConflictError } from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
 import { childSystemPrompt, taskPrompt } from "./tool-policy.ts";
@@ -35,6 +36,7 @@ import {
   snapshotView,
 } from "./state.ts";
 import { emptyRunWarningSlots } from "./warnings.ts";
+import type { WriterPoolEntry } from "./writer-pool.ts";
 
 export interface RunLaunchDependencies {
   readonly ownerScope: Scope.Scope;
@@ -42,6 +44,8 @@ export interface RunLaunchDependencies {
   readonly writerLeases: WriterLeaseContract;
   /** The service-owned run registry; launch admission inserts and evicts under the lock. */
   readonly records: Map<string, RunRecord>;
+  /** One session-owned cross-process writer pool per canonical cwd digest. */
+  readonly writerPools: Map<string, WriterPoolEntry>;
   /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly publish: Effect.Effect<void>;
@@ -98,6 +102,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     backendRegistry,
     writerLeases,
     records,
+    writerPools,
     withLock,
     publish,
     delivery,
@@ -124,6 +129,19 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             code: "task_required",
             message: "Subagent task is required.",
           });
+        const normalizedClaims =
+          request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
+        if (normalizedClaims && !normalizedClaims.ok)
+          return yield* new InvalidSubagentRequestError({
+            code: normalizedClaims.code,
+            message: normalizedClaims.message,
+          });
+        if (normalizedClaims && request.writeIntent !== "writer")
+          return yield* new InvalidSubagentRequestError({
+            code: "write_claims_read_only",
+            message: "writes may be supplied only for a writer subagent.",
+          });
+        const writeClaims = normalizedClaims?.claims;
         if (request.closeOnReport === false && !isRetainableProfileCandidate(request))
           return yield* new InvalidSubagentRequestError({
             code: "retained_report_capability_invalid",
@@ -188,6 +206,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         const evictionEligible = (record: RunRecord): boolean =>
           !record.cleanupPending &&
           record.process === undefined &&
+          writerPools
+            .get(record.canonicalWriterCwd?.digest ?? "")
+            ?.violationRunIds.has(record.view.id) !== true &&
           record.retryClaim === undefined &&
           record.completionClaims.size === 0 &&
           record.completionGenerations.size === 0 &&
@@ -209,7 +230,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
          * concurrent admission already counted its reservation while reclamation
          * ran), while a fresh admission excludes nothing. Caller must hold the
          * service lock, and every eviction reclaim must already have definitely
-         * succeeded before this deletes the evicted record.
+         * succeeded before this deletes the evicted record. A mutable writer-pool
+         * safety transition may still reject phase C; that path quarantines the
+         * already-reclaimed history record against resume.
          */
         const admitLocked = (evicted: RunRecord | undefined, ownReservation?: RunRecord) =>
           Effect.gen(function* () {
@@ -232,8 +255,11 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             if (canonicalWriterCwd) {
               const writerFailure = writerConflictError(
                 records,
+                writerPools,
                 canonicalWriterCwd,
+                writeClaims,
                 ownReservation,
+                predecessor,
               );
               if (writerFailure) return yield* writerFailure;
             }
@@ -243,20 +269,31 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               delivery.discardQuestionLocked(evicted.view.id);
             }
             // Run scopes are service-owned rather than automatically parent-closed so shutdown
-            // can observe backend cleanup before authorizing the separately scoped writer lease
-            // release. They are created only after every eviction reclaim already succeeded.
+            // can observe backend cleanup before authorizing shared writer-pool lease release.
+            // They are created only after every eviction reclaim already succeeded.
             const scope = yield* Scope.make();
-            // Lease scope is detached from the owner scope so the service finalizer can first
-            // close every backend scope, then authorize and close the corresponding lease scope.
-            const writerLeaseScope = canonicalWriterCwd ? yield* Scope.make() : undefined;
-            const writerLeaseReleaseState = writerLeaseScope ? { authorized: false } : undefined;
-            const writerLeasePreparationSettled = writerLeaseScope
-              ? Deferred.makeUnsafe<void>()
-              : undefined;
             const initializationSettled = Deferred.makeUnsafe<void>();
             const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
             const { id, name } = allocateRunIdentity(requestedName);
             const assignmentAttemptToken = allocateAssignmentAttemptToken();
+            let writerPool: WriterPoolEntry | undefined;
+            if (canonicalWriterCwd) {
+              writerPool = writerPools.get(canonicalWriterCwd.digest);
+              if (!writerPool) {
+                writerPool = {
+                  cwd: canonicalWriterCwd,
+                  leaseScope: yield* Scope.make(),
+                  releaseState: { authorized: false },
+                  preparationSettled: Deferred.makeUnsafe<void, SubagentError>(),
+                  members: new Map(),
+                  violationRunIds: new Set(),
+                  state: "pending",
+                  admissionPaused: false,
+                };
+                writerPools.set(canonicalWriterCwd.digest, writerPool);
+              }
+              writerPool.members.set(id, writeClaims);
+            }
             const view: SubagentRunView = (() => {
               const baseResult = { id, name, task: request.task.trim() };
               const withProfile = request.profile
@@ -277,7 +314,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 remainingCandidateCount === undefined
                   ? withPredecessorRunId
                   : { ...withPredecessorRunId, remainingCandidateCount };
-              const withSelectionAndAdditionalFields = {
+              const withSelectionAndWriteIntent = {
                 ...withRemainingCandidateCount,
                 selection: request.selection ?? {
                   source: "profile-candidate",
@@ -291,6 +328,21 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 state: "starting" as const,
                 context: request.context,
                 writeIntent: request.writeIntent,
+              };
+              const withWriteClaims =
+                writeClaims === undefined
+                  ? withSelectionAndWriteIntent
+                  : {
+                      ...withSelectionAndWriteIntent,
+                      writeClaims,
+                      writeAudit: {
+                        observedFileWrites: [],
+                        violations: [],
+                        bashWriteHints: 0,
+                      },
+                    };
+              return {
+                ...withWriteClaims,
                 fastMode: request.fastMode,
                 host: request.host,
                 runtime: request.runtime,
@@ -304,7 +356,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 sessionEvents: [],
                 usage: emptyUsage(),
               };
-              return withSelectionAndAdditionalFields;
             })();
             const launch: BackendLaunchRequest = (() => {
               const baseResult = {
@@ -338,7 +389,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 : withParentSessionFile;
               const withSystemPrompt = {
                 ...withParentLeafId,
-                systemPrompt: childSystemPrompt(request),
+                systemPrompt: childSystemPrompt(
+                  writeClaims === undefined ? request : { ...request, writes: writeClaims },
+                ),
               };
               return withSystemPrompt;
             })();
@@ -356,21 +409,13 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 stoppedByParent: false,
                 cleanupPending: false,
                 runStateReclaimState: "pending" as const,
+                writeViolationContainmentStarted: false,
               };
               const withCanonicalWriterCwd = canonicalWriterCwd
-                ? { ...baseResult, canonicalWriterCwd }
+                ? { ...baseResult, canonicalWriterCwd, writerPool }
                 : baseResult;
-              const withWriterLeaseScopeAndAdditionalFields = writerLeaseScope
-                ? {
-                    ...withCanonicalWriterCwd,
-                    writerLeaseScope,
-                    writerLeasePreparationState: "pending" as const,
-                    writerLeasePreparationSettled,
-                    writerLeaseReleaseState,
-                  }
-                : withCanonicalWriterCwd;
               const withInitializationPendingAndAdditionalFields = {
-                ...withWriterLeaseScopeAndAdditionalFields,
+                ...withCanonicalWriterCwd,
                 initializationPending: true,
                 initializationSettled,
                 notificationGeneration: 0,
@@ -433,11 +478,18 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                   const capacityFailure = processCapacityError(records);
                   if (capacityFailure) return yield* capacityFailure;
                   if (canonicalWriterCwd) {
-                    const writerFailure = writerConflictError(records, canonicalWriterCwd);
+                    const writerFailure = writerConflictError(
+                      records,
+                      writerPools,
+                      canonicalWriterCwd,
+                      writeClaims,
+                      undefined,
+                      request.supersedes ? records.get(request.supersedes.runId) : undefined,
+                    );
                     if (writerFailure) return yield* writerFailure;
                   }
                   candidate.evictionClaim = canonicalWriterCwd
-                    ? { writerCwdDigest: canonicalWriterCwd.digest }
+                    ? { writerCwdDigest: canonicalWriterCwd.digest, writeClaims }
                     : {};
                   return { kind: "reclaim" as const, candidate };
                 }
@@ -448,8 +500,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         /**
          * Phase C: after a definite reclaim success, revalidate this start's
          * exclusive claim and the candidate's eligibility under the lock, then
-         * perform the atomic delete+insert. Admission is the only outcome; a
-         * second reclamation phase is impossible by construction.
+         * perform the atomic delete+insert. A second reclamation phase is
+         * impossible; any post-reclaim admission rejection quarantines the old
+         * record because its resumable private state is already gone.
          */
         const admitReclaimed = (candidate: RunRecord): Effect.Effect<RunRecord, SubagentError> =>
           withLock(
@@ -482,12 +535,19 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 ),
                 Effect.andThen(
                   admitReclaimed(attempt.candidate).pipe(
-                    Effect.onError(() => clearEvictionClaim(attempt.candidate)),
+                    Effect.onError(() =>
+                      quarantineReclaimFailure(attempt.candidate).pipe(
+                        Effect.andThen(clearEvictionClaim(attempt.candidate)),
+                      ),
+                    ),
                   ),
                 ),
               );
         const peerNotice = peerNoticeText(records.values(), reserved.view.id);
-        const initialPrompt = taskPrompt(request, peerNotice);
+        const initialPrompt = taskPrompt(
+          writeClaims === undefined ? request : { ...request, writes: writeClaims },
+          peerNotice,
+        );
         const initialize = Effect.gen(function* () {
           const state = yield* initializeProcess(reserved);
           // Let a terminal frame already queued behind the initialization state

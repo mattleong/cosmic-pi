@@ -24,6 +24,7 @@ import { renderSubagentStartCall } from "./render-start.ts";
 
 import {
   AwaitParameters,
+  ClaimsParameters,
   LifecycleParameters,
   ListParameters,
   ModelsParameters,
@@ -37,6 +38,7 @@ import {
 
 export type {
   SubagentAwaitInput,
+  SubagentClaimsInput,
   SubagentLifecycleInput,
   SubagentListInput,
   SubagentModelsInput,
@@ -145,15 +147,15 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: SUBAGENT_TOOL_NAMES[1],
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped background subagents for bounded, independent workstreams such as codebase reconnaissance, external research, planning, and independent review. Start is nonblocking: launch a batch early and continue working. Every task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Each item accepts only task, optional profile, and optional name. The selected profile supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped background subagents for bounded, independent workstreams such as codebase reconnaissance, external research, planning, independent review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. A claimless writer remains exclusive; writers with disjoint claims may share the checkout cooperatively. Native edit, write, and Bash are unchanged. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through.",
     promptSnippet:
       "Parallelize independent reconnaissance, research, planning, and review with background subagents",
     promptGuidelines: [
       "Before substantial work, check for independent workstreams. When two or more exist, use subagent_start early to launch one to three read-only subagents in one batch; skip subagent_start only for trivial or tightly serial tasks.",
       "Use subagent_start for bounded slices rather than the whole assignment: give each scout one narrow reconnaissance question and a concrete deliverable while allowing it to follow relevant evidence as deeply as needed; use researcher for sourced external research, planner for implementation planning, reviewer for independent verification, oracle for inherited-decision analysis, and generalist for other read-only work.",
-      "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. Each agent item accepts task, optional profile, and optional name; the selected version 4 profile exclusively supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport.",
+      "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. The selected version 4 profile exclusively supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport; writes only narrows a writer to exact cooperative file claims.",
       "After subagent_start, continue independent work instead of waiting idle. Use subagent_await only when progress or final synthesis depends on a report; unclaimed completion reports are delivered automatically.",
-      "Use subagent_start with profile=worker only for an explicit implementation handoff while the main agent does not edit. Keep one writer in the shared cwd, counting the main agent, and serialize writers unless isolated worktrees are available.",
+      "Use profile=worker only for explicit implementation handoffs. While any writer pool is active, the parent coordinates and reviews but does not edit. Launch multiple shared-cwd writers only with pairwise-disjoint exact writes claims; native tools and Bash are cooperative rather than per-file sandboxed.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",
       "When a profiled run fails and its status reports remaining route candidates, call subagent_lifecycle with action=retry for that run before launching any generalist replacement. Retry creates a new run on the next candidate from the original frozen route and never re-attempts the failed candidate.",
     ],
@@ -282,6 +284,52 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     renderResult: sharedRenderResult,
   });
 
-  for (const tool of [models, start, list, status, awaitTool, send, reply, lifecycle, rename])
+  const claims = defineTool({
+    name: SUBAGENT_TOOL_NAMES[9],
+    label: "Manage Writer Claims",
+    description:
+      "Inspect, grant, or revoke exact cooperative file claims for active shared-cwd writers, or resume writer admission after reviewing a claim violation. Grant and revoke require the worker to be blocked on a parent claim question with no other active tool. This coordinates native edit, write, and Bash; it does not replace or sandbox them.",
+    promptSnippet: "Coordinate exact file ownership for shared-cwd writer pools",
+    promptGuidelines: [
+      "When a writer requests another file, grant it with subagent_claims before replying. Only the parent grants or transfers claims.",
+      "Revoke or transfer a claim only while its current owner is waiting on a parent claim question with no other active tool. Resume paused writer admission only after inspecting the violation and shared tree.",
+    ],
+    parameters: ClaimsParameters,
+    execute: (_id, input, signal, onUpdate, ctx) =>
+      executeSubagentAction(
+        pi,
+        runtime,
+        { action: "claims", operation: input },
+        signal,
+        onUpdate,
+        ctx,
+      ),
+    renderCall: (args, theme) =>
+      renderSubagentCall(
+        args.action === "list"
+          ? "Inspect writer claims"
+          : args.action === "resume_admission"
+            ? "Resume writer admission"
+            : `${args.action === "grant" ? "Grant" : "Revoke"} writer claims`,
+        args.action === "list"
+          ? args.runIds.join(", ")
+          : `${args.runId}${"paths" in args ? ` · ${args.paths.join(", ")}` : ""}`,
+        theme,
+      ),
+    renderResult: sharedRenderResult,
+  });
+
+  for (const tool of [
+    models,
+    start,
+    list,
+    status,
+    awaitTool,
+    send,
+    reply,
+    lifecycle,
+    rename,
+    claims,
+  ])
     pi.registerTool(withCodePreviewShell(tool));
 }

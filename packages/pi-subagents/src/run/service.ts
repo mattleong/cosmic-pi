@@ -45,6 +45,8 @@ import {
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
 import { snapshotView } from "./state.ts";
+import type { WriterPoolEntry } from "./writer-pool.ts";
+import { makeRunWriteClaimControl } from "./write-claim-control.ts";
 
 let nextRuntimeNamespace = 1;
 const allocateRuntimeNamespace = (): string => `r${(nextRuntimeNamespace++).toString(36)}`;
@@ -120,6 +122,15 @@ export interface SubagentServiceContract {
   readonly resume: (id: string, message?: string) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly rename: (id: string, name: string) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly stop: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly grantWriteClaims: (
+    id: string,
+    paths: ReadonlyArray<string>,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly revokeWriteClaims: (
+    id: string,
+    paths: ReadonlyArray<string>,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly resumeWriterAdmission: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly projection: Effect.Effect<SubagentProjection>;
 }
 
@@ -167,6 +178,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
+  const writerPools = new Map<string, WriterPoolEntry>();
   const initialProjection: SubagentProjection = Object.freeze({
     revision: 0,
     runs: Object.freeze([]),
@@ -272,7 +284,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     retainCleanupQuarantine,
     closeRecordScope,
     closeExitedScope,
-  } = makeRunRecordCleanup({ withLock, publish, writerLeases });
+  } = makeRunRecordCleanup({ withLock, publish, writerLeases, writerPools });
 
   let sendPeerNotices: (changedId: string) => Effect.Effect<void>;
   let initializeProcess: (record: RunRecord) => Effect.Effect<BackendStartupState, SubagentError>;
@@ -284,6 +296,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   let steerBackend: (record: RunRecord, message: string) => Effect.Effect<void, SubagentError>;
   let interruptBackend: (record: RunRecord) => Effect.Effect<void, SubagentError>;
   let renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
+  let containWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
 
   const { mutateEventView, mergeLateUsage, pauseFromEvent, failPendingResponses, settle, failRun } =
     makeRunSettlement({
@@ -319,6 +332,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     acceptReport: acceptBackendReport,
     notify: delivery.queueActionNotification,
     failRun,
+    onWriteClaimViolation: (record, message) => containWriteClaimViolation(record, message),
   });
 
   ({
@@ -356,6 +370,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     backendRegistry,
     writerLeases,
     records,
+    writerPools,
     withLock,
     publish,
     delivery,
@@ -404,6 +419,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const { resume } = makeRunResume({
     ownerScope,
     records,
+    writerPools,
     withLock,
     publish,
     writerLeases,
@@ -439,6 +455,55 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     settle,
   });
 
+  containWriteClaimViolation = (record, message) =>
+    withLock(
+      Effect.gen(function* () {
+        if (record.writeViolationContainmentStarted) return false;
+        const pool = record.writerPool;
+        if (!pool) return false;
+        record.writeViolationContainmentStarted = true;
+        pool.admissionPaused = true;
+        pool.violationRunIds.add(record.view.id);
+        pool.pauseReason = message;
+        for (const memberId of pool.members.keys()) {
+          const member = records.get(memberId);
+          if (member && member.view.writeAdmissionPaused !== true)
+            member.view = { ...member.view, writeAdmissionPaused: true };
+        }
+        yield* publish;
+        return hasSubagentCapability(record.view, "interrupt") &&
+          (record.view.state === "running" || record.view.state === "waiting_for_parent")
+          ? ("interrupt" as const)
+          : record.view.state === "starting"
+            ? ("stop" as const)
+            : undefined;
+      }),
+    ).pipe(
+      Effect.flatMap((containmentAction) => {
+        if (!containmentAction) return Effect.void;
+        const containment =
+          containmentAction === "interrupt" ? interrupt(record.view.id) : stop(record.view.id);
+        return containment.pipe(
+          Effect.catch((error) =>
+            Effect.logWarning(`Could not contain write-claim violation: ${error.message}`).pipe(
+              Effect.annotateLogs("runId", record.view.id),
+            ),
+          ),
+          Effect.forkIn(ownerScope, { startImmediately: true }),
+          Effect.asVoid,
+        );
+      }),
+    );
+
+  const writeClaims = makeRunWriteClaimControl({
+    records,
+    writerPools,
+    withLock,
+    publish,
+    requireRecord,
+    sendPeerNotices,
+  });
+
   const projection = SubscriptionRef.get(projectionRef);
 
   const service: SubagentServiceContract = {
@@ -461,6 +526,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     resume,
     rename,
     stop,
+    grantWriteClaims: writeClaims.grant,
+    revokeWriteClaims: writeClaims.revoke,
+    resumeWriterAdmission: writeClaims.resumeAdmission,
     projection,
   };
 

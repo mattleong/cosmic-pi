@@ -14,6 +14,7 @@ import {
   type ProfileRouteSource,
 } from "../profiles/model.ts";
 import type { SubagentRunView, SubagentUsage } from "../run/model.ts";
+import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
 import {
   MAX_ERROR_CHARS,
@@ -81,7 +82,8 @@ type RunDetailsAction =
   | "interrupt"
   | "resume"
   | "stop"
-  | "rename";
+  | "rename"
+  | "claims";
 
 export interface StartDetailsInput {
   readonly startEntries: ReadonlyArray<SubagentStartEntry>;
@@ -223,6 +225,55 @@ const projectSelection = (
   return warning === undefined ? withCandidate : { ...withCandidate, warning };
 };
 
+const projectWriteCardFields = (
+  run: SubagentRunView,
+  density: DetailDensity,
+): Partial<SubagentRunCard> => {
+  const base = {};
+  const claimLimit = density === "full" ? MAX_WRITE_CLAIMS : density === "compact" ? 16 : 4;
+  const projectedClaims = run.writeClaims
+    ? run.writeClaims
+        .slice(0, claimLimit)
+        .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file"))
+    : undefined;
+  const withClaims = projectedClaims
+    ? {
+        ...base,
+        writeClaims: projectedClaims,
+        writeClaimCount: nonNegativeInteger(run.writeClaims?.length ?? 0),
+      }
+    : base;
+  const withClaimOmission =
+    run.writeClaims && run.writeClaims.length > claimLimit
+      ? { ...withClaims, writeClaimsOmitted: true as const }
+      : withClaims;
+  const observedLimit = density === "full" ? 64 : density === "compact" ? 16 : 0;
+  const violationLimit = density === "full" ? 16 : density === "compact" ? 8 : 0;
+  const withAudit = run.writeAudit
+    ? {
+        ...withClaimOmission,
+        writeAudit: {
+          observedFileWrites: (observedLimit === 0
+            ? []
+            : run.writeAudit.observedFileWrites.slice(-observedLimit)
+          ).map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
+          violations: (violationLimit === 0
+            ? []
+            : run.writeAudit.violations.slice(-violationLimit)
+          ).map((violation) => ({
+            path: requiredText(violation.path, MAX_WRITE_CLAIM_CHARS, "unknown-file"),
+            toolName: requiredText(violation.toolName, 200, "unknown-tool"),
+            observedAt: nonNegative(violation.observedAt),
+          })),
+          bashWriteHints: nonNegativeInteger(run.writeAudit.bashWriteHints),
+        },
+      }
+    : withClaimOmission;
+  return run.writeAdmissionPaused === true
+    ? { ...withAudit, writeAdmissionPaused: true as const }
+    : withAudit;
+};
+
 const projectOptionalCardFields = (
   run: SubagentRunView,
   density: DetailDensity,
@@ -266,6 +317,7 @@ export const projectSubagentRunCard = (
     lastActivityAt: nonNegative(run.lastActivityAt),
     usage: projectUsage(run.usage),
     selection: projectSelection(run.selection, density),
+    ...projectWriteCardFields(run, density),
     ...projectOptionalCardFields(run, density),
   };
   const withProfile = profile === undefined ? base : { ...base, profile };

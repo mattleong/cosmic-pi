@@ -79,6 +79,11 @@ export function fakeChildLayer(
       readonly type: RpcCommand["type"];
       readonly code: string;
     }>;
+    readonly initialSendGates?: ReadonlyArray<{
+      readonly spawnIndex: number;
+      readonly type: RpcCommand["type"];
+      readonly gate: Deferred.Deferred<void, never>;
+    }>;
   } = {},
 ) {
   const controls: FakeChildControl[] = [];
@@ -129,7 +134,9 @@ export function fakeChildLayer(
           const sendGates: Array<{
             readonly type: RpcCommand["type"];
             readonly gate: Deferred.Deferred<void, never>;
-          }> = [];
+          }> = (options.initialSendGates ?? [])
+            .filter((candidate) => candidate.spawnIndex === spawnIndex)
+            .map(({ type, gate }) => ({ type, gate }));
           const ipcGates: Array<Deferred.Deferred<void, never>> = [];
           const beforeResponses: Array<{
             readonly type: RpcCommand["type"];

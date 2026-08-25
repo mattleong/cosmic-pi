@@ -20,6 +20,8 @@ import {
   type ProfileCandidate,
 } from "../profiles/model.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
+import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
 import { PI_SUBAGENT_CAPABILITIES, SUBAGENT_RUN_STATES } from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
 
@@ -92,6 +94,21 @@ const SelectionSchema = Schema.Struct({
   warning: Schema.optionalKey(boundedString(MAX_CARD_PROVENANCE_CHARS, 1)),
 });
 
+const WriteClaimViolationSchema = Schema.Struct({
+  path: boundedString(MAX_WRITE_CLAIM_CHARS, 1),
+  toolName: boundedString(200, 1),
+  observedAt: nonNegativeNumber,
+});
+
+const WriteAuditSchema = Schema.Struct({
+  observedFileWrites: boundedArray(
+    boundedString(MAX_WRITE_CLAIM_CHARS, 1),
+    MAX_OBSERVED_WRITE_PATHS,
+  ),
+  violations: boundedArray(WriteClaimViolationSchema, MAX_WRITE_CLAIM_VIOLATIONS),
+  bashWriteHints: nonNegativeInteger,
+});
+
 export const SubagentRunCardSchema = Schema.Struct({
   id: boundedString(MAX_PROTOCOL_ID_CHARS, 1),
   name: boundedString(MAX_NAME_CHARS, 1),
@@ -106,6 +123,15 @@ export const SubagentRunCardSchema = Schema.Struct({
   fastMode: Schema.Boolean,
   context: ContextSchema,
   writeIntent: WriteIntentSchema,
+  writeClaims: Schema.optionalKey(
+    boundedArray(boundedString(MAX_WRITE_CLAIM_CHARS, 1), MAX_WRITE_CLAIMS).check(
+      Schema.isMinLength(1),
+    ),
+  ),
+  writeClaimCount: Schema.optionalKey(nonNegativeInteger),
+  writeClaimsOmitted: Schema.optionalKey(Schema.Literal(true)),
+  writeAudit: Schema.optionalKey(WriteAuditSchema),
+  writeAdmissionPaused: Schema.optionalKey(Schema.Literal(true)),
   capabilities: boundedArray(
     Schema.Literals(PI_SUBAGENT_CAPABILITIES),
     PI_SUBAGENT_CAPABILITIES.length,
@@ -259,6 +285,7 @@ export const CompactSubagentToolDetailsSchema = Schema.Union([
   runActionSchema("resume"),
   runActionSchema("stop"),
   runActionSchema("rename"),
+  runActionSchema("claims"),
 ]);
 
 export const SubagentStartAwaitCardDetailsSchema = Schema.Union([
@@ -332,6 +359,7 @@ const RUN_ACTIONS = new Set([
   "resume",
   "stop",
   "rename",
+  "claims",
 ]);
 
 const recordOf = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
@@ -376,6 +404,16 @@ const preflightCard = <ValueInput>(value: ValueInput): boolean => {
   const card = recordOf(value);
   if (!card) return true;
   if (!preflightArray(card, "capabilities", PI_SUBAGENT_CAPABILITIES.length)) return false;
+  if (!preflightArray(card, "writeClaims", MAX_WRITE_CLAIMS)) return false;
+  if (hasOwn(card, "writeAudit")) {
+    const audit = recordOf(readKnown(card, "writeAudit"));
+    if (
+      audit &&
+      (!preflightArray(audit, "observedFileWrites", MAX_OBSERVED_WRITE_PATHS) ||
+        !preflightArray(audit, "violations", MAX_WRITE_CLAIM_VIOLATIONS))
+    )
+      return false;
+  }
   if (!hasOwn(card, "selection")) return true;
   const selection = recordOf(readKnown(card, "selection"));
   return !selection || preflightArray(selection, "skippedCandidates", MAX_CARD_SKIPS);

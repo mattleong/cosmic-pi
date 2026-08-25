@@ -87,6 +87,18 @@ export interface PendingParentQuestion {
   readonly createdAt: number;
 }
 
+export interface WriteClaimViolation {
+  readonly path: string;
+  readonly toolName: string;
+  readonly observedAt: number;
+}
+
+export interface SubagentWriteAudit {
+  readonly observedFileWrites: ReadonlyArray<string>;
+  readonly violations: ReadonlyArray<WriteClaimViolation>;
+  readonly bashWriteHints: number;
+}
+
 export interface SubagentRunView {
   readonly id: string;
   readonly name: string;
@@ -107,6 +119,10 @@ export interface SubagentRunView {
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
+  /** Exact cooperative file claims. Absent on a writer means exclusive whole-cwd ownership. */
+  readonly writeClaims?: ReadonlyArray<string> | undefined;
+  readonly writeAudit?: SubagentWriteAudit | undefined;
+  readonly writeAdmissionPaused?: boolean | undefined;
   readonly fastMode: boolean;
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -150,6 +166,8 @@ export interface StartSubagentRequest {
   readonly task: string;
   readonly profile?: ProfileId | undefined;
   readonly profileGuidance?: string | undefined;
+  /** Exact workspace-relative file claims; absent means an exclusive writer. */
+  readonly writes?: ReadonlyArray<string> | undefined;
   readonly selection?: SubagentSelectionProvenance | undefined;
   /** Frozen configured route and cursor; never accepted from the public start schema. */
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
