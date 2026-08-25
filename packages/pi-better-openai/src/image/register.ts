@@ -10,16 +10,47 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import { withCodePreviewShell } from "pi-code-previews";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
-import { isImageContent, resultText } from "./helpers.ts";
 import { describeHostFailure } from "../ui/notify-text.ts";
 import { OpenAIImageService } from "./service.ts";
-import {
-  OPENAI_IMAGE_COMMAND,
-  OPENAI_IMAGE_TOOL,
-  TOOL_PARAMS,
-  type CodexImageResult,
-  type ToolParams,
-} from "./types.ts";
+import { TOOL_PARAMS, type CodexImageResult, type ToolParams } from "./types.ts";
+
+const OPENAI_IMAGE_TOOL = "openai_image";
+const OPENAI_IMAGE_COMMAND = "openai-image";
+
+const resultText = (result: CodexImageResult): string => {
+  const parts = [
+    `Generated image using OpenAI image_generation tool via openai-codex/${result.model}.`,
+    `Action: ${result.action}.`,
+    `Prompt: ${result.prompt}`,
+  ];
+  if (result.revisedPrompt) parts.push(`Revised prompt: ${result.revisedPrompt}`);
+  if (result.savedPath) parts.push(`Saved: ${result.savedPath}`);
+  return parts.join("\n");
+};
+
+const isOptionalString = <Value>(value: Value): value is Value & (string | undefined) =>
+  value === undefined || Predicate.isString(value);
+
+const isCodexImageResult = <Value>(value: Value): value is Value & CodexImageResult =>
+  Predicate.isObject(value) &&
+  Predicate.isString(value.id) &&
+  Predicate.isString(value.status) &&
+  Predicate.isString(value.prompt) &&
+  isOptionalString(value.revisedPrompt) &&
+  Predicate.isString(value.data) &&
+  Predicate.isString(value.mimeType) &&
+  isOptionalString(value.savedPath) &&
+  Predicate.isString(value.model) &&
+  Predicate.isString(value.action) &&
+  Predicate.isString(value.outputFormat);
+
+const isImageContent = <Value>(
+  value: Value,
+): value is Value & { type: "image"; data: string; mimeType: string } =>
+  Predicate.isObject(value) &&
+  value.type === "image" &&
+  Predicate.isString(value.data) &&
+  Predicate.isString(value.mimeType);
 
 export function registerOpenAIImage(
   pi: ExtensionAPI,
@@ -34,24 +65,17 @@ export function registerOpenAIImage(
   };
   pi.registerMessageRenderer<CodexImageResult>("openai-image", (message, _options, theme) => {
     const result = message.details;
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const text =
-      result && Predicate.isObject(result)
-        ? resultText(result as CodexImageResult)
-        : Predicate.isString(message.content)
-          ? message.content
-          : message.content
-              .filter((part) => part.type === "text")
-              .map((part) => part.text)
-              .join("\n");
+    const text = isCodexImageResult(result)
+      ? resultText(result)
+      : Predicate.isString(message.content)
+        ? message.content
+        : message.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n");
     let image: { data: string; mimeType: string; savedPath?: string } | undefined;
-    if (
-      result &&
-      Predicate.isObject(result) &&
-      Predicate.isString(result.data) &&
-      Predicate.isString(result.mimeType)
-    )
-      image = Predicate.isString(result.savedPath)
+    if (isCodexImageResult(result))
+      image = result.savedPath
         ? { data: result.data, mimeType: result.mimeType, savedPath: result.savedPath }
         : { data: result.data, mimeType: result.mimeType };
     else if (Array.isArray(message.content)) {

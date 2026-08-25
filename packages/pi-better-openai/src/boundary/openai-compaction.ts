@@ -17,7 +17,10 @@ const AuthSchema = Schema.Union([
   }),
   Schema.Struct({ ok: Schema.Literal(false), error: Schema.String }),
 ]);
-const NonNegativeNumberSchema = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
+const NonNegativeIntegerSchema = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
 const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
 const CompactRequestSchema = Schema.Struct({
   model: Schema.String,
@@ -30,9 +33,9 @@ const CompactedResponseSchema = Schema.Struct({
   object: Schema.Literal("response.compaction"),
   output: Schema.Array(JsonObjectSchema),
   usage: Schema.Struct({
-    input_tokens: NonNegativeNumberSchema,
-    output_tokens: NonNegativeNumberSchema,
-    total_tokens: NonNegativeNumberSchema,
+    input_tokens: NonNegativeIntegerSchema,
+    output_tokens: NonNegativeIntegerSchema,
+    total_tokens: NonNegativeIntegerSchema,
   }),
 });
 

@@ -8,17 +8,7 @@ import {
 
 export { IMAGE_OUTPUT_FORMATS, IMAGE_SAVE_MODES, type ImageOutputFormat, type ImageSaveMode };
 
-export const OPENAI_IMAGE_TOOL = "openai_image";
-export const OPENAI_IMAGE_COMMAND = "openai-image";
-export const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
-export const DEFAULT_TIMEOUT_MS = 180_000;
-export const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGE_INPUTS = 5;
-export const MAX_TOTAL_IMAGE_INPUT_BYTES = 50 * 1024 * 1024;
-export const MAX_IMAGE_RESPONSE_BYTES = 100 * 1024 * 1024;
-export const MAX_SSE_EVENT_CHARS = 80 * 1024 * 1024;
-export const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
-export const SUPPORTED_INPUT_IMAGE_FORMATS = new Set(["png", "jpeg", "jpg", "webp", "gif"]);
 export const IMAGE_ACTIONS = ["auto", "generate", "edit"] as const;
 export type ImageAction = (typeof IMAGE_ACTIONS)[number];
 
@@ -67,10 +57,8 @@ export const ToolParamsSchema = Schema.Struct({
   save: Schema.optional(Schema.Literals(IMAGE_SAVE_MODES)),
   saveDir: Schema.optional(boundedString(PATH_MAX_LENGTH)),
 });
-export const TOOL_PARAM_KEYS = new Set(Object.keys(TOOL_PARAMS.properties));
 export type ToolParams = typeof ToolParamsSchema.Type;
 export type ImageInput = {
-  readonly path: string;
   readonly data: string;
   readonly mimeType: string;
 };

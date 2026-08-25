@@ -18,38 +18,52 @@ import {
   sanitizeDiagnosticError,
   StreamingHttpClient,
 } from "pi-cosmic-core";
-import { SharpAdapter } from "../boundary/sharp.ts";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
+import { SharpAdapter } from "../boundary/sharp.ts";
+import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../config/schema.ts";
+import type { OpenAIProjection } from "../usage/projection.ts";
 import { makeImageInputReader } from "./input.ts";
-import { makeImageOutput } from "./output.ts";
+import { imageOutputMetadata, makeImageOutput } from "./output.ts";
+import { buildImageRequest, ImageRequestSchema } from "./protocol.ts";
 import { parseImageSse } from "./stream.ts";
-import { ImageRequestSchema } from "./protocol.ts";
-import type { OpenAIProjection } from "../usage/index.ts";
-import { buildRequest, imageMimeType, resolveImageConfig, resolveModel } from "./helpers.ts";
 import {
-  CODEX_RESPONSES_URL,
-  DEFAULT_TIMEOUT_MS,
-  OpenAIImageError,
-  TOOL_PARAM_KEYS,
+  TOOL_PARAMS,
   ToolParamsSchema,
   fail,
   type CodexImageResult,
+  type ImageAction,
+  type ImageOutputFormat,
+  type ImageSaveMode,
+  type ToolParams,
 } from "./types.ts";
 
-export interface OpenAIImageServiceContract {
-  readonly generate: <Params>(params: Params) => Effect.Effect<CodexImageResult, OpenAIImageError>;
+const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
+const TOOL_PARAM_KEYS = new Set(Object.keys(TOOL_PARAMS.properties));
+
+const resolveModel = (
+  params: Pick<ToolParams, "model">,
+  ctx: ExtensionContext,
+  cfg: ResolvedConfig,
+): string => {
+  const requested = params.model?.trim();
+  if (requested)
+    return requested.includes("/") ? requested.split("/").pop() || requested : requested;
+  const currentModel = ctx.model;
+  return currentModel?.provider === "openai-codex"
+    ? (currentModel.id ?? cfg.image.defaultModel)
+    : cfg.image.defaultModel;
+};
+
+interface OpenAIImageServiceOptions {
+  readonly context: MutableRef.MutableRef<ExtensionContext>;
+  readonly projection: MutableRef.MutableRef<OpenAIProjection>;
+  readonly agentDir?: string;
 }
-export class OpenAIImageService extends Context.Service<
-  OpenAIImageService,
-  OpenAIImageServiceContract
->()("pi-better-openai/image/service/OpenAIImageService") {
-  static layer(options: {
-    readonly context: MutableRef.MutableRef<ExtensionContext>;
-    readonly projection: MutableRef.MutableRef<OpenAIProjection>;
-    readonly agentDir?: string;
-  }) {
-    return Layer.effect(
-      this,
+
+export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
+  "pi-better-openai/image/service/OpenAIImageService",
+  {
+    make: (options: OpenAIImageServiceOptions) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -71,6 +85,8 @@ export class OpenAIImageService extends Context.Service<
         const { validatedGeneratedImage, persistImage } = makeImageOutput({ fs, path, sharp });
         const generate = Effect.fn("OpenAIImage.generate")(function* <RawParams>(
           rawParams: RawParams,
+          ctx: ExtensionContext,
+          cfg: ResolvedConfig | undefined,
         ) {
           const parameterKeys = yield* Effect.try({
             try: () => (Predicate.isObject(rawParams) ? Object.keys(rawParams) : undefined),
@@ -81,8 +97,6 @@ export class OpenAIImageService extends Context.Service<
           const params = yield* Schema.decodeUnknownEffect(ToolParamsSchema)(rawParams).pipe(
             Effect.mapError(imageError("params", "Invalid OpenAI image parameters.")),
           );
-          const ctx = MutableRef.get(options.context);
-          const cfg = MutableRef.get(options.projection).config;
           if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
           if (!cfg.image.enabled)
             return yield* fail("config", "OpenAI image generation is disabled in config.");
@@ -94,7 +108,10 @@ export class OpenAIImageService extends Context.Service<
             try: () => resolveModel(params, ctx, cfg),
             catch: imageError("context", "Unable to read the Pi model context."),
           });
-          const { action, outputFormat, save } = resolveImageConfig(cfg, params);
+          const action: ImageAction = params.action ?? "auto";
+          const outputFormat: ImageOutputFormat = params.outputFormat ?? cfg.image.outputFormat;
+          const save: ImageSaveMode = params.save ?? cfg.image.defaultSave;
+          const output = imageOutputMetadata(outputFormat);
           const customDirectory =
             params.saveDir?.trim() || Option.getOrUndefined(customSaveDir)?.trim();
           const resolveCustomDirectory = (directory: string | undefined) => {
@@ -137,23 +154,25 @@ export class OpenAIImageService extends Context.Service<
                 },
               },
               ImageRequestSchema,
-              buildRequest(params, model, cfg, inputs),
+              buildImageRequest({
+                prompt: params.prompt,
+                model,
+                action,
+                outputFormat,
+                images: inputs,
+              }),
             )
             .pipe(
               Effect.mapError(imageError("request", "Codex image request failed.")),
               Effect.withSpan("pi-better-openai.image.request"),
             );
           if (response.status < 200 || response.status >= 300) {
-            yield* response.discardRawBody.pipe(
-              Effect.timeout("1 second"),
-              Effect.catch(() => Effect.void),
-            );
+            yield* response.discardRawBody.pipe(Effect.timeout("1 second"), Effect.ignore);
             return yield* fail("request", `Codex image request failed (${response.status}).`);
           }
-          const parsed = yield* parseImageSse(
-            response.rawBody,
-            imageMimeType(`image.${outputFormat}`, outputFormat),
-          ).pipe(Effect.withSpan("pi-better-openai.image.stream"));
+          const parsed = yield* parseImageSse(response.rawBody, output.mimeType).pipe(
+            Effect.withSpan("pi-better-openai.image.stream"),
+          );
           const validated = yield* validatedGeneratedImage(parsed, outputFormat).pipe(
             Effect.withSpan("pi-better-openai.image.convert"),
           );
@@ -176,31 +195,31 @@ export class OpenAIImageService extends Context.Service<
           return result;
         });
         const safeGenerate = <Params>(params: Params) =>
-          Effect.suspend(() =>
-            generate(params).pipe(
-              Effect.timeout(
-                Duration.millis(
-                  MutableRef.get(options.projection).config?.image.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-                ),
-              ),
-            ),
-          ).pipe(
+          Effect.suspend(() => {
+            const ctx = MutableRef.get(options.context);
+            const cfg = MutableRef.get(options.projection).config;
+            const timeoutMs = cfg?.image.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs;
+            return generate(params, ctx, cfg).pipe(Effect.timeout(Duration.millis(timeoutMs)));
+          }).pipe(
             Effect.mapError((error) => {
               const message = sanitizeDiagnosticError(
-                "message" in error && Predicate.isString(error.message)
+                Predicate.isObject(error) && Predicate.isString(error.message)
                   ? error.message
                   : "OpenAI image request timed out.",
               );
               return fail(
-                "operation" in error && Predicate.isString(error.operation)
+                Predicate.isObject(error) && Predicate.isString(error.operation)
                   ? error.operation
                   : "timeout",
                 message,
               );
             }),
           );
-        return OpenAIImageService.of({ generate: safeGenerate });
+        return { generate: safeGenerate };
       }),
-    );
+  },
+) {
+  static layer(options: OpenAIImageServiceOptions) {
+    return Layer.effect(this, this.make(options));
   }
 }

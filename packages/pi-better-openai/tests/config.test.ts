@@ -7,12 +7,15 @@ import {
   InvalidSettingError,
   SETTINGS_OPTION_DESCRIPTORS,
   prepareSettingUpdate,
+} from "../src/config/options.ts";
+import type { ConfigFile } from "../src/config/schema.ts";
+import {
   configPaths,
   readConfig,
   readRawConfig,
   resolveConfig,
   writeConfig,
-} from "../src/config/index.ts";
+} from "../src/config/store.ts";
 
 const temp = FileSystem.FileSystem.pipe(
   Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "pi-better-openai-config-" })),
@@ -81,6 +84,33 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       expect(resolved.usage.refreshIntervalMs).toBe(15_000);
       expect(resolved.image.timeoutMs).toBe(30_000);
     }),
+  );
+
+  it.effect.each([
+    [
+      "project desiredActive",
+      { desiredActive: false, active: true },
+      { desiredActive: true, active: true },
+      false,
+    ],
+    ["project legacy active", { active: true }, { desiredActive: false }, true],
+    ["global desiredActive", undefined, { desiredActive: false, active: true }, false],
+    ["global legacy active", undefined, { active: true }, true],
+    ["default", undefined, undefined, false],
+  ] as const)(
+    "resolves desired fast state with legacy precedence from %s",
+    ([, project, global, expected]) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const root = yield* temp;
+        const agent = path.join(root, "agent");
+        const paths = yield* configPaths(root, agent);
+        if (project) yield* writeConfig(paths.project, project satisfies ConfigFile);
+        if (global) yield* writeConfig(paths.global, global satisfies ConfigFile);
+
+        const resolved = yield* resolveConfig(root, agent, true);
+        expect(resolved.desiredActive).toBe(expected);
+      }),
   );
 
   it.effect.each([

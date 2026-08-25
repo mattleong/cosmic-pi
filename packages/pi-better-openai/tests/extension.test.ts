@@ -53,6 +53,7 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
     const handlers = new Map<string, Handler[]>();
     const commands = new Map<string, Command>();
     let tool: any;
+    let toolActivations = 0;
     const piFixture = {
       on(name: string, handler: Handler) {
         handlers.set(name, [...(handlers.get(name) ?? []), handler]);
@@ -65,6 +66,7 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
       getThinkingLevel: vi.fn(() => "off"),
       registerTool(value: any) {
         tool = value;
+        toolActivations++;
       },
       registerMessageRenderer: vi.fn(),
       sendMessage: vi.fn(),
@@ -111,20 +113,13 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
       get tool() {
         return tool;
       },
+      get toolActivations() {
+        return toolActivations;
+      },
       pi,
       emit,
     };
   });
-
-function stalledStartup() {
-  const started = Deferred.makeUnsafe<void>();
-  let interruptions = 0;
-  const effect = Deferred.succeed(started, undefined).pipe(
-    Effect.andThen(Effect.never),
-    Effect.ensuring(Effect.sync(() => void interruptions++)),
-  );
-  return { effect, started, interruptions: () => interruptions };
-}
 
 function deferredPromise() {
   const handle = Deferred.makeUnsafe<void>();
@@ -147,10 +142,9 @@ const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
   );
 
 layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
-  it.effect("interrupts an older settings bootstrap before activating its replacement", () =>
+  it.effect("activates only the replacement after its preview loader wins", () =>
     Effect.gen(function* () {
       const loads = [deferredPromise(), deferredPromise()];
-      const started: number[] = [];
       const signals: AbortSignal[] = [];
       let loadIndex = 0;
       const h = yield* harness({
@@ -158,67 +152,44 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
           if (signal) signals.push(signal);
           return loads[loadIndex++]!.promise;
         },
-        startupEffect: (generation) =>
-          Effect.sync(() => {
-            started.push(generation);
-          }),
       });
+      const replacement = { ...h.ctx };
 
       const first = yield* h
         .emit("session_start")
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* waitUntil(() => loadIndex === 1);
       const second = yield* h
-        .emit("session_start")
+        .emit("session_start", {}, replacement)
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* waitUntil(() => loadIndex === 2);
       loads[1]!.resolve();
       yield* Fiber.join(first);
       yield* Fiber.join(second);
-      loads[0]!.resolve();
 
-      expect(started).toEqual([2]);
       expect(signals[0]?.aborted).toBe(true);
       expect(signals[1]?.aborted).toBe(false);
-      yield* h.emit("session_shutdown");
+      expect(h.toolActivations).toBe(1);
+
+      loads[0]!.resolve();
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      expect(h.toolActivations).toBe(1);
+      yield* invoke(h.commands.get("openai-usage")?.("", replacement));
+      expect(replacement.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
+      yield* h.emit("session_shutdown", {}, replacement);
     }),
   );
 
-  it.effect("contains a preview-settings failure before provider startup", () =>
+  it.effect("treats preview loader failure as best effort", () =>
     Effect.gen(function* () {
-      let started = 0;
       const h = yield* harness({
         loadPreviewSettings: () => Promise.reject(new Error("settings unavailable")),
-        startupEffect: () =>
-          Effect.sync(() => {
-            started += 1;
-          }),
       });
+
       yield* h.emit("session_start");
-      expect(started).toBe(1);
-      yield* h.emit("session_shutdown");
-    }),
-  );
 
-  it.effect("replacement immediately interrupts a stalled session startup", () =>
-    Effect.gen(function* () {
-      const stalled = stalledStartup();
-      const h = yield* harness({
-        startupEffect: (generation) => (generation === 1 ? stalled.effect : Effect.void),
-      });
-      const first = yield* h
-        .emit("session_start")
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Deferred.await(stalled.started);
-
-      const second = yield* h
-        .emit("session_start")
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Fiber.join(first);
-      yield* Fiber.join(second);
-
-      expect(stalled.interruptions()).toBe(1);
-      expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
+      expect(h.toolActivations).toBe(1);
       yield* invoke(h.commands.get("openai-usage")?.("", h.ctx));
       expect(h.ctx.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
       yield* h.emit("session_shutdown");
@@ -229,7 +200,6 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
     Effect.gen(function* () {
       let resets = 0;
       const h = yield* harness({
-        startupEffect: () => Effect.void,
         resetOpenAICodexTransport: () => {
           resets++;
           if (resets > 1) throw new Error("transport reset defect");
@@ -325,38 +295,20 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
     }),
   );
 
-  it.effect("host abort immediately interrupts a stalled startup and removes its listener", () =>
+  it.effect("shutdown aborts a stalled preview loader without activating", () =>
     Effect.gen(function* () {
-      const stalled = stalledStartup();
-      const controller = new AbortController();
-      const addEventListener = vi.spyOn(controller.signal, "addEventListener");
-      const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
-      const h = yield* harness({ startupEffect: () => stalled.effect });
-      h.ctx.signal = controller.signal;
+      const load = deferredPromise();
+      let loaderSignal: AbortSignal | undefined;
+      const h = yield* harness({
+        loadPreviewSettings: (_cwd, _projectTrusted, signal) => {
+          loaderSignal = signal;
+          return load.promise;
+        },
+      });
       const startup = yield* h
         .emit("session_start")
         .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Deferred.await(stalled.started);
-      const hostAbortListener = addEventListener.mock.calls[0]?.[1];
-
-      controller.abort(new Error("session replaced"));
-      yield* Fiber.join(startup);
-
-      expect(stalled.interruptions()).toBe(1);
-      expect(hostAbortListener).toBeTypeOf("function");
-      expect(removeEventListener).toHaveBeenCalledWith("abort", hostAbortListener);
-      expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
-    }),
-  );
-
-  it.effect("shutdown immediately interrupts a stalled session startup", () =>
-    Effect.gen(function* () {
-      const stalled = stalledStartup();
-      const h = yield* harness({ startupEffect: () => stalled.effect });
-      const startup = yield* h
-        .emit("session_start")
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Deferred.await(stalled.started);
+      yield* waitUntil(() => loaderSignal !== undefined);
 
       const shutdown = yield* h
         .emit("session_shutdown")
@@ -364,7 +316,12 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* Fiber.join(startup);
       yield* Fiber.join(shutdown);
 
-      expect(stalled.interruptions()).toBe(1);
+      expect(loaderSignal?.aborted).toBe(true);
+      expect(h.toolActivations).toBe(0);
+      load.resolve();
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      expect(h.toolActivations).toBe(0);
       expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
     }),
   );
@@ -378,41 +335,6 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* h.emit("session_start");
       expect(h.ctx.ui.notify).toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
       expect(h.tool).toBeUndefined();
-    }),
-  );
-
-  it.effect("captures changing session cwd and signal getters exactly once", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      const controller = new AbortController();
-      let cwdReads = 0;
-      let signalReads = 0;
-      const replacement = { ...h.ctx };
-      Object.defineProperties(replacement, {
-        cwd: {
-          configurable: true,
-          get() {
-            cwdReads++;
-            if (cwdReads > 1) throw new Error("cwd was read again");
-            return h.ctx.cwd;
-          },
-        },
-        signal: {
-          configurable: true,
-          get() {
-            signalReads++;
-            if (signalReads > 1) throw new Error("signal was read again");
-            return controller.signal;
-          },
-        },
-      });
-
-      yield* h.emit("session_start", {}, replacement);
-
-      expect(cwdReads).toBe(1);
-      expect(signalReads).toBe(1);
-      yield* invoke(h.commands.get("openai-usage")?.("", h.ctx));
-      yield* h.emit("session_shutdown", {}, h.ctx);
     }),
   );
 

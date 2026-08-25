@@ -1,19 +1,14 @@
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Sse from "effect/unstable/encoding/Sse";
 import { sanitizeDiagnosticError, type StreamingHttpError } from "pi-cosmic-core";
-import { extractImageFromEvent } from "./helpers.ts";
 import { decodeImageStreamEvent } from "./protocol.ts";
-import {
-  MAX_IMAGE_RESPONSE_BYTES,
-  MAX_SSE_EVENT_CHARS,
-  OpenAIImageError,
-  fail,
-  type ExtractedImageResult,
-} from "./types.ts";
+import { OpenAIImageError, fail, type ExtractedImageResult } from "./types.ts";
+
+const MAX_IMAGE_RESPONSE_BYTES = 100 * 1024 * 1024;
+const MAX_SSE_EVENT_CHARS = 80 * 1024 * 1024;
 
 export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   body: Stream.Stream<Uint8Array, StreamingHttpError>,
@@ -44,33 +39,28 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
     const rawEvent = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
       data,
     ).pipe(Effect.mapError(() => fail("stream", "Codex image response contained malformed JSON.")));
-    const event: unknown = yield* decodeImageStreamEvent(rawEvent).pipe(
+    const event = yield* decodeImageStreamEvent(rawEvent, mimeType, fallbackId).pipe(
       Effect.mapError(() => fail("stream", "Codex image response contained a malformed event.")),
     );
-    const image = extractImageFromEvent(event, mimeType, fallbackId);
-    if (image?.data && image.status === "completed") {
-      completed = image;
-      return false;
+    switch (event._tag) {
+      case "Image":
+        if (event.image.data && event.image.status === "completed") {
+          completed = event.image;
+          return false;
+        }
+        return true;
+      case "ResponseFailed":
+        providerFailure = fail("response", sanitizeDiagnosticError(event.message));
+        return false;
+      case "ProviderError":
+        providerFailure = fail(
+          "response",
+          `Codex image error: ${sanitizeDiagnosticError(event.message)}`,
+        );
+        return false;
+      case "Ignored":
+        return true;
     }
-    if (Predicate.isObject(event) && event.type === "response.failed") {
-      const response = Predicate.isObject(event.response) ? event.response : undefined;
-      const error = Predicate.isObject(response?.error) ? response.error : undefined;
-      providerFailure = fail(
-        "response",
-        sanitizeDiagnosticError(
-          Predicate.isString(error?.message) ? error.message : "Codex image request failed.",
-        ),
-      );
-      return false;
-    }
-    if (Predicate.isObject(event) && event.type === "error") {
-      providerFailure = fail(
-        "response",
-        `Codex image error: ${sanitizeDiagnosticError(Predicate.isString(event.message) ? event.message : "Codex image request failed.")}`,
-      );
-      return false;
-    }
-    return true;
   });
 
   const drainEvents = Effect.fn("OpenAIImage.drainSseEvents")(function* () {

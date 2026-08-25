@@ -25,7 +25,8 @@ import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts"
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
 import { describeHostFailure } from "./ui/notify-text.ts";
-import { type OpenAIConfigError, type ResolvedConfig } from "./config/index.ts";
+import type { ResolvedConfig } from "./config/schema.ts";
+import type { OpenAIConfigError } from "./config/store.ts";
 import {
   fastDebugLines,
   fastStateText,
@@ -44,23 +45,21 @@ import {
   type OpenAISessionInput,
 } from "./layer.ts";
 import { createFooterController } from "./footer/controller.ts";
-import { registerOpenAIImage } from "./image/index.ts";
+import { registerOpenAIImage } from "./image/register.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import { fastModeFooterPrimitive, openAIUsageFooterPrimitive } from "./ui/primitives.ts";
+import { OpenAIBoundaryError, OpenAIUsageService } from "./usage/controller.ts";
+import { formatDebug } from "./usage/debug.ts";
 import {
-  OpenAIBoundaryError,
-  OpenAIUsageService,
-  formatDebug,
   makeProjection,
   resetProjection,
   synchronizeProjectionContext,
   type OpenAIProjection,
-} from "./usage/index.ts";
+} from "./usage/projection.ts";
 
 const FAST_ID = "fast";
 
 export interface BetterOpenAIExtensionDependencies {
-  readonly startupEffect: (generation: number) => Effect.Effect<void, never, OpenAIUsageService>;
   readonly loadPreviewSettings?: (
     projectCwd: string,
     projectTrusted: boolean,
@@ -79,9 +78,7 @@ const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): Re
 };
 
 export function registerBetterOpenAIApplication(pi: ExtensionAPI): void {
-  betterOpenAIWithDependencies(pi, {
-    startupEffect: () => OpenAIUsageService.use(() => Effect.void),
-  });
+  betterOpenAIWithDependencies(pi, {});
 }
 
 /** Internal seam for deterministic lifecycle/finalizer tests. */
@@ -125,7 +122,6 @@ export function betterOpenAIWithDependencies(
     hasTerminalUI,
   });
 
-  let sessionSequence = 0;
   const slot = makePiSessionRuntimeSlot<
     OpenAISessionInput,
     OpenAIApplication,
@@ -145,11 +141,10 @@ export function betterOpenAIWithDependencies(
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-openai" },
       ),
-    startup: ({ ctx, cwd, generation, projectTrusted }) =>
+    startup: ({ ctx, cwd, projectTrusted }) =>
       bestEffortHostBootstrap("pi-better-openai.preview-settings", (signal) =>
         loadPreviewSettings(cwd, projectTrusted, signal),
       ).pipe(
-        Effect.andThen(dependencies.startupEffect(generation)),
         Effect.andThen(
           FastModeService.use((service) =>
             service
@@ -310,7 +305,6 @@ export function betterOpenAIWithDependencies(
   });
 
   pi.on("session_start", (_event, ctx) => {
-    const generation = ++sessionSequence;
     const captured = captureSessionHost(ctx);
     if (captured._tag !== "Captured" || captured.aborted) {
       safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
@@ -332,7 +326,6 @@ export function betterOpenAIWithDependencies(
           ctx,
           context,
           cwd,
-          generation,
           projectTrusted,
         },
         signal,

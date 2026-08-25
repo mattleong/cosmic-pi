@@ -1,16 +1,27 @@
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
-import type { SafeFileContract } from "pi-cosmic-core";
+import { isStrictlyInsidePathWith, type SafeFileContract } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
-import { imageMimeType, isInside } from "./helpers.ts";
-import {
-  MAX_IMAGE_INPUT_BYTES,
-  MAX_IMAGE_INPUTS,
-  MAX_TOTAL_IMAGE_INPUT_BYTES,
-  SUPPORTED_INPUT_IMAGE_FORMATS,
-  fail,
-} from "./types.ts";
+import { MAX_IMAGE_INPUTS, fail } from "./types.ts";
+
+const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_INPUT_BYTES = 50 * 1024 * 1024;
+const SUPPORTED_INPUT_IMAGE_FORMATS = new Set(["png", "jpeg", "jpg", "webp", "gif"]);
+
+const inputMimeType = (format: string): string => {
+  switch (format) {
+    case "jpeg":
+    case "jpg":
+      return "image/jpeg";
+    case "webp":
+      return "image/webp";
+    case "gif":
+      return "image/gif";
+    default:
+      return "image/png";
+  }
+};
 
 export const makeImageInputReader = (dependencies: {
   readonly fs: FileSystem.FileSystem;
@@ -19,6 +30,8 @@ export const makeImageInputReader = (dependencies: {
   readonly sharp: SharpAdapterContract;
 }) => {
   const { fs, path, safeFile, sharp } = dependencies;
+  const isInside = (root: string, child: string) =>
+    isStrictlyInsidePathWith(path, path.resolve(root), path.resolve(child));
   const imageError = (operation: string, message: string) => () => fail(operation, message);
   const validateInput = Effect.fn("OpenAIImage.validateInput")(function* (
     inputPath: string,
@@ -34,7 +47,7 @@ export const makeImageInputReader = (dependencies: {
           ),
         ),
       );
-    if (!isInside(path, realWorkspace, realInput))
+    if (!isInside(realWorkspace, realInput))
       return yield* fail(
         "input",
         `Image input must be a file inside the current workspace: ${inputPath}`,
@@ -62,7 +75,7 @@ export const makeImageInputReader = (dependencies: {
       path: verified.path,
       data: verified.bytes,
       size: verified.bytes.byteLength,
-      mimeType: imageMimeType(inputPath, metadata.format),
+      mimeType: inputMimeType(metadata.format),
     };
   });
 
@@ -86,7 +99,7 @@ export const makeImageInputReader = (dependencies: {
       const trimmed = raw.trim();
       if (!trimmed) continue;
       const candidate = path.resolve(workspace, trimmed);
-      if (!isInside(path, workspace, candidate))
+      if (!isInside(workspace, candidate))
         return yield* fail(
           "input",
           `Image input must be a file inside the current workspace: ${candidate}`,
@@ -102,7 +115,6 @@ export const makeImageInputReader = (dependencies: {
       validated.push(input);
     }
     return validated.map((input) => ({
-      path: input.path,
       mimeType: input.mimeType,
       data: Buffer.from(input.data).toString("base64"),
     }));

@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import {
   initialUsageProjection,
+  isUsingOAuthAtHostBoundary,
   makeFrozenUsageProjection,
   resetFrozenUsageProjection,
   synchronizeUsageProjectionContext,
@@ -9,8 +10,7 @@ import {
   type UsageEligibilityStatusTexts,
   type UsageProjectionBase,
 } from "pi-cosmic-core";
-import { isModelUsingOAuth } from "../boundary/model-registry.ts";
-import type { ResolvedConfig } from "../config/index.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import { usageScopeForModel, type UsageSnapshot } from "./format.ts";
 
 export interface OpenAIProjection extends UsageProjectionBase<ResolvedConfig, UsageSnapshot> {
@@ -53,7 +53,10 @@ export function isOpenAISubscriptionModel(
 ): boolean {
   const model = ctx.model;
   if (!model || (model.provider !== "openai" && model.provider !== "openai-codex")) return false;
-  return !cfg.usage.showOnlyOnSubscriptionModels || (isUsingOAuth ?? isModelUsingOAuth(ctx, model));
+  return (
+    !cfg.usage.showOnlyOnSubscriptionModels ||
+    (isUsingOAuth ?? isUsingOAuthAtHostBoundary(ctx.modelRegistry, model))
+  );
 }
 
 interface OpenAIUsageDecision {

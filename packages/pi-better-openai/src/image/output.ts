@@ -7,12 +7,36 @@ import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
+import { isStrictlyInsidePathWith } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
-import { decodeBase64, extensionForFormat, imageMimeType, isInside } from "./helpers.ts";
 import { fail, type ExtractedImageResult, type ImageOutputFormat } from "./types.ts";
 
+const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
 const imageVerificationLostMessage =
   "OpenAI image post-commit verification could not stat the destination; skipping identity check.";
+
+const outputFormats = {
+  png: { extension: "png", mimeType: "image/png", sharpFormat: "png" },
+  jpeg: { extension: "jpg", mimeType: "image/jpeg", sharpFormat: "jpeg" },
+  webp: { extension: "webp", mimeType: "image/webp", sharpFormat: "webp" },
+} as const satisfies Record<
+  ImageOutputFormat,
+  { readonly extension: string; readonly mimeType: string; readonly sharpFormat: string }
+>;
+
+export const imageOutputMetadata = (format: ImageOutputFormat) => outputFormats[format];
+
+const decodeStrictBase64 = (value: string): Uint8Array | undefined => {
+  if (
+    value.length === 0 ||
+    value.length > Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4 ||
+    value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  )
+    return undefined;
+  const bytes = Buffer.from(value, "base64");
+  return bytes.length <= MAX_GENERATED_IMAGE_BYTES ? bytes : undefined;
+};
 
 export const makeImageOutput = (dependencies: {
   readonly fs: FileSystem.FileSystem;
@@ -20,27 +44,29 @@ export const makeImageOutput = (dependencies: {
   readonly sharp: SharpAdapterContract;
 }) => {
   const { fs, path, sharp } = dependencies;
+  const isInside = (root: string, child: string) =>
+    isStrictlyInsidePathWith(path, path.resolve(root), path.resolve(child));
   const imageError = (operation: string, message: string) => () => fail(operation, message);
   const validatedGeneratedImage = Effect.fn("OpenAIImage.validateGeneratedImage")(function* (
     parsed: ExtractedImageResult,
     outputFormat: ImageOutputFormat,
   ) {
-    const bytes = decodeBase64(parsed.data);
+    const bytes = decodeStrictBase64(parsed.data);
     if (!bytes) return yield* fail("response", "Codex returned invalid image base64.");
     const metadata = yield* sharp
       .decode(bytes)
       .pipe(Effect.mapError(imageError("response", "Codex returned unreadable image data.")));
-    const expected = outputFormat === "jpeg" ? "jpeg" : outputFormat;
+    const expected = imageOutputMetadata(outputFormat);
     const actual = metadata.format === "jpg" ? "jpeg" : metadata.format;
-    if (actual !== expected)
+    if (actual !== expected.sharpFormat)
       return yield* fail(
         "response",
-        `Codex returned ${actual ?? "unknown"} image data when ${expected} was requested.`,
+        `Codex returned ${actual ?? "unknown"} image data when ${expected.sharpFormat} was requested.`,
       );
     return {
       ...parsed,
       data: Buffer.from(bytes).toString("base64"),
-      mimeType: imageMimeType(`image.${outputFormat}`, outputFormat),
+      mimeType: expected.mimeType,
       bytes,
     };
   });
@@ -56,7 +82,7 @@ export const makeImageOutput = (dependencies: {
       canonicalBase = yield* fs
         .realPath(protectedBase)
         .pipe(Effect.mapError(imageError("save", "Unable to resolve protected output root.")));
-      if (!isInside(path, protectedBase, requestedDirectory))
+      if (!isInside(protectedBase, requestedDirectory))
         return yield* fail("save", "Image output directory escapes its protected root.");
       let existingAncestor = path.resolve(requestedDirectory);
       while (!(yield* fs.exists(existingAncestor))) {
@@ -68,7 +94,7 @@ export const makeImageOutput = (dependencies: {
       const canonicalAncestor = yield* fs
         .realPath(existingAncestor)
         .pipe(Effect.mapError(imageError("save", "Unable to inspect image output path.")));
-      if (canonicalAncestor !== canonicalBase && !isInside(path, canonicalBase, canonicalAncestor))
+      if (canonicalAncestor !== canonicalBase && !isInside(canonicalBase, canonicalAncestor))
         return yield* fail("save", "Image output directory escapes its protected root.");
     }
     yield* fs
@@ -80,7 +106,7 @@ export const makeImageOutput = (dependencies: {
     if (
       canonicalBase &&
       canonicalDirectory !== canonicalBase &&
-      !isInside(path, canonicalBase, canonicalDirectory)
+      !isInside(canonicalBase, canonicalDirectory)
     )
       return yield* fail("save", "Image output directory escapes its protected root.");
     const now = yield* Clock.currentTimeMillis;
@@ -92,15 +118,13 @@ export const makeImageOutput = (dependencies: {
     ]
       .map((value) => value.toString(16).padStart(8, "0"))
       .join("");
+    const format = imageOutputMetadata(outputFormat);
     const destination = path.join(
       canonicalDirectory,
-      `openai-image-${stamp}-${safeId}-${nonce}.${extensionForFormat(outputFormat)}`,
+      `openai-image-${stamp}-${safeId}-${nonce}.${format.extension}`,
     );
     const temporary = `${destination}.${nonce}.tmp`;
     let ownedIdentity: { readonly dev: number; readonly ino: number } | undefined;
-    let publishedIdentity:
-      | { readonly type: string; readonly dev: number; readonly ino: number }
-      | undefined;
     const removeOwnedTemporary = Effect.gen(function* () {
       if (!ownedIdentity) return;
       const visible = yield* fs.stat(temporary);
@@ -111,18 +135,7 @@ export const makeImageOutput = (dependencies: {
         visible.dev === ownedIdentity.dev
       )
         yield* fs.remove(temporary);
-    }).pipe(Effect.catchCause(() => Effect.void));
-    const removePublishedDestination = Effect.gen(function* () {
-      if (!publishedIdentity) return;
-      const visible = yield* fs.stat(destination);
-      const visibleInode = Option.getOrUndefined(visible.ino);
-      if (
-        visible.type === publishedIdentity.type &&
-        visibleInode === publishedIdentity.ino &&
-        visible.dev === publishedIdentity.dev
-      )
-        yield* fs.remove(destination);
-    }).pipe(Effect.catchCause(() => Effect.void));
+    }).pipe(Effect.ignoreCause);
     const verifyPublicationSource = Effect.fn("OpenAIImage.verifyPublicationSource")(function* () {
       if (!ownedIdentity)
         return yield* fail("save", "Unable to verify image temporary file identity.");
@@ -137,8 +150,8 @@ export const makeImageOutput = (dependencies: {
         visible.type !== "File" ||
         visibleInode !== ownedIdentity.ino ||
         visible.dev !== ownedIdentity.dev ||
-        !isInside(path, canonicalDirectory, actualTemporary) ||
-        (canonicalBase && !isInside(path, canonicalBase, actualTemporary))
+        !isInside(canonicalDirectory, actualTemporary) ||
+        (canonicalBase && !isInside(canonicalBase, actualTemporary))
       )
         return yield* fail("save", "Image temporary file escaped its protected root.");
     });
@@ -162,103 +175,72 @@ export const makeImageOutput = (dependencies: {
       }).pipe(
         Effect.onError((cause) =>
           Scope.close(fileScope, Exit.failCause(cause)).pipe(
-            Effect.catchCause(() => Effect.void),
-            Effect.ensuring(removeOwnedTemporary),
+            Effect.ignoreCause,
+            Effect.andThen(removeOwnedTemporary),
           ),
         ),
       );
     });
-    return yield* Effect.uninterruptibleMask((restore) =>
-      Effect.acquireUseRelease(
-        acquireTemporary,
-        ({ file, fileScope }) =>
-          restore(
+    return yield* Effect.acquireUseRelease(
+      acquireTemporary,
+      ({ file, fileScope }) =>
+        Effect.gen(function* () {
+          yield* verifyPublicationSource();
+          yield* file
+            .writeAll(bytes)
+            .pipe(Effect.mapError(imageError("save", "Unable to save generated image.")));
+          yield* file.sync.pipe(
+            Effect.mapError(imageError("save", "Unable to sync generated image.")),
+          );
+          yield* Scope.close(fileScope, Exit.void).pipe(
+            Effect.catchDefect(() =>
+              Effect.fail(fail("save", "Unable to close image temporary file.")),
+            ),
+          );
+        }).pipe(
+          Effect.andThen(
             Effect.gen(function* () {
               yield* verifyPublicationSource();
-              yield* file
-                .writeAll(bytes)
-                .pipe(Effect.mapError(imageError("save", "Unable to save generated image.")));
-              yield* file.sync.pipe(
-                Effect.mapError(imageError("save", "Unable to sync generated image.")),
-              );
-              yield* Scope.close(fileScope, Exit.void).pipe(
-                Effect.catchDefect(() =>
-                  Effect.fail(fail("save", "Unable to close image temporary file.")),
+              yield* fs
+                .link(temporary, destination)
+                .pipe(
+                  Effect.mapError(
+                    imageError("save", "Unable to publish generated image without clobbering."),
+                  ),
+                );
+              // Linking is the commit point. Never remove the destination after this succeeds:
+              // another process may replace it before verification observes the path.
+              const published = yield* fs.stat(destination).pipe(
+                Effect.option,
+                Effect.tap((published) =>
+                  Option.isNone(published)
+                    ? Effect.logWarning(imageVerificationLostMessage)
+                    : Effect.void,
+                ),
+                Effect.catchCause(() =>
+                  Effect.logWarning(imageVerificationLostMessage).pipe(Effect.as(Option.none())),
                 ),
               );
-            }),
-          ).pipe(
-            Effect.andThen(
-              Effect.gen(function* () {
-                yield* verifyPublicationSource();
-                let linked = false;
-                yield* Effect.gen(function* () {
-                  yield* fs
-                    .link(temporary, destination)
-                    .pipe(
-                      Effect.mapError(
-                        imageError("save", "Unable to publish generated image without clobbering."),
-                      ),
-                    );
-                  linked = true;
-                  if (ownedIdentity)
-                    publishedIdentity = {
-                      type: "File",
-                      dev: ownedIdentity.dev,
-                      ino: ownedIdentity.ino,
-                    };
-                  // The hard link above is the commit point. Post-commit verification is
-                  // best-effort defense against a swapped destination: neither a typed
-                  // verification failure nor a defect may undo the committed publication,
-                  // so only a positive identity mismatch unlinks the published file.
-                  const published = yield* fs.stat(destination).pipe(
-                    Effect.option,
-                    // A typed stat failure also loses verification evidence; say so even
-                    // though the loss cannot undo the committed publication.
-                    Effect.tap((published) =>
-                      Option.isNone(published)
-                        ? Effect.logWarning(imageVerificationLostMessage)
-                        : Effect.void,
-                    ),
-                    // A defect during stat loses verification too; warn and continue.
-                    Effect.catchCause(() =>
-                      Effect.logWarning(imageVerificationLostMessage).pipe(
-                        Effect.as(Option.none()),
-                      ),
-                    ),
-                  );
-                  if (Option.isNone(published)) return;
-                  const publishedStat = published.value;
-                  const publishedInode = Option.getOrUndefined(publishedStat.ino);
-                  if (
-                    !ownedIdentity ||
-                    publishedStat.type !== "File" ||
-                    publishedInode === undefined ||
-                    publishedInode !== ownedIdentity.ino ||
-                    publishedStat.dev !== ownedIdentity.dev
-                  ) {
-                    if (publishedInode !== undefined)
-                      publishedIdentity = {
-                        type: publishedStat.type,
-                        dev: publishedStat.dev,
-                        ino: publishedInode,
-                      };
-                    return yield* fail(
-                      "save",
-                      "Published image did not match the owned temporary file.",
-                    );
-                  }
-                }).pipe(Effect.onError(() => (linked ? removePublishedDestination : Effect.void)));
-              }).pipe(Effect.uninterruptible),
-            ),
+              if (Option.isNone(published)) return;
+              const publishedStat = published.value;
+              const publishedInode = Option.getOrUndefined(publishedStat.ino);
+              if (
+                !ownedIdentity ||
+                publishedStat.type !== "File" ||
+                publishedInode === undefined ||
+                publishedInode !== ownedIdentity.ino ||
+                publishedStat.dev !== ownedIdentity.dev
+              )
+                return yield* fail(
+                  "save",
+                  "Published image did not match the owned temporary file.",
+                );
+            }).pipe(Effect.uninterruptible),
           ),
-        ({ fileScope }, exit) =>
-          Scope.close(fileScope, exit).pipe(
-            Effect.catchCause(() => Effect.void),
-            Effect.ensuring(removeOwnedTemporary),
-          ),
-      ).pipe(Effect.as(destination)),
-    );
+        ),
+      ({ fileScope }, exit) =>
+        Scope.close(fileScope, exit).pipe(Effect.ignoreCause, Effect.andThen(removeOwnedTemporary)),
+    ).pipe(Effect.as(destination));
   });
   return { validatedGeneratedImage, persistImage } as const;
 };

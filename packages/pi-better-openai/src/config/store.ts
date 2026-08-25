@@ -114,7 +114,6 @@ function resolveConfigFiles(
     ...metadata,
     persistState:
       project?.persistState ?? global?.persistState ?? DEFAULT_CONFIG.persistState ?? true,
-    active: project?.active ?? global?.active ?? desiredActive,
     desiredActive,
     usage: {
       enabled: project?.usage?.enabled ?? global?.usage?.enabled ?? DEFAULT_USAGE_CONFIG.enabled,

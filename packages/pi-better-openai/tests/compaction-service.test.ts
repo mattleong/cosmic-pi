@@ -10,7 +10,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import { provideBuiltLayer } from "pi-cosmic-core";
+import { jsonHttpTestLayer } from "pi-cosmic-core/testing";
 import {
+  OpenAICompactionBoundaryError,
   OpenAICompactionClient,
   type OpenAICompactRequest,
   type OpenAICompactionClientContract,
@@ -111,6 +113,42 @@ function serviceLayer(
     Layer.provide(Layer.succeed(OpenAICompactionClient, OpenAICompactionClient.of({ compact }))),
   );
 }
+
+describe("OpenAICompactionClient", () => {
+  it.effect("rejects fractional usage before returning a checkpoint", () => {
+    const layer = OpenAICompactionClient.layer(() => ({
+      getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const, apiKey: "test-api-key" }),
+    })).pipe(
+      Layer.provide(
+        jsonHttpTestLayer(() =>
+          Effect.succeed({
+            status: 200,
+            body: {
+              object: "response.compaction",
+              output: [{ type: "compaction" }],
+              usage: { input_tokens: 1.5, output_tokens: 2, total_tokens: 3.5 },
+            },
+          }),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const client = yield* OpenAICompactionClient;
+      // SAFETY: The fixture fixes the API discriminator to the boundary's supported API.
+      const requestModel = model() as Model<"openai-responses">;
+      const result = yield* client
+        .compact({ model: requestModel, input: [{ type: "message" }] })
+        .pipe(Effect.result);
+
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure).toBeInstanceOf(OpenAICompactionBoundaryError);
+        expect(result.failure.operation).toBe("decode");
+      }
+    }).pipe(provideBuiltLayer(layer));
+  });
+});
 
 describe("OpenAICompactionService", () => {
   it.effect("is a no-op when disabled or the current model is ineligible", () => {

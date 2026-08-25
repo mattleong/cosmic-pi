@@ -1,6 +1,7 @@
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
+import type { ExtractedImageResult, ImageAction, ImageInput, ImageOutputFormat } from "./types.ts";
 
 const ImageGenerationItemFields = {
   type: Schema.Literal("image_generation_call"),
@@ -32,28 +33,93 @@ const ProviderErrorEventSchema = Schema.Struct({
   message: Schema.optional(Schema.String),
 });
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
-
 const EventDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
+
+type ImageGenerationItem = typeof ImageGenerationItemSchema.Type;
+
+export type ImageStreamEvent =
+  | { readonly _tag: "Image"; readonly image: ExtractedImageResult }
+  | { readonly _tag: "ResponseFailed"; readonly message: string }
+  | { readonly _tag: "ProviderError"; readonly message: string }
+  | { readonly _tag: "Ignored" };
+
+const ignoredEvent: ImageStreamEvent = { _tag: "Ignored" };
+
+const imageData = (value: string, expectedMimeType: string) => {
+  const match = /^data:[^;,]+;base64,(.*)$/s.exec(value);
+  return {
+    data: (match?.[1] ?? value).trim(),
+    mimeType: expectedMimeType,
+  };
+};
+
+const normalizeImageItem = (
+  item: ImageGenerationItem,
+  fallbackMimeType: string,
+  fallbackId: string,
+): ImageStreamEvent => {
+  const raw = item.result?.trim() ? item.result : item.b64_json;
+  if (!raw) return ignoredEvent;
+  const base = {
+    id: item.id ?? fallbackId,
+    status: item.status ?? "completed",
+    ...imageData(raw, fallbackMimeType),
+  };
+  return {
+    _tag: "Image",
+    image:
+      item.revised_prompt === undefined ? base : { ...base, revisedPrompt: item.revised_prompt },
+  };
+};
+
 export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent")(function* <
   Value,
->(value: Value) {
+>(value: Value, fallbackMimeType: string, fallbackId: string) {
   const discriminant = yield* Schema.decodeUnknownEffect(EventDiscriminantSchema)(value);
-  const schema =
-    discriminant.type === "response.output_item.done"
-      ? CompletedEventSchema
-      : discriminant.type === "image_generation_call"
-        ? ItemEventSchema
-        : discriminant.type === "response.failed"
-          ? FailedEventSchema
-          : discriminant.type === "error"
-            ? ProviderErrorEventSchema
-            : discriminant.type === undefined &&
-                hasObjectRuntimeType(value) &&
-                value !== null &&
-                ("partial_image_b64" in value || "b64_json" in value)
-              ? PartialEventSchema
-              : IgnoredEventSchema;
-  return yield* Schema.decodeUnknownEffect(schema)(value);
+  if (discriminant.type === "response.output_item.done") {
+    const event = yield* Schema.decodeUnknownEffect(CompletedEventSchema)(value);
+    return normalizeImageItem(event.item, fallbackMimeType, fallbackId);
+  }
+  if (discriminant.type === "image_generation_call") {
+    const item = yield* Schema.decodeUnknownEffect(ItemEventSchema)(value);
+    return normalizeImageItem(item, fallbackMimeType, fallbackId);
+  }
+  if (discriminant.type === "response.failed") {
+    const event = yield* Schema.decodeUnknownEffect(FailedEventSchema)(value);
+    return {
+      _tag: "ResponseFailed",
+      message: event.response.error?.message ?? "Codex image request failed.",
+    } as const;
+  }
+  if (discriminant.type === "error") {
+    const event = yield* Schema.decodeUnknownEffect(ProviderErrorEventSchema)(value);
+    return {
+      _tag: "ProviderError",
+      message: event.message ?? "Codex image request failed.",
+    } as const;
+  }
+  if (
+    discriminant.type === undefined &&
+    hasObjectRuntimeType(value) &&
+    value !== null &&
+    ("partial_image_b64" in value || "b64_json" in value)
+  ) {
+    const event = yield* Schema.decodeUnknownEffect(PartialEventSchema)(value);
+    const raw = event.partial_image_b64 ?? event.b64_json;
+    const partial: ImageStreamEvent = raw?.trim()
+      ? {
+          _tag: "Image",
+          image: {
+            id: fallbackId,
+            status: "partial",
+            ...imageData(raw, fallbackMimeType),
+          },
+        }
+      : ignoredEvent;
+    return partial;
+  }
+  yield* Schema.decodeUnknownEffect(IgnoredEventSchema)(value);
+  return ignoredEvent;
 });
 
 const InputContentSchema = Schema.Union([
@@ -85,3 +151,43 @@ export const ImageRequestSchema = Schema.Struct({
   client_metadata: Schema.Record(Schema.String, Schema.String),
 });
 export type ImageRequest = typeof ImageRequestSchema.Type;
+
+export function buildImageRequest(values: {
+  readonly prompt: string;
+  readonly model: string;
+  readonly action: ImageAction;
+  readonly outputFormat: ImageOutputFormat;
+  readonly images: readonly ImageInput[];
+}): ImageRequest {
+  const content: Array<
+    | { readonly type: "input_text"; readonly text: string }
+    | { readonly type: "input_image"; readonly detail: "auto"; readonly image_url: string }
+  > = [{ type: "input_text", text: values.prompt }];
+  for (const image of values.images) {
+    content.push({
+      type: "input_image",
+      detail: "auto",
+      image_url: `data:${image.mimeType};base64,${image.data}`,
+    });
+  }
+  const tool: ImageRequest["tools"][number] =
+    values.action === "auto"
+      ? { type: "image_generation", output_format: values.outputFormat }
+      : {
+          type: "image_generation",
+          output_format: values.outputFormat,
+          action: values.action,
+        };
+  return {
+    model: values.model,
+    instructions: "",
+    input: [{ role: "user", content }],
+    tools: [tool],
+    tool_choice: { type: "image_generation" },
+    parallel_tool_calls: false,
+    store: false,
+    stream: true,
+    include: [],
+    client_metadata: { "x-codex-installation-id": "pi-better-openai" },
+  };
+}

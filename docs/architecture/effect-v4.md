@@ -112,8 +112,8 @@ Two things emit spans, and they use different names on purpose:
   required families below must keep their exact names.
 - `Effect.fn("Name.method")` marks an **internal function boundary**, named after the service
   and method it wraps. These are diagnostic aids, not a contract; renaming one alongside its
-  function is an ordinary refactor. Use `Effect.fnUntraced` when only the stack-frame boundary
-  is wanted and a span would be noise.
+  function is an ordinary refactor. `Effect.fnUntraced` creates neither an Effect stack-frame
+  boundary nor a span. Apply `Effect.withSpan` separately when a stable span is required.
 
 Do not convert between the two to satisfy a naming rule. If an internal boundary becomes
 something operators depend on, promote it deliberately: give it a package-prefixed

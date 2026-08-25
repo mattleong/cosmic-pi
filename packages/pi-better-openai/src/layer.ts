@@ -6,8 +6,9 @@ import { OpenAICompactionClient } from "./boundary/openai-compaction.ts";
 import { SharpAdapter } from "./boundary/sharp.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
 import { FastModeService } from "./fast/service.ts";
-import { OpenAIImageService } from "./image/index.ts";
-import { OpenAIUsageService, type OpenAIProjection } from "./usage/index.ts";
+import { OpenAIImageService } from "./image/service.ts";
+import { OpenAIUsageService } from "./usage/controller.ts";
+import type { OpenAIProjection } from "./usage/projection.ts";
 import type { FastSnapshot } from "./fast/controller.ts";
 
 /** Plain session values captured by the Pi adapter before runtime construction. */
@@ -15,7 +16,6 @@ export interface OpenAISessionInput {
   readonly ctx: ExtensionContext;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly cwd: string;
-  readonly generation: number;
   readonly projectTrusted: boolean;
 }
 

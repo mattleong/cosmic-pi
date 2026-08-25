@@ -1,16 +1,16 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedConfig } from "../config/index.ts";
-import { isModelUsingOAuth } from "../boundary/model-registry.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import { isFastActive, statusSegment, type FastSnapshot } from "../fast/controller.ts";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as MutableRef from "effect/MutableRef";
 import {
   createFooterPresenter,
   formatTokens,
+  isUsingOAuthAtHostBoundary,
   type FooterHostData,
   type FooterTheme,
 } from "pi-cosmic-core";
-import { visibleStatusLine, type OpenAIProjection } from "../usage/index.ts";
+import { visibleStatusLine, type OpenAIProjection } from "../usage/projection.ts";
 
 const sanitizeStatusText = (text: string) => text.replace(/[ \r\n\t]+/g, " ").trim();
 
@@ -64,7 +64,7 @@ export function createFooterController(deps: {
     ctx.sessionManager.getSessionName(),
   );
   const oauthMemo = memo((ctx: ExtensionContext, model: NonNullable<ExtensionContext["model"]>) =>
-    isModelUsingOAuth(ctx, model),
+    isUsingOAuthAtHostBoundary(ctx.modelRegistry, model),
   );
   let currentContext: ExtensionContext | undefined;
 

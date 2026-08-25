@@ -6,9 +6,9 @@ import * as MutableRef from "effect/MutableRef";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, makeSynchronousIngress, ProjectionError } from "pi-cosmic-core";
-import type { OpenAIConfigError, ResolvedConfig } from "../config/index.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
-import { OpenAIUsageService } from "../usage/index.ts";
+import { OpenAIUsageService } from "../usage/controller.ts";
 
 export interface FastInjectionEvent {
   readonly model: string;
@@ -17,28 +17,16 @@ export interface FastInjectionEvent {
 
 export type FastInjectionIngress = (event: FastInjectionEvent) => void;
 
-export interface FastModeServiceContract {
-  readonly recordInjection: FastInjectionIngress;
-  readonly initialize: (
-    ctx: ExtensionContext,
-    config: ResolvedConfig,
-    flagActive: boolean,
-  ) => Effect.Effect<void, OpenAIConfigError>;
-  readonly setDesired: (
-    ctx: ExtensionContext,
-    desiredActive: boolean,
-  ) => Effect.Effect<void, OpenAIConfigError>;
-  readonly modelChanged: (ctx: ExtensionContext) => Effect.Effect<void, OpenAIConfigError>;
+interface FastModeServiceOptions {
+  readonly projection: MutableRef.MutableRef<FastSnapshot>;
 }
 
-export class FastModeService extends Context.Service<FastModeService, FastModeServiceContract>()(
+type FastInitializationConfig = Pick<ResolvedConfig, "persistState" | "desiredActive">;
+
+export class FastModeService extends Context.Service<FastModeService>()(
   "pi-better-openai/fast/service/FastModeService",
-) {
-  static layer(options: {
-    readonly projection: MutableRef.MutableRef<FastSnapshot>;
-  }): Layer.Layer<FastModeService, never, OpenAIUsageService> {
-    return Layer.effect(
-      this,
+  {
+    make: (options: FastModeServiceOptions) =>
       Effect.gen(function* () {
         const usage = yield* OpenAIUsageService;
         const initialState = initialFastSnapshot();
@@ -95,21 +83,30 @@ export class FastModeService extends Context.Service<FastModeService, FastModeSe
             active: desiredActive && supportsFast(ctx),
           })).pipe(Effect.catchTag("ProjectionError", Effect.die));
 
-        return FastModeService.of({
-          recordInjection: (event) => ingress.offer(event),
-          initialize: (ctx, config, flagActive) => {
+        return {
+          recordInjection: (event: FastInjectionEvent): void => {
+            ingress.offer(event);
+          },
+          initialize: (
+            ctx: ExtensionContext,
+            config: FastInitializationConfig,
+            flagActive: boolean,
+          ) => {
             const desiredActive =
               flagActive || (config.persistState ? config.desiredActive : false);
             return transition(ctx, desiredActive);
           },
           setDesired: transition,
-          modelChanged: (ctx) =>
+          modelChanged: (ctx: ExtensionContext) =>
             persistTransition((current) => ({
               ...current,
               active: current.desiredActive && supportsFast(ctx),
             })).pipe(Effect.catchTag("ProjectionError", Effect.die)),
-        });
+        };
       }),
-    );
+  },
+) {
+  static layer(options: FastModeServiceOptions) {
+    return Layer.effect(this, this.make(options));
   }
 }

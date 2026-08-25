@@ -20,7 +20,6 @@ export interface ResolvedConfig {
   projectConfigExists: boolean;
   globalConfigExists: boolean;
   persistState: boolean;
-  active: boolean;
   desiredActive: boolean;
   usage: {
     enabled: boolean;
@@ -42,9 +41,9 @@ export interface ResolvedConfig {
 type OptionalFields<T> = { readonly [K in keyof T]?: T[K] | undefined };
 export type UsageConfig = OptionalFields<ResolvedConfig["usage"]>;
 export type ImageConfig = OptionalFields<ResolvedConfig["image"]>;
-export type ConfigFile = OptionalFields<
-  Pick<ResolvedConfig, "persistState" | "active" | "desiredActive">
-> & {
+export type ConfigFile = OptionalFields<Pick<ResolvedConfig, "persistState" | "desiredActive">> & {
+  /** Legacy fast-mode state retained for tolerant reads and compatibility writes. */
+  readonly active?: boolean | undefined;
   readonly usage?: UsageConfig | undefined;
   readonly footer?: OptionalFields<ResolvedConfig["footer"]> | undefined;
   readonly compaction?: OptionalFields<ResolvedConfig["compaction"]> | undefined;

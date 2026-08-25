@@ -3,10 +3,10 @@ import * as Predicate from "effect/Predicate";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { decodeJwtPayloadText, readSchemaDocument } from "pi-cosmic-core";
-import type { CodexAuthResult } from "./result.ts";
 
 const CodexAuthDocumentSchema = Schema.Struct({
   "openai-codex": Schema.optional(Schema.Unknown),
@@ -32,6 +32,9 @@ const JwtPayloadSchema = Schema.Struct({
     Schema.Struct({ chatgpt_account_id: Schema.optional(Schema.String) }),
   ),
 });
+const RegistryCredentialsFromJsonSchema = Schema.fromJsonString(RegistryCredentialsSchema);
+const JwtPayloadFromJsonSchema = Schema.fromJsonString(JwtPayloadSchema);
+const decodeJwtPayload = Option.liftThrowable(decodeJwtPayloadText);
 
 export class CodexAuthError extends Schema.TaggedError<CodexAuthError>()("CodexAuthError", {
   operation: Schema.String,
@@ -47,6 +50,17 @@ const redactAccessToken = (value: string): Redacted.Redacted<string> =>
 export type CodexCredentialsWithSource = CodexCredentials & {
   readonly source: "modelRegistry" | "authFile";
 };
+export type CodexAuthResult =
+  | {
+      readonly _tag: "Found";
+      readonly credentials: CodexCredentialsWithSource;
+    }
+  | { readonly _tag: "Missing" }
+  | {
+      readonly _tag: "Unavailable" | "Malformed";
+      readonly operation: string;
+      readonly message: string;
+    };
 const unavailable = (operation: string, message: string): CodexAuthResult => ({
   _tag: "Unavailable",
   operation,
@@ -58,38 +72,30 @@ const malformed = (operation: string, message: string): CodexAuthResult => ({
   message,
 });
 
-export const extractAccountIdFromJwt = Effect.fn("CodexAuth.extractAccountIdFromJwt")(function* (
-  token: string,
-) {
-  const source = yield* Effect.try({
-    try: () => decodeJwtPayloadText(token),
-    catch: () =>
-      new CodexAuthError({ operation: "jwt", message: "Unable to decode Codex token metadata." }),
-  }).pipe(Effect.catch(() => Effect.succeed("")));
+export function extractAccountIdFromJwt(token: string): string | undefined {
+  const source = Option.getOrUndefined(decodeJwtPayload(token));
   if (!source) return undefined;
-  const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(JwtPayloadSchema))(
-    source,
-  ).pipe(Effect.catch(() => Effect.void));
+  const decoded = Option.getOrUndefined(
+    Schema.decodeUnknownOption(JwtPayloadFromJsonSchema)(source),
+  );
   return decoded?.["https://api.openai.com/auth"]?.chatgpt_account_id?.trim() || undefined;
-});
-export const parseCodexRegistryCredentials = Effect.fn("CodexAuth.parseRegistryCredentials")(
-  function* (raw: string | undefined) {
-    const value = raw?.trim();
-    if (!value) return undefined;
-    const parsed = yield* Schema.decodeUnknownEffect(
-      Schema.fromJsonString(RegistryCredentialsSchema),
-    )(value).pipe(Effect.catch(() => Effect.void));
-    if (parsed) {
-      const accessToken = parsed.access ?? parsed.token;
-      const accountId = (parsed.accountId ?? parsed.account_id)?.trim();
-      if (accessToken && accountId) return { accessToken, accountId } satisfies CodexCredentials;
-    }
-    const accountId = yield* extractAccountIdFromJwt(value);
-    return accountId
-      ? ({ accessToken: redactAccessToken(value), accountId } satisfies CodexCredentials)
-      : undefined;
-  },
-);
+}
+export function parseCodexRegistryCredentials(
+  raw: string | undefined,
+): CodexCredentials | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  const parsed = Option.getOrUndefined(
+    Schema.decodeUnknownOption(RegistryCredentialsFromJsonSchema)(value),
+  );
+  if (parsed) {
+    const accessToken = parsed.access ?? parsed.token;
+    const accountId = (parsed.accountId ?? parsed.account_id)?.trim();
+    if (accessToken && accountId) return { accessToken, accountId };
+  }
+  const accountId = extractAccountIdFromJwt(value);
+  return accountId ? { accessToken: redactAccessToken(value), accountId } : undefined;
+}
 
 export const readCodexAuthResult = Effect.fn("CodexAuth.readAuthResult")(function* (
   authPath: string,
@@ -153,7 +159,7 @@ export const getCodexCredentialsResult = Effect.fn("CodexAuth.getCredentialsResu
     { concurrency: 2 },
   );
   if (registryRaw._tag === "Success") {
-    const registry = yield* parseCodexRegistryCredentials(
+    const registry = parseCodexRegistryCredentials(
       Predicate.isString(registryRaw.success) ? registryRaw.success : undefined,
     );
     // Deliberate precedence: a registry API key wins over an existing auth-file OAuth

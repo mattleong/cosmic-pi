@@ -51,17 +51,14 @@ function makeContext(initialModel: string) {
   };
 }
 
-const fakeUsageLayer = Layer.succeed(
-  OpenAIUsageService,
-  OpenAIUsageService.of({
-    refresh: () => Effect.void,
-    contextChanged: () => Effect.void,
-    updateSetting: () => Effect.void,
-    persistFast: (_active, _desiredActive, afterCommit = Effect.void) =>
-      Effect.uninterruptible(afterCommit),
-    readConfigDocument: () => Effect.succeed({}),
-  }),
-);
+const fakeUsageLayer = Layer.succeed(OpenAIUsageService, {
+  refresh: () => Effect.void,
+  contextChanged: () => Effect.void,
+  updateSetting: () => Effect.void,
+  persistFast: (_active, _desiredActive, afterCommit = Effect.void) =>
+    Effect.uninterruptible(afterCommit),
+  readConfigDocument: () => Effect.succeed({}),
+});
 
 describe("FastModeService", () => {
   it.effect("publishes persisted fast state only from the atomic afterCommit region", () => {

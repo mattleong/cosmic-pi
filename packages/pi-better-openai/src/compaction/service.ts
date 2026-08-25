@@ -13,11 +13,10 @@ import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
 import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
 import { FAST_SERVICE_TIER } from "../fast/models.ts";
-import type { OpenAIProjection } from "../usage/index.ts";
+import type { OpenAIProjection } from "../usage/projection.ts";
 import {
   OpenAICompactionClient,
   type OpenAICompactRequest,
-  type OpenAICompactionBoundaryError,
 } from "../boundary/openai-compaction.ts";
 import {
   findActiveOpenAICompactionCheckpoint,
@@ -43,35 +42,16 @@ export class OpenAICompactionError extends Schema.TaggedError<OpenAICompactionEr
 const compactionError = (operation: OpenAICompactionError["operation"], message: string) =>
   new OpenAICompactionError({ operation, message });
 
-export interface OpenAICompactionServiceContract {
-  readonly compact: (
-    event: SessionBeforeCompactEvent,
-  ) => Effect.Effect<
-    CompactionResult | undefined,
-    OpenAICompactionError | OpenAICompactionBoundaryError
-  >;
-  readonly filterContext: (
-    messages: ContextEvent["messages"],
-  ) => Effect.Effect<ContextEvent["messages"] | undefined, OpenAICompactionError>;
-  readonly inject: <Payload>(
-    payload: Payload,
-  ) => Effect.Effect<
-    ReturnType<typeof injectOpenAICompactionCheckpoint<Payload>>,
-    OpenAICompactionError
-  >;
+interface OpenAICompactionServiceOptions {
+  readonly context: MutableRef.MutableRef<ExtensionContext>;
+  readonly projection: MutableRef.MutableRef<OpenAIProjection>;
+  readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
 }
 
-export class OpenAICompactionService extends Context.Service<
-  OpenAICompactionService,
-  OpenAICompactionServiceContract
->()("pi-better-openai/compaction/service/OpenAICompactionService") {
-  static layer(options: {
-    readonly context: MutableRef.MutableRef<ExtensionContext>;
-    readonly projection: MutableRef.MutableRef<OpenAIProjection>;
-    readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
-  }) {
-    return Layer.effect(
-      this,
+export class OpenAICompactionService extends Context.Service<OpenAICompactionService>()(
+  "pi-better-openai/compaction/service/OpenAICompactionService",
+  {
+    make: (options: OpenAICompactionServiceOptions) =>
       Effect.gen(function* () {
         const client = yield* OpenAICompactionClient;
         const readContext = Effect.fn("OpenAICompaction.readContext")(function* () {
@@ -90,9 +70,9 @@ export class OpenAICompactionService extends Context.Service<
               compactionError("context", "Unable to read the current Pi session context."),
           });
         });
-        const compact: OpenAICompactionServiceContract["compact"] = Effect.fn(
-          "OpenAICompaction.compact",
-        )(function* (event) {
+        const compact = Effect.fn("OpenAICompaction.compact")(function* (
+          event: SessionBeforeCompactEvent,
+        ) {
           const config = MutableRef.get(options.projection).config;
           if (!config?.compaction.enabled) return undefined;
           const current = yield* readContext();
@@ -145,9 +125,9 @@ export class OpenAICompactionService extends Context.Service<
             details: { type: OPENAI_COMPACTION_DETAILS_TYPE, checkpoint },
           } satisfies CompactionResult;
         });
-        const filterContext: OpenAICompactionServiceContract["filterContext"] = Effect.fn(
-          "OpenAICompaction.filterContext",
-        )(function* (messages) {
+        const filterContext = Effect.fn("OpenAICompaction.filterContext")(function* (
+          messages: ContextEvent["messages"],
+        ) {
           const config = MutableRef.get(options.projection).config;
           if (!config?.compaction.enabled) return undefined;
           const branch = yield* Effect.try({
@@ -177,9 +157,7 @@ export class OpenAICompactionService extends Context.Service<
             ? undefined
             : messages.filter((_message, index) => index !== summaryIndex);
         });
-        const inject: OpenAICompactionServiceContract["inject"] = Effect.fn(
-          "OpenAICompaction.inject",
-        )(function* (payload) {
+        const inject = Effect.fn("OpenAICompaction.inject")(function* <Payload>(payload: Payload) {
           const config = MutableRef.get(options.projection).config;
           if (!config?.compaction.enabled) return undefined;
           const current = yield* Effect.try({
@@ -194,8 +172,11 @@ export class OpenAICompactionService extends Context.Service<
           const active = findActiveOpenAICompactionCheckpoint(current.branch, current.model);
           return active ? injectOpenAICompactionCheckpoint(payload, active.checkpoint) : undefined;
         });
-        return OpenAICompactionService.of({ compact, filterContext, inject });
+        return { compact, filterContext, inject };
       }),
-    );
+  },
+) {
+  static layer(options: OpenAICompactionServiceOptions) {
+    return Layer.effect(this, this.make(options));
   }
 }

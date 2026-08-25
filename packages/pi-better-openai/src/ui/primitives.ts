@@ -1,9 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type * as MutableRef from "effect/MutableRef";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
-import type { ResolvedConfig } from "../config/index.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
-import { visibleStatusLine, type OpenAIProjection } from "../usage/index.ts";
+import { visibleStatusLine, type OpenAIProjection } from "../usage/projection.ts";
 
 export function fastModeFooterPrimitive(
   ctx: ExtensionContext,

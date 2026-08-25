@@ -164,14 +164,6 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string
   ].join("\n");
 }
 
-export interface CodexUsageResult {
-  readonly snapshot: UsageSnapshot;
-  readonly credential: {
-    readonly source: "modelRegistry" | "authFile";
-    readonly accountId: string;
-  };
-}
-
 export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWithCredentials")(
   function* (credentials: CodexCredentialsWithSource, modelId?: string) {
     const http = yield* JsonHttpClient;
@@ -202,9 +194,6 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
         message: `Codex usage request failed (${response.status})`,
       });
     const now = yield* Clock.currentTimeMillis;
-    return {
-      snapshot: parseUsageSnapshot(response.body, modelId, now),
-      credential: { source: credentials.source, accountId: credentials.accountId },
-    } satisfies CodexUsageResult;
+    return parseUsageSnapshot(response.body, modelId, now);
   },
 );

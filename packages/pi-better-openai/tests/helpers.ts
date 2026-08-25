@@ -4,7 +4,7 @@ import {
   DEFAULT_IMAGE_CONFIG,
   DEFAULT_USAGE_CONFIG,
   type ResolvedConfig,
-} from "../src/config/index.ts";
+} from "../src/config/schema.ts";
 
 export function makeResolvedConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   return {
@@ -14,7 +14,6 @@ export function makeResolvedConfig(overrides: Partial<ResolvedConfig> = {}): Res
     projectConfigExists: false,
     globalConfigExists: false,
     persistState: true,
-    active: false,
     desiredActive: false,
     usage: DEFAULT_USAGE_CONFIG,
     footer: DEFAULT_FOOTER_CONFIG,

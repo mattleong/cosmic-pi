@@ -16,7 +16,7 @@ import {
   parseCodexRegistryCredentials,
   readCodexAuthResult,
 } from "../src/auth/codex-auth.ts";
-import { readConfig, resolveConfig } from "../src/config/index.ts";
+import { readConfig, resolveConfig } from "../src/config/store.ts";
 
 const documents = makeInMemoryDocuments;
 const context = (token?: string, oauth = true): ExtensionContext => {
@@ -114,7 +114,7 @@ describe("OpenAI configuration and credentials", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(store.layer));
   });
 
-  it.effect("extracts JWT and registry credentials with auth-file fallback and expiry", () => {
+  it.effect("parses lossy registry credentials with auth-file fallback and expiry", () => {
     const authPath = "/agent/auth.json";
     const store = documents({
       [authPath]: {
@@ -126,19 +126,35 @@ describe("OpenAI configuration and credentials", () => {
         },
       },
     });
+    const rawJwt = jwt("acct_jwt");
     const privateRegistryPayload = JSON.stringify({
       access: "private-registry-token",
       accountId: "acct_registry",
     });
     const registryPayload = JSON.stringify({ access: "registry", accountId: "acct_registry" });
+    const rejectedRegistryContext = context();
+    rejectedRegistryContext.modelRegistry.getApiKeyForProvider = () =>
+      Promise.reject(new Error("registry"));
+
+    expect(extractAccountIdFromJwt(rawJwt)).toBe("acct_jwt");
+    expect(extractAccountIdFromJwt("malformed-jwt")).toBeUndefined();
+    expect(parseCodexRegistryCredentials("{malformed-registry")).toBeUndefined();
+
+    const jwtCredentials = parseCodexRegistryCredentials(rawJwt);
+    expect(jwtCredentials?.accountId).toBe("acct_jwt");
+    if (jwtCredentials) {
+      expect(Redacted.value(jwtCredentials.accessToken)).toBe(rawJwt);
+      expect(serializedSnapshot(jwtCredentials)).not.toContain(rawJwt);
+    }
+
+    const registry = parseCodexRegistryCredentials(privateRegistryPayload);
+    expect(registry?.accountId).toBe("acct_registry");
+    if (registry) {
+      expect(Redacted.value(registry.accessToken)).toBe("private-registry-token");
+      expect(serializedSnapshot(registry)).not.toContain("private-registry-token");
+    }
+
     return Effect.gen(function* () {
-      expect(yield* extractAccountIdFromJwt(jwt("acct_jwt"))).toBe("acct_jwt");
-      const registry = yield* parseCodexRegistryCredentials(privateRegistryPayload);
-      expect(registry?.accountId).toBe("acct_registry");
-      if (registry) {
-        expect(Redacted.value(registry.accessToken)).toBe("private-registry-token");
-        expect(serializedSnapshot(registry)).not.toContain("private-registry-token");
-      }
       const file = yield* readCodexAuthResult(authPath);
       expect(file._tag).toBe("Found");
       if (file._tag === "Found") {
@@ -148,6 +164,12 @@ describe("OpenAI configuration and credentials", () => {
         expect(serializedSnapshot(file.credentials)).not.toContain("file-token");
       }
       expect((yield* getCodexCredentials(authPath, context()))?.source).toBe("authFile");
+      expect((yield* getCodexCredentials(authPath, context("{malformed-registry")))?.source).toBe(
+        "authFile",
+      );
+      expect((yield* getCodexCredentials(authPath, rejectedRegistryContext))?.source).toBe(
+        "authFile",
+      );
       expect((yield* getCodexCredentials(authPath, context(registryPayload)))?.source).toBe(
         "modelRegistry",
       );
