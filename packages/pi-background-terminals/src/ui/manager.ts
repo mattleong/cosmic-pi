@@ -1,38 +1,37 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import {
   brailleSpinnerFrame,
-  managerLayoutTier,
   managerStateGlyph,
   renderResponsiveManagerFooter,
   startingSpinnerFrame,
 } from "pi-cosmic-ui/manager";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
+import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import {
-  FullScreenKeymap,
-  pageSteps,
-  type FullScreenSelectionKeybindingId,
-} from "pi-cosmic-ui/manager/keymap";
-import {
-  computeDetailWindow,
   confirmedReservedShortcut,
   detailWindowPositionLabel,
-  listDetailMotion,
   listDetailMotionFromAction,
-  listWindowStart,
   padListDetailRow,
-  reconcileListSelection,
-  selectListIndex,
   stackedListHeight,
   wideListDetailGeometry,
-  type ListDetailPane,
+  type ListSelectionChange,
 } from "pi-cosmic-ui/manager/list-detail";
+import {
+  framedFill,
+  framedScreen,
+  framedStackedRows,
+  framedWideRows,
+  listDetailFrame,
+  ListDetailShell,
+  type ListDetailFrame,
+} from "pi-cosmic-ui/manager/list-detail-shell";
 import type {
   BackgroundJobView,
   BackgroundLogEvent,
   BackgroundTerminalProjection,
 } from "../job/model.ts";
-import { isActiveJobState } from "../job/model.ts";
+import { countJobStates, isActiveJobState } from "../job/model.ts";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { styledBackgroundLogLines } from "./styled-log.ts";
 
@@ -52,8 +51,6 @@ export interface ProcessManagerOptions {
   readonly stop: (id: string) => void;
   readonly clear: () => void;
 }
-
-type ProcessManagerLayout = "wide" | "stacked" | "narrow";
 
 const PROCESS_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
 
@@ -98,41 +95,29 @@ const displayName = (job: BackgroundJobView): string =>
   sanitizeTerminalLine(job.name?.trim() || job.command);
 
 export class ProcessManagerComponent implements Component {
-  private selected = 0;
-  private selectedId: string | undefined;
   private follow = true;
-  private details = false;
   private showTechnicalDetails = false;
   private alternateHelp = false;
-  private detailScroll = 0;
-  private detailMaxScroll = 0;
-  private detailLineCount = 0;
-  private detailPageSize = 1;
-  private listPageSize = 1;
   private pendingStop: string | undefined;
-  private layout: ProcessManagerLayout = "narrow";
-  private pane: ListDetailPane = "list";
-  private readonly keymap = new FullScreenKeymap();
+  private readonly shell = new ListDetailShell();
+  private readonly frame: ListDetailFrame;
   private readonly options: ProcessManagerOptions;
 
   constructor(options: ProcessManagerOptions) {
     this.options = options;
+    this.frame = listDetailFrame(options.theme);
   }
 
-  private applySelection(next: ReturnType<typeof selectListIndex>): void {
-    this.selected = next.selected;
-    this.selectedId = next.selectedId;
+  private applySelection(next: ListSelectionChange): void {
     if (next.changed) {
       this.follow = true;
-      this.detailScroll = 0;
       this.pendingStop = undefined;
     }
   }
 
   private select(index: number, jobs: ReadonlyArray<BackgroundJobView>): void {
     this.applySelection(
-      selectListIndex(
-        { selected: this.selected, selectedId: this.selectedId },
+      this.shell.select(
         index,
         jobs.map((job) => job.id),
       ),
@@ -140,13 +125,8 @@ export class ProcessManagerComponent implements Component {
   }
 
   private reconcileSelection(jobs: ReadonlyArray<BackgroundJobView>): void {
-    this.applySelection(
-      reconcileListSelection(
-        { selected: this.selected, selectedId: this.selectedId },
-        jobs.map((job) => job.id),
-      ),
-    );
-    const selected = jobs[this.selected];
+    this.applySelection(this.shell.reconcile(jobs.map((job) => job.id)));
+    const selected = jobs[this.shell.state.selected];
     if (
       this.pendingStop &&
       (this.pendingStop !== selected?.id || !isActiveJobState(selected.state))
@@ -157,11 +137,11 @@ export class ProcessManagerComponent implements Component {
   handleInput(data: string): void {
     const jobs = this.options.getProjection().jobs;
     this.reconcileSelection(jobs);
-    const selected = jobs[this.selected];
+    const selected = jobs[this.shell.state.selected];
     const matchesKeybinding = this.options.matchesKeybinding;
 
     if (this.pendingStop) {
-      const resolution = this.keymap.resolve(data, {
+      const resolution = this.shell.keymap.resolve(data, {
         mode: "confirmation",
         matchesKeybinding,
         reservedKeys: new Set(["x"]),
@@ -174,7 +154,7 @@ export class ProcessManagerComponent implements Component {
       return;
     }
 
-    const resolution = this.keymap.resolve(data, {
+    const resolution = this.shell.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding,
       reservedKeys: PROCESS_MANAGER_SHORTCUTS,
@@ -183,13 +163,13 @@ export class ProcessManagerComponent implements Component {
     if (resolution._tag === "Shortcut") {
       if (resolution.key === "t") {
         this.showTechnicalDetails = !this.showTechnicalDetails;
-        this.detailScroll = 0;
+        this.shell.resetDetailScroll();
         this.follow = true;
       } else if (resolution.key === "f" && selected && isActiveJobState(selected.state)) {
         // Unfollow is sticky: the anchored detail window keeps the viewed slice even before
         // overflow; toggling follow back on returns to the newest lines.
         this.follow = !this.follow;
-        this.detailScroll = 0;
+        this.shell.resetDetailScroll();
       } else if (resolution.key === "x" && selected && isActiveJobState(selected.state)) {
         this.pendingStop = selected.id;
       } else if (resolution.key === "c" && jobs.some((job) => !isActiveJobState(job.state)))
@@ -199,12 +179,10 @@ export class ProcessManagerComponent implements Component {
     }
 
     if (resolution.action === "confirm") {
-      if (this.layout === "narrow" && selected) {
-        this.details = !this.details;
-        this.pane = this.details ? "detail" : "list";
-        this.detailScroll = 0;
+      // Enter policy stays local: only the narrow layout toggles the expanded inspector.
+      if (this.shell.state.layout === "narrow" && selected) {
+        this.shell.enterPane();
         this.follow = true;
-        this.keymap.resetChord();
       }
       this.options.requestRender();
       return;
@@ -212,36 +190,19 @@ export class ProcessManagerComponent implements Component {
     if (resolution.action === "help") this.alternateHelp = !this.alternateHelp;
     const motion = listDetailMotionFromAction(resolution.action);
     if (motion) {
-      const result = listDetailMotion(
-        {
-          pane: this.pane,
-          details: this.details,
-          selected: this.selected,
-          detailScroll: this.detailScroll,
-        },
-        motion,
-        {
-          layout: this.layout,
-          rowCount: jobs.length,
-          hasSelection: selected !== undefined,
-          detailMaxScroll: this.detailMaxScroll,
-          detailSteps: pageSteps(this.detailPageSize),
-          listSteps: pageSteps(this.listPageSize),
-        },
-      );
+      const result = this.shell.applyMotion(motion, {
+        rowCount: jobs.length,
+        hasSelection: selected !== undefined,
+      });
       if (result._tag === "Close") {
         this.options.close();
         return;
       }
       if (result._tag === "Update") {
-        this.pane = result.state.pane;
-        this.details = result.state.details;
-        this.detailScroll = result.state.detailScroll;
         // Scrolling away from the newest lines detaches follow; an explicit unfollow stays
         // sticky, so scrolling back to the bottom never silently re-follows.
-        if (result.scrolledDetail && this.detailScroll > 0) this.follow = false;
+        if (result.scrolledDetail && this.shell.state.detailScroll > 0) this.follow = false;
         if (result.movedSelection) this.select(result.state.selected, jobs);
-        if (result.resetChord) this.keymap.resetChord();
       }
     }
     this.options.requestRender();
@@ -251,50 +212,27 @@ export class ProcessManagerComponent implements Component {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
-    const nextLayout = managerLayoutTier(safeWidth);
-    if (nextLayout !== this.layout) {
-      this.layout = nextLayout;
-      this.keymap.resetChord();
-      if (this.layout === "narrow") this.details = this.pane === "detail";
-    }
+    this.shell.syncLayout(safeWidth);
     const projection = this.options.getProjection();
     const jobs = projection.jobs;
     this.reconcileSelection(jobs);
-    const selected = jobs[this.selected];
-    if (!selected && this.pane === "detail") {
-      this.pane = "list";
-      this.details = false;
-      this.keymap.resetChord();
-    }
-    const active = jobs.filter((job) => isActiveJobState(job.state)).length;
-    const failed = jobs.filter((job) => job.state === "failed" || job.state === "timed_out").length;
+    const selected = jobs[this.shell.state.selected];
+    this.shell.ensureSelectionPane(selected !== undefined);
+    const { active, failed } = countJobStates(jobs);
     const title = ` /ps · ${active} active${failed ? ` · ${failed} failed` : ""} `;
-    const top = `${this.outerBorder("╭")}${this.options.theme.fg("accent", title)}${this.outerBorder(
-      `${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`,
-    )}`;
     const footerText = this.helpText(safeWidth, jobs, selected);
-    const bottom = `${this.outerBorder(
-      `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(footerText) - 2))}`,
-    )}${footerText}${this.outerBorder("╯")}`;
-    if (height === 1) return [truncateToWidth(top, safeWidth, "")];
-    if (safeWidth === 1) return Array.from({ length: height }, () => " ");
-
-    const bodyHeight = height - 2;
-    const body =
-      this.layout === "wide"
-        ? this.renderWide(safeWidth, bodyHeight, jobs, selected)
-        : this.layout === "stacked"
-          ? this.renderStacked(safeWidth, bodyHeight, jobs, selected)
-          : this.renderNarrow(safeWidth, bodyHeight, jobs, selected);
-    return [truncateToWidth(top, safeWidth, ""), ...body, truncateToWidth(bottom, safeWidth, "")];
-  }
-
-  private outerBorder(text: string): string {
-    return this.options.theme.fg("borderAccent", text);
-  }
-
-  private innerBorder(text: string): string {
-    return this.options.theme.fg("borderMuted", text);
+    return framedScreen(this.frame, {
+      width: safeWidth,
+      height,
+      top: this.options.theme.fg("accent", title),
+      bottom: footerText,
+      body: (bodyHeight) =>
+        this.shell.state.layout === "wide"
+          ? this.renderWide(safeWidth, bodyHeight, jobs, selected)
+          : this.shell.state.layout === "stacked"
+            ? this.renderStacked(safeWidth, bodyHeight, jobs, selected)
+            : this.renderNarrow(safeWidth, bodyHeight, jobs, selected),
+    });
   }
 
   private helpText(
@@ -325,17 +263,18 @@ export class ProcessManagerComponent implements Component {
       selected && isActiveJobState(selected.state) ? "x Stop" : undefined,
       jobs.some((job) => !isActiveJobState(job.state)) ? "c Clear" : undefined,
     ].filter((item): item is string => item !== undefined);
+    const joinedActions = actions.length > 0 ? actions.join(" · ") : undefined;
     // The expanded ? overlay is the discoverable place for the full motion vocabulary.
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
           `${navigation} Move · h/l Panes · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
-          actions.length > 0 ? actions.join(" · ") : "No actions",
+          joinedActions ?? "No actions",
           `? Back · ${escape}/q Close`,
         ],
         [
           `${navigation} · h/l · C-u/d · PgUp/PgDn · gg/G`,
-          actions.length > 0 ? actions.join(" · ") : "No actions",
+          joinedActions ?? "No actions",
           `? · ${escape}/q`,
         ],
         [`${navigation} · PgUp/PgDn · gg/G`, `? · ${escape}/q`],
@@ -343,14 +282,10 @@ export class ProcessManagerComponent implements Component {
     return renderResponsiveManagerFooter(contentWidth, [
       [
         `${navigation} Move · C-u/d Scroll · h/l Panes`,
-        actions.length > 0 ? actions.join(" · ") : undefined,
+        joinedActions,
         `t Technical · ? More · ${escape}/q Close`,
       ],
-      [
-        `${navigation} · C-u/d · h/l`,
-        actions.length > 0 ? actions.join(" · ") : undefined,
-        `t Tech · ? · ${escape}/q`,
-      ],
+      [`${navigation} · C-u/d · h/l`, joinedActions, `t Tech · ? · ${escape}/q`],
       width >= 60
         ? [`${navigation} Select · h/l Panes`, "C-u/d · gg/G", `? More · ${escape}/q`]
         : [`${navigation} · l Details`, "gg/G", `? More · ${escape}/q`],
@@ -358,7 +293,7 @@ export class ProcessManagerComponent implements Component {
   }
 
   private jobLine(job: BackgroundJobView, index: number, width: number): string {
-    const selected = index === this.selected;
+    const selected = index === this.shell.state.selected;
     const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
     const frame = Math.floor(this.options.getNow() / 160);
     const presentation = statePresentation(job, frame);
@@ -376,12 +311,8 @@ export class ProcessManagerComponent implements Component {
   ): ReadonlyArray<{ readonly job: BackgroundJobView; readonly index: number }> {
     // The rendered window is the authoritative list page size for half/full-page motions,
     // so stacked layouts page by their actual visible rows rather than the full height.
-    this.listPageSize = Math.max(1, limit);
-    const start = listWindowStart(jobs.length, this.selected, limit);
-    return jobs.slice(start, start + Math.max(1, limit)).map((job, offset) => ({
-      job,
-      index: start + offset,
-    }));
+    const { start, end } = this.shell.visibleWindow(jobs.length, limit);
+    return jobs.slice(start, end).map((job, offset) => ({ job, index: start + offset }));
   }
 
   // Caches fully sanitized, prefixed, themed lines per immutable log snapshot so a render tick
@@ -433,16 +364,7 @@ export class ProcessManagerComponent implements Component {
   }
 
   private detailWindow(lines: string[], height: number, width: number): string[] {
-    const window = computeDetailWindow({
-      lines,
-      height,
-      previous: { scroll: this.detailScroll, lineCount: this.detailLineCount },
-      follow: this.follow,
-    });
-    this.detailScroll = window.scroll;
-    this.detailMaxScroll = window.maxScroll;
-    this.detailPageSize = window.pageSize;
-    this.detailLineCount = window.lineCount;
+    const window = this.shell.detailWindow(lines, height, this.follow);
     if (!window.overflow) return [...window.visible];
     return [
       this.options.theme.fg("dim", detailWindowPositionLabel(window.overflow)),
@@ -450,21 +372,10 @@ export class ProcessManagerComponent implements Component {
     ].map((line) => truncateToWidth(line, width, ""));
   }
 
-  private frameLine(line: string, inner: number): string {
-    return `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
-  }
-
-  private frameToHeight(rows: string[], height: number, inner: number): string[] {
-    while (rows.length < height) rows.push(this.frameLine("", inner));
-    return rows.slice(0, height);
-  }
-
   private listPane(jobs: ReadonlyArray<BackgroundJobView>, limit: number, width: number): string[] {
+    const focused = this.shell.state.pane === "list";
     return [
-      this.options.theme.fg(
-        this.pane === "list" ? "accent" : "muted",
-        `${this.pane === "list" ? "› " : ""}Background jobs`,
-      ),
+      this.options.theme.fg(focused ? "accent" : "muted", `${focused ? "› " : ""}Background jobs`),
       ...this.visibleJobs(jobs, limit).map(({ job, index }) => this.jobLine(job, index, width)),
     ];
   }
@@ -475,20 +386,10 @@ export class ProcessManagerComponent implements Component {
     jobs: ReadonlyArray<BackgroundJobView>,
     selected: BackgroundJobView | undefined,
   ): string[] {
-    const { listWidth: leftWidth, detailWidth: rightWidth } = wideListDetailGeometry(
-      width,
-      34,
-      0.4,
-    );
-    const left = this.listPane(jobs, Math.max(1, height - 1), leftWidth);
-    const detail = this.detailWindow(this.detailLines(selected), height, rightWidth);
-    return Array.from(
-      { length: height },
-      (_, index) =>
-        `${this.outerBorder("│")}${padListDetailRow(left[index] ?? "", leftWidth)}${this.innerBorder(
-          "│",
-        )}${padListDetailRow(detail[index] ?? "", rightWidth)}${this.outerBorder("│")}`,
-    );
+    const { listWidth, detailWidth } = wideListDetailGeometry(width, 34, 0.4);
+    const left = this.listPane(jobs, Math.max(1, height - 1), listWidth);
+    const right = this.detailWindow(this.detailLines(selected), height, detailWidth);
+    return framedWideRows(this.frame, { left, right, height, listWidth, detailWidth });
   }
 
   private renderStacked(
@@ -500,11 +401,9 @@ export class ProcessManagerComponent implements Component {
     const inner = width - 2;
     const listHeight = stackedListHeight(height, jobs.length);
     const list = this.listPane(jobs, Math.max(1, listHeight - 1), inner);
-    const divider = `${this.outerBorder("├")}${this.innerBorder("─".repeat(inner))}${this.outerBorder("┤")}`;
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected), remaining, inner);
-    const frame = (line: string) => this.frameLine(line, inner);
-    return this.frameToHeight([...list.map(frame), divider, ...detail.map(frame)], height, inner);
+    return framedStackedRows(this.frame, { list, detail, height, inner });
   }
 
   private renderNarrow(
@@ -515,20 +414,13 @@ export class ProcessManagerComponent implements Component {
   ): string[] {
     const inner = width - 2;
     const lines =
-      this.details && selected
+      this.shell.state.details && selected
         ? this.detailWindow(this.detailLines(selected), height, inner)
         : jobs.length
           ? this.visibleJobs(jobs, height).map(({ job, index }) => this.jobLine(job, index, inner))
           : [this.options.theme.fg("dim", "No background jobs.")];
-    if (!this.details) {
-      this.detailMaxScroll = 0;
-      this.detailLineCount = 0;
-    }
-    return this.frameToHeight(
-      lines.map((line) => this.frameLine(line, inner)),
-      height,
-      inner,
-    );
+    if (!this.shell.state.details) this.shell.resetDetailWindow();
+    return framedFill(this.frame, lines, height, inner);
   }
 
   invalidate(): void {}

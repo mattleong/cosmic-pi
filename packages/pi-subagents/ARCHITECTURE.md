@@ -18,7 +18,7 @@
 - `src/backend/` contains the six local/Herdr Pi, Claude, and Codex drivers plus their pure protocol and policy modules. A selected driver owns execution after readiness succeeds; fallback never crosses an ownership boundary.
 - `src/boundary/` contains Pi, Node, process, filesystem, Herdr, native-catalog, writer-lease, RPC, and supervisor adapters. `host-child-pi.ts` shares one-shot credential scrubbing and the eligible OpenAI priority request hook between local and delegated Pi children. Supervisor tool execution returns plain response data; one outer writer commit publishes exactly one MCP response before writer shutdown proceeds.
 - `src/settings/` owns command orchestration, pure route edits, the replace-only immutable Pi model/provenance catalog, and the stateful disposable profile workspace. `src/settings/ui/` contains only pure selectors, model-choice projection, and rendering.
-- `src/tools/` owns Pi tool schemas, execution, persisted detail schemas, bounded text formatting, and cooperative renderers. `src/ui/` owns pure fleet and run presentation.
+- `src/tools/` owns Pi tool schemas, execution, persisted detail schemas, bounded text formatting, and cooperative renderers. `src/ui/` owns pure fleet and run presentation; the fleet delegates generic selection/pane/layout/detail-scroll state and framed screen composition to the shared `ListDetailShell` (`pi-cosmic-ui/manager/list-detail-shell`) while keeping prompts, notices, busy/capability/action policy, the all-layout Enter policy, no-follow detail scrolling, headings, and geometry local.
 - `src/supervisor/` owns the import-free MCP argument contract and Effect RPC v2 protocol.
 
 ## Invariants

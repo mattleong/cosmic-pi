@@ -8,11 +8,15 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
-import { registerBackgroundTerminalsApplication } from "../src/application.ts";
+import {
+  registerBackgroundTerminalsApplication,
+  type BackgroundTerminalsApplicationBoundaries,
+} from "../src/application.ts";
 
 type Handler = ExtensionHandler<any, any>;
 
 interface CapturedBackgroundTool {
+  readonly name: string;
   readonly execute: (
     id: string,
     input: { readonly action: "list" },
@@ -28,11 +32,6 @@ const deferred = <A>() => {
     promise: Effect.runPromise(Deferred.await(gate)),
     resolve: (value: A) => void Deferred.doneUnsafe(gate, Effect.succeed(value)),
   };
-};
-
-const extensionApiFixture = <Fixture extends object>(fixture: Fixture): Fixture & ExtensionAPI => {
-  // SAFETY: Each test invokes only the ExtensionAPI members explicitly implemented by its fixture.
-  return fixture as Fixture & ExtensionAPI;
 };
 
 const extensionContextFixture = <Fixture extends object>(
@@ -51,61 +50,56 @@ const context = (cwd: string): ExtensionContext =>
     mode: "rpc",
   });
 
+const harness = (loadSettings: BackgroundTerminalsApplicationBoundaries["loadSettings"]) => {
+  const handlers = new Map<string, Handler>();
+  const tools: CapturedBackgroundTool[] = [];
+  const registerTool = vi.fn((tool: CapturedBackgroundTool) => tools.push(tool));
+  const fixture = {
+    events: undefined,
+    registerCommand: vi.fn(),
+    registerTool,
+    on: (name: string, handler: Handler) => handlers.set(name, handler),
+  };
+  // SAFETY: Each test invokes only the ExtensionAPI members explicitly implemented above.
+  registerBackgroundTerminalsApplication(fixture as typeof fixture & ExtensionAPI, {
+    loadSettings,
+  });
+  return {
+    tools,
+    registerTool,
+    emit: (name: "session_start" | "turn_end" | "session_shutdown", ctx: ExtensionContext) =>
+      Promise.resolve(handlers.get(name)?.({}, ctx)),
+  };
+};
+
 describe("background-terminal Pi lifecycle", () => {
-  it.effect("makes out-of-order settings preparation latest-generation wins", () =>
+  it.effect("skips superseded settings loads so only the latest generation activates", () =>
     Effect.gen(function* () {
-      const handlers = new Map<string, Handler>();
-      const first = deferred<void>();
-      const second = deferred<void>();
+      const settings = deferred<void>();
       const loads: Array<readonly [string, boolean]> = [];
-      const tools: string[] = [];
-      const pi = extensionApiFixture({
-        events: undefined,
-        registerCommand: vi.fn(),
-        registerTool: vi.fn((tool: { readonly name: string }) => tools.push(tool.name)),
-        on: vi.fn((name: string, handler: Handler) => handlers.set(name, handler)),
-      });
-      registerBackgroundTerminalsApplication(pi, {
-        loadSettings: (cwd, trusted) => {
-          loads.push([cwd, trusted]);
-          return loads.length === 1 ? first.promise : second.promise;
-        },
+      const app = harness((cwd, trusted) => {
+        loads.push([cwd, trusted]);
+        return settings.promise;
       });
 
-      const firstContext = context(`${process.cwd()}/first`);
+      const firstStart = app.emit("session_start", context(`${process.cwd()}/first`));
       const secondContext = context(`${process.cwd()}/second`);
-      const firstStart = Promise.resolve(handlers.get("session_start")?.({}, firstContext));
-      const secondStart = Promise.resolve(handlers.get("session_start")?.({}, secondContext));
+      const secondStart = app.emit("session_start", secondContext);
 
-      second.resolve();
-      yield* Effect.promise(() => secondStart);
-      expect(tools).toEqual(["background_terminal"]);
-
-      first.resolve();
-      yield* Effect.promise(() => firstStart);
-      expect(tools).toEqual(["background_terminal"]);
-      expect(loads).toEqual([
-        [`${process.cwd()}/first`, false],
-        [`${process.cwd()}/second`, false],
-      ]);
-      yield* Effect.promise(() =>
-        Promise.resolve(handlers.get("session_shutdown")?.({}, secondContext)),
-      );
+      settings.resolve();
+      yield* Effect.promise(() => Promise.all([firstStart, secondStart]));
+      expect(app.tools.map((tool) => tool.name)).toEqual(["background_terminal"]);
+      // The superseded first start never reaches the settings boundary.
+      expect(loads).toEqual([[`${process.cwd()}/second`, false]]);
+      yield* Effect.promise(() => app.emit("session_shutdown", secondContext));
     }),
   );
 
   it.effect("ignores turn_end while the runtime slot is inactive", () =>
     Effect.gen(function* () {
-      const handlers = new Map<string, Handler>();
       const settings = deferred<void>();
       const setStatus = vi.fn();
-      const pi = extensionApiFixture({
-        events: undefined,
-        registerCommand: vi.fn(),
-        registerTool: vi.fn(),
-        on: vi.fn((name: string, handler: Handler) => handlers.set(name, handler)),
-      });
-      registerBackgroundTerminalsApplication(pi, { loadSettings: () => settings.promise });
+      const app = harness(() => settings.promise);
       const ctx = extensionContextFixture({
         ...context(process.cwd()),
         hasUI: true,
@@ -113,105 +107,90 @@ describe("background-terminal Pi lifecycle", () => {
         ui: { setStatus },
       });
 
-      const starting = Promise.resolve(handlers.get("session_start")?.({}, ctx));
-      handlers.get("turn_end")?.({}, ctx);
+      const starting = app.emit("session_start", ctx);
+      yield* Effect.promise(() => app.emit("turn_end", ctx));
       expect(setStatus).not.toHaveBeenCalled();
 
       settings.resolve();
       yield* Effect.promise(() => starting);
-      yield* Effect.promise(() => Promise.resolve(handlers.get("session_shutdown")?.({}, ctx)));
+      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
     }),
   );
 
-  it.effect(
-    "deactivates the prior runtime immediately while replacement settings are pending",
-    () =>
-      Effect.gen(function* () {
-        const handlers = new Map<string, Handler>();
-        const replacement = deferred<void>();
-        const registered: CapturedBackgroundTool[] = [];
-        let loadCount = 0;
-        const pi = extensionApiFixture({
-          events: undefined,
-          registerCommand: vi.fn(),
-          registerTool: vi.fn((tool: CapturedBackgroundTool) => registered.push(tool)),
-          on: vi.fn((name: string, handler: Handler) => handlers.set(name, handler)),
-        });
-        registerBackgroundTerminalsApplication(pi, {
-          loadSettings: () => (++loadCount === 1 ? Promise.resolve() : replacement.promise),
-        });
-        const ctx = context(process.cwd());
-        yield* Effect.promise(() => Promise.resolve(handlers.get("session_start")?.({}, ctx)));
-        expect(registered).toHaveLength(1);
+  it.effect("rejects a stale tool call typed while replacement settings are still loading", () =>
+    Effect.gen(function* () {
+      const entered = deferred<void>();
+      const replacement = deferred<void>();
+      let loadCount = 0;
+      const app = harness(() => {
+        if (++loadCount === 1) return Promise.resolve();
+        entered.resolve();
+        return replacement.promise;
+      });
+      const ctx = context(process.cwd());
+      yield* Effect.promise(() => app.emit("session_start", ctx));
+      const tool = app.tools[0];
+      if (!tool) throw new Error("background tool registration was not captured");
 
-        const replacing = Promise.resolve(handlers.get("session_start")?.({}, ctx));
-        const tool = registered[0];
-        if (!tool) throw new Error("background tool registration was not captured");
-        yield* Effect.promise(() =>
-          expect(
-            tool.execute(
-              "replacement-check",
-              { action: "list" },
-              new AbortController().signal,
-              undefined,
-              ctx,
-            ),
-          ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
-        );
+      const replacing = app.emit("session_start", ctx);
+      // The replacement loader has signalled entry and stays blocked: the prior runtime is
+      // already deactivated and the next one is not yet active, so the activation-1 tool
+      // must fail typed instead of reaching the unactivated replacement runtime.
+      yield* Effect.promise(() => entered.promise);
+      yield* Effect.promise(() =>
+        expect(
+          tool.execute(
+            "replacement-check",
+            { action: "list" },
+            new AbortController().signal,
+            undefined,
+            ctx,
+          ),
+        ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+      );
 
-        replacement.resolve();
-        yield* Effect.promise(() => replacing);
-        yield* Effect.promise(() => Promise.resolve(handlers.get("session_shutdown")?.({}, ctx)));
-      }),
+      replacement.resolve();
+      yield* Effect.promise(() => replacing);
+      // Tool activation still happens once settings resolve for the replacement generation.
+      expect(app.tools.map((tool) => tool.name)).toEqual([
+        "background_terminal",
+        "background_terminal",
+      ]);
+      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
+    }),
   );
 
   it.effect("invalidates pending settings preparation when the captured session aborts", () =>
     Effect.gen(function* () {
-      const handlers = new Map<string, Handler>();
       const settings = deferred<void>();
-      const registerTool = vi.fn();
-      const pi = extensionApiFixture({
-        events: undefined,
-        registerCommand: vi.fn(),
-        registerTool,
-        on: vi.fn((name: string, handler: Handler) => handlers.set(name, handler)),
-      });
-      registerBackgroundTerminalsApplication(pi, { loadSettings: () => settings.promise });
+      const app = harness(() => settings.promise);
       const controller = new AbortController();
       const ctx = extensionContextFixture({
         ...context(process.cwd()),
         signal: controller.signal,
       });
 
-      const starting = Promise.resolve(handlers.get("session_start")?.({}, ctx));
+      const starting = app.emit("session_start", ctx);
       controller.abort();
       settings.resolve();
       yield* Effect.promise(() => starting);
 
-      expect(registerTool).not.toHaveBeenCalled();
-      yield* Effect.promise(() => Promise.resolve(handlers.get("session_shutdown")?.({}, ctx)));
+      expect(app.registerTool).not.toHaveBeenCalled();
+      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
     }),
   );
 
   it.effect("invalidates pending settings preparation on shutdown", () =>
     Effect.gen(function* () {
-      const handlers = new Map<string, Handler>();
       const settings = deferred<void>();
-      const registerTool = vi.fn();
-      const pi = extensionApiFixture({
-        events: undefined,
-        registerCommand: vi.fn(),
-        registerTool,
-        on: vi.fn((name: string, handler: Handler) => handlers.set(name, handler)),
-      });
-      registerBackgroundTerminalsApplication(pi, { loadSettings: () => settings.promise });
+      const app = harness(() => settings.promise);
       const ctx = context(process.cwd());
 
-      const starting = Promise.resolve(handlers.get("session_start")?.({}, ctx));
-      yield* Effect.promise(() => Promise.resolve(handlers.get("session_shutdown")?.({}, ctx)));
+      const starting = app.emit("session_start", ctx);
+      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
       settings.resolve();
       yield* Effect.promise(() => starting);
-      expect(registerTool).not.toHaveBeenCalled();
+      expect(app.registerTool).not.toHaveBeenCalled();
     }),
   );
 });

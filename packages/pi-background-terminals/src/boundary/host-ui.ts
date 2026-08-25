@@ -4,10 +4,7 @@ import {
   makeProjectionBridge as makeHostProjectionBridge,
   type ProjectionBridge,
 } from "pi-cosmic-ui/boundary/host-status";
-import { emptyProjection, footerStatus } from "../job/projection.ts";
-import type { BackgroundTerminalProjection } from "../job/model.ts";
-
-export { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
+import { emptyProjection, footerStatus, type BackgroundTerminalProjection } from "../job/model.ts";
 
 const STATUS_KEY = "pi-background-terminals";
 

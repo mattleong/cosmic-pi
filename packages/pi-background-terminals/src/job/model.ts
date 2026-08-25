@@ -72,3 +72,40 @@ const ACTIVE_JOB_STATES: ReadonlySet<BackgroundJobState> = new Set([
 
 export const isActiveJobState = (state: BackgroundJobState): boolean =>
   ACTIVE_JOB_STATES.has(state);
+
+export interface BackgroundJobStateCounts {
+  readonly active: number;
+  readonly failed: number;
+}
+
+/** Single owner of the failed policy: `failed` counts both `failed` and `timed_out` jobs. */
+export const countJobStates = (
+  jobs: ReadonlyArray<Pick<BackgroundJobSnapshot, "state">>,
+): BackgroundJobStateCounts => {
+  let active = 0;
+  let failed = 0;
+  for (const job of jobs) {
+    if (isActiveJobState(job.state)) active += 1;
+    else if (job.state === "failed" || job.state === "timed_out") failed += 1;
+  }
+  return { active, failed };
+};
+
+export const emptyProjection = (): BackgroundTerminalProjection => ({ jobs: [] });
+
+/** Active jobs first, then most recently started. Shared by snapshot and view ordering. */
+export function sortJobsByActivity<A extends Pick<BackgroundJobSnapshot, "state" | "startedAt">>(
+  jobs: ReadonlyArray<A>,
+): ReadonlyArray<A> {
+  return [...jobs].sort((left, right) => {
+    const active = Number(isActiveJobState(right.state)) - Number(isActiveJobState(left.state));
+    return active !== 0 ? active : right.startedAt - left.startedAt;
+  });
+}
+
+export function footerStatus(projection: BackgroundTerminalProjection): string | undefined {
+  const { active, failed } = countJobStates(projection.jobs);
+  if (active === 0 && failed === 0) return undefined;
+  if (active === 0) return `${failed} background job${failed === 1 ? "" : "s"} failed`;
+  return `${active} background job${active === 1 ? "" : "s"} active${failed > 0 ? ` · ${failed} failed` : ""}`;
+}

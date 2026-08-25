@@ -1,10 +1,9 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
-import * as Predicate from "effect/Predicate";
-
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
-import { startHostUiTicker, type BackgroundTerminalProjectionBridge } from "../boundary/host-ui.ts";
+import type { BackgroundTerminalProjectionBridge } from "../boundary/host-ui.ts";
 import { synchronousNow } from "pi-cosmic-core";
 import { ProcessManagerComponent } from "../ui/manager.ts";
 
@@ -34,7 +33,7 @@ function openProcessManager(
           fullScreenKeybindingLabel(
             id,
             fallback,
-            Predicate.isFunction(keybindings.getKeys)
+            keybindings.getKeys !== undefined
               ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
               : undefined,
           ),

@@ -30,6 +30,7 @@ import {
 import { LogBuffer, readLogBuffer } from "./log-buffer.ts";
 import {
   isActiveJobState,
+  sortJobsByActivity,
   type BackgroundJobSnapshot,
   type BackgroundJobState,
   type BackgroundLogSlice,
@@ -37,7 +38,6 @@ import {
   type ReadBackgroundLogs,
   type StartBackgroundJob,
 } from "./model.ts";
-import { sortJobsByActivity } from "./projection.ts";
 
 interface JobRecord {
   snapshot: BackgroundJobSnapshot;
@@ -71,7 +71,6 @@ export interface BackgroundTerminalServiceContract {
     force?: boolean,
   ) => Effect.Effect<ReadonlyArray<BackgroundJobSnapshot>, BackgroundTerminalError>;
   readonly clear: Effect.Effect<number>;
-  readonly projection: Effect.Effect<BackgroundTerminalProjection>;
 }
 
 export interface BackgroundTerminalServiceOptions {
@@ -97,9 +96,8 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   const lock = yield* Semaphore.make(1);
   const jobs = new Map<string, JobRecord>();
   let nextId = 1;
-  // Open while the runtime admits starts; the shutdown finalizer closes it under the same
-  // lock that guards admission.
-  const admissions = yield* Latch.make(true);
+  // Set by the shutdown finalizer under the same lock that guards admission.
+  let admissionsClosed = false;
   const retainedLogBudget = Math.max(1, Math.floor(config.totalLogBufferBytes / 2));
   const ingressLogBudget = Math.max(1, config.totalLogBufferBytes - retainedLogBudget);
 
@@ -129,7 +127,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       Effect.flatMap(() =>
         withLock(
           Effect.gen(function* () {
-            Latch.closeUnsafe(outputPublishWake);
             const now = yield* Clock.currentTimeMillis;
             return Math.max(0, outputPublishDeadline - now);
           }),
@@ -193,20 +190,13 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       : exit.error || exit.exitCode !== 0
         ? "failed"
         : "exited";
-    const baseSnapshot = {
+    record.snapshot = {
       ...record.snapshot,
       state,
       endedAt,
       exitCode: exit.exitCode,
-    };
-    const snapshotWithSignal = exit.signal
-      ? { ...baseSnapshot, signal: exit.signal }
-      : baseSnapshot;
-    const snapshotWithError = exit.error
-      ? { ...snapshotWithSignal, error: exit.error }
-      : snapshotWithSignal;
-    record.snapshot = {
-      ...snapshotWithError,
+      ...(exit.signal && { signal: exit.signal }),
+      ...(exit.error && { error: exit.error }),
       logCursor: record.logs.nextCursor - 1,
       droppedLogBytes: record.logs.droppedBytes,
     };
@@ -250,29 +240,109 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       }),
     );
 
-  type RequestStop = (
+  type StopPreparation = {
+    readonly record: JobRecord;
+    readonly owner: boolean;
+    readonly terminal?: BackgroundJobSnapshot;
+  };
+
+  const requestStop = (
     id: string,
-    force?: boolean,
-    outcome?: "stopped" | "timed_out",
-  ) => Effect.Effect<BackgroundJobSnapshot, BackgroundTerminalError>;
-  let requestStop: RequestStop;
+    force = false,
+    outcome: "stopped" | "timed_out" = "stopped",
+  ): Effect.Effect<
+    BackgroundJobSnapshot,
+    BackgroundJobNotFoundError | BackgroundTerminationError
+  > =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const prepared = yield* withLock(
+          Effect.suspend((): Effect.Effect<StopPreparation, BackgroundJobNotFoundError> => {
+            const record = jobs.get(id);
+            if (!record) return Effect.fail(notFound(id));
+            if (!isActiveJobState(record.snapshot.state)) {
+              return Effect.succeed({
+                record,
+                owner: false,
+                terminal: record.snapshot,
+              } satisfies StopPreparation);
+            }
+            const owner = !record.terminationStarted;
+            record.terminationStarted = true;
+            record.terminalOutcome ??= outcome;
+            record.snapshot = { ...record.snapshot, state: "stopping" };
+            wake(record);
+            publish();
+            return Effect.succeed({ record, owner } satisfies StopPreparation);
+          }),
+        );
+        if (prepared.terminal) return prepared.terminal;
+
+        const terminate = (handle: LocalProcessHandle, mode: "graceful" | "force") =>
+          handle
+            .terminate(mode)
+            .pipe(
+              Effect.mapError(
+                (error) => new BackgroundTerminationError({ id, message: error.message }),
+              ),
+            );
+        const stopPhase = Effect.gen(function* () {
+          const handle = Option.getOrUndefined(
+            Option.flatten(
+              yield* Deferred.await(prepared.record.handleReady).pipe(
+                Effect.option,
+                Effect.timeoutOption("5 seconds"),
+              ),
+            ),
+          );
+          if (!handle) return;
+          if (force) yield* terminate(handle, "force");
+          else if (prepared.owner) {
+            yield* terminate(handle, "graceful");
+            const settled = yield* Deferred.await(prepared.record.completion).pipe(
+              Effect.timeoutOption(Duration.millis(config.stopGraceMs)),
+            );
+            if (Option.isNone(settled)) yield* terminate(handle, "force");
+          }
+        });
+        // Keep this hook outside the timeout operators so their internal interruption cannot force twice.
+        yield* restore(stopPhase).pipe(
+          Effect.onInterrupt(() =>
+            prepared.owner
+              ? Effect.gen(function* () {
+                  const ready = yield* Deferred.poll(prepared.record.handleReady);
+                  if (Option.isSome(ready))
+                    yield* ready.value.pipe(Effect.flatMap((handle) => handle.terminate("force")));
+                }).pipe(Effect.ignore)
+              : Effect.void,
+          ),
+        );
+
+        const finalWait = yield* restore(
+          Deferred.await(prepared.record.completion).pipe(
+            Effect.timeoutOption(Duration.millis(Math.max(5_000, config.stopGraceMs + 5_000))),
+          ),
+        );
+        if (Option.isSome(finalWait)) return finalWait.value;
+        return yield* new BackgroundTerminationError({
+          id,
+          message: "Background process did not confirm exit after forced termination.",
+        });
+      }),
+    );
 
   const monitor = (id: string, ownerRecord: JobRecord, request: StartBackgroundJob) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const spawnRequestBase = {
+        const handle = yield* processes.spawn({
           command: request.command,
           cwd: request.cwd,
           ingressBufferBytes: Math.max(
             1,
             Math.min(config.logBufferBytesPerJob, Math.floor(ingressLogBudget / config.maxRunning)),
           ),
-        };
-        const handle = yield* processes.spawn(
-          config.shellPath
-            ? { ...spawnRequestBase, shellPath: config.shellPath }
-            : spawnRequestBase,
-        );
+          ...(config.shellPath && { shellPath: config.shellPath }),
+        });
         const terminateLateHandle = yield* withLock(
           Effect.sync(() => {
             Deferred.doneUnsafe(ownerRecord.handleReady, Effect.succeed(handle));
@@ -371,11 +441,11 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         const prepared = { ...request, command, cwd };
         const record = yield* withLock(
           Effect.gen(function* () {
-            if (!admissions.isOpen() || !config.enabled) {
+            if (admissionsClosed || !config.enabled) {
               return yield* new BackgroundRuntimeClosedError({
-                message: admissions.isOpen()
-                  ? "Background terminals are disabled."
-                  : "Background terminal runtime is closed.",
+                message: admissionsClosed
+                  ? "Background terminal runtime is closed."
+                  : "Background terminals are disabled.",
               });
             }
             const active = [...jobs.values()].filter((item) =>
@@ -389,19 +459,18 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
             }
             const startedAt = yield* Clock.currentTimeMillis;
             const id = `term-${nextId++}`;
-            const snapshot: BackgroundJobSnapshot = {
-              id,
-              command,
-              cwd,
-              state: "starting",
-              startedAt,
-              logCursor: 0,
-              droppedLogBytes: 0,
-            };
+            const name = request.name?.trim();
             const created: JobRecord = {
-              snapshot: request.name?.trim()
-                ? { ...snapshot, name: request.name.trim() }
-                : snapshot,
+              snapshot: {
+                id,
+                command,
+                cwd,
+                state: "starting",
+                startedAt,
+                logCursor: 0,
+                droppedLogBytes: 0,
+                ...(name && { name }),
+              },
               logs: LogBuffer.empty(),
               wake: Deferred.makeUnsafe<void>(),
               completion: Deferred.makeUnsafe<BackgroundJobSnapshot>(),
@@ -453,10 +522,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       }),
     );
 
-  const readLogs = (
-    request: ReadBackgroundLogs,
-    allowWait: boolean,
-  ): Effect.Effect<BackgroundLogSlice, BackgroundJobNotFoundError> =>
+  const logs: BackgroundTerminalServiceContract["logs"] = (request) =>
     Effect.gen(function* () {
       const prepared = yield* withLock(
         Effect.suspend(() => {
@@ -464,7 +530,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
           if (!record) return Effect.fail(notFound(request.id));
           const slice = readLogBuffer(request.id, record.logs, record.snapshot.state, request);
           const shouldWait =
-            allowWait &&
             (request.waitSeconds ?? 0) > 0 &&
             slice.events.length === 0 &&
             isActiveJobState(record.snapshot.state);
@@ -477,80 +542,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
           Duration.seconds(Math.min(request.waitSeconds ?? 0, config.maxLogWaitSeconds)),
         ),
       );
-      return yield* readLogs({ ...request, waitSeconds: 0 }, false);
-    });
-
-  const logs: BackgroundTerminalServiceContract["logs"] = (request) => readLogs(request, true);
-
-  type StopPreparation = {
-    readonly record: JobRecord;
-    readonly owner: boolean;
-    readonly terminal?: BackgroundJobSnapshot;
-  };
-
-  requestStop = (id, force = false, outcome = "stopped") =>
-    Effect.gen(function* () {
-      const prepared = yield* withLock(
-        Effect.suspend((): Effect.Effect<StopPreparation, BackgroundJobNotFoundError> => {
-          const record = jobs.get(id);
-          if (!record) return Effect.fail(notFound(id));
-          if (!isActiveJobState(record.snapshot.state)) {
-            return Effect.succeed({
-              record,
-              owner: false,
-              terminal: record.snapshot,
-            } satisfies StopPreparation);
-          }
-          const owner = !record.terminationStarted;
-          record.terminationStarted = true;
-          record.terminalOutcome ??= outcome;
-          record.snapshot = { ...record.snapshot, state: "stopping" };
-          wake(record);
-          publish();
-          return Effect.succeed({ record, owner } satisfies StopPreparation);
-        }),
-      );
-      if (prepared.terminal) return prepared.terminal;
-
-      const handleResult = yield* Deferred.await(prepared.record.handleReady).pipe(
-        Effect.option,
-        Effect.timeoutOption("5 seconds"),
-      );
-      const handle =
-        Option.isSome(handleResult) && Option.isSome(handleResult.value)
-          ? handleResult.value.value
-          : undefined;
-      const terminate = (mode: "graceful" | "force") =>
-        handle
-          ? handle.terminate(mode).pipe(
-              Effect.mapError(
-                (error) =>
-                  new BackgroundTerminationError({
-                    id,
-                    message: error.message,
-                  }),
-              ),
-            )
-          : Effect.void;
-
-      if (force) {
-        yield* terminate("force");
-      } else if (prepared.owner) {
-        yield* terminate("graceful");
-        const settled = yield* Deferred.await(prepared.record.completion).pipe(
-          Effect.timeoutOption(Duration.millis(config.stopGraceMs)),
-        );
-        if (Option.isNone(settled)) yield* terminate("force");
-      }
-
-      const finalWait = yield* Deferred.await(prepared.record.completion).pipe(
-        Effect.timeoutOption(Duration.millis(Math.max(5_000, config.stopGraceMs + 5_000))),
-      );
-      if (Option.isSome(finalWait)) return finalWait.value;
-      return yield* new BackgroundTerminationError({
-        id,
-        message: "Background process did not confirm exit after forced termination.",
-      });
+      return yield* logs({ ...request, waitSeconds: 0 });
     });
 
   const stop: BackgroundTerminalServiceContract["stop"] = (id, force) => requestStop(id, force);
@@ -563,9 +555,23 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
             .map((record) => record.snapshot.id),
         ),
       );
-      return yield* Effect.forEach(ids, (id) => requestStop(id, force), {
-        concurrency: Math.min(ids.length || 1, 8),
-      });
+      // Partition isolates typed failures; interruption and defects still interrupt the batch.
+      const [failures, settled] = yield* Effect.partition(
+        ids,
+        (id) =>
+          requestStop(id, force).pipe(
+            // A job can settle and be evicted between capture and stop; that race is success.
+            Effect.catchTag("BackgroundJobNotFoundError", () => Effect.undefined),
+          ),
+        { concurrency: 8 },
+      );
+      if (failures.length > 0) {
+        return yield* new BackgroundTerminationError({
+          id: failures.map((failure) => failure.id).join(", "),
+          message: failures.map((failure) => `${failure.id}: ${failure.message}`).join(" · "),
+        });
+      }
+      return settled.filter((snapshot) => snapshot !== undefined);
     });
   const clear = withLock(
     Effect.sync(() => {
@@ -579,7 +585,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       return removed;
     }),
   );
-  const projection = withLock(Effect.sync(currentProjection));
 
   const service: BackgroundTerminalServiceContract = {
     start,
@@ -589,11 +594,14 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
     stop,
     stopAll,
     clear,
-    projection,
   };
 
   yield* Effect.addFinalizer(() =>
-    withLock(Latch.close(admissions)).pipe(
+    withLock(
+      Effect.sync(() => {
+        admissionsClosed = true;
+      }),
+    ).pipe(
       Effect.andThen(stopAll(false)),
       Effect.asVoid,
       Effect.catch(() => Effect.void),

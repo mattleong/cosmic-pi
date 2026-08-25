@@ -1,38 +1,34 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-  managerLayoutTier,
-  managerNoticeGlyph,
-  renderResponsiveManagerFooter,
-} from "pi-cosmic-ui/manager";
+import { managerNoticeGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
   Input,
   truncateToWidth,
-  visibleWidth,
   wrapTextWithAnsi,
   type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
+import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import {
-  FullScreenKeymap,
-  pageSteps,
-  type FullScreenSelectionKeybindingId,
-} from "pi-cosmic-ui/manager/keymap";
-import {
-  computeDetailWindow,
   confirmedReservedShortcut,
   detailWindowPositionLabel,
-  listDetailMotion,
   listDetailMotionFromAction,
-  listWindowStart,
   padListDetailRow,
-  reconcileListSelection,
-  selectListIndex,
   stackedListHeight,
   wideListDetailGeometry,
-  type ListDetailPane,
+  type ListSelectionChange,
 } from "pi-cosmic-ui/manager/list-detail";
+import {
+  framedFill,
+  framedRow,
+  framedScreen,
+  framedStackedRows,
+  framedWideRows,
+  listDetailFrame,
+  ListDetailShell,
+  type ListDetailFrame,
+} from "pi-cosmic-ui/manager/list-detail-shell";
 import {
   hasSubagentCapability,
   isActiveRunState,
@@ -97,7 +93,6 @@ const canRename = (run: SubagentRunView | undefined): boolean =>
 const canStop = (run: SubagentRunView | undefined): boolean =>
   Boolean(run && isActiveRunState(run.state) && run.state !== "stopping");
 
-type FleetLayout = "wide" | "stacked" | "narrow";
 type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
 
 const FLEET_SHORTCUTS = new Set(["i", "m", "n", "r", "t", "x"]);
@@ -112,28 +107,20 @@ type FleetPrompt = {
 };
 
 export class SubagentFleetComponent implements Component, Focusable {
-  private selected = 0;
-  private selectedId: string | undefined;
-  private details = false;
-  private detailScroll = 0;
-  private detailMaxScroll = 0;
-  private detailLineCount = 0;
-  private detailPageSize = 1;
-  private listPageSize = 1;
   private showTechnicalDetails = false;
   private alternateHelp = false;
   private pendingStop: string | undefined;
   private prompt: FleetPrompt | undefined;
   private notice: FleetNotice | undefined;
   private busyAction: string | undefined;
-  private layout: FleetLayout = "narrow";
-  private pane: ListDetailPane = "list";
   private _focused = false;
-  private readonly keymap = new FullScreenKeymap();
+  private readonly shell = new ListDetailShell();
+  private readonly frame: ListDetailFrame;
   private readonly options: FleetOptions;
 
   constructor(options: FleetOptions) {
     this.options = options;
+    this.frame = listDetailFrame(options.theme);
   }
 
   get focused(): boolean {
@@ -145,19 +132,13 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (this.prompt) this.prompt.input.focused = value;
   }
 
-  private applySelection(next: ReturnType<typeof selectListIndex>): void {
-    this.selected = next.selected;
-    this.selectedId = next.selectedId;
-    if (next.changed) {
-      this.detailScroll = 0;
-      this.pendingStop = undefined;
-    }
+  private applySelection(next: ListSelectionChange): void {
+    if (next.changed) this.pendingStop = undefined;
   }
 
   private select(index: number, runs: ReadonlyArray<SubagentRunView>): void {
     this.applySelection(
-      selectListIndex(
-        { selected: this.selected, selectedId: this.selectedId },
+      this.shell.select(
         index,
         runs.map((run) => run.id),
       ),
@@ -165,13 +146,8 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private reconcile(runs: ReadonlyArray<SubagentRunView>): void {
-    this.applySelection(
-      reconcileListSelection(
-        { selected: this.selected, selectedId: this.selectedId },
-        runs.map((run) => run.id),
-      ),
-    );
-    const selected = runs[this.selected];
+    this.applySelection(this.shell.reconcile(runs.map((run) => run.id)));
+    const selected = runs[this.shell.state.selected];
     if (this.pendingStop && (this.pendingStop !== selected?.id || !canStop(selected)))
       this.pendingStop = undefined;
     if (this.prompt && this.prompt.runId !== selected?.id) this.prompt = undefined;
@@ -180,19 +156,14 @@ export class SubagentFleetComponent implements Component, Focusable {
   private openPrompt(run: SubagentRunView, kind: FleetPromptKind): void {
     const input = new Input();
     input.focused = this._focused;
-    this.prompt = (() => {
-      const baseResult = {
-        kind,
-        runId: run.id,
-        runName: sanitizeTerminalLine(run.name),
-        input,
-      };
-      const withContext =
-        kind === "reply" && run.question?.message
-          ? { ...baseResult, context: sanitizeTerminalLine(run.question.message) }
-          : baseResult;
-      return withContext;
-    })();
+    const question = kind === "reply" ? run.question?.message : undefined;
+    this.prompt = {
+      kind,
+      runId: run.id,
+      runName: sanitizeTerminalLine(run.name),
+      input,
+      ...(question && { context: sanitizeTerminalLine(question) }),
+    };
     this.notice = undefined;
   }
 
@@ -269,11 +240,11 @@ export class SubagentFleetComponent implements Component, Focusable {
   handleInput(data: string): void {
     const runs = this.options.getProjection().runs;
     this.reconcile(runs);
-    const selected = runs[this.selected];
+    const selected = runs[this.shell.state.selected];
     const matchesKeybinding = this.options.matchesKeybinding;
 
     if (this.prompt) {
-      const resolution = this.keymap.resolve(data, { mode: "text-input", matchesKeybinding });
+      const resolution = this.shell.keymap.resolve(data, { mode: "text-input", matchesKeybinding });
       if (resolution?._tag === "Action" && resolution.action === "cancel") {
         this.prompt = undefined;
         this.notice = { kind: "info", text: "Input canceled." };
@@ -289,7 +260,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     }
 
     if (this.pendingStop) {
-      const resolution = this.keymap.resolve(data, {
+      const resolution = this.shell.keymap.resolve(data, {
         mode: "confirmation",
         matchesKeybinding,
         reservedKeys: new Set(["x"]),
@@ -312,7 +283,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (this.busyAction) {
       // Esc/q close the overlay so a hung action can never trap the user; the in-flight
       // operation itself is not cancelled and settles into the notice state on its own.
-      const resolution = this.keymap.resolve(data, { mode: "busy", matchesKeybinding });
+      const resolution = this.shell.keymap.resolve(data, { mode: "busy", matchesKeybinding });
       if (
         resolution?._tag === "Action" &&
         (resolution.action === "cancel" || resolution.action === "quit")
@@ -323,7 +294,7 @@ export class SubagentFleetComponent implements Component, Focusable {
 
     // Every notice, including errors, dismisses on the next navigation key.
     this.notice = undefined;
-    const resolution = this.keymap.resolve(data, {
+    const resolution = this.shell.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding,
       reservedKeys: FLEET_SHORTCUTS,
@@ -333,7 +304,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (resolution._tag === "Shortcut") {
       if (resolution.key === "t") {
         this.showTechnicalDetails = !this.showTechnicalDetails;
-        this.detailScroll = 0;
+        this.shell.resetDetailScroll();
       } else if (resolution.key === "x" && selected && canStop(selected))
         this.pendingStop = selected.id;
       else if (resolution.key === "i" && selected && canInterrupt(selected))
@@ -373,46 +344,24 @@ export class SubagentFleetComponent implements Component, Focusable {
     }
 
     if (resolution.action === "confirm") {
-      if (selected) {
-        if (this.layout === "narrow") this.details = !this.details;
-        this.pane = this.layout === "narrow" && !this.details ? "list" : "detail";
-        this.detailScroll = 0;
-        this.keymap.resetChord();
-      }
+      // Enter policy stays local: every layout opens/toggles the detail pane on Enter.
+      if (selected) this.shell.enterPane();
       this.options.requestRender();
       return;
     }
     if (resolution.action === "help") this.alternateHelp = !this.alternateHelp;
     const motion = listDetailMotionFromAction(resolution.action);
     if (motion) {
-      const result = listDetailMotion(
-        {
-          pane: this.pane,
-          details: this.details,
-          selected: this.selected,
-          detailScroll: this.detailScroll,
-        },
-        motion,
-        {
-          layout: this.layout,
-          rowCount: runs.length,
-          hasSelection: selected !== undefined,
-          detailMaxScroll: this.detailMaxScroll,
-          detailSteps: pageSteps(this.detailPageSize),
-          listSteps: pageSteps(this.listPageSize),
-        },
-      );
+      const result = this.shell.applyMotion(motion, {
+        rowCount: runs.length,
+        hasSelection: selected !== undefined,
+      });
       if (result._tag === "Close") {
         this.options.close();
         return;
       }
-      if (result._tag === "Update") {
-        this.pane = result.state.pane;
-        this.details = result.state.details;
-        this.detailScroll = result.state.detailScroll;
-        if (result.movedSelection) this.select(result.state.selected, runs);
-        if (result.resetChord) this.keymap.resetChord();
-      }
+      if (result._tag === "Update" && result.movedSelection)
+        this.select(result.state.selected, runs);
     }
     this.options.requestRender();
   }
@@ -421,21 +370,12 @@ export class SubagentFleetComponent implements Component, Focusable {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
-    const nextLayout = managerLayoutTier(safeWidth);
-    if (nextLayout !== this.layout) {
-      this.layout = nextLayout;
-      this.keymap.resetChord();
-      if (this.layout === "narrow") this.details = this.pane === "detail";
-    }
+    this.shell.syncLayout(safeWidth);
     const projection = this.options.getProjection();
     const runs = projection.runs;
     this.reconcile(runs);
-    const selected = runs[this.selected];
-    if (!selected && this.pane === "detail") {
-      this.pane = "list";
-      this.details = false;
-      this.keymap.resetChord();
-    }
+    const selected = runs[this.shell.state.selected];
+    this.shell.ensureSelectionPane(selected !== undefined);
     const working = runs.filter(
       (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
     ).length;
@@ -444,43 +384,26 @@ export class SubagentFleetComponent implements Component, Focusable {
     const retained = runs.filter((run) => run.state === "reported").length;
     const titleRaw = ` /subagents · ${runs.length} run${runs.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} retained` : ""} `;
     const title = truncateToWidth(titleRaw, Math.max(0, safeWidth - 2), "");
-    const top = `${this.outerBorder("╭")}${this.options.theme.fg("accent", title)}${this.outerBorder(
-      `${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`,
-    )}`;
     const help = this.helpText(safeWidth, selected);
     const safeHelp = truncateToWidth(help, Math.max(0, safeWidth - 2), "");
-    const bottom = `${this.outerBorder(
-      `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(safeHelp) - 2))}`,
-    )}${safeHelp}${this.outerBorder("╯")}`;
-    if (height === 1) return [truncateToWidth(top, safeWidth, "")];
-    if (safeWidth === 1) return Array.from({ length: height }, () => " ");
-    const bodyHeight = height - 2;
-    let body: string[];
-    if (this.prompt) body = this.renderPrompt(safeWidth, bodyHeight, this.prompt);
-    else {
-      const showNotice = this.notice !== undefined && bodyHeight > 0;
-      const contentHeight = Math.max(0, bodyHeight - (showNotice ? 1 : 0));
-      const content =
-        this.layout === "wide"
-          ? this.renderWide(safeWidth, contentHeight, runs, selected)
-          : this.layout === "stacked"
-            ? this.renderStacked(safeWidth, contentHeight, runs, selected)
-            : this.renderNarrow(safeWidth, contentHeight, runs, selected);
-      body = showNotice ? [this.renderNotice(safeWidth, this.notice!), ...content] : content;
-    }
-    return [truncateToWidth(top, safeWidth, ""), ...body, truncateToWidth(bottom, safeWidth, "")];
-  }
-
-  private outerBorder(text: string): string {
-    return this.options.theme.fg("borderAccent", text);
-  }
-
-  private innerBorder(text: string): string {
-    return this.options.theme.fg("borderMuted", text);
-  }
-
-  private framedRow(line: string, inner: number): string {
-    return `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
+    return framedScreen(this.frame, {
+      width: safeWidth,
+      height,
+      top: this.options.theme.fg("accent", title),
+      bottom: safeHelp,
+      body: (bodyHeight) => {
+        if (this.prompt) return this.renderPrompt(safeWidth, bodyHeight, this.prompt);
+        const showNotice = this.notice !== undefined && bodyHeight > 0;
+        const contentHeight = Math.max(0, bodyHeight - (showNotice ? 1 : 0));
+        const content =
+          this.shell.state.layout === "wide"
+            ? this.renderWide(safeWidth, contentHeight, runs, selected)
+            : this.shell.state.layout === "stacked"
+              ? this.renderStacked(safeWidth, contentHeight, runs, selected)
+              : this.renderNarrow(safeWidth, contentHeight, runs, selected);
+        return showNotice ? [this.renderNotice(safeWidth, this.notice!), ...content] : content;
+      },
+    });
   }
 
   private renderNotice(width: number, notice: FleetNotice): string {
@@ -488,7 +411,8 @@ export class SubagentFleetComponent implements Component, Focusable {
     const glyph = managerNoticeGlyph(notice.kind);
     const color =
       notice.kind === "error" ? "error" : notice.kind === "success" ? "success" : "muted";
-    return this.framedRow(
+    return framedRow(
+      this.frame,
       this.options.theme.fg(color, `${glyph} ${sanitizeTerminalLine(notice.text)}`),
       inner,
     );
@@ -545,10 +469,7 @@ export class SubagentFleetComponent implements Component, Focusable {
                 ...inputLines,
                 ...feedback,
               ];
-    const frame = (line: string) => this.framedRow(line, inner);
-    const rendered = rows.slice(0, height).map(frame);
-    while (rendered.length < height) rendered.push(frame(""));
-    return rendered;
+    return framedFill(this.frame, rows, height, inner);
   }
 
   private runLine(
@@ -557,7 +478,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     width: number,
     runs: ReadonlyArray<SubagentRunView>,
   ): string {
-    const selected = index === this.selected;
+    const selected = index === this.shell.state.selected;
     const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
     const frame = Math.floor(this.options.getNow() / 160);
     const glyph = this.options.theme.fg(
@@ -587,11 +508,8 @@ export class SubagentFleetComponent implements Component, Focusable {
   private visibleRuns(runs: ReadonlyArray<SubagentRunView>, limit: number) {
     // The rendered window is the authoritative list page size for half/full-page motions,
     // so stacked layouts page by their actual visible rows rather than the full height.
-    this.listPageSize = Math.max(1, limit);
-    const start = listWindowStart(runs.length, this.selected, limit);
-    return runs
-      .slice(start, start + Math.max(1, limit))
-      .map((run, offset) => ({ run, index: start + offset }));
+    const { start, end } = this.shell.visibleWindow(runs.length, limit);
+    return runs.slice(start, end).map((run, offset) => ({ run, index: start + offset }));
   }
 
   private listHeading(
@@ -648,10 +566,11 @@ export class SubagentFleetComponent implements Component, Focusable {
     ].filter((item): item is { full: string; compact: string } => item !== undefined);
     const actions = availableActions.map((item) => item.full);
     const compactActions = availableActions.map((item) => item.compact);
-    const scrollHelp = this.pane === "list" ? "C-u/d Half-page · gg/G Ends" : "C-u/d Detail · gg/G";
+    const scrollHelp =
+      this.shell.state.pane === "list" ? "C-u/d Half-page · gg/G Ends" : "C-u/d Detail · gg/G";
     // The expanded ? overlay is the discoverable place for the full motion vocabulary.
     const expandedScrollHelp =
-      this.pane === "list"
+      this.shell.state.pane === "list"
         ? "C-u/d Half · PgUp/PgDn Page · gg/G Ends"
         : "C-u/d · PgUp/PgDn Detail · gg/G";
     if (this.alternateHelp)
@@ -701,15 +620,8 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private detailWindow(lines: string[], height: number, width: number): string[] {
-    const window = computeDetailWindow({
-      lines,
-      height,
-      previous: { scroll: this.detailScroll, lineCount: this.detailLineCount },
-    });
-    this.detailScroll = window.scroll;
-    this.detailMaxScroll = window.maxScroll;
-    this.detailPageSize = window.pageSize;
-    this.detailLineCount = window.lineCount;
+    // No follow policy: scroll 0 keeps tracking the newest lines (tri-state `undefined`).
+    const window = this.shell.detailWindow(lines, height);
     if (!window.overflow) return [...window.visible];
     const position = this.options.theme.fg("dim", detailWindowPositionLabel(window.overflow));
     return [padListDetailRow(position, width), ...window.visible];
@@ -721,27 +633,18 @@ export class SubagentFleetComponent implements Component, Focusable {
     runs: ReadonlyArray<SubagentRunView>,
     selected: SubagentRunView | undefined,
   ): string[] {
-    const { listWidth: leftWidth, detailWidth: rightWidth } = wideListDetailGeometry(
-      width,
-      38,
-      0.42,
-    );
+    const { listWidth, detailWidth } = wideListDetailGeometry(width, 38, 0.42);
     const visible = this.visibleRuns(runs, Math.max(1, height - 1));
+    const focused = this.shell.state.pane === "list";
     const left = [
       this.options.theme.fg(
-        this.pane === "list" ? "accent" : "muted",
-        `${this.pane === "list" ? "› " : ""}${this.listHeading(runs, visible)}`,
+        focused ? "accent" : "muted",
+        `${focused ? "› " : ""}${this.listHeading(runs, visible)}`,
       ),
-      ...visible.map(({ run, index }) => this.runLine(run, index, leftWidth, runs)),
+      ...visible.map(({ run, index }) => this.runLine(run, index, listWidth, runs)),
     ];
-    const detail = this.detailWindow(this.detailLines(selected, rightWidth), height, rightWidth);
-    return Array.from(
-      { length: height },
-      (_, index) =>
-        `${this.outerBorder("│")}${padListDetailRow(left[index] ?? "", leftWidth)}${this.innerBorder(
-          "│",
-        )}${padListDetailRow(detail[index] ?? "", rightWidth)}${this.outerBorder("│")}`,
-    );
+    const right = this.detailWindow(this.detailLines(selected, detailWidth), height, detailWidth);
+    return framedWideRows(this.frame, { left, right, height, listWidth, detailWidth });
   }
 
   private renderStacked(
@@ -753,20 +656,17 @@ export class SubagentFleetComponent implements Component, Focusable {
     const inner = width - 2;
     const listHeight = stackedListHeight(height, runs.length);
     const visible = this.visibleRuns(runs, listHeight - 1);
+    const focused = this.shell.state.pane === "list";
     const list = [
       this.options.theme.fg(
-        this.pane === "list" ? "accent" : "muted",
-        `${this.pane === "list" ? "› " : ""}${this.listHeading(runs, visible)}`,
+        focused ? "accent" : "muted",
+        `${focused ? "› " : ""}${this.listHeading(runs, visible)}`,
       ),
       ...visible.map(({ run, index }) => this.runLine(run, index, inner, runs)),
     ];
-    const divider = `${this.outerBorder("├")}${this.innerBorder("─".repeat(inner))}${this.outerBorder("┤")}`;
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
-    const frame = (line: string) => this.framedRow(line, inner);
-    const lines = [...list.map(frame), divider, ...detail.map(frame)];
-    while (lines.length < height) lines.push(frame(""));
-    return lines.slice(0, height);
+    return framedStackedRows(this.frame, { list, detail, height, inner });
   }
 
   private renderNarrow(
@@ -777,7 +677,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   ): string[] {
     const inner = width - 2;
     const lines =
-      this.details && selected
+      this.shell.state.details && selected
         ? this.detailWindow(this.detailLines(selected, inner), height, inner)
         : runs.length
           ? (() => {
@@ -795,14 +695,8 @@ export class SubagentFleetComponent implements Component, Focusable {
                 "No subagents. Ask the agent to start one with subagent_start.",
               ),
             ];
-    if (!this.details) {
-      this.detailMaxScroll = 0;
-      this.detailLineCount = 0;
-    }
-    const frame = (line: string) => this.framedRow(line, inner);
-    const rendered = lines.slice(0, height).map(frame);
-    while (rendered.length < height) rendered.push(frame(""));
-    return rendered;
+    if (!this.shell.state.details) this.shell.resetDetailWindow();
+    return framedFill(this.frame, lines, height, inner);
   }
 
   invalidate(): void {

@@ -1,6 +1,7 @@
 // Long-lived shell output is decoded into a byte-bounded queue here. Effect owns spawn,
-// streams, forced cleanup, and scope lifetime; only immediate signal dispatch and the
-// post-leader process-group sweep remain raw platform operations.
+// streams, forced cleanup, and scope lifetime; immediate graceful signal dispatch, the
+// POSIX post-leader process-group sweep, and the bounded Windows taskkill tree terminator
+// remain raw platform operations.
 import { StringDecoder } from "node:string_decoder";
 import { effectProcessExit, nodeProcessLayer } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
@@ -118,58 +119,62 @@ function dispatchGracefulTermination(pid: number): void {
   }
 }
 
-const terminateWindowsTree = (
+export interface WindowsTreeTerminatorChild {
+  on(event: "exit" | "error", listener: (result: Error | number | null) => void): void;
+  removeListener(event: "exit" | "error", listener: (result: Error | number | null) => void): void;
+  kill(signal: NodeJS.Signals): void;
+  unref(): void;
+}
+
+export type WindowsTreeTerminatorSpawn = (
+  command: string,
+  args: ReadonlyArray<string>,
+  options: { readonly stdio: "ignore"; readonly windowsHide: true },
+) => WindowsTreeTerminatorChild;
+
+/**
+ * Windows lacks POSIX process groups, so `taskkill /pid PID /T /F` is the whole-tree force
+ * terminator. It runs through a raw bounded callback rather than a scoped Effect spawner
+ * because interruption cleanup (typically the 2-second timeout) must stay synchronous:
+ * remove the settle listeners, install a harmless late-error listener, SIGKILL the
+ * terminator, and unref it without ever awaiting taskkill's own exit, so a hung taskkill
+ * cannot hang the interrupting finalizer join.
+ */
+export const terminateWindowsTree = (
   pid: number,
-  mode: "graceful" | "force",
+  spawnTerminator: WindowsTreeTerminatorSpawn = spawnWindowsTreeTerminator,
 ): Effect.Effect<void, LocalProcessError> =>
   Effect.callback<void, LocalProcessError>((resume) => {
-    let killer: ReturnType<typeof spawnWindowsTreeTerminator>;
-    try {
-      killer = spawnWindowsTreeTerminator(
-        "taskkill",
-        ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])],
-        { stdio: "ignore", windowsHide: true },
-      );
-    } catch (error) {
-      resume(Effect.fail(processError("terminate", error)));
-      return Effect.void;
-    }
-    let settled = false;
-    const cleanup = () => {
-      killer.off("error", onError);
-      killer.off("close", onClose);
+    const killer = spawnTerminator("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    const settle = (result: Error | number | null) => {
+      removeListeners();
+      resume(result === 0 ? Effect.void : Effect.fail(processError("terminate", result)));
     };
-    const finish = (effect: Effect.Effect<void, LocalProcessError>) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resume(effect);
+    const removeListeners = () => {
+      killer.removeListener("exit", settle);
+      killer.removeListener("error", settle);
     };
-    const onError = (error: Error) => finish(Effect.fail(processError("terminate", error)));
-    const onClose = (code: number | null) =>
-      finish(
-        code === 0
-          ? Effect.void
-          : Effect.fail(processError("terminate", "taskkill did not confirm cleanup")),
-      );
-    killer.once("error", onError);
-    killer.once("close", onClose);
+    killer.on("exit", settle);
+    killer.on("error", settle);
     return Effect.sync(() => {
-      cleanup();
-      if (!settled) killer.kill("SIGKILL");
+      removeListeners();
+      killer.on("error", () => {});
+      killer.kill("SIGKILL");
+      killer.unref();
     });
   }).pipe(
-    Effect.timeoutOption("2 seconds"),
-    Effect.flatMap((outcome) =>
-      outcome._tag === "Some"
-        ? Effect.void
-        : Effect.fail(processError("terminate", "taskkill timed out")),
-    ),
+    Effect.timeoutOrElse({
+      duration: "2 seconds",
+      orElse: () => Effect.fail(processError("terminate", "taskkill timed out")),
+    }),
   );
 
 const terminateLingeringGroup = (pid: number): Effect.Effect<void> => {
   if (process.platform === "win32")
-    return terminateWindowsTree(pid, "force").pipe(Effect.catch(() => Effect.void));
+    return terminateWindowsTree(pid).pipe(Effect.catch(() => Effect.void));
   return Effect.sync(() => {
     try {
       process.kill(-pid, "SIGKILL");
@@ -293,8 +298,10 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
   const exitFiber = yield* Effect.exit(child.exitCode).pipe(
     Effect.flatMap((exit) => {
       const observed = effectProcessExit(exit);
-      const baseExit = { exitCode: observed.code };
-      const result = observed.signal ? { ...baseExit, signal: observed.signal } : baseExit;
+      const result = {
+        exitCode: observed.code,
+        ...(observed.signal && { signal: observed.signal }),
+      };
       return terminateLingeringGroup(pid).pipe(Effect.as(result));
     }),
     Effect.forkScoped({ startImmediately: true }),
@@ -302,18 +309,16 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
 
   const forceTermination =
     process.platform === "win32"
-      ? terminateWindowsTree(pid, "force")
+      ? terminateWindowsTree(pid)
       : child.isRunning.pipe(
           Effect.catch(() => Effect.succeed(true)),
           Effect.flatMap((running) =>
             running
               ? child.kill({ killSignal: "SIGKILL" }).pipe(
-                  Effect.timeoutOption("2 seconds"),
-                  Effect.flatMap((outcome) =>
-                    outcome._tag === "Some"
-                      ? Effect.void
-                      : Effect.fail(processError("terminate", "cleanup timed out")),
-                  ),
+                  Effect.timeoutOrElse({
+                    duration: "2 seconds",
+                    orElse: () => Effect.fail(processError("terminate", "cleanup timed out")),
+                  }),
                 )
               : terminateLingeringGroup(pid),
           ),
@@ -346,9 +351,8 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     terminate,
     release: child.unref.pipe(
       Effect.andThen(terminate("force")),
-      Effect.timeoutOption("2500 millis"),
-      Effect.catch(() => Effect.succeedNone),
-      Effect.asVoid,
+      Effect.timeoutOrElse({ duration: "2500 millis", orElse: () => Effect.void }),
+      Effect.ignore,
       Effect.ensuring(Effect.sync(closeOutput)),
     ),
   };

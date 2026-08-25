@@ -103,6 +103,8 @@ Recommended defaults:
 
 Capacity applies to `starting`, `running`, and `stopping` jobs. When retention exceeds its limit, evict the oldest completed jobs only. Never evict an active job.
 
+The total log budget is split roughly in half: one half bounds retained in-memory logs across all jobs and the other funds per-process ingress buffers divided across the running-job capacity.
+
 ### 4.5 Output model
 
 - Capture stdout and stderr independently at the process boundary.
@@ -124,6 +126,7 @@ interface BackgroundLogSlice {
     readonly stream: "stdout" | "stderr";
     readonly text: string;
     readonly timestamp: number;
+    readonly bytes: number;
   }>;
   readonly nextCursor: number;
   readonly earliestAvailableCursor: number;
@@ -189,7 +192,7 @@ Normal stop requests graceful process-tree termination, waits for the configured
 
 #### `stop_all`
 
-Stops all active jobs concurrently with bounded concurrency and returns their final snapshots.
+Stops all active jobs concurrently with bounded concurrency and returns their final snapshots in the captured order. Every captured job receives a termination request even when a sibling stop fails with a typed error; only external interruption or a defect interrupts the batch. A job that settles and is evicted between capture and stop is tolerated as success. Remaining failures aggregate into one `BackgroundTerminationError`; a failed batch never reports partial success.
 
 #### `clear`
 
@@ -266,6 +269,7 @@ Behavior:
 - Service revisions invalidate and rerender the component; no polling timer is required.
 - Closing `/ps` unsubscribes its listener.
 - Rendered logs strip dangerous terminal control sequences while retaining safe color only if explicitly supported later.
+- `/ps` uses the shared `listDetailFrame(theme)` border renderers. Shared `framedFill` accepts raw content lines and frames, clips, and fills them.
 
 ## 8. Footer status
 
@@ -287,11 +291,14 @@ The adapter owns an Effect `ChildProcessHandle` and exposes a narrower Effect-na
 ```ts
 interface LocalProcessHandle {
   readonly pid: number;
-  readonly events: Stream.Stream<ProcessEvent, ProcessBoundaryError>;
-  readonly awaitExit: Effect.Effect<ProcessExit, ProcessBoundaryError>;
-  readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, ProcessBoundaryError>;
+  readonly output: Stream.Stream<LocalProcessOutput>;
+  readonly awaitExit: Effect.Effect<LocalProcessExit>;
+  readonly droppedOutputBytes: () => number;
+  readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, LocalProcessError>;
 }
 ```
+
+`output` and `awaitExit` never fail: stream failures surface as synthetic stderr text and exit observation settles with an exit code/signal record. `droppedOutputBytes` reports ingress bytes discarded by the bounded queue so the service can reconcile unobserved drops after exit. Only `terminate` fails typed, with `LocalProcessError`.
 
 Spawn requirements:
 
@@ -301,7 +308,7 @@ Spawn requirements:
 - Hide extra windows on Windows.
 - Create a process group where supported.
 - On POSIX, terminate the process group rather than only the shell PID.
-- On Windows, use `taskkill /T` for active process trees and retry it during finalization. Cleanup after a shell leader has already exited is best effort until a native Job Object boundary is introduced.
+- On Windows, run `taskkill /pid PID /T /F` as a raw bounded callback around Node spawn (hidden window, ignored stdio) with typed zero/nonzero/error mapping and a 2-second timeout, and retry it during finalization. The callback's interruption cleanup is synchronous — remove listeners, keep a harmless late-error listener, SIGKILL, unref — and never awaits taskkill's own exit, so a hung terminator cannot hang a finalizer join. Cleanup after a shell leader has already exited is best effort until a native Job Object boundary is introduced.
 - Handle spawn failure, exit, abort, timeout, and late output without double settlement.
 - Unref the upstream handle only when bounded release begins, so its fallback finalizer cannot extend session shutdown after this boundary's cleanup deadline.
 
@@ -313,13 +320,15 @@ Termination policy:
 4. Escalate to force termination if still active.
 5. Await final process settlement before completing stop or scope closure.
 
+The service masks interruption only while it claims stop ownership. Owner waits then resume interruptibly. Interruption forces an already-settled handle, while the monitor forces a handle that arrives later. Internal timeout interruption does not run the owner interruption finalizer.
+
 ## 10. Effect ownership
 
 - `extension.ts` registers Pi callbacks only.
 - `layer.ts` composes the scoped runtime.
-- `application.ts` wires session lifecycle, tools, commands, status, and UI projection.
+- `application.ts` wires session lifecycle, tools, commands, status, and UI projection through the shared session-runtime slot. Trusted code-preview settings load as the first step of runtime startup, after the slot has deactivated the prior runtime. Startup returns only `showFooterStatus`; the bridge already owns the empty initial and cleared projections. Superseded session starts never reach the settings boundary, and only the current-generation activation registers the tool. Application Effect execution is gated synchronously on slot activation, so stale tool or manager calls made while a replacement start is still loading settings fail with a typed `PiSessionRuntimeError` rather than reaching the unactivated next runtime.
 - `BackgroundTerminalService` is the sole owner of the job registry and child scopes.
-- Each job gets a child scope containing its process handle, output fiber, timeout fiber, and completion Deferred.
+- Process monitors run in one fixed child scope owned by the service; each monitor scopes its process handle, output fiber, and timeout fiber, with a completion Deferred per job.
 - Registry mutation is serialized. Concurrent start/stop/exit/shutdown events cannot produce duplicate settlement or lose a job.
 - Use Effect child-process acquisition for spawn readiness and `Deferred` for exit and log waiters.
 - Use `SubscriptionRef` or an equivalent revisioned projection for TUI/footer updates.
@@ -338,44 +347,9 @@ Expected tagged errors include:
 
 ## 11. Package layout
 
-```text
-packages/pi-background-terminals/
-  index.ts
-  package.json
-  tsconfig.json
-  ARCHITECTURE.md
-  src/
-    extension.ts
-    layer.ts
-    application.ts
-    config/
-      schema.ts
-      options.ts
-      store.ts
-    settings/
-      controller.ts
-    boundary/
-      host-ui.ts
-      local-process.ts
-      native-clock.ts
-    job/
-      service.ts
-      model.ts
-      errors.ts
-      log-buffer.ts
-      projection.ts
-    tools/
-      background-terminal.ts
-    ui/
-      manager.ts
-  tests/
-    config.test.ts
-    job-service.test.ts
-    local-process.test.ts
-    log-buffer.test.ts
-```
+The package follows the repository's small-extension conventions while nesting the multi-file job feature: `extension.ts`, `layer.ts`, and `application.ts` at the `src/` root; `config/` with its single `store.ts` persistence door; `settings/controller.ts` for the `/ps` command; `boundary/` for the Pi status bridge and the local-process adapter; `job/` for the Effect-owned domain (service, model with its merged pure projection helpers, errors, bounded log buffer, UTF-8 accounting); `tools/` for the `background_terminal` registration; `ui/` for pure presentation; and package-root `tests/`. See the package `ARCHITECTURE.md` for the current source map.
 
-This follows the repository's small-extension conventions while nesting the multi-file job feature. `ui/` remains pure; Effect resources stay in `job/`; Node and Pi adapters stay in `boundary/`. Shared process utilities should move to `pi-cosmic-core` only if a second package needs the same abstraction.
+`ui/` remains pure; Effect resources stay in `job/`; Node and Pi adapters stay in `boundary/`. Shared process utilities should move to `pi-cosmic-core` only if a second package needs the same abstraction.
 
 Stable service key:
 
@@ -433,6 +407,7 @@ Cover:
 - A log long-poll wakes on output, exit, timeout, caller interruption, and shutdown.
 - Concurrent stop requests share one termination workflow.
 - Graceful stop escalates only after `TestClock` advances past the grace period.
+- Interrupting a stop owner after graceful dispatch forces the settled handle, and a later stop observes `stopped`.
 - Runtime timeout produces `timed_out` and terminates the process tree.
 - Scope closure stops all jobs and awaits finalizers.
 - No start or subscription succeeds after runtime closure.

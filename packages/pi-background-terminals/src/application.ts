@@ -1,8 +1,4 @@
-import {
-  getAgentDir,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { loadCodePreviewSettings } from "pi-code-previews";
 import {
@@ -10,10 +6,10 @@ import {
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
+  PiSessionRuntimeError,
 } from "pi-cosmic-core";
 import { makeProjectionBridge } from "./boundary/host-ui.ts";
 import { BackgroundTerminalConfigStore } from "./config/store.ts";
-import type { BackgroundTerminalProjection } from "./job/model.ts";
 import { BackgroundTerminalService } from "./job/service.ts";
 import {
   makeBackgroundTerminalLayer,
@@ -25,14 +21,12 @@ import { registerProcessManagerCommand } from "./settings/controller.ts";
 import { registerBackgroundTerminalTool } from "./tools/background-terminal.ts";
 
 export interface BackgroundTerminalsApplicationBoundaries {
-  readonly loadSettings: (
-    cwd: string,
-    projectTrusted: boolean,
-  ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
+  readonly loadSettings: (cwd: string, projectTrusted: boolean) => Promise<void>;
 }
 
 const LIVE_APPLICATION_BOUNDARIES: BackgroundTerminalsApplicationBoundaries = {
-  loadSettings: loadCodePreviewSettings,
+  loadSettings: (cwd, projectTrusted) =>
+    loadCodePreviewSettings(cwd, projectTrusted).then(() => undefined),
 };
 
 export function registerBackgroundTerminalsApplication(
@@ -40,14 +34,13 @@ export function registerBackgroundTerminalsApplication(
   boundaries: BackgroundTerminalsApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
   const bridge = makeProjectionBridge(pi.events);
-  let preparationGeneration = 0;
 
   const slot = makePiSessionRuntimeSlot<
     BackgroundTerminalSessionInput,
     BackgroundTerminalApplication,
     never,
     BackgroundTerminalRuntimeError,
-    { readonly showFooterStatus: boolean; readonly projection: BackgroundTerminalProjection }
+    { readonly showFooterStatus: boolean }
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
@@ -57,27 +50,42 @@ export function registerBackgroundTerminalsApplication(
         }),
         { agentDirectory: getAgentDir, packageName: "pi-background-terminals" },
       ),
-    startup: () =>
+    startup: (input) =>
       Effect.gen(function* () {
+        // The slot has already deactivated any prior runtime, so no tool call can target the
+        // prior session while this activation loads trusted code-preview settings. Superseded
+        // or aborted starts never reach this settings boundary.
+        yield* Effect.tryPromise(() =>
+          boundaries.loadSettings(input.cwd, input.projectTrusted),
+        ).pipe(Effect.ignore);
         const config = yield* BackgroundTerminalConfigStore;
-        const service = yield* BackgroundTerminalService;
-        return {
-          showFooterStatus: config.showFooterStatus,
-          projection: yield* service.projection,
-        };
+        return { showFooterStatus: config.showFooterStatus };
       }),
     onActivated: ({ ctx }, _token, prepared) => {
+      // Only the current-generation activation reaches this hook, and settings are already
+      // loaded, so the cooperative-shell wrapper captures the fresh shell mode here.
+      registerBackgroundTerminalTool(pi, { run });
       bridge.setFooterEnabled(prepared.showFooterStatus);
-      bridge.publish(prepared.projection);
       bridge.setContext(ctx);
     },
     onDeactivated: () => bridge.clear(),
   });
 
+  // Synchronous activation gate: while a replacement start is still loading settings, the
+  // slot already holds the unactivated next runtime, so stale callers must fail typed here
+  // instead of reaching it through the bare slot runner.
   const run = <A, E>(
     effect: Effect.Effect<A, E, BackgroundTerminalApplication>,
     signal?: AbortSignal,
-  ) => slot.run(effect, signal);
+  ) =>
+    slot.isActive()
+      ? slot.run(effect, signal)
+      : Promise.reject(
+          new PiSessionRuntimeError({
+            operation: "run",
+            message: "Pi session runtime is not active.",
+          }),
+        );
 
   registerProcessManagerCommand(pi, bridge, {
     stop: (id) =>
@@ -86,71 +94,22 @@ export function registerBackgroundTerminalsApplication(
       run(BackgroundTerminalService.use((service) => service.clear)).then(() => undefined),
   });
 
-  const prepareActivation = (ctx: ExtensionContext): Promise<void> => {
-    const generation = ++preparationGeneration;
-    bridge.clear();
-    // Replacement begins before the settings boundary so no tool call can target the prior
-    // session while a newer activation is still being prepared.
-    const shutdown = slot.shutdown();
+  pi.on("session_start", (_event, ctx) => {
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable") return shutdown.then(() => undefined);
-    if (captured.aborted) return shutdown.then(() => undefined);
-    const preparationAborted = () => {
-      try {
-        return captured.signal?.aborted === true;
-      } catch {
-        return true;
-      }
-    };
-    let removePreparationAbort: () => void = () => undefined;
-    if (captured.signal) {
-      try {
-        const invalidatePreparation = () => {
-          if (generation === preparationGeneration) ++preparationGeneration;
-        };
-        captured.signal.addEventListener("abort", invalidatePreparation, { once: true });
-        removePreparationAbort = () => {
-          try {
-            captured.signal?.removeEventListener("abort", invalidatePreparation);
-          } catch {
-            // A stale host signal cannot escape lifecycle cleanup.
-          }
-        };
-        if (preparationAborted()) invalidatePreparation();
-      } catch {
-        return shutdown.then(() => undefined);
-      }
+    if (captured._tag === "Unavailable" || captured.aborted) {
+      bridge.clear();
+      return slot.shutdown();
     }
-    const projectTrusted = isProjectTrusted(ctx);
-    const settings = Promise.resolve()
-      .then(() => Promise.resolve(boundaries.loadSettings(captured.cwd, projectTrusted)))
-      .catch(() => undefined);
-    return Promise.all([shutdown, settings])
-      .then(() => {
-        if (generation !== preparationGeneration || preparationAborted()) return undefined;
-        registerBackgroundTerminalTool(pi, { run });
-        if (generation !== preparationGeneration || preparationAborted()) return undefined;
-        return slot.start(
-          {
-            ctx,
-            cwd: captured.cwd,
-            projectTrusted,
-          },
-          captured.signal,
-        );
-      })
-      .then(() => undefined)
-      .finally(removePreparationAbort);
-  };
-
-  pi.on("session_start", (_event, ctx) => prepareActivation(ctx));
+    return slot
+      .start({ ctx, cwd: captured.cwd, projectTrusted: isProjectTrusted(ctx) }, captured.signal)
+      .then(() => undefined);
+  });
 
   pi.on("turn_end", (_event, ctx) => {
     if (slot.isActive()) bridge.setContext(ctx);
   });
 
   pi.on("session_shutdown", () => {
-    ++preparationGeneration;
     bridge.clear();
     return slot.shutdown();
   });

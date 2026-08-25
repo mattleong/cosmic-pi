@@ -1,10 +1,17 @@
 // Explicit test entry-point Layer provision owns the local process scope.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core";
-import { LocalProcess, makeBackgroundProcessEnvironment } from "../src/boundary/local-process.ts";
+import {
+  LocalProcess,
+  makeBackgroundProcessEnvironment,
+  terminateWindowsTree,
+  type WindowsTreeTerminatorSpawn,
+} from "../src/boundary/local-process.ts";
 
 const withLocalProcess = <A, E>(effect: Effect.Effect<A, E, LocalProcess | Scope.Scope>) =>
   effect.pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
@@ -26,6 +33,100 @@ const awaitProcessDeath = (pid: number) =>
     }
     return !processAlive(pid);
   });
+
+type TerminatorListener = (result: Error | number | null) => void;
+
+/** Platform-neutral fake taskkill child so terminator semantics are testable everywhere. */
+const fakeTerminator = () => {
+  const listeners = new Map<"exit" | "error", TerminatorListener[]>();
+  const spawns: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+  const killed: string[] = [];
+  let unrefed = false;
+  const spawn: WindowsTreeTerminatorSpawn = (command, args) => {
+    spawns.push({ command, args });
+    return {
+      on: (event, listener) => listeners.set(event, [...(listeners.get(event) ?? []), listener]),
+      removeListener: (event, listener) =>
+        listeners.set(
+          event,
+          (listeners.get(event) ?? []).filter((item) => item !== listener),
+        ),
+      kill: (signal) => killed.push(signal),
+      unref: () => {
+        unrefed = true;
+      },
+    };
+  };
+  return {
+    spawn,
+    spawns,
+    killed,
+    isUnrefed: () => unrefed,
+    emit: (event: "exit" | "error", result: Error | number | null) => {
+      for (const listener of listeners.get(event) ?? []) listener(result);
+    },
+    listenerCounts: () => ({
+      exit: listeners.get("exit")?.length ?? 0,
+      error: listeners.get("error")?.length ?? 0,
+    }),
+  };
+};
+
+describe("windows tree terminator", () => {
+  it.effect("confirms a zero-exit taskkill and removes its listeners", () =>
+    Effect.gen(function* () {
+      const fake = fakeTerminator();
+      const fiber = yield* terminateWindowsTree(42, fake.spawn).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      expect(fake.spawns).toEqual([{ command: "taskkill", args: ["/pid", "42", "/T", "/F"] }]);
+      fake.emit("exit", 0);
+      yield* Fiber.join(fiber);
+      expect(fake.listenerCounts()).toEqual({ exit: 0, error: 0 });
+      expect(fake.killed).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("maps nonzero exit and spawn error to redacted typed failures", () =>
+    Effect.gen(function* () {
+      const nonzero = fakeTerminator();
+      const nonzeroFiber = yield* terminateWindowsTree(42, nonzero.spawn).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      nonzero.emit("exit", 1);
+      const nonzeroFailure = yield* Fiber.join(nonzeroFiber).pipe(Effect.flip);
+      expect(nonzeroFailure).toMatchObject({ _tag: "LocalProcessError" });
+
+      const errored = fakeTerminator();
+      const erroredFiber = yield* terminateWindowsTree(42, errored.spawn).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      errored.emit("error", new Error("taskkill exposed FAKE_SECRET_123"));
+      const erroredFailure = yield* Fiber.join(erroredFiber).pipe(Effect.flip);
+      expect(erroredFailure).toMatchObject({ _tag: "LocalProcessError" });
+      expect(String(erroredFailure)).not.toContain("FAKE_SECRET_123");
+      expect(errored.listenerCounts()).toEqual({ exit: 0, error: 0 });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("bounds a never-exiting taskkill with synchronous kill/unref/listener cleanup", () =>
+    Effect.gen(function* () {
+      const fake = fakeTerminator();
+      const fiber = yield* terminateWindowsTree(42, fake.spawn).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      expect(fake.killed).toEqual([]);
+      yield* TestClock.adjust("2 seconds");
+      // Under TestClock a cleanup that awaited taskkill's exit would hang this join forever.
+      const failure = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(failure).toMatchObject({ _tag: "LocalProcessError" });
+      expect(fake.killed).toEqual(["SIGKILL"]);
+      expect(fake.isUnrefed()).toBe(true);
+      // Settle listeners are gone; only the harmless late-error listener remains.
+      expect(fake.listenerCounts()).toEqual({ exit: 0, error: 1 });
+    }).pipe(Effect.scoped),
+  );
+});
 
 describe("local process boundary", () => {
   it("requests color from compatible CLIs unless the environment explicitly configures it", () => {

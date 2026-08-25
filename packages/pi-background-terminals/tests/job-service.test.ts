@@ -32,14 +32,19 @@ interface FakeProcessControl {
   readonly complete: (exit?: LocalProcessExit) => void;
 }
 
-function fakeProcessLayer(
-  options: {
-    readonly completeOnGraceful?: boolean;
-    readonly completeOnForce?: boolean;
-    readonly failTermination?: boolean;
-    readonly spawnGate?: Deferred.Deferred<void>;
-  } = {},
-) {
+interface FakeSpawnBehavior {
+  readonly completeOnGraceful?: boolean;
+  readonly completeOnForce?: boolean;
+  readonly failTermination?: boolean;
+}
+
+interface FakeProcessOptions extends FakeSpawnBehavior {
+  readonly spawnGate?: Deferred.Deferred<void>;
+  /** Per-spawn behavior overrides by spawn index; missing entries fall back to the base options. */
+  readonly bySpawn?: ReadonlyArray<FakeSpawnBehavior | undefined>;
+}
+
+function fakeProcessLayer(options: FakeProcessOptions = {}) {
   const controls: FakeProcessControl[] = [];
   const spawned = Deferred.makeUnsafe<void>();
   const layer = Layer.succeed(LocalProcess, {
@@ -47,6 +52,7 @@ function fakeProcessLayer(
       Effect.acquireRelease(
         Effect.gen(function* () {
           if (options.spawnGate) yield* Deferred.await(options.spawnGate);
+          const behavior: FakeSpawnBehavior = { ...options, ...options.bySpawn?.[controls.length] };
           const output = yield* Queue.unbounded<
             {
               readonly stream: "stdout" | "stderr";
@@ -72,7 +78,7 @@ function fakeProcessLayer(
             terminate: (mode) =>
               Effect.suspend(() => {
                 modes.push(mode);
-                if (options.failTermination)
+                if (behavior.failTermination)
                   return Effect.fail(
                     new LocalProcessError({
                       operation: "terminate process tree",
@@ -80,8 +86,8 @@ function fakeProcessLayer(
                     }),
                   );
                 if (
-                  (mode === "force" && options.completeOnForce !== false) ||
-                  (mode === "graceful" && options.completeOnGraceful !== false)
+                  (mode === "force" && behavior.completeOnForce !== false) ||
+                  (mode === "graceful" && behavior.completeOnGraceful !== false)
                 ) {
                   complete({
                     exitCode: null,
@@ -110,12 +116,7 @@ function fakeProcessLayer(
 function serviceHarness(
   overrides: Partial<BackgroundTerminalConfig> = {},
   onProjection: (projection: BackgroundTerminalProjection) => void = () => {},
-  fakeOptions: {
-    readonly completeOnGraceful?: boolean;
-    readonly completeOnForce?: boolean;
-    readonly failTermination?: boolean;
-    readonly spawnGate?: Deferred.Deferred<void>;
-  } = {},
+  fakeOptions: FakeProcessOptions = {},
 ) {
   const fake = fakeProcessLayer(fakeOptions);
   const config = Layer.succeed(
@@ -142,7 +143,7 @@ const awaitState = (state: BackgroundJobState) => {
 };
 
 describe("BackgroundTerminalService", () => {
-  it.effect("coalesces output publications onto one leading and trailing interval", () => {
+  it.effect("publishes output once at the leading edge and once at the trailing deadline", () => {
     const projections: BackgroundTerminalProjection[] = [];
     const trailing = Deferred.makeUnsafe<void>();
     const harness = serviceHarness({}, (projection) => {
@@ -150,21 +151,42 @@ describe("BackgroundTerminalService", () => {
       const text = projection.jobs[0]?.logs.map((entry) => entry.text).join("") ?? "";
       if (text === "abc") Deferred.doneUnsafe(trailing, Effect.void);
     });
+    const outputTexts = () =>
+      projections
+        .map((projection) => projection.jobs[0]?.logs.map((entry) => entry.text).join(""))
+        .filter((text): text is string => Boolean(text));
     return Effect.gen(function* () {
-      yield* BackgroundTerminalService.use((service) =>
-        service.start({ command: "watch", cwd: "." }),
-      );
-      yield* Deferred.await(harness.spawned);
+      const service = yield* BackgroundTerminalService;
+      const started = yield* service.start({ command: "watch", cwd: "." });
+
+      const first = yield* service
+        .logs({ id: started.id, afterCursor: 0, waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
       harness.controls[0]?.offer("stdout", "a");
+      const firstSlice = yield* Fiber.join(first);
+      expect(firstSlice.events.map((event) => event.cursor)).toEqual([1]);
+      expect(outputTexts()).toEqual(["a"]);
+
+      const second = yield* service
+        .logs({ id: started.id, afterCursor: firstSlice.nextCursor, waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
       harness.controls[0]?.offer("stdout", "b");
+      const secondSlice = yield* Fiber.join(second);
+      const third = yield* service
+        .logs({ id: started.id, afterCursor: secondSlice.nextCursor, waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
       harness.controls[0]?.offer("stdout", "c");
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("1 second");
+      const thirdSlice = yield* Fiber.join(third);
+      expect([firstSlice.nextCursor, secondSlice.nextCursor, thirdSlice.nextCursor]).toEqual([
+        1, 2, 3,
+      ]);
+      expect(outputTexts()).toEqual(["a"]);
+
+      yield* TestClock.adjust("999 millis");
+      expect(outputTexts()).toEqual(["a"]);
+      yield* TestClock.adjust("1 millis");
       yield* Deferred.await(trailing);
-      const outputPublications = projections.filter((projection) =>
-        projection.jobs.some((job) => job.logs.length > 0),
-      );
-      expect(outputPublications.length).toBeLessThanOrEqual(2);
+      expect(outputTexts()).toEqual(["a", "abc"]);
     }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
@@ -219,6 +241,23 @@ describe("BackgroundTerminalService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
+  it.effect("forces an owner stop interrupted after graceful dispatch", () => {
+    const harness = serviceHarness({ stopGraceMs: 2_000 }, () => {}, { completeOnGraceful: false });
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTerminalService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const stopping = yield* service
+        .stop(started.id)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Effect.yieldNow;
+      expect(harness.controls[0]?.modes).toEqual(["graceful"]);
+      yield* TestClock.adjust("1999 millis");
+      yield* Fiber.interrupt(stopping);
+      expect(harness.controls[0]?.modes).toEqual(["graceful", "force"]);
+      expect((yield* service.stop(started.id)).state).toBe("stopped");
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
   it.effect("retains capacity until a process confirms exit after stop times out", () => {
     const harness = serviceHarness({ stopGraceMs: 0, maxRunning: 1 }, () => {}, {
       completeOnGraceful: false,
@@ -266,6 +305,44 @@ describe("BackgroundTerminalService", () => {
       harness.controls[0]?.complete({ exitCode: null, signal: "SIGTERM" });
       yield* Effect.yieldNow;
       expect(yield* service.status(started.id)).toMatchObject({ state: "stopped" });
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("stops every sibling despite one failed termination and aggregates the failure", () => {
+    const harness = serviceHarness({ stopGraceMs: 2_000, maxRunning: 2 }, () => {}, {
+      bySpawn: [{ failTermination: true }, { completeOnGraceful: false }],
+    });
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTerminalService;
+      const first = yield* service.start({ command: "first", cwd: "." });
+      const second = yield* service.start({ command: "second", cwd: "." });
+      const stopping = yield* service.stopAll().pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("2 seconds");
+      const failure = yield* Fiber.join(stopping).pipe(Effect.flip);
+      expect(failure._tag).toBe("BackgroundTerminationError");
+      expect(failure).toMatchObject({ id: first.id });
+      // The sibling's graceful-to-force workflow completed despite the first job's typed failure.
+      expect(yield* service.status(second.id)).toMatchObject({ state: "stopped" });
+      expect(harness.controls[1]?.modes).toEqual(["graceful", "force"]);
+      // The failed job keeps stopping ownership until its process confirms exit.
+      expect(yield* service.status(first.id)).toMatchObject({ state: "stopping" });
+      harness.controls[0]?.complete({ exitCode: null, signal: "SIGTERM" });
+      yield* Effect.yieldNow;
+      expect((yield* service.status(first.id)).state).toBe("stopped");
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("stops all active jobs and preserves the captured input order", () => {
+    const harness = serviceHarness({ maxRunning: 3 });
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTerminalService;
+      yield* service.start({ command: "first", cwd: "." });
+      yield* service.start({ command: "second", cwd: "." });
+      yield* service.start({ command: "third", cwd: "." });
+      const stopped = yield* service.stopAll();
+      expect(stopped.map((job) => job.id)).toEqual(["term-1", "term-2", "term-3"]);
+      expect(stopped.every((job) => job.state === "stopped")).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
@@ -373,6 +450,19 @@ describe("BackgroundTerminalService", () => {
       yield* Scope.close(scope, Exit.void);
       expect(harness.controls[0]?.modes).toContain("graceful");
       expect(Deferred.isDoneUnsafe(terminal.reached)).toBe(true);
+    });
+  });
+
+  it.effect("rejects starts after the service scope closes", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(harness.layer, scope);
+      const service = Context.get(context, BackgroundTerminalService);
+      yield* Scope.close(scope, Exit.void);
+      expect(yield* service.start({ command: "late", cwd: "." }).pipe(Effect.flip)).toMatchObject({
+        _tag: "BackgroundRuntimeClosedError",
+      });
     });
   });
 });
