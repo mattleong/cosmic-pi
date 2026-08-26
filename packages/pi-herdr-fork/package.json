@@ -2,7 +2,7 @@
   "name": "pi-herdr-fork",
   "version": "0.2.0",
   "private": true,
-  "description": "A deterministic Pi command for forking the current session into a user-owned Herdr pane.",
+  "description": "Reusable blank Pi side sessions in user-owned Herdr panes.",
   "keywords": [
     "herdr",
     "pi",

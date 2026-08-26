@@ -1,40 +1,56 @@
 # Architecture
 
-`pi-herdr-fork` is an Effect-managed Pi extension with one deterministic command. `/herdr-fork` creates a native Pi fork in the calling pane's current Herdr tab and deliberately transfers ownership to the user after startup.
+`pi-herdr-fork` is an Effect-managed Pi extension for one reusable blank side session per parent Pi session. `/herdr-fork` focuses or resumes the linked child. `/herdr-fork:new` creates a fresh child and supersedes the link after confirmed startup and child-file validation. The extension never closes user-owned panes.
 
-## Source map
+## Ownership and lifecycle
 
-- `src/extension.ts` — thin Pi registration entrypoint.
-- `src/application.ts` — Pi session runtime lifecycle, session Layer composition, and command wiring; expected fork failures are converted to typed opened/failed command outcomes before the Promise boundary.
-- `src/boundary/herdr-client.ts` — fixed scoped Effect/Herdr child-process and Effect Schema protocol boundary, with injectable executable/process seams limited to deterministic tests.
-- `src/boundary/host-session.ts` — guarded Pi session, inherited Herdr environment, and parent-session file capture.
-- `src/boundary/host-notifier.ts` — best-effort Pi notification boundary.
-- `src/fork/controller.ts` — `/herdr-fork` host command registration and TUI rendering of typed command outcomes.
-- `src/fork/errors.ts` — schema-backed expected failures and outcome classification.
-- `src/fork/policy.ts` — pure split, agent-name, and initial-prompt policies.
-- `src/fork/service.ts` — preflight, launch sequencing, ownership validation, retained-pane failure decoration, focus, and user handoff.
-- `tests/` — command, policy, sequencing, topology, and uncertain-outcome coverage.
+`src/extension.ts` is the registration entry. `src/application.ts` owns Pi event and command wiring. `src/layer.ts` composes the session-scoped `HerdrForkService` Layer.
 
-## Lifecycle
+`session_start` captures the guarded host session and constructs one managed runtime. The runtime owns command serialization and the Herdr workflows. The session slot publishes the immutable child parent-reference capability only from its generation-checked `onActivated` hook and clears it during deactivation. `session_shutdown` disposes the runtime but does not close panes or child sessions.
 
-The extension factory registers callbacks and `/herdr-fork` but starts no process. `session_start` atomically captures cwd, signal, and initial aborted state through the shared guarded session boundary, then captures immutable parent-session and Herdr routing inputs. Capture failure or an already-aborted session fails closed; the exact captured signal is passed to the one managed runtime and the raw host getter is never reread. `session_shutdown` disposes only that runtime; it never closes a successfully handed-off pane.
+The two commands are TUI-only. A single Effect semaphore serializes calls within one extension runtime. Prompt text reaches the command directly and is passed to Herdr as one bounded argument.
 
-The command is TUI-only and can run without waiting for the main agent to settle. It receives its optional prompt directly from Pi, so no model or shell expands command arguments.
+## Reusable side session
+
+The parent stores a versioned `pi-herdr-fork/reusable-link` custom entry. Each link includes:
+
+- the owning parent session ID and path
+- the child session ID and path
+- the live Herdr agent name and terminal ID
+
+Parent ownership fields matter because native Pi forks copy custom entries. Restoration ignores links owned by ancestor sessions. A malformed unscoped or current-owner record fails closed.
+
+A new side session does not use `--fork`. After the new pane reaches a stable shell, the session-file boundary exclusively creates a blank persisted Pi header with a preassigned child ID and no `parentSession` lineage. The service validates that file, then starts Pi with `--session` so the child is resumable even before its first assistant message. It validates the header again after startup and only then appends the reusable link. This commit remains authoritative if later optional prompt delivery or focus fails, because the child already exists and must not become orphaned.
+
+Reuse validates the linked child header before reading live Herdr state. A fresh bounded `herdr api snapshot` has three outcomes:
+
+- One matching session path, agent name, and terminal focuses the existing child.
+- More than one match or an identity mismatch fails closed.
+- No match prepares a new sibling pane and reopens the child with `--session`.
+
+The resume path takes another snapshot immediately before `agent start`. If the child became live while the pane was prepared, startup is refused and the empty pane is retained for inspection. This narrows the duplicate-writer race but is not a cross-process session-file lease. A manually launched or non-Herdr Pi remains outside this coordination boundary. Child files share the normal project session directory, so Pi's recency-based `--continue` selection may choose a side session.
+
+`/herdr-fork:new` skips link reuse and creates a new blank child. It appends a replacement link only after startup and child validation. Failures before that commit leave the previous link authoritative.
+
+## Live parent reference
+
+Every child launch receives fixed extension flags containing the parent ID, parent file, and owning child ID. The child activates the capability only when:
+
+- the current child session ID matches the child marker
+- the parent path differs from the child path
+- a bounded no-follow parent-header probe succeeds
+- the probed parent ID matches the parent marker
+
+`before_agent_start` repeats that identity probe for every child run. It appends a stable system-prompt instruction with the JSON-quoted parent path and expected ID. No transcript content is read or imported. There is no polling, cursor, dedicated tool, automatic synchronization, or return channel.
+
+The synchronous reference value is a plain host projection. The generation-checked application slot controls activation and clearing; the Effect runtime remains the owner of session lifetime.
 
 ## Boundaries
 
-The Herdr client captures and allowlists inherited routing once, invokes only the fixed `herdr` executable with argument arrays and no shell, and decodes JSON responses with Effect Schema. Commands that decode a JSON envelope go through the one `herdrCommand` door; raw text and discarded responses call the command runner directly. Each command is an asynchronous scoped Effect child resource: the shared `pi-cosmic-core` bounded process owns each per-command deadline (the runner clamps and hands it the value), and caller interruption or scope closure terminates its process group and waits for bounded close confirmation. Stdout and stderr are independently byte-bounded; overflow terminates the child and fails closed. Process transport failures retain the existing confirmed read-only versus outcome-uncertain mutation classification, while recognized structured mutation precondition rejections remain confirmed not applied.
+- `src/boundary/herdr-client.ts` owns the fixed `herdr` executable, bounded argv execution, mutation outcome classification, and Effect Schema decoding for pane, agent, process, layout, protocol, and snapshot responses.
+- `src/boundary/session-file.ts` owns cryptographic child IDs, exclusive blank-session creation, and bounded read-only session-header probes. It opens probes with no-follow and nonblocking flags, verifies the descriptor is a regular file, and never uses `SessionManager`, so validation cannot migrate or rewrite a session.
+- `src/boundary/host-link-store.ts` is the single persistence door over `pi.appendEntry` and read-only parent session entries.
+- `src/fork/service.ts` is the service door. `src/fork/validation.ts` contains internal preflight, shell-readiness, and native identity checks. `src/fork/link.ts`, `marker.ts`, and `policy.ts` hold schemas and pure policy.
+- `src/parent-link/` contains pure reference resolution, prompt formatting, and the synchronous Pi host bridge.
 
-The service requires protocol 17 or newer, a current Herdr Pi integration, a regular non-symlink parent session file, and inherited caller-pane identity before topology mutation. It targets `pane current --current`, verifies the split remains in the same workspace/tab, then requires sustained shell ownership across a bounded read-only `pane process-info` readiness window before dispatching `agent start`. It requires the atomic startup response to match the exact pane, terminal, workspace, tab, agent name, and Pi runtime before reporting success. Native child-session metadata is also validated when present, but it is not required because the Pi integration can report it after interactive readiness; this user-owned handoff never adopts identity from a later lookup.
-
-## Ownership
-
-Topology creation is managed only until the forked Pi is confirmed. The successful pane is user-owned and intentionally survives the parent Pi session. The package persists no topology record and performs no shutdown cleanup or later adoption.
-
-A failed mutating request is outcome-uncertain and is never retried automatically, except when Herdr returns a recognized structured precondition rejection such as `agent_pane_busy`; that is confirmed not applied. Read-only shell readiness inspections may repeat within a fixed deadline. Once a split has occurred, one structural Effect ownership region covers topology validation, shell readiness, startup, prompting, and focus. Every later failure retains the exact pane for inspection without changing its confirmed/uncertain classification, rather than risk closing a fork whose startup result is ambiguous.
-
-## Security
-
-The command accepts only an optional bounded initial prompt. It accepts no executable, session selector, working directory, environment, arbitrary Pi arguments, or Herdr target. Prompt text receives a fixed non-flag prefix and is passed as one process argument.
-
-The fork is not isolated: it shares the parent's project directory and normal Pi configuration, and it may mutate files concurrently. Conversation context is a point-in-time native fork and is not synchronized afterward.
+All Herdr commands use fixed argument arrays with no shell. Outputs and identifiers are bounded and schema-decoded. Parent and child session files must be regular non-symlink files. Expected failures are typed `HerdrForkError` values. Mutating requests with uncertain outcomes are never retried automatically, and any pane created before a later failure is retained rather than closed.

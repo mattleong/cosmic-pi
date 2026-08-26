@@ -16,4 +16,4 @@ export const makeAgentName = (sessionId: string, paneId: string): string => {
   return `fork-${session}-${pane}`.slice(0, 32).replaceAll(/-$/gu, "");
 };
 
-export const initialForkPrompt = (prompt: string): string => `Initial fork request:\n${prompt}`;
+export const sideSessionPrompt = (prompt: string): string => `Side-session request:\n${prompt}`;

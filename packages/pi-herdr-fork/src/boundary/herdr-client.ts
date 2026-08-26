@@ -53,6 +53,14 @@ export const LayoutEnvelopeSchema = Schema.Struct({
 export const AgentEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({ agent: PaneSchema }),
 });
+export const SnapshotEnvelopeSchema = Schema.Struct({
+  result: Schema.Struct({
+    snapshot: Schema.Struct({
+      protocol: Schema.Number.check(Schema.isInt()),
+      agents: Schema.Array(PaneSchema).check(Schema.isMaxLength(4_096)),
+    }),
+  }),
+});
 export const PaneProcessInfoEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({
     process_info: Schema.Struct({

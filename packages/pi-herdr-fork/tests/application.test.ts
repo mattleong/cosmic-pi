@@ -16,13 +16,18 @@ type HarnessContext = ExtensionContext & {
 };
 
 const harness = () => {
-  const handlers = new Map<string, Handler>();
+  const handlers = new Map<string, Handler[]>();
   const notify = vi.fn();
   const piFixture = {
     on(name: string, handler: Handler) {
-      handlers.set(name, handler);
+      const list = handlers.get(name) ?? [];
+      list.push(handler);
+      handlers.set(name, list);
     },
     registerCommand() {},
+    registerFlag() {},
+    getFlag: () => undefined,
+    appendEntry() {},
   };
   // SAFETY: The application uses only the ExtensionAPI members implemented by this fixture.
   const pi = piFixture as typeof piFixture & ExtensionAPI;
@@ -35,14 +40,19 @@ const harness = () => {
     sessionManager: {
       getSessionFile: () => "/sessions/parent.jsonl",
       getSessionId: () => "parent-session",
+      getSessionDir: () => "/sessions",
+      getEntries: () => [],
+      getHeader: () => null,
     },
     ui: { notify },
   };
   // SAFETY: The application uses only the ExtensionContext members implemented by this fixture.
   const ctx = contextFixture as typeof contextFixture & HarnessContext;
   registerHerdrForkApplication(pi);
-  const start = () => handlers.get("session_start")?.({ type: "session_start" }, ctx);
-  const shutdown = () => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx);
+  const invokeAll = <EventInput>(name: string, event: EventInput) =>
+    Promise.all((handlers.get(name) ?? []).map((handler) => handler(event, ctx)));
+  const start = () => invokeAll("session_start", { type: "session_start" });
+  const shutdown = () => invokeAll("session_shutdown", { reason: "quit" });
   return { ctx, notify, start, shutdown };
 };
 

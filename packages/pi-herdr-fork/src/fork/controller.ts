@@ -6,27 +6,41 @@ export type HerdrForkCommandOutcome =
   | { readonly _tag: "opened"; readonly result: HerdrForkResult }
   | { readonly _tag: "failed"; readonly message: string };
 
-export const registerHerdrForkCommand = (
+export interface HerdrForkCommandHandlers {
+  readonly open: (prompt?: string | undefined) => Promise<HerdrForkCommandOutcome>;
+  readonly openNew: (prompt?: string | undefined) => Promise<HerdrForkCommandOutcome>;
+}
+
+const successMessage = (result: HerdrForkResult): string => {
+  switch (result.mode) {
+    case "focused":
+      return `Focused ${result.agentName} in ${result.paneId}.`;
+    case "resumed":
+      return `Reopened the fork session as ${result.agentName} in ${result.paneId}. The pane is now user-owned.`;
+    case "created":
+      return `Opened ${result.agentName} in ${result.paneId}. The pane is now user-owned.`;
+  }
+};
+
+const registerCommand = (
   pi: ExtensionAPI,
-  open: (prompt?: string | undefined) => Promise<HerdrForkCommandOutcome>,
+  name: string,
+  description: string,
+  run: (prompt?: string | undefined) => Promise<HerdrForkCommandOutcome>,
 ): void => {
-  pi.registerCommand("herdr-fork", {
-    description: "Fork this Pi session into a new user-owned pane in the current Herdr tab.",
+  pi.registerCommand(name, {
+    description,
     handler: (args, ctx) => {
       if (ctx.mode !== "tui") {
-        notifyHerdrFork(ctx, "/herdr-fork is available only in Pi's interactive TUI.", "error");
+        notifyHerdrFork(ctx, `/${name} is available only in Pi's interactive TUI.`, "error");
         return Promise.resolve();
       }
 
       const trimmed = args.trim();
-      return open(trimmed || undefined).then(
+      return run(trimmed || undefined).then(
         (outcome) => {
           if (outcome._tag === "opened")
-            notifyHerdrFork(
-              ctx,
-              `Opened ${outcome.result.agentName} in ${outcome.result.paneId}. The pane is now user-owned.`,
-              "info",
-            );
+            notifyHerdrFork(ctx, successMessage(outcome.result), "info");
           else notifyHerdrFork(ctx, outcome.message.slice(0, 2_000), "error");
         },
         (failure) => {
@@ -38,4 +52,22 @@ export const registerHerdrForkCommand = (
       );
     },
   });
+};
+
+export const registerHerdrForkCommands = (
+  pi: ExtensionAPI,
+  handlers: HerdrForkCommandHandlers,
+): void => {
+  registerCommand(
+    pi,
+    "herdr-fork",
+    "Reuse or open this session's durable Herdr fork pane in the current tab.",
+    handlers.open,
+  );
+  registerCommand(
+    pi,
+    "herdr-fork:new",
+    "Create a fresh Herdr fork pane and make it this session's reusable fork.",
+    handlers.openNew,
+  );
 };

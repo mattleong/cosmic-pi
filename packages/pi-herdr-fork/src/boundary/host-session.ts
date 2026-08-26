@@ -18,6 +18,7 @@ export interface HerdrForkSessionInput {
   readonly cwd: string;
   readonly sessionFile?: string | undefined;
   readonly sessionId?: string | undefined;
+  readonly sessionDir?: string | undefined;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }
 
@@ -38,6 +39,7 @@ export const captureHerdrForkSession = (
       aborted: host.aborted,
       sessionFile: ctx.sessionManager.getSessionFile(),
       sessionId: ctx.sessionManager.getSessionId(),
+      sessionDir: ctx.sessionManager.getSessionDir(),
       environment: selectHerdrEnvironment(process.env),
     };
   } catch {
