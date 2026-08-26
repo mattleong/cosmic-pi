@@ -166,6 +166,7 @@ const SelectedStartEntryFields = {
   effort: EffortSchema,
   fastMode: Schema.Boolean,
   candidateIndex: Schema.optionalKey(nonNegativeInteger),
+  warning: Schema.optionalKey(boundedString(MAX_CARD_PROVENANCE_CHARS, 1)),
 };
 const PendingStartEntrySchema = Schema.Struct({
   ...StartEntryIdentityFields,

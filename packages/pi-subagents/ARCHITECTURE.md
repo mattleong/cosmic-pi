@@ -23,7 +23,7 @@
 
 ## Invariants
 
-- A public start batch captures one profile snapshot. Candidate fallback is readiness-only; explicit retry advances strictly through the frozen route after confirmed cleanup.
+- A public start batch captures one profile snapshot. Candidate fallback is readiness-only; explicit retry advances strictly through the frozen route after confirmed cleanup. Herdr protocol readiness is one deliberate exception to literal host selection: any version other than protocol 20, or a CLI/server protocol mismatch, retries that same candidate on the local host before advancing the route. The fallback preserves runtime, model, effort, context, write intent, fast mode, and claims, forces `closeOnReport:true`, and records a prominent warning.
 - Every process, pane, helper, transport, private harness, writer pool, and writer lease belongs to the session runtime. One cross-process cwd lease protects each session pool; claimless writers are exclusive, while claimed writers must be pairwise disjoint. Claims coordinate unchanged native tools and Bash rather than sandboxing them. Any unconfirmed member cleanup quarantines the whole cwd pool, preserving fail-closed writer ownership.
 - Reports are in-memory assignment generations. Retained next-assignment admission stops at 63 unresolved reports, reserving generation 64 for a later terminal backend failure; no run records generation 65. Close-on-report resume paths retain the hard 64-generation bound.
 - The parent channel and delegated bridge share one supervisor contract. Questions are correlated and interruptible, reports are idempotent, and the MCP helper writes one response frame per call even when cancellation races stdout backpressure.

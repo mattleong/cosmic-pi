@@ -124,28 +124,45 @@ const receiptRow = (entry: SubagentStartEntry, width: number, theme: Theme): str
   const route = routeLabel(entry);
   const id = entry.status === "started" ? sanitizeTerminalLine(shortRunId(entry.runId)) : "";
   const raw = `${glyph} ${name} · ${profile} · ${route}${id ? ` · ${id}` : ""}`;
-  if (visibleWidth(raw) <= safeWidth)
-    return [
-      `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)} · ${theme.fg("muted", profile)} · ${theme.fg("toolOutput", route)}${id ? ` · ${theme.fg("muted", id)}` : ""}`,
-    ];
-
-  const lines = [
-    `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)}`,
-    `  ${theme.fg("muted", profile)}`,
-  ];
-  if (selectedRoute(entry)) {
-    lines.push(
-      `  ${theme.fg("toolOutput", `${entry.host ?? "local"}/${entry.runtime ?? "pi"}`)}`,
-      `  ${theme.fg(
-        "toolOutput",
-        formatToolModel(entry.model ?? "unknown model", entry.effort ?? "off", entry.fastMode),
-      )}`,
-    );
-  } else {
-    lines.push(`  ${theme.fg("toolOutput", route)}`);
-  }
-  if (id) lines.push(`  ${theme.fg("muted", id)}`);
-  return lines.map((line) => truncateToWidth(line, safeWidth));
+  const routeLines =
+    visibleWidth(raw) <= safeWidth
+      ? [
+          `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)} · ${theme.fg("muted", profile)} · ${theme.fg("toolOutput", route)}${id ? ` · ${theme.fg("muted", id)}` : ""}`,
+        ]
+      : (() => {
+          const lines = [
+            `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)}`,
+            `  ${theme.fg("muted", profile)}`,
+          ];
+          if (selectedRoute(entry)) {
+            lines.push(
+              `  ${theme.fg("toolOutput", `${entry.host ?? "local"}/${entry.runtime ?? "pi"}`)}`,
+              `  ${theme.fg(
+                "toolOutput",
+                formatToolModel(
+                  entry.model ?? "unknown model",
+                  entry.effort ?? "off",
+                  entry.fastMode,
+                ),
+              )}`,
+            );
+          } else {
+            lines.push(`  ${theme.fg("toolOutput", route)}`);
+          }
+          if (id) lines.push(`  ${theme.fg("muted", id)}`);
+          return lines.map((line) => truncateToWidth(line, safeWidth));
+        })();
+  const warningLines =
+    selectedRoute(entry) && entry.warning
+      ? wrapTextWithAnsi(
+          theme.fg(
+            "warning",
+            `  ${managerNoticeGlyph("warning")} ${sanitizeTerminalLine(entry.warning)}`,
+          ),
+          safeWidth,
+        )
+      : [];
+  return [...routeLines, ...warningLines];
 };
 
 const receiptHeader = (
@@ -157,6 +174,9 @@ const receiptHeader = (
   const started = entries.filter((entry) => entry.status === "started").length;
   const failed = entries.filter((entry) => entry.status === "failed").length;
   const pending = total - started - failed;
+  const warnings = entries.filter(
+    (entry) => selectedRoute(entry) && entry.warning !== undefined,
+  ).length;
   if (partial) {
     const frame = Math.floor(synchronousNow() / 160);
     const progress = `Launching ${started + failed} of ${total} · ${started} started · ${failed} failed · ${pending} pending`;
@@ -166,8 +186,8 @@ const receiptHeader = (
     return theme.fg("warning", `${managerNoticeGlyph("warning")} Launch receipt unavailable`);
   if (failed === 0)
     return theme.fg(
-      "success",
-      `${managerStateGlyph("done")} Started ${started} subagent${started === 1 ? "" : "s"}`,
+      warnings > 0 ? "warning" : "success",
+      `${warnings > 0 ? managerNoticeGlyph("warning") : managerStateGlyph("done")} Started ${started} subagent${started === 1 ? "" : "s"}${warnings > 0 ? ` · ${warnings} route warning${warnings === 1 ? "" : "s"}` : ""}`,
     );
   if (started > 0)
     return theme.fg(

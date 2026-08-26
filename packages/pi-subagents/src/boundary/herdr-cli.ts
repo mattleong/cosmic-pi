@@ -10,7 +10,7 @@ import { InvalidSubagentRequestError, processError, SubagentProcessError } from 
 import type { SubagentRuntime } from "../domain/routing.ts";
 
 const HERDR_EXECUTABLE = "herdr";
-const SUPPORTED_PROTOCOL = 19;
+const SUPPORTED_PROTOCOL = 20;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_BYTES = 128 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 8 * 1024;
@@ -29,6 +29,11 @@ const CONFIRMED_AGENT_START_REJECTION_CODES = new Set([
   // after runtime input dispatch when post-send agent evidence disappears.
   "agent_start_input_failed",
   "agent_name_taken",
+]);
+const CONFIRMED_AGENT_PROMPT_REJECTION_CODES = new Set([
+  // Protocol 20 rejects before sending text or Enter when the agent is already at a question
+  // or approval dialog. Protocol 19 never emits this code.
+  "agent_blocked",
 ]);
 const MUTATING_OPERATIONS = new Set([
   "split pane",
@@ -237,7 +242,7 @@ export interface HerdrCliLayerOptions {
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly commandTimeoutMillis?: number | undefined;
   /** Diagnostic seam only. Production uses the source selected by the real-shell regression. */
-  readonly paneOutputSource?: "recent" | "recent-unwrapped" | undefined;
+  readonly paneOutputSource?: "visible" | "recent" | "recent-unwrapped" | undefined;
   /** Test seam only. Production uses the canonical runtime executable names. */
   readonly runtimeExecutables?: Partial<Record<SubagentRuntime, string>> | undefined;
 }
@@ -631,7 +636,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
           document.protocol < SUPPORTED_PROTOCOL
             ? "herdr_upgrade_required"
             : "herdr_protocol_unsupported",
-          `Herdr protocol ${SUPPORTED_PROTOCOL} is required; found ${document.protocol}.`,
+          `Unsupported Herdr protocol ${document.protocol}. pi-subagents supports protocol ${SUPPORTED_PROTOCOL}; Herdr launch was blocked before topology changes.`,
         );
       const liveSnapshot = yield* runCommand(
         fixedOptions,
@@ -646,7 +651,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
       if (liveSnapshot.protocol !== document.protocol)
         return yield* readinessError(
           "herdr_protocol_mismatch",
-          `Herdr CLI protocol ${document.protocol} does not match the selected live server protocol ${liveSnapshot.protocol}.`,
+          `Unsupported Herdr protocol pairing. The CLI reports ${document.protocol}, but the live server reports ${liveSnapshot.protocol}. pi-subagents requires one matching supported protocol; Herdr launch was blocked before topology changes.`,
         );
       const resolvedCallingPane = yield* currentPane.pipe(
         Effect.mapError((error) =>
@@ -809,7 +814,10 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
           "--match",
           marker,
           "--source",
-          fixedOptions.paneOutputSource ?? "recent",
+          // Protocol 20 can keep a newly split shell's prompt and first marker entirely in the
+          // live viewport while `recent` remains empty. Launch attestations therefore observe the
+          // visible pane that owns the command instead of mistaking executed input for a drop.
+          fixedOptions.paneOutputSource ?? "visible",
           "--lines",
           "40",
           "--timeout",
@@ -884,9 +892,14 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         CONFIRMED_AGENT_START_REJECTION_CODES,
       ).pipe(Effect.flatMap((source) => decodeAgentResponse("start agent", source))),
     prompt: (agentName, text) =>
-      runCommand(fixedOptions, ["agent", "prompt", agentName, text], "prompt agent").pipe(
-        Effect.flatMap((source) => decodeAgentResponse("prompt agent", source)),
-      ),
+      runCommand(
+        fixedOptions,
+        ["agent", "prompt", agentName, text],
+        "prompt agent",
+        undefined,
+        MAX_JSON_BYTES,
+        CONFIRMED_AGENT_PROMPT_REJECTION_CODES,
+      ).pipe(Effect.flatMap((source) => decodeAgentResponse("prompt agent", source))),
     closePane: (paneId) => ok(["pane", "close", paneId], "close pane"),
     focusTab: (tabId, operation) => ok(["tab", "focus", tabId], operation),
   };

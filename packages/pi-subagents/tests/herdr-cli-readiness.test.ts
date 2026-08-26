@@ -15,7 +15,10 @@ const fixtureExecutable = fileURLToPath(
   new URL("./fixtures/herdr-cli-fixture.mjs", import.meta.url),
 );
 const temporaryDirectories: string[] = [];
-const CommandLogSchema = Schema.Struct({ pane: Schema.NullOr(Schema.String) });
+const CommandLogSchema = Schema.Struct({
+  args: Schema.Array(Schema.String),
+  pane: Schema.NullOr(Schema.String),
+});
 
 afterEach(() =>
   Promise.all(
@@ -67,7 +70,7 @@ describe("Herdr calling-pane readiness", () => {
   });
 
   effectTest(
-    "accepts one exact live inherited calling pane and preserves its selector",
+    "accepts protocol 20 with one exact live inherited calling pane and preserves its selector",
     function* () {
       const { cli, logPath } = yield* step(() => makeFixtureCli());
       yield* step(() => Effect.runPromise(cli.preflight("pi")));
@@ -80,6 +83,66 @@ describe("Herdr calling-pane readiness", () => {
       expect(commands.every((command) => command.pane === "user:p0")).toBe(true);
     },
   );
+
+  effectTest("rejects older and newer Herdr protocols with explicit diagnostics", function* () {
+    const older = yield* step(() => makeFixtureCli("legacy-protocol"));
+    yield* step(() =>
+      expect(Effect.runPromise(older.cli.preflight("pi"))).rejects.toMatchObject({
+        code: "herdr_upgrade_required",
+        message: expect.stringContaining(
+          "Unsupported Herdr protocol 19. pi-subagents supports protocol 20",
+        ),
+      }),
+    );
+
+    const newer = yield* step(() => makeFixtureCli("future-protocol"));
+    yield* step(() =>
+      expect(Effect.runPromise(newer.cli.preflight("pi"))).rejects.toMatchObject({
+        code: "herdr_protocol_unsupported",
+        message: expect.stringContaining(
+          "Unsupported Herdr protocol 21. pi-subagents supports protocol 20",
+        ),
+      }),
+    );
+  });
+
+  effectTest("rejects a mismatched Herdr CLI and live-server protocol pair", function* () {
+    const { cli } = yield* step(() => makeFixtureCli("live-protocol-mismatch"));
+    yield* step(() =>
+      expect(Effect.runPromise(cli.preflight("pi"))).rejects.toMatchObject({
+        code: "herdr_protocol_mismatch",
+        message: expect.stringContaining("The CLI reports 20, but the live server reports 19"),
+      }),
+    );
+  });
+
+  effectTest("treats protocol-20 agent_blocked as confirmed prompt non-application", function* () {
+    const { cli } = yield* step(() => makeFixtureCli("agent-blocked"));
+    yield* step(() =>
+      expect(Effect.runPromise(cli.prompt("reviewer", "Continue"))).rejects.toMatchObject({
+        operation: "prompt agent",
+        code: "agent_blocked",
+        message: "agent is waiting for approval or a user answer",
+      }),
+    );
+  });
+
+  effectTest("watches the visible pane for causal launch markers", function* () {
+    const { cli, logPath } = yield* step(() => makeFixtureCli());
+    yield* step(() =>
+      Effect.runPromise(cli.waitPaneOutput("user:p0", "marker", "confirm pane input")),
+    );
+
+    const commands = (yield* step(() => readFile(logPath, "utf8")))
+      .trim()
+      .split("\n")
+      .map((line) => Schema.decodeUnknownSync(CommandLogSchema)(JSON.parse(line)));
+    const wait = commands.find(
+      (command) => command.args[0] === "pane" && command.args[1] === "wait-output",
+    );
+    expect(wait?.args).toContain("visible");
+    expect(wait?.args).not.toContain("recent");
+  });
 
   effectTest(
     "skips when pane-current evidence disagrees with the inherited selector",

@@ -553,7 +553,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             return yield* processError(
               "confirm Herdr agent session",
               "herdr_agent_session_unconfirmed",
-              "Herdr confirmed interactive startup without atomically returning bounded native session ownership evidence; protocol 19 exposes no launch token for safe delayed adoption.",
+              "Herdr confirmed interactive startup without atomically returning bounded native session ownership evidence; the supported Herdr protocol exposes no launch token for safe delayed adoption.",
             );
           provisional.startedIdentity = identity;
           const run: OwnedRun = {
