@@ -4,28 +4,17 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
-import * as MutableRef from "effect/MutableRef";
 import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import { captureExplicitModelArgument } from "./boundary/host-cli.ts";
-import {
-  captureContextModel,
-  captureSelectedModel,
-  captureThinkingLevel,
-} from "./boundary/host-model.ts";
+import { captureSelectedModel, captureThinkingLevel } from "./boundary/host-model.ts";
 import { captureDirectorySession } from "./boundary/host-session.ts";
-import {
-  makeDirectoryModelsLayer,
-  type DirectoryModelsApplication,
-  type DirectoryModelsRuntimeError,
-} from "./layer.ts";
+import { makeDirectoryModelsLayer } from "./layer.ts";
 import {
   DirectoryModelPreferenceService,
-  INITIAL_RESTORE_EVENT_STATE,
   type DirectoryModelSessionInput,
 } from "./preference/service.ts";
 
@@ -33,39 +22,21 @@ export function registerDirectoryModelsApplication(
   pi: ExtensionAPI,
   hasExplicitModel: () => boolean = captureExplicitModelArgument,
 ): void {
-  const restoreEvents = MutableRef.make(INITIAL_RESTORE_EVENT_STATE);
   const warn = (ctx: ExtensionContext, message: string) =>
     notifyAtHostBoundary(ctx, message, "warning");
 
-  const slot = makePiSessionRuntimeSlot<
-    DirectoryModelSessionInput,
-    DirectoryModelsApplication,
-    never,
-    DirectoryModelsRuntimeError
-  >({
-    makeRuntime: (input) =>
+  const slot = makePiSessionRuntimeSlot({
+    makeRuntime: (input: DirectoryModelSessionInput) =>
       makePiManagedRuntime(
         pi,
-        makeDirectoryModelsLayer(input, {
-          restoreEvents,
-          warn: (message) => warn(input.ctx, message),
-        }),
+        makeDirectoryModelsLayer(input, (message) => warn(input.ctx, message)),
         { agentDirectory: getAgentDir, packageName: "pi-directory-models" },
       ),
     startup: () => DirectoryModelPreferenceService.use((service) => service.initialize),
-    onDeactivated: () => {
-      // A non-cancelable setModel settlement may still be completing while runtime disposal waits.
-      // Keep its restoration marker active so the host event cannot be mistaken for a user change;
-      // the scoped restoration finalizer clears it when settlement finishes.
-      if (!MutableRef.get(restoreEvents).active)
-        MutableRef.set(restoreEvents, INITIAL_RESTORE_EVENT_STATE);
-    },
     onStartFailure: ({ ctx }) => {
       warn(ctx, "Directory model preferences failed to start.");
     },
   });
-
-  const run = <A, E>(effect: Effect.Effect<A, E, DirectoryModelsApplication>) => slot.run(effect);
 
   pi.on("session_start", (event, ctx) => {
     const captured = captureDirectorySession(event, ctx);
@@ -92,39 +63,22 @@ export function registerDirectoryModelsApplication(
       .then(() => undefined);
   });
 
+  const persist = (ctx: ExtensionContext) =>
+    slot
+      .run(DirectoryModelPreferenceService.use((service) => service.remember))
+      .catch(() => warn(ctx, "Unable to save the directory preference."));
+
   pi.on("model_select", (event, ctx) => {
-    if (MutableRef.get(restoreEvents).active || event.source === "restore") return;
-    const selected = captureSelectedModel(event.model);
-    if (!selected) return;
-    return run(
-      DirectoryModelPreferenceService.use((service) => service.rememberModel(selected)),
-    ).catch(() => warn(ctx, "Unable to save the directory model preference."));
+    if (!slot.isActive()) return;
+    if (event.source === "restore") return;
+    if (!captureSelectedModel(event.model)) return;
+    return persist(ctx);
   });
 
   pi.on("thinking_level_select", (event, ctx) => {
-    const level = captureThinkingLevel(event.level);
-    if (!level) return;
-    const restore = MutableRef.get(restoreEvents);
-    if (restore.active) {
-      MutableRef.set(restoreEvents, {
-        ...restore,
-        observedThinkingEvents: restore.observedThinkingEvents + 1,
-      });
-      return;
-    }
-    if (restore.pendingThinkingEvents > 0) {
-      MutableRef.set(restoreEvents, {
-        ...restore,
-        pendingThinkingEvents: restore.pendingThinkingEvents - 1,
-      });
-      return;
-    }
-    const selected = captureContextModel(ctx);
-    if (!selected) return;
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    return run(
-      DirectoryModelPreferenceService.use((service) => service.rememberThinking(selected, level)),
-    ).catch(() => warn(ctx, "Unable to save the directory thinking preference."));
+    if (!slot.isActive()) return;
+    if (!captureThinkingLevel(event.level)) return;
+    return persist(ctx);
   });
 
   pi.on("session_shutdown", () => slot.shutdown());

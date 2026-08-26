@@ -50,51 +50,31 @@ export function captureContextModel(ctx: ExtensionContext): SelectedModel | unde
   }
 }
 
+const thinkingReadError = hostError("thinking", "Unable to read Pi's thinking level.");
+
+/** Read and decode Pi's current thinking level; hostile getters and absent levels become typed errors. */
+const readThinkingLevel = (
+  pi: ExtensionAPI,
+): Effect.Effect<ThinkingLevel, DirectoryModelHostError> =>
+  Effect.try({
+    try: () => decodeThinkingLevel(pi.getThinkingLevel()),
+    catch: thinkingReadError,
+  }).pipe(Effect.flatMap(Effect.fromOption(thinkingReadError)));
+
 export const preferenceFromSelectedModel = Effect.fn("DirectoryModelHost.fromSelected")(function* (
   pi: ExtensionAPI,
   canonicalCwd: string,
   selected: SelectedModel,
-  thinkingOverride?: ThinkingLevel,
 ) {
-  const thinkingLevel = yield* Effect.try({
-    try: () => {
-      if (thinkingOverride) return thinkingOverride;
-      const fromApi = captureThinkingLevel(pi.getThinkingLevel());
-      if (fromApi) return fromApi;
-      throw new Error("invalid thinking level");
-    },
-    catch: hostError("read", "Unable to read Pi's current thinking level."),
-  });
+  const thinkingLevel = yield* readThinkingLevel(pi);
   return makeDirectoryModelPreference(canonicalCwd, selected.provider, selected.id, thinkingLevel);
 });
-
-export const captureCurrentPreference = Effect.fn("DirectoryModelHost.captureCurrent")(function* (
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  canonicalCwd: string,
-) {
-  const current = captureContextModel(ctx);
-  if (!current) return yield* hostError("read", "Pi has no active model to remember.")();
-  return yield* preferenceFromSelectedModel(pi, canonicalCwd, current);
-});
-
-const readThinkingLevel = (pi: ExtensionAPI) =>
-  Effect.try({
-    try: () => {
-      const level = captureThinkingLevel(pi.getThinkingLevel());
-      if (level) return level;
-      throw new Error("invalid thinking level");
-    },
-    catch: hostError("thinking", "Unable to read Pi's thinking level."),
-  });
 
 export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(function* (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   preference: DirectoryModelPreference,
 ) {
-  let previousThinking = yield* readThinkingLevel(pi);
-  let thinkingEvents = 0;
   const current = yield* Effect.try({
     try: () => captureSelectedModel(ctx.model),
     catch: hostError("read", "Unable to inspect Pi's current model."),
@@ -120,23 +100,16 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
         "auth",
         "The remembered directory model has no configured authentication.",
       )();
-    const modelThinking = yield* readThinkingLevel(pi);
-    if (modelThinking !== previousThinking) thinkingEvents++;
-    previousThinking = modelThinking;
   }
   yield* Effect.try({
     try: () => pi.setThinkingLevel(preference.thinkingLevel),
     catch: hostError("thinking", "Unable to restore the remembered thinking level."),
   });
   const effectiveThinking = yield* readThinkingLevel(pi);
-  if (effectiveThinking !== previousThinking) thinkingEvents++;
-  return {
-    preference: makeDirectoryModelPreference(
-      preference.cwd,
-      preference.provider,
-      preference.model,
-      effectiveThinking,
-    ),
-    thinkingEvents,
-  };
+  return makeDirectoryModelPreference(
+    preference.cwd,
+    preference.provider,
+    preference.model,
+    effectiveThinking,
+  );
 });

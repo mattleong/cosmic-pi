@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { AgentDirectory, JsonDocumentStore } from "pi-cosmic-core";
-import { preferenceFilename } from "../boundary/path-key.ts";
+import { preferenceFilename } from "./path-key.ts";
 import { DirectoryModelPreferenceSchema, type DirectoryModelPreference } from "./schema.ts";
 
 const STORE_DIRECTORY = "pi-directory-models";
@@ -15,13 +15,13 @@ export interface DirectoryIdentity {
   readonly preferencePath: string;
 }
 
+/** Callers only branch on store failure itself, so the error carries no payload. */
 export class DirectoryModelStoreError extends Schema.TaggedError<DirectoryModelStoreError>()(
   "DirectoryModelStoreError",
-  { operation: Schema.String, message: Schema.String },
+  {},
 ) {}
 
-const storeError = (operation: string, message: string) => () =>
-  new DirectoryModelStoreError({ operation, message });
+const storeError = () => new DirectoryModelStoreError();
 
 export interface DirectoryModelStoreContract {
   readonly identify: (cwd: string) => Effect.Effect<DirectoryIdentity, DirectoryModelStoreError>;
@@ -48,11 +48,7 @@ export class DirectoryModelStore extends Context.Service<
 
       const identify = Effect.fn("DirectoryModelStore.identify")(function* (cwd: string) {
         const lexical = paths.resolve(cwd);
-        const canonicalCwd = yield* fs
-          .realPath(lexical)
-          .pipe(
-            Effect.mapError(storeError("identify", "Unable to resolve the working directory.")),
-          );
+        const canonicalCwd = yield* fs.realPath(lexical).pipe(Effect.mapError(storeError));
         const filename = preferenceFilename(canonicalCwd, paths.basename(canonicalCwd));
         return {
           canonicalCwd,
@@ -63,18 +59,12 @@ export class DirectoryModelStore extends Context.Service<
       const read = Effect.fn("DirectoryModelStore.read")(function* (identity: DirectoryIdentity) {
         const raw = yield* documents
           .readObject(identity.preferencePath)
-          .pipe(
-            Effect.mapError(storeError("read", "Unable to read the directory model preference.")),
-          );
+          .pipe(Effect.mapError(storeError));
         if (raw === undefined) return undefined;
         const preference = yield* Schema.decodeUnknownEffect(DirectoryModelPreferenceSchema)(
           raw,
-        ).pipe(Effect.mapError(storeError("decode", "The directory model preference is invalid.")));
-        if (preference.cwd !== identity.canonicalCwd)
-          return yield* storeError(
-            "identity",
-            "The directory model preference belongs to another path.",
-          )();
+        ).pipe(Effect.mapError(storeError));
+        if (preference.cwd !== identity.canonicalCwd) return yield* storeError();
         return preference;
       });
 
@@ -84,14 +74,10 @@ export class DirectoryModelStore extends Context.Service<
       ) {
         const document = yield* Schema.encodeEffect(DirectoryModelPreferenceSchema)(
           preference,
-        ).pipe(
-          Effect.mapError(storeError("encode", "Unable to encode the directory model preference.")),
-        );
+        ).pipe(Effect.mapError(storeError));
         yield* documents
           .writeObject(identity.preferencePath, document)
-          .pipe(
-            Effect.mapError(storeError("write", "Unable to save the directory model preference.")),
-          );
+          .pipe(Effect.mapError(storeError));
       });
 
       return DirectoryModelStore.of({ identify, read, write });

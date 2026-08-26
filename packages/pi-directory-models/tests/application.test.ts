@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, vi } from "vitest";
 import { registerDirectoryModelsApplication } from "../src/application.ts";
-import { preferenceFilename } from "../src/boundary/path-key.ts";
+import { preferenceFilename } from "../src/config/path-key.ts";
 import {
   DirectoryModelPreferenceSchema,
   makeDirectoryModelPreference,
@@ -78,9 +78,10 @@ const writePreference = (
 const harness = (
   options: {
     readonly explicitModel?: boolean;
-    readonly entries?: readonly { readonly type: string }[];
+    readonly entries?: readonly { readonly type: string; readonly summary?: unknown }[];
     readonly cwd?: string;
     readonly delayThinkingEvents?: boolean;
+    readonly setModelDenied?: boolean;
     readonly setModelSettlement?: Promise<void>;
   } = {},
 ) =>
@@ -108,6 +109,7 @@ const harness = (
     const setModel = vi.fn(
       (next: Model): Promise<boolean> =>
         Promise.resolve(options.setModelSettlement).then(() => {
+          if (options.setModelDenied) return false;
           const previousModel = activeModel;
           activeModel = next;
           return Promise.resolve(
@@ -161,13 +163,11 @@ const harness = (
     const shutdown = () => emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
 
     return {
-      realCwd,
       cwd,
       agentDirectory,
       initial,
       remembered,
       alternate,
-      available,
       notify,
       setModel,
       setThinkingLevel,
@@ -178,6 +178,7 @@ const harness = (
         activeModel = next;
         thinkingLevel = thinking;
       },
+      model: () => activeModel,
       thinking: () => thinkingLevel,
       flushThinkingEvents: () =>
         Effect.suspend(() =>
@@ -197,13 +198,9 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
   it.effect("initializes a readable preference for an ordinary fresh session", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       const h = yield* harness();
       yield* h.start();
 
-      expect(path.basename(yield* preferencePath(h.agentDirectory, h.cwd))).toMatch(
-        /^pi-directory-models-project-.*--[a-f0-9]{12}\.json$/,
-      );
       expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
         cwd: yield* fs.realPath(h.cwd),
         provider: h.initial.provider,
@@ -270,10 +267,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* Fiber.join(successor);
       expect(h.setModel).toHaveBeenCalledTimes(1);
       expect(h.thinking()).toBe("high");
-      expect(h.notify).not.toHaveBeenCalledWith(
-        "Unable to save the directory model preference.",
-        "warning",
-      );
+      expect(h.notify).not.toHaveBeenCalled();
       yield* h.shutdown();
     });
   });
@@ -301,6 +295,22 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         );
         expect(resumed.setModel).not.toHaveBeenCalled();
         yield* resumed.shutdown();
+      }
+    }),
+  );
+
+  it.effect("classifies compaction and branch-summary startups", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      for (const [entry, initializes] of [
+        [{ type: "compaction" }, false],
+        [{ type: "branch_summary", summary: "earlier conversation" }, false],
+        [{ type: "branch_summary" }, true],
+      ] as const) {
+        const h = yield* harness({ entries: [entry] });
+        yield* h.start();
+        expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(initializes);
+        yield* h.shutdown();
       }
     }),
   );
@@ -384,7 +394,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
-  it.effect("suppresses thinking events delayed past restoration", () =>
+  it.effect("keeps thinking events delayed past restoration idempotent", () =>
     Effect.gen(function* () {
       const h = yield* harness({ delayThinkingEvents: true });
       yield* writePreference(h.agentDirectory, h.cwd, {
@@ -412,6 +422,29 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
+  it.effect("keeps the preference and session state intact when setModel resolves false", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ setModelDenied: true });
+      yield* writePreference(h.agentDirectory, h.cwd, {
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "high",
+      });
+
+      yield* h.start();
+      expect(h.model()).toBe(h.initial);
+      expect(h.thinking()).toBe("low");
+      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "high",
+      });
+      expect(h.notify).toHaveBeenCalledTimes(1);
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      yield* h.shutdown();
+    }),
+  );
+
   it.effect("retains an unavailable preference and fails open with one warning", () =>
     Effect.gen(function* () {
       const h = yield* harness();
@@ -427,10 +460,104 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         provider: "missing-provider",
         model: "missing-model",
       });
-      expect(h.notify).toHaveBeenCalledWith(
-        "The remembered directory model is not available.",
-        "warning",
+      expect(h.notify).toHaveBeenCalledTimes(1);
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      yield* h.shutdown();
+    }),
+  );
+
+  it.effect("ignores model and thinking events before startup and after shutdown", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const h = yield* harness();
+
+      h.select(h.remembered, "high");
+      yield* h.emit("model_select", {
+        type: "model_select",
+        model: h.remembered,
+        previousModel: h.initial,
+        source: "set",
+      });
+      yield* h.emit("thinking_level_select", {
+        type: "thinking_level_select",
+        level: "high",
+        previousLevel: "low",
+      });
+      expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(false);
+      expect(h.notify).not.toHaveBeenCalled();
+
+      h.select(h.initial, "low");
+      yield* h.start();
+      yield* h.shutdown();
+      const persisted = yield* readPreference(h.agentDirectory, h.cwd);
+
+      h.select(h.alternate, "high");
+      yield* h.emit("model_select", {
+        type: "model_select",
+        model: h.alternate,
+        previousModel: h.initial,
+        source: "set",
+      });
+      yield* h.emit("thinking_level_select", {
+        type: "thinking_level_select",
+        level: "high",
+        previousLevel: "low",
+      });
+      expect(yield* readPreference(h.agentDirectory, h.cwd)).toEqual(persisted);
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("fails open and preserves malformed or foreign-cwd preference documents", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+
+      const malformed = yield* harness();
+      const malformedTarget = yield* preferencePath(malformed.agentDirectory, malformed.cwd);
+      yield* fs.makeDirectory(path.dirname(malformedTarget), { recursive: true });
+      yield* fs.writeFileString(malformedTarget, "{ not json");
+      yield* malformed.start();
+      expect(malformed.setModel).not.toHaveBeenCalled();
+      expect(yield* fs.readFileString(malformedTarget)).toBe("{ not json");
+      yield* malformed.shutdown();
+
+      const foreign = yield* harness();
+      const foreignTarget = yield* preferencePath(foreign.agentDirectory, foreign.cwd);
+      yield* fs.makeDirectory(path.dirname(foreignTarget), { recursive: true });
+      const document = yield* Schema.encodeUnknownEffect(PreferenceFromJson)(
+        makeDirectoryModelPreference(
+          "/somewhere/else",
+          foreign.remembered.provider,
+          foreign.remembered.id,
+          "high",
+        ),
       );
+      yield* fs.writeFileString(foreignTarget, document);
+      yield* foreign.start();
+      expect(foreign.setModel).not.toHaveBeenCalled();
+      expect(yield* fs.readFileString(foreignTarget)).toBe(document);
+      yield* foreign.shutdown();
+    }),
+  );
+
+  it.effect("leaves an existing preference untouched when --model is explicit", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ explicitModel: true });
+      yield* writePreference(h.agentDirectory, h.cwd, {
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "high",
+      });
+
+      yield* h.start();
+      expect(h.setModel).not.toHaveBeenCalled();
+      expect(h.setThinkingLevel).not.toHaveBeenCalled();
+      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "high",
+      });
       yield* h.shutdown();
     }),
   );

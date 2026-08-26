@@ -3,7 +3,7 @@ import {
   preferenceFilename,
   readableDirectorySlug,
   shortPathHash,
-} from "../src/boundary/path-key.ts";
+} from "../src/config/path-key.ts";
 
 describe("directory preference path keys", () => {
   test("keeps a recognizable basename and a stable short hash", () => {

@@ -4,22 +4,15 @@ import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { DirectoryModelStore } from "./config/store.ts";
 import {
   DirectoryModelPreferenceService,
-  type DirectoryModelPreferenceServiceOptions,
   type DirectoryModelSessionInput,
+  type DirectoryModelWarn,
 } from "./preference/service.ts";
 
 export const makeDirectoryModelsLayer = (
   input: DirectoryModelSessionInput,
-  options: DirectoryModelPreferenceServiceOptions,
+  warn: DirectoryModelWarn,
 ) => {
-  const platform = Layer.merge(
-    nodeFilePlatformLayer,
-    AgentDirectory.layerFromHost(() => getAgentDir()),
-  );
+  const platform = Layer.merge(nodeFilePlatformLayer, AgentDirectory.layerFromHost(getAgentDir));
   const store = DirectoryModelStore.layer.pipe(Layer.provide(platform));
-  return DirectoryModelPreferenceService.layer(input, options).pipe(Layer.provide(store));
+  return DirectoryModelPreferenceService.layer(input, warn).pipe(Layer.provide(store));
 };
-
-export type DirectoryModelsLayer = ReturnType<typeof makeDirectoryModelsLayer>;
-export type DirectoryModelsApplication = Layer.Success<DirectoryModelsLayer>;
-export type DirectoryModelsRuntimeError = Layer.Error<DirectoryModelsLayer>;

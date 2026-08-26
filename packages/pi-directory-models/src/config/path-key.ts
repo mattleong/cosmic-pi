@@ -1,4 +1,4 @@
-// Node hashing is intentionally isolated at this deterministic platform boundary.
+/** Deterministic, readable preference filenames derived from the canonical working directory. */
 import { createHash } from "node:crypto";
 
 const MAX_SLUG_CHARS = 48;
