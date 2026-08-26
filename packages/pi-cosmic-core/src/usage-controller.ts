@@ -1,6 +1,7 @@
 /** Provider-agnostic subscription-usage refresh controller shared by provider extensions. */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
@@ -35,11 +36,6 @@ export type UsageControllerConfig = ScopedConfigMetadata & {
 
 /** Core services every provider usage stack depends on. */
 export type UsageProviderRequirements = Path.Path | JsonDocumentStore | JsonHttpClient;
-
-type UsageProviderRemainder<R> = Exclude<
-  Exclude<Exclude<R, Path.Path>, JsonDocumentStore>,
-  JsonHttpClient
->;
 
 /** Provider fetch result. `patch` carries provider identity fields into the projection. */
 export type UsageFetchOutcome<Snapshot, Patch> =
@@ -151,10 +147,8 @@ export interface UsageRefreshControllerOptions<
   >;
   readonly formatStatusLine: (snapshot: Snapshot, cfg: Resolved, fetchedAt: number) => string;
   readonly formatStatusText: (snapshot: Snapshot, fetchedAt: number) => string;
-  /** Pins provider-specific services onto effects that escape the layer scope. */
-  readonly provideDependencies: <A, E2>(
-    effect: Effect.Effect<A, E2, UsageProviderRemainder<R>>,
-  ) => Effect.Effect<A, E2>;
+  /** Provider-specific services pinned onto effects that escape the layer scope. */
+  readonly dependencies: Context.Context<R>;
 }
 
 export interface UsageRefreshController<
@@ -205,22 +199,21 @@ export const makeUsageRefreshController = <
 ) =>
   Effect.gen(function* () {
     const { context, cwd, projection, onChange, logLabel } = options;
-    const provideProviderDependencies = options.provideDependencies;
     const path = yield* Path.Path;
     const documents = yield* JsonDocumentStore;
     const http = yield* JsonHttpClient;
     const tracer = yield* Tracer.Tracer;
+    // Capture only these shared services, never the whole ambient context. Context.merge keeps
+    // the second context on key collisions, so provider dependencies cannot replace them.
+    const sharedDependencies = Context.make(Path.Path, path).pipe(
+      Context.add(JsonDocumentStore, documents),
+      Context.add(JsonHttpClient, http),
+      Context.add(Tracer.Tracer, tracer),
+    );
+    const dependencies = Context.merge(options.dependencies, sharedDependencies);
     const provideDependencies = <A, E2>(
       effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
-    ): Effect.Effect<A, E2> =>
-      provideProviderDependencies(
-        effect.pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.provideService(JsonDocumentStore, documents),
-          Effect.provideService(JsonHttpClient, http),
-          Effect.provideService(Tracer.Tracer, tracer),
-        ),
-      );
+    ): Effect.Effect<A, E2> => Effect.provideContext(effect, dependencies);
     const agentDir = options.agentDir ?? (yield* AgentDirectory);
     const authPath = path.join(agentDir, "auth.json");
     const projectTrusted = options.projectTrusted === true;

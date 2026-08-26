@@ -1,6 +1,6 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Ref from "effect/Ref";
 
 /** Flags shared by subscription-usage refresh loops. */
 export interface RefreshRequest {
@@ -13,9 +13,10 @@ interface State<Request, E> {
   readonly queued: { readonly value: Request } | undefined;
 }
 
-type Registration<E> =
-  | { readonly owner: true; readonly done: Deferred.Deferred<void, E> }
-  | { readonly owner: false; readonly done: Deferred.Deferred<void, E> };
+interface Registration<E> {
+  readonly owner: boolean;
+  readonly done: Deferred.Deferred<void, E>;
+}
 
 export const mergeRefreshRequest = (
   current: RefreshRequest | undefined,
@@ -30,7 +31,7 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
   merge: (current: Request | undefined, next: Request) => Request,
 ) =>
   Effect.gen(function* () {
-    const state = yield* SynchronizedRef.make<State<Request, E>>({
+    const state = yield* Ref.make<State<Request, E>>({
       active: undefined,
       queued: undefined,
     });
@@ -40,9 +41,10 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
       operation: (request: Request) => Effect.Effect<void, E, R>,
     ): Effect.Effect<void, E, R> =>
       Effect.gen(function* () {
-        const registration = yield* SynchronizedRef.modifyEffect(
+        const candidate = yield* Deferred.make<void, E>();
+        const registration = yield* Ref.modify(
           state,
-          (current): Effect.Effect<readonly [Registration<E>, State<Request, E>]> => {
+          (current): readonly [Registration<E>, State<Request, E>] => {
             if (current.active) {
               // Merging stays open for the whole cycle so a request that arrives while a
               // follow-up executes is queued and drained instead of resolving unexecuted.
@@ -50,15 +52,12 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
                 ...current,
                 queued: { value: merge(current.queued?.value, request) },
               };
-              const registration: Registration<E> = { owner: false, done: current.active };
-              return Effect.succeed([registration, next] as const);
+              return [{ owner: false, done: current.active }, next] as const;
             }
-            return Deferred.make<void, E>().pipe(
-              Effect.map((done): readonly [Registration<E>, State<Request, E>] => [
-                { owner: true, done },
-                { active: done, queued: undefined },
-              ]),
-            );
+            return [
+              { owner: true, done: candidate },
+              { active: candidate, queued: undefined },
+            ] as const;
           },
         );
         if (!registration.owner) return yield* Deferred.await(registration.done);
@@ -67,29 +66,25 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
           let pending: { readonly value: Request } | undefined = { value: request };
           while (pending !== undefined) {
             yield* operation(pending.value);
-            // Taking the queue and releasing ownership is one serialized transition:
+            // Taking the queue and releasing ownership is one atomic transition:
             // a non-empty queue keeps ownership (so later arrivals still merge), and an
             // empty queue ends the cycle in that same step, leaving no lost-request window.
-            pending = yield* SynchronizedRef.modifyEffect(state, (current) => {
-              if (current.active !== registration.done)
-                return Effect.succeed([undefined, current] as const);
+            pending = yield* Ref.modify(state, (current) => {
+              if (current.active !== registration.done) return [undefined, current] as const;
               const queued = current.queued;
               return queued !== undefined
-                ? Effect.succeed([queued, { active: current.active, queued: undefined }] as const)
-                : Effect.succeed([undefined, { active: undefined, queued: undefined }] as const);
+                ? ([queued, { active: current.active, queued: undefined }] as const)
+                : ([undefined, { active: undefined, queued: undefined }] as const);
             });
           }
         });
         return yield* Effect.uninterruptibleMask((restore) =>
           restore(work).pipe(
             Effect.onExit((exit) =>
-              SynchronizedRef.modifyEffect(state, (current) =>
-                Effect.succeed([
-                  undefined,
-                  current.active === registration.done
-                    ? { active: undefined, queued: undefined }
-                    : current,
-                ] as const),
+              Ref.update(state, (current) =>
+                current.active === registration.done
+                  ? { active: undefined, queued: undefined }
+                  : current,
               ).pipe(Effect.andThen(Deferred.done(registration.done, exit)), Effect.asVoid),
             ),
           ),

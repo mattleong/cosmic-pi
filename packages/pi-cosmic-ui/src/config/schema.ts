@@ -30,6 +30,8 @@ export interface ResolvedCosmicUiConfig {
   readonly configPath: string;
   readonly projectConfigPath: string;
   readonly globalConfigPath: string;
+  readonly projectConfigExists: boolean;
+  readonly globalConfigExists: boolean;
   readonly footer: {
     readonly enabled: boolean;
     readonly density: FooterDensity;
@@ -64,3 +66,16 @@ export const DEFAULT_CONFIG = {
     mediaPlacement: "inline-right",
   },
 } satisfies { readonly footer: ResolvedCosmicUiConfig["footer"] };
+
+export const makeDefaultResolvedCosmicUiConfig = (): ResolvedCosmicUiConfig => ({
+  configPath: "",
+  projectConfigPath: "",
+  globalConfigPath: "",
+  projectConfigExists: false,
+  globalConfigExists: false,
+  footer: {
+    ...DEFAULT_CONFIG.footer,
+    order: [...DEFAULT_CONFIG.footer.order],
+    hidden: [...DEFAULT_CONFIG.footer.hidden],
+  },
+});

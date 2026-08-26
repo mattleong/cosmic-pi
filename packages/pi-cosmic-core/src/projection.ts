@@ -42,11 +42,6 @@ type ProjectionData =
   | ReadonlyArray<ProjectionData>
   | ProjectionRecord;
 
-const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
-const ProjectionDataSchema: Schema.Codec<ProjectionData> = Schema.Tree(
-  Schema.Union([Schema.Undefined, Schema.Null, Schema.String, FiniteNumberSchema, Schema.Boolean]),
-);
-
 const cloneAndFreeze = <Value>(
   value: Value,
   seen: WeakMap<object, ProjectionData>,
@@ -117,12 +112,11 @@ const cloneAndFreeze = <Value>(
   return Object.freeze(clone);
 };
 
-/** Clones and deeply freezes a schema-validated plain-data snapshot. */
+/** Clones and deeply freezes a plain-data snapshot, rejecting non-plain values with typed paths. */
 export const freezeSnapshot = <Snapshot>(snapshot: Snapshot): Snapshot => {
   const cloned = cloneAndFreeze(snapshot, new WeakMap(), new WeakMap(), "$");
-  if (!Schema.is(ProjectionDataSchema)(cloned))
-    return unsupported("$", "value outside the projection schema");
-  // SAFETY: Recursive cloning preserved the caller's plain-data structure and Schema.Tree validated it.
+  // SAFETY: cloneAndFreeze structurally validated every value while cloning, so the frozen clone
+  // preserves the caller's plain-data snapshot shape.
   return cloned as Snapshot;
 };
 

@@ -126,7 +126,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         formatStatusLine: (snapshot, cfg, fetchedAt) =>
           formatUsageSnapshot(snapshot, cfg.usage, fetchedAt),
         formatStatusText: formatUsageDetails,
-        provideDependencies: (effect) => effect,
+        dependencies: Context.empty(),
       });
       const persistFastWithRequirements = Effect.fn("OpenAIUsage.persistFast")(function* (
         active: boolean,

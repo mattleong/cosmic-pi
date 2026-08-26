@@ -245,7 +245,7 @@ export function normalizeCosmicFooterUpsertEvent<ValueInput>(
 export function normalizeCosmicFooterRemoveEvent<ValueInput>(
   value: ValueInput,
 ): CosmicFooterRemoveEvent | undefined {
-  const event = decode(RemoveData, value);
+  const event = decodeSafely(RemoveData, value);
   if (!event) return undefined;
   const snapshot: CosmicFooterRemoveEvent = {
     version: event.version,
@@ -259,7 +259,7 @@ export function normalizeCosmicFooterRemoveEvent<ValueInput>(
 export function normalizeCosmicFooterInvalidateEvent<ValueInput>(
   value: ValueInput,
 ): CosmicFooterInvalidateEvent | undefined {
-  const event = decode(InvalidateData, value);
+  const event = decodeSafely(InvalidateData, value);
   if (!event) return undefined;
   const snapshot: CosmicFooterInvalidateEvent = { version: event.version };
   if (event.owner !== undefined) snapshot.owner = event.owner;

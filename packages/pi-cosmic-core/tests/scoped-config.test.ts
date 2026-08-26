@@ -153,7 +153,35 @@ const testStore = makeScopedConfigStore<TestFile, TestResolved, TestConfigError>
   }),
 });
 
+const readOnlyStore = makeScopedConfigStore<TestFile, TestResolved, TestConfigError>({
+  errorFactory: (operation, path) => () =>
+    new TestConfigError({ operation, path, message: "test" }),
+  label: "Test",
+  spanPrefix: "TestConfig",
+  projectConfigDirectory: ".pi",
+  basename: "config.json",
+  decode: (value) => ({ values: value }),
+  resolve: (metadata, project, global) => ({
+    ...metadata,
+    project: project?.values ?? {},
+    global: global?.values ?? {},
+  }),
+});
+
 testLayer(Path.layer)("scoped config store", (it) => {
+  it.effect("resolves empty scopes without seeding when no default document is supplied", () => {
+    const memory = makeInMemoryDocuments();
+    return Effect.gen(function* () {
+      const resolved = yield* readOnlyStore.resolveConfig("/project", "/agent", true);
+      expect(resolved.configPath).toBe(resolved.globalConfigPath);
+      expect(resolved.projectConfigExists).toBe(false);
+      expect(resolved.globalConfigExists).toBe(false);
+      expect(resolved.project).toEqual({});
+      expect(resolved.global).toEqual({});
+      expect(memory.documents.size).toBe(0);
+    }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
+  });
+
   it.effect("omitted trust fails closed without project-document I/O", () => {
     const memory = makeInMemoryDocuments({
       "/project/.pi/extensions/config.json": { fromProject: true },
@@ -190,38 +218,54 @@ testLayer(Path.layer)("scoped config store", (it) => {
     }).pipe(Effect.provideService(JsonDocumentStore, JsonDocumentStore.of(service)));
   });
 
-  it.effect("resolveCommittedConfig honors an explicit committed scope with a fallback", () => {
+  it.effect("resolveCommittedConfig updates scope metadata and preserves overlays", () => {
     const memory = makeInMemoryDocuments();
     return Effect.gen(function* () {
-      const current = yield* testStore.resolveConfig("/project", "/agent", true);
-      // Explicit global commit keeps the project fallback overlay.
+      const absent = yield* readOnlyStore.resolveConfig("/project", "/agent", true);
       const globalCommit = testStore.resolveCommittedConfig(
-        { ...current, configPath: current.projectConfigPath, projectConfigExists: true },
+        {
+          ...absent,
+          configPath: absent.projectConfigPath,
+          projectConfigExists: true,
+        },
         { fromGlobal: true },
         { fromProject: true },
         "global",
       );
-      expect(globalCommit.global).toEqual({ fromGlobal: true });
-      expect(globalCommit.project).toEqual({ fromProject: true });
+      expect(globalCommit).toMatchObject({
+        configPath: absent.projectConfigPath,
+        projectConfigExists: true,
+        globalConfigExists: true,
+        project: { fromProject: true },
+        global: { fromGlobal: true },
+      });
 
-      // Explicit project commit keeps the global fallback overlay.
       const projectCommit = testStore.resolveCommittedConfig(
-        { ...current, configPath: current.projectConfigPath, projectConfigExists: true },
+        { ...absent, globalConfigExists: true },
         { fromProject: true },
         { fromGlobal: true },
         "project",
       );
-      expect(projectCommit.project).toEqual({ fromProject: true });
-      expect(projectCommit.global).toEqual({ fromGlobal: true });
+      expect(projectCommit).toMatchObject({
+        configPath: absent.projectConfigPath,
+        projectConfigExists: true,
+        globalConfigExists: true,
+        project: { fromProject: true },
+        global: { fromGlobal: true },
+      });
 
-      // Without an explicit scope the committed scope derives from the preferred path.
       const derivedGlobal = testStore.resolveCommittedConfig(
-        current,
+        absent,
         { fromGlobal: true },
         undefined,
       );
-      expect(derivedGlobal.global).toEqual({ fromGlobal: true });
-      expect(derivedGlobal.project).toEqual({});
+      expect(derivedGlobal).toMatchObject({
+        configPath: absent.globalConfigPath,
+        projectConfigExists: false,
+        globalConfigExists: true,
+        project: {},
+        global: { fromGlobal: true },
+      });
     }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
   });
 });

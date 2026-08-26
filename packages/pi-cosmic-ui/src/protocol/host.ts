@@ -3,24 +3,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import { makeSynchronousIngress, type SynchronousIngressOfferResult } from "pi-cosmic-core";
 import { FooterRegistryService } from "../footer/registry.ts";
-import type {
-  CosmicFooterContribution,
-  CosmicFooterInvalidateEvent,
-  CosmicFooterRemoveEvent,
-  CosmicFooterUpsertEvent,
-} from "./protocol.ts";
-
-interface MutableRemoveProtocolEvent {
-  _tag: "Remove";
-  owner: string;
-  id?: string;
-}
-
-interface MutableInvalidateProtocolEvent {
-  _tag: "Invalidate";
-  owner?: string;
-  id?: string;
-}
+import type { CosmicFooterContribution } from "./protocol.ts";
 
 export type FooterProtocolEvent =
   | {
@@ -98,27 +81,20 @@ export function makeFooterProtocolBuffer(capacity = 128): FooterProtocolBuffer {
   };
 }
 
-export const protocolUpsert = (event: CosmicFooterUpsertEvent): FooterProtocolEvent => ({
-  _tag: "Upsert",
-  owner: event.owner,
-  contribution: event.contribution,
-});
-export const protocolRemove = (event: CosmicFooterRemoveEvent): FooterProtocolEvent => {
-  const protocolEvent: MutableRemoveProtocolEvent = {
-    _tag: "Remove",
-    owner: event.owner,
-  };
-  if (event.id !== undefined) protocolEvent.id = event.id;
-  return protocolEvent;
-};
-export const protocolInvalidate = (event: CosmicFooterInvalidateEvent): FooterProtocolEvent => {
-  const protocolEvent: MutableInvalidateProtocolEvent = {
-    _tag: "Invalidate",
-  };
-  if (event.owner !== undefined) protocolEvent.owner = event.owner;
-  if (event.id !== undefined) protocolEvent.id = event.id;
-  return protocolEvent;
-};
+export const protocolUpsert = (
+  owner: string,
+  contribution: CosmicFooterContribution,
+): FooterProtocolEvent => ({ _tag: "Upsert", owner, contribution });
+export const protocolRemove = (owner: string, id?: string): FooterProtocolEvent =>
+  id === undefined ? { _tag: "Remove", owner } : { _tag: "Remove", owner, id };
+export const protocolInvalidate = (owner?: string, id?: string): FooterProtocolEvent =>
+  owner === undefined
+    ? id === undefined
+      ? { _tag: "Invalidate" }
+      : { _tag: "Invalidate", id }
+    : id === undefined
+      ? { _tag: "Invalidate", owner }
+      : { _tag: "Invalidate", owner, id };
 
 /** Scoped protocol ingress ownership. The host publishes through the registry. */
 export const makeFooterProtocolHostLayer = (options: {

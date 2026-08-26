@@ -12,6 +12,7 @@ import {
   type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
+import { DEFAULT_CONFIG } from "../src/config/schema.ts";
 import {
   configPaths,
   resolveConfig,
@@ -37,6 +38,39 @@ const withTempConfig = <A, E>(
   }).pipe(Effect.scoped, provideBuiltLayer(nodePlatformLayer));
 
 describe("Cosmic UI config", () => {
+  it.effect("does not seed defaults and marks the first footer update as global", () =>
+    withTempConfig(({ cwd, agent }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* configPaths(cwd, agent);
+        const config = yield* resolveConfig(cwd, agent, true);
+        expect(config.configPath).toBe(paths.global);
+        expect(config.projectConfigExists).toBe(false);
+        expect(config.globalConfigExists).toBe(false);
+        expect(config.footer).toEqual(DEFAULT_CONFIG.footer);
+        expect(yield* fs.exists(paths.project)).toBe(false);
+        expect(yield* fs.exists(paths.global)).toBe(false);
+
+        const afterCommit: Array<typeof config> = [];
+        const updated = yield* updateFooterConfig(cwd, agent, { enabled: false }, true, (next) =>
+          Effect.sync(() => void afterCommit.push(next)),
+        );
+        const expectedMetadata = {
+          configPath: paths.global,
+          projectConfigPath: paths.project,
+          globalConfigPath: paths.global,
+          projectConfigExists: false,
+          globalConfigExists: true,
+        };
+        expect(updated).toMatchObject({ ...expectedMetadata, footer: { enabled: false } });
+        expect(afterCommit).toHaveLength(1);
+        expect(afterCommit[0]).toMatchObject(expectedMetadata);
+        expect(yield* fs.exists(paths.project)).toBe(false);
+        expect(yield* fs.exists(paths.global)).toBe(true);
+      }),
+    ),
+  );
+
   it.effect("merges valid fields independently and preserves unknown fields", () =>
     withTempConfig(({ cwd, agent }) =>
       Effect.gen(function* () {

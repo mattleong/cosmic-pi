@@ -12,7 +12,7 @@ import { isProjectTrusted, makePiManagedRuntime, makePiSessionRuntimeSlot } from
 import { makeHostCallbackBoundary, snapshotHostAbortSignal } from "./boundary/host-callback.ts";
 import { addAssistantUsage, decodeAssistantUsage } from "./boundary/host-usage.ts";
 import { shutdownHostUiTickers } from "./boundary/host-status.ts";
-import { DEFAULT_CONFIG, type ResolvedCosmicUiConfig } from "./config/schema.ts";
+import { makeDefaultResolvedCosmicUiConfig, type ResolvedCosmicUiConfig } from "./config/schema.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import {
   emptyFooterRegistrySnapshot,
@@ -51,12 +51,6 @@ import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
 import { WorkingTimerService, type WorkingTimerServiceContract } from "./working/service.ts";
 
-interface MutableInvalidateProtocolEvent {
-  _tag: "Invalidate";
-  owner?: string;
-  id?: string;
-}
-
 export interface CosmicUiApplicationDependencies {
   readonly shutdownHostUiTickers?: () => Promise<void>;
 }
@@ -76,27 +70,18 @@ export function cosmicUiWithDependencies(
   const bridge: FooterRegistryBridge = {
     snapshot: emptyFooterRegistrySnapshot(),
     requestRenderNow: () => undefined,
-    invalidate: (owner, id) => {
-      const event: MutableInvalidateProtocolEvent = {
-        _tag: "Invalidate",
-      };
-      if (owner !== undefined) event.owner = owner;
-      if (id !== undefined) event.id = id;
-      protocolBuffer.offer(event);
+    invalidate: () => {
+      protocolBuffer.offer(protocolInvalidate());
     },
   };
   const projection = makeProjection();
-  type SessionHostRead =
-    | {
-        readonly _tag: "Success";
-        readonly cwd: string;
-        readonly signal: AbortSignal | undefined;
-        readonly aborted: boolean;
-        readonly releaseSignal: () => void;
-      }
-    | { readonly _tag: "Failure" };
-  const failedSessionHostRead: SessionHostRead = Object.freeze({ _tag: "Failure" });
-  const sessionHostFrom = (ctx: ExtensionContext): SessionHostRead => {
+  interface SessionHostRead {
+    readonly cwd: string;
+    readonly signal: AbortSignal | undefined;
+    readonly aborted: boolean;
+    readonly releaseSignal: () => void;
+  }
+  const sessionHostFrom = (ctx: ExtensionContext): SessionHostRead | undefined => {
     const cwd = callbacks.invoke<string | undefined>(
       "host-query",
       () => {
@@ -107,22 +92,17 @@ export function cosmicUiWithDependencies(
       },
       undefined,
     );
-    if (cwd === undefined) return failedSessionHostRead;
+    if (cwd === undefined) return undefined;
     const abort = snapshotHostAbortSignal(callbacks, () => ctx.signal);
     return abort === undefined
-      ? failedSessionHostRead
+      ? undefined
       : {
-          _tag: "Success",
           cwd,
           signal: abort.signal,
           aborted: abort.aborted,
           releaseSignal: abort.release,
         };
   };
-  type TotalsRead =
-    | { readonly _tag: "Success"; readonly totals: FooterTotals }
-    | { readonly _tag: "Failure" };
-  const failedTotalsRead: TotalsRead = Object.freeze({ _tag: "Failure" });
   let lastCompleteTotals = emptyTotals();
   const rememberTotals = (totals: FooterTotals) => {
     lastCompleteTotals = totals;
@@ -132,7 +112,7 @@ export function cosmicUiWithDependencies(
     lastCompleteTotals = emptyTotals();
   };
   const totalsFromSession = (ctx: ExtensionContext): FooterTotals => {
-    const read = callbacks.invoke<TotalsRead>(
+    const read = callbacks.invoke<FooterTotals | undefined>(
       "host-query",
       () => {
         let totals = emptyTotals();
@@ -144,23 +124,18 @@ export function cosmicUiWithDependencies(
           if (next === undefined) throw new Error("Assistant usage totals overflowed.");
           totals = next;
         }
-        return { _tag: "Success", totals };
+        return totals;
       },
-      failedTotalsRead,
+      undefined,
     );
-    return read._tag === "Success" ? rememberTotals(read.totals) : lastCompleteTotals;
+    return read === undefined ? lastCompleteTotals : rememberTotals(read);
   };
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   let workingTimer: WorkingTimerServiceContract | undefined;
   let subscriptions: Array<() => void> = [];
 
   const config = (): ResolvedCosmicUiConfig =>
-    MutableRef.get(projection).config ?? {
-      configPath: "",
-      projectConfigPath: "",
-      globalConfigPath: "",
-      footer: { ...DEFAULT_CONFIG.footer },
-    };
+    MutableRef.get(projection).config ?? makeDefaultResolvedCosmicUiConfig();
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
@@ -217,11 +192,9 @@ export function cosmicUiWithDependencies(
     },
   });
 
-  const run = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, signal?: AbortSignal) =>
-    slot.run(effect, signal);
   const runFrom = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, ctx: ExtensionContext) => {
     const abort = snapshotHostAbortSignal(callbacks, () => ctx.signal);
-    const result = run(effect, abort?.signal);
+    const result = slot.run(effect, abort?.signal);
     return abort ? result.finally(abort.release) : result;
   };
   const forkFrom = <A, E>(
@@ -287,7 +260,7 @@ export function cosmicUiWithDependencies(
           () => normalizeCosmicFooterUpsertEvent(data),
           undefined,
         );
-        if (event) protocolBuffer.offer(protocolUpsert(event));
+        if (event) protocolBuffer.offer(protocolUpsert(event.owner, event.contribution));
       }),
       pi.events.on(COSMIC_UI_FOOTER_REMOVE, (data) => {
         const event = callbacks.invoke(
@@ -295,7 +268,7 @@ export function cosmicUiWithDependencies(
           () => normalizeCosmicFooterRemoveEvent(data),
           undefined,
         );
-        if (event) protocolBuffer.offer(protocolRemove(event));
+        if (event) protocolBuffer.offer(protocolRemove(event.owner, event.id));
       }),
       pi.events.on(COSMIC_UI_FOOTER_INVALIDATE, (data) => {
         const event = callbacks.invoke(
@@ -303,7 +276,7 @@ export function cosmicUiWithDependencies(
           () => normalizeCosmicFooterInvalidateEvent(data),
           undefined,
         );
-        if (event) protocolBuffer.offer(protocolInvalidate(event));
+        if (event) protocolBuffer.offer(protocolInvalidate(event.owner, event.id));
       }),
     ];
   };
@@ -317,7 +290,7 @@ export function cosmicUiWithDependencies(
     config,
     updateContext,
     update: footerInstallation.update,
-    run,
+    run: slot.run,
     callbacks,
   });
 
@@ -329,7 +302,7 @@ export function cosmicUiWithDependencies(
         resetProjection(projection);
       });
     const host = sessionHostFrom(ctx);
-    if (host._tag === "Failure") return shutdownFailedStart();
+    if (host === undefined) return shutdownFailedStart();
     if (host.aborted) {
       host.releaseSignal();
       return shutdownFailedStart();
@@ -378,29 +351,25 @@ export function cosmicUiWithDependencies(
 
   pi.on("turn_end", (event, ctx) => {
     updateContext(ctx);
-    const read = callbacks.invoke<
-      | { readonly _tag: "Assistant"; readonly totals: FooterTotals }
-      | { readonly _tag: "Rescan" }
-      | { readonly _tag: "Failure" }
-    >(
+    const read = callbacks.invoke<FooterTotals | undefined | null>(
       "host-query",
       () => {
-        const message = event.message;
-        if (!message || message.role !== "assistant") return { _tag: "Rescan" };
+        const message: unknown = event.message;
+        if (message === undefined) return undefined;
+        if (!Predicate.isObject(message)) throw new Error("Invalid turn message.");
+        const role = message.role;
+        if (!Predicate.isString(role)) throw new Error("Invalid turn message role.");
+        if (role !== "assistant") return undefined;
         const usage = decodeAssistantUsage(message.usage);
         if (usage === undefined) throw new Error("Invalid assistant usage.");
         const totals = addAssistantUsage(lastCompleteTotals, usage);
         if (totals === undefined) throw new Error("Assistant usage totals overflowed.");
-        return { _tag: "Assistant", totals };
+        return rememberTotals(totals);
       },
-      { _tag: "Failure" },
+      null,
     );
     const totals =
-      read._tag === "Assistant"
-        ? rememberTotals(read.totals)
-        : read._tag === "Rescan"
-          ? totalsFromSession(ctx)
-          : lastCompleteTotals;
+      read === undefined ? totalsFromSession(ctx) : read === null ? lastCompleteTotals : read;
     footerInstallation.invalidateContextUsage();
     requestRender();
     return runFrom(

@@ -55,7 +55,7 @@ export interface FooterRegistryServiceContract {
 export interface FooterRegistryBridge {
   snapshot: FooterRegistrySnapshot;
   requestRenderNow: () => void;
-  invalidate: (owner?: string, id?: string) => void;
+  invalidate: () => void;
 }
 
 export class FooterRegistryService extends Context.Service<

@@ -71,8 +71,6 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
       this,
       Effect.gen(function* () {
         const registryAuth = yield* ModelRegistryAuth;
-        const provideDependencies = <A, E>(effect: Effect.Effect<A, E, ModelRegistryAuth>) =>
-          Effect.provideService(effect, ModelRegistryAuth, registryAuth);
         const requestUsage = options.requestUsage ?? requestXaiUsage;
         const subscriptionEligibility = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
           const model = ctx.model;
@@ -149,7 +147,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           formatStatusLine: (snapshot, cfg, fetchedAt) =>
             formatUsageSnapshot(snapshot, cfg.usage, fetchedAt),
           formatStatusText: formatUsageDetails,
-          provideDependencies,
+          dependencies: Context.make(ModelRegistryAuth, registryAuth),
         });
         return XaiUsageService.of({
           refresh: controller.refresh,

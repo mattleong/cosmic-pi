@@ -507,7 +507,7 @@ describe("Cosmic UI extension", () => {
     Effect.gen(function* () {
       const h = harness();
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      h.ctx.sessionManager.getEntries = vi.fn(
+      const getEntries = vi.fn(
         () =>
           [
             {
@@ -525,6 +525,7 @@ describe("Cosmic UI extension", () => {
             },
           ] as never,
       );
+      h.ctx.sessionManager.getEntries = getEntries;
       yield* emit(h, "session_start");
       const factory = h.setFooter.mock.calls[0]?.[0];
       const footer = factory(
@@ -548,6 +549,7 @@ describe("Cosmic UI extension", () => {
 
       yield* emit(h, "turn_end", { message: { role: "assistant", usage } });
       expect(input).toHaveBeenCalledOnce();
+      expect(getEntries).toHaveBeenCalledOnce();
       expect(footer.render(100).join("\n")).toContain("↑50");
       yield* emit(h, "session_shutdown");
     }),
@@ -564,10 +566,13 @@ describe("Cosmic UI extension", () => {
         cost: { total: 0 },
       });
       // SAFETY: These locally constructed session entries exercise only assistant usage aggregation.
-      h.ctx.sessionManager.getEntries = vi.fn(
+      const initialEntries = vi.fn(
         () => [{ type: "message", message: { role: "assistant", usage: usage(50) } }] as never,
       );
+      h.ctx.sessionManager.getEntries = initialEntries;
       yield* emit(h, "session_start");
+      yield* emit(h, "turn_end", { message: { role: "assistant", usage: usage(0) } });
+      expect(initialEntries).toHaveBeenCalledOnce();
       const factory = h.setFooter.mock.calls[0]?.[0];
       const footer = factory(
         { requestRender: vi.fn() },
@@ -583,19 +588,24 @@ describe("Cosmic UI extension", () => {
 
       // A partially valid rescan is discarded atomically when a later record is invalid.
       // SAFETY: These locally constructed session entries exercise only assistant usage aggregation.
-      h.ctx.sessionManager.getEntries = vi.fn(
+      const rescannedEntries = vi.fn(
         () =>
           [
             { type: "message", message: { role: "assistant", usage: usage(25) } },
             { type: "message", message: { role: "assistant", usage: usage(Number.NaN) } },
           ] as never,
       );
+      h.ctx.sessionManager.getEntries = rescannedEntries;
       yield* emit(h, "session_compact");
       expect(footer.render(100).join("\n")).toContain("↑50");
 
+      yield* emit(h, "turn_end");
+      yield* emit(h, "turn_end", { message: { role: "user" } });
+      expect(rescannedEntries).toHaveBeenCalledTimes(3);
       yield* emit(h, "turn_end", {
         message: { role: "assistant", usage: usage(Number.POSITIVE_INFINITY) },
       });
+      expect(rescannedEntries).toHaveBeenCalledTimes(3);
       expect(footer.render(100).join("\n")).toContain("↑50");
       yield* emit(h, "session_shutdown");
     }),

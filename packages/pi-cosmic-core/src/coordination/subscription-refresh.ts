@@ -2,7 +2,6 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TxReentrantLock from "effect/TxReentrantLock";
 import { makeRefreshCoordinatorWith } from "./refresh-coordinator.ts";
 
@@ -36,7 +35,7 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
     const revisionRef = yield* Ref.make(0);
     const commitGate = yield* TxReentrantLock.make();
     const initialWake = yield* Deferred.make<void>();
-    const wakeRef = yield* SynchronizedRef.make(initialWake);
+    const wakeRef = yield* Ref.make(initialWake);
     const equals = options.equals ?? Object.is;
     const spanName = options.spanName ?? "pi-cosmic-core.subscription.refresh";
 
@@ -46,9 +45,8 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
       TxReentrantLock.withLock(commitGate, effect);
 
     const wake = Effect.gen(function* () {
-      const previous = yield* SynchronizedRef.modifyEffect(wakeRef, (current) =>
-        Deferred.make<void>().pipe(Effect.map((next) => [current, next] as const)),
-      );
+      const nextWake = yield* Deferred.make<void>();
+      const previous = yield* Ref.getAndSet(wakeRef, nextWake);
       yield* Deferred.succeed(previous, undefined);
     });
 
@@ -76,7 +74,7 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
       Effect.gen(function* () {
         while (true) {
           const interval = yield* options.interval;
-          const currentWake = yield* SynchronizedRef.get(wakeRef);
+          const currentWake = yield* Ref.get(wakeRef);
           yield* Effect.raceFirst(
             Effect.sleep(Duration.millis(interval)),
             Deferred.await(currentWake),

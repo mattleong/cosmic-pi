@@ -30,6 +30,16 @@ describe("Cosmic UI protocol guards", () => {
       expect(() => guard(input)).not.toThrow();
       expect(guard(input)).toBe(false);
     }
+    for (const normalize of [
+      normalizeCosmicUiHostQuery,
+      normalizeCosmicFooterUpsertEvent,
+      normalizeCosmicFooterRemoveEvent,
+      normalizeCosmicFooterInvalidateEvent,
+    ]) {
+      const input = hostileVersion();
+      expect(() => normalize(input)).not.toThrow();
+      expect(normalize(input)).toBeUndefined();
+    }
   });
 
   it("agrees with normalization for accepted and version-mismatched messages", () => {

@@ -43,8 +43,11 @@ export interface ScopedConfigStoreOptions<File, Resolved extends ScopedConfigMet
   readonly extensionsDirectory?: string;
   /** Tolerant wire decode of a raw document into the package's config file shape. */
   readonly decode: (value: JsonObject) => File;
-  /** Document seeded into the global scope when neither scope exists yet. */
-  readonly defaultDocument: () => JsonObject;
+  /**
+   * Document seeded into the global scope when neither scope exists yet. When omitted,
+   * resolution never writes: both scopes simply resolve as absent with package defaults.
+   */
+  readonly defaultDocument?: () => JsonObject;
   /** Overlays project over global over package defaults into the resolved config. */
   readonly resolve: (
     metadata: ScopedConfigMetadata,
@@ -77,8 +80,10 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
    * Resolves the exact document returned by an atomic commit without post-commit I/O.
    *
    * `fallback` is the other scope's raw document captured before the commit (the global
-   * document for a project commit, the project document for a global commit). When
-   * `committedScope` is omitted it is derived from `current.configPath`, which matches
+   * document for a project commit, the project document for a global commit). It affects only
+   * the decoded overlay, never existence metadata. The committed scope becomes present, the
+   * other existence flag is preserved, and project existence selects the preferred path.
+   * When `committedScope` is omitted it is derived from `current.configPath`, which matches
    * callers that always commit to the preferred scope.
    */
   readonly resolveCommittedConfig: (
@@ -91,8 +96,9 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
 
 /**
  * Builds the standard project/global scoped configuration store: path resolution, tolerant reads,
- * atomic writes, and layered resolution that seeds the global document when neither scope exists,
- * warns (rather than fails) on unreadable documents, and overlays project over global.
+ * atomic writes, and layered resolution that seeds the global document when neither scope exists
+ * (only when `defaultDocument` is supplied), warns (rather than fails) on unreadable documents,
+ * and overlays project over global.
  */
 export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadata, E>(
   options: ScopedConfigStoreOptions<File, Resolved, E>,
@@ -153,7 +159,7 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     );
     const projectExists = trusted && selected.projectExists;
     let globalExists = selected.globalExists;
-    if (!projectExists && !globalExists) {
+    if (!projectExists && !globalExists && defaultDocument !== undefined) {
       yield* writeConfig(paths.global, defaultDocument());
       globalExists = true;
     }
@@ -183,15 +189,17 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     fallback: JsonObject | undefined,
     committedScope?: "project" | "global",
   ): Resolved => {
-    const metadata: ScopedConfigMetadata = {
-      configPath: current.configPath,
-      projectConfigPath: current.projectConfigPath,
-      globalConfigPath: current.globalConfigPath,
-      projectConfigExists: current.projectConfigExists,
-      globalConfigExists: current.globalConfigExists,
-    };
     const scope =
       committedScope ?? (current.configPath === current.projectConfigPath ? "project" : "global");
+    const projectConfigExists = scope === "project" ? true : current.projectConfigExists;
+    const globalConfigExists = scope === "global" ? true : current.globalConfigExists;
+    const metadata: ScopedConfigMetadata = {
+      configPath: projectConfigExists ? current.projectConfigPath : current.globalConfigPath,
+      projectConfigPath: current.projectConfigPath,
+      globalConfigPath: current.globalConfigPath,
+      projectConfigExists,
+      globalConfigExists,
+    };
     if (scope === "project") {
       return resolve(
         metadata,

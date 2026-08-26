@@ -11,10 +11,10 @@ import {
   decodeTolerantFields,
   JsonDocumentStore,
   makeConfigDocumentErrorFactory,
-  scopedDocumentPaths,
-  selectScopedDocument,
+  makeScopedConfigStore,
   type JsonDocumentModification,
   type JsonObject,
+  type ScopedConfigMetadata,
 } from "pi-cosmic-core";
 import {
   DEFAULT_CONFIG,
@@ -37,16 +37,6 @@ const stringArray = <Candidate>(candidate: Candidate): readonly string[] | undef
   Array.isArray(candidate)
     ? candidate.filter((entry): entry is string => Predicate.isString(entry))
     : undefined;
-
-export const configPaths = Effect.fn("pi-cosmic-ui.config.paths")(function* (
-  cwd: string,
-  agentDir: string,
-) {
-  return yield* scopedDocumentPaths(cwd, agentDir, {
-    projectConfigDirectory: CONFIG_DIR_NAME,
-    basename: CONFIG_BASENAME,
-  });
-});
 
 function decodeConfig<ValueInput>(value: ValueInput): CosmicUiConfigFile {
   const root = decodeTolerantFields(
@@ -71,16 +61,13 @@ function decodeConfig<ValueInput>(value: ValueInput): CosmicUiConfigFile {
 }
 
 const resolveDocuments = (
-  paths: { readonly project: string; readonly global: string },
-  projectExists: boolean,
+  metadata: ScopedConfigMetadata,
   project: CosmicUiConfigFile | undefined,
   global: CosmicUiConfigFile | undefined,
 ): ResolvedCosmicUiConfig => {
   const footer = Object.assign({}, DEFAULT_CONFIG.footer, global?.footer, project?.footer);
   return {
-    configPath: projectExists ? paths.project : paths.global,
-    projectConfigPath: paths.project,
-    globalConfigPath: paths.global,
+    ...metadata,
     footer: {
       enabled: footer.enabled,
       density: footer.density,
@@ -91,38 +78,37 @@ const resolveDocuments = (
   };
 };
 
-const readConfigTolerantly = (path: string) =>
-  readConfig(path).pipe(
-    Effect.catch(() =>
-      Effect.logWarning("Unable to read a Cosmic UI configuration document.").pipe(
-        Effect.as(undefined),
+/**
+ * The shared scoped store is instantiated without a default document, so resolution never
+ * writes: an absent scope stays absent and the resolved config falls back to package defaults.
+ * Untrusted projects still perform zero project-document I/O.
+ */
+const store = makeScopedConfigStore<
+  CosmicUiConfigFile,
+  ResolvedCosmicUiConfig,
+  CosmicUiConfigError
+>({
+  errorFactory: mapError,
+  label: "Cosmic UI",
+  spanPrefix: "CosmicUiConfig",
+  projectConfigDirectory: CONFIG_DIR_NAME,
+  basename: CONFIG_BASENAME,
+  decode: decodeConfig,
+  resolve: resolveDocuments,
+});
+
+export const { configPaths, readConfig, resolveConfig } = store;
+
+const readRawConfigTolerantly = (path: string) =>
+  store
+    .readRawConfig(path)
+    .pipe(
+      Effect.catch(() =>
+        Effect.logWarning("Unable to read a Cosmic UI configuration document.").pipe(
+          Effect.as(undefined),
+        ),
       ),
-    ),
-  );
-
-export const readConfig = Effect.fn("pi-cosmic-ui.config.read")(function* (path: string) {
-  const documents = yield* JsonDocumentStore;
-  const raw = yield* documents.readObject(path).pipe(Effect.mapError(mapError("read", path)));
-  return raw === undefined ? undefined : decodeConfig(raw);
-});
-
-export const resolveConfig = Effect.fn("pi-cosmic-ui.config.resolve")(function* (
-  cwd: string,
-  agentDir: string,
-  projectTrusted = false,
-) {
-  const paths = yield* configPaths(cwd, agentDir);
-  const trusted = projectTrusted === true;
-  // Untrusted projects never probe the project document: its path stays inert metadata.
-  const selected = yield* selectScopedDocument(paths, { probeProject: trusted }).pipe(
-    Effect.mapError((error) => mapError("inspect", error.path)()),
-  );
-  const projectExists = trusted && selected.projectExists;
-  const { globalExists } = selected;
-  const project = projectExists ? yield* readConfigTolerantly(paths.project) : undefined;
-  const global = globalExists ? yield* readConfigTolerantly(paths.global) : undefined;
-  return resolveDocuments(paths, projectExists, project, global);
-});
+    );
 
 export type CosmicUiConfigAfterCommit = (config: ResolvedCosmicUiConfig) => Effect.Effect<void>;
 
@@ -140,38 +126,29 @@ const modifyFooterConfig = Effect.fn("pi-cosmic-ui.config.modify-footer")(functi
   projectTrusted: boolean,
   afterCommit: CosmicUiConfigAfterCommit,
 ) {
-  const documents = yield* JsonDocumentStore;
-  const modifyObject = documents.modifyObject;
   const fresh = yield* resolveConfig(cwd, agentDir, projectTrusted);
   const projectSelected = fresh.configPath === fresh.projectConfigPath;
-  const global = projectSelected ? yield* readConfigTolerantly(fresh.globalConfigPath) : undefined;
-  if (modifyObject === undefined) return yield* mapError("update", fresh.configPath)();
+  // The other scope's raw document is only needed as the overlay fallback for a project commit.
+  const global = projectSelected
+    ? yield* readRawConfigTolerantly(fresh.globalConfigPath)
+    : undefined;
 
-  return yield* modifyObject(fresh.configPath, (raw) =>
-    Effect.try({
-      try: () => {
-        // SAFETY: Configuration decoding validates the persisted value before this typed access.
-        const currentFooter =
-          hasObjectRuntimeType(raw.footer) && raw.footer !== null && !Array.isArray(raw.footer)
-            ? (raw.footer as JsonObject)
-            : {};
-        const committed = { ...raw, footer: update(currentFooter, fresh) };
-        const committedConfig = decodeConfig(committed);
-        const next = resolveDocuments(
-          { project: fresh.projectConfigPath, global: fresh.globalConfigPath },
-          projectSelected,
-          projectSelected ? committedConfig : undefined,
-          projectSelected ? global : committedConfig,
-        );
-        return {
-          value: next,
-          document: committed,
-          afterCommit: afterCommit(next),
-        } satisfies JsonDocumentModification<ResolvedCosmicUiConfig>;
-      },
-      catch: mapError("update", fresh.configPath),
-    }),
-  ).pipe(Effect.mapError(mapError("update", fresh.configPath)));
+  return yield* store
+    .modifyConfig(fresh.configPath, (raw) => {
+      // SAFETY: Configuration decoding validates the persisted value before this typed access.
+      const currentFooter =
+        hasObjectRuntimeType(raw.footer) && raw.footer !== null && !Array.isArray(raw.footer)
+          ? (raw.footer as JsonObject)
+          : {};
+      const committed = { ...raw, footer: update(currentFooter, fresh) };
+      const next = store.resolveCommittedConfig(fresh, committed, global);
+      return {
+        value: next,
+        document: committed,
+        afterCommit: afterCommit(next),
+      } satisfies JsonDocumentModification<ResolvedCosmicUiConfig>;
+    })
+    .pipe(Effect.mapError(mapError("update", fresh.configPath)));
 });
 
 export const updateFooterConfig = Effect.fn("pi-cosmic-ui.config.update-footer")(function* (
