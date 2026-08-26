@@ -303,7 +303,7 @@ describe("session-owned Herdr topology", () => {
         .pipe(Effect.provideService(Scope.Scope, runScope), Effect.flip);
       expect(failure).toMatchObject({
         code: "herdr_cleanup_unconfirmed",
-        message: expect.stringContaining("protocol 19 exposes no launch token"),
+        message: expect.stringContaining("supported Herdr protocol exposes no launch token"),
       });
       const closed = yield* Scope.close(runScope, Exit.void).pipe(Effect.exit);
       expect(Exit.isFailure(closed)).toBe(true);

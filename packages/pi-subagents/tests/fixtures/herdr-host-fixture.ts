@@ -118,8 +118,8 @@ export const fakeTopology = () => {
       transientPostActivationOccupancySnapshots - 1,
     );
     return {
-      version: "0.8.0",
-      protocol: 19,
+      version: "0.8.2",
+      protocol: 20,
       focusedWorkspaceId: "user",
       focusedTabId,
       focusedPaneId: focusedTabId === "user:t" ? "user:p0" : undefined,

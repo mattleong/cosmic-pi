@@ -67,6 +67,7 @@ export interface SubagentStartResolvedRoute {
   readonly effort: SubagentEffort;
   readonly fastMode: boolean;
   readonly candidateIndex?: number | undefined;
+  readonly warning?: string | undefined;
 }
 
 export type SubagentStartOutcome =
@@ -147,13 +148,13 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: SUBAGENT_TOOL_NAMES[1],
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped background subagents for bounded, independent workstreams such as codebase reconnaissance, external research, planning, independent review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. A claimless writer remains exclusive; writers with disjoint claims may share the checkout cooperatively. Native edit, write, and Bash are unchanged. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through.",
+      "Launch one to twelve session-scoped background subagents for bounded, independent workstreams such as codebase reconnaissance, external research, planning, independent review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. A claimless writer remains exclusive; writers with disjoint claims may share the checkout cooperatively. Native edit, write, and Bash are unchanged. Ordered readiness failures fall through only before spawn; an unsupported Herdr protocol first retries the same candidate on the local host and forces closeOnReport=true. Post-ownership uncertainty never falls through.",
     promptSnippet:
       "Parallelize independent reconnaissance, research, planning, and review with background subagents",
     promptGuidelines: [
       "Before substantial work, check for independent workstreams. When two or more exist, use subagent_start early to launch one to three read-only subagents in one batch; skip subagent_start only for trivial or tightly serial tasks.",
       "Use subagent_start for bounded slices rather than the whole assignment: give each scout one narrow reconnaissance question and a concrete deliverable while allowing it to follow relevant evidence as deeply as needed; use researcher for sourced external research, planner for implementation planning, reviewer for independent verification, oracle for inherited-decision analysis, and generalist for other read-only work.",
-      "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. The selected version 4 profile exclusively supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport; writes only narrows a writer to exact cooperative file claims.",
+      "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. The selected version 4 profile supplies runtime, model, effort, context, write intent, fast mode, and normal host/close behavior; writes only narrows a writer to exact cooperative file claims. If Herdr reports an unsupported protocol before ownership, subagent_start visibly falls back to the same runtime on the local host and forces closeOnReport=true.",
       "After subagent_start, continue independent work instead of waiting idle. Use subagent_await only when progress or final synthesis depends on a report; unclaimed completion reports are delivered automatically.",
       "Use profile=worker only for explicit implementation handoffs. While any writer pool is active, the parent coordinates and reviews but does not edit. Launch multiple shared-cwd writers only with pairwise-disjoint exact writes claims; native tools and Bash are cooperative rather than per-file sandboxed.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",

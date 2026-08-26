@@ -71,7 +71,7 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
   );
 };
 
-/** A v4 route candidate. Every routing and capability choice is profile-owned. */
+/** A v4 route candidate. Profile choices apply except for the protocol-only Herdr-to-local fallback. */
 export interface ProfileCandidate {
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -246,7 +246,7 @@ export interface ProfileRouteContinuation {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
   /** Zero-based candidate selected for the run carrying this continuation. */
   readonly selectedCandidateIndex: number;
-  /** Static/dynamic skips accumulated before that selected candidate. */
+  /** Static/dynamic skips accumulated before selection, including same-candidate host fallback. */
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
 

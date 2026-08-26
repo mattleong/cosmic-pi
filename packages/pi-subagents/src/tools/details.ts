@@ -390,9 +390,14 @@ const projectStartEntry = (
     entry.candidateIndex === undefined
       ? selectedBase
       : { ...selectedBase, candidateIndex: nonNegativeInteger(entry.candidateIndex) };
+  const warning = optionalText(
+    entry.warning,
+    density === "full" ? MAX_CARD_PROVENANCE_CHARS : density === "compact" ? 512 : 160,
+  );
+  const withWarning = warning === undefined ? selected : { ...selected, warning };
   return entry.status === "started"
     ? {
-        ...selected,
+        ...withWarning,
         status: "started",
         runId: requiredText(
           entry.runId,
@@ -400,7 +405,7 @@ const projectStartEntry = (
           "unknown-run",
         ),
       }
-    : { ...selected, status: "failed" };
+    : { ...withWarning, status: "failed" };
 };
 
 /** Explicit privacy projection for request-ordered start receipts. */

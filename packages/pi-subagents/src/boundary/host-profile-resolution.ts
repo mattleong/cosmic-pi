@@ -250,15 +250,54 @@ const resolveConcreteModel = (
     };
   });
 
+interface CandidateReadinessFailure {
+  readonly message: string;
+  readonly _tag: string;
+  readonly code?: string | undefined;
+}
+
 const dynamicCandidateSkip = (
   attempt: ProfileCandidateAttempt,
-  error: { readonly message: string; readonly _tag: string; readonly code?: string | undefined },
+  error: CandidateReadinessFailure,
 ): SkippedProfileCandidate => ({
   candidateIndex: attempt.candidateIndex,
   candidate: `${attempt.host}/${attempt.runtime}/${attempt.model}:${attempt.effort}`,
   code: error.code || error._tag,
   reason: error.message,
 });
+
+const HERDR_PROTOCOL_FALLBACK_CODES = new Set([
+  "herdr_upgrade_required",
+  "herdr_protocol_unsupported",
+  "herdr_protocol_mismatch",
+]);
+
+const shouldFallBackFromHerdrProtocol = (
+  attempt: ProfileCandidateAttempt,
+  error: CandidateReadinessFailure,
+): boolean =>
+  attempt.host === "herdr" &&
+  error.code !== undefined &&
+  HERDR_PROTOCOL_FALLBACK_CODES.has(error.code);
+
+const localProtocolFallbackAttempt = (
+  attempt: ProfileCandidateAttempt,
+): ProfileCandidateAttempt => ({
+  ...attempt,
+  host: "local",
+  closeOnReport: true,
+  reason: `Configured Herdr candidate ${attempt.candidateIndex + 1} required an automatic local/${attempt.runtime} protocol fallback.`,
+});
+
+const localProtocolFallbackWarning = (
+  attempt: ProfileCandidateAttempt,
+  error: CandidateReadinessFailure,
+): string =>
+  `${error.message} Fell back automatically to local/${attempt.runtime}.${
+    attempt.closeOnReport
+      ? ""
+      : " closeOnReport was forced to true because local runs close after reporting."
+  }`;
 
 interface PlannedStartInput {
   readonly rawInput: SubagentProfileStartSpec;
@@ -353,29 +392,62 @@ const resolvePlannedStart = (
           },
         ]);
       }
+      const selectedResult = (
+        selectedAttempt: ProfileCandidateAttempt,
+        concrete: ResolvedConcreteModel,
+        selectedSkips: ReadonlyArray<SkippedProfileCandidate>,
+        warning?: string,
+      ) => {
+        const selectionBase = {
+          source: selectedAttempt.source,
+          routeSource: selectedAttempt.routeSource,
+          host: concrete.host,
+          runtime: concrete.runtime,
+          closeOnReport: concrete.closeOnReport,
+          candidateIndex: selectedAttempt.candidateIndex,
+          reason: input.retry
+            ? `Profile ${input.definition.id} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${selectedAttempt.candidateIndex + 1} (${selectedAttempt.host}/${selectedAttempt.runtime}).`
+            : selectedAttempt.reason,
+          skippedCandidates: selectedSkips,
+        };
+        return {
+          attempt: selectedAttempt,
+          concrete,
+          selection: warning === undefined ? selectionBase : { ...selectionBase, warning },
+        };
+      };
       return resolveConcreteModel(attempt, ctx, environment.cwd).pipe(
         Effect.matchEffect({
-          onFailure: (error) =>
-            isCleanupUnconfirmed(error) || isOutcomeUncertain(error)
-              ? Effect.fail(error)
-              : tryAttempt(index + 1, [...precedingSkips, dynamicCandidateSkip(attempt, error)]),
+          onFailure: (error) => {
+            if (isCleanupUnconfirmed(error) || isOutcomeUncertain(error)) return Effect.fail(error);
+            const herdrSkip = dynamicCandidateSkip(attempt, error);
+            if (!shouldFallBackFromHerdrProtocol(attempt, error))
+              return tryAttempt(index + 1, [...precedingSkips, herdrSkip]);
+            const fallbackAttempt = localProtocolFallbackAttempt(attempt);
+            const fallbackSkips = [...precedingSkips, herdrSkip];
+            return resolveConcreteModel(fallbackAttempt, ctx, environment.cwd).pipe(
+              Effect.matchEffect({
+                onFailure: (fallbackError) =>
+                  isCleanupUnconfirmed(fallbackError) || isOutcomeUncertain(fallbackError)
+                    ? Effect.fail(fallbackError)
+                    : tryAttempt(index + 1, [
+                        ...fallbackSkips,
+                        dynamicCandidateSkip(fallbackAttempt, fallbackError),
+                      ]),
+                onSuccess: (concrete) =>
+                  Effect.succeed(
+                    selectedResult(
+                      fallbackAttempt,
+                      concrete,
+                      fallbackSkips,
+                      localProtocolFallbackWarning(attempt, error),
+                    ),
+                  ),
+              }),
+            );
+          },
           onSuccess: (concrete) =>
-            Effect.succeed({
-              attempt,
-              concrete,
-              selection: {
-                source: attempt.source,
-                routeSource: attempt.routeSource,
-                host: attempt.host,
-                runtime: attempt.runtime,
-                closeOnReport: attempt.closeOnReport,
-                candidateIndex: attempt.candidateIndex,
-                reason: input.retry
-                  ? `Profile ${input.definition.id} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${attempt.candidateIndex + 1} (${attempt.host}/${attempt.runtime}).`
-                  : attempt.reason,
-                skippedCandidates: precedingSkips,
-              },
-            }),
+            Effect.succeed(selectedResult(attempt, concrete, precedingSkips)),
         }),
       );
     };

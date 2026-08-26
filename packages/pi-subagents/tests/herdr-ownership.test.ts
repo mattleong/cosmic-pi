@@ -31,8 +31,8 @@ const agent: HerdrAgent = {
 
 const snapshot = (panes: ReadonlyArray<HerdrPane>, agents: ReadonlyArray<HerdrAgent>) =>
   ({
-    version: "0.8.0",
-    protocol: 19,
+    version: "0.8.2",
+    protocol: 20,
     focusedWorkspaceId: "w",
     focusedTabId: "w:t",
     focusedPaneId: "w:p1",

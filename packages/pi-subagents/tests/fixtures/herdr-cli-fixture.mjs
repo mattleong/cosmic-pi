@@ -15,7 +15,8 @@ await appendFile(
   })}\n`,
 );
 const args = process.argv.slice(2);
-const protocol = config.mode === "future-protocol" ? 20 : 19;
+const protocol =
+  config.mode === "legacy-protocol" ? 19 : config.mode === "future-protocol" ? 21 : 20;
 if (config.mode === "sleep") {
   await new Promise((resolve) => setTimeout(resolve, 5_000));
   process.exit(0);
@@ -63,6 +64,18 @@ if (args[0] === "agent" && args[1] === "start" && config.mode === "invalid-agent
   );
   process.exit(1);
 }
+if (args[0] === "agent" && args[1] === "prompt" && config.mode === "agent-blocked") {
+  console.error(
+    JSON.stringify({
+      id: "cli:agent:prompt",
+      error: {
+        code: "agent_blocked",
+        message: "agent is waiting for approval or a user answer",
+      },
+    }),
+  );
+  process.exit(1);
+}
 if (args[0] === "agent" && args[1] === "start" && config.mode === "agent-start-timeout") {
   console.error(
     JSON.stringify({
@@ -103,8 +116,8 @@ if (args[0] === "api" && args[1] === "snapshot" && config.mode === "split-unicod
       result: {
         type: "session_snapshot",
         snapshot: {
-          version: "0.8.0",
-          protocol: 19,
+          version: "0.8.2",
+          protocol,
           focused_workspace_id: null,
           focused_tab_id: null,
           focused_pane_id: null,
@@ -222,8 +235,8 @@ if (args[0] === "api" && args[1] === "snapshot") {
       result: {
         type: "session_snapshot",
         snapshot: {
-          version: "0.8.0",
-          protocol: config.mode === "live-protocol-mismatch" ? 18 : protocol,
+          version: "0.8.2",
+          protocol: config.mode === "live-protocol-mismatch" ? 19 : protocol,
           focused_workspace_id: "user",
           focused_tab_id: "user:t",
           focused_pane_id: pane.pane_id,

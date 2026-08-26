@@ -74,7 +74,10 @@ const profileCandidate = (overrides: Partial<ProfileCandidateDetailsInput> = {})
   ...overrides,
 });
 
-const startedEntry = (index = 0, name = "review"): SubagentStartEntry => ({
+const startedEntry = (
+  index = 0,
+  name = "review",
+): Extract<SubagentStartEntry, { readonly status: "started" }> => ({
   index,
   name,
   profile: "reviewer",
@@ -375,7 +378,10 @@ describe("persisted subagent details version 2", () => {
   it("requires exact request-ordered start entries and matching failures", () => {
     const details = makeStartDetails({
       startEntries: [
-        startedEntry(0, "same-name"),
+        {
+          ...startedEntry(0, "same-name"),
+          warning: "Unsupported Herdr protocol 21. Fell back automatically to local/pi.",
+        },
         {
           index: 1,
           name: "same-name",
@@ -392,7 +398,10 @@ describe("persisted subagent details version 2", () => {
       [0, "same-name"],
       [1, "same-name"],
     ]);
-    expect(details.startEntries[0]).toMatchObject({ runId: "agent-r2-1" });
+    expect(details.startEntries[0]).toMatchObject({
+      runId: "agent-r2-1",
+      warning: expect.stringContaining("Fell back automatically to local/pi"),
+    });
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
     expectDeeplyFrozen(details);
 

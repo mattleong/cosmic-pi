@@ -415,7 +415,9 @@ export const executeSubagentAction = (
               request.selection?.candidateIndex === undefined
                 ? baseResult
                 : { ...baseResult, candidateIndex: request.selection.candidateIndex };
-            return withCandidateIndex;
+            return request.selection?.warning
+              ? { ...withCandidateIndex, warning: request.selection.warning }
+              : withCandidateIndex;
           })();
         const startEntriesFor = (
           outcomes: ReadonlyMap<number, SubagentStartOutcome>,
@@ -448,17 +450,21 @@ export const executeSubagentAction = (
                         ...baseResult,
                         candidateIndex: outcome.run.selection.candidateIndex,
                       };
-                const withRunId = { ...withCandidateIndex, runId: outcome.run.id };
+                const withWarning = outcome.run.selection.warning
+                  ? { ...withCandidateIndex, warning: outcome.run.selection.warning }
+                  : withCandidateIndex;
+                const withRunId = { ...withWarning, runId: outcome.run.id };
                 return withRunId;
               })();
             if (outcome.resolvedRoute) {
-              const { candidateIndex, ...route } = outcome.resolvedRoute;
-              const selectedFailure = {
+              const { candidateIndex, warning, ...route } = outcome.resolvedRoute;
+              const selectedBase = {
                 ...base,
                 status: "failed" as const,
                 routeStatus: "selected" as const,
                 ...route,
               };
+              const selectedFailure = warning ? { ...selectedBase, warning } : selectedBase;
               return candidateIndex === undefined
                 ? selectedFailure
                 : { ...selectedFailure, candidateIndex };

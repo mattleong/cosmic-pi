@@ -287,7 +287,14 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
           (() => {
             const baseResult = {
               id: `agent-${requests.length}`,
+              host: input.host,
+              runtime: input.runtime,
+              closeOnReport: input.closeOnReport,
+              fastMode: input.fastMode,
+              context: input.context,
+              writeIntent: input.writeIntent,
               model: input.model,
+              effort: input.effort,
               selection: input.selection ?? view().selection,
             };
             const withProfile = input.profile
