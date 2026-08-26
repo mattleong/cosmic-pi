@@ -5,12 +5,11 @@
 ## Source map
 
 - `src/extension.ts` — thin Pi registration entrypoint.
-- `src/layer.ts` — session Layer composition.
-- `src/application.ts` — Pi session runtime lifecycle and command wiring.
-- `src/settings/controller.ts` — `/herdr-fork` host command registration and TUI feedback.
+- `src/application.ts` — Pi session runtime lifecycle, session Layer composition, and command wiring; expected fork failures are converted to typed opened/failed command outcomes before the Promise boundary.
 - `src/boundary/herdr-client.ts` — fixed scoped Effect/Herdr child-process and Effect Schema protocol boundary, with injectable executable/process seams limited to deterministic tests.
 - `src/boundary/host-session.ts` — guarded Pi session, inherited Herdr environment, and parent-session file capture.
 - `src/boundary/host-notifier.ts` — best-effort Pi notification boundary.
+- `src/fork/controller.ts` — `/herdr-fork` host command registration and TUI rendering of typed command outcomes.
 - `src/fork/errors.ts` — schema-backed expected failures and outcome classification.
 - `src/fork/policy.ts` — pure split, agent-name, and initial-prompt policies.
 - `src/fork/service.ts` — preflight, launch sequencing, ownership validation, retained-pane failure decoration, focus, and user handoff.
@@ -24,7 +23,7 @@ The command is TUI-only and can run without waiting for the main agent to settle
 
 ## Boundaries
 
-The Herdr client captures and allowlists inherited routing once, invokes only the fixed `herdr` executable with argument arrays and no shell, and decodes JSON responses with Effect Schema. Each command is an asynchronous scoped Effect child resource: timeout, caller interruption, or scope closure terminates its process group and waits for bounded close confirmation. Stdout and stderr are independently byte-bounded; overflow terminates the child and fails closed. Process transport failures retain the existing confirmed read-only versus outcome-uncertain mutation classification, while recognized structured mutation precondition rejections remain confirmed not applied.
+The Herdr client captures and allowlists inherited routing once, invokes only the fixed `herdr` executable with argument arrays and no shell, and decodes JSON responses with Effect Schema. Commands that decode a JSON envelope go through the one `herdrCommand` door; raw text and discarded responses call the command runner directly. Each command is an asynchronous scoped Effect child resource: the shared `pi-cosmic-core` bounded process owns each per-command deadline (the runner clamps and hands it the value), and caller interruption or scope closure terminates its process group and waits for bounded close confirmation. Stdout and stderr are independently byte-bounded; overflow terminates the child and fails closed. Process transport failures retain the existing confirmed read-only versus outcome-uncertain mutation classification, while recognized structured mutation precondition rejections remain confirmed not applied.
 
 The service requires protocol 17 or newer, a current Herdr Pi integration, a regular non-symlink parent session file, and inherited caller-pane identity before topology mutation. It targets `pane current --current`, verifies the split remains in the same workspace/tab, then requires sustained shell ownership across a bounded read-only `pane process-info` readiness window before dispatching `agent start`. It requires the atomic startup response to match the exact pane, terminal, workspace, tab, agent name, and Pi runtime before reporting success. Native child-session metadata is also validated when present, but it is not required because the Pi integration can report it after interactive readiness; this user-owned handoff never adopts identity from a later lookup.
 

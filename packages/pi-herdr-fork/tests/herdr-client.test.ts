@@ -1,49 +1,63 @@
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as TestClock from "effect/testing/TestClock";
+import type { BoundedProcessRequest } from "pi-cosmic-core";
 import { expect } from "vitest";
-import {
-  makeHerdrCommandRunner,
-  type HerdrProcessRequest,
-  type HerdrProcessRunner,
-} from "../src/boundary/herdr-client.ts";
+import { makeHerdrCommandRunner, type HerdrProcessRunner } from "../src/boundary/herdr-client.ts";
 
-const request = (mutation = false, timeoutMillis?: number) => {
-  const base = {
-    args: ["api", "schema", "--json"],
-    operation: "inspect protocol",
-    mutation,
-  };
-  return timeoutMillis === undefined ? base : { ...base, timeoutMillis };
-};
+const request = (mutation = false, timeoutMillis?: number) => ({
+  args: ["api", "schema", "--json"],
+  operation: "inspect protocol",
+  mutation,
+  timeoutMillis,
+});
 
 const success = {
-  status: 0,
+  code: 0,
   signal: null,
   stdout: '{"protocol":19}',
   stderr: "",
   overflowed: false,
+  timedOut: false,
+  cleanupUnconfirmed: false,
+  dispatched: true,
 } as const;
 
-it.effect("runs and interrupts the production asynchronous child-process boundary", () =>
+// Intentional real platform process behavior; the deterministic seams cannot prove it.
+it.live("runs, classifies, and interrupts the production child-process boundary", () =>
   Effect.gen(function* () {
     const runner = makeHerdrCommandRunner({}, { executable: process.execPath });
     const output = yield* runner({
       args: ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
       operation: "inspect process boundary",
-      mutation: false,
     });
     expect(output).toEqual({ stdout: "out", stderr: "err" });
+
+    const failed = yield* Effect.result(
+      runner({
+        args: ["-e", "process.stderr.write('real boundary failure'); process.exit(3)"],
+        operation: "inspect process boundary",
+      }),
+    );
+    expect(failed._tag).toBe("Failure");
+    if (failed._tag === "Failure") {
+      expect(failed.failure).toMatchObject({
+        code: "herdr_inspect_process_boundary_failed",
+        outcome: "confirmed",
+      });
+      expect(failed.failure.message).toContain("real boundary failure");
+      expect(failed.failure.message.length).toBeLessThanOrEqual(2_100);
+    }
 
     const running = yield* runner({
       args: ["-e", "setInterval(() => undefined, 1000)"],
       operation: "inspect process interruption",
-      mutation: false,
     }).pipe(Effect.forkScoped({ startImmediately: true }));
     yield* Effect.yieldNow;
     yield* Fiber.interrupt(running);
+    expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true);
   }),
 );
 
@@ -51,7 +65,7 @@ it.effect("runs fixed argv asynchronously through the injectable process seam", 
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
-    let captured: HerdrProcessRequest | undefined;
+    let captured: BoundedProcessRequest | undefined;
     let completed = false;
     const processRunner: HerdrProcessRunner = (processRequest) =>
       Effect.gen(function* () {
@@ -87,7 +101,12 @@ it.effect("runs fixed argv asynchronously through the injectable process seam", 
         HERDR_ENV: "1",
         HERDR_PANE_ID: "w1:p1",
       },
-      maximumOutputBytes: 4 * 1024 * 1024,
+      stdoutLimitBytes: 4 * 1024 * 1024,
+      stderrLimitBytes: 4 * 1024 * 1024,
+      timeoutMillis: 15_000,
+      cleanupTimeoutMillis: 1_000,
+      detached: false,
+      windowsHide: true,
     });
 
     yield* Deferred.succeed(release, undefined);
@@ -95,62 +114,58 @@ it.effect("runs fixed argv asynchronously through the injectable process seam", 
   }),
 );
 
-it.effect("times out with scoped cleanup and preserves uncertain mutation classification", () =>
+it.effect("owns each per-command deadline and hands the clamped value to the process", () =>
   Effect.gen(function* () {
-    const started = yield* Deferred.make<void>();
-    let finalized = 0;
-    const processRunner: HerdrProcessRunner = () =>
-      Effect.gen(function* () {
-        yield* Effect.addFinalizer(() => Effect.sync(() => void finalized++));
-        yield* Deferred.succeed(started, undefined);
-        return yield* Effect.never;
+    const captured: Array<number> = [];
+    const processRunner: HerdrProcessRunner = (processRequest) =>
+      Effect.sync(() => {
+        captured.push(processRequest.timeoutMillis);
+        return success;
       });
     const runner = makeHerdrCommandRunner({}, { processRunner });
-    const running = yield* runner(request(true, 50)).pipe(Effect.result, Effect.forkScoped);
-    yield* Deferred.await(started);
 
-    yield* TestClock.adjust("50 millis");
-    const result = yield* Fiber.join(running);
+    yield* runner(request());
+    yield* runner(request(false, 70_000));
+    yield* runner(request(false, 200_000));
+    yield* runner(request(false, 0));
 
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure")
-      expect(result.failure).toMatchObject({
-        code: "herdr_inspect_protocol_outcome_uncertain",
-        outcome: "uncertain",
-      });
-    expect(finalized).toBe(1);
+    expect(captured).toEqual([15_000, 70_000, 120_000, 15_000]);
   }),
 );
 
-it.effect("interrupts an in-flight command and releases its scoped process", () =>
+it.effect("interrupts an in-flight command and observes the process interruption", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
-    let finalized = 0;
+    let interrupted = 0;
     const processRunner: HerdrProcessRunner = () =>
-      Effect.gen(function* () {
-        yield* Effect.addFinalizer(() => Effect.sync(() => void finalized++));
-        yield* Deferred.succeed(started, undefined);
-        return yield* Effect.never;
-      });
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Effect.sync(() => void interrupted++)),
+      );
     const runner = makeHerdrCommandRunner({}, { processRunner });
     const running = yield* runner(request()).pipe(Effect.forkScoped);
     yield* Deferred.await(started);
 
     yield* Fiber.interrupt(running);
 
-    expect(finalized).toBe(1);
+    expect(interrupted).toBe(1);
   }),
 );
 
 it.effect("fails closed when either output stream exceeds its byte bound", () =>
   Effect.gen(function* () {
     for (const stream of ["stdout", "stderr"] as const) {
-      const processRunner: HerdrProcessRunner = () =>
-        Effect.succeed({ ...success, [stream]: "123456789" });
+      let limits: readonly [number, number] | undefined;
+      const processRunner: HerdrProcessRunner = (processRequest) =>
+        Effect.sync(() => {
+          limits = [processRequest.stdoutLimitBytes, processRequest.stderrLimitBytes];
+          return { ...success, [stream]: "123456789" };
+        });
       const runner = makeHerdrCommandRunner({}, { processRunner, maximumOutputBytes: 8 });
 
       const result = yield* Effect.result(runner(request()));
 
+      expect(limits).toEqual([8, 8]);
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure")
         expect(result.failure).toMatchObject({
@@ -161,15 +176,37 @@ it.effect("fails closed when either output stream exceeds its byte bound", () =>
   }),
 );
 
+it.effect(
+  "fails closed on in-band overflow, deadline, and cleanup uncertainty by mutation class",
+  () =>
+    Effect.gen(function* () {
+      for (const flag of ["overflowed", "timedOut", "cleanupUnconfirmed"] as const)
+        for (const mutation of [false, true]) {
+          const processRunner: HerdrProcessRunner = () =>
+            Effect.succeed({ ...success, [flag]: true });
+          const runner = makeHerdrCommandRunner({}, { processRunner });
+
+          const result = yield* Effect.result(runner(request(mutation)));
+
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure")
+            expect(result.failure).toMatchObject(
+              mutation
+                ? { code: "herdr_inspect_protocol_outcome_uncertain", outcome: "uncertain" }
+                : { code: "herdr_inspect_protocol_failed", outcome: "confirmed" },
+            );
+        }
+    }),
+);
+
 it.effect("keeps structured mutation precondition rejections confirmed", () =>
   Effect.gen(function* () {
     const processRunner: HerdrProcessRunner = () =>
       Effect.succeed({
-        status: 1,
-        signal: null,
+        ...success,
+        code: 1,
         stdout: "",
         stderr: JSON.stringify({ error: { code: "agent_pane_busy", message: "busy" } }),
-        overflowed: false,
       });
     const runner = makeHerdrCommandRunner({}, { processRunner });
     const result = yield* Effect.result(
@@ -182,11 +219,38 @@ it.effect("keeps structured mutation precondition rejections confirmed", () =>
     );
 
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure")
+    if (result._tag === "Failure") {
       expect(result.failure).toMatchObject({
         code: "herdr_start_forked_pi_rejected",
         outcome: "confirmed",
         herdrCode: "agent_pane_busy",
       });
+      expect(result.failure.message).toContain("was rejected before it was applied");
+    }
+  }),
+);
+
+it.effect("keeps undecodable mutating exit failures outcome-uncertain", () =>
+  Effect.gen(function* () {
+    const processRunner: HerdrProcessRunner = () =>
+      Effect.succeed({ ...success, code: 1, stdout: "", stderr: "connection closed" });
+    const runner = makeHerdrCommandRunner({}, { processRunner });
+    const result = yield* Effect.result(
+      runner({
+        args: ["agent", "start"],
+        operation: "start forked Pi",
+        mutation: true,
+        confirmedRejectionCodes: ["agent_pane_busy"],
+      }),
+    );
+
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
+        code: "herdr_start_forked_pi_outcome_uncertain",
+        outcome: "uncertain",
+      });
+      expect(result.failure.herdrCode).toBeUndefined();
+    }
   }),
 );

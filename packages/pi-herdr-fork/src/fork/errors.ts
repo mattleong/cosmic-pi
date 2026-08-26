@@ -10,18 +10,3 @@ export class HerdrForkError extends Schema.TaggedError<HerdrForkError>()("HerdrF
   paneId: Schema.optional(Schema.String),
   herdrCode: Schema.optional(Schema.String),
 }) {}
-
-export const herdrForkError = (
-  operation: string,
-  code: string,
-  message: string,
-  outcome: HerdrForkErrorOutcome = "confirmed",
-  paneId?: string,
-  herdrCode?: string,
-): HerdrForkError => {
-  const errorBase = { operation, code, message, outcome };
-  const errorWithPane = paneId !== undefined ? { ...errorBase, paneId } : errorBase;
-  return new HerdrForkError(
-    herdrCode !== undefined ? { ...errorWithPane, herdrCode } : errorWithPane,
-  );
-};

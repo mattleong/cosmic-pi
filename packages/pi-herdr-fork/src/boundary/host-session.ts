@@ -21,7 +21,7 @@ export interface HerdrForkSessionInput {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }
 
-export interface CapturedHerdrForkSession extends HerdrForkSessionInput {
+interface CapturedHerdrForkSession extends HerdrForkSessionInput {
   readonly signal: AbortSignal | undefined;
   readonly aborted: boolean;
 }

@@ -2,9 +2,8 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type * as Scope from "effect/Scope";
 import { runBoundedProcessNode } from "pi-cosmic-core";
-import { HerdrForkError, herdrForkError, type HerdrForkErrorOutcome } from "../fork/errors.ts";
+import { HerdrForkError, type HerdrForkErrorOutcome } from "../fork/errors.ts";
 
 const HERDR_EXECUTABLE = "herdr";
 const COMMAND_TIMEOUT_MILLIS = 15_000;
@@ -36,7 +35,7 @@ const PaneSchema = Schema.Struct({
 export const ProtocolSchema = Schema.Struct({
   protocol: Schema.Number.check(Schema.isInt()),
 });
-const PaneEnvelopeSchema = Schema.Struct({
+export const PaneEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({ pane: PaneSchema }),
 });
 export const LayoutEnvelopeSchema = Schema.Struct({
@@ -82,12 +81,12 @@ export type HerdrPaneProcessInfo = typeof PaneProcessInfoEnvelopeSchema.Type.res
 export interface HerdrCommandRequest {
   readonly args: ReadonlyArray<string>;
   readonly operation: string;
-  readonly mutation: boolean;
+  readonly mutation?: boolean | undefined;
   readonly timeoutMillis?: number | undefined;
   readonly confirmedRejectionCodes?: ReadonlyArray<string> | undefined;
 }
 
-export interface HerdrCommandOutput {
+interface HerdrCommandOutput {
   readonly stdout: string;
   readonly stderr: string;
 }
@@ -96,32 +95,9 @@ export type HerdrCommandRunner = (
   request: HerdrCommandRequest,
 ) => Effect.Effect<HerdrCommandOutput, HerdrForkError>;
 
-export interface HerdrProcessRequest {
-  readonly executable: string;
-  readonly args: ReadonlyArray<string>;
-  readonly environment: Readonly<NodeJS.ProcessEnv>;
-  readonly maximumOutputBytes: number;
-}
+export type HerdrProcessRunner = typeof runBoundedProcessNode;
 
-export interface HerdrProcessResult {
-  readonly status: number | null;
-  /** Non-null when the child was terminated by a signal instead of exiting normally. */
-  readonly signal: NodeJS.Signals | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly overflowed: boolean;
-}
-
-export class HerdrProcessError extends Schema.TaggedError<HerdrProcessError>()(
-  "HerdrProcessError",
-  { operation: Schema.String, message: Schema.String },
-) {}
-
-export type HerdrProcessRunner = (
-  request: HerdrProcessRequest,
-) => Effect.Effect<HerdrProcessResult, HerdrProcessError, Scope.Scope>;
-
-export interface HerdrCommandRunnerOptions {
+interface HerdrCommandRunnerOptions {
   /** Test seam only. Production always runs the fixed `herdr` executable. */
   readonly executable?: string | undefined;
   /** Test seam for deterministic process lifecycle and transport outcomes. */
@@ -132,39 +108,6 @@ export interface HerdrCommandRunnerOptions {
 
 const PROCESS_CLEANUP_MILLIS = 1_000;
 const MAX_COMMAND_TIMEOUT_MILLIS = 120_000;
-
-const processBoundaryError = (operation: string) =>
-  new HerdrProcessError({ operation, message: `Unable to ${operation} Herdr process.` });
-
-/** Scoped Effect child-process implementation used by the production command runner. */
-export const runNodeHerdrProcess: HerdrProcessRunner = (request) =>
-  runBoundedProcessNode({
-    executable: request.executable,
-    args: request.args,
-    environment: request.environment,
-    stdoutLimitBytes: request.maximumOutputBytes,
-    stderrLimitBytes: request.maximumOutputBytes,
-    timeoutMillis: MAX_COMMAND_TIMEOUT_MILLIS,
-    cleanupTimeoutMillis: PROCESS_CLEANUP_MILLIS,
-    detached: false,
-    windowsHide: true,
-  }).pipe(
-    Effect.flatMap((result) =>
-      result.timedOut || result.cleanupUnconfirmed
-        ? Effect.fail(processBoundaryError("run"))
-        : Effect.succeed({
-            status: result.code,
-            // SAFETY: The Node process adapter extracts only Node-reported signal names.
-            signal: result.signal as NodeJS.Signals | null,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            overflowed: result.overflowed,
-          }),
-    ),
-    Effect.mapError((error) =>
-      error instanceof HerdrProcessError ? error : processBoundaryError(error.operation),
-    ),
-  );
 
 const safeDiagnostic = (value: string): string =>
   [...value]
@@ -193,35 +136,31 @@ const parseHerdrCliError = (source: string): typeof HerdrCliErrorEnvelopeSchema.
     Schema.decodeUnknownOption(Schema.fromJsonString(HerdrCliErrorEnvelopeSchema))(source),
   );
 
-export const herdrCommandExitFailure = (
+const herdrCommandExitFailure = (
   request: HerdrCommandRequest,
+  mutation: boolean,
   diagnosticSource: string,
 ): HerdrForkError => {
   const detail = safeDiagnostic(diagnosticSource);
   const cliError = parseHerdrCliError(diagnosticSource);
   const confirmedRejection =
-    request.mutation &&
+    mutation &&
     cliError !== undefined &&
     request.confirmedRejectionCodes?.includes(cliError.error.code) === true;
   const outcome: HerdrForkErrorOutcome =
-    request.mutation && !confirmedRejection ? "uncertain" : "confirmed";
-  const suffix = confirmedRejection
-    ? "rejected"
-    : request.mutation
-      ? "outcome_uncertain"
-      : "failed";
-  return herdrForkError(
-    request.operation,
-    operationCode(request.operation, suffix),
-    confirmedRejection
+    mutation && !confirmedRejection ? "uncertain" : "confirmed";
+  const suffix = confirmedRejection ? "rejected" : mutation ? "outcome_uncertain" : "failed";
+  return new HerdrForkError({
+    operation: request.operation,
+    code: operationCode(request.operation, suffix),
+    message: confirmedRejection
       ? `Herdr ${request.operation} was rejected before it was applied.${detail ? ` ${detail}` : ""}`
-      : request.mutation
+      : mutation
         ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.${detail ? ` ${detail}` : ""}`
         : `Herdr ${request.operation} failed.${detail ? ` ${detail}` : ""}`,
     outcome,
-    undefined,
-    cliError?.error.code,
-  );
+    herdrCode: cliError?.error.code,
+  });
 };
 
 export const selectHerdrEnvironment = (source: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
@@ -250,16 +189,16 @@ export const selectHerdrEnvironment = (source: Readonly<NodeJS.ProcessEnv>): Nod
     ),
   );
 
-const herdrTransportFailure = (request: HerdrCommandRequest): HerdrForkError => {
-  const outcome: HerdrForkErrorOutcome = request.mutation ? "uncertain" : "confirmed";
-  return herdrForkError(
-    request.operation,
-    operationCode(request.operation, request.mutation ? "outcome_uncertain" : "failed"),
-    request.mutation
+const herdrTransportFailure = (request: HerdrCommandRequest, mutation: boolean): HerdrForkError => {
+  const outcome: HerdrForkErrorOutcome = mutation ? "uncertain" : "confirmed";
+  return new HerdrForkError({
+    operation: request.operation,
+    code: operationCode(request.operation, mutation ? "outcome_uncertain" : "failed"),
+    message: mutation
       ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.`
       : `Unable to run Herdr ${request.operation}.`,
     outcome,
-  );
+  });
 };
 
 export const makeHerdrCommandRunner = (
@@ -267,7 +206,7 @@ export const makeHerdrCommandRunner = (
   options: HerdrCommandRunnerOptions = {},
 ): HerdrCommandRunner => {
   const environment = selectHerdrEnvironment(sourceEnvironment);
-  const processRunner = options.processRunner ?? runNodeHerdrProcess;
+  const processRunner = options.processRunner ?? runBoundedProcessNode;
   const executable = options.executable ?? HERDR_EXECUTABLE;
   const configuredMaximum = options.maximumOutputBytes ?? MAX_OUTPUT_BYTES;
   const maximumOutputBytes =
@@ -276,36 +215,40 @@ export const makeHerdrCommandRunner = (
       : MAX_OUTPUT_BYTES;
 
   return (request) => {
+    const mutation = request.mutation ?? false;
     const configuredTimeout = request.timeoutMillis ?? COMMAND_TIMEOUT_MILLIS;
     const timeoutMillis =
       Number.isFinite(configuredTimeout) && configuredTimeout > 0
         ? Math.min(Math.floor(configuredTimeout), MAX_COMMAND_TIMEOUT_MILLIS)
         : COMMAND_TIMEOUT_MILLIS;
-    const process = Effect.scoped(
-      processRunner({
-        executable,
-        args: [...request.args],
-        environment,
-        maximumOutputBytes,
-      }).pipe(Effect.timeoutOption(timeoutMillis)),
-    );
 
-    return process.pipe(
-      Effect.mapError(() => herdrTransportFailure(request)),
-      Effect.flatMap(Effect.fromOption(() => herdrTransportFailure(request))),
+    return processRunner({
+      executable,
+      args: [...request.args],
+      environment,
+      stdoutLimitBytes: maximumOutputBytes,
+      stderrLimitBytes: maximumOutputBytes,
+      timeoutMillis,
+      cleanupTimeoutMillis: PROCESS_CLEANUP_MILLIS,
+      detached: false,
+      windowsHide: true,
+    }).pipe(
+      Effect.mapError(() => herdrTransportFailure(request, mutation)),
       Effect.flatMap((output) => {
         if (
           output.overflowed ||
+          output.timedOut ||
+          output.cleanupUnconfirmed ||
           Buffer.byteLength(output.stdout, "utf8") > maximumOutputBytes ||
           Buffer.byteLength(output.stderr, "utf8") > maximumOutputBytes
         )
-          return Effect.fail(herdrTransportFailure(request));
-        if (output.status !== 0) {
-          const killedBySignal = output.status === null && output.signal !== null;
+          return Effect.fail(herdrTransportFailure(request, mutation));
+        if (output.code !== 0) {
+          const killedBySignal = output.code === null && output.signal !== null;
           const detail = killedBySignal
             ? `terminated by ${output.signal} signal${output.stderr ? `: ${output.stderr.trim()}` : ""}`
             : output.stderr || output.stdout;
-          return Effect.fail(herdrCommandExitFailure(request, detail));
+          return Effect.fail(herdrCommandExitFailure(request, mutation, detail));
         }
         return Effect.succeed({ stdout: output.stdout, stderr: output.stderr });
       }),
@@ -313,67 +256,53 @@ export const makeHerdrCommandRunner = (
   };
 };
 
-export const decodeJson = <A>(
+const decodeJson = <A>(
   schema: Schema.Decoder<A>,
   source: string,
   operation: string,
-  mutation = false,
+  mutation: boolean,
 ): Effect.Effect<A, HerdrForkError> =>
   Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(source).pipe(
-    Effect.mapError(() =>
-      herdrForkError(
-        operation,
-        operationCode(operation, mutation ? "outcome_uncertain" : "json_invalid"),
-        mutation
-          ? `Herdr ${operation} returned invalid data after the request was dispatched; its outcome is unconfirmed.`
-          : `Herdr returned invalid data while attempting to ${operation}.`,
-        mutation ? "uncertain" : "confirmed",
-      ),
+    Effect.mapError(
+      () =>
+        new HerdrForkError({
+          operation,
+          code: operationCode(operation, mutation ? "outcome_uncertain" : "json_invalid"),
+          message: mutation
+            ? `Herdr ${operation} returned invalid data after the request was dispatched; its outcome is unconfirmed.`
+            : `Herdr returned invalid data while attempting to ${operation}.`,
+          outcome: mutation ? "uncertain" : "confirmed",
+        }),
     ),
     Effect.flatMap((value) =>
       Schema.decodeUnknownEffect(schema)(value).pipe(
-        Effect.mapError(() =>
-          herdrForkError(
-            operation,
-            operationCode(operation, mutation ? "outcome_uncertain" : "protocol_invalid"),
-            mutation
-              ? `Herdr ${operation} returned unexpected data after the request was dispatched; its outcome is unconfirmed.`
-              : `Herdr returned unexpected data while attempting to ${operation}.`,
-            mutation ? "uncertain" : "confirmed",
-          ),
+        Effect.mapError(
+          () =>
+            new HerdrForkError({
+              operation,
+              code: operationCode(operation, mutation ? "outcome_uncertain" : "protocol_invalid"),
+              message: mutation
+                ? `Herdr ${operation} returned unexpected data after the request was dispatched; its outcome is unconfirmed.`
+                : `Herdr returned unexpected data while attempting to ${operation}.`,
+              outcome: mutation ? "uncertain" : "confirmed",
+            }),
         ),
       ),
     ),
   );
 
-export const command = (
+/**
+ * The one decoded protocol door: runs a fixed-argv Herdr command and decodes its
+ * JSON envelope. Raw text or discarded responses call the command runner directly.
+ */
+export const herdrCommand = <A>(
   runner: HerdrCommandRunner,
-  args: ReadonlyArray<string>,
-  operation: string,
-  mutation = false,
-  timeoutMillis?: number,
-  confirmedRejectionCodes?: ReadonlyArray<string>,
-): Effect.Effect<HerdrCommandOutput, HerdrForkError> => {
-  const requestBase = { args, operation, mutation };
-  const requestWithTimeout =
-    timeoutMillis !== undefined ? { ...requestBase, timeoutMillis } : requestBase;
-  return runner(
-    confirmedRejectionCodes !== undefined
-      ? { ...requestWithTimeout, confirmedRejectionCodes }
-      : requestWithTimeout,
-  );
-};
-
-export const paneCommand = (
-  runner: HerdrCommandRunner,
-  args: ReadonlyArray<string>,
-  operation: string,
-  mutation = false,
-): Effect.Effect<HerdrPane, HerdrForkError> =>
-  command(runner, args, operation, mutation).pipe(
+  request: HerdrCommandRequest & { readonly schema: Schema.Decoder<A> },
+): Effect.Effect<A, HerdrForkError> => {
+  const { schema, ...commandRequest } = request;
+  return runner(commandRequest).pipe(
     Effect.flatMap((output) =>
-      decodeJson(PaneEnvelopeSchema, output.stdout, operation, mutation).pipe(
-        Effect.map(({ result }) => result.pane),
-      ),
+      decodeJson(schema, output.stdout, request.operation, request.mutation ?? false),
     ),
   );
+};

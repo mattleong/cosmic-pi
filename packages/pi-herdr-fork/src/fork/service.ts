@@ -1,15 +1,13 @@
 import * as Context from "effect/Context";
-import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import {
   AgentEnvelopeSchema,
   LayoutEnvelopeSchema,
+  PaneEnvelopeSchema,
   PaneProcessInfoEnvelopeSchema,
   ProtocolSchema,
-  command,
-  decodeJson,
+  herdrCommand,
   makeHerdrCommandRunner,
-  paneCommand,
   type HerdrCommandRunner,
   type HerdrPane,
   type HerdrPaneProcessInfo,
@@ -19,27 +17,13 @@ import {
   parentForkDisplayName,
   type HerdrForkSessionInput,
 } from "../boundary/host-session.ts";
-import { HerdrForkError, herdrForkError } from "./errors.ts";
+import { HerdrForkError } from "./errors.ts";
 import { initialForkPrompt, makeAgentName, selectSplitDirection } from "./policy.ts";
 
 const MINIMUM_HERDR_PROTOCOL = 17;
 const START_TIMEOUT_MILLIS = 70_000;
 const MAX_PROMPT_BYTES = 32 * 1024;
 
-const retainPaneFailure = (
-  failure: HerdrForkError,
-  paneId: string,
-  guidance: string = `Pane ${paneId} was retained for manual inspection.`,
-): HerdrForkError =>
-  failure.paneId === paneId
-    ? failure
-    : new HerdrForkError({
-        ...failure,
-        paneId,
-        message: failure.message.includes(guidance)
-          ? failure.message
-          : `${failure.message} ${guidance}`,
-      });
 const SHELL_READINESS_ATTEMPTS = 31;
 const SHELL_READINESS_DELAY_MILLIS = 200;
 const REQUIRED_STABLE_SHELL_READINGS = 6;
@@ -61,6 +45,15 @@ const HERDR_SHELL_PROCESS_NAMES = new Set([
   "cmd",
 ]);
 
+const retainPaneFailure = (
+  failure: HerdrForkError,
+  paneId: string,
+  guidance: string = `Pane ${paneId} was retained for manual inspection.`,
+): HerdrForkError =>
+  failure.paneId === paneId
+    ? failure
+    : new HerdrForkError({ ...failure, paneId, message: `${failure.message} ${guidance}` });
+
 export interface HerdrForkResult {
   readonly agentName: string;
   readonly paneId: string;
@@ -68,14 +61,9 @@ export interface HerdrForkResult {
   readonly prompted: boolean;
 }
 
-export interface HerdrForkServiceContract {
-  readonly open: (prompt?: string | undefined) => Effect.Effect<HerdrForkResult, HerdrForkError>;
-}
-
-export interface HerdrForkServiceOptions {
+interface HerdrForkServiceOptions {
   readonly runner?: HerdrCommandRunner | undefined;
   readonly validateSessionFile?: ((path: string) => boolean) | undefined;
-  readonly readinessDelay?: ((milliseconds: number) => Effect.Effect<void>) | undefined;
 }
 
 const validateInput = (
@@ -85,34 +73,39 @@ const validateInput = (
 ): Effect.Effect<{ sessionFile: string; sessionId: string }, HerdrForkError> =>
   Effect.gen(function* () {
     if (input.environment.HERDR_ENV !== "1" || !input.environment.HERDR_PANE_ID)
-      return yield* herdrForkError(
-        "validate environment",
-        "herdr_environment_unavailable",
-        "herdr-fork must run from a Pi session inside a Herdr-managed pane with caller identity.",
-      );
+      return yield* new HerdrForkError({
+        operation: "validate environment",
+        code: "herdr_environment_unavailable",
+        message:
+          "herdr-fork must run from a Pi session inside a Herdr-managed pane with caller identity.",
+        outcome: "confirmed",
+      });
 
     if (!input.sessionFile || !validateSessionFile(input.sessionFile))
-      return yield* herdrForkError(
-        "validate parent session",
-        "parent_session_unavailable",
-        "The current Pi session does not have a readable persisted session file to fork.",
-      );
+      return yield* new HerdrForkError({
+        operation: "validate parent session",
+        code: "parent_session_unavailable",
+        message: "The current Pi session does not have a readable persisted session file to fork.",
+        outcome: "confirmed",
+      });
     if (!input.sessionId)
-      return yield* herdrForkError(
-        "validate parent session",
-        "parent_session_id_unavailable",
-        "The current Pi session ID is unavailable.",
-      );
+      return yield* new HerdrForkError({
+        operation: "validate parent session",
+        code: "parent_session_id_unavailable",
+        message: "The current Pi session ID is unavailable.",
+        outcome: "confirmed",
+      });
 
     if (
       prompt !== undefined &&
       (prompt.includes("\0") || Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES)
     )
-      return yield* herdrForkError(
-        "validate prompt",
-        "fork_prompt_invalid",
-        `The optional initial prompt must be at most ${MAX_PROMPT_BYTES} UTF-8 bytes and contain no NUL byte.`,
-      );
+      return yield* new HerdrForkError({
+        operation: "validate prompt",
+        code: "fork_prompt_invalid",
+        message: `The optional initial prompt must be at most ${MAX_PROMPT_BYTES} UTF-8 bytes and contain no NUL byte.`,
+        outcome: "confirmed",
+      });
 
     return { sessionFile: input.sessionFile, sessionId: input.sessionId };
   });
@@ -128,7 +121,8 @@ const paneHasAvailableShell = (processInfo: HerdrPaneProcessInfo): boolean => {
   const foregroundProcesses = processInfo.foreground_processes ?? [];
   const foregroundProcess = foregroundProcesses[0];
   return (
-    Predicate.isNumber(shellPid) &&
+    shellPid !== null &&
+    shellPid !== undefined &&
     processInfo.foreground_process_group_id === shellPid &&
     foregroundProcesses.length === 1 &&
     foregroundProcess?.pid === shellPid &&
@@ -139,37 +133,35 @@ const paneHasAvailableShell = (processInfo: HerdrPaneProcessInfo): boolean => {
 const waitForAvailableShell = (
   runner: HerdrCommandRunner,
   paneId: string,
-  delay: (milliseconds: number) => Effect.Effect<void>,
 ): Effect.Effect<void, HerdrForkError> =>
   Effect.gen(function* () {
     let stableReadings = 0;
     for (let attempt = 1; attempt <= SHELL_READINESS_ATTEMPTS; attempt += 1) {
-      const output = yield* command(
-        runner,
-        ["pane", "process-info", "--pane", paneId],
-        "inspect fork pane shell",
-      );
-      const { result } = yield* decodeJson(
-        PaneProcessInfoEnvelopeSchema,
-        output.stdout,
-        "inspect fork pane shell",
-      );
+      const { result } = yield* herdrCommand(runner, {
+        args: ["pane", "process-info", "--pane", paneId],
+        operation: "inspect fork pane shell",
+        schema: PaneProcessInfoEnvelopeSchema,
+      });
       if (result.process_info.pane_id !== paneId)
-        return yield* herdrForkError(
-          "inspect fork pane shell",
-          "herdr_fork_pane_shell_mismatch",
-          "Herdr returned process information for a different pane. No Pi launch was attempted.",
-        );
+        return yield* new HerdrForkError({
+          operation: "inspect fork pane shell",
+          code: "herdr_fork_pane_shell_mismatch",
+          message:
+            "Herdr returned process information for a different pane. No Pi launch was attempted.",
+          outcome: "confirmed",
+        });
       stableReadings = paneHasAvailableShell(result.process_info) ? stableReadings + 1 : 0;
       if (stableReadings >= REQUIRED_STABLE_SHELL_READINGS) return;
-      if (attempt < SHELL_READINESS_ATTEMPTS) yield* delay(SHELL_READINESS_DELAY_MILLIS);
+      if (attempt < SHELL_READINESS_ATTEMPTS) yield* Effect.sleep(SHELL_READINESS_DELAY_MILLIS);
     }
 
-    return yield* herdrForkError(
-      "inspect fork pane shell",
-      "herdr_fork_pane_shell_not_ready",
-      "The new Herdr pane did not reach an available shell before the readiness deadline. No Pi launch was attempted.",
-    );
+    return yield* new HerdrForkError({
+      operation: "inspect fork pane shell",
+      code: "herdr_fork_pane_shell_not_ready",
+      message:
+        "The new Herdr pane did not reach an available shell before the readiness deadline. No Pi launch was attempted.",
+      outcome: "confirmed",
+    });
   });
 
 const validateStartedAgent = (
@@ -194,12 +186,12 @@ const validateStartedAgent = (
         childSession.value === parentSessionFile))
   )
     return Effect.fail(
-      herdrForkError(
-        "start forked Pi",
-        "herdr_agent_ownership_mismatch",
-        "Herdr returned forked Pi startup evidence that did not match this launch.",
-        "uncertain",
-      ),
+      new HerdrForkError({
+        operation: "start forked Pi",
+        code: "herdr_agent_ownership_mismatch",
+        message: "Herdr returned forked Pi startup evidence that did not match this launch.",
+        outcome: "uncertain",
+      }),
     );
 
   return Effect.void;
@@ -208,72 +200,67 @@ const validateStartedAgent = (
 export const makeHerdrForkService = (
   input: HerdrForkSessionInput,
   options: HerdrForkServiceOptions = {},
-): HerdrForkServiceContract => {
+) => {
   const runner = options.runner ?? makeHerdrCommandRunner(input.environment);
   const validateSessionFile = options.validateSessionFile ?? isValidParentSessionFile;
-  const readinessDelay = options.readinessDelay ?? Effect.sleep;
 
-  const open: HerdrForkServiceContract["open"] = (prompt) =>
-    Effect.gen(function* () {
+  const open: (prompt?: string | undefined) => Effect.Effect<HerdrForkResult, HerdrForkError> =
+    Effect.fn("HerdrForkService.open")(function* (prompt?: string | undefined) {
       const { sessionFile, sessionId } = yield* validateInput(prompt, input, validateSessionFile);
 
-      const protocolOutput = yield* command(
-        runner,
-        ["api", "schema", "--json"],
-        "inspect protocol",
-      );
-      const protocol = yield* decodeJson(ProtocolSchema, protocolOutput.stdout, "inspect protocol");
+      const protocol = yield* herdrCommand(runner, {
+        args: ["api", "schema", "--json"],
+        operation: "inspect protocol",
+        schema: ProtocolSchema,
+      });
       if (protocol.protocol < MINIMUM_HERDR_PROTOCOL)
-        return yield* herdrForkError(
-          "inspect protocol",
-          "herdr_upgrade_required",
-          `Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer is required; found ${protocol.protocol}.`,
-        );
+        return yield* new HerdrForkError({
+          operation: "inspect protocol",
+          code: "herdr_upgrade_required",
+          message: `Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer is required; found ${protocol.protocol}.`,
+          outcome: "confirmed",
+        });
 
-      const integrations = yield* command(
-        runner,
-        ["integration", "status"],
-        "inspect Pi integration",
-      );
+      const integrations = yield* runner({
+        args: ["integration", "status"],
+        operation: "inspect Pi integration",
+      });
       const piIntegration = integrations.stdout
         .split(/\r?\n/gu)
         .find((line) => line.startsWith("pi:"));
       if (!piIntegration || !/^pi: current \(v\d+\) \(.+\)$/u.test(piIntegration))
-        return yield* herdrForkError(
-          "inspect Pi integration",
-          "herdr_pi_integration_unavailable",
-          "The current Herdr Pi integration is required. Run `herdr integration install pi`, then try again.",
-        );
+        return yield* new HerdrForkError({
+          operation: "inspect Pi integration",
+          code: "herdr_pi_integration_unavailable",
+          message:
+            "The current Herdr Pi integration is required. Run `herdr integration install pi`, then try again.",
+          outcome: "confirmed",
+        });
 
-      const parentPane = yield* paneCommand(
-        runner,
-        ["pane", "current", "--current"],
-        "resolve calling pane",
-      );
-      const layoutOutput = yield* command(
-        runner,
-        ["pane", "layout", "--pane", parentPane.pane_id],
-        "inspect calling pane layout",
-      );
-      const { result: layoutResult } = yield* decodeJson(
-        LayoutEnvelopeSchema,
-        layoutOutput.stdout,
-        "inspect calling pane layout",
-      );
+      const parentPane = (yield* herdrCommand(runner, {
+        args: ["pane", "current", "--current"],
+        operation: "resolve calling pane",
+        schema: PaneEnvelopeSchema,
+      })).result.pane;
+      const { result: layoutResult } = yield* herdrCommand(runner, {
+        args: ["pane", "layout", "--pane", parentPane.pane_id],
+        operation: "inspect calling pane layout",
+        schema: LayoutEnvelopeSchema,
+      });
       if (
         layoutResult.layout.workspace_id !== parentPane.workspace_id ||
         layoutResult.layout.tab_id !== parentPane.tab_id
       )
-        return yield* herdrForkError(
-          "inspect calling pane layout",
-          "herdr_parent_topology_mismatch",
-          "The calling pane changed workspace or tab while its layout was inspected.",
-        );
+        return yield* new HerdrForkError({
+          operation: "inspect calling pane layout",
+          code: "herdr_parent_topology_mismatch",
+          message: "The calling pane changed workspace or tab while its layout was inspected.",
+          outcome: "confirmed",
+        });
 
       const direction = selectSplitDirection(layoutResult.layout.area.width);
-      const forkPane = yield* paneCommand(
-        runner,
-        [
+      const forkPane = (yield* herdrCommand(runner, {
+        args: [
           "pane",
           "split",
           parentPane.pane_id,
@@ -285,29 +272,30 @@ export const makeHerdrForkService = (
           input.cwd,
           "--no-focus",
         ],
-        "split fork pane",
-        true,
-      );
+        operation: "split fork pane",
+        mutation: true,
+        schema: PaneEnvelopeSchema,
+      })).result.pane;
       return yield* Effect.gen(function* () {
         if (
           forkPane.pane_id === parentPane.pane_id ||
           forkPane.workspace_id !== parentPane.workspace_id ||
           forkPane.tab_id !== parentPane.tab_id
         )
-          return yield* herdrForkError(
-            "split fork pane",
-            "herdr_split_topology_mismatch",
-            "Herdr returned a pane outside the calling pane's current workspace/tab; no further action was taken.",
-            "uncertain",
-          );
+          return yield* new HerdrForkError({
+            operation: "split fork pane",
+            code: "herdr_split_topology_mismatch",
+            message:
+              "Herdr returned a pane outside the calling pane's current workspace/tab; no further action was taken.",
+            outcome: "uncertain",
+          });
 
-        yield* waitForAvailableShell(runner, forkPane.pane_id, readinessDelay);
+        yield* waitForAvailableShell(runner, forkPane.pane_id);
 
         const agentName = makeAgentName(sessionId, forkPane.pane_id);
         const displayName = parentForkDisplayName(input.cwd);
-        const startedOutput = yield* command(
-          runner,
-          [
+        const { result: startedResult } = yield* herdrCommand(runner, {
+          args: [
             "agent",
             "start",
             agentName,
@@ -323,32 +311,30 @@ export const makeHerdrForkService = (
             "--name",
             displayName,
           ],
-          "start forked Pi",
-          true,
-          START_TIMEOUT_MILLIS,
-          ["agent_pane_busy"],
-        );
-        const { result: startedResult } = yield* decodeJson(
-          AgentEnvelopeSchema,
-          startedOutput.stdout,
-          "start forked Pi",
-          true,
-        );
+          operation: "start forked Pi",
+          mutation: true,
+          timeoutMillis: START_TIMEOUT_MILLIS,
+          confirmedRejectionCodes: ["agent_pane_busy"],
+          schema: AgentEnvelopeSchema,
+        });
         yield* validateStartedAgent(startedResult.agent, forkPane, agentName, sessionFile);
 
         const promptResult =
           prompt === undefined
             ? undefined
             : yield* Effect.result(
-                command(
-                  runner,
-                  ["agent", "prompt", agentName, initialForkPrompt(prompt)],
-                  "prompt forked Pi",
-                  true,
-                ),
+                runner({
+                  args: ["agent", "prompt", agentName, initialForkPrompt(prompt)],
+                  operation: "prompt forked Pi",
+                  mutation: true,
+                }),
               );
         const focusResult = yield* Effect.result(
-          command(runner, ["agent", "focus", agentName], "focus forked Pi", true),
+          runner({
+            args: ["agent", "focus", agentName],
+            operation: "focus forked Pi",
+            mutation: true,
+          }),
         );
 
         if (promptResult?._tag === "Failure")
@@ -373,9 +359,10 @@ export const makeHerdrForkService = (
       }).pipe(Effect.mapError((failure) => retainPaneFailure(failure, forkPane.pane_id)));
     });
 
-  return { open };
+  return { open } as const;
 };
 
-export class HerdrForkService extends Context.Service<HerdrForkService, HerdrForkServiceContract>()(
-  "pi-herdr-fork/fork/service/HerdrForkService",
-) {}
+export class HerdrForkService extends Context.Service<
+  HerdrForkService,
+  ReturnType<typeof makeHerdrForkService>
+>()("pi-herdr-fork/fork/service/HerdrForkService") {}

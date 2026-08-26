@@ -1,7 +1,9 @@
+import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import { expect } from "vitest";
 import {
-  herdrCommandExitFailure,
   selectHerdrEnvironment,
   type HerdrCommandRequest,
   type HerdrCommandRunner,
@@ -166,7 +168,6 @@ const fixture = (options: FixtureOptions = {}) => {
   const service = makeHerdrForkService(input, {
     runner,
     validateSessionFile: () => true,
-    readinessDelay: () => Effect.void,
   });
 
   return { calls, input, runner, service };
@@ -174,6 +175,18 @@ const fixture = (options: FixtureOptions = {}) => {
 
 const operationNames = (calls: ReadonlyArray<HerdrCommandRequest>) =>
   calls.map((call) => call.operation);
+
+/**
+ * Forks a workflow that sleeps through the shell-readiness window, then advances the
+ * TestClock past the documented maximum of 30 readiness sleeps before joining. The
+ * bounded loop cannot hang even when the pane never becomes ready.
+ */
+const withShellReadiness = <A, E>(workflow: Effect.Effect<A, E>) =>
+  Effect.gen(function* () {
+    const fiber = yield* workflow.pipe(Effect.forkScoped({ startImmediately: true }));
+    for (let step = 0; step < 32; step += 1) yield* TestClock.adjust("200 millis");
+    return yield* Fiber.join(fiber);
+  });
 
 describe("herdr-fork policy", () => {
   it("uses a right split only when the current pane is wide", () => {
@@ -185,45 +198,6 @@ describe("herdr-fork policy", () => {
     const name = makeAgentName("SESSION !!! WITH SPACES", "workspace:pane/999999999");
     expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
     expect(name.length).toBeLessThanOrEqual(32);
-  });
-
-  it("classifies agent_pane_busy as a confirmed precondition rejection", () => {
-    const failure = herdrCommandExitFailure(
-      {
-        args: ["agent", "start"],
-        operation: "start forked Pi",
-        mutation: true,
-        confirmedRejectionCodes: ["agent_pane_busy"],
-      },
-      JSON.stringify({
-        error: {
-          code: "agent_pane_busy",
-          message: "agent target pane w1:p2 is not an available shell",
-        },
-      }),
-    );
-    expect(failure).toMatchObject({
-      code: "herdr_start_forked_pi_rejected",
-      outcome: "confirmed",
-      herdrCode: "agent_pane_busy",
-    });
-    expect(failure.message).toContain("was rejected before it was applied");
-  });
-
-  it("keeps undecodable mutating failures outcome-uncertain", () => {
-    const failure = herdrCommandExitFailure(
-      {
-        args: ["agent", "start"],
-        operation: "start forked Pi",
-        mutation: true,
-        confirmedRejectionCodes: ["agent_pane_busy"],
-      },
-      "connection closed",
-    );
-    expect(failure).toMatchObject({
-      code: "herdr_start_forked_pi_outcome_uncertain",
-      outcome: "uncertain",
-    });
   });
 
   it("passes only bounded Herdr caller routing to the CLI process", () => {
@@ -249,9 +223,10 @@ describe("herdr-fork policy", () => {
 });
 
 describe("herdr-fork workflow", () => {
-  it("splits, starts a native fork, safely prompts, focuses, and transfers ownership", () => {
-    const test = fixture();
-    return Effect.runPromise(test.service.open("--review the plan")).then((result) => {
+  it.effect("splits, starts a native fork, safely prompts, focuses, and transfers ownership", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      const result = yield* withShellReadiness(test.service.open("--review the plan"));
       expect(result).toMatchObject({
         paneId: "w1:p2",
         direction: "right",
@@ -319,32 +294,35 @@ describe("herdr-fork workflow", () => {
         result.agentName,
       ]);
       expect(test.calls.some((call) => call.args.includes("close"))).toBe(false);
-    });
-  });
+    }),
+  );
 
-  it("uses a down split and omits prompt delivery when no prompt is supplied", () => {
-    const test = fixture({ width: 80 });
-    return Effect.runPromise(test.service.open()).then((result) => {
+  it.effect("uses a down split and omits prompt delivery when no prompt is supplied", () =>
+    Effect.gen(function* () {
+      const test = fixture({ width: 80 });
+      const result = yield* withShellReadiness(test.service.open());
       expect(result.direction).toBe("down");
       expect(result.prompted).toBe(false);
       expect(operationNames(test.calls)).not.toContain("prompt forked Pi");
-    });
-  });
+    }),
+  );
 
-  it("waits through read-only shell inspections without retrying any mutation", () => {
-    const test = fixture({ shellReadyAfter: 3 });
-    return Effect.runPromise(test.service.open()).then(() => {
+  it.effect("waits through read-only shell inspections without retrying any mutation", () =>
+    Effect.gen(function* () {
+      const test = fixture({ shellReadyAfter: 3 });
+      yield* withShellReadiness(test.service.open());
       const inspections = test.calls.filter((call) => call.operation === "inspect fork pane shell");
       expect(inspections).toHaveLength(8);
       expect(inspections.every((call) => !call.mutation)).toBe(true);
       for (const operation of ["split fork pane", "start forked Pi", "focus forked Pi"])
         expect(test.calls.filter((call) => call.operation === operation)).toHaveLength(1);
-    });
-  });
+    }),
+  );
 
-  it("accepts exact atomic startup while Pi session metadata is still pending", () => {
-    const test = fixture({ startedIdentityAvailable: false });
-    return Effect.runPromise(test.service.open("Review the fork.")).then((result) => {
+  it.effect("accepts exact atomic startup while Pi session metadata is still pending", () =>
+    Effect.gen(function* () {
+      const test = fixture({ startedIdentityAvailable: false });
+      const result = yield* withShellReadiness(test.service.open("Review the fork."));
       expect(result).toMatchObject({ paneId: "w1:p2", prompted: true });
       expect(operationNames(test.calls).slice(-3)).toEqual([
         "start forked Pi",
@@ -353,42 +331,45 @@ describe("herdr-fork workflow", () => {
       ]);
       expect(operationNames(test.calls)).not.toContain("confirm forked Pi identity");
       expect(test.calls.filter((call) => call.operation === "start forked Pi")).toHaveLength(1);
-    });
-  });
+    }),
+  );
 
-  it("does not prompt or adopt mismatched atomic startup evidence", () => {
-    const test = fixture({ startedTerminalId: "term-other" });
-    return Effect.runPromise(Effect.result(test.service.open("Do not misroute this."))).then(
-      (result) => {
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure")
-          expect(result.failure).toMatchObject({
-            code: "herdr_agent_ownership_mismatch",
-            outcome: "uncertain",
-            paneId: "w1:p2",
-          });
-        expect(operationNames(test.calls)).not.toContain("prompt forked Pi");
-        expect(operationNames(test.calls)).not.toContain("focus forked Pi");
-        expect(test.calls.filter((call) => call.operation === "start forked Pi")).toHaveLength(1);
-      },
-    );
-  });
+  it.effect("does not prompt or adopt mismatched atomic startup evidence", () =>
+    Effect.gen(function* () {
+      const test = fixture({ startedTerminalId: "term-other" });
+      const result = yield* Effect.result(
+        withShellReadiness(test.service.open("Do not misroute this.")),
+      );
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({
+          code: "herdr_agent_ownership_mismatch",
+          outcome: "uncertain",
+          paneId: "w1:p2",
+        });
+      expect(operationNames(test.calls)).not.toContain("prompt forked Pi");
+      expect(operationNames(test.calls)).not.toContain("focus forked Pi");
+      expect(test.calls.filter((call) => call.operation === "start forked Pi")).toHaveLength(1);
+    }),
+  );
 
-  it("resets stability after a transient shell-owned sample", () => {
-    const test = fixture({
-      shellReadiness: [true, true, false, true, true, true, true, true, true],
-    });
-    return Effect.runPromise(test.service.open()).then(() => {
+  it.effect("resets stability after a transient shell-owned sample", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        shellReadiness: [true, true, false, true, true, true, true, true, true],
+      });
+      yield* withShellReadiness(test.service.open());
       expect(
         test.calls.filter((call) => call.operation === "inspect fork pane shell"),
       ).toHaveLength(9);
       expect(test.calls.filter((call) => call.operation === "start forked Pi")).toHaveLength(1);
-    });
-  });
+    }),
+  );
 
-  it("structurally retains the pane when a shell-readiness inspection fails", () => {
-    const test = fixture({ failOperation: "inspect fork pane shell" });
-    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
+  it.effect("structurally retains the pane when a shell-readiness inspection fails", () =>
+    Effect.gen(function* () {
+      const test = fixture({ failOperation: "inspect fork pane shell" });
+      const result = yield* Effect.result(test.service.open());
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") {
         expect(result.failure).toMatchObject({
@@ -400,66 +381,75 @@ describe("herdr-fork workflow", () => {
       }
       expect(operationNames(test.calls)).not.toContain("start forked Pi");
       expect(test.calls.some((call) => call.args.includes("close"))).toBe(false);
-    });
-  });
+    }),
+  );
 
-  it("retains the pane and skips Pi launch when its shell misses the readiness deadline", () => {
-    const test = fixture({ shellReadyAfter: 100 });
-    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "herdr_fork_pane_shell_not_ready",
-          outcome: "confirmed",
-          paneId: "w1:p2",
-        });
-      expect(
-        test.calls.filter((call) => call.operation === "inspect fork pane shell").length,
-      ).toBeGreaterThan(1);
-      expect(operationNames(test.calls)).not.toContain("start forked Pi");
-      expect(test.calls.some((call) => call.args.includes("close"))).toBe(false);
-    });
-  });
+  it.effect(
+    "retains the pane and skips Pi launch when its shell misses the readiness deadline",
+    () =>
+      Effect.gen(function* () {
+        const test = fixture({ shellReadyAfter: 100 });
+        const result = yield* Effect.result(withShellReadiness(test.service.open()));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure")
+          expect(result.failure).toMatchObject({
+            code: "herdr_fork_pane_shell_not_ready",
+            outcome: "confirmed",
+            paneId: "w1:p2",
+          });
+        expect(
+          test.calls.filter((call) => call.operation === "inspect fork pane shell"),
+        ).toHaveLength(31);
+        expect(operationNames(test.calls)).not.toContain("start forked Pi");
+        expect(test.calls.some((call) => call.args.includes("close"))).toBe(false);
+      }),
+  );
 
-  it("requires inherited Herdr caller identity before any CLI call", () => {
-    const test = fixture();
-    const service = makeHerdrForkService(
-      { ...test.input, environment: { HERDR_ENV: "1" } },
-      { runner: test.runner, validateSessionFile: () => true },
-    );
-    return Effect.runPromise(Effect.result(service.open())).then((result) => {
+  it.effect("requires inherited Herdr caller identity before any CLI call", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      const service = makeHerdrForkService(
+        { ...test.input, environment: { HERDR_ENV: "1" } },
+        { runner: test.runner, validateSessionFile: () => true },
+      );
+      const result = yield* Effect.result(service.open());
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure")
         expect(result.failure.code).toBe("herdr_environment_unavailable");
       expect(test.calls).toEqual([]);
-    });
-  });
+    }),
+  );
 
-  it("requires a regular persisted parent session before mutation", () => {
-    const test = fixture();
-    const service = makeHerdrForkService(test.input, {
-      runner: test.runner,
-      validateSessionFile: () => false,
-    });
-    return Effect.runPromise(Effect.result(service.open())).then((result) => {
+  it.effect("requires a regular persisted parent session before mutation", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      const service = makeHerdrForkService(test.input, {
+        runner: test.runner,
+        validateSessionFile: () => false,
+      });
+      const result = yield* Effect.result(service.open());
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") expect(result.failure.code).toBe("parent_session_unavailable");
       expect(test.calls).toEqual([]);
-    });
-  });
+    }),
+  );
 
-  it("rejects unsupported Herdr protocols before mutation", () => {
-    const test = fixture({ protocol: 16 });
-    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
+  it.effect("rejects unsupported Herdr protocols before mutation", () =>
+    Effect.gen(function* () {
+      const test = fixture({ protocol: 16 });
+      const result = yield* Effect.result(test.service.open());
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") expect(result.failure.code).toBe("herdr_upgrade_required");
       expect(operationNames(test.calls)).toEqual(["inspect protocol"]);
-    });
-  });
+    }),
+  );
 
-  it("requires a current Pi integration before creating topology", () => {
-    const test = fixture({ integration: "pi: outdated (v6 < v8) (/agent/herdr-agent-state.ts)\n" });
-    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
+  it.effect("requires a current Pi integration before creating topology", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        integration: "pi: outdated (v6 < v8) (/agent/herdr-agent-state.ts)\n",
+      });
+      const result = yield* Effect.result(test.service.open());
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure")
         expect(result.failure).toMatchObject({
@@ -467,24 +457,26 @@ describe("herdr-fork workflow", () => {
           outcome: "confirmed",
         });
       expect(operationNames(test.calls)).toEqual(["inspect protocol", "inspect Pi integration"]);
-    });
-  });
+    }),
+  );
 
-  it("rejects a layout that no longer belongs to the calling pane", () => {
-    const test = fixture({ layoutWorkspaceId: "w2" });
-    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
+  it.effect("rejects a layout that no longer belongs to the calling pane", () =>
+    Effect.gen(function* () {
+      const test = fixture({ layoutWorkspaceId: "w2" });
+      const result = yield* Effect.result(test.service.open());
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") {
         expect(result.failure.code).toBe("herdr_parent_topology_mismatch");
         expect(result.failure.paneId).toBeUndefined();
       }
       expect(operationNames(test.calls)).not.toContain("split fork pane");
-    });
-  });
+    }),
+  );
 
-  it("refuses to launch when the split escapes the calling tab", () => {
-    const test = fixture({ splitTabId: "w1:t2" });
-    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
+  it.effect("refuses to launch when the split escapes the calling tab", () =>
+    Effect.gen(function* () {
+      const test = fixture({ splitTabId: "w1:t2" });
+      const result = yield* Effect.result(test.service.open());
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure")
         expect(result.failure).toMatchObject({
@@ -493,62 +485,62 @@ describe("herdr-fork workflow", () => {
           paneId: "w1:p2",
         });
       expect(operationNames(test.calls)).not.toContain("start forked Pi");
-    });
-  });
+    }),
+  );
 
-  it("retains the created pane when agent startup has an uncertain failure", () => {
-    const test = fixture({ failOperation: "start forked Pi" });
-    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
+  it.effect("retains the created pane when agent startup has an uncertain failure", () =>
+    Effect.gen(function* () {
+      const test = fixture({ failOperation: "start forked Pi" });
+      const result = yield* Effect.result(withShellReadiness(test.service.open()));
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") {
         expect(result.failure).toMatchObject({ outcome: "uncertain", paneId: "w1:p2" });
         expect(result.failure.message).toContain("retained for manual inspection");
       }
       expect(test.calls.some((call) => call.args.includes("close"))).toBe(false);
-    });
-  });
+    }),
+  );
 
-  it("focuses a confirmed fork even when optional prompt delivery fails", () => {
-    const test = fixture({ failOperation: "prompt forked Pi" });
-    return Effect.runPromise(Effect.result(test.service.open("Prompt that may not arrive."))).then(
-      (result) => {
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") {
-          expect(result.failure.paneId).toBe("w1:p2");
-          expect(result.failure.message).toContain("enter the prompt there manually");
-        }
-        expect(operationNames(test.calls).at(-1)).toBe("focus forked Pi");
-      },
-    );
-  });
+  it.effect("focuses a confirmed fork even when optional prompt delivery fails", () =>
+    Effect.gen(function* () {
+      const test = fixture({ failOperation: "prompt forked Pi" });
+      const result = yield* Effect.result(
+        withShellReadiness(test.service.open("Prompt that may not arrive.")),
+      );
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure.paneId).toBe("w1:p2");
+        expect(result.failure.message).toContain("enter the prompt there manually");
+      }
+      expect(operationNames(test.calls).at(-1)).toBe("focus forked Pi");
+    }),
+  );
 
-  it("reports a focus failure without closing a confirmed fork", () => {
-    const test = fixture({ failOperation: "focus forked Pi" });
-    return Effect.runPromise(Effect.result(test.service.open())).then((result) => {
+  it.effect("reports a focus failure without closing a confirmed fork", () =>
+    Effect.gen(function* () {
+      const test = fixture({ failOperation: "focus forked Pi" });
+      const result = yield* Effect.result(withShellReadiness(test.service.open()));
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") {
         expect(result.failure.paneId).toBe("w1:p2");
         expect(result.failure.message).toContain("focus it manually");
       }
       expect(test.calls.some((call) => call.args.includes("close"))).toBe(false);
-    });
-  });
+    }),
+  );
 
-  it("requires a distinct path-based child session identity", () => {
-    const sameSession = fixture({ startedSession: SESSION_FILE });
-    const idSession = fixture({ startedSessionKind: "id" });
-    return Effect.runPromise(
-      Effect.all([
-        Effect.result(sameSession.service.open()),
-        Effect.result(idSession.service.open()),
-      ]),
-    ).then(([sameResult, idResult]) => {
+  it.effect("requires a distinct path-based child session identity", () =>
+    Effect.gen(function* () {
+      const sameSession = fixture({ startedSession: SESSION_FILE });
+      const idSession = fixture({ startedSessionKind: "id" });
+      const sameResult = yield* Effect.result(withShellReadiness(sameSession.service.open()));
+      const idResult = yield* Effect.result(withShellReadiness(idSession.service.open()));
       expect(sameResult._tag).toBe("Failure");
       expect(idResult._tag).toBe("Failure");
       if (sameResult._tag === "Failure")
         expect(sameResult.failure.code).toBe("herdr_agent_ownership_mismatch");
       if (idResult._tag === "Failure")
         expect(idResult.failure.code).toBe("herdr_agent_ownership_mismatch");
-    });
-  });
+    }),
+  );
 });
