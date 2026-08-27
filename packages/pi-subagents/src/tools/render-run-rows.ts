@@ -136,34 +136,28 @@ export const renderResponsiveRunRows = (
       const usageColumn = hasUsage ? ` · ${padVisible(usage, usageWidth)}` : "";
       return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(intent, intentWidth)}${usageColumn} · ${padVisible(state, stateWidth)}`;
     });
-  return displayRuns.flatMap((run, index) => {
+  return displayRuns.map((run, index) => {
     const color = runStateColor(run.state);
-    const identity = theme.fg(color, identities[index] ?? "");
-    const intentText = intents[index] ?? "";
-    const treeRow = treeRows?.[index];
-    const treeIndent = treeRow
-      ? " ".repeat(
-          visibleWidth(runCardTreeBranch(treeRow)) +
-            (options.hierarchy?.awaitedRunIds?.has(run.id) ? 2 : 0) +
-            2,
-        )
-      : "";
-    const compactRouteWidth = Math.max(
-      1,
-      safeWidth - visibleWidth(treeIndent) - visibleWidth(intentText) - 3,
-    );
-    const route = theme.fg("toolOutput", runRoute(run, compactRouteWidth));
-    const metadata = `${treeIndent}${route} · ${theme.fg(
-      run.writeIntent === "writer" ? "warning" : "muted",
-      intentText,
-    )}`;
-    const status = `${treeIndent}${[states[index] ?? "", usages[index] ?? ""]
+    const identity = identities[index] ?? "";
+    const compactStatus = [
+      runStateLabel(run.state),
+      run.writeIntent === "writer" ? "writer" : undefined,
+      usages[index],
+    ]
       .filter(Boolean)
-      .join(" · ")}`;
-    return [
-      truncateToWidth(identity, safeWidth),
-      truncateToWidth(metadata, safeWidth),
-      truncateToWidth(theme.fg(color, status), safeWidth),
-    ];
+      .join(" · ");
+    const compactMinimumIdentityWidth = Math.min(24, Math.max(8, Math.floor(safeWidth * 0.45)));
+    const maximumStatusWidth = safeWidth - compactMinimumIdentityWidth - 3;
+    if (maximumStatusWidth < 7) return truncateToWidth(theme.fg(color, identity), safeWidth);
+    const compactStatusWidth = Math.min(
+      visibleWidth(compactStatus),
+      Math.max(7, Math.floor(safeWidth * 0.36)),
+      maximumStatusWidth,
+    );
+    const compactIdentityWidth = safeWidth - compactStatusWidth - 3;
+    return `${truncateToWidth(
+      theme.fg(color, identity),
+      compactIdentityWidth,
+    )} · ${truncateToWidth(theme.fg(color, compactStatus), compactStatusWidth)}`;
   });
 };

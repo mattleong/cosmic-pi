@@ -3,6 +3,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { makeAwaitDetails, makeCompactToolDetails } from "../../src/tools/details.ts";
 import { renderSubagentResult } from "../../src/tools/render.ts";
+import { renderResponsiveRunRows } from "../../src/tools/render-run-rows.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
 // SAFETY: This fixture implements the Theme methods consumed by semantic result rendering.
@@ -45,4 +46,42 @@ describe("hierarchical tool result rendering", () => {
     );
     expect([...list, ...awaitProgress].every((line) => visibleWidth(line) <= width)).toBe(true);
   });
+
+  it.each([20, 50, 73, 87])(
+    "keeps each compact hierarchy run on one bounded line at width %i",
+    (width) => {
+      const busyTarget = view({
+        id: "agent-r1-15",
+        name: "React DOM server trace plan",
+        parentRunId: "root",
+        depth: 1,
+        usage: {
+          input: 25_000,
+          output: 25_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 50_000,
+          cost: 0,
+        },
+      });
+      const busyChild = view({
+        id: "agent-r1-16",
+        name: "Codemirror optimization plan",
+        parentRunId: busyTarget.id,
+        depth: 2,
+      });
+      const details = makeAwaitDetails({
+        runs: [busyTarget],
+        contextRuns: [busyChild],
+        awaitedRunIds: [busyTarget.id],
+        awaitUntil: "all_finished",
+      });
+      const rows = renderResponsiveRunRows(details.cards, width, theme, {
+        hierarchy: { awaitedRunIds: new Set([busyTarget.id]) },
+      });
+
+      expect(rows).toHaveLength(details.cards.length);
+      expect(rows.every((line) => visibleWidth(line) <= width)).toBe(true);
+    },
+  );
 });
