@@ -52,7 +52,7 @@ export interface TaskManagerOptions {
   readonly clear: () => void;
 }
 
-const PROCESS_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
+const TASK_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
 
 const statePresentation = (task: BackgroundTaskView, frame: number) => {
   switch (task.state) {
@@ -157,7 +157,7 @@ export class TaskManagerComponent implements Component {
     const resolution = this.shell.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding,
-      reservedKeys: PROCESS_MANAGER_SHORTCUTS,
+      reservedKeys: TASK_MANAGER_SHORTCUTS,
     });
     if (!resolution) return;
     if (resolution._tag === "Shortcut") {
@@ -244,7 +244,7 @@ export class TaskManagerComponent implements Component {
     const key = (id: FullScreenSelectionKeybindingId, fallback: string): string =>
       filterReservedKeyLabel(
         this.options.keybindingLabel?.(id, fallback) || fallback,
-        PROCESS_MANAGER_SHORTCUTS,
+        TASK_MANAGER_SHORTCUTS,
         fallback,
       );
     const configuredNavigation = this.options.keybindingLabel
