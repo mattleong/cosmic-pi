@@ -35,8 +35,6 @@ export interface ProjectedPiModel {
 export interface ProfileModelCatalogSnapshot {
   readonly revision: number;
   readonly piModels: ReadonlyArray<ProjectedPiModel>;
-  /** Undefined means provider provenance could not be inspected and Herdr Pi must fail closed. */
-  readonly extensionProviderIds?: ReadonlyArray<string> | undefined;
 }
 
 export interface ProfileModelRegistryRefreshResult {
@@ -46,7 +44,6 @@ export interface ProfileModelRegistryRefreshResult {
 
 export interface ProfileModelRegistry {
   readonly getAvailable: () => ReadonlyArray<Model<Api>>;
-  readonly getRegisteredProviderIds: () => ReadonlyArray<string>;
   readonly getError: () => string | undefined;
   readonly refresh: (options?: {
     readonly signal: AbortSignal;
@@ -61,18 +58,11 @@ const freezeProjectedModel = (model: ProjectedPiModel): ProjectedPiModel =>
 const freezeCatalogSnapshot = (
   revision: number,
   models: ReadonlyArray<ProjectedPiModel>,
-  extensionProviderIds: ReadonlyArray<string> | undefined,
-): ProfileModelCatalogSnapshot => {
-  const base = {
+): ProfileModelCatalogSnapshot =>
+  Object.freeze({
     revision,
     piModels: Object.freeze(models.map(freezeProjectedModel)),
-  };
-  return Object.freeze(
-    extensionProviderIds === undefined
-      ? base
-      : { ...base, extensionProviderIds: Object.freeze([...extensionProviderIds]) },
-  );
-};
+  });
 
 const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
   const efforts = getSupportedThinkingLevels(model).flatMap((effort) => {
@@ -91,18 +81,9 @@ const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
 const projectRegistry = (
   registry: ProfileModelRegistry,
   revision: number,
-  tolerateUnavailableProvenance = false,
 ): ProfileModelCatalogSnapshot | undefined => {
   try {
-    const models = registry.getAvailable().map(projectPiModel);
-    let extensionProviderIds: ReadonlyArray<string> | undefined;
-    try {
-      extensionProviderIds = [...registry.getRegisteredProviderIds()];
-    } catch {
-      if (!tolerateUnavailableProvenance) return undefined;
-      // The initial snapshot remains coherent, but Herdr Pi choices fail closed without provenance.
-    }
-    return freezeCatalogSnapshot(revision, models, extensionProviderIds);
+    return freezeCatalogSnapshot(revision, registry.getAvailable().map(projectPiModel));
   } catch {
     return undefined;
   }
@@ -116,7 +97,7 @@ export class ProfileModelCatalog {
 
   constructor(registry: ProfileModelRegistry) {
     this.registry = registry;
-    this.snapshot = projectRegistry(registry, 0, true) ?? freezeCatalogSnapshot(0, [], undefined);
+    this.snapshot = projectRegistry(registry, 0) ?? freezeCatalogSnapshot(0, []);
   }
 
   capture(): ProfileModelCatalogSnapshot {
@@ -276,8 +257,7 @@ export function loadCandidateModelPicker(
   if (candidate.runtime !== "pi") return loadNativeModels(input);
 
   const snapshot = input.piCatalog;
-  // Herdr Pi loads trusted global extensions under --no-approve. Pi's trust loader, rather than
-  // provider registration provenance, blocks project-local provider resources.
+  // The root registry already reflects project trust; local and Herdr Pi use the same catalog.
   const availableModels = snapshot.piModels;
   const parentModel = input.parentSelector
     ? snapshot.piModels.find((model) => canonicalPiSelector(model) === input.parentSelector)

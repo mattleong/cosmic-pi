@@ -6,7 +6,7 @@ import { freezeSnapshot } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { SubagentBackendRegistry } from "../backend/service.ts";
-import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/tool-policy.ts";
+import { piRootActiveToolSnapshot } from "../run/tool-policy.ts";
 import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
@@ -84,8 +84,8 @@ const resolvePiModel = (
   InvalidSubagentRequestError
 > =>
   Effect.gen(function* () {
-    // Herdr Pi now performs normal global extension discovery under --no-approve. Project-local
-    // providers remain blocked by Pi's trust loader, while global provider models are eligible.
+    // The root registry already reflects the current project-trust decision. Local and Herdr Pi
+    // mirror that decision, so every authenticated canonical model is eligible for resolution.
     const availableModels = ctx.modelRegistry
       .getAvailable()
       .map((model) => ({ provider: model.provider, id: model.id }));
@@ -457,6 +457,8 @@ const resolvePlannedStart = (
         ...candidate,
       })),
     });
+    const activeTools =
+      concrete.runtime === "pi" ? yield* piRootActiveToolSnapshot(pi.getActiveTools()) : [];
     return (() => {
       const baseResult = {};
       const withName = input.rawInput.name?.trim()
@@ -497,10 +499,7 @@ const resolvePlannedStart = (
         ...withRuntimeApiKey,
         effort: concrete.effort,
         effortWasExplicit: concrete.effortWasExplicit,
-        activeTools: piToolsForWriteIntent(
-          pi.getActiveTools().filter((name) => !ORCHESTRATION_TOOL_DENYLIST.has(name)),
-          selected.attempt.writeIntent,
-        ),
+        activeTools,
         projectTrusted: environment.projectTrusted,
         parentSessionId: ctx.sessionManager.getSessionId(),
       };

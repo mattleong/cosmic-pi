@@ -8,8 +8,12 @@ import registerBridge, {
   type PiSupervisorBridgeExtensionDependencies,
 } from "../src/boundary/host-pi-supervisor-extension.ts";
 import type { PiSupervisorBridgeClient } from "../src/boundary/pi-supervisor-bridge-client.ts";
-import type { SupervisorMcpToolArgumentsByName as SupervisorToolArgumentsByName } from "../src/supervisor/mcp-contract.ts";
 import { RpcSessionTransportError } from "../src/boundary/rpc-session.ts";
+import { SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
+import {
+  SUPERVISOR_MCP_TOOL_NAMES,
+  type SupervisorMcpToolArgumentsByName as SupervisorToolArgumentsByName,
+} from "../src/supervisor/mcp-contract.ts";
 import { extensionApiFixture, extensionContextFixture, modelFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 
@@ -76,10 +80,11 @@ const bridgeContext = extensionContextFixture({});
 
 const bridgeHarness = (
   bridgeOpen: PiSupervisorBridgeExtensionDependencies["openBridge"] = openBridge,
+  initialActiveTools: ReadonlyArray<string> = ["read"],
 ) => {
   const handlers = new Map<string, BridgeEventHandler>();
   const tools: BridgeTool[] = [];
-  let active = ["read"];
+  let active = [...initialActiveTools];
   // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const pi = extensionApiFixture({
     registerFlag: vi.fn(),
@@ -93,7 +98,7 @@ const bridgeHarness = (
     registerProvider: vi.fn(),
   });
   registerBridge(pi, { openBridge: bridgeOpen });
-  return { handlers, tools };
+  return { handlers, tools, activeTools: () => [...active] };
 };
 
 const startBridgeHarness = () => {
@@ -158,6 +163,32 @@ describe("Herdr-hosted Pi bridge extension", () => {
       expect(remaining.apiKey).toBeUndefined();
       expect(remaining.provider).toBeUndefined();
       expect(pi.registerProvider).not.toHaveBeenCalled();
+    },
+  );
+
+  effectTest(
+    "preserves ordinary inherited tools while reconciling authenticated bridge tools",
+    function* () {
+      const { handlers, activeTools } = bridgeHarness(openBridge, [
+        "read",
+        "code_mode",
+        "subagent_start",
+        "herdr_agent_start",
+        "contact_parent",
+      ]);
+      yield* settle(() =>
+        handlers.get("session_start")?.(
+          {},
+          extensionContextFixture({ cwd: "/project", isProjectTrusted: () => true, hasUI: false }),
+        ),
+      );
+
+      expect(activeTools()).toEqual([
+        "read",
+        "code_mode",
+        ...SUPERVISOR_MCP_TOOL_NAMES,
+        ...SUBAGENT_TOOL_NAMES,
+      ]);
     },
   );
 

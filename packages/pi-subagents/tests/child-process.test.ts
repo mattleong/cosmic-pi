@@ -3,10 +3,12 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import {
+  childToolPolicy,
   releaseChildProcess,
   requestCooperativeAbort,
   safeSubagentDirectorySegment,
 } from "../src/boundary/child-process.ts";
+import { piRootActiveToolSnapshot, SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 
 describe("subagent child process boundary", () => {
   it("keeps untrusted session identifiers inside one directory segment", () => {
@@ -16,6 +18,71 @@ describe("subagent child process boundary", () => {
     expect(escaped).not.toContain("/");
     expect(safeSubagentDirectorySegment("../../../../tmp/owned")).toBe(escaped);
   });
+
+  it.effect("inherits ordered root tools through private proxies while excluding competitors", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* piRootActiveToolSnapshot([
+        "read",
+        "edit",
+        "read",
+        "subagent_start",
+        "subagent_future",
+        "herdr_agent_start",
+        "herdr_agent_future",
+        "workflow",
+        "workflow_control",
+        "workflow_future",
+        "bash",
+      ]);
+      const policy = childToolPolicy(snapshot);
+
+      expect(policy.enabled).toEqual([
+        "read",
+        "edit",
+        "bash",
+        "contact_parent",
+        ...SUBAGENT_TOOL_NAMES,
+      ]);
+      expect(policy.excluded.split(",")).toEqual([
+        "herdr_agent_start",
+        "herdr_agent_list",
+        "herdr_agent_status",
+        "herdr_agent_await",
+        "herdr_agent_read",
+        "herdr_agent_send",
+        "herdr_agent_stop",
+        "workflow",
+        "workflow_control",
+      ]);
+      expect(policy.excluded).not.toContain("subagent_");
+    }),
+  );
+
+  it.effect("rejects root tool snapshots that cannot round-trip through Pi CLI arguments", () =>
+    Effect.gen(function* () {
+      const aggregateOverflow = Array.from(
+        { length: 256 },
+        (_, index) => `t${index.toString().padStart(3, "0")}_${"x".repeat(123)}`,
+      );
+      const cases: ReadonlyArray<ReadonlyArray<string>> = [
+        ["safe,workflow_future"],
+        [" leading-space"],
+        ["trailing-space "],
+        ["line\nbreak"],
+        [""],
+        ["x".repeat(129)],
+        Array.from({ length: 257 }, () => "read"),
+        aggregateOverflow,
+      ];
+      for (const activeTools of cases) {
+        const error = yield* piRootActiveToolSnapshot(activeTools).pipe(Effect.flip);
+        expect(error).toMatchObject({
+          _tag: "InvalidSubagentRequestError",
+          code: "pi_active_tools_unrepresentable",
+        });
+      }
+    }),
+  );
 
   it.effect("bounds a cooperative abort when stdin never drains", () =>
     Effect.gen(function* () {

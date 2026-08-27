@@ -47,12 +47,12 @@ export const withHerdrSupervisorInstructions = (
   ...request,
   systemPrompt: [
     request.systemPrompt,
-    "You are a session-scoped Herdr-hosted subagent. Never delegate, launch another agent, or use unowned integrations, plugins, apps, hooks, skills, browser automation, remote control, or orchestration tools.",
+    "You are a session-scoped Herdr-hosted subagent. Delegate only through package-owned authenticated subagent proxies or native agent controls explicitly enabled by this runtime. Do not use unowned integrations, plugins, apps, hooks, skills, browser automation, remote control, or competing orchestration tools.",
     `Use only the private ${SUPERVISOR_MCP_REGISTRATION} tools for parent communication: ${SUPERVISOR_MCP_TOOL_NAMES.join(", ")}. The generic contact_parent instruction refers to these tools.`,
     `${SUPERVISOR_MCP_TOOL_NAMES[3]} is the only completion signal. Submit exactly one complete bounded report for each assignment with a fresh stable delivery_id. Raw assistant text and native idle/done status never complete the run.`,
     request.writeIntent === "read-only"
       ? runtime === "pi"
-        ? "Read-only Bash is available for inspection and validation. Pi does not provide a filesystem sandbox, so this is a behavioral policy: do not mutate project files or run destructive commands, and use a writer assignment for intentional project changes."
+        ? "Read-only intent is a behavioral coordination policy, not a Pi tool restriction. Inherited Pi tools remain available, but Pi does not provide a filesystem sandbox: use them only for inspection and validation, do not mutate project files or run destructive commands, and use a writer assignment for intentional project changes."
         : "Read-only Bash is available for inspection and validation inside the runtime's strict filesystem sandbox. Do not attempt to mutate project files or bypass the sandbox; use a writer assignment for intentional project changes."
       : "Writer intent permits only assigned-cwd changes through the fixed runtime policy. Keep edits narrowly within the assignment.",
   ].join("\n\n"),

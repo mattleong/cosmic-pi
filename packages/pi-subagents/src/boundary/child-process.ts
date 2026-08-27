@@ -22,8 +22,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import {
-  CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
-  piToolsForWriteIntent,
+  PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
@@ -161,12 +160,9 @@ export interface ChildToolPolicy {
   readonly excluded: string;
 }
 
-export const childToolPolicy = (
-  activeTools: ReadonlyArray<string>,
-  writeIntent: import("../domain/routing.ts").SubagentWriteIntent,
-): ChildToolPolicy => ({
-  enabled: piToolsForWriteIntent(activeTools, writeIntent),
-  excluded: CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>): ChildToolPolicy => ({
+  enabled: [...new Set([...rootActiveTools, "contact_parent", ...SUBAGENT_TOOL_NAMES])],
+  excluded: PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
 });
 
 export const requestCooperativeAbort = (
@@ -334,7 +330,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
   const cliEntry = join(getPackageDir(), "dist", "cli.js");
-  const toolPolicy = childToolPolicy(request.activeTools, request.writeIntent);
+  const toolPolicy = childToolPolicy(request.activeTools);
   const cliArgs = [
     "--mode",
     "rpc",
@@ -344,7 +340,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     request.effort,
     ...(request.fastMode ? ["--pi-subagents-fast-mode"] : []),
     "--tools",
-    [...new Set([...toolPolicy.enabled, "contact_parent", ...SUBAGENT_TOOL_NAMES])].join(","),
+    toolPolicy.enabled.join(","),
     "--exclude-tools",
     toolPolicy.excluded,
     "--append-system-prompt",

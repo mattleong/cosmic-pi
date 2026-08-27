@@ -1,5 +1,4 @@
 import * as Effect from "effect/Effect";
-import type { SubagentWriteIntent } from "../domain/routing.ts";
 import { InvalidSubagentRequestError } from "./errors.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import type { StartSubagentRequest } from "./model.ts";
@@ -17,13 +16,8 @@ export const SUBAGENT_TOOL_NAMES = [
   "subagent_claims",
 ] as const;
 
-/**
- * Orchestration tools excluded from inherited parent tools. Packaged Pi child integrations register
- * the authenticated `subagent_*` proxies separately; competing Herdr/workflow orchestrators remain
- * denied at the process boundary.
- */
-export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
-  ...SUBAGENT_TOOL_NAMES,
+/** Competing orchestrators stay disabled even when the root session has them active. */
+export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_NAMES = [
   "herdr_agent_start",
   "herdr_agent_list",
   "herdr_agent_status",
@@ -33,13 +27,69 @@ export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
   "herdr_agent_stop",
   "workflow",
   "workflow_control",
-]);
+] as const;
 
-export const ORCHESTRATION_TOOL_DENYLIST_ARGUMENT = [...ORCHESTRATION_TOOL_DENYLIST].join(",");
-const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
-export const CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT = [...ORCHESTRATION_TOOL_DENYLIST]
-  .filter((name) => !SUBAGENT_TOOL_NAME_SET.has(name))
-  .join(",");
+export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT =
+  PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_NAMES.join(",");
+
+const MAX_INHERITED_PI_TOOL_COUNT = 256;
+const MAX_INHERITED_PI_TOOL_NAME_CHARS = 128;
+const MAX_INHERITED_PI_TOOL_ARGUMENT_BYTES = 32_768;
+const toolNameEncoder = new TextEncoder();
+
+const isCompetingOrchestratorTool = (name: string): boolean =>
+  name.startsWith("herdr_agent_") || name === "workflow" || name.startsWith("workflow_");
+
+const unrepresentableToolSnapshot = () =>
+  new InvalidSubagentRequestError({
+    code: "pi_active_tools_unrepresentable",
+    message:
+      "The root Pi active-tool list cannot be represented safely for a child process. Disable malformed or excessive tools and retry.",
+  });
+
+const hasToolNameControlCharacter = (name: string): boolean => {
+  for (let index = 0; index < name.length; index += 1) {
+    const code = name.charCodeAt(index);
+    if (code < 32 || (code >= 127 && code <= 159)) return true;
+  }
+  return false;
+};
+
+const isCliRepresentableToolName = (name: string): boolean =>
+  name.length > 0 &&
+  name.length <= MAX_INHERITED_PI_TOOL_NAME_CHARS &&
+  name === name.trim() &&
+  !name.includes(",") &&
+  !hasToolNameControlCharacter(name);
+
+/**
+ * Capture ordinary root-session tools in active order. Raw coordinator implementations are not
+ * inherited: packaged child integrations explicitly register and activate authenticated proxies.
+ * Prefix filtering also keeps future tools from known competing coordinator families out of a
+ * child even before they are added to the process-level hard-exclusion list. The exact snapshot
+ * must survive Pi's comma-delimited CLI parser without normalization or name injection.
+ */
+export const piRootActiveToolSnapshot = (
+  rootActiveTools: ReadonlyArray<string>,
+): Effect.Effect<ReadonlyArray<string>, InvalidSubagentRequestError> => {
+  if (rootActiveTools.length > MAX_INHERITED_PI_TOOL_COUNT)
+    return Effect.fail(unrepresentableToolSnapshot());
+  const inherited: string[] = [];
+  const seen = new Set<string>();
+  let argumentBytes = 0;
+  for (const name of rootActiveTools) {
+    if (!isCliRepresentableToolName(name)) return Effect.fail(unrepresentableToolSnapshot());
+    if (seen.has(name) || name.startsWith("subagent_") || isCompetingOrchestratorTool(name))
+      continue;
+    const encodedBytes = toolNameEncoder.encode(name).length + (inherited.length === 0 ? 0 : 1);
+    if (argumentBytes + encodedBytes > MAX_INHERITED_PI_TOOL_ARGUMENT_BYTES)
+      return Effect.fail(unrepresentableToolSnapshot());
+    argumentBytes += encodedBytes;
+    seen.add(name);
+    inherited.push(name);
+  }
+  return Effect.succeed(Object.freeze(inherited));
+};
 
 /** Shared bound/emptiness policy for every parent-authored message that reaches a child. */
 export const validateParentMessage = (
@@ -60,25 +110,6 @@ export const validateParentMessage = (
     );
   return Effect.succeed(normalized);
 };
-
-const PI_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
-  "read",
-  "grep",
-  "find",
-  "ls",
-  "bash",
-  "web_search",
-  "fetch_content",
-  "get_search_content",
-]);
-
-export const piToolsForWriteIntent = (
-  activeTools: ReadonlyArray<string>,
-  writeIntent: SubagentWriteIntent,
-): ReadonlyArray<string> =>
-  [...new Set(activeTools)].filter(
-    (tool) => writeIntent === "writer" || PI_READ_ONLY_TOOLS.has(tool),
-  );
 
 export const childSystemPrompt = (request: StartSubagentRequest): string =>
   [
@@ -104,7 +135,7 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
             "Report every changed file, validation command, and any possible out-of-claim side effect in the final report.",
           ].join("\n\n")
         : "You are the exclusive declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
-      : "Your run is declared read-only. When Bash is available, use it for inspection and validation only; do not use it to edit, write, patch, generate, or otherwise mutate project files. Use a writer assignment for intentional project changes.",
+      : "Your run is declared read-only as a prompt and writer-lease policy, not a tool-capability boundary. Inherited tools may still be capable of mutation; use them only for inspection and validation, and do not edit, write, patch, generate, or otherwise mutate project files. Use a writer assignment for intentional project changes.",
   ].join("\n\n");
 
 export const taskPrompt = (request: StartSubagentRequest, peerNotice: string): string =>

@@ -159,18 +159,6 @@ const projectedParentModel = (
     ? snapshot.piModels.find((model) => `${model.provider}/${model.id}` === parentSelector)
     : undefined;
 
-const availablePiModelsForHost = (
-  snapshot: ProfileModelCatalogSnapshot,
-  host: ProfileCandidate["host"],
-) =>
-  host === "local"
-    ? snapshot.piModels
-    : snapshot.extensionProviderIds
-      ? snapshot.piModels.filter(
-          (model) => !snapshot.extensionProviderIds?.includes(model.provider),
-        )
-      : [];
-
 const supportedPiEfforts = (
   candidate: ProfileCandidate,
   snapshot: ProfileModelCatalogSnapshot,
@@ -178,7 +166,7 @@ const supportedPiEfforts = (
 ): ReadonlyArray<SubagentEffort> | undefined => {
   if (candidate.runtime !== "pi") return undefined;
   const choices = createProfileModelChoices({
-    models: availablePiModelsForHost(snapshot, candidate.host),
+    models: snapshot.piModels,
     parentModel: projectedParentModel(snapshot, parentSelector),
     currentSelector: candidate.model,
     allowParent: candidate.host === "local",
@@ -192,19 +180,8 @@ const supportedPiEfforts = (
 
 const fastModeAvailable = (
   candidate: ProfileCandidate,
-  snapshot: ProfileModelCatalogSnapshot,
   parentSelector: string | undefined,
 ): boolean => {
-  if (candidate.runtime === "pi" && candidate.host === "herdr") {
-    const slash = candidate.model.indexOf("/");
-    const provider = slash > 0 ? candidate.model.slice(0, slash) : undefined;
-    if (
-      !provider ||
-      !snapshot.extensionProviderIds ||
-      snapshot.extensionProviderIds.includes(provider)
-    )
-      return false;
-  }
   if (candidate.runtime === "pi" && candidate.model === "parent")
     return parentSelector ? supportsSubagentFastMode("pi", parentSelector) : false;
   return supportsSubagentFastMode(candidate.runtime, candidate.model);
@@ -275,11 +252,6 @@ function openProfileSettings(
       });
       // Catalog I/O never delays the overlay. Every action captures one immutable catalog generation.
       return Promise.resolve().then(() => {
-        if (!modelCatalog.capture().extensionProviderIds)
-          ctx.ui.notify(
-            "Could not inspect Pi provider provenance; Herdr Pi model choices are unavailable.",
-            "warning",
-          );
         let parentEffort: SubagentEffort = "high";
         if (ctx.model) {
           try {
@@ -437,10 +409,8 @@ function openProfileSettings(
                     const snapshot = modelCatalog.capture();
                     return supportedPiEfforts(candidate, snapshot, parentModel);
                   },
-                  fastModeAvailable: (candidate: ProfileCandidate) => {
-                    const snapshot = modelCatalog.capture();
-                    return fastModeAvailable(candidate, snapshot, parentModel);
-                  },
+                  fastModeAvailable: (candidate: ProfileCandidate) =>
+                    fastModeAvailable(candidate, parentModel),
                   reload: () => requestProfileReload(ctx, bridge),
                   onDispose: () => {
                     requestWorkspaceRender = undefined;

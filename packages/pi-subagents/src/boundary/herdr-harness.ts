@@ -10,7 +10,7 @@ import * as Redacted from "effect/Redacted";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import {
-  CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+  PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
@@ -304,14 +304,7 @@ const piArgv = (
   promptPath: string,
 ): ReadonlyArray<string> => {
   const tools = [
-    "read",
-    "grep",
-    "find",
-    "ls",
-    "bash",
-    ...(request.writeIntent === "writer" ? ["edit", "write"] : []),
-    ...SUPERVISOR_MCP_TOOL_NAMES,
-    ...SUBAGENT_TOOL_NAMES,
+    ...new Set([...request.activeTools, ...SUPERVISOR_MCP_TOOL_NAMES, ...SUBAGENT_TOOL_NAMES]),
   ];
   return [
     "--name",
@@ -323,7 +316,7 @@ const piArgv = (
     ...(request.fastMode ? ["--pi-subagents-fast-mode"] : []),
     "--session-dir",
     sessionDirectory,
-    "--no-approve",
+    request.projectTrusted ? "--approve" : "--no-approve",
     "--extension",
     integration,
     "--extension",
@@ -334,7 +327,7 @@ const piArgv = (
     "--tools",
     tools.join(","),
     "--exclude-tools",
-    CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+    PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
     "--append-system-prompt",
     promptPath,
     "--pi-subagents-supervisor-config",

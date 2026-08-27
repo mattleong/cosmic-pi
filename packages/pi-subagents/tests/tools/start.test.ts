@@ -38,7 +38,7 @@ describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
   effectTest(
-    "uses short-form profile defaults, inherits model effort, and strips recursive tools",
+    "uses short-form defaults and snapshots ordered root tools without write-intent filtering",
     function* () {
       let request: StartSubagentRequest | undefined;
       const service = subagentServiceDouble({
@@ -61,9 +61,15 @@ describe("subagent tool", () => {
         "write",
         "bash",
         "mcp",
+        "read",
         "subagent_start",
+        "subagent_future",
         "subagent_await",
+        "herdr_agent_start",
+        "herdr_agent_future",
         "workflow",
+        "workflow_control",
+        "workflow_future",
       ]).get("subagent_start");
 
       const result = yield* maybe(() =>
@@ -93,7 +99,7 @@ describe("subagent tool", () => {
         effort: "high",
         writeIntent: "read-only",
         parentLeafId: "user-1",
-        activeTools: ["read", "grep", "bash"],
+        activeTools: ["read", "grep", "edit", "write", "bash", "mcp"],
       });
     },
   );

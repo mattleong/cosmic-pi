@@ -12,6 +12,11 @@ import { makeHerdrHarness } from "../src/boundary/herdr-harness.ts";
 import type { SupervisorConnectionMetadata } from "../src/boundary/supervisor-channel.ts";
 import type { BackendLaunchRequest } from "../src/backend/model.ts";
 import { processError } from "../src/run/errors.ts";
+import {
+  PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
+  SUBAGENT_TOOL_NAMES,
+} from "../src/run/tool-policy.ts";
+import { SUPERVISOR_MCP_TOOL_NAMES } from "../src/supervisor/mcp-contract.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath, nodeSpawn } from "./support/node-builtins.ts";
 
@@ -665,45 +670,101 @@ describe("Herdr native harness security", () => {
       ),
     ));
 
-  it("loads global Pi extensions/themes while trust-blocking project resources and adding private tools", () =>
+  it("inherits and deterministically deduplicates Pi tools without an intent-based built-in set", () =>
     setup().then((test) =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const prepared = yield* test.harness.prepare("pi", launch("pi"), test.supervisor);
-            expect(valueAfter(prepared.argv, "--model")).toBe("openai-codex/gpt-5.6-sol");
-            expect(valueAfter(prepared.argv, "--thinking")).toBe("xhigh");
-            expect(prepared.argv).not.toContain("--no-extensions");
-            expect(prepared.argv).toContain("--no-approve");
-            expect(prepared.argv).toContain("--no-skills");
-            expect(prepared.argv).toContain("--no-prompt-templates");
-            expect(prepared.argv).not.toContain("--no-themes");
-            expect(prepared.argv).toContain("--no-context-files");
-            expect(prepared.argv.filter((value) => value === "--extension")).toHaveLength(2);
-            expect(valueAfter(prepared.argv, "--tools")).toContain("bash");
-            expect(valueAfter(prepared.argv, "--tools")).not.toContain("edit");
-            expect(valueAfter(prepared.argv, "--tools")).not.toContain("write");
-            expect(valueAfter(prepared.argv, "--tools")).toContain("supervisor_submit_report");
-            expect(valueAfter(prepared.argv, "--tools")).toContain("subagent_start");
-            expect(valueAfter(prepared.argv, "--exclude-tools")).not.toContain("subagent_start");
-            expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("workflow_control");
-            const promptPath = valueAfter(prepared.argv, "--append-system-prompt")!;
+            const activeTools = ["code_mode", "edit", "supervisor_progress", "code_mode"];
+            const expected = [
+              "code_mode",
+              "edit",
+              ...SUPERVISOR_MCP_TOOL_NAMES,
+              ...SUBAGENT_TOOL_NAMES,
+            ];
+            const readOnly = yield* test.harness.prepare(
+              "pi",
+              { ...launch("pi"), activeTools },
+              test.supervisor,
+            );
+            const writer = yield* test.harness.prepare(
+              "pi",
+              { ...launch("pi", "writer"), activeTools },
+              test.supervisor,
+            );
+            const readOnlyTools = valueAfter(readOnly.argv, "--tools")?.split(",") ?? [];
+            const writerTools = valueAfter(writer.argv, "--tools")?.split(",") ?? [];
+
+            expect(readOnlyTools).toEqual(expected);
+            expect(writerTools).toEqual(expected);
+            for (const fixedTool of ["read", "grep", "find", "ls", "bash", "write"])
+              expect(readOnlyTools).not.toContain(fixedTool);
+            readOnly.authorizeCleanup();
+            writer.authorizeCleanup();
+          }),
+        ),
+      ),
+    ));
+
+  it("mirrors Pi project trust while retaining private resources and competing-tool exclusion", () =>
+    setup().then((test) =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const untrusted = yield* test.harness.prepare("pi", launch("pi"), test.supervisor);
+            const trusted = yield* test.harness.prepare(
+              "pi",
+              { ...launch("pi"), projectTrusted: true },
+              test.supervisor,
+            );
+
+            expect(untrusted.argv).toContain("--no-approve");
+            expect(untrusted.argv).not.toContain("--approve");
+            expect(trusted.argv).toContain("--approve");
+            expect(trusted.argv).not.toContain("--no-approve");
+            for (const prepared of [untrusted, trusted]) {
+              expect(valueAfter(prepared.argv, "--model")).toBe("openai-codex/gpt-5.6-sol");
+              expect(valueAfter(prepared.argv, "--thinking")).toBe("xhigh");
+              expect(prepared.argv).toEqual(
+                expect.arrayContaining([
+                  "--no-skills",
+                  "--no-prompt-templates",
+                  "--no-context-files",
+                ]),
+              );
+              expect(prepared.argv).not.toContain("--no-extensions");
+              expect(prepared.argv).not.toContain("--no-themes");
+              const extensions = prepared.argv.flatMap((value, index) =>
+                value === "--extension" ? [prepared.argv[index + 1]] : [],
+              );
+              expect(extensions).toEqual([
+                test.integrations.pi,
+                expect.stringContaining("host-pi-supervisor-extension.ts"),
+              ]);
+              expect(valueAfter(prepared.argv, "--exclude-tools")).toBe(
+                PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
+              );
+              expect(valueAfter(prepared.argv, "--exclude-tools")).not.toContain("subagent_start");
+              expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("workflow_control");
+              expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
+            }
+            const promptPath = valueAfter(untrusted.argv, "--append-system-prompt")!;
             expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
               launch("pi").systemPrompt,
             );
-            expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
-            expect(prepared.secretCommand).not.toContain("pi-runtime-secret");
-            expect(prepared.secretCommand).toContain(
-              prepared.startupAttestation.secretReadyReceipt.path,
+            expect(untrusted.secretCommand).not.toContain("pi-runtime-secret");
+            expect(untrusted.secretCommand).toContain(
+              untrusted.startupAttestation.secretReadyReceipt.path,
             );
-            const bootstrapPath = join(prepared.directory, "pi-environment.sh");
+            const bootstrapPath = join(untrusted.directory, "pi-environment.sh");
             const bootstrap = yield* Effect.promise(() => fs.readFile(bootstrapPath, "utf8"));
             expect(bootstrap).toContain("PI_SUBAGENT_RUNTIME_API_KEY='pi-runtime-secret'");
             expect((yield* Effect.promise(() => fs.stat(bootstrapPath))).mode & 0o777).toBe(0o600);
             expect(
-              prepared.environmentCommand({ paneId: "p", tabId: "t", workspaceId: "w" }),
+              untrusted.environmentCommand({ paneId: "p", tabId: "t", workspaceId: "w" }),
             ).toContain("PI_SUBAGENT_CHILD='1'");
-            prepared.authorizeCleanup();
+            untrusted.authorizeCleanup();
+            trusted.authorizeCleanup();
           }),
         ),
       ),

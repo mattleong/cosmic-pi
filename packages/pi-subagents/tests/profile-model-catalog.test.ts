@@ -53,12 +53,10 @@ describe("profile model catalog", () => {
   it.effect("atomically replaces one immutable snapshot and retains it on failure or abort", () =>
     Effect.gen(function* () {
       let models = [piModel("openai", "gpt-old")];
-      let providers = ["extension-old"];
       let registryError: string | undefined;
       let refresh = deferred();
       const registry: ProfileModelRegistry = {
         getAvailable: () => models,
-        getRegisteredProviderIds: () => providers,
         getError: () => registryError,
         refresh: () => refresh.promise,
       };
@@ -67,14 +65,12 @@ describe("profile model catalog", () => {
       expect(initial).toMatchObject({
         revision: 0,
         piModels: [{ provider: "openai", id: "gpt-old" }],
-        extensionProviderIds: ["extension-old"],
       });
       expect(Object.isFrozen(initial)).toBe(true);
       expect(Object.isFrozen(initial.piModels)).toBe(true);
 
       const updating = catalog.refresh();
       models = [piModel("openai", "gpt-new")];
-      providers = ["extension-new"];
       expect(catalog.capture()).toBe(initial);
       refresh.resolve();
       expect(yield* Effect.promise(() => updating)).toBe("updated");
@@ -82,7 +78,6 @@ describe("profile model catalog", () => {
       expect(updated).toMatchObject({
         revision: 1,
         piModels: [{ provider: "openai", id: "gpt-new" }],
-        extensionProviderIds: ["extension-new"],
       });
       expect(updated.piModels.some((model) => model.id === "gpt-old")).toBe(false);
 
@@ -90,7 +85,6 @@ describe("profile model catalog", () => {
       refresh = deferred();
       const failing = catalog.refresh();
       models = [piModel("openai", "gpt-failed")];
-      providers = ["extension-failed"];
       refresh.resolve();
       expect(yield* Effect.promise(() => failing)).toBe("failed");
       expect(catalog.capture()).toBe(updated);
@@ -100,7 +94,6 @@ describe("profile model catalog", () => {
       const controller = new AbortController();
       const aborting = catalog.refresh(controller.signal);
       models = [piModel("openai", "gpt-aborted")];
-      providers = ["extension-aborted"];
       controller.abort();
       refresh.resolve();
       expect(yield* Effect.promise(() => aborting)).toBe("aborted");
@@ -110,19 +103,16 @@ describe("profile model catalog", () => {
 
   it.effect("derives the preferred Herdr Pi selector from the current snapshot", () =>
     Effect.gen(function* () {
-      let models = [piModel("native", "first"), piModel("extension", "hidden")];
-      let providers = ["extension"];
+      let models = [piModel("native", "first"), piModel("extension", "eligible")];
       const registry: ProfileModelRegistry = {
         getAvailable: () => models,
-        getRegisteredProviderIds: () => providers,
         getError: () => undefined,
         refresh: () => Promise.resolve({ aborted: false }),
       };
       const catalog = new ProfileModelCatalog(registry);
       expect(preferredHerdrPiSelector(catalog.capture(), "native/first")).toBe("native/first");
 
-      models = [piModel("native", "second"), piModel("extension2", "hidden")];
-      providers = ["extension2"];
+      models = [piModel("native", "second"), piModel("extension2", "eligible")];
       expect(yield* Effect.promise(() => catalog.refresh())).toBe("updated");
       expect(preferredHerdrPiSelector(catalog.capture(), "native/first")).toBe("native/second");
     }),
@@ -135,7 +125,6 @@ describe("profile model catalog", () => {
           piModel("openai", "gpt-old", "Parent\u001b[2J\nrenamed"),
           piModel("openai", "gpt-next", "Next\u0007\tmodel"),
         ],
-        getRegisteredProviderIds: () => [],
         getError: () => undefined,
         refresh: () => Promise.resolve({ aborted: false }),
       };
@@ -189,14 +178,11 @@ describe("profile model catalog", () => {
   );
 
   it.effect(
-    "keeps global extension-provider models eligible for Herdr and uses live Codex tiers",
+    "keeps trusted extension-provider models eligible for Herdr and uses live Codex tiers",
     () =>
       Effect.gen(function* () {
         const registry: ProfileModelRegistry = {
-          getAvailable: () => [piModel("openai", "gpt-old")],
-          getRegisteredProviderIds: () => {
-            throw new Error("provenance unavailable");
-          },
+          getAvailable: () => [piModel("openai-codex", "gpt-5.6-sol")],
           getError: () => undefined,
           refresh: () => Promise.resolve({ aborted: false }),
         };
@@ -205,15 +191,15 @@ describe("profile model catalog", () => {
           loadCandidateModelPicker({
             profile: "reviewer",
             candidateIndex: 0,
-            candidate: candidate({ host: "herdr", model: "openai/gpt-old" }),
+            candidate: candidate({ host: "herdr", model: "openai-codex/gpt-5.6-sol" }),
             listNativeModels: () => Promise.resolve([]),
             piCatalog: catalog.capture(),
           }),
         );
         expect(herdr.warning).toBeUndefined();
         expect(herdr.choices).toHaveLength(1);
-        expect(herdr.choices[0]?.item.value).toBe("openai/gpt-old");
-        expect(herdr.choices[0]?.fastModeAvailable).toBe(false);
+        expect(herdr.choices[0]?.item.value).toBe("openai-codex/gpt-5.6-sol");
+        expect(herdr.choices[0]?.fastModeAvailable).toBe(true);
 
         const advertised: NativeRuntimeModel = {
           selector: "future-codex",

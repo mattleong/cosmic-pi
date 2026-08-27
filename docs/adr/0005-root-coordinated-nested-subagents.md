@@ -50,7 +50,7 @@ Questions and unclaimed outcomes go to the nearest connected Pi ancestor. If no 
 
 ### Herdr Pi resources
 
-Herdr Pi keeps `--no-approve`, `--no-skills`, `--no-prompt-templates`, and `--no-context-files`. It no longer uses `--no-extensions` or `--no-themes`. Pi's trust loader therefore loads trusted global extensions and themes, including normal `pi-code-previews` discovery, while `--no-approve` blocks project-local resources. The packaged lifecycle and supervisor integrations remain explicit. Extension-registered global provider models are eligible for Herdr Pi.
+Herdr Pi mirrors the root session's project-trust decision with `--approve` or `--no-approve` while always keeping `--no-skills`, `--no-prompt-templates`, and `--no-context-files`. It does not use `--no-extensions` or `--no-themes`, so trusted launches can discover project and global extensions while untrusted launches remain global-only. The packaged lifecycle and supervisor integrations remain explicit. At each launch the root supplies its current active tool-name snapshot, independent of Pi write intent; competing orchestrators remain excluded and package-owned `subagent_*` tools use authenticated proxies.
 
 ### Native runtime agents
 
