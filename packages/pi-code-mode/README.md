@@ -66,6 +66,11 @@ approval and preview extensions, registered tool overrides, and session-specific
 operations. Nested Bash therefore uses Pi's default local implementation rather than a
 configured prefix, shell hook, sandbox, remote operation, or other top-level override.
 
+Enabling Code Mode means accepting the program authored by the agent as the authorization for
+its nested operations. Do not rely on Pi middleware, approval prompts, registered overrides, or
+claim observers to inspect or stop those operations. Enforce any required restriction outside
+Code Mode, or disable the tool.
+
 Bash can execute processes, use the inherited shell environment and network, and mutate
 arbitrary paths. Read, edit, and write accept paths outside the project, including absolute
 and home-relative paths. `code_mode` is an orchestration runtime, not a permission, process,
