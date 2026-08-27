@@ -1,6 +1,10 @@
 // Stateful Herdr topology fixture shared by host integration suites.
 import * as Effect from "effect/Effect";
 import type { HerdrAgent, HerdrCliContract, HerdrSnapshot } from "../../src/boundary/herdr-cli.ts";
+import type {
+  HerdrStartupReceipt,
+  HerdrStartupReceiptPhase,
+} from "../../src/boundary/herdr-attestation.ts";
 import type { HerdrHarnessContract } from "../../src/boundary/herdr-harness.ts";
 import type { SupervisorConnectionMetadata } from "../../src/boundary/supervisor-channel.ts";
 import type { BackendLaunchRequest } from "../../src/backend/model.ts";
@@ -37,6 +41,17 @@ export const supervisor: SupervisorConnectionMetadata = {
   },
 };
 
+const startupReceiptPhases: ReadonlyArray<HerdrStartupReceiptPhase> = [
+  "activation-1",
+  "activation-2",
+  "environment-ready",
+  "post-environment-shell",
+  "secret-ready",
+  "post-secret-shell",
+];
+const isStartupReceiptPhase = (value: string): value is HerdrStartupReceiptPhase =>
+  startupReceiptPhases.some((phase) => phase === value);
+
 export const launch = (id: string): BackendLaunchRequest => ({
   runId: id,
   name: id,
@@ -62,6 +77,11 @@ export const fakeTopology = () => {
   ]);
   const agents = new Map<string, HerdrAgent>();
   const activationConfirmations = new Map<string, number>();
+  const publishedReceipts = new Set<HerdrStartupReceiptPhase>();
+  const receiptFaults = new Map<
+    HerdrStartupReceiptPhase,
+    "absent" | "wrong" | "symlink" | "partial"
+  >();
   const shellProcessInspections = new Map<string, number>();
   const environmentMarkerInspections = new Map<string, number>();
   const shellInspectedPanes = new Set<string>();
@@ -75,6 +95,7 @@ export const fakeTopology = () => {
   let focusedTabId = "user:t";
   let failFocusRestoration = false;
   let invalidSecretAttestation = false;
+  let dropFirstActivationReceipt = true;
   let dropAllActivationProbes = false;
   let rejectStartAsBusy = false;
   let initialBusyShellInspections = 0;
@@ -107,6 +128,72 @@ export const fakeTopology = () => {
   let postCloseSnapshotReached = false;
   let notifyPostCloseSnapshotReached: (() => void) | undefined;
   let releasePostCloseSnapshot: (() => void) | undefined;
+
+  const observeReceipt = (
+    phase: HerdrStartupReceiptPhase,
+  ): Effect.Effect<void, SubagentProcessError> =>
+    Effect.suspend(() => {
+      if (phase === "activation-1" || phase === "activation-2") {
+        const paneId = `user:p${(nextPane - 1).toString()}`;
+        const attempts = (activationConfirmations.get(paneId) ?? 0) + 1;
+        activationConfirmations.set(paneId, attempts);
+        if (!publishedReceipts.has(phase)) {
+          if (attempts === 1 && moveFocusAfterFirstProbe) focusedTabId = "user:other";
+          return Effect.fail(
+            new SubagentProcessError({
+              operation: "observe Herdr startup receipt",
+              code: "herdr_startup_receipt_timeout",
+              message: "Fixture activation receipt remained absent.",
+            }),
+          );
+        }
+        if (attempts > 1 && configuredPostActivationOccupancySnapshots > 0) {
+          postActivationOccupancyPaneId = paneId;
+          transientPostActivationOccupancySnapshots = configuredPostActivationOccupancySnapshots;
+        }
+        if (driftAfterOutput === "confirm pane input") transientTerminalMismatchSnapshots = 1;
+      }
+      const fault = receiptFaults.get(phase);
+      if (fault && fault !== "absent")
+        return Effect.fail(
+          new SubagentProcessError({
+            operation: "validate Herdr startup receipt",
+            code: "herdr_startup_receipt_invalid",
+            message: `Fixture ${fault} receipt was rejected.`,
+          }),
+        );
+      if (!publishedReceipts.has(phase))
+        return Effect.fail(
+          new SubagentProcessError({
+            operation: "observe Herdr startup receipt",
+            code: "herdr_startup_receipt_timeout",
+            message: "Fixture receipt remained absent.",
+          }),
+        );
+      if (phase === "environment-ready") {
+        const paneId = `user:p${(nextPane - 1).toString()}`;
+        environmentMarkerInspections.set(paneId, shellProcessInspections.get(paneId) ?? 0);
+        if (driftAfterOutput === "confirm pane environment") transientTerminalMismatchSnapshots = 1;
+      }
+      return Effect.void;
+    });
+
+  const fixtureReceipt = (phase: HerdrStartupReceiptPhase): HerdrStartupReceipt => ({
+    phase,
+    command: `publish-receipt:${phase}`,
+    path: `/private/${phase}.receipt`,
+    temporaryPath: `/private/${phase}.tmp`,
+    observe: observeReceipt(phase),
+  });
+  const startupAttestation = {
+    activationReceipt: (attempt: 1 | 2) =>
+      fixtureReceipt(attempt === 1 ? "activation-1" : "activation-2"),
+    environmentReadyReceipt: fixtureReceipt("environment-ready"),
+    postEnvironmentShellReceipt: fixtureReceipt("post-environment-shell"),
+    secretReadyReceipt: fixtureReceipt("secret-ready"),
+    postSecretShellReceipt: fixtureReceipt("post-secret-shell"),
+  };
+
   const snapshot = (): HerdrSnapshot => {
     const showTerminalMismatch =
       transientTerminalMismatchSnapshots > 0 || terminalMismatchSnapshotCountdown === 1;
@@ -305,6 +392,7 @@ export const fakeTopology = () => {
         if (!panes.has(anchorPaneId))
           throw new Error(`Fixture split anchor ${anchorPaneId} does not exist.`);
         const paneId = `user:p${nextPane}`;
+        publishedReceipts.clear();
         panes.set(paneId, { terminalId: `user:term${nextPane}` });
         nextPane += 1;
         const pane = snapshot().panes.find((candidate) => candidate.paneId === paneId)!;
@@ -316,7 +404,7 @@ export const fakeTopology = () => {
         const pane = panes.get(paneId)!;
         panes.set(paneId, { ...pane, label });
       }),
-    runPaneCommand: (paneId, _command, operation) =>
+    runPaneCommand: (paneId, command, operation) =>
       Effect.suspend(() => {
         if (
           operation === "load pane secrets" &&
@@ -327,56 +415,45 @@ export const fakeTopology = () => {
             new SubagentProcessError({
               operation,
               code: "fixture_secret_before_replacement_shell",
-              message: "Fixture requires fresh shell inspection after the environment marker.",
+              message: "Fixture requires fresh shell inspection after the environment receipt.",
             }),
           );
         paneCommands.push({ paneId, operation });
-        return focusedTabId !== "user:t"
-          ? Effect.fail(
-              new SubagentProcessError({
-                operation: "prepare pane environment",
-                code: "fixture_unfocused_input_stalled",
-                message: "Fixture models Herdr input stalling in a never-focused workspace.",
-              }),
-            )
-          : !shellInspectedPanes.has(paneId)
-            ? Effect.fail(
-                new SubagentProcessError({
-                  operation: "activate pane input",
-                  code: "fixture_input_before_shell_ready",
-                  message:
-                    "Fixture rejects input while a transient native TUI still owns the pane.",
-                }),
-              )
-            : Effect.void;
-      }),
-    waitPaneOutput: (paneId, _marker, operation) =>
-      Effect.suspend(() => {
-        if (operation === "confirm pane input") {
-          const attempts = (activationConfirmations.get(paneId) ?? 0) + 1;
-          activationConfirmations.set(paneId, attempts);
-          if (attempts === 1 || dropAllActivationProbes) {
-            if (attempts === 1 && moveFocusAfterFirstProbe) focusedTabId = "user:other";
-            return Effect.fail(
-              new SubagentProcessError({
-                operation,
-                code: "timeout",
-                message: "Fixture drops the first harmless input in a restored workspace.",
-              }),
-            );
-          }
+        if (focusedTabId !== "user:t")
+          return Effect.fail(
+            new SubagentProcessError({
+              operation: "prepare pane environment",
+              code: "fixture_unfocused_input_stalled",
+              message: "Fixture models Herdr input stalling in a never-focused workspace.",
+            }),
+          );
+        if (!shellInspectedPanes.has(paneId))
+          return Effect.fail(
+            new SubagentProcessError({
+              operation: "activate pane input",
+              code: "fixture_input_before_shell_ready",
+              message: "Fixture rejects input while a transient native TUI still owns the pane.",
+            }),
+          );
+        const commandPhase = command.startsWith("publish-receipt:")
+          ? command.slice("publish-receipt:".length)
+          : undefined;
+        const phase =
+          commandPhase && isStartupReceiptPhase(commandPhase)
+            ? commandPhase
+            : operation === "prepare pane environment"
+              ? "environment-ready"
+              : operation === "load pane secrets"
+                ? "secret-ready"
+                : undefined;
+        if (phase) {
+          const shouldDrop =
+            receiptFaults.get(phase) === "absent" ||
+            ((phase === "activation-1" || phase === "activation-2") &&
+              (dropAllActivationProbes ||
+                (phase === "activation-1" && dropFirstActivationReceipt)));
+          if (!shouldDrop) publishedReceipts.add(phase);
         }
-        if (
-          operation === "confirm pane input" &&
-          (activationConfirmations.get(paneId) ?? 0) > 1 &&
-          configuredPostActivationOccupancySnapshots > 0
-        ) {
-          postActivationOccupancyPaneId = paneId;
-          transientPostActivationOccupancySnapshots = configuredPostActivationOccupancySnapshots;
-        }
-        if (operation === "confirm pane environment")
-          environmentMarkerInspections.set(paneId, shellProcessInspections.get(paneId) ?? 0);
-        if (driftAfterOutput === operation) transientTerminalMismatchSnapshots = 1;
         return Effect.void;
       }),
     paneProcessInfo: (paneId) =>
@@ -510,19 +587,11 @@ export const fakeTopology = () => {
           runtime,
           argv: [],
           environmentCommand: () => "fixed-env",
-          environmentReadyMarker: "fixture-env-ready",
-          activationProbe: (attempt) => ({
-            command: `activate-${attempt.toString()}`,
-            marker: `fixture-activate-${attempt.toString()}`,
-          }),
-          shellReadinessProbe: (phase) => ({
-            command: `confirm-shell-${phase}`,
-            marker: `fixture-shell-${phase}`,
-          }),
+          startupAttestation,
           ...(invalidSecretAttestation
-            ? { secretCommand: "load-secret" }
+            ? { secretCommand: "" }
             : validSecretBootstrap
-              ? { secretCommand: "load-secret", secretReadyMarker: "fixture-secret-ready" }
+              ? { secretCommand: "load-secret" }
               : {}),
           authorizeCleanup: () => {
             cleanupAuthorizations += 1;
@@ -535,6 +604,7 @@ export const fakeTopology = () => {
     harness,
     agents,
     activationConfirmations,
+    publishedReceipts,
     shellProcessInspections,
     shellInspectedPanes,
     closedPanes,
@@ -548,6 +618,15 @@ export const fakeTopology = () => {
     callerPaneLive: () => panes.has("user:p0"),
     dropEveryActivationProbe: () => {
       dropAllActivationProbes = true;
+    },
+    executeFirstActivationReceipt: () => {
+      dropFirstActivationReceipt = false;
+    },
+    failReceipt: (
+      phase: HerdrStartupReceiptPhase,
+      fault: "absent" | "wrong" | "symlink" | "partial",
+    ) => {
+      receiptFaults.set(phase, fault);
     },
     delayInitialShellReadiness: (inspections: number) => {
       initialBusyShellInspections = inspections;

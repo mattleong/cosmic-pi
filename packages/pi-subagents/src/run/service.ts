@@ -612,7 +612,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     markCleanupPending,
     closeRecordScope,
     settle,
-    failRun,
     submitPrompt,
     initializeProcess: (record) => initializeProcess(record),
     sendPeerNotices: (changedId) => sendPeerNotices(changedId),

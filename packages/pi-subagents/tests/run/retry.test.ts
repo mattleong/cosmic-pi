@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { ProfileCandidate, ProfileRouteContinuation } from "../../src/profiles/model.ts";
+import { getFailedStartRecovery } from "../../src/run/launch.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
 
@@ -33,6 +34,83 @@ const continuation = (
 });
 
 describe("explicit profile-route retry", () => {
+  it.effect("returns settled eligible recovery for an admitted failed start", () => {
+    const fake = fakeChildLayer(Effect.void, {
+      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+    });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .startSessionOwned(request({ profile: "reviewer", routeContinuation: continuation(0) }))
+        .pipe(Effect.flip);
+      const recovery = getFailedStartRecovery(failure);
+
+      expect(recovery).toEqual({
+        runId: expect.stringMatching(/^agent-/),
+        cleanupDisposition: "confirmed",
+        retryDisposition: "eligible",
+        remainingCandidateCount: 1,
+        hasRemainingCandidate: true,
+      });
+      const claim = yield* service.claimRetryContinuation(recovery!.runId);
+      expect(claim.source.id).toBe(recovery!.runId);
+      yield* service.releaseRetryClaim(recovery!.runId, claim.claimToken);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("does not return admitted-failure recovery before cleanup settles", () => {
+    const promptGate = Deferred.makeUnsafe<void>();
+    const cleanupGate = Deferred.makeUnsafe<void>();
+    const fake = fakeChildLayer(Effect.void, {
+      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+      initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }],
+    });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const completed = yield* Deferred.make<void>();
+      const starting = yield* service
+        .start(request({ profile: "reviewer", routeContinuation: continuation(0) }))
+        .pipe(
+          Effect.flip,
+          Effect.tap(() => Deferred.succeed(completed, undefined)),
+          Effect.forkScoped,
+        );
+      yield* yieldUntil(() => fake.controls.length === 1);
+      fake.controls[0]!.gateRelease(cleanupGate);
+      yield* Deferred.succeed(promptGate, undefined);
+      yield* Effect.yieldNow;
+      expect(yield* Deferred.isDone(completed)).toBe(false);
+
+      yield* Deferred.succeed(cleanupGate, undefined);
+      const failure = yield* Fiber.join(starting);
+      expect(getFailedStartRecovery(failure)).toMatchObject({
+        cleanupDisposition: "confirmed",
+        retryDisposition: "eligible",
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("reports frozen-route exhaustion on an admitted failed start", () => {
+    const fake = fakeChildLayer(Effect.void, {
+      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+    });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .start(request({ profile: "reviewer", routeContinuation: continuation(1) }))
+        .pipe(Effect.flip);
+      expect(getFailedStartRecovery(failure)).toMatchObject({
+        cleanupDisposition: "confirmed",
+        retryDisposition: "exhausted",
+        remainingCandidateCount: 0,
+        hasRemainingCandidate: false,
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("admits one linked successor and atomically supersedes the failed predecessor", () => {
     const fake = fakeChildLayer();
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));
@@ -188,13 +266,42 @@ describe("explicit profile-route retry", () => {
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
-      yield* service
+      const failure = yield* service
         .start(request({ profile: "reviewer", routeContinuation: continuation(0) }))
         .pipe(Effect.flip);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       const failedRun = (yield* service.list)[0]!;
+      expect(getFailedStartRecovery(failure)).toMatchObject({
+        runId: failedRun.id,
+        cleanupDisposition: "confirmed",
+        retryDisposition: "blocked",
+        hasRemainingCandidate: true,
+      });
       const blocked = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
       expect(blocked).toMatchObject({ code: "retry_outcome_uncertain" });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("returns blocked recovery when admitted-start cleanup is quarantined", () => {
+    const fake = fakeChildLayer(Effect.void, {
+      releaseDefect: true,
+      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+    });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .start(request({ profile: "reviewer", routeContinuation: continuation(0) }))
+        .pipe(Effect.flip);
+      const recovery = getFailedStartRecovery(failure);
+      expect(recovery).toMatchObject({
+        cleanupDisposition: "quarantined",
+        retryDisposition: "blocked",
+        remainingCandidateCount: 1,
+        hasRemainingCandidate: true,
+      });
+      const blocked = yield* service.claimRetryContinuation(recovery!.runId).pipe(Effect.flip);
+      expect(blocked).toMatchObject({ code: "retry_cleanup_unconfirmed" });
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
@@ -211,6 +318,39 @@ describe("explicit profile-route retry", () => {
       const blocked = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
       expect(blocked).toMatchObject({ code: "retry_cleanup_unconfirmed" });
       expect((yield* service.status(failedRun.id)).warning).toContain("quarantined");
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("returns writer recovery only after exact ownership is released", () => {
+    const fake = fakeChildLayer(Effect.void, {
+      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+    });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .start(
+          request({
+            profile: "worker",
+            writeIntent: "writer",
+            writes: ["src/retry-owner.ts"],
+            routeContinuation: continuation(0),
+          }),
+        )
+        .pipe(Effect.flip);
+      const recovery = getFailedStartRecovery(failure);
+      expect(recovery).toMatchObject({
+        cleanupDisposition: "confirmed",
+        retryDisposition: "eligible",
+      });
+      const replacement = yield* service.start(
+        request({
+          name: "replacement-writer",
+          writeIntent: "writer",
+          writes: ["src/RETRY-owner.ts"],
+        }),
+      );
+      expect(replacement.state).toBe("running");
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 

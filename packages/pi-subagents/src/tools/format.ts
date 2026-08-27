@@ -212,6 +212,30 @@ export const formatDetailedRuns = (
   };
 };
 
+type FailedStartRecovery = NonNullable<SubagentStartFailure["admittedRun"]>;
+
+export const formatFailedStartRecovery = (recovery: FailedStartRecovery): string => {
+  const remaining = recovery.hasRemainingCandidate
+    ? ` · ${recovery.remainingCandidateCount} candidate${recovery.remainingCandidateCount === 1 ? "" : "s"} remains`
+    : " · no candidate remains";
+  return `admitted ${sanitizeTerminalLine(recovery.runId)} · cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}${remaining}`;
+};
+
+export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string => {
+  switch (recovery.retryDisposition) {
+    case "eligible":
+      return `Continue with subagent_lifecycle({ action: "retry", runIds: [${JSON.stringify(recovery.runId)}] }).`;
+    case "pending":
+      return "Cleanup is still settling; do not retry until an eligible disposition is returned.";
+    case "blocked":
+      return "Do not retry automatically; ownership or execution outcome is uncertain.";
+    case "exhausted":
+      return "The frozen profile route is exhausted; only now consider a generalist replacement.";
+    case "unavailable":
+      return "This run has no frozen route continuation; start a new profiled run if appropriate.";
+  }
+};
+
 export const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): string =>
   failures.length === 0
     ? ""
@@ -221,7 +245,14 @@ export const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure
           const target = failure.name ? ` ${sanitizeTerminalLine(failure.name)}` : "";
           const message = boundedLine(failure.message, 2_048);
           const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-          return `  #${failure.index + 1}${target}${code}: ${message}`;
+          const recovery = failure.admittedRun;
+          return [
+            `  #${failure.index + 1}${target}${code}: ${message}`,
+            recovery ? `    ${formatFailedStartRecovery(recovery)}` : undefined,
+            recovery ? `    Next: ${failedStartRecoveryAction(recovery)}` : undefined,
+          ]
+            .filter((line): line is string => line !== undefined)
+            .join("\n");
         }),
       ].join("\n");
 

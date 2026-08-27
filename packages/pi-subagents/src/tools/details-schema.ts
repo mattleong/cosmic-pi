@@ -22,7 +22,12 @@ import {
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
-import { PI_SUBAGENT_CAPABILITIES, SUBAGENT_RUN_STATES } from "../run/model.ts";
+import {
+  FAILED_START_CLEANUP_DISPOSITIONS,
+  FAILED_START_RETRY_DISPOSITIONS,
+  PI_SUBAGENT_CAPABILITIES,
+  SUBAGENT_RUN_STATES,
+} from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
 
 export const SUBAGENT_CARD_DETAILS_VERSION = 2;
@@ -220,11 +225,20 @@ export const SubagentStartEntrySchema = Schema.Union([
   FailedUnavailableStartEntrySchema,
 ]);
 
+const FailedStartRecoverySchema = Schema.Struct({
+  runId: boundedString(MAX_PROTOCOL_ID_CHARS, 1),
+  cleanupDisposition: Schema.Literals(FAILED_START_CLEANUP_DISPOSITIONS),
+  retryDisposition: Schema.Literals(FAILED_START_RETRY_DISPOSITIONS),
+  remainingCandidateCount: nonNegativeInteger,
+  hasRemainingCandidate: Schema.Boolean,
+});
+
 export const SubagentCardFailureSchema = Schema.Struct({
   index: nonNegativeInteger,
   name: Schema.optionalKey(boundedString(MAX_NAME_CHARS, 1)),
   message: boundedString(MAX_FAILURE_MESSAGE_CHARS, 1),
   code: Schema.optionalKey(boundedString(MAX_FAILURE_CODE_CHARS, 1)),
+  admittedRun: Schema.optionalKey(FailedStartRecoverySchema),
 });
 
 const hasValidProfileCandidatePolicy = Schema.makeFilter((candidate: ProfileCandidate) =>
@@ -493,22 +507,47 @@ const preflight = <ValueInput>(value: ValueInput): boolean => {
 
 const validStartRelationships = (details: SubagentStartDetails): boolean => {
   const failedIndexes = new Set<number>();
-  const startedRunIds = new Set<string>();
+  const runIds = new Set<string>();
   for (let index = 0; index < details.startEntries.length; index += 1) {
     const entry = details.startEntries[index];
     if (!entry || entry.index !== index) return false;
     if (entry.status === "failed") failedIndexes.add(index);
     if (entry.status === "started") {
-      if (startedRunIds.has(entry.runId)) return false;
-      startedRunIds.add(entry.runId);
+      if (runIds.has(entry.runId)) return false;
+      runIds.add(entry.runId);
     }
   }
   const failures = details.startFailures ?? [];
   if (failures.length !== failedIndexes.size) return false;
   const seenFailures = new Set<number>();
+  let previousFailureIndex = -1;
   for (const failure of failures) {
-    if (!failedIndexes.has(failure.index) || seenFailures.has(failure.index)) return false;
+    if (
+      !failedIndexes.has(failure.index) ||
+      seenFailures.has(failure.index) ||
+      failure.index <= previousFailureIndex
+    )
+      return false;
     seenFailures.add(failure.index);
+    previousFailureIndex = failure.index;
+    const recovery = failure.admittedRun;
+    if (!recovery) continue;
+    const entry = details.startEntries[failure.index];
+    if (entry?.routeStatus !== "selected" || runIds.has(recovery.runId)) return false;
+    runIds.add(recovery.runId);
+    if (recovery.hasRemainingCandidate !== recovery.remainingCandidateCount > 0) return false;
+    if (
+      (recovery.retryDisposition === "eligible" &&
+        (recovery.cleanupDisposition !== "confirmed" || !recovery.hasRemainingCandidate)) ||
+      (recovery.retryDisposition === "pending" &&
+        (recovery.cleanupDisposition !== "pending" || !recovery.hasRemainingCandidate)) ||
+      (recovery.retryDisposition === "blocked" && !recovery.hasRemainingCandidate) ||
+      ((recovery.retryDisposition === "exhausted" || recovery.retryDisposition === "unavailable") &&
+        recovery.hasRemainingCandidate) ||
+      (recovery.cleanupDisposition === "quarantined" &&
+        (recovery.retryDisposition === "eligible" || recovery.retryDisposition === "pending"))
+    )
+      return false;
   }
   return true;
 };

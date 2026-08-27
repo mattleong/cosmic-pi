@@ -69,6 +69,8 @@ export interface RunRecord {
   nativeAgentTotal: number;
   /** Resolves only after backend/process/writer cleanup is confirmed or quarantined. */
   cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
+  /** Authoritative cleanup fact used by failed-start recovery and retry admission. */
+  cleanupDisposition: "pending" | "confirmed" | "quarantined";
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
   retryClaim?: { readonly token: string } | undefined;
   retryExhausted: boolean;

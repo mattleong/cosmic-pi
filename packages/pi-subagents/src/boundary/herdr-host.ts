@@ -388,18 +388,12 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           { ...request, name: agentName },
           supervisor,
         );
-        const hasSecretCommand = harness.secretCommand !== undefined;
-        const hasSecretMarker = harness.secretReadyMarker !== undefined;
-        if (
-          hasSecretCommand !== hasSecretMarker ||
-          harness.secretCommand === "" ||
-          harness.secretReadyMarker === ""
-        ) {
+        if (harness.secretCommand === "") {
           harness.authorizeCleanup();
           return yield* processError(
             "validate Herdr harness",
             "herdr_secret_attestation_invalid",
-            "Private Herdr secret bootstrap command and readiness marker must be present together and non-empty.",
+            "A private Herdr secret bootstrap command must be non-empty when present.",
           );
         }
         const before = yield* cli.snapshot.pipe(
@@ -475,7 +469,8 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           // Do not spend either bounded activation probe inside that TUI; wait until the exact pane
           // first reaches an available, unoccupied shell, then causally activate input.
           yield* waitForAvailableShell(pane, invalidateProvisional);
-          // The harmless marker may be retried because it has no state beyond terminal output.
+          // The harmless activation receipt may be retried once after a receipt timeout because
+          // neither attempt mutates state beyond its unique private receipt.
           yield* activatePaneInput(before, pane, harness, invalidateProvisional);
           // Herdr process detection can briefly publish a stale agent classification after shell
           // startup/activation even while process-info proves the exact foreground owner is still
@@ -496,17 +491,14 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             }),
             "prepare pane environment",
           );
-          yield* cli.waitPaneOutput(
-            pane.paneId,
-            harness.environmentReadyMarker,
-            "confirm pane environment",
-          );
-          // The bootstrap marker precedes its final exec. A queued harmless command must execute
-          // in the replacement shell before any private secret input is allowed.
+          yield* harness.startupAttestation.environmentReadyReceipt.observe;
+          yield* inspectProvisionalPane(pane, "confirm pane environment", invalidateProvisional);
+          // The environment-ready receipt precedes the final exec. Re-prove the exact foreground
+          // shell, then require a second receipt from input executed by that replacement shell.
+          yield* waitForAvailableShell(pane, invalidateProvisional, true);
           yield* confirmShellInput(pane, harness, "environment", invalidateProvisional);
-          if (harness.secretCommand && harness.secretReadyMarker) {
-            // The environment marker precedes its final shell exec. Re-prove foreground-shell
-            // ownership before sending credential bootstrap into the pane.
+          if (harness.secretCommand) {
+            // Re-prove foreground-shell ownership before sending credential bootstrap into the pane.
             yield* waitForAvailableShell(pane, invalidateProvisional, true);
             yield* requireAvailableProvisionalPane(
               pane,
@@ -515,17 +507,16 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
               invalidateProvisional,
             );
             yield* cli.runPaneCommand(pane.paneId, harness.secretCommand, "load pane secrets");
-            yield* cli.waitPaneOutput(
-              pane.paneId,
-              harness.secretReadyMarker,
-              "confirm pane secrets",
-            );
-            // Prove that the shell accepted another command after secret bootstrap completed.
+            yield* harness.startupAttestation.secretReadyReceipt.observe;
+            yield* inspectProvisionalPane(pane, "confirm pane secrets", invalidateProvisional);
+            // Re-prove the foreground shell, then prove it accepted another command after the
+            // secret bootstrap completed.
+            yield* waitForAvailableShell(pane, invalidateProvisional, true);
             yield* confirmShellInput(pane, harness, "secrets", invalidateProvisional);
           }
-          // Marker output proves that the sterile environment command was accepted, but it can
-          // precede the final exec into the replacement interactive shell. Agent start requires
-          // that exact shell to own the foreground while the owned tab remains focused.
+          // Private receipts prove causal command execution without depending on observable PTY
+          // output. Agent start still requires the exact replacement shell to own the foreground
+          // while the owned tab remains focused.
           yield* waitForAvailableShell(pane, invalidateProvisional, true);
           yield* requireAvailableProvisionalPane(
             pane,

@@ -11,7 +11,12 @@ import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { managerNoticeGlyph, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import type { SubagentStartEntry } from "./details.ts";
-import { formatToolModel, formatToolRoute } from "./format.ts";
+import {
+  failedStartRecoveryAction,
+  formatFailedStartRecovery,
+  formatToolModel,
+  formatToolRoute,
+} from "./format.ts";
 import { failureRecovery } from "./render-management.ts";
 import type { SubagentStartSpec } from "./schema.ts";
 import type { SubagentStartFailure } from "./subagent.ts";
@@ -83,8 +88,14 @@ export const renderStartFailures = (
       const summary = `${theme.fg("error", `${managerStateGlyph("failed")} ${name}`)} · ${theme.fg("error", `failed to start${code}`)}`;
       const raw = sanitizeTerminalLine(failure.message);
       const detail = clipWithMarker(raw, expanded ? 2_048 : 240, "… [truncated]");
-      const recovery = failureRecovery(failure.code, failure.message, "start");
-      return `${summary}\n${theme.fg("dim", detail)}\n${theme.fg("accent", `Next: ${recovery}`)}`;
+      const admitted = failure.admittedRun;
+      const recovery = admitted
+        ? failedStartRecoveryAction(admitted)
+        : failureRecovery(failure.code, failure.message, "start");
+      const admittedLine = admitted
+        ? `\n${theme.fg("dim", formatFailedStartRecovery(admitted))}`
+        : "";
+      return `${summary}\n${theme.fg("dim", detail)}${admittedLine}\n${theme.fg("accent", `Next: ${recovery}`)}`;
     })
     .join("\n");
 
@@ -116,18 +127,32 @@ const receiptPresentation = (entry: SubagentStartEntry) => {
   }
 };
 
-const receiptRow = (entry: SubagentStartEntry, width: number, theme: Theme): string[] => {
+const receiptRow = (
+  entry: SubagentStartEntry,
+  width: number,
+  theme: Theme,
+  failure?: SubagentStartFailure,
+): string[] => {
   const safeWidth = Math.max(1, width);
   const { glyph, color } = receiptPresentation(entry);
   const name = sanitizeTerminalLine(entry.name);
   const profile = sanitizeTerminalLine(entry.profile || "generalist");
   const route = routeLabel(entry);
-  const id = entry.status === "started" ? sanitizeTerminalLine(shortRunId(entry.runId)) : "";
-  const raw = `${glyph} ${name} · ${profile} · ${route}${id ? ` · ${id}` : ""}`;
+  const recovery = entry.status === "failed" ? failure?.admittedRun : undefined;
+  const id =
+    entry.status === "started"
+      ? sanitizeTerminalLine(shortRunId(entry.runId))
+      : recovery
+        ? sanitizeTerminalLine(shortRunId(recovery.runId))
+        : "";
+  const recoveryStatus = recovery
+    ? ` · cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}`
+    : "";
+  const raw = `${glyph} ${name} · ${profile} · ${route}${id ? ` · ${id}` : ""}${recoveryStatus}`;
   const routeLines =
     visibleWidth(raw) <= safeWidth
       ? [
-          `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)} · ${theme.fg("muted", profile)} · ${theme.fg("toolOutput", route)}${id ? ` · ${theme.fg("muted", id)}` : ""}`,
+          `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)} · ${theme.fg("muted", profile)} · ${theme.fg("toolOutput", route)}${id ? ` · ${theme.fg("muted", id)}` : ""}${recoveryStatus ? theme.fg(recovery?.retryDisposition === "eligible" ? "accent" : "warning", recoveryStatus) : ""}`,
         ]
       : (() => {
           const lines = [
@@ -150,6 +175,10 @@ const receiptRow = (entry: SubagentStartEntry, width: number, theme: Theme): str
             lines.push(`  ${theme.fg("toolOutput", route)}`);
           }
           if (id) lines.push(`  ${theme.fg("muted", id)}`);
+          if (recovery)
+            lines.push(
+              `  ${theme.fg("muted", `cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}`)}`,
+            );
           return lines.map((line) => truncateToWidth(line, safeWidth));
         })();
   const warningLines =
@@ -253,10 +282,20 @@ class StartReceiptComponent implements Component {
                     ),
                     safeWidth,
                   ),
+                  ...(failure.admittedRun
+                    ? wrapTextWithAnsi(
+                        this.theme.fg("dim", formatFailedStartRecovery(failure.admittedRun)),
+                        safeWidth,
+                      )
+                    : []),
                   ...wrapTextWithAnsi(
                     this.theme.fg(
                       "accent",
-                      `Next: ${failureRecovery(failure.code, failure.message, "start")}`,
+                      `Next: ${
+                        failure.admittedRun
+                          ? failedStartRecoveryAction(failure.admittedRun)
+                          : failureRecovery(failure.code, failure.message, "start")
+                      }`,
                     ),
                     safeWidth,
                   ),
@@ -267,7 +306,14 @@ class StartReceiptComponent implements Component {
       : [];
     return [
       truncateToWidth(receiptHeader(entries, this.partial, this.theme), safeWidth),
-      ...entries.flatMap((entry) => receiptRow(entry, safeWidth, this.theme)),
+      ...entries.flatMap((entry) =>
+        receiptRow(
+          entry,
+          safeWidth,
+          this.theme,
+          this.failures.find((failure) => failure.index === entry.index),
+        ),
+      ),
       ...failureDetails,
       ...(!this.expanded && this.failures.length > 0
         ? [truncateToWidth(this.theme.fg("dim", "▸ failure details · expand to view"), safeWidth)]

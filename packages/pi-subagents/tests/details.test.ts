@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { SubagentRunView } from "../src/run/model.ts";
+import { formatStartResult } from "../src/tools/format.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
   decodeCompactToolDetails,
@@ -492,6 +493,90 @@ describe("persisted subagent details version 2", () => {
     const forgedFailure = clone(details);
     forgedFailure.startFailures![0]!.index = 0;
     expect(decodeStartAwaitCardDetails(forgedFailure)).toBeUndefined();
+  });
+
+  it("persists admitted-run recovery in request order and rejects forged dispositions", () => {
+    const failedSelected = (index: number, name: string): SubagentStartEntry => ({
+      index,
+      name,
+      profile: "reviewer",
+      status: "failed",
+      routeStatus: "selected",
+      host: "local",
+      runtime: "pi",
+      model: "openai-codex/gpt-5.6-sol",
+      effort: "high",
+      fastMode: false,
+      candidateIndex: index,
+    });
+    const details = makeStartDetails({
+      startEntries: [failedSelected(0, "first"), failedSelected(1, "second")],
+      startFailures: [
+        {
+          index: 1,
+          name: "second",
+          code: "start_outcome_uncertain",
+          message: "Outcome uncertain.",
+          admittedRun: {
+            runId: "agent-r2-2",
+            cleanupDisposition: "confirmed",
+            retryDisposition: "blocked",
+            remainingCandidateCount: 1,
+            hasRemainingCandidate: true,
+          },
+        },
+        {
+          index: 0,
+          name: "first",
+          code: "prompt_rejected",
+          message: "Prompt rejected.",
+          admittedRun: {
+            runId: "agent-r2-1",
+            cleanupDisposition: "confirmed",
+            retryDisposition: "eligible",
+            remainingCandidateCount: 2,
+            hasRemainingCandidate: true,
+          },
+        },
+      ],
+    });
+
+    expect(details.startFailures?.map((failure) => failure.index)).toEqual([0, 1]);
+    expect(details.startFailures).toMatchObject([
+      {
+        admittedRun: {
+          runId: "agent-r2-1",
+          cleanupDisposition: "confirmed",
+          retryDisposition: "eligible",
+          remainingCandidateCount: 2,
+          hasRemainingCandidate: true,
+        },
+      },
+      {
+        admittedRun: {
+          runId: "agent-r2-2",
+          retryDisposition: "blocked",
+        },
+      },
+    ]);
+    expect(decodeStartAwaitCardDetails(details)).toEqual(details);
+    expectDeeplyFrozen(details);
+    const formatted = formatStartResult([], details.startFailures ?? []);
+    expect(formatted).toContain("admitted agent-r2-1 · cleanup confirmed · retry eligible");
+    expect(formatted).toContain('subagent_lifecycle({ action: "retry", runIds: ["agent-r2-1"] })');
+    expect(formatted).toContain("retry blocked");
+
+    const forgedEligibility = clone(details);
+    forgedEligibility.startFailures![0]!.admittedRun!.cleanupDisposition = "pending";
+    expect(decodeStartAwaitCardDetails(forgedEligibility)).toBeUndefined();
+
+    const forgedRemaining = clone(details);
+    forgedRemaining.startFailures![0]!.admittedRun!.hasRemainingCandidate = false;
+    expect(decodeStartAwaitCardDetails(forgedRemaining)).toBeUndefined();
+
+    const reordered = clone(details);
+    reordered.startFailures!.reverse();
+    expect(decodeStartAwaitCardDetails(reordered)).toBeUndefined();
   });
 
   it("fits hostile start identities without dropping entries or failures", () => {

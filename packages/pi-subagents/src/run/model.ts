@@ -186,6 +186,27 @@ export interface SubagentProjection {
   readonly runs: ReadonlyArray<SubagentRunView>;
 }
 
+export const FAILED_START_CLEANUP_DISPOSITIONS = ["pending", "confirmed", "quarantined"] as const;
+export type FailedStartCleanupDisposition = (typeof FAILED_START_CLEANUP_DISPOSITIONS)[number];
+
+export const FAILED_START_RETRY_DISPOSITIONS = [
+  "eligible",
+  "pending",
+  "blocked",
+  "exhausted",
+  "unavailable",
+] as const;
+export type FailedStartRetryDisposition = (typeof FAILED_START_RETRY_DISPOSITIONS)[number];
+
+/** Settled, privacy-bounded recovery facts for a start that already admitted a run. */
+export interface FailedStartRecovery {
+  readonly runId: string;
+  readonly cleanupDisposition: FailedStartCleanupDisposition;
+  readonly retryDisposition: FailedStartRetryDisposition;
+  readonly remainingCandidateCount: number;
+  readonly hasRemainingCandidate: boolean;
+}
+
 export interface SubagentRetrySupersession {
   readonly runId: string;
   readonly claimToken: string;

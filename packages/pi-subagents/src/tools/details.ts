@@ -393,7 +393,23 @@ const projectFailure = (
     ...withName,
     message: requiredText(failure.message, maximumMessage, "Launch failed."),
   };
-  return code === undefined ? withMessage : { ...withMessage, code };
+  const withCode = code === undefined ? withMessage : { ...withMessage, code };
+  if (!failure.admittedRun) return withCode;
+  const recovery = failure.admittedRun;
+  return {
+    ...withCode,
+    admittedRun: {
+      runId: requiredText(
+        recovery.runId,
+        density === "full" ? MAX_PROTOCOL_ID_CHARS : density === "compact" ? 256 : 128,
+        "unknown-run",
+      ),
+      cleanupDisposition: recovery.cleanupDisposition,
+      retryDisposition: recovery.retryDisposition,
+      remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
+      hasRemainingCandidate: recovery.hasRemainingCandidate,
+    },
+  };
 };
 
 const projectStartEntry = (
@@ -547,7 +563,11 @@ const startDetailsCandidate = (
     action: "start",
     startEntries: projectSubagentStartEntries(input.startEntries, density),
   };
-  const failures = input.startFailures?.map((failure) => projectFailure(failure, density));
+  const failures = input.startFailures
+    ? [...input.startFailures]
+        .sort((left, right) => left.index - right.index)
+        .map((failure) => projectFailure(failure, density))
+    : undefined;
   return failures && failures.length > 0 ? { ...base, startFailures: failures } : base;
 };
 

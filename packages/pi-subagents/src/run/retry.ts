@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
-import type { SubagentRunView } from "./model.ts";
+import type { FailedStartRecovery, SubagentRunView } from "./model.ts";
 import { snapshotView } from "./state.ts";
 
 export interface SubagentRetryClaim {
@@ -21,6 +21,44 @@ export interface RunRetryDependencies {
 
 const invalid = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
+
+/**
+ * Projects only settled run facts. Error codes are deliberately excluded: the
+ * admitted record, complete scope cleanup barrier, and frozen route are the
+ * authorities for whether a caller may continue.
+ */
+export const failedStartRecoveryForRecord = (record: RunRecord): FailedStartRecovery => {
+  const continuation = record.routeContinuation;
+  const remainingCandidateCount = continuation
+    ? Math.max(0, continuation.candidates.length - continuation.selectedCandidateIndex - 1)
+    : 0;
+  const hasRemainingCandidate = remainingCandidateCount > 0;
+  const retryDisposition: FailedStartRecovery["retryDisposition"] = !continuation
+    ? "unavailable"
+    : record.retryExhausted || !hasRemainingCandidate
+      ? "exhausted"
+      : record.view.supersededByRunId !== undefined || record.assignment.outcomeUncertain
+        ? "blocked"
+        : record.cleanupDisposition === "quarantined" || record.view.retryBlocked === true
+          ? "blocked"
+          : record.cleanupPending ||
+              record.cleanupDisposition === "pending" ||
+              record.runStateReclaimState === "running"
+            ? "pending"
+            : record.process !== undefined ||
+                record.writerPool !== undefined ||
+                record.evictionClaim !== undefined ||
+                record.retryClaim !== undefined
+              ? "blocked"
+              : "eligible";
+  return Object.freeze({
+    runId: record.view.id,
+    cleanupDisposition: record.cleanupDisposition,
+    retryDisposition,
+    remainingCandidateCount,
+    hasRemainingCandidate,
+  });
+};
 
 /** Owns exclusive failed-run continuation claims and route-exhaustion publication. */
 export function makeRunRetry(dependencies: RunRetryDependencies) {

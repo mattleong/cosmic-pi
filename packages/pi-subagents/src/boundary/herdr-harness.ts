@@ -28,6 +28,10 @@ import {
 } from "../backend/claude-policy.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
 import {
+  prepareHerdrStartupAttestation,
+  type HerdrStartupAttestation,
+} from "./herdr-attestation.ts";
+import {
   isHerdrCodexHooksError,
   makeHerdrCodexHooks,
   type HerdrCodexHooksContract,
@@ -111,20 +115,10 @@ export interface HerdrPreparedHarness {
     readonly tabId: string;
     readonly workspaceId: string;
   }) => string;
-  readonly environmentReadyMarker: string;
-  /** Harmless per-attempt marker used to causally activate a restored no-focus workspace. */
-  readonly activationProbe: (attempt: number) => {
-    readonly command: string;
-    readonly marker: string;
-  };
-  /** Causally proves that the replacement shell accepted input after a bootstrap marker. */
-  readonly shellReadinessProbe: (phase: "environment" | "secrets") => {
-    readonly command: string;
-    readonly marker: string;
-  };
-  /** Optional fixed command containing only a private script path and readiness marker. */
+  /** Private filesystem receipts are the sole causal launch gates. */
+  readonly startupAttestation: HerdrStartupAttestation;
+  /** Optional fixed command containing only a private script path and atomic receipt command. */
   readonly secretCommand?: string | undefined;
-  readonly secretReadyMarker?: string | undefined;
   /** Authorize removal only after exact hosted topology/process cleanup has been confirmed. */
   readonly authorizeCleanup: () => void;
 }
@@ -162,10 +156,6 @@ export interface HerdrHarnessLayerOptions {
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
-const printMarkerCommand = (marker: string): string => {
-  const pivot = Math.max(1, Math.floor(marker.length / 2));
-  return `printf '%s%s\\n' ${shellQuote(marker.slice(0, pivot))} ${shellQuote(marker.slice(pivot))}`;
-};
 const controlFreeArgv = (argv: ReadonlyArray<string>): ReadonlyArray<string> => {
   if (argv.some(hasControlCharacter)) throw new Error("herdr-agent-argument-invalid");
   return argv;
@@ -238,7 +228,7 @@ const validateIntegration = (path: string, runtime: SubagentRuntime): Promise<vo
 const fixedEnvironmentCommand = (
   environment: NodeJS.ProcessEnv,
   topology: { readonly paneId: string; readonly tabId: string; readonly workspaceId: string },
-  readyMarker: string,
+  environmentReceiptCommand: string,
   fixedOverrides: Readonly<Record<string, string>> = {},
 ): string => {
   const fixed = {
@@ -259,9 +249,9 @@ const fixedEnvironmentCommand = (
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${key}=${shellQuote(value as string)}`)
     .join(" ");
-  // The first shell receives no user startup files. Its marker proves the env -i transition ran
-  // before it replaces itself with the interactive shell used by `agent start`.
-  const bootstrap = `${printMarkerCommand(readyMarker)}; exec /bin/sh`;
+  // The first shell receives no user startup files. It atomically publishes its private receipt
+  // before replacing itself with the interactive shell used by `agent start`.
+  const bootstrap = `${environmentReceiptCommand} && exec /bin/sh`;
   return `exec /usr/bin/env -i ${assignments} /bin/sh -c ${shellQuote(bootstrap)}`;
 };
 
@@ -424,7 +414,8 @@ const prepareHarness = (
     return ensurePrivateDirectory(packageRoot)
       .then(() => ensurePrivateDirectory(root))
       .then(() => fs.mkdir(directory, { mode: 0o700 }))
-      .then(() => {
+      .then(() => prepareHerdrStartupAttestation(directory))
+      .then((startupAttestation) => {
         let cleanupAuthorized = false;
         const authorizeCleanup = () => {
           cleanupAuthorized = true;
@@ -436,8 +427,6 @@ const prepareHarness = (
           cleanupAuthorized: () => cleanupAuthorized,
         });
         const integration = integrationPath(options, runtime, agentDirectory, environment);
-        const environmentReadyMarker = `pi-subagents-env-${nonce}`;
-        const secretReadyMarker = `pi-subagents-secret-${nonce}`;
         const runIdentityEnvironment = {
           PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
           PI_SUBAGENT_RUN_ID: request.runId,
@@ -450,17 +439,9 @@ const prepareHarness = (
           fixedEnvironmentCommand(
             environment,
             topology,
-            environmentReadyMarker,
+            startupAttestation.environmentReadyReceipt.command,
             runIdentityEnvironment,
           );
-        const activationProbe = (attempt: number) => {
-          const marker = `pi-subagents-activate-${nonce}-${attempt.toString()}`;
-          return { command: printMarkerCommand(marker), marker };
-        };
-        const shellReadinessProbe = (phase: "environment" | "secrets") => {
-          const marker = `pi-subagents-shell-${phase}-${nonce}`;
-          return { command: printMarkerCommand(marker), marker };
-        };
         const promptPath = join(directory, "system-prompt.md");
 
         const buildClaude = (): Promise<PreparedHarnessResource> => {
@@ -499,13 +480,16 @@ const prepareHarness = (
                 runtime,
                 argv: controlFreeArgv(claudeArgv(request, settingsPath, mcpPath, promptPath)),
                 environmentCommand: (topology) =>
-                  fixedEnvironmentCommand(environment, topology, environmentReadyMarker, {
-                    ...runIdentityEnvironment,
-                    CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1",
-                  }),
-                environmentReadyMarker,
-                activationProbe,
-                shellReadinessProbe,
+                  fixedEnvironmentCommand(
+                    environment,
+                    topology,
+                    startupAttestation.environmentReadyReceipt.command,
+                    {
+                      ...runIdentityEnvironment,
+                      CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1",
+                    },
+                  ),
+                startupAttestation,
               }),
             );
         };
@@ -540,11 +524,8 @@ const prepareHarness = (
                   ),
                 ),
                 environmentCommand,
-                environmentReadyMarker,
-                activationProbe,
-                shellReadinessProbe,
-                secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
-                secretReadyMarker,
+                startupAttestation,
+                secretCommand: `. ${shellQuote(secretPath)} && ${startupAttestation.secretReadyReceipt.command}`,
               }),
             );
         };
@@ -621,11 +602,8 @@ const prepareHarness = (
                       runtime,
                       argv: controlFreeArgv(codexArgv(request)),
                       environmentCommand,
-                      environmentReadyMarker,
-                      activationProbe,
-                      shellReadinessProbe,
-                      secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
-                      secretReadyMarker,
+                      startupAttestation,
+                      secretCommand: `. ${shellQuote(secretPath)} && ${startupAttestation.secretReadyReceipt.command}`,
                     }),
                   );
               });
@@ -636,29 +614,26 @@ const prepareHarness = (
           .then(() => writeExclusive(promptPath, request.systemPrompt))
           .then(() =>
             runtime === "claude" ? buildClaude() : runtime === "pi" ? buildPi() : buildCodex(),
-          )
-          .catch((error) => {
-            if (
-              isHerdrCodexHooksError(error) &&
-              error.code === "codex_herdr_hook_cleanup_unconfirmed"
-            )
-              throw harnessCleanupUnconfirmed(error);
-            return Promise.resolve()
-              .then(() => {
-                if (options.harnessCleanupFault) throw new Error("fixture-harness-cleanup-failure");
-                return removeHarness(directory);
-              })
-              .then(
-                () => {
-                  throw error;
-                },
-                (cleanupError) => {
-                  // Keep the private directory fail-closed. Suppressing this failure would permit
-                  // candidate fallback even though credentials or harness state may still be present.
-                  throw harnessCleanupUnconfirmed(cleanupError);
-                },
-              );
-          });
+          );
+      })
+      .catch((error) => {
+        if (isHerdrCodexHooksError(error) && error.code === "codex_herdr_hook_cleanup_unconfirmed")
+          throw harnessCleanupUnconfirmed(error);
+        return Promise.resolve()
+          .then(() => {
+            if (options.harnessCleanupFault) throw new Error("fixture-harness-cleanup-failure");
+            return removeHarness(directory);
+          })
+          .then(
+            () => {
+              throw error;
+            },
+            (cleanupError) => {
+              // Keep the private directory fail-closed. Suppressing this failure would permit
+              // candidate fallback even though credentials or harness state may still be present.
+              throw harnessCleanupUnconfirmed(cleanupError);
+            },
+          );
       });
   });
 };

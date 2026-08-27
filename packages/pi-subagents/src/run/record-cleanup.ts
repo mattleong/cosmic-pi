@@ -233,7 +233,9 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
   const markCleanupPending = (record: RunRecord) =>
     withLock(
       Effect.sync(() => {
+        if (record.closingScope === record.scope && record.cleanupDisposition !== "pending") return;
         record.cleanupPending = true;
+        record.cleanupDisposition = "pending";
       }),
     );
   const clearCleanupPending = (record: RunRecord, scope: Scope.Closeable = record.scope) =>
@@ -261,9 +263,13 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
           ? Effect.void
           : (result.shouldReclaim ? reclaimRecordRunState(record) : Effect.void).pipe(
               Effect.tap(() =>
-                Effect.sync(() => {
-                  Deferred.doneUnsafe(result.cleanupSettlement, Effect.succeed("confirmed"));
-                }),
+                withLock(
+                  Effect.sync(() => {
+                    if (record.scope !== scope) return;
+                    record.cleanupDisposition = "confirmed";
+                    Deferred.doneUnsafe(result.cleanupSettlement, Effect.succeed("confirmed"));
+                  }),
+                ),
               ),
             ),
       ),
@@ -286,6 +292,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             ? "Subagent cleanup could not be confirmed; process capacity and writer ownership remain quarantined for this session."
             : "Subagent cleanup could not be fully confirmed; this run remains quarantined for the session.";
           record.cleanupPending = true;
+          record.cleanupDisposition = "quarantined";
           record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
           record.view = {
             ...record.view,

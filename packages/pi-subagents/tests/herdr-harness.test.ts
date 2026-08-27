@@ -3,13 +3,17 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
+import { provideBuiltLayer } from "pi-cosmic-core";
+import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { prepareHerdrStartupAttestation } from "../src/boundary/herdr-attestation.ts";
 import { HerdrCodexHooksError, makeHerdrCodexHooks } from "../src/boundary/herdr-codex-hooks.ts";
 import { makeHerdrHarness } from "../src/boundary/herdr-harness.ts";
 import type { SupervisorConnectionMetadata } from "../src/boundary/supervisor-channel.ts";
 import type { BackendLaunchRequest } from "../src/backend/model.ts";
+import { processError } from "../src/run/errors.ts";
 import { effectTest, step } from "./support/effect-test.ts";
-import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath, nodeSpawn } from "./support/node-builtins.ts";
 
 const { join } = nodePath;
 
@@ -32,6 +36,25 @@ const hasControlCharacter = (value: string): boolean =>
   [...value].some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
+
+const runShellCommand = (command: string): Promise<void> =>
+  Effect.runPromise(
+    Effect.callback<void>((resume) => {
+      const child = nodeSpawn("/bin/sh", ["-c", command], { stdio: "ignore" });
+      child.once("error", (error) => resume(Effect.die(error)));
+      child.once("close", (code) =>
+        resume(
+          code === 0 ? Effect.void : Effect.die(new Error(`Fixture shell exited ${String(code)}.`)),
+        ),
+      );
+    }),
+  );
+
+const setupReceiptDirectory = () =>
+  fs.mkdtemp(join(tmpdir(), "pi-subagents-herdr-receipts-")).then((directory) => {
+    directories.push(directory);
+    return fs.chmod(directory, 0o700).then(() => directory);
   });
 
 const setup = () =>
@@ -159,6 +182,132 @@ afterEach(() =>
 );
 
 describe("Herdr native harness security", () => {
+  it("atomically publishes a unique private receipt from the pane command", () =>
+    setupReceiptDirectory().then((directory) =>
+      prepareHerdrStartupAttestation(directory, {
+        pollAttempts: 2,
+        pollDelayMillis: 1,
+      }).then((attestation) => {
+        const receipt = attestation.environmentReadyReceipt;
+        return fs
+          .readdir(directory)
+          .then((entries) => expect(entries).toEqual([]))
+          .then(() => runShellCommand(receipt.command))
+          .then(() => Effect.runPromise(receipt.observe))
+          .then(() => fs.lstat(receipt.path))
+          .then((stat) => {
+            expect(stat.isFile()).toBe(true);
+            expect(stat.isSymbolicLink()).toBe(false);
+            expect(stat.mode & 0o077).toBe(0);
+            return expect(fs.lstat(receipt.temporaryPath)).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+          });
+      }),
+    ));
+
+  it("logs only bounded receipt phase/outcome diagnostics", () =>
+    setupReceiptDirectory().then((directory) => {
+      const captured = makeCapturedLogger();
+      return prepareHerdrStartupAttestation(directory, {
+        pollAttempts: 1,
+        pollDelayMillis: 1,
+      }).then((attestation) => {
+        const receipt = attestation.secretReadyReceipt;
+        return expect(Effect.runPromise(receipt.observe.pipe(provideBuiltLayer(captured.layer))))
+          .rejects.toMatchObject({ code: "herdr_startup_receipt_timeout" })
+          .then(() => {
+            const diagnostics = capturedTelemetrySnapshot({ entries: captured.entries });
+            expect(diagnostics).toContain("secret-ready");
+            expect(diagnostics).toContain("timeout");
+            expect(diagnostics).not.toContain(directory);
+            expect(diagnostics).not.toContain(receipt.path);
+            expect(diagnostics).not.toContain(receipt.command);
+          });
+      });
+    }));
+
+  it("removes startup receipts only after harness cleanup is authorized", () =>
+    setup().then((test) => {
+      let harnessDirectory = "";
+      let receiptPath = "";
+      return Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const prepared = yield* test.harness.prepare("pi", launch("pi"), test.supervisor);
+            harnessDirectory = prepared.directory;
+            const receipt = prepared.startupAttestation.activationReceipt(1);
+            receiptPath = receipt.path;
+            yield* Effect.tryPromise({
+              try: () => runShellCommand(receipt.command),
+              catch: () =>
+                processError(
+                  "execute fixture receipt command",
+                  "fixture_receipt_command_failed",
+                  "Fixture receipt command failed.",
+                ),
+            }).pipe(Effect.orDie);
+            yield* receipt.observe;
+            prepared.authorizeCleanup();
+          }),
+        ),
+      ).then(() =>
+        Promise.all([
+          expect(fs.lstat(receiptPath)).rejects.toMatchObject({ code: "ENOENT" }),
+          expect(fs.lstat(harnessDirectory)).rejects.toMatchObject({ code: "ENOENT" }),
+        ]).then(() => undefined),
+      );
+    }));
+
+  it("rejects absent, wrong, symlink, partial, oversized, and non-regular receipts", () =>
+    setupReceiptDirectory().then((directory) =>
+      prepareHerdrStartupAttestation(directory, {
+        pollAttempts: 2,
+        pollDelayMillis: 1,
+      }).then((attestation) => {
+        const absent = attestation.activationReceipt(1);
+        const wrong = attestation.activationReceipt(2);
+        const symlink = attestation.environmentReadyReceipt;
+        const partial = attestation.postEnvironmentShellReceipt;
+        const oversized = attestation.secretReadyReceipt;
+        const nonRegular = attestation.postSecretShellReceipt;
+        const target = join(directory, "symlink-target");
+        return expect(Effect.runPromise(absent.observe))
+          .rejects.toMatchObject({ code: "herdr_startup_receipt_timeout" })
+          .then(() => fs.writeFile(wrong.path, "wrong-complete-content\n", { mode: 0o600 }))
+          .then(() =>
+            expect(Effect.runPromise(wrong.observe)).rejects.toMatchObject({
+              code: "herdr_startup_receipt_invalid",
+            }),
+          )
+          .then(() => fs.writeFile(target, "target\n", { mode: 0o600 }))
+          .then(() => fs.symlink(target, symlink.path))
+          .then(() =>
+            expect(Effect.runPromise(symlink.observe)).rejects.toMatchObject({
+              code: "herdr_startup_receipt_invalid",
+            }),
+          )
+          .then(() => fs.writeFile(partial.path, "partial", { mode: 0o600 }))
+          .then(() =>
+            expect(Effect.runPromise(partial.observe)).rejects.toMatchObject({
+              code: "herdr_startup_receipt_invalid",
+            }),
+          )
+          .then(() => fs.writeFile(oversized.path, "x".repeat(512), { mode: 0o600 }))
+          .then(() =>
+            expect(Effect.runPromise(oversized.observe)).rejects.toMatchObject({
+              code: "herdr_startup_receipt_invalid",
+            }),
+          )
+          .then(() => fs.mkdir(nonRegular.path, { mode: 0o700 }))
+          .then(() =>
+            expect(Effect.runPromise(nonRegular.observe)).rejects.toMatchObject({
+              code: "herdr_startup_receipt_invalid",
+            }),
+          );
+      }),
+    ));
+
   effectTest(
     "rejects unrepresentable Claude writer cwd rules during topology-free preflight",
     function* () {
@@ -325,17 +474,22 @@ describe("Herdr native harness security", () => {
             });
             expect(environmentCommand).toContain("exec /usr/bin/env -i");
             expect(environmentCommand).toContain("CLAUDE_CODE_SKIP_PROMPT_HISTORY='1'");
-            expect(environmentCommand).not.toContain(prepared.environmentReadyMarker);
-            const firstActivation = prepared.activationProbe(1);
-            const secondActivation = prepared.activationProbe(2);
-            expect(firstActivation.marker).not.toBe(secondActivation.marker);
-            expect(firstActivation.command).toContain(firstActivation.marker.slice(0, 20));
-            expect(secondActivation.command).toContain(secondActivation.marker.slice(0, 20));
-            const environmentShell = prepared.shellReadinessProbe("environment");
-            const secretShell = prepared.shellReadinessProbe("secrets");
-            expect(environmentShell.marker).not.toBe(secretShell.marker);
-            expect(environmentShell.command).toContain(environmentShell.marker.slice(0, 20));
-            expect(secretShell.command).toContain(secretShell.marker.slice(0, 20));
+            expect(environmentCommand).toContain(
+              prepared.startupAttestation.environmentReadyReceipt.path,
+            );
+            const startupReceipts = [
+              prepared.startupAttestation.activationReceipt(1),
+              prepared.startupAttestation.activationReceipt(2),
+              prepared.startupAttestation.environmentReadyReceipt,
+              prepared.startupAttestation.postEnvironmentShellReceipt,
+              prepared.startupAttestation.secretReadyReceipt,
+              prepared.startupAttestation.postSecretShellReceipt,
+            ];
+            expect(new Set(startupReceipts.map((receipt) => receipt.path)).size).toBe(6);
+            expect(new Set(startupReceipts.map((receipt) => receipt.command)).size).toBe(6);
+            expect(
+              startupReceipts.every((receipt) => receipt.path.startsWith(prepared.directory)),
+            ).toBe(true);
             const settings = yield* Effect.promise(() =>
               readJsonFile(valueAfter(prepared.argv, "--settings")!),
             );
@@ -539,7 +693,9 @@ describe("Herdr native harness security", () => {
             );
             expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
             expect(prepared.secretCommand).not.toContain("pi-runtime-secret");
-            expect(prepared.secretCommand).not.toContain(prepared.secretReadyMarker);
+            expect(prepared.secretCommand).toContain(
+              prepared.startupAttestation.secretReadyReceipt.path,
+            );
             const bootstrapPath = join(prepared.directory, "pi-environment.sh");
             const bootstrap = yield* Effect.promise(() => fs.readFile(bootstrapPath, "utf8"));
             expect(bootstrap).toContain("PI_SUBAGENT_RUNTIME_API_KEY='pi-runtime-secret'");

@@ -127,23 +127,6 @@ describe("Herdr calling-pane readiness", () => {
     );
   });
 
-  effectTest("watches the visible pane for causal launch markers", function* () {
-    const { cli, logPath } = yield* step(() => makeFixtureCli());
-    yield* step(() =>
-      Effect.runPromise(cli.waitPaneOutput("user:p0", "marker", "confirm pane input")),
-    );
-
-    const commands = (yield* step(() => readFile(logPath, "utf8")))
-      .trim()
-      .split("\n")
-      .map((line) => Schema.decodeUnknownSync(CommandLogSchema)(JSON.parse(line)));
-    const wait = commands.find(
-      (command) => command.args[0] === "pane" && command.args[1] === "wait-output",
-    );
-    expect(wait?.args).toContain("visible");
-    expect(wait?.args).not.toContain("recent");
-  });
-
   effectTest(
     "skips when pane-current evidence disagrees with the inherited selector",
     function* () {

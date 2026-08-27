@@ -206,15 +206,6 @@ export interface HerdrCliContract {
       | "prepare pane environment"
       | "load pane secrets",
   ) => Effect.Effect<void, SubagentProcessError>;
-  readonly waitPaneOutput: (
-    paneId: string,
-    marker: string,
-    operation:
-      | "confirm pane input"
-      | "confirm pane shell"
-      | "confirm pane environment"
-      | "confirm pane secrets",
-  ) => Effect.Effect<void, SubagentProcessError>;
   readonly paneProcessInfo: (
     paneId: string,
   ) => Effect.Effect<HerdrPaneProcessInfo, SubagentProcessError>;
@@ -241,8 +232,6 @@ export interface HerdrCliLayerOptions {
   /** Test seam only. Production inherits only the bounded Herdr session environment. */
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly commandTimeoutMillis?: number | undefined;
-  /** Diagnostic seam only. Production uses the source selected by the real-shell regression. */
-  readonly paneOutputSource?: "visible" | "recent" | "recent-unwrapped" | undefined;
   /** Test seam only. Production uses the canonical runtime executable names. */
   readonly runtimeExecutables?: Partial<Record<SubagentRuntime, string>> | undefined;
 }
@@ -795,40 +784,14 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         undefined,
         MAX_TEXT_BYTES,
       ).pipe(
-        // Herdr 0.8 intentionally emits no JSON for a successful `pane run`; the
-        // subsequent marker wait is the causal application attestation. Preserve
-        // envelope validation if a compatible server does emit a response.
+        // Herdr 0.8 intentionally emits no JSON for a successful `pane run`. Private filesystem
+        // receipts attest startup command execution because rendered terminal output is ephemeral.
+        // Preserve envelope validation if a compatible server does emit a response.
         Effect.flatMap((source) =>
           source.trim().length === 0
             ? Effect.void
             : decodeEnvelope(operation, source).pipe(Effect.asVoid),
         ),
-      ),
-    waitPaneOutput: (paneId, marker, operation) =>
-      runCommand(
-        fixedOptions,
-        [
-          "pane",
-          "wait-output",
-          paneId,
-          "--match",
-          marker,
-          "--source",
-          // Protocol 20 can keep a newly split shell's prompt and first marker entirely in the
-          // live viewport while `recent` remains empty. Launch attestations therefore observe the
-          // visible pane that owns the command instead of mistaking executed input for a drop.
-          fixedOptions.paneOutputSource ?? "visible",
-          "--lines",
-          "40",
-          "--timeout",
-          "5000",
-        ],
-        operation,
-        7_000,
-        MAX_TEXT_BYTES,
-      ).pipe(
-        Effect.flatMap((source) => decodeEnvelope(operation, source)),
-        Effect.asVoid,
       ),
     paneProcessInfo: (paneId) =>
       runCommand(

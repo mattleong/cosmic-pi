@@ -17,6 +17,7 @@ import {
   InvalidSubagentRequestError,
   type SubagentError,
   SubagentHistoryCapacityError,
+  SubagentProcessError,
   SubagentRuntimeClosedError,
   UnsupportedSafeWriterOwnershipError,
 } from "./errors.ts";
@@ -28,6 +29,7 @@ import {
   isActiveRunState,
   isTerminalRunState,
   SUBAGENT_ROOT_RUN_ID,
+  type FailedStartRecovery,
   type StartSubagentRequest,
   type SubagentRunView,
 } from "./model.ts";
@@ -41,6 +43,13 @@ import {
 } from "./state.ts";
 import { emptyRunWarningSlots } from "./warnings.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
+import { failedStartRecoveryForRecord } from "./retry.ts";
+
+const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
+
+/** Available only for an error returned after this service admitted and fully compensated a run. */
+export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
+  failedStartRecoveries.get(error);
 
 export interface RunLaunchDependencies {
   readonly ownerScope: Scope.Scope;
@@ -73,11 +82,6 @@ export interface RunLaunchDependencies {
     record: RunRecord,
     state: "completed" | "failed" | "stopped",
     error?: string,
-  ) => Effect.Effect<SubagentRunView>;
-  readonly failRun: (
-    record: RunRecord,
-    message: string,
-    pendingError?: SubagentError,
   ) => Effect.Effect<SubagentRunView>;
   readonly submitPrompt: (
     record: RunRecord,
@@ -119,7 +123,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     markCleanupPending,
     closeRecordScope,
     settle,
-    failRun,
     submitPrompt,
     initializeProcess,
     sendPeerNotices,
@@ -447,6 +450,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 nativeAgents: new Map(),
                 nativeAgentTotal: 0,
                 cleanupSettlement,
+                cleanupDisposition: "pending" as const,
                 routeContinuation: request.routeContinuation,
                 retryExhausted: false,
                 pauseRequested: false,
@@ -649,10 +653,11 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           if (activated.pendingSettlement) {
             const pending = activated.pendingSettlement;
             if (pending.state === "failed")
-              return yield* failRun(
-                reserved,
-                pending.error ?? "Subagent failed during startup.",
-              ).pipe(Effect.tap(() => closeRecordScope(reserved)));
+              return yield* new SubagentProcessError({
+                operation: "start",
+                code: "start_failed_before_prompt",
+                message: pending.error ?? "Subagent failed during startup.",
+              });
             return yield* settle(reserved, pending.state, pending.error);
           }
           const attemptToken = yield* withLock(
@@ -692,8 +697,17 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                     sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS),
                   );
               }
+              // This is the complete backend/process/writer/private-state cleanup barrier.
+              // Recovery metadata is attached only after it settles or quarantines.
               yield* closeRecordScope(reserved);
             }),
+          ),
+          Effect.tapError((error) =>
+            withLock(
+              Effect.sync(() => {
+                failedStartRecoveries.set(error, failedStartRecoveryForRecord(reserved));
+              }),
+            ),
           ),
         );
       }),

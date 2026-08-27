@@ -36,6 +36,7 @@ import {
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
+import { getFailedStartRecovery } from "../run/launch.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import {
@@ -552,7 +553,8 @@ export const executeSubagentActionEffect = (
                   message: error.message,
                   code: subagentErrorCode(error),
                 };
-                return withMessageAndCode;
+                const admittedRun = getFailedStartRecovery(error);
+                return admittedRun ? { ...withMessageAndCode, admittedRun } : withMessageAndCode;
               })(),
             };
             const withResolvedRoute = resolvedRoute ? { ...baseResult, resolvedRoute } : baseResult;

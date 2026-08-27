@@ -139,6 +139,41 @@ describe("session-owned Herdr topology", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.live("launches from private pane-command receipts without terminal-output attestation", () => {
+    const fake = fakeTopology();
+    fake.executeFirstActivationReceipt();
+    fake.enableSecretBootstrap();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const hosted = yield* host.launch("pi", launch("agent-receipt-only"), {
+        ...supervisor,
+        runId: "agent-receipt-only",
+      });
+      expect(fake.publishedReceipts).toEqual(
+        new Set([
+          "activation-1",
+          "environment-ready",
+          "post-environment-shell",
+          "secret-ready",
+          "post-secret-shell",
+        ]),
+      );
+      expect(fake.paneCommands.map(({ operation }) => operation)).toEqual([
+        "activate pane input",
+        "prepare pane environment",
+        "confirm pane shell",
+        "load pane secrets",
+        "confirm pane shell",
+      ]);
+      expect(yield* hosted.inspect).toMatchObject({ paneId: hosted.paneId });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.live("waits for a transient native pane occupant before spending activation probes", () => {
     const fake = fakeTopology();
     fake.delayInitialShellReadiness(3);
@@ -183,6 +218,7 @@ describe("session-owned Herdr topology", () => {
   it.live("rolls back when both harmless pane-input activation probes are dropped", () => {
     const fake = fakeTopology();
     fake.dropEveryActivationProbe();
+    fake.enableSecretBootstrap();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
         Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
@@ -198,13 +234,51 @@ describe("session-owned Herdr topology", () => {
       );
       expect(result).toMatchObject({
         _tag: "Failure",
-        failure: { code: "herdr_pane_input_unavailable" },
+        failure: {
+          code: "herdr_pane_input_unavailable",
+          message: expect.stringContaining(
+            "Neither harmless activation attempt published its private receipt",
+          ),
+        },
       });
       expect(fake.activationConfirmations.get("user:p1")).toBe(2);
+      expect(fake.paneCommands.map(({ operation }) => operation)).toEqual([
+        "activate pane input",
+        "activate pane input",
+      ]);
       expect(fake.closedPanes).toEqual(["user:p1"]);
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.focusedTab()).toBe("user:t");
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.live("blocks agent start and safely cleans up after an invalid environment receipt", () => {
+    const fake = fakeTopology();
+    fake.executeFirstActivationReceipt();
+    fake.failReceipt("environment-ready", "wrong");
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const failure = yield* host
+        .launch("pi", launch("agent-invalid-environment-receipt"), {
+          ...supervisor,
+          runId: "agent-invalid-environment-receipt",
+        })
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({ code: "herdr_startup_receipt_invalid" });
+      expect(fake.agents.size).toBe(0);
+      expect(fake.paneCommands.map(({ operation }) => operation)).toEqual([
+        "activate pane input",
+        "prepare pane environment",
+      ]);
+      expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.cleanupAuthorizations()).toBe(1);
+      expect(fake.callerPaneLive()).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 

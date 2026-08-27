@@ -210,24 +210,44 @@ export const makeHerdrLaunchSafety = (
           );
         yield* cli.focusTab(pane.tabId, "activate herdr tab");
         yield* requireAvailableProvisionalPane(pane, "activate pane input", true, invalidate);
-        const probe = harness.activationProbe(attempt);
-        yield* cli.runPaneCommand(pane.paneId, probe.command, "activate pane input");
-        const confirmed = yield* cli
-          .waitPaneOutput(pane.paneId, probe.marker, "confirm pane input")
-          .pipe(
-            Effect.as(true),
-            Effect.catch((error) =>
-              error.code === "timeout" || error.code === "herdr_cli_timeout"
-                ? Effect.succeed(false)
-                : Effect.fail(error),
-            ),
-          );
-        if (confirmed) return;
+        const receipt = harness.startupAttestation.activationReceipt(attempt === 1 ? 1 : 2);
+        yield* cli.runPaneCommand(pane.paneId, receipt.command, "activate pane input");
+        const confirmed = yield* receipt.observe.pipe(
+          Effect.as(true),
+          Effect.catch((error) =>
+            error.code === "herdr_startup_receipt_timeout"
+              ? Effect.succeed(false)
+              : Effect.fail(error),
+          ),
+        );
+        if (confirmed) {
+          yield* inspectProvisionalPane(pane, "confirm pane input", invalidate);
+          return;
+        }
+        if (attempt < PANE_INPUT_ACTIVATION_ATTEMPTS) {
+          // A first accepted pane-run can be dropped by a restored workspace. Before the one
+          // harmless retry, revalidate exact ownership and current focus, explicitly refocus the
+          // same tab, and bracket a fresh foreground-shell inspection with snapshots.
+          const retry = yield* inspectProvisionalPane(pane, "retry pane activation", invalidate);
+          if (
+            retry.occupied ||
+            retry.snapshot.focusedTabId !== pane.tabId ||
+            (retry.snapshot.focusedWorkspaceId !== undefined &&
+              retry.snapshot.focusedWorkspaceId !== pane.workspaceId)
+          )
+            return yield* processError(
+              "activate pane input",
+              "herdr_focus_changed",
+              "The provisional Herdr pane became occupied or user focus moved; activation input was refused.",
+            );
+          yield* cli.focusTab(pane.tabId, "activate herdr tab");
+          yield* waitForAvailableShell(pane, invalidate, true);
+        }
       }
       return yield* processError(
         "activate pane input",
         "herdr_pane_input_unavailable",
-        "Herdr accepted harmless activation probes without executing them in the owned pane. No environment, secret, or agent launch command was attempted.",
+        "Neither harmless activation attempt published its private receipt in the owned pane. No environment, secret, or agent launch command was attempted.",
       );
     });
 
@@ -239,9 +259,13 @@ export const makeHerdrLaunchSafety = (
   ) =>
     Effect.gen(function* () {
       yield* requireAvailableProvisionalPane(pane, "confirm pane shell", true, invalidate);
-      const probe = harness.shellReadinessProbe(phase);
-      yield* cli.runPaneCommand(pane.paneId, probe.command, "confirm pane shell");
-      yield* cli.waitPaneOutput(pane.paneId, probe.marker, "confirm pane shell");
+      const receipt =
+        phase === "environment"
+          ? harness.startupAttestation.postEnvironmentShellReceipt
+          : harness.startupAttestation.postSecretShellReceipt;
+      yield* cli.runPaneCommand(pane.paneId, receipt.command, "confirm pane shell");
+      yield* receipt.observe;
+      yield* inspectProvisionalPane(pane, "confirm pane shell", invalidate);
     });
 
   const restoreFocus: HerdrLaunchSafety["restoreFocus"] = (
