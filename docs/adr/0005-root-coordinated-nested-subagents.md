@@ -52,6 +52,12 @@ Questions and unclaimed outcomes go to the nearest connected Pi ancestor. If no 
 
 Herdr Pi mirrors the root session's project-trust decision with `--approve` or `--no-approve` while always keeping `--no-skills`, `--no-prompt-templates`, and `--no-context-files`. It does not use `--no-extensions` or `--no-themes`, so trusted launches can discover project and global extensions while untrusted launches remain global-only. The packaged lifecycle and supervisor integrations remain explicit. At each launch the root supplies its current active tool-name snapshot, independent of Pi write intent; competing orchestrators remain excluded and package-owned `subagent_*` tools use authenticated proxies.
 
+### Code Mode and cooperative writer claims
+
+An active, discoverable Code Mode tool gives a Pi child the same seven direct nested built-ins that the tool gives the root Pi session. Inheriting it does not create a separate capability policy. The model must apply the assignment's `writeIntent` and exact-file claims when it writes the Code Mode program.
+
+The Code Mode interpreter does not authorize paths against writer claims. Its nested built-in calls also bypass Pi tool middleware, approvals, registered overrides, and `pi-subagents` claim observation. Claims therefore remain admission and coordination rules, not filesystem confinement. A compliant agent should write programs that stay within its claims, but the coordinator may not observe or interrupt an out-of-claim nested mutation.
+
 ### Native runtime agents
 
 Claude and Codex may use their native agent systems within configured runtime limits. Native agents inherit the parent's runtime sandbox and writer lease. They never become Pi run nodes, cannot acquire independent Pi writer claims, and do not affect Pi depth or direct-child admission.
