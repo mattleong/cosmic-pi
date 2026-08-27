@@ -128,15 +128,27 @@ export interface SubagentServiceContract {
   readonly startRetrySessionOwned: (
     request: StartSubagentRequest & { readonly supersedes: SubagentRetrySupersession },
   ) => Effect.Effect<SubagentRunView, SubagentError>;
+  /**
+   * Await selected observations. The optional update projection is the root-owned immutable
+   * snapshot; consumers must derive only authorized target subtrees before external rendering.
+   */
   readonly awaitTerminal: (
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
-    onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
+    onUpdate?: (
+      runs: ReadonlyArray<SubagentRunView>,
+      projection?: ReadonlyArray<SubagentRunView>,
+    ) => void,
   ) => Effect.Effect<ReadonlyArray<SubagentRunView>, SubagentError>;
   readonly withAwaitTerminalObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
-    onUpdate: ((runs: ReadonlyArray<SubagentRunView>) => void) | undefined,
+    onUpdate:
+      | ((
+          runs: ReadonlyArray<SubagentRunView>,
+          projection?: ReadonlyArray<SubagentRunView>,
+        ) => void)
+      | undefined,
     use: (observations: ReadonlyArray<SubagentRunObservation>) => Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, SubagentError | E, R>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentRunView>>;

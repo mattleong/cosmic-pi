@@ -6,11 +6,13 @@ import type { SubagentAwaitUntil } from "../run/service.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details.ts";
 import { aggregateRunUsage, renderResponsiveRunRows, runTiming } from "./render-run-rows.ts";
+import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
 
 interface AwaitProgressRun {
   readonly id: string;
   readonly name: string;
   readonly state: SubagentRunCard["state"];
+  readonly parentRunId?: string | undefined;
   readonly currentTool?: string | undefined;
   readonly startedAt?: number | undefined;
   readonly lastActivityAt?: number | undefined;
@@ -50,14 +52,19 @@ const awaitRunStatus = (run: AwaitProgressRun): string =>
 export const formatAwaitProgress = (
   runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
-): string =>
-  [
+  contextRuns: ReadonlyArray<AwaitProgressRun> = [],
+): string => {
+  const awaitedIds = new Set(runs.map((run) => run.id));
+  const allRuns = [...runs, ...contextRuns.filter((run) => !awaitedIds.has(run.id))];
+  return [
     awaitProgressHeader(runs, until),
-    ...runs.map(
-      (run) =>
-        `${runStateGlyph(run.state)} ${sanitizeTerminalLine(run.name)} (${sanitizeTerminalLine(run.id)}) · ${awaitRunStatus(run)}`,
+    "◎ awaited target · descendants are context",
+    ...projectRunCardTree(allRuns).map(
+      (row) =>
+        `${runCardTreeBranch(row)}${awaitedIds.has(row.run.id) ? "◎ " : ""}${runStateGlyph(row.run.state)} ${sanitizeTerminalLine(row.run.name)} (${sanitizeTerminalLine(row.run.id)}) · ${awaitRunStatus(row.run)}`,
     ),
   ].join("\n");
+};
 
 const awaitHeaderColor = (
   runs: ReadonlyArray<SubagentRunCard>,
@@ -68,15 +75,30 @@ const awaitHeaderColor = (
     : "warning";
 };
 
+interface AwaitProgressHierarchy {
+  readonly awaitedRunIds?: ReadonlySet<string> | undefined;
+  readonly contextOmitted?: boolean | undefined;
+}
+
 class AwaitProgressComponent implements Component {
   private readonly runs: ReadonlyArray<SubagentRunCard>;
+  private readonly targets: ReadonlyArray<SubagentRunCard>;
   private readonly until: SubagentAwaitUntil;
   private readonly theme: Theme;
+  private readonly hierarchy: AwaitProgressHierarchy;
 
-  constructor(runs: ReadonlyArray<SubagentRunCard>, until: SubagentAwaitUntil, theme: Theme) {
+  constructor(
+    runs: ReadonlyArray<SubagentRunCard>,
+    targets: ReadonlyArray<SubagentRunCard>,
+    until: SubagentAwaitUntil,
+    theme: Theme,
+    hierarchy: AwaitProgressHierarchy,
+  ) {
     this.runs = runs;
+    this.targets = targets;
     this.until = until;
     this.theme = theme;
+    this.hierarchy = hierarchy;
   }
 
   render(width: number): string[] {
@@ -85,13 +107,31 @@ class AwaitProgressComponent implements Component {
     const usage = aggregateRunUsage(this.runs);
     return [
       truncateToWidth(
-        this.theme.fg(awaitHeaderColor(this.runs), awaitProgressHeader(this.runs, this.until)),
+        this.theme.fg(
+          awaitHeaderColor(this.targets),
+          awaitProgressHeader(this.targets, this.until),
+        ),
         safeWidth,
       ),
-      ...(usage ? [this.theme.fg("dim", `Total usage · ${usage}`)] : []),
+      truncateToWidth(
+        this.theme.fg("dim", "◎ awaited target · descendants are context"),
+        safeWidth,
+      ),
+      ...(this.hierarchy.contextOmitted
+        ? [
+            truncateToWidth(
+              this.theme.fg("warning", "Some descendant context was omitted from this card."),
+              safeWidth,
+            ),
+          ]
+        : []),
+      ...(usage
+        ? [truncateToWidth(this.theme.fg("dim", `Total usage · ${usage}`), safeWidth)]
+        : []),
       ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
         frame,
         status: awaitRunStatus,
+        hierarchy: this.hierarchy,
       }),
     ];
   }
@@ -158,6 +198,8 @@ export const syncAwaitProgressTicker = (
 
 export const renderAwaitProgressComponent = (
   runs: ReadonlyArray<SubagentRunCard>,
+  targets: ReadonlyArray<SubagentRunCard>,
   until: SubagentAwaitUntil,
   theme: Theme,
-): Component => new AwaitProgressComponent(runs, until, theme);
+  hierarchy: AwaitProgressHierarchy,
+): Component => new AwaitProgressComponent(runs, targets, until, theme, hierarchy);

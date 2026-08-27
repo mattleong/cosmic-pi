@@ -16,6 +16,7 @@ import {
 import type { SubagentRunView, SubagentUsage } from "../run/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
+import { projectRunCardTree } from "./run-card-tree.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
@@ -91,7 +92,12 @@ export interface StartDetailsInput {
 }
 
 export interface AwaitDetailsInput {
+  /** Runs whose state controls completion and whose reports may be claimed by this await. */
   readonly runs: ReadonlyArray<SubagentRunView>;
+  /** Read-only descendant context; reports are always omitted from these cards. */
+  readonly contextRuns?: ReadonlyArray<SubagentRunView> | undefined;
+  /** Original targets retained when cancellation occurs before the first observation. */
+  readonly awaitedRunIds?: ReadonlyArray<string> | undefined;
   readonly awaitUntil: "all_finished" | "any_finished";
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
@@ -568,14 +574,29 @@ const awaitCandidate = (
   includeReports: boolean,
 ): SubagentAwaitDetails => {
   const source = input.runs.slice(0, MAX_TARGET_RUNS);
-  const cards = source.map((run) => {
+  const requestedAwaitedRunIds = (input.awaitedRunIds ?? source.map((run) => run.id)).slice(
+    0,
+    MAX_TARGET_RUNS,
+  );
+  const targetIds = new Set(source.map((run) => run.id));
+  const contextCandidates = projectRunCardTree(input.contextRuns ?? [])
+    .map((row) => row.run)
+    .filter((run) => !targetIds.has(run.id));
+  const contextSource = contextCandidates.slice(0, Math.max(0, MAX_TARGET_RUNS - source.length));
+  const targetCards = source.map((run) => {
     const card = projectSubagentRunCard(run, density);
     return includeReports ? card : omitReports(card);
   });
+  const contextCards = contextSource.map((run) =>
+    omitReports(projectSubagentRunCard(run, density)),
+  );
+  const awaitedRunIds =
+    targetCards.length > 0 ? targetCards.map((card) => card.id) : requestedAwaitedRunIds;
   const base: SubagentAwaitDetails = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "await",
-    cards,
+    cards: [...targetCards, ...contextCards],
+    awaitedRunIds,
     awaitUntil: input.awaitUntil,
   };
   const withTimedOut = input.timedOut ? { ...base, timedOut: true as const } : base;
@@ -585,10 +606,14 @@ const awaitCandidate = (
   const withCancelled = input.cancelled
     ? { ...withAttention, cancelled: true as const }
     : withAttention;
+  const withContextOmission =
+    contextCandidates.length > contextSource.length
+      ? { ...withCancelled, contextOmitted: true as const }
+      : withCancelled;
   const omitted = !includeReports && reportsWereOmitted(source);
   return input.contentOmitted || omitted
-    ? { ...withCancelled, contentOmitted: true as const }
-    : withCancelled;
+    ? { ...withContextOmission, contentOmitted: true as const }
+    : withContextOmission;
 };
 
 /** Makes strict version-2 await details with semantic fitting stages. */
@@ -620,7 +645,9 @@ const runDetailsCandidate = (
   density: DetailDensity,
   includeReports: boolean,
 ): RunDetailsCandidate => {
-  const source = input.runs.slice(0, MAX_TARGET_RUNS);
+  const orderedRuns =
+    input.action === "list" ? projectRunCardTree(input.runs).map((row) => row.run) : input.runs;
+  const source = orderedRuns.slice(0, MAX_TARGET_RUNS);
   const cards = source.map((run) => {
     const card = projectSubagentRunCard(run, density);
     return includeReports ? card : omitReports(card);

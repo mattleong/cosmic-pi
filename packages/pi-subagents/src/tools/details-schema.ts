@@ -274,10 +274,14 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
   action: Schema.Literal("await"),
   cards: boundedArray(SubagentRunCardSchema, MAX_TARGET_RUNS),
+  awaitedRunIds: Schema.optionalKey(
+    boundedArray(boundedString(MAX_PROTOCOL_ID_CHARS, 1), MAX_TARGET_RUNS),
+  ),
   awaitUntil: Schema.Literals(["all_finished", "any_finished"] as const),
   timedOut: Schema.optionalKey(Schema.Literal(true)),
   attentionRequired: Schema.optionalKey(Schema.Literal(true)),
   cancelled: Schema.optionalKey(Schema.Literal(true)),
+  contextOmitted: Schema.optionalKey(Schema.Literal(true)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
 });
 
@@ -345,9 +349,11 @@ const KNOWN_ROOT_KEYS = [
   "startEntries",
   "startFailures",
   "awaitUntil",
+  "awaitedRunIds",
   "timedOut",
   "attentionRequired",
   "cancelled",
+  "contextOmitted",
   "contentOmitted",
   "profiles",
   "fallbackProfile",
@@ -360,9 +366,11 @@ const AWAIT_KEYS = new Set([
   "action",
   "cards",
   "awaitUntil",
+  "awaitedRunIds",
   "timedOut",
   "attentionRequired",
   "cancelled",
+  "contextOmitted",
   "contentOmitted",
 ]);
 const MODELS_KEYS = new Set(["version", "action", "profiles", "fallbackProfile", "contentOmitted"]);
@@ -466,7 +474,8 @@ const preflight = <ValueInput>(value: ValueInput): boolean => {
   if (action === "await")
     return (
       rootKeysAllowed(record, AWAIT_KEYS) &&
-      preflightArray(record, "cards", MAX_TARGET_RUNS, preflightCard)
+      preflightArray(record, "cards", MAX_TARGET_RUNS, preflightCard) &&
+      preflightArray(record, "awaitedRunIds", MAX_TARGET_RUNS)
     );
   if (action === "models")
     return (
@@ -504,6 +513,20 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
   return true;
 };
 
+const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
+  const awaitedRunIds = details.awaitedRunIds;
+  if (!awaitedRunIds) return true;
+  const uniqueTargets = new Set(awaitedRunIds);
+  if (uniqueTargets.size !== awaitedRunIds.length) return false;
+  if (details.cards.length === 0) return true;
+  const cardIds = new Set(details.cards.map((card) => card.id));
+  if (!awaitedRunIds.every((id) => cardIds.has(id))) return false;
+  return details.cards.every(
+    (card) =>
+      uniqueTargets.has(card.id) || (card.finalText === undefined && card.error === undefined),
+  );
+};
+
 const safeDecode = <S extends Schema.ConstraintDecoder<unknown>, ValueInput>(
   schema: S,
   value: ValueInput,
@@ -525,10 +548,10 @@ const safeDecode = <S extends Schema.ConstraintDecoder<unknown>, ValueInput>(
 export const decodeStartAwaitCardDetails = <ValueInput>(
   value: ValueInput,
 ): SubagentStartAwaitCardDetails | undefined =>
-  safeDecode(
-    SubagentStartAwaitCardDetailsSchema,
-    value,
-    (details) => details.action !== "start" || validStartRelationships(details),
+  safeDecode(SubagentStartAwaitCardDetailsSchema, value, (details) =>
+    details.action === "start"
+      ? validStartRelationships(details)
+      : validAwaitRelationships(details),
   );
 
 /** Safe current-version decoder for all non-start tool details. */

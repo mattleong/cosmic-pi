@@ -45,7 +45,8 @@ export const projectFleetTree = (
     ancestorContinues: ReadonlyArray<boolean>,
     visible: boolean,
   ): void => {
-    if (run.id === visibilityRootId || !visited.add(run.id)) return;
+    if (run.id === visibilityRootId || visited.has(run.id)) return;
+    visited.add(run.id);
     scopedRuns.push(run);
     const descendants = children.get(run.id) ?? [];
     const hasChildren = descendants.length > 0;

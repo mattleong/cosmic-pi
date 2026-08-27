@@ -59,6 +59,7 @@ import {
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
 import { formatAwaitProgress } from "./render-await.ts";
+import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
 import type { SubagentModelsInput, SubagentStartSpec, SubagentToolInput } from "./schema.ts";
 import type {
   ProfileCandidateDiscovery,
@@ -318,6 +319,32 @@ const managementAcknowledgement = (
   }
 };
 
+const boundedAwaitContext = (
+  targets: ReadonlyArray<SubagentRunView>,
+  contextRuns: ReadonlyArray<SubagentRunView>,
+): ReadonlyArray<SubagentRunView> =>
+  projectRunCardTree(contextRuns)
+    .map((row) => row.run)
+    .slice(0, Math.max(0, MAX_TARGET_RUNS - targets.length));
+
+const awaitDescendantContext = (
+  targets: ReadonlyArray<SubagentRunView>,
+  projection: ReadonlyArray<SubagentRunView>,
+): ReadonlyArray<SubagentRunView> => {
+  const targetIds = new Set(targets.map((run) => run.id));
+  const byId = new Map(projection.map((run) => [run.id, run]));
+  return projection.filter((run) => {
+    if (targetIds.has(run.id)) return false;
+    const visited = new Set<string>([run.id]);
+    let parentRunId = run.parentRunId;
+    while (parentRunId && visited.add(parentRunId)) {
+      if (targetIds.has(parentRunId)) return true;
+      parentRunId = byId.get(parentRunId)?.parentRunId;
+    }
+    return false;
+  });
+};
+
 export const executeSubagentActionEffect = (
   pi: ExtensionAPI,
   environment: SubagentToolRuntime["environment"],
@@ -356,7 +383,12 @@ export const executeSubagentActionEffect = (
   }
 
   let latestAwaitRuns: ReadonlyArray<SubagentRunView> = [];
+  let latestAwaitContextRuns: ReadonlyArray<SubagentRunView> = [];
   const requestedAwaitUntil = input.action === "await" ? input.until : undefined;
+  const requestedAwaitIds =
+    input.action === "await"
+      ? [...new Set(input.runIds.map((id) => id.trim()).filter(Boolean))]
+      : undefined;
   const effect = Effect.gen(function* () {
     const service = yield* SubagentService;
     const authorize = (ids: ReadonlyArray<string>) =>
@@ -376,10 +408,21 @@ export const executeSubagentActionEffect = (
           (run) => run.state === "waiting_for_parent" && run.question !== undefined,
         );
         const attentionRequired = waiting.length > 0;
-        const attentionText = attentionRequired ? `${attentionRecoveryText(runs)}\n\n` : "";
-        const formatted = formatDetailedRuns(runs, attentionText);
+        const attentionText = attentionRequired ? attentionRecoveryText(runs) : "";
+        const hierarchy = formatAwaitProgress(
+          runs,
+          requestedAwaitUntil ?? "all_finished",
+          boundedAwaitContext(runs, latestAwaitContextRuns),
+        );
+        const prefix = [hierarchy, attentionText].filter(Boolean).join("\n\n");
+        const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
         yield* consumeCompletions(observations, formatted.fullyRenderedIds);
-        return { runs, attentionRequired, text: formatted.text };
+        return {
+          runs,
+          awaitContextRuns: latestAwaitContextRuns,
+          attentionRequired,
+          text: formatted.text,
+        };
       });
     const finishStatus = (ids: ReadonlyArray<string>) =>
       authorize(ids).pipe(
@@ -599,14 +642,26 @@ export const executeSubagentActionEffect = (
         const until = input.until;
         yield* authorize(ids);
         let lastUpdate = "";
-        const updateAwait = (runs: ReadonlyArray<SubagentRunView>) => {
+        const updateAwait = (
+          runs: ReadonlyArray<SubagentRunView>,
+          projection?: ReadonlyArray<SubagentRunView>,
+        ) => {
           latestAwaitRuns = runs;
-          const text = formatAwaitProgress(runs, until);
-          if (text === lastUpdate) return;
-          lastUpdate = text;
+          latestAwaitContextRuns = awaitDescendantContext(runs, projection ?? runs);
+          const displayedContext = boundedAwaitContext(runs, latestAwaitContextRuns);
+          const text = formatAwaitProgress(runs, until, displayedContext);
+          const details = makeAwaitDetails({
+            runs,
+            contextRuns: latestAwaitContextRuns,
+            awaitedRunIds: ids,
+            awaitUntil: until,
+          });
+          const updateKey = JSON.stringify(details);
+          if (updateKey === lastUpdate) return;
+          lastUpdate = updateKey;
           onUpdate?.({
             content: [{ type: "text", text }],
-            details: makeAwaitDetails({ runs, awaitUntil: until }),
+            details,
           });
         };
         return yield* service.withAwaitTerminalObservations(
@@ -739,15 +794,25 @@ export const executeSubagentActionEffect = (
         (run) => !isAssignmentFinishedRunState(run.state),
       ).length;
       const attention = attentionRecoveryText(latestAwaitRuns);
+      const hierarchy =
+        latestAwaitRuns.length > 0
+          ? formatAwaitProgress(
+              latestAwaitRuns,
+              requestedAwaitUntil,
+              boundedAwaitContext(latestAwaitRuns, latestAwaitContextRuns),
+            )
+          : "";
       const summary =
         latestAwaitRuns.length === 0
           ? "Await canceled before progress was observed; selected subagents may still be unfinished."
           : `Await canceled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.`;
-      const text = [summary, attention].filter(Boolean).join("\n\n");
+      const text = [summary, hierarchy, attention].filter(Boolean).join("\n\n");
       onUpdate?.({
         content: [{ type: "text", text }],
         details: makeAwaitDetails({
           runs: latestAwaitRuns,
+          contextRuns: latestAwaitContextRuns,
+          awaitedRunIds: requestedAwaitIds,
           awaitUntil: requestedAwaitUntil,
           cancelled: true,
         }),
@@ -764,13 +829,14 @@ export const executeSubagentActionEffect = (
     Effect.map(
       (executionResult: {
         readonly runs: ReadonlyArray<SubagentRunView>;
+        readonly awaitContextRuns?: ReadonlyArray<SubagentRunView>;
         readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
         readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
         readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
         readonly attentionRequired?: boolean;
         readonly text?: string;
       }): AgentToolResult<unknown> => {
-        const { runs, attentionRequired, text: formattedText } = executionResult;
+        const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
         const startFailures = executionResult.startFailures ?? [];
         const startEntries = executionResult.startEntries;
         const actionFailures = executionResult.actionFailures ?? [];
@@ -782,6 +848,8 @@ export const executeSubagentActionEffect = (
           startFailures.length > 0 ? { ...startDetailsBase, startFailures } : startDetailsBase;
         const awaitDetailsBase = {
           runs,
+          contextRuns: awaitContextRuns,
+          awaitedRunIds: requestedAwaitIds,
           awaitUntil: input.action === "await" ? input.until : ("all_finished" as const),
         };
         const awaitDetailsInput = attentionRequired
@@ -815,7 +883,9 @@ export const executeSubagentActionEffect = (
               : runs.length === 0
                 ? "No subagent runs."
                 : input.action === "list"
-                  ? runs.map((run) => formatRun(run)).join("\n")
+                  ? projectRunCardTree(runs)
+                      .map((row) => `${runCardTreeBranch(row)}${formatRun(row.run)}`)
+                      .join("\n")
                   : input.action === "status"
                     ? (formattedText ?? formatDetailedRuns(runs).text)
                     : input.action === "await"

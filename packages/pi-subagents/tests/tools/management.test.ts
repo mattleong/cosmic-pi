@@ -131,14 +131,23 @@ describe("subagent tool", () => {
         endedAt: 2,
         finalText: "Second report.",
       });
+      const descendant = view({
+        id: "agent-child",
+        name: "nested-review",
+        parentRunId: "agent-1",
+        depth: 2,
+      });
       const sent: string[] = [];
       const service = subagentServiceDouble({
         start: () => Effect.succeed(view()),
-        awaitTerminal: (_ids, _until, onUpdate) =>
-          Effect.sync(() => {
-            onUpdate?.([view(), view({ id: "agent-2", name: "test-review" })]);
-            return [completedOne, completedTwo];
-          }),
+        awaitTerminal: () => Effect.succeed([completedOne, completedTwo]),
+        withAwaitTerminalObservations: (_ids, _until, onUpdate, use) =>
+          Effect.sync(() =>
+            onUpdate?.(
+              [view(), view({ id: "agent-2", name: "test-review" })],
+              [view(), descendant, view({ id: "agent-2", name: "test-review" })],
+            ),
+          ).pipe(Effect.andThen(use([{ run: completedOne }, { run: completedTwo }]))),
         list: Effect.succeed([]),
         status: (id) => Effect.succeed(id === "agent-1" ? completedOne : completedTwo),
         send: (id) => Effect.sync(() => (sent.push(id), id === "agent-1" ? view() : view({ id }))),
@@ -157,20 +166,28 @@ describe("subagent tool", () => {
       const awaited = yield* maybe(() =>
         awaitTool?.execute(
           "call",
-          { runIds: ["agent-1", "agent-2"], until: "all_finished" },
+          { runIds: [" agent-1 ", "agent-1", "agent-2"], until: "all_finished" },
           undefined,
           (result) => updates.push(resultText(result)),
           context,
         ),
       );
-      expect(updates).toEqual([
-        "Waiting for all subagents · 0 of 2 subagents finished · 2 running\n⠋ auth-review (agent-1) · running\n⠋ test-review (agent-2) · running",
-      ]);
+      expect(updates).toHaveLength(1);
+      const progress = updates[0] ?? "";
+      expect(progress).toContain("0 of 2 subagents finished");
+      expect(progress).toMatch(/◎ .*auth-review \(agent-1\)/);
+      expect(progress.indexOf("auth-review")).toBeLessThan(progress.indexOf("nested-review"));
+      expect(progress).toContain("test-review (agent-2)");
       expect(awaited?.content[0]?.text).toContain("First report.");
       expect(awaited?.content[0]?.text).toContain("Second report.");
       expect(awaited?.details).toMatchObject({
         action: "await",
-        cards: [{ id: "agent-1" }, { id: "agent-2" }],
+        awaitedRunIds: ["agent-1", "agent-2"],
+        cards: [
+          { id: "agent-1" },
+          { id: "agent-2" },
+          { id: "agent-child", parentRunId: "agent-1" },
+        ],
       });
 
       const sentResult = yield* maybe(() =>
@@ -189,6 +206,45 @@ describe("subagent tool", () => {
       expect(sentResult?.content[0]?.text).not.toContain("Subagent status");
     },
   );
+
+  effectTest("publishes descendant-only usage changes in live await context", function* () {
+    const target = view({ id: "agent-parent", parentRunId: "root", depth: 1 });
+    const child = view({
+      id: "agent-child",
+      parentRunId: target.id,
+      depth: 2,
+    });
+    const childWithUsage = view({
+      ...child,
+      usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12, cost: 0 },
+    });
+    const completed = view({ ...target, state: "completed", endedAt: 2 });
+    const service = subagentServiceDouble({
+      ...startCapturingService([]),
+      withAwaitTerminalObservations: (_ids, _until, onUpdate, use) =>
+        Effect.sync(() => {
+          onUpdate?.([target], [target, child]);
+          onUpdate?.([target], [target, childWithUsage]);
+        }).pipe(Effect.andThen(use([{ run: completed }]))),
+    });
+    const updates: AgentToolResult<unknown>[] = [];
+    yield* maybe(() =>
+      captureSubagentTools(service)
+        .get("subagent_await")
+        ?.execute(
+          "call",
+          { runIds: [target.id], until: "all_finished" },
+          undefined,
+          (result) => updates.push(result),
+          context,
+        ),
+    );
+    expect(updates).toHaveLength(2);
+    expect(updates[1]?.details).toMatchObject({
+      action: "await",
+      cards: [{ id: target.id }, { id: child.id, usage: { totalTokens: 12 } }],
+    });
+  });
 
   effectTest("handles tool-level await cancellation with retained attention", function* () {
     const base = startCapturingService([]);

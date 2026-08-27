@@ -95,6 +95,37 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect("supplies descendant projection context with await updates", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const parent = yield* service.start(request({ name: "await-parent" }));
+      const child = yield* service.startSessionOwnedFrom(
+        parent.id,
+        request({ name: "await-child" }),
+      );
+      let updateProjection: SubagentProjection["runs"] | undefined;
+      let settled = false;
+      const completed = yield* service.awaitTerminal(
+        [parent.id],
+        "all_finished",
+        (_runs, projection) => {
+          updateProjection = projection;
+          if (!settled) {
+            settled = true;
+            fake.controls[0]?.offer({ type: "agent_settled" });
+          }
+        },
+      );
+      expect(completed[0]?.state).toBe("completed");
+      expect(updateProjection?.map((run) => run.id)).toEqual(
+        expect.arrayContaining([parent.id, child.id]),
+      );
+      yield* service.stop(child.id);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("wakes multiple subscribers across non-terminal and terminal revisions", () => {
     const fake = fakeChildLayer();
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));

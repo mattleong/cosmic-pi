@@ -188,12 +188,15 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
   const waitForTerminalObservations = (
     claim: CompletionClaim,
     until: SubagentAwaitUntil,
-    onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
+    onUpdate?: (
+      runs: ReadonlyArray<SubagentRunView>,
+      projection?: ReadonlyArray<SubagentRunView>,
+    ) => void,
   ): Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentRuntimeClosedError> => {
     const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
       Effect.sync(() => {
         try {
-          onUpdate?.(runs);
+          onUpdate?.(runs, currentProjection().runs);
         } catch {
           // Pi partial-result delivery is best effort and cannot own the waiter.
         }

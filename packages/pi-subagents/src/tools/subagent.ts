@@ -183,7 +183,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   const list = defineTool({
     name: SUBAGENT_TOOL_NAMES[2],
     label: "List Subagents",
-    description: "List every session-scoped subagent run in compact form.",
+    description:
+      "List every visible session-scoped subagent run as a compact parent-before-child hierarchy.",
     parameters: ListParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "list" }, signal, onUpdate, ctx),
@@ -212,7 +213,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: SUBAGENT_TOOL_NAMES[4],
     label: "Await Subagents",
     description:
-      "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Returns early if a subagent needs a parent reply, then call it again after subagent_reply. A retained run in reported state counts as finished for its current assignment.",
+      "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Awaited targets control completion and report claims; bounded visible descendants appear only as hierarchy context. Returns early if a target needs a parent reply, then call it again after subagent_reply. A retained target in reported state counts as finished for its current assignment.",
     promptSnippet: "Wait at a dependency or synthesis barrier for selected subagent reports",
     promptGuidelines: [
       "Use subagent_await only when progress or final synthesis depends on selected reports; otherwise continue independent work and let unclaimed completion reports arrive automatically. Do not poll subagent_status. If subagent_await returns for a parent question, use subagent_reply and then call subagent_await again; use subagent_status only for troubleshooting or a user-requested snapshot.",

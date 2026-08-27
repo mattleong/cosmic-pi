@@ -156,6 +156,79 @@ describe("persisted subagent details version 2", () => {
     expectDeeplyFrozen(decoded);
   });
 
+  it("persists awaited targets with bounded descendant context but never descendant reports", () => {
+    const target = {
+      ...run(1),
+      parentRunId: "root",
+      finalText: "Claimed target report.",
+    };
+    const child = {
+      ...run(2),
+      parentRunId: target.id,
+      finalText: "Unclaimed descendant report.",
+    };
+    const extraContext = Array.from({ length: 12 }, (_, index) => ({
+      ...run(index + 3),
+      parentRunId: target.id,
+      finalText: `Unclaimed context ${index}.`,
+    }));
+    const details = makeAwaitDetails({
+      runs: [target],
+      contextRuns: [child, ...extraContext],
+      awaitedRunIds: [target.id],
+      awaitUntil: "all_finished",
+    });
+
+    expect(details.awaitedRunIds).toEqual([target.id]);
+    expect(details.cards).toHaveLength(12);
+    expect(details.cards[0]).toMatchObject({ id: target.id, finalText: "Claimed target report." });
+    expect(details.cards[1]).toMatchObject({ id: child.id, finalTextTruncated: true });
+    expect(details.cards[1]?.finalText).toBeUndefined();
+    expect(details.contextOmitted).toBe(true);
+    expect(JSON.stringify(details)).not.toContain("Unclaimed descendant report");
+
+    const forged = clone(details);
+    forged.cards[1]!.finalText = "Forged descendant report.";
+    expect(decodeStartAwaitCardDetails(forged)).toBeUndefined();
+  });
+
+  it("keeps awaited target IDs aligned with compact cards during semantic fitting", () => {
+    const runs = Array.from({ length: 12 }, (_, index) => ({
+      ...run(index + 1),
+      id: `${index}-${"i".repeat(1_020)}`,
+      finalText: undefined,
+      progress: "p".repeat(512),
+      warning: "w".repeat(512),
+      selection: {
+        ...run(index + 1).selection,
+        reason: "r".repeat(1_024),
+        skippedCandidates: Array.from({ length: 8 }, (_, candidateIndex) => ({
+          candidateIndex,
+          candidate: `candidate-${candidateIndex}-${"c".repeat(64)}`,
+          code: "unavailable",
+          reason: "s".repeat(1_024),
+        })),
+      },
+    }));
+    const details = makeAwaitDetails({
+      runs,
+      awaitedRunIds: runs.map((candidate) => candidate.id),
+      awaitUntil: "all_finished",
+    });
+    expect(details.cards).toHaveLength(12);
+    expect(details.awaitedRunIds).toEqual(details.cards.map((card) => card.id));
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+  });
+
+  it("orders list cards parent before child before applying the card bound", () => {
+    const parent = { ...run(1), parentRunId: "root" };
+    const child = { ...run(2), parentRunId: parent.id };
+    const details = makeCompactToolDetails({ action: "list", runs: [child, parent] });
+    expect(details.action).toBe("list");
+    if (details.action !== "list") return;
+    expect(details.cards.map((card) => card.id)).toEqual([parent.id, child.id]);
+  });
+
   it("strips unknown keys without invoking their getters", () => {
     const source = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "any_finished" }));
     const rootGetter = vi.fn(() => "private root value");
@@ -235,6 +308,9 @@ describe("persisted subagent details version 2", () => {
     const awaitDetails = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
     expect(decodeStartAwaitCardDetails({ ...awaitDetails, version: 1 })).toBeUndefined();
     expect(decodeStartAwaitCardDetails({ ...awaitDetails, version: 3 })).toBeUndefined();
+    expect(
+      decodeStartAwaitCardDetails({ ...awaitDetails, awaitedRunIds: ["missing-run"] }),
+    ).toBeUndefined();
     expect(decodeStartAwaitCardDetails({ ...awaitDetails, action: "start" })).toBeUndefined();
     expect(
       decodeStartAwaitCardDetails({
@@ -599,6 +675,7 @@ describe("persisted subagent details version 2", () => {
       id: `agent-${index}`,
       finalText: "x".repeat(20_000),
     }));
+    valid.awaitedRunIds = valid.cards.map((card) => card.id);
     expect(decodeStartAwaitCardDetails(valid)).toBeUndefined();
 
     Object.defineProperty(valid, "unknownLargeValue", {
@@ -607,6 +684,7 @@ describe("persisted subagent details version 2", () => {
     });
     delete valid.cards[0]!.finalText;
     valid.cards = [valid.cards[0]!];
+    valid.awaitedRunIds = [valid.cards[0]!.id];
     const stripped = decodeStartAwaitCardDetails(valid);
     expect(stripped).toBeDefined();
     expect(JSON.stringify(stripped).length).toBeLessThanOrEqual(48_000);
