@@ -16,7 +16,7 @@ const extensionPackages = [
   "pi-code-previews",
   "pi-directory-models",
   "pi-advisor",
-  "pi-background-terminals",
+  "pi-background-task",
   "pi-subagents",
 ];
 const packageNames = ["pi-cosmic-core", ...extensionPackages];
@@ -81,7 +81,7 @@ try {
   );
   if (tarballs.length !== packageNames.length || [...tarballNames.values()].some((name) => !name)) {
     throw new Error(
-      `Expected core, ask-user, xAI, OpenAI, Cosmic UI, code-mode, code-preview, directory-model, advisor, background terminal, and subagent tarballs, found: ${tarballs.join(", ")}.`,
+      `Expected core, ask-user, xAI, OpenAI, Cosmic UI, code-mode, code-preview, directory-model, advisor, background task, and subagent tarballs, found: ${tarballs.join(", ")}.`,
     );
   }
   const tarballPath = (packageName) => join(temporaryDirectory, tarballNames.get(packageName));
@@ -105,7 +105,7 @@ try {
           "pi-code-previews": `file:${tarballPath("pi-code-previews")}`,
           "pi-directory-models": `file:${tarballPath("pi-directory-models")}`,
           "pi-advisor": `file:${tarballPath("pi-advisor")}`,
-          "pi-background-terminals": `file:${tarballPath("pi-background-terminals")}`,
+          "pi-background-task": `file:${tarballPath("pi-background-task")}`,
           "pi-subagents": `file:${tarballPath("pi-subagents")}`,
         },
         pnpm: {
@@ -118,7 +118,7 @@ try {
             "pi-code-mode": `file:${tarballPath("pi-code-mode")}`,
             "pi-code-previews": `file:${tarballPath("pi-code-previews")}`,
             "pi-directory-models": `file:${tarballPath("pi-directory-models")}`,
-            "pi-background-terminals": `file:${tarballPath("pi-background-terminals")}`,
+            "pi-background-task": `file:${tarballPath("pi-background-task")}`,
             "pi-subagents": `file:${tarballPath("pi-subagents")}`,
           },
         },
@@ -152,7 +152,7 @@ try {
     const cosmicUi = await load("pi-cosmic-ui");
     const directoryModels = await load("pi-directory-models");
     const advisor = await load("pi-advisor");
-    const terminals = await load("pi-background-terminals");
+    const backgroundTask = await load("pi-background-task");
     const subagents = await load("pi-subagents");
     const codeMode = await load("pi-code-mode");
     const protocol = await load("pi-cosmic-ui/protocol");
@@ -169,7 +169,7 @@ try {
     if (typeof cosmicUi.default !== "function") throw new Error("missing Cosmic UI extension export");
     if (typeof directoryModels.default !== "function") throw new Error("missing directory-model extension export");
     if (typeof advisor.default !== "function") throw new Error("missing advisor extension export");
-    if (typeof terminals.default !== "function") throw new Error("missing background terminals extension export");
+    if (typeof backgroundTask.default !== "function") throw new Error("missing background task extension export");
     if (typeof subagents.default !== "function") throw new Error("missing subagents extension export");
     if (typeof codeMode.default !== "function") throw new Error("missing code-mode extension export");
     if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function") throw new Error("missing code-preview public exports");

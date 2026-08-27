@@ -1,6 +1,6 @@
 /**
  * Pure, closed list/detail primitives shared by full-screen extension managers
- * (`/subagents`, `/ps`): selection clamping/reconciliation, the shared modeless motion
+ * (`/subagents`, `/tasks`): selection clamping/reconciliation, the shared modeless motion
  * reducer, bounded detail windows with the standardized position label, pane geometry, row
  * windowing, width padding, and reserved-shortcut confirmation resolution. The module has no
  * domain imports and takes no host callbacks; callers own row rendering, actions, prompts,

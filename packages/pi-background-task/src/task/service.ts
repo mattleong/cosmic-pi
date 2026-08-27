@@ -1,0 +1,625 @@
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Latch from "effect/Latch";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import {
+  LocalProcess,
+  type LocalProcessError,
+  type LocalProcessHandle,
+} from "../boundary/local-process.ts";
+import { BackgroundTaskConfigStore } from "../config/store.ts";
+import {
+  BackgroundTaskCapacityError,
+  BackgroundTaskNotFoundError,
+  BackgroundRuntimeClosedError,
+  BackgroundSpawnError,
+  BackgroundTerminationError,
+  InvalidBackgroundCommandError,
+  InvalidBackgroundCwdError,
+  type BackgroundTaskError,
+} from "./errors.ts";
+import { LogBuffer, readLogBuffer } from "./log-buffer.ts";
+import {
+  isActiveTaskState,
+  sortTasksByActivity,
+  type BackgroundTaskSnapshot,
+  type BackgroundTaskState,
+  type BackgroundLogSlice,
+  type BackgroundTaskProjection,
+  type ReadBackgroundLogs,
+  type StartBackgroundTask,
+} from "./model.ts";
+
+interface TaskRecord {
+  snapshot: BackgroundTaskSnapshot;
+  logs: LogBuffer;
+  wake: Deferred.Deferred<void>;
+  completion: Deferred.Deferred<BackgroundTaskSnapshot>;
+  handleReady: Deferred.Deferred<LocalProcessHandle, LocalProcessError>;
+  terminationStarted: boolean;
+  terminalOutcome?: "stopped" | "timed_out";
+  ingressDroppedObserved: number;
+}
+
+export type BackgroundTaskFilter = "active" | "completed" | "all";
+
+export interface BackgroundTaskServiceContract {
+  readonly start: (
+    request: StartBackgroundTask,
+  ) => Effect.Effect<BackgroundTaskSnapshot, BackgroundTaskError>;
+  readonly list: (
+    filter?: BackgroundTaskFilter,
+  ) => Effect.Effect<ReadonlyArray<BackgroundTaskSnapshot>>;
+  readonly status: (
+    id: string,
+  ) => Effect.Effect<BackgroundTaskSnapshot, BackgroundTaskNotFoundError>;
+  readonly logs: (
+    request: ReadBackgroundLogs,
+  ) => Effect.Effect<BackgroundLogSlice, BackgroundTaskNotFoundError>;
+  readonly stop: (
+    id: string,
+    force?: boolean,
+  ) => Effect.Effect<BackgroundTaskSnapshot, BackgroundTaskError>;
+  readonly stopAll: (
+    force?: boolean,
+  ) => Effect.Effect<ReadonlyArray<BackgroundTaskSnapshot>, BackgroundTaskError>;
+  readonly clear: Effect.Effect<number>;
+}
+
+export interface BackgroundTaskServiceOptions {
+  readonly publish?: (projection: BackgroundTaskProjection) => void;
+}
+
+const notFound = (id: string) =>
+  new BackgroundTaskNotFoundError({ id, message: `Background task not found: ${id}` });
+
+/** Output chunks coalesce into at most one projection publish per interval. */
+const OUTPUT_PUBLISH_INTERVAL_MILLIS = 1_000;
+
+const makeService = Effect.fn("BackgroundTaskService.make")(function* (
+  options: BackgroundTaskServiceOptions,
+) {
+  const config = yield* BackgroundTaskConfigStore;
+  const processes = yield* LocalProcess;
+  const path = yield* Path.Path;
+  const ownerScope = yield* Effect.scope;
+  // The parent owns one fixed monitor scope. The service shutdown finalizer is registered later,
+  // so it requests and confirms process settlement before the monitor scope is interrupted.
+  const monitorScope = yield* Scope.fork(ownerScope);
+  const lock = yield* Semaphore.make(1);
+  const tasks = new Map<string, TaskRecord>();
+  let nextId = 1;
+  // Set by the shutdown finalizer under the same lock that guards admission.
+  let admissionsClosed = false;
+  const retainedLogBudget = Math.max(1, Math.floor(config.totalLogBufferBytes / 2));
+  const ingressLogBudget = Math.max(1, config.totalLogBufferBytes - retainedLogBudget);
+
+  const withLock = lock.withPermits(1);
+  const wake = (record: TaskRecord) => {
+    const current = record.wake;
+    record.wake = Deferred.makeUnsafe<void>();
+    Deferred.doneUnsafe(current, Effect.void);
+  };
+  const currentProjection = (): BackgroundTaskProjection => ({
+    tasks: sortTasksByActivity(
+      [...tasks.values()].map((record) => ({
+        ...record.snapshot,
+        logs: record.logs.events,
+      })),
+    ),
+  });
+  let outputPublishPending = false;
+  let outputPublishDeadline = 0;
+  const outputPublishWake = yield* Latch.make();
+  const publish = () => {
+    outputPublishPending = false;
+    options.publish?.(currentProjection());
+  };
+  const outputPublishWorker = Effect.forever(
+    Latch.await(outputPublishWake).pipe(
+      Effect.flatMap(() =>
+        withLock(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            return Math.max(0, outputPublishDeadline - now);
+          }),
+        ),
+      ),
+      Effect.flatMap((delayMillis) => Effect.sleep(Duration.millis(delayMillis))),
+      Effect.andThen(
+        withLock(
+          Effect.gen(function* () {
+            Latch.closeUnsafe(outputPublishWake);
+            if (!outputPublishPending) return;
+            outputPublishDeadline =
+              (yield* Clock.currentTimeMillis) + OUTPUT_PUBLISH_INTERVAL_MILLIS;
+            publish();
+          }),
+        ),
+      ),
+    ),
+  );
+  yield* Effect.forkIn(outputPublishWorker, ownerScope, { startImmediately: true });
+  const totalLogBytes = () =>
+    [...tasks.values()].reduce((total, record) => total + record.logs.bytes, 0);
+  const enforceTotalLogBudget = () => {
+    let total = totalLogBytes();
+    while (total > retainedLogBudget) {
+      let selected: TaskRecord | undefined;
+      for (const record of tasks.values()) {
+        const first = record.logs.oldestEvent;
+        const selectedFirst = selected?.logs.oldestEvent;
+        if (first && (!selectedFirst || first.timestamp < selectedFirst.timestamp))
+          selected = record;
+      }
+      const dropped = selected?.logs.oldestEvent;
+      if (!selected || !dropped) break;
+      selected.logs = selected.logs.dropOldest();
+      total -= dropped.bytes;
+      selected.snapshot = {
+        ...selected.snapshot,
+        droppedLogBytes: selected.logs.droppedBytes,
+      };
+      wake(selected);
+    }
+  };
+  const trimRetention = () => {
+    const completed = [...tasks.values()]
+      .filter((record) => !isActiveTaskState(record.snapshot.state))
+      .sort((left, right) => (left.snapshot.endedAt ?? 0) - (right.snapshot.endedAt ?? 0));
+    while (tasks.size > config.maxRetained && completed.length > 0) {
+      const evicted = completed.shift();
+      if (evicted) tasks.delete(evicted.snapshot.id);
+    }
+  };
+  const completeRecord = (
+    record: TaskRecord,
+    exit: { readonly exitCode: number | null; readonly signal?: string; readonly error?: string },
+    endedAt: number,
+  ) => {
+    if (!isActiveTaskState(record.snapshot.state)) return;
+    const state: BackgroundTaskState = record.terminalOutcome
+      ? record.terminalOutcome
+      : exit.error || exit.exitCode !== 0
+        ? "failed"
+        : "exited";
+    record.snapshot = {
+      ...record.snapshot,
+      state,
+      endedAt,
+      exitCode: exit.exitCode,
+      ...(exit.signal && { signal: exit.signal }),
+      ...(exit.error && { error: exit.error }),
+      logCursor: record.logs.nextCursor - 1,
+      droppedLogBytes: record.logs.droppedBytes,
+    };
+    wake(record);
+    Deferred.doneUnsafe(record.completion, Effect.succeed(record.snapshot));
+    trimRetention();
+    publish();
+  };
+
+  const appendOutput = (
+    id: string,
+    stream: "stdout" | "stderr",
+    text: string,
+    droppedBytes: number,
+  ) =>
+    withLock(
+      Effect.gen(function* () {
+        const record = tasks.get(id);
+        if (!record || !isActiveTaskState(record.snapshot.state)) return;
+        const timestamp = yield* Clock.currentTimeMillis;
+        record.logs = record.logs
+          .addDropped(droppedBytes)
+          .append(stream, text, timestamp, config.logBufferBytesPerTask);
+        record.ingressDroppedObserved += droppedBytes;
+        record.snapshot = {
+          ...record.snapshot,
+          logCursor: record.logs.nextCursor - 1,
+          droppedLogBytes: record.logs.droppedBytes,
+        };
+        wake(record);
+        enforceTotalLogBudget();
+        // Output-driven publishes coalesce onto an interval; a trailing flush
+        // covers chunks that land between the leading edge and quiescence.
+        outputPublishPending = true;
+        if (timestamp >= outputPublishDeadline) {
+          outputPublishDeadline = timestamp + OUTPUT_PUBLISH_INTERVAL_MILLIS;
+          publish();
+        } else {
+          Latch.openUnsafe(outputPublishWake);
+        }
+      }),
+    );
+
+  type StopPreparation = {
+    readonly record: TaskRecord;
+    readonly owner: boolean;
+    readonly terminal?: BackgroundTaskSnapshot;
+  };
+
+  const requestStop = (
+    id: string,
+    force = false,
+    outcome: "stopped" | "timed_out" = "stopped",
+  ): Effect.Effect<
+    BackgroundTaskSnapshot,
+    BackgroundTaskNotFoundError | BackgroundTerminationError
+  > =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const prepared = yield* withLock(
+          Effect.suspend((): Effect.Effect<StopPreparation, BackgroundTaskNotFoundError> => {
+            const record = tasks.get(id);
+            if (!record) return Effect.fail(notFound(id));
+            if (!isActiveTaskState(record.snapshot.state)) {
+              return Effect.succeed({
+                record,
+                owner: false,
+                terminal: record.snapshot,
+              } satisfies StopPreparation);
+            }
+            const owner = !record.terminationStarted;
+            record.terminationStarted = true;
+            record.terminalOutcome ??= outcome;
+            record.snapshot = { ...record.snapshot, state: "stopping" };
+            wake(record);
+            publish();
+            return Effect.succeed({ record, owner } satisfies StopPreparation);
+          }),
+        );
+        if (prepared.terminal) return prepared.terminal;
+
+        const terminate = (handle: LocalProcessHandle, mode: "graceful" | "force") =>
+          handle
+            .terminate(mode)
+            .pipe(
+              Effect.mapError(
+                (error) => new BackgroundTerminationError({ id, message: error.message }),
+              ),
+            );
+        const stopPhase = Effect.gen(function* () {
+          const handle = Option.getOrUndefined(
+            Option.flatten(
+              yield* Deferred.await(prepared.record.handleReady).pipe(
+                Effect.option,
+                Effect.timeoutOption("5 seconds"),
+              ),
+            ),
+          );
+          if (!handle) return;
+          if (force) yield* terminate(handle, "force");
+          else if (prepared.owner) {
+            yield* terminate(handle, "graceful");
+            const settled = yield* Deferred.await(prepared.record.completion).pipe(
+              Effect.timeoutOption(Duration.millis(config.stopGraceMs)),
+            );
+            if (Option.isNone(settled)) yield* terminate(handle, "force");
+          }
+        });
+        // Keep this hook outside the timeout operators so their internal interruption cannot force twice.
+        yield* restore(stopPhase).pipe(
+          Effect.onInterrupt(() =>
+            prepared.owner
+              ? Effect.gen(function* () {
+                  const ready = yield* Deferred.poll(prepared.record.handleReady);
+                  if (Option.isSome(ready))
+                    yield* ready.value.pipe(Effect.flatMap((handle) => handle.terminate("force")));
+                }).pipe(Effect.ignore)
+              : Effect.void,
+          ),
+        );
+
+        const finalWait = yield* restore(
+          Deferred.await(prepared.record.completion).pipe(
+            Effect.timeoutOption(Duration.millis(Math.max(5_000, config.stopGraceMs + 5_000))),
+          ),
+        );
+        if (Option.isSome(finalWait)) return finalWait.value;
+        return yield* new BackgroundTerminationError({
+          id,
+          message: "Background process did not confirm exit after forced termination.",
+        });
+      }),
+    );
+
+  const monitor = (id: string, ownerRecord: TaskRecord, request: StartBackgroundTask) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const handle = yield* processes.spawn({
+          command: request.command,
+          cwd: request.cwd,
+          ingressBufferBytes: Math.max(
+            1,
+            Math.min(
+              config.logBufferBytesPerTask,
+              Math.floor(ingressLogBudget / config.maxRunning),
+            ),
+          ),
+          ...(config.shellPath && { shellPath: config.shellPath }),
+        });
+        const terminateLateHandle = yield* withLock(
+          Effect.sync(() => {
+            Deferred.doneUnsafe(ownerRecord.handleReady, Effect.succeed(handle));
+            const record = tasks.get(id);
+            if (record !== ownerRecord || !isActiveTaskState(ownerRecord.snapshot.state)) {
+              return true;
+            }
+            const stopping = ownerRecord.snapshot.state === "stopping";
+            ownerRecord.snapshot = {
+              ...ownerRecord.snapshot,
+              state: stopping ? "stopping" : "running",
+              pid: handle.pid,
+            };
+            wake(ownerRecord);
+            publish();
+            return stopping;
+          }),
+        );
+        if (terminateLateHandle) {
+          yield* handle.terminate("force").pipe(Effect.catch(() => Effect.void));
+        }
+        const outputFiber = yield* handle.output.pipe(
+          Stream.runForEach((event) =>
+            appendOutput(id, event.stream, event.text, event.droppedBytes),
+          ),
+          Effect.catchCause(() => Effect.void),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        if (request.timeoutSeconds !== undefined) {
+          yield* Effect.sleep(Duration.seconds(request.timeoutSeconds)).pipe(
+            Effect.andThen(requestStop(id, false, "timed_out")),
+            Effect.catch(() => Effect.void),
+            Effect.forkScoped({ startImmediately: true }),
+          );
+        }
+        const exit = yield* handle.awaitExit;
+        const drained = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
+        if (Option.isNone(drained)) yield* Fiber.interrupt(outputFiber);
+        const endedAt = yield* Clock.currentTimeMillis;
+        yield* withLock(
+          Effect.sync(() => {
+            const record = tasks.get(id);
+            if (record) {
+              const unobservedDrops = Math.max(
+                0,
+                handle.droppedOutputBytes() - record.ingressDroppedObserved,
+              );
+              record.logs = record.logs.addDropped(unobservedDrops);
+              record.ingressDroppedObserved += unobservedDrops;
+              completeRecord(record, exit, endedAt);
+            }
+          }),
+        );
+      }),
+    ).pipe(
+      Effect.catch((spawnError: LocalProcessError) =>
+        withLock(
+          Effect.gen(function* () {
+            const record = tasks.get(id);
+            Deferred.doneUnsafe(ownerRecord.handleReady, Effect.fail(spawnError));
+            if (record !== ownerRecord || !isActiveTaskState(ownerRecord.snapshot.state)) return;
+            const endedAt = yield* Clock.currentTimeMillis;
+            ownerRecord.snapshot = {
+              ...ownerRecord.snapshot,
+              state: "failed",
+              endedAt,
+              error: spawnError.message,
+            };
+            wake(ownerRecord);
+            Deferred.doneUnsafe(ownerRecord.completion, Effect.succeed(ownerRecord.snapshot));
+            trimRetention();
+            publish();
+          }),
+        ),
+      ),
+    );
+
+  const start: BackgroundTaskServiceContract["start"] = (request) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const command = request.command.trim();
+        if (!command) {
+          return yield* new InvalidBackgroundCommandError({
+            message: "Background command must not be empty.",
+          });
+        }
+        if (
+          request.timeoutSeconds !== undefined &&
+          (!Number.isFinite(request.timeoutSeconds) || request.timeoutSeconds <= 0)
+        ) {
+          return yield* new InvalidBackgroundCommandError({
+            message: "Background timeout must be a positive finite number of seconds.",
+          });
+        }
+        const cwd = path.resolve(request.cwd);
+        const prepared = { ...request, command, cwd };
+        const record = yield* withLock(
+          Effect.gen(function* () {
+            if (admissionsClosed || !config.enabled) {
+              return yield* new BackgroundRuntimeClosedError({
+                message: admissionsClosed
+                  ? "Background task runtime is closed."
+                  : "Background tasks are disabled.",
+              });
+            }
+            const active = [...tasks.values()].filter((item) =>
+              isActiveTaskState(item.snapshot.state),
+            ).length;
+            if (active >= config.maxRunning) {
+              return yield* new BackgroundTaskCapacityError({
+                limit: config.maxRunning,
+                message: `Background task capacity reached (${config.maxRunning}).`,
+              });
+            }
+            const startedAt = yield* Clock.currentTimeMillis;
+            const id = `task-${nextId++}`;
+            const name = request.name?.trim();
+            const created: TaskRecord = {
+              snapshot: {
+                id,
+                command,
+                cwd,
+                state: "starting",
+                startedAt,
+                logCursor: 0,
+                droppedLogBytes: 0,
+                ...(name && { name }),
+              },
+              logs: LogBuffer.empty(),
+              wake: Deferred.makeUnsafe<void>(),
+              completion: Deferred.makeUnsafe<BackgroundTaskSnapshot>(),
+              handleReady: Deferred.makeUnsafe<LocalProcessHandle, LocalProcessError>(),
+              terminationStarted: false,
+              ingressDroppedObserved: 0,
+            };
+            tasks.set(id, created);
+            publish();
+            return created;
+          }),
+        );
+        yield* monitor(record.snapshot.id, record, prepared).pipe(
+          Effect.forkIn(monitorScope, { startImmediately: true }),
+        );
+        return yield* restore(Deferred.await(record.handleReady)).pipe(
+          Effect.andThen(Effect.sync(() => record.snapshot)),
+          Effect.mapError((error) =>
+            error.operation === "inspect working directory"
+              ? new InvalidBackgroundCwdError({ cwd, message: error.message })
+              : new BackgroundSpawnError({ message: error.message }),
+          ),
+        );
+      }),
+    );
+
+  const list: BackgroundTaskServiceContract["list"] = (filter = "all") =>
+    withLock(
+      Effect.sync(() =>
+        sortTasksByActivity(
+          [...tasks.values()]
+            .map((record) => record.snapshot)
+            .filter((snapshot) =>
+              filter === "all"
+                ? true
+                : filter === "active"
+                  ? isActiveTaskState(snapshot.state)
+                  : !isActiveTaskState(snapshot.state),
+            ),
+        ),
+      ),
+    );
+
+  const status: BackgroundTaskServiceContract["status"] = (id) =>
+    withLock(
+      Effect.suspend(() => {
+        const record = tasks.get(id);
+        return record ? Effect.succeed(record.snapshot) : Effect.fail(notFound(id));
+      }),
+    );
+
+  const logs: BackgroundTaskServiceContract["logs"] = (request) =>
+    Effect.gen(function* () {
+      const prepared = yield* withLock(
+        Effect.suspend(() => {
+          const record = tasks.get(request.id);
+          if (!record) return Effect.fail(notFound(request.id));
+          const slice = readLogBuffer(request.id, record.logs, record.snapshot.state, request);
+          const shouldWait =
+            (request.waitSeconds ?? 0) > 0 &&
+            slice.events.length === 0 &&
+            isActiveTaskState(record.snapshot.state);
+          return Effect.succeed({ slice, wake: shouldWait ? record.wake : undefined });
+        }),
+      );
+      if (!prepared.wake) return prepared.slice;
+      yield* Deferred.await(prepared.wake).pipe(
+        Effect.timeoutOption(
+          Duration.seconds(Math.min(request.waitSeconds ?? 0, config.maxLogWaitSeconds)),
+        ),
+      );
+      return yield* logs({ ...request, waitSeconds: 0 });
+    });
+
+  const stop: BackgroundTaskServiceContract["stop"] = (id, force) => requestStop(id, force);
+  const stopAll: BackgroundTaskServiceContract["stopAll"] = (force = false) =>
+    Effect.gen(function* () {
+      const ids = yield* withLock(
+        Effect.sync(() =>
+          [...tasks.values()]
+            .filter((record) => isActiveTaskState(record.snapshot.state))
+            .map((record) => record.snapshot.id),
+        ),
+      );
+      // Partition isolates typed failures; interruption and defects still interrupt the batch.
+      const [failures, settled] = yield* Effect.partition(
+        ids,
+        (id) =>
+          requestStop(id, force).pipe(
+            // A task can settle and be evicted between capture and stop; that race is success.
+            Effect.catchTag("BackgroundTaskNotFoundError", () => Effect.undefined),
+          ),
+        { concurrency: 8 },
+      );
+      if (failures.length > 0) {
+        return yield* new BackgroundTerminationError({
+          id: failures.map((failure) => failure.id).join(", "),
+          message: failures.map((failure) => `${failure.id}: ${failure.message}`).join(" · "),
+        });
+      }
+      return settled.filter((snapshot) => snapshot !== undefined);
+    });
+  const clear = withLock(
+    Effect.sync(() => {
+      let removed = 0;
+      for (const [id, record] of tasks) {
+        if (isActiveTaskState(record.snapshot.state)) continue;
+        tasks.delete(id);
+        removed += 1;
+      }
+      if (removed > 0) publish();
+      return removed;
+    }),
+  );
+
+  const service: BackgroundTaskServiceContract = {
+    start,
+    list,
+    status,
+    logs,
+    stop,
+    stopAll,
+    clear,
+  };
+
+  yield* Effect.addFinalizer(() =>
+    withLock(
+      Effect.sync(() => {
+        admissionsClosed = true;
+      }),
+    ).pipe(
+      Effect.andThen(stopAll(false)),
+      Effect.asVoid,
+      Effect.catch(() => Effect.void),
+    ),
+  );
+
+  return service;
+});
+
+export class BackgroundTaskService extends Context.Service<
+  BackgroundTaskService,
+  BackgroundTaskServiceContract
+>()("pi-background-task/task/service/BackgroundTaskService") {
+  static readonly layer = (options: BackgroundTaskServiceOptions = {}) =>
+    Layer.effect(this, makeService(options));
+}

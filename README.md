@@ -8,7 +8,7 @@ A pnpm workspace for Pi extensions.
 - [`pi-ask-user`](packages/pi-ask-user) — structured, responsive questionnaires for decisions the agent should not guess.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
-- [`pi-background-terminals`](packages/pi-background-terminals) — session-scoped background jobs with an agent tool and full-screen `/ps` manager.
+- [`pi-background-task`](packages/pi-background-task) — session-scoped background tasks with an agent tool and full-screen `/tasks` manager.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
@@ -29,7 +29,7 @@ Install the published extensions with pi:
 pi install npm:pi-ask-user
 pi install npm:pi-better-openai
 pi install npm:pi-better-xai
-pi install npm:pi-background-terminals
+pi install npm:pi-background-task
 pi install npm:pi-code-previews
 pi install npm:pi-cosmic-ui
 pi install npm:pi-directory-models

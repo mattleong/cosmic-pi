@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-ask-user`, `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-mode`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` and `pi-herdr-btw` remain local-only, and the nested private `pi-code-mode-runtime` is never published on its own (its TypeScript source ships inside the `pi-code-mode` tarball and loads through Pi/Jiti). A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
+All workspace packages use the same version. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-better-xai`, `pi-code-mode`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` and `pi-herdr-btw` remain local-only, and the nested private `pi-code-mode-runtime` is never published on its own (its TypeScript source ships inside the `pi-code-mode` tarball and loads through Pi/Jiti). A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
 
 ## One-time setup
 
@@ -9,7 +9,7 @@ Before the first release:
 1. Create and push the `mattleong/cosmic-pi` GitHub repository.
 2. On npm, configure trusted publishing for every public package:
    - `pi-ask-user`
-   - `pi-background-terminals`
+   - `pi-background-task`
    - `pi-better-openai`
    - `pi-better-xai`
    - `pi-code-mode`
@@ -90,7 +90,7 @@ Watch the **Publish npm packages** workflow in GitHub Actions. After it succeeds
 
 ```bash
 npm view pi-ask-user version
-npm view pi-background-terminals version
+npm view pi-background-task version
 npm view pi-better-openai version
 npm view pi-better-xai version
 npm view pi-code-mode version

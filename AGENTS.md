@@ -6,7 +6,7 @@
 - `packages/pi-ask-user/` contains the structured user-questionnaire extension.
 - `packages/pi-better-openai/` contains the Better OpenAI pi extension.
 - `packages/pi-better-xai/` contains the Better xAI subscription usage extension.
-- `packages/pi-background-terminals/` contains the session-scoped background process extension.
+- `packages/pi-background-task/` contains the session-scoped background task extension.
 - `packages/pi-code-mode/` contains the Code Mode Pi extension: the `code_mode` agent tool (confined interpreted programs over all seven `tools.pi` built-ins), trusted-project-only scoped settings, session lifecycle, and `/code-mode-settings`. Nested built-ins deliberately use direct fresh definitions rather than Pi middleware or registered overrides (ADR 0004).
 - `packages/pi-code-mode/runtime/` contains the private, host-neutral Code Mode execution runtime vendored from OpenCode 2 (no Pi imports; see its `PROVENANCE.md`). It is a nested workspace package whose TypeScript `src/` ships inside the `pi-code-mode` tarball; Pi/Jiti loads it only through `pi-code-mode`'s `src/boundary/codemode-runtime.ts` door.
 - `packages/pi-code-previews/` contains the code-preview pi extension.

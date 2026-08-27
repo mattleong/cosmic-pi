@@ -39,7 +39,7 @@ const MANAGER_STATE_GLYPHS = {
   stopping: "◒",
 } satisfies Readonly<Record<ManagerStateGlyphKind, string>>;
 
-/** Shared terminal-state glyph pairs for manager rows (`/subagents`, `/ps`). */
+/** Shared terminal-state glyph pairs for manager rows (`/subagents`, `/tasks`). */
 export const managerStateGlyph = (kind: ManagerStateGlyphKind): string =>
   MANAGER_STATE_GLYPHS[kind];
 
