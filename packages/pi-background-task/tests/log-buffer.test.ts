@@ -6,7 +6,7 @@ describe("background log buffer", () => {
   it("counts UTF-8 bytes and retains a valid tail", () => {
     const buffer = LogBuffer.empty().append("stdout", "a🙂bc", 1, 6);
     expect(buffer.bytes).toBeLessThanOrEqual(6);
-    expect(buffer.events[0]?.text).toBe("🙂bc");
+    expect(buffer.events[0]).toMatchObject({ text: "🙂bc", droppedBefore: true });
     expect(buffer.droppedBytes).toBe(1);
   });
 

@@ -15,6 +15,8 @@ export interface BackgroundLogEvent {
   readonly text: string;
   readonly timestamp: number;
   readonly bytes: number;
+  /** True when bytes immediately before this retained chunk were discarded. */
+  readonly droppedBefore?: true;
 }
 
 export interface BackgroundTaskSnapshot {
@@ -62,6 +64,27 @@ export interface ReadBackgroundLogs {
   readonly afterCursor?: number;
   readonly tailLines?: number;
   readonly waitSeconds?: number;
+}
+
+export type BackgroundTaskWaitUntil = "exit" | "output";
+export type BackgroundTaskWaitOutcome = "matched" | "completed" | "timeout";
+
+export interface WaitForBackgroundTask {
+  readonly id: string;
+  readonly until: BackgroundTaskWaitUntil;
+  readonly contains?: string;
+  readonly afterCursor?: number;
+  readonly waitSeconds?: number;
+}
+
+export interface BackgroundTaskWaitResult {
+  readonly id: string;
+  readonly outcome: BackgroundTaskWaitOutcome;
+  readonly snapshot: BackgroundTaskSnapshot;
+  readonly nextCursor: number;
+  readonly earliestAvailableCursor: number;
+  readonly droppedBytes: number;
+  readonly matchCursor?: number;
 }
 
 const ACTIVE_TASK_STATES: ReadonlySet<BackgroundTaskState> = new Set([

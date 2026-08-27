@@ -18,9 +18,13 @@ import {
 import { Type } from "typebox";
 import { BackgroundTaskService } from "../task/service.ts";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
-import type { BackgroundTaskSnapshot, BackgroundLogSlice } from "../task/model.ts";
+import type {
+  BackgroundTaskSnapshot,
+  BackgroundLogSlice,
+  BackgroundTaskWaitResult,
+} from "../task/model.ts";
 
-const ACTIONS = ["start", "list", "status", "logs", "stop", "stop_all", "clear"] as const;
+const ACTIONS = ["start", "list", "status", "logs", "wait", "stop", "stop_all", "clear"] as const;
 
 const parameters = Type.Object({
   action: StringEnum(ACTIONS, { description: "Background task operation" }),
@@ -37,12 +41,20 @@ const parameters = Type.Object({
       description: "Optional runtime limit; omitted means no timeout",
     }),
   ),
-  id: Type.Optional(Type.String({ description: "Task ID for status, logs, or stop" })),
+  id: Type.Optional(Type.String({ description: "Task ID for status, logs, wait, or stop" })),
   state: Type.Optional(
     StringEnum(["active", "completed", "all"] as const, { description: "List filter" }),
   ),
+  until: Type.Optional(StringEnum(["exit", "output"] as const, { description: "Wait condition" })),
+  contains: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 256,
+      description: "Literal output text required when waiting for output",
+    }),
+  ),
   afterCursor: Type.Optional(
-    Type.Integer({ minimum: 0, description: "Return logs after this cursor" }),
+    Type.Integer({ minimum: 0, description: "Read or match output after this cursor" }),
   ),
   tailLines: Type.Optional(
     Type.Integer({
@@ -52,7 +64,11 @@ const parameters = Type.Object({
     }),
   ),
   waitSeconds: Type.Optional(
-    Type.Number({ minimum: 0, maximum: 30, description: "Long-poll wait for newer logs" }),
+    Type.Number({
+      minimum: 0,
+      maximum: 120,
+      description: "Long-poll duration for logs or wait; wait defaults to configured maximum",
+    }),
   ),
   force: Type.Optional(Type.Boolean({ description: "Force immediate process-tree termination" })),
 });
@@ -62,6 +78,7 @@ export interface BackgroundTaskToolDetails {
   readonly snapshot?: BackgroundTaskSnapshot;
   readonly tasks?: ReadonlyArray<BackgroundTaskSnapshot>;
   readonly logs?: BackgroundLogSlice;
+  readonly wait?: BackgroundTaskWaitResult;
   readonly removed?: number;
   readonly truncation?: ReturnType<typeof truncateTail>;
 }
@@ -82,6 +99,13 @@ const formatTask = (task: BackgroundTaskSnapshot) => {
   const suffix = task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`;
   return sanitizeTerminalLine(
     `${task.id}${task.name ? ` ${task.name}` : ""} ${task.state}${suffix} — ${task.command}`,
+  );
+};
+
+const formatWait = (result: BackgroundTaskWaitResult): string => {
+  const cursor = result.matchCursor ?? result.nextCursor;
+  return sanitizeTerminalLine(
+    `${result.id} ${result.outcome} state=${result.snapshot.state} cursor=${cursor}`,
   );
 };
 
@@ -120,11 +144,11 @@ export function registerBackgroundTaskTool(
     name: "background_task",
     label: "Background Task",
     description:
-      "Start and manage session-scoped local background commands. Actions: start, list, status, logs, stop, stop_all, clear. Output is bounded; tasks are terminated when the Pi session closes.",
+      "Start and manage session-scoped local background commands. Actions: start, list, status, logs, wait, stop, stop_all, clear. Output is bounded; tasks are terminated when the Pi session closes.",
     promptSnippet: "Start and manage long-running local commands without blocking the current turn",
     promptGuidelines: [
       "Use background_task only when a server, watcher, long test suite, or other command can run independently; use bash when validation or the next step must finish before responding.",
-      "After starting a background task, continue independent work. When completion becomes actionable, check status once; do not repeatedly poll status or logs merely to watch progress.",
+      "After starting a background task, continue independent work. At a dependency barrier, use wait once instead of polling status or logs.",
       "Use logs only when output is needed for a decision, the task fails, or the user asks. For one bounded snapshot, omit afterCursor and set a small tailLines value. For incremental reads, set afterCursor to the previous nextCursor and optionally waitSeconds; tailLines does not apply when afterCursor is set.",
       "Stop background tasks when they are no longer needed; every task is terminated when the Pi session is replaced or shut down.",
     ],
@@ -175,6 +199,22 @@ export function registerBackgroundTaskTool(
                   ? { ...logDetails, truncation: formatted.truncation }
                   : logDetails,
               );
+            }
+            case "wait": {
+              const until = input.until;
+              if (until === undefined) {
+                return yield* new InvalidBackgroundCommandError({
+                  message: "until is required for the background_task wait action.",
+                });
+              }
+              const result = yield* service.wait({
+                id: yield* required(input.id, "id"),
+                until,
+                ...(input.contains !== undefined && { contains: input.contains }),
+                ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
+                ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
+              });
+              return reply(formatWait(result), { action: input.action, wait: result });
             }
             case "stop": {
               const snapshot = yield* service.stop(yield* required(input.id, "id"), input.force);

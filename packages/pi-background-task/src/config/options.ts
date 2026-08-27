@@ -31,9 +31,9 @@ export function normalizeConfig(value: Partial<BackgroundTaskConfig> = {}): Back
       0,
       30_000,
     ),
-    maxLogWaitSeconds: integerIn(
-      value.maxLogWaitSeconds,
-      DEFAULT_BACKGROUND_TASK_CONFIG.maxLogWaitSeconds,
+    maxWaitSeconds: integerIn(
+      value.maxWaitSeconds,
+      DEFAULT_BACKGROUND_TASK_CONFIG.maxWaitSeconds,
       0,
       120,
     ),

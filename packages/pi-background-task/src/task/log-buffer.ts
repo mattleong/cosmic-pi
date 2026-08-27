@@ -80,6 +80,7 @@ export class LogBuffer {
     text: string,
     timestamp: number,
     maxBytes: number,
+    droppedBefore = false,
   ): LogBuffer {
     if (!text) return this;
     const originalBytes = utf8ByteLength(text);
@@ -97,6 +98,7 @@ export class LogBuffer {
         text: tail.text,
         timestamp,
         bytes: tail.bytes,
+        ...((droppedBefore || tail.bytes < originalBytes) && { droppedBefore: true }),
       });
       end += 1;
     }

@@ -63,7 +63,7 @@ describe("background task config", () => {
       logBufferBytesPerTask: 8_192,
       totalLogBufferBytes: 1,
       stopGraceMs: -1,
-      maxLogWaitSeconds: 999,
+      maxWaitSeconds: 999,
       shellPath: "  /bin/zsh  ",
     });
     expect(config.enabled).toBe(false);
@@ -71,7 +71,7 @@ describe("background task config", () => {
     expect(config.maxRetained).toBe(500);
     expect(config.totalLogBufferBytes).toBeGreaterThanOrEqual(config.logBufferBytesPerTask);
     expect(config.stopGraceMs).toBe(0);
-    expect(config.maxLogWaitSeconds).toBe(120);
+    expect(config.maxWaitSeconds).toBe(120);
     expect(config.shellPath).toBe("/bin/zsh");
   });
 

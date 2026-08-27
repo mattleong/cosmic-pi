@@ -28,7 +28,7 @@ import { BackgroundTaskService } from "../src/task/service.ts";
 interface FakeProcessControl {
   readonly handle: LocalProcessHandle;
   readonly modes: Array<"graceful" | "force">;
-  readonly offer: (stream: "stdout" | "stderr", text: string) => void;
+  readonly offer: (stream: "stdout" | "stderr", text: string, droppedBytes?: number) => void;
   readonly complete: (exit?: LocalProcessExit) => void;
 }
 
@@ -100,8 +100,8 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
           controls.push({
             handle,
             modes,
-            offer: (stream, text) =>
-              void Queue.offerUnsafe(output, { stream, text, droppedBytes: 0 }),
+            offer: (stream, text, droppedBytes = 0) =>
+              void Queue.offerUnsafe(output, { stream, text, droppedBytes }),
             complete,
           });
           yield* Deferred.succeed(spawned, undefined);
@@ -208,6 +208,251 @@ describe("BackgroundTaskService", () => {
       harness.controls[0]?.complete();
       yield* Deferred.await(terminal.reached);
       expect(yield* service.status(started.id)).toMatchObject({ state: "exited", exitCode: 0 });
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("waits for literal output across retained chunks", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const waiting = yield* service
+        .wait({
+          id: started.id,
+          until: "output",
+          contains: "ready now",
+          afterCursor: 0,
+          waitSeconds: 30,
+        })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+
+      harness.controls[0]?.offer("stdout", "rea");
+      yield* Effect.yieldNow;
+      harness.controls[0]?.offer("stdout", "dy now\n");
+      const result = yield* Fiber.join(waiting);
+
+      expect(result).toMatchObject({
+        id: started.id,
+        outcome: "matched",
+        matchCursor: 2,
+        nextCursor: 2,
+        snapshot: { state: "running" },
+      });
+      yield* service.stop(started.id);
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("matches literal output already retained before the wait starts", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const read = yield* service
+        .logs({ id: started.id, afterCursor: 0, waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      harness.controls[0]?.offer("stdout", "server ready\n");
+      yield* Fiber.join(read);
+
+      expect(
+        yield* service.wait({
+          id: started.id,
+          until: "output",
+          contains: "ready",
+          waitSeconds: 0,
+        }),
+      ).toMatchObject({ outcome: "matched", matchCursor: 1 });
+      yield* service.stop(started.id);
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("does not match a literal across stdout and stderr boundaries", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const firstRead = yield* service
+        .logs({ id: started.id, afterCursor: 0, waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      harness.controls[0]?.offer("stdout", "rea");
+      const first = yield* Fiber.join(firstRead);
+      const secondRead = yield* service
+        .logs({ id: started.id, afterCursor: first.nextCursor, waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      harness.controls[0]?.offer("stderr", "dy");
+      yield* Fiber.join(secondRead);
+
+      expect(
+        yield* service.wait({
+          id: started.id,
+          until: "output",
+          contains: "ready",
+          waitSeconds: 0,
+        }),
+      ).toMatchObject({ outcome: "timeout", snapshot: { state: "running" } });
+      yield* service.stop(started.id);
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("does not match across discarded output", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const waiting = yield* service
+        .wait({
+          id: started.id,
+          until: "output",
+          contains: "ready",
+          waitSeconds: 30,
+        })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+
+      harness.controls[0]?.offer("stdout", "rea");
+      yield* Effect.yieldNow;
+      harness.controls[0]?.offer("stdout", "dy", 10);
+      harness.controls[0]?.complete();
+      expect(yield* Fiber.join(waiting)).toMatchObject({
+        outcome: "completed",
+        snapshot: { state: "exited" },
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("resets every stream carry when dropped bytes attach to another stream", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const waiting = yield* service
+        .wait({
+          id: started.id,
+          until: "output",
+          contains: "ready",
+          waitSeconds: 30,
+        })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+
+      harness.controls[0]?.offer("stdout", "rea");
+      yield* Effect.yieldNow;
+      harness.controls[0]?.offer("stderr", "diagnostic", 10);
+      harness.controls[0]?.offer("stdout", "dy");
+      harness.controls[0]?.complete();
+      expect(yield* Fiber.join(waiting)).toMatchObject({ outcome: "completed" });
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("does not rebase a future output cursor", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const waiting = yield* service
+        .wait({
+          id: started.id,
+          until: "output",
+          contains: "ready",
+          afterCursor: 10,
+          waitSeconds: 30,
+        })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+
+      harness.controls[0]?.offer("stdout", "ready");
+      harness.controls[0]?.complete();
+      expect(yield* Fiber.join(waiting)).toMatchObject({ outcome: "completed" });
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("waits for exit and returns the terminal snapshot", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "check", cwd: "." });
+      const waiting = yield* service
+        .wait({ id: started.id, until: "exit", waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+
+      harness.controls[0]?.complete({ exitCode: 1 });
+      expect(yield* Fiber.join(waiting)).toMatchObject({
+        outcome: "completed",
+        snapshot: { state: "failed", exitCode: 1 },
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("returns completed when a task exits before an output match", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "check", cwd: "." });
+      const waiting = yield* service
+        .wait({
+          id: started.id,
+          until: "output",
+          contains: "never printed",
+          waitSeconds: 30,
+        })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+
+      harness.controls[0]?.complete();
+      expect(yield* Fiber.join(waiting)).toMatchObject({
+        outcome: "completed",
+        snapshot: { state: "exited", exitCode: 0 },
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("returns a normal timeout result without stopping the task", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const waiting = yield* service
+        .wait({ id: started.id, until: "exit", waitSeconds: 5 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("5 seconds");
+      expect(yield* Fiber.join(waiting)).toMatchObject({
+        outcome: "timeout",
+        snapshot: { state: "running" },
+      });
+      expect((yield* service.status(started.id)).state).toBe("running");
+      yield* service.stop(started.id);
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("interrupts a wait without mutating the task", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const waiting = yield* service
+        .wait({ id: started.id, until: "exit", waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(waiting);
+      expect((yield* service.status(started.id)).state).toBe("running");
+      yield* service.stop(started.id);
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("rejects an invalid output wait predicate", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      expect(
+        yield* service
+          .wait({ id: started.id, until: "output", contains: "", waitSeconds: 1 })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "InvalidBackgroundCommandError" });
+      expect(
+        yield* service
+          .wait({ id: started.id, until: "exit", contains: "irrelevant", waitSeconds: 1 })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "InvalidBackgroundCommandError" });
+      yield* service.stop(started.id);
     }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 

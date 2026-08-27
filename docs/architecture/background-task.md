@@ -99,7 +99,7 @@ Recommended defaults:
 - Per-task in-memory log buffer: 256 KiB.
 - Total in-memory log budget: 2 MiB.
 - Stop grace period: 2 seconds.
-- Maximum long-poll wait: 30 seconds.
+- Maximum task wait and log long-poll duration: 30 seconds.
 
 Capacity applies to `starting`, `running`, and `stopping` tasks. When retention exceeds its limit, evict the oldest completed tasks only. Never evict an active task.
 
@@ -127,6 +127,7 @@ interface BackgroundLogSlice {
     readonly text: string;
     readonly timestamp: number;
     readonly bytes: number;
+    readonly droppedBefore?: true;
   }>;
   readonly nextCursor: number;
   readonly earliestAvailableCursor: number;
@@ -177,9 +178,21 @@ Inputs:
 - `id` — required.
 - `afterCursor` — optional; omit to receive the current tail.
 - `tailLines` — optional when `afterCursor` is absent; default 200, maximum 2,000.
-- `waitSeconds` — optional long-poll duration from 0 through 30 seconds.
+- `waitSeconds` — optional long-poll duration from 0 through `maxWaitSeconds`.
 
 If no newer log event exists and the task is active, wait until output arrives, the task settles, the caller aborts, or `waitSeconds` expires. Return a cursor even when no output arrives. This avoids repeated fixed-delay polling.
+
+#### `wait`
+
+Inputs:
+
+- `id` — required.
+- `until` — required; either `exit` or `output`.
+- `contains` — required for `output`; a case-sensitive literal of at most 256 characters.
+- `afterCursor` — optional for `output`; defaults to 0.
+- `waitSeconds` — optional duration from 0 through `maxWaitSeconds`; defaults to that configured maximum.
+
+The result outcome is `matched`, `completed`, or `timeout`. Output matching scans retained output after the requested cursor and then waits on the task's output signal; matching may span retained chunks from the same output stream, while any discarded-byte boundary resets all partial matches because ingress-drop accounting may cross streams. Task completion wins over an unmatched output predicate. Timeout is normal result data and never stops the task.
 
 #### `stop`
 
@@ -208,7 +221,7 @@ Suggested guidelines:
 
 - The main agent should decide whether a command belongs in `background_task` based on whether work can continue independently; use `bash` when the next step immediately depends on command completion.
 - Use `background_task` for servers, watchers, long-running test suites, and other processes that should remain active while the agent continues working.
-- Use `background_task` log cursors and long polling instead of repeatedly polling at fixed intervals.
+- At a dependency barrier, use `background_task` `wait` once instead of polling status or logs.
 - Stop background tasks when they are no longer needed. All tasks are terminated when the Pi session is replaced or shut down.
 
 ### 5.3 Tool rendering
@@ -228,7 +241,7 @@ Terminal states use success, warning, or error colors. Expanded results include 
 
 This is the only slash command in the MVP. It opens the interactive task manager in TUI mode and does not accept operational subcommands.
 
-Starting, listing, reading, stopping, and clearing tasks are agent-facing operations exposed through `background_task`. A user who wants work placed in the background asks the main agent naturally rather than manually translating that intent into process commands.
+Starting, listing, reading, waiting, stopping, and clearing tasks are agent-facing operations exposed through `background_task`. A user who wants work placed in the background asks the main agent naturally rather than manually translating that intent into process commands.
 
 The TUI manager may still provide direct stop and clear controls as an emergency human override. It does not provide a command-entry field or a separate path for starting tasks.
 
@@ -373,7 +386,7 @@ Configuration shape and defaults:
   "logBufferBytesPerTask": 262144,
   "totalLogBufferBytes": 2097152,
   "stopGraceMs": 2000,
-  "maxLogWaitSeconds": 30,
+  "maxWaitSeconds": 30,
   "showFooterStatus": true,
   "shellPath": null
 }
@@ -405,6 +418,8 @@ Cover:
 - Capacity rejects excess active tasks but permits starts after completion.
 - Output ordering, split UTF-8 decoding, cursor reads, and dropped-byte reporting.
 - A log long-poll wakes on output, exit, timeout, caller interruption, and shutdown.
+- An output wait matches retained and future literal text across chunk boundaries, reports its cursor, and returns completion or timeout without polling.
+- An exit wait returns the terminal snapshot; interruption leaves no registered waiter or task mutation.
 - Concurrent stop requests share one termination workflow.
 - Graceful stop escalates only after `TestClock` advances past the grace period.
 - Interrupting a stop owner after graceful dispatch forces the settled handle, and a later stop observes `stopped`.
@@ -457,7 +472,7 @@ The MVP is complete when:
 
 1. The main agent can decide to start a long-running command and receive a task ID without waiting for exit.
 2. The user can view all tasks and live bounded logs in `/tasks`.
-3. The main agent can list, inspect, long-poll logs, stop, stop all, and clear tasks through one tool without operational slash commands.
+3. The main agent can list, inspect, long-poll logs, wait for exit or literal output, stop, stop all, and clear tasks through one tool without operational slash commands.
 4. Output memory remains within configured per-task and total bounds under sustained noisy output.
 5. Session shutdown leaves no child process tree after graceful cleanup on supported platforms.
 6. Start/stop/exit/shutdown races settle tasks exactly once.

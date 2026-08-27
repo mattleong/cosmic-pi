@@ -37,7 +37,7 @@ function decodeConfig<ValueInput>(value: ValueInput): Partial<BackgroundTaskConf
       logBufferBytesPerTask: FiniteNumberSchema,
       totalLogBufferBytes: FiniteNumberSchema,
       stopGraceMs: FiniteNumberSchema,
-      maxLogWaitSeconds: FiniteNumberSchema,
+      maxWaitSeconds: FiniteNumberSchema,
       showFooterStatus: Schema.Boolean,
       shellPath: Schema.String,
     },

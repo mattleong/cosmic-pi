@@ -7,7 +7,7 @@ export interface BackgroundTaskConfig {
   readonly logBufferBytesPerTask: number;
   readonly totalLogBufferBytes: number;
   readonly stopGraceMs: number;
-  readonly maxLogWaitSeconds: number;
+  readonly maxWaitSeconds: number;
   readonly showFooterStatus: boolean;
   readonly shellPath?: string;
 }
@@ -19,7 +19,7 @@ export const DEFAULT_BACKGROUND_TASK_CONFIG: BackgroundTaskConfig = {
   logBufferBytesPerTask: 256 * 1024,
   totalLogBufferBytes: 2 * 1024 * 1024,
   stopGraceMs: 2_000,
-  maxLogWaitSeconds: 30,
+  maxWaitSeconds: 30,
   showFooterStatus: true,
 };
 

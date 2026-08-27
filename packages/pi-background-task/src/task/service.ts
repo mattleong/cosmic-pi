@@ -34,9 +34,12 @@ import {
   type BackgroundTaskSnapshot,
   type BackgroundTaskState,
   type BackgroundLogSlice,
+  type BackgroundLogStream,
   type BackgroundTaskProjection,
+  type BackgroundTaskWaitResult,
   type ReadBackgroundLogs,
   type StartBackgroundTask,
+  type WaitForBackgroundTask,
 } from "./model.ts";
 
 interface TaskRecord {
@@ -49,6 +52,15 @@ interface TaskRecord {
   terminalOutcome?: "stopped" | "timed_out";
   ingressDroppedObserved: number;
 }
+
+type WaitInspection =
+  | { readonly _tag: "result"; readonly result: BackgroundTaskWaitResult }
+  | {
+      readonly _tag: "pending";
+      readonly awaitChange: Effect.Effect<void>;
+      readonly snapshot: BackgroundTaskSnapshot;
+      readonly slice: BackgroundLogSlice;
+    };
 
 export type BackgroundTaskFilter = "active" | "completed" | "all";
 
@@ -65,6 +77,12 @@ export interface BackgroundTaskServiceContract {
   readonly logs: (
     request: ReadBackgroundLogs,
   ) => Effect.Effect<BackgroundLogSlice, BackgroundTaskNotFoundError>;
+  readonly wait: (
+    request: WaitForBackgroundTask,
+  ) => Effect.Effect<
+    BackgroundTaskWaitResult,
+    BackgroundTaskNotFoundError | InvalidBackgroundCommandError
+  >;
   readonly stop: (
     id: string,
     force?: boolean,
@@ -82,8 +100,24 @@ export interface BackgroundTaskServiceOptions {
 const notFound = (id: string) =>
   new BackgroundTaskNotFoundError({ id, message: `Background task not found: ${id}` });
 
+const waitResult = (
+  snapshot: BackgroundTaskSnapshot,
+  slice: BackgroundLogSlice,
+  outcome: BackgroundTaskWaitResult["outcome"],
+  matchCursor?: number,
+): BackgroundTaskWaitResult => ({
+  id: snapshot.id,
+  outcome,
+  snapshot,
+  nextCursor: slice.nextCursor,
+  earliestAvailableCursor: slice.earliestAvailableCursor,
+  droppedBytes: slice.droppedBytes,
+  ...(matchCursor !== undefined && { matchCursor }),
+});
+
 /** Output chunks coalesce into at most one projection publish per interval. */
 const OUTPUT_PUBLISH_INTERVAL_MILLIS = 1_000;
+const MAX_WAIT_PATTERN_CHARS = 256;
 
 const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   options: BackgroundTaskServiceOptions,
@@ -221,7 +255,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         const timestamp = yield* Clock.currentTimeMillis;
         record.logs = record.logs
           .addDropped(droppedBytes)
-          .append(stream, text, timestamp, config.logBufferBytesPerTask);
+          .append(stream, text, timestamp, config.logBufferBytesPerTask, droppedBytes > 0);
         record.ingressDroppedObserved += droppedBytes;
         record.snapshot = {
           ...record.snapshot,
@@ -544,10 +578,124 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       if (!prepared.wake) return prepared.slice;
       yield* Deferred.await(prepared.wake).pipe(
         Effect.timeoutOption(
-          Duration.seconds(Math.min(request.waitSeconds ?? 0, config.maxLogWaitSeconds)),
+          Duration.seconds(Math.min(request.waitSeconds ?? 0, config.maxWaitSeconds)),
         ),
       );
       return yield* logs({ ...request, waitSeconds: 0 });
+    });
+
+  const wait: BackgroundTaskServiceContract["wait"] = (request) =>
+    Effect.gen(function* () {
+      const waitSeconds = request.waitSeconds ?? config.maxWaitSeconds;
+      if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
+        return yield* new InvalidBackgroundCommandError({
+          message: "Background task wait must be a non-negative finite number of seconds.",
+        });
+      }
+      if (
+        request.afterCursor !== undefined &&
+        (!Number.isInteger(request.afterCursor) || request.afterCursor < 0)
+      ) {
+        return yield* new InvalidBackgroundCommandError({
+          message: "Background task wait cursor must be a non-negative integer.",
+        });
+      }
+      const contains = request.contains;
+      if (
+        request.until === "exit" &&
+        (contains !== undefined || request.afterCursor !== undefined)
+      ) {
+        return yield* new InvalidBackgroundCommandError({
+          message: "contains and afterCursor are valid only when waiting for output.",
+        });
+      }
+      if (
+        request.until === "output" &&
+        (!contains || contains.length > MAX_WAIT_PATTERN_CHARS || contains.includes("\0"))
+      ) {
+        return yield* new InvalidBackgroundCommandError({
+          message: `Output waits require a non-empty contains value of at most ${MAX_WAIT_PATTERN_CHARS} characters with no NUL byte.`,
+        });
+      }
+
+      const timeoutMillis = Math.min(waitSeconds, config.maxWaitSeconds) * 1_000;
+      const deadline = (yield* Clock.currentTimeMillis) + timeoutMillis;
+      let scanAfterCursor = request.afterCursor ?? 0;
+      const carryByStream = { stdout: "", stderr: "" } satisfies Record<
+        BackgroundLogStream,
+        string
+      >;
+
+      const inspect = (): Effect.Effect<WaitInspection, BackgroundTaskNotFoundError> =>
+        withLock(
+          Effect.suspend((): Effect.Effect<WaitInspection, BackgroundTaskNotFoundError> => {
+            const record = tasks.get(request.id);
+            if (!record) return Effect.fail(notFound(request.id));
+            const slice = readLogBuffer(request.id, record.logs, record.snapshot.state, {
+              afterCursor: scanAfterCursor,
+            });
+            if (request.until === "output" && contains) {
+              if (slice.earliestAvailableCursor > scanAfterCursor + 1) {
+                carryByStream.stdout = "";
+                carryByStream.stderr = "";
+              }
+              let matchCursor: number | undefined;
+              for (const event of slice.events) {
+                if (event.droppedBefore) {
+                  carryByStream.stdout = "";
+                  carryByStream.stderr = "";
+                }
+                const candidate = carryByStream[event.stream] + event.text;
+                if (candidate.includes(contains)) {
+                  matchCursor = event.cursor;
+                  break;
+                }
+                carryByStream[event.stream] =
+                  contains.length > 1 ? candidate.slice(-(contains.length - 1)) : "";
+              }
+              scanAfterCursor = Math.max(scanAfterCursor, slice.nextCursor);
+              if (matchCursor !== undefined) {
+                return Effect.succeed({
+                  _tag: "result",
+                  result: waitResult(record.snapshot, slice, "matched", matchCursor),
+                });
+              }
+            }
+            if (!isActiveTaskState(record.snapshot.state)) {
+              return Effect.succeed({
+                _tag: "result",
+                result: waitResult(record.snapshot, slice, "completed"),
+              });
+            }
+            return Effect.succeed({
+              _tag: "pending",
+              awaitChange:
+                request.until === "exit"
+                  ? Deferred.await(record.completion).pipe(Effect.asVoid)
+                  : Deferred.await(record.wake),
+              snapshot: record.snapshot,
+              slice,
+            });
+          }),
+        );
+
+      while (true) {
+        const inspected = yield* inspect();
+        if (inspected._tag === "result") return inspected.result;
+        const remainingMillis = deadline - (yield* Clock.currentTimeMillis);
+        if (remainingMillis <= 0) {
+          return waitResult(inspected.snapshot, inspected.slice, "timeout");
+        }
+        const awakened = yield* inspected.awaitChange.pipe(
+          Effect.timeoutOption(Duration.millis(remainingMillis)),
+        );
+        if (Option.isNone(awakened)) {
+          const finalInspection = yield* inspect();
+          return finalInspection._tag === "result"
+            ? finalInspection.result
+            : waitResult(finalInspection.snapshot, finalInspection.slice, "timeout");
+        }
+      }
     });
 
   const stop: BackgroundTaskServiceContract["stop"] = (id, force) => requestStop(id, force);
@@ -596,6 +744,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     list,
     status,
     logs,
+    wait,
     stop,
     stopAll,
     clear,

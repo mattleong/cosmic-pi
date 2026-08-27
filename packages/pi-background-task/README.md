@@ -2,7 +2,9 @@
 
 Session-scoped background task management for pi.
 
-The main agent uses one `background_task` tool to decide when work should run independently of foreground `bash` calls. Supported actions are `start`, `list`, `status`, `logs`, `stop`, `stop_all`, and `clear`.
+The main agent uses one `background_task` tool to decide when work should run independently of foreground `bash` calls. Supported actions are `start`, `list`, `status`, `logs`, `wait`, `stop`, `stop_all`, and `clear`.
+
+`wait` provides a bounded dependency barrier without polling. It can wait for task exit or for literal text in retained or future output. Output waits accept `contains` and an optional `afterCursor`; all waits return `matched`, `completed`, or `timeout` as normal results. `waitSeconds` defaults to the configured `maxWaitSeconds`, which is 30 seconds by default.
 
 Use `/tasks` to open the full-screen human task manager. It uses the same responsive chrome and Vim navigation as `/subagents`: `j/k` move, `h/l` switch list/detail focus, `Ctrl-U` / `Ctrl-D` scroll, `gg/G` jump to the first/last row or the top/bottom of focused output, and `q` closes. Arrow, Home/End, Enter, Escape, and configured Pi selection bindings remain available. The manager also provides shared Braille activity frames, humanized state rows, grouped capability-aware controls, two-press stop confirmation, and technical metadata on demand. Normal rows show `name · state · elapsed`; task IDs, PID, cwd, and the full command appear only after pressing `t`. `f` toggles tail following, `?` switches compact action help, and `c` clears retained background tasks. It does not provide a command-entry field.
 
@@ -29,7 +31,7 @@ Optional configuration may be placed in:
   "logBufferBytesPerTask": 262144,
   "totalLogBufferBytes": 2097152,
   "stopGraceMs": 2000,
-  "maxLogWaitSeconds": 30,
+  "maxWaitSeconds": 30,
   "showFooterStatus": true
 }
 ```
