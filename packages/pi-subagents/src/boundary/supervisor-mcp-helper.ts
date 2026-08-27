@@ -32,14 +32,19 @@ import {
 } from "../supervisor/protocol.ts";
 import {
   isSupervisorMcpMessageArguments,
+  isSupervisorMcpProxyArguments,
   isSupervisorMcpReportArguments,
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
   MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
+  MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS,
+  MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS,
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+  SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS,
+  SUPERVISOR_MCP_PROXY_TOOL_NAME,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../supervisor/mcp-contract.ts";
@@ -72,9 +77,9 @@ class HelperStartupFailure extends Data.TaggedError("HelperStartupFailure")<{
 }
 
 const startupFailure = (diagnostic: string) => new HelperStartupFailure({ diagnostic });
-const SERVER_VERSION = "2.0.0";
+const SERVER_VERSION = "3.0.0";
 const MAX_CONFIG_BYTES = 4 * 1024;
-const MAX_LINE_BYTES = 512 * 1024;
+const MAX_LINE_BYTES = MAX_SUPERVISOR_CHANNEL_LINE_BYTES;
 const MAX_QUEUED_INPUT_BYTES = 2 * MAX_LINE_BYTES;
 const MAX_ID_CHARS = 256;
 const MAX_CONCURRENT_CALLS = 16;
@@ -85,7 +90,12 @@ const CONNECT_TIMEOUT_MILLIS = 5_000;
 type RpcId = string | number;
 
 type DecodedMcpMessage =
-  | { readonly method: "initialize"; readonly id: RpcId; readonly protocolVersion: string }
+  | {
+      readonly method: "initialize";
+      readonly id: RpcId;
+      readonly protocolVersion: string;
+      readonly piBridge: boolean;
+    }
   | { readonly method: "notifications/initialized" }
   | { readonly method: "notifications/cancelled"; readonly requestId: RpcId }
   | { readonly method: "ping" | "tools/list"; readonly id: RpcId }
@@ -105,6 +115,7 @@ type ToolCall = Extract<DecodedMcpMessage, { readonly method: "tools/call" }>;
 
 type DecodedToolArguments =
   | { readonly kind: "message"; readonly message: string }
+  | { readonly kind: "proxy"; readonly tool: string; readonly argumentsJson: string }
   | {
       readonly kind: "report";
       readonly deliveryId: ReturnType<typeof SupervisorDeliveryIdSchema.make>;
@@ -308,6 +319,7 @@ let activeCalls: FiberMap.FiberMap<string>;
 let assignmentEpoch = 0;
 let channelClosed = false;
 let initialized = false;
+let piBridgeClient = false;
 let requestMainShutdown = (): void => {};
 let supervisorClient:
   | RpcClient.FromGroup<typeof SupervisorRpcGroup, RpcClientError.RpcClientError>
@@ -439,6 +451,24 @@ const callReport = (
   );
 };
 
+const callProxy = (
+  tool: string,
+  argumentsJson: string,
+  signal?: AbortSignal,
+): Promise<{ readonly ok: boolean; readonly payloadJson: string }> => {
+  const client = liveClient();
+  return runSupervisor(
+    client.SupervisorProxy({
+      ...authenticatedPayload(),
+      requestId: SupervisorChannelIdSchema.make(randomUUID()),
+      tool,
+      argumentsJson,
+    }),
+    signal,
+    false,
+  );
+};
+
 const messageInputSchema = {
   type: "object",
   properties: {
@@ -506,10 +536,29 @@ const toolDefinitions = [
   },
 ];
 
+const proxyToolDefinition = {
+  name: SUPERVISOR_MCP_PROXY_TOOL_NAME,
+  description: "Private delegated-Pi coordinator proxy.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      tool: { type: "string", minLength: 1, maxLength: MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS },
+      arguments_json: { type: "string", maxLength: MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS },
+    },
+    required: SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS,
+    additionalProperties: false,
+  },
+  annotations: toolAnnotations,
+} as const;
+
 const decodeToolArguments = <ValueInput>(
   name: string,
   value: ValueInput,
 ): DecodedToolArguments | undefined => {
+  if (name === SUPERVISOR_MCP_PROXY_TOOL_NAME) {
+    if (!piBridgeClient || !isSupervisorMcpProxyArguments(value)) return undefined;
+    return { kind: "proxy", tool: value.tool, argumentsJson: value.arguments_json };
+  }
   if (name === SUPERVISOR_MCP_TOOL_NAMES[3]) {
     if (!isSupervisorMcpReportArguments(value)) return undefined;
     const deliveryId = SupervisorDeliveryIdSchema.makeOption(value.delivery_id);
@@ -549,7 +598,14 @@ const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | un
         (own(value.params, "_meta") && !boundedMetadata(value.params._meta))
       )
         return undefined;
-      return { method: "initialize", id, protocolVersion: value.params.protocolVersion };
+      return {
+        method: "initialize",
+        id,
+        protocolVersion: value.params.protocolVersion,
+        piBridge:
+          isJsonObject(value.params.clientInfo) &&
+          value.params.clientInfo.name === "pi-subagents-pi-bridge",
+      };
     case "notifications/initialized":
       return id === undefined && validMeta(value.params)
         ? { method: "notifications/initialized" }
@@ -616,6 +672,11 @@ const executeTool = (request: ToolCall, signal: AbortSignal): Promise<McpToolRes
           `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
         ),
       );
+    case SUPERVISOR_MCP_PROXY_TOOL_NAME:
+      if (args.kind !== "proxy" || !piBridgeClient) break;
+      return callProxy(args.tool, args.argumentsJson, signal).then((result) =>
+        toolResult(result.payloadJson, !result.ok),
+      );
   }
   return malformed();
 };
@@ -671,6 +732,7 @@ const dispatchMcp = (request: DecodedMcpMessage): void => {
   switch (request.method) {
     case "initialize":
       initialized = true;
+      piBridgeClient = request.piBridge;
       void sendRpc({
         jsonrpc: "2.0",
         id: request.id,
@@ -694,7 +756,13 @@ const dispatchMcp = (request: DecodedMcpMessage): void => {
         void rpcError(request.id, -32002, "MCP helper is not initialized.");
         return;
       }
-      void sendRpc({ jsonrpc: "2.0", id: request.id, result: { tools: toolDefinitions } });
+      void sendRpc({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+          tools: piBridgeClient ? [...toolDefinitions, proxyToolDefinition] : toolDefinitions,
+        },
+      });
       return;
     case "tools/call": {
       if (!initialized) {
@@ -779,6 +847,22 @@ const main = Effect.gen(function* () {
   yield* client.SupervisorWatchAssignments(authenticatedPayload()).pipe(
     Stream.runForEach((update) =>
       Effect.gen(function* () {
+        if (update.kind === "notification") {
+          yield* Effect.tryPromise({
+            try: () =>
+              stdout.write({
+                jsonrpc: "2.0",
+                method: "notifications/pi_subagents",
+                params: { updateId: update.updateId, message: update.message },
+              }),
+            catch: () => new McpWriteFailure({ reason: "stream" }),
+          });
+          yield* client.SupervisorAcknowledgeNotification({
+            ...authenticatedPayload(),
+            updateId: update.updateId,
+          });
+          return;
+        }
         if (update.assignmentEpoch <= assignmentEpoch)
           return yield* Effect.die(new Error("non-monotonic-assignment-epoch"));
         assignmentEpoch = update.assignmentEpoch;

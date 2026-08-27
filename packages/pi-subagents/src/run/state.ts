@@ -67,6 +67,12 @@ export const snapshotView = (view: SubagentRunView): SubagentRunView => {
       skippedCandidates: view.selection.skippedCandidates.map((candidate) => ({ ...candidate })),
     },
     sessionEvents: view.sessionEvents.map((event) => ({ ...event })),
+    nativeActivity: view.nativeActivity
+      ? {
+          ...view.nativeActivity,
+          latest: view.nativeActivity.latest ? { ...view.nativeActivity.latest } : undefined,
+        }
+      : undefined,
     writeClaims: view.writeClaims ? [...view.writeClaims] : undefined,
     writeAudit: view.writeAudit
       ? {

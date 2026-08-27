@@ -64,6 +64,9 @@ export interface RunRecord {
     | { readonly scope: Scope.Closeable; readonly settled: Deferred.Deferred<void> }
     | undefined;
   readonly activeTools: Map<string, string>;
+  /** Runtime-native activity remains internal to this Pi run node. */
+  readonly nativeAgents: Map<string, { readonly kind: string }>;
+  nativeAgentTotal: number;
   /** Resolves only after backend/process/writer cleanup is confirmed or quarantined. */
   cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
@@ -85,6 +88,7 @@ export interface RunRecord {
    */
   evictionClaim?:
     | {
+        readonly parentRunId?: string | undefined;
         readonly writerCwdDigest?: string | undefined;
         readonly writeClaims?: ReadonlyArray<string> | undefined;
       }
@@ -109,6 +113,15 @@ export interface RunRecord {
   nextAssignmentEpoch: number;
   lastBackendReport?: BackendReportWatermark | undefined;
 }
+
+export const clearRunNativeActivity = (record: RunRecord): void => {
+  record.nativeAgents.clear();
+  if (record.view.nativeActivity?.active)
+    record.view = {
+      ...record.view,
+      nativeActivity: { ...record.view.nativeActivity, active: 0 },
+    };
+};
 
 export const completeRunInitialization = (record: RunRecord): void => {
   record.initializationPending = false;

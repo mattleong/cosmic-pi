@@ -188,65 +188,67 @@ describe("profile model catalog", () => {
     }),
   );
 
-  it.effect("fails Herdr provenance closed and uses only live Codex tier advertisements", () =>
-    Effect.gen(function* () {
-      const registry: ProfileModelRegistry = {
-        getAvailable: () => [piModel("openai", "gpt-old")],
-        getRegisteredProviderIds: () => {
-          throw new Error("provenance unavailable");
-        },
-        getError: () => undefined,
-        refresh: () => Promise.resolve({ aborted: false }),
-      };
-      const catalog = new ProfileModelCatalog(registry);
-      const herdr = yield* Effect.promise(() =>
-        loadCandidateModelPicker({
-          profile: "reviewer",
-          candidateIndex: 0,
-          candidate: candidate({ host: "herdr", model: "openai/gpt-old" }),
-          listNativeModels: () => Promise.resolve([]),
-          piCatalog: catalog.capture(),
-        }),
-      );
-      expect(herdr.warning).toContain("provenance is unavailable");
-      expect(herdr.choices).toHaveLength(1);
-      expect(herdr.choices[0]?.item.value).toBe("openai/gpt-old");
-      expect(herdr.choices[0]?.fastModeAvailable).toBe(false);
+  it.effect(
+    "keeps global extension-provider models eligible for Herdr and uses live Codex tiers",
+    () =>
+      Effect.gen(function* () {
+        const registry: ProfileModelRegistry = {
+          getAvailable: () => [piModel("openai", "gpt-old")],
+          getRegisteredProviderIds: () => {
+            throw new Error("provenance unavailable");
+          },
+          getError: () => undefined,
+          refresh: () => Promise.resolve({ aborted: false }),
+        };
+        const catalog = new ProfileModelCatalog(registry);
+        const herdr = yield* Effect.promise(() =>
+          loadCandidateModelPicker({
+            profile: "reviewer",
+            candidateIndex: 0,
+            candidate: candidate({ host: "herdr", model: "openai/gpt-old" }),
+            listNativeModels: () => Promise.resolve([]),
+            piCatalog: catalog.capture(),
+          }),
+        );
+        expect(herdr.warning).toBeUndefined();
+        expect(herdr.choices).toHaveLength(1);
+        expect(herdr.choices[0]?.item.value).toBe("openai/gpt-old");
+        expect(herdr.choices[0]?.fastModeAvailable).toBe(false);
 
-      const advertised: NativeRuntimeModel = {
-        selector: "future-codex",
-        label: "Future Codex",
-        description: "Advertised live catalog model",
-        supportedEfforts: ["high"],
-        supportedServiceTiers: ["priority"],
-        isDefault: true,
-      };
-      const codexCandidate = candidate({ runtime: "codex", model: advertised.selector });
-      const live = yield* Effect.promise(() =>
-        loadCandidateModelPicker({
-          profile: "worker",
-          candidateIndex: 0,
-          candidate: codexCandidate,
-          listNativeModels: () => Promise.resolve([advertised]),
-          piCatalog: catalog.capture(),
-        }),
-      );
-      expect(live.choices[0]?.fastModeAvailable).toBe(true);
+        const advertised: NativeRuntimeModel = {
+          selector: "future-codex",
+          label: "Future Codex",
+          description: "Advertised live catalog model",
+          supportedEfforts: ["high"],
+          supportedServiceTiers: ["priority"],
+          isDefault: true,
+        };
+        const codexCandidate = candidate({ runtime: "codex", model: advertised.selector });
+        const live = yield* Effect.promise(() =>
+          loadCandidateModelPicker({
+            profile: "worker",
+            candidateIndex: 0,
+            candidate: codexCandidate,
+            listNativeModels: () => Promise.resolve([advertised]),
+            piCatalog: catalog.capture(),
+          }),
+        );
+        expect(live.choices[0]?.fastModeAvailable).toBe(true);
 
-      const fallback = yield* Effect.promise(() =>
-        loadCandidateModelPicker({
-          profile: "worker",
-          candidateIndex: 0,
-          candidate: codexCandidate,
-          listNativeModels: () => Promise.reject(new Error("catalog\u001b[2J failed")),
-          piCatalog: catalog.capture(),
-        }),
-      );
-      expect(
-        fallback.choices.find((choice) => choice.item.value === advertised.selector)
-          ?.fastModeAvailable,
-      ).toBe(false);
-      expect(hasTerminalControls(fallback.warning ?? "")).toBe(false);
-    }),
+        const fallback = yield* Effect.promise(() =>
+          loadCandidateModelPicker({
+            profile: "worker",
+            candidateIndex: 0,
+            candidate: codexCandidate,
+            listNativeModels: () => Promise.reject(new Error("catalog\u001b[2J failed")),
+            piCatalog: catalog.capture(),
+          }),
+        );
+        expect(
+          fallback.choices.find((choice) => choice.item.value === advertised.selector)
+            ?.fastModeAvailable,
+        ).toBe(false);
+        expect(hasTerminalControls(fallback.warning ?? "")).toBe(false);
+      }),
   );
 });

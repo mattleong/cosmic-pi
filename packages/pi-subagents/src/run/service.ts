@@ -1,5 +1,6 @@
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -8,8 +9,13 @@ import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { BackendStartupState } from "../backend/model.ts";
+import type {
+  BackendProxyRequest,
+  BackendProxyResult,
+  BackendStartupState,
+} from "../backend/model.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
+import { SubagentProfileService } from "../profiles/service.ts";
 import type {
   SubagentNotification,
   SubagentNotificationDelivery,
@@ -21,6 +27,7 @@ import {
   SubagentNotFoundError,
   SubagentRuntimeClosedError,
   UnsupportedSubagentCapabilityError,
+  subagentErrorCode,
 } from "./errors.ts";
 import { makeRunAssignment } from "./assignment.ts";
 import { makeRunCompletionObservations } from "./completion-observations.ts";
@@ -37,6 +44,8 @@ import { makeRunReportLifecycle } from "./report-lifecycle.ts";
 import { makeRunSettlement } from "./settlement.ts";
 import {
   hasSubagentCapability,
+  isActiveRunState,
+  SUBAGENT_ROOT_RUN_ID,
   type StartSubagentRequest,
   type SubagentCapability,
   type SubagentRetrySupersession,
@@ -44,7 +53,9 @@ import {
   type SubagentRunView,
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
-import { snapshotView } from "./state.ts";
+import { sanitizeOutputText, snapshotView } from "./state.ts";
+import { descendantRunIds, isRunInSubtree, projectRunTree, runDepth } from "./tree.ts";
+import { encodeSubagentProxyPayload } from "../tools/proxy-protocol.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { makeRunWriteClaimControl } from "./write-claim-control.ts";
 
@@ -58,6 +69,17 @@ export type SubagentNotificationCallback =
 export interface SubagentServiceOptions {
   readonly publish?: (projection: SubagentProjection) => void;
   readonly notify?: SubagentNotificationCallback;
+  readonly proxyHandler?:
+    | ((
+        service: SubagentServiceContract,
+        callerRunId: string,
+        request: BackendProxyRequest,
+      ) => Effect.Effect<
+        BackendProxyResult,
+        SubagentError,
+        SubagentProfileService | SubagentBackendRegistry
+      >)
+    | undefined;
 }
 
 export type SubagentAwaitUntil = "all_finished" | "any_finished";
@@ -85,6 +107,16 @@ export interface SubagentServiceContract {
   readonly startSessionOwned: (
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
+  /** Authenticated nested-Pi admission; ancestry comes only from the server-side caller identity. */
+  readonly startSessionOwnedFrom: (
+    callerRunId: string,
+    request: StartSubagentRequest,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly visibleList: (callerRunId: string) => Effect.Effect<ReadonlyArray<SubagentRunView>>;
+  readonly authorizeTargets: (
+    callerRunId: string,
+    ids: ReadonlyArray<string>,
+  ) => Effect.Effect<void, SubagentNotFoundError>;
   readonly claimRetryContinuation: (id: string) => Effect.Effect<SubagentRetryClaim, SubagentError>;
   readonly releaseRetryClaim: (id: string, claimToken: string) => Effect.Effect<void>;
   readonly exhaustRetryClaim: (
@@ -173,14 +205,23 @@ const requireCapability = (
 
 const makeService = Effect.fn("SubagentService.make")(function* (options: SubagentServiceOptions) {
   const backendRegistry = yield* SubagentBackendRegistry;
+  const profileService = yield* SubagentProfileService;
   const writerLeases = yield* WriterLeaseService;
   const ownerScope = yield* Effect.scope;
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
   const writerPools = new Map<string, WriterPoolEntry>();
+  const proxyCancellations = new Map<string, Deferred.Deferred<void>>();
+  let service!: SubagentServiceContract;
   const initialProjection: SubagentProjection = Object.freeze({
     revision: 0,
+    root: Object.freeze({
+      id: "root",
+      depth: 0,
+      directChildCount: 0,
+      descendantCount: 0,
+    }),
     runs: Object.freeze([]),
   });
   const projectionRef = yield* SubscriptionRef.make(initialProjection);
@@ -207,13 +248,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   };
   // Each run view is already deeply frozen by snapshotView, so only the fresh
   // top-level container and array need freezing before publication.
-  const frozenProjection = (revision: number): SubagentProjection =>
-    Object.freeze({
+  const frozenProjection = (revision: number): SubagentProjection => {
+    const tree = projectRunTree(records);
+    return Object.freeze({
       revision,
-      runs: Object.freeze(
-        sortRuns([...records.values()].map((record) => snapshotView(record.view))),
-      ),
+      root: tree.root,
+      runs: Object.freeze(sortRuns(tree.runs.map((view) => snapshotView(view)))),
     });
+  };
   const publish = Effect.uninterruptible(
     Effect.suspend(() => {
       const projection = frozenProjection(SubscriptionRef.getUnsafe(projectionRef).revision + 1);
@@ -236,16 +278,96 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           : Effect.fail(new SubagentRuntimeClosedError({ message: "Parent session shut down." })),
       ),
     );
-  const notify = (notification: SubagentNotification): SubagentNotificationDelivery | undefined => {
+  const notifyRoot = (
+    notification: SubagentNotification,
+  ): SubagentNotificationDelivery | undefined => {
     try {
-      const delivery = options.notify?.(notification);
-      return hasObjectRuntimeType(delivery) && delivery !== null ? delivery : undefined;
+      const delivered = options.notify?.(notification);
+      return hasObjectRuntimeType(delivered) && delivered !== null ? delivered : undefined;
     } catch {
-      // Host transcript delivery is acknowledged only when the boundary returned normally.
       return notification.type === "completed"
         ? { deliveredCompletionKeys: [] }
         : { actionAccepted: false };
     }
+  };
+  const ancestorMessage = (notification: SubagentNotification): string => {
+    if (notification.type === "question")
+      return sanitizeOutputText(
+        `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion: ${notification.message}\n\nUse subagent_reply for ${notification.id}.`,
+        32 * 1024,
+      );
+    const run = notification.runs[0];
+    if (!run) return "A descendant subagent finished.";
+    const outcome =
+      run.outcome === "failed"
+        ? `failed: ${run.error ?? "No failure detail."}`
+        : `reported: ${run.finalText ?? "No final report."}`;
+    return sanitizeOutputText(
+      `Descendant ${run.name} (${run.id}) ${outcome}\n\nUse subagent_status or subagent_await for the full run record.`,
+      32 * 1024,
+    );
+  };
+  const deliverToNearestAncestor = (sourceRunId: string, message: string): Effect.Effect<boolean> =>
+    Effect.suspend(() => {
+      let parentRunId = records.get(sourceRunId)?.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+      const candidates: RunRecord[] = [];
+      const visited = new Set<string>();
+      while (parentRunId !== SUBAGENT_ROOT_RUN_ID && visited.add(parentRunId)) {
+        const parent = records.get(parentRunId);
+        if (!parent) break;
+        if (
+          parent.view.runtime === "pi" &&
+          isActiveRunState(parent.view.state) &&
+          parent.process?.controls.deliverNotification
+        )
+          candidates.push(parent);
+        parentRunId = parent.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+      }
+      const attempt = (index: number): Effect.Effect<boolean> => {
+        const candidate = candidates[index];
+        if (!candidate?.process?.controls.deliverNotification) return Effect.succeed(false);
+        return candidate.process.controls.deliverNotification(message).pipe(
+          Effect.as(true),
+          Effect.catch(() => attempt(index + 1)),
+        );
+      };
+      return attempt(0);
+    });
+  const notify = (
+    notification: SubagentNotification,
+  ): Effect.Effect<SubagentNotificationDelivery | undefined> => {
+    if (
+      notification.type === "completed" &&
+      notification.runs.every(
+        (run) =>
+          (records.get(run.id)?.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === SUBAGENT_ROOT_RUN_ID,
+      )
+    )
+      return Effect.succeed(notifyRoot(notification));
+    if (notification.type === "question")
+      return deliverToNearestAncestor(notification.id, ancestorMessage(notification)).pipe(
+        Effect.map((delivered) =>
+          delivered ? { actionAccepted: true } : notifyRoot(notification),
+        ),
+      );
+    return Effect.forEach(
+      notification.runs,
+      (run) =>
+        deliverToNearestAncestor(run.id, ancestorMessage({ type: "completed", runs: [run] })).pipe(
+          Effect.map((delivered) => {
+            if (delivered) return `${run.id}:${run.generation}`;
+            const rootDelivery = notifyRoot({ type: "completed", runs: [run] });
+            return rootDelivery?.deliveredCompletionKeys?.includes(`${run.id}:${run.generation}`)
+              ? `${run.id}:${run.generation}`
+              : undefined;
+          }),
+        ),
+      { concurrency: 4 },
+    ).pipe(
+      Effect.map((keys) => ({
+        deliveredCompletionKeys: keys.filter((key): key is string => key !== undefined),
+      })),
+    );
   };
   const requireRecord = (id: string): Effect.Effect<RunRecord, SubagentNotFoundError> =>
     Effect.suspend(() => {
@@ -323,6 +445,100 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     sendPeerNotices: (changedId) => sendPeerNotices(changedId),
   });
 
+  const handleProxyEvent = (
+    record: RunRecord,
+    event: Extract<
+      import("../backend/model.ts").BackendEvent,
+      { readonly type: "proxy_request" | "proxy_cancel" }
+    >,
+  ): Effect.Effect<void> => {
+    const key = `${record.view.id}:${event.requestId}`;
+    if (event.type === "proxy_cancel") {
+      const cancellation = proxyCancellations.get(key);
+      return cancellation
+        ? Deferred.succeed(cancellation, undefined).pipe(Effect.asVoid)
+        : Effect.void;
+    }
+    if (
+      !options.proxyHandler ||
+      record.view.runtime !== "pi" ||
+      record.stoppedByParent ||
+      !isActiveRunState(record.view.state)
+    )
+      return event
+        .respond(
+          false,
+          encodeSubagentProxyPayload({
+            code: "proxy_caller_disconnected",
+            message: "Nested Pi coordinator access is unavailable for this run.",
+          }) ?? "{}",
+        )
+        .pipe(Effect.ignore);
+    if (
+      [...proxyCancellations.keys()].filter((candidate) =>
+        candidate.startsWith(`${record.view.id}:`),
+      ).length >= 16
+    )
+      return event
+        .respond(
+          false,
+          encodeSubagentProxyPayload({
+            code: "proxy_capacity",
+            message: "Nested Pi has too many concurrent coordinator calls.",
+          }) ?? "{}",
+        )
+        .pipe(Effect.ignore);
+    const cancellation = Deferred.makeUnsafe<void>();
+    if (proxyCancellations.has(key))
+      return event
+        .respond(
+          false,
+          encodeSubagentProxyPayload({
+            code: "proxy_request_conflict",
+            message: "Nested Pi reused an active coordinator request identity.",
+          }) ?? "{}",
+        )
+        .pipe(Effect.ignore);
+    proxyCancellations.set(key, cancellation);
+    const execute = options.proxyHandler(service, record.view.id, event).pipe(
+      Effect.provideService(SubagentProfileService, profileService),
+      Effect.provideService(SubagentBackendRegistry, backendRegistry),
+      Effect.matchEffect({
+        onFailure: (error) =>
+          event.respond(
+            false,
+            encodeSubagentProxyPayload({
+              code: subagentErrorCode(error),
+              message: error.message,
+            }) ?? "{}",
+          ),
+        onSuccess: (result) =>
+          Effect.suspend(() => {
+            const payloadJson = encodeSubagentProxyPayload(result);
+            return payloadJson
+              ? event.respond(true, payloadJson)
+              : event.respond(
+                  false,
+                  encodeSubagentProxyPayload({
+                    code: "proxy_response_oversized",
+                    message: "Nested Pi coordinator response exceeded its bound.",
+                  }) ?? "{}",
+                );
+          }),
+      }),
+      Effect.ignore,
+    );
+    return Effect.raceFirst(execute, Deferred.await(cancellation)).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (proxyCancellations.get(key) === cancellation) proxyCancellations.delete(key);
+        }),
+      ),
+      Effect.forkIn(ownerScope, { startImmediately: true }),
+      Effect.asVoid,
+    );
+  };
+
   const handleWireEvent = makeRunEventHandler({
     mutateView: mutateEventView,
     mergeLateUsage,
@@ -333,6 +549,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     notify: delivery.queueActionNotification,
     failRun,
     onWriteClaimViolation: (record, message) => containWriteClaimViolation(record, message),
+    onProxyEvent: handleProxyEvent,
   });
 
   ({
@@ -403,6 +620,31 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     );
 
   const list = SubscriptionRef.get(projectionRef).pipe(Effect.map((current) => current.runs));
+  const visibleList: SubagentServiceContract["visibleList"] = (callerRunId) =>
+    withLock(
+      Effect.sync(() =>
+        sortRuns(
+          projectRunTree(records)
+            .runs.filter((run) => isRunInSubtree(records, callerRunId, run.id))
+            .map((run) => snapshotView(run)),
+        ),
+      ),
+    );
+  const authorizeTargets: SubagentServiceContract["authorizeTargets"] = (callerRunId, ids) =>
+    withLock(
+      Effect.gen(function* () {
+        if (!records.has(callerRunId)) return yield* notFound(callerRunId);
+        for (const id of ids)
+          if (!isRunInSubtree(records, callerRunId, id)) return yield* notFound(id);
+      }),
+    );
+  const startSessionOwnedFrom: SubagentServiceContract["startSessionOwnedFrom"] = (
+    callerRunId,
+    request,
+  ) =>
+    authorizeTargets(callerRunId, [callerRunId]).pipe(
+      Effect.andThen(startSessionOwned({ ...request, parentRunId: callerRunId })),
+    );
   const status: SubagentServiceContract["status"] = (id) =>
     observations
       .withStatusObservations([id], ({ observations: selected }) => {
@@ -436,7 +678,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     sendPeerNotices: (changedId) => sendPeerNotices(changedId),
   });
 
-  const { send, reply, interrupt, rename, stop } = makeRunControls({
+  const {
+    send,
+    reply,
+    interrupt,
+    rename,
+    stop: stopOne,
+  } = makeRunControls({
     ownerScope,
     withLock,
     requireRecord,
@@ -454,6 +702,40 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeRecordScope,
     settle,
   });
+
+  const stop: SubagentServiceContract["stop"] = (id) =>
+    Effect.gen(function* () {
+      const orderedIds = yield* withLock(
+        Effect.gen(function* () {
+          const root = yield* requireRecord(id);
+          const descendants = descendantRunIds(records, id);
+          const ordered = [...descendants, root.view.id].sort(
+            (left, right) =>
+              runDepth(records.get(right)?.view ?? root.view) -
+              runDepth(records.get(left)?.view ?? root.view),
+          );
+          for (const targetId of ordered) {
+            const target = records.get(targetId);
+            if (target) target.stoppedByParent = true;
+          }
+          return ordered;
+        }),
+      );
+      let selected: SubagentRunView | undefined;
+      let firstError: SubagentError | undefined;
+      for (const targetId of orderedIds) {
+        const outcome = yield* stopOne(targetId).pipe(
+          Effect.match({
+            onFailure: (error) => ({ error }),
+            onSuccess: (run) => ({ run }),
+          }),
+        );
+        if ("error" in outcome) firstError ??= outcome.error;
+        else if (targetId === id) selected = outcome.run;
+      }
+      if (firstError) return yield* firstError;
+      return selected ?? snapshotView((yield* requireRecord(id)).view);
+    });
 
   containWriteClaimViolation = (record, message) =>
     withLock(
@@ -506,9 +788,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const projection = SubscriptionRef.get(projectionRef);
 
-  const service: SubagentServiceContract = {
+  service = {
     start,
     startSessionOwned,
+    startSessionOwnedFrom,
+    visibleList,
+    authorizeTargets,
     claimRetryContinuation: retry.claimRetryContinuation,
     releaseRetryClaim: retry.releaseRetryClaim,
     exhaustRetryClaim: retry.exhaustRetryClaim,
@@ -540,7 +825,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ).pipe(
       Effect.andThen(
         Effect.forEach(
-          [...records.values()],
+          [...records.values()].sort((left, right) => runDepth(right.view) - runDepth(left.view)),
           (record) => {
             record.stoppedByParent = true;
             failPendingResponses(
@@ -561,7 +846,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               ),
             );
           },
-          { concurrency: 8, discard: true },
+          { concurrency: 1, discard: true },
         ),
       ),
       Effect.asVoid,

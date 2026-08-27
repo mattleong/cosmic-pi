@@ -41,8 +41,8 @@ const fixture = () =>
       }));
   });
 
-describe("SubagentConfigStore v4", () => {
-  effectTest("loads v4 global/project routes with project inheritance", function* () {
+describe("SubagentConfigStore v5", () => {
+  effectTest("loads v4 routes with v5 nesting defaults and project inheritance", function* () {
     const paths = yield* step(fixture);
     yield* step(() =>
       writeFile(
@@ -83,9 +83,11 @@ describe("SubagentConfigStore v4", () => {
     });
     expect(config.profileSources.worker).toBe("global");
     expect(config.fallbackProfile).toBe("generalist");
+    expect(config.nesting).toEqual({ maxDirectChildren: 12, maxDepth: 3 });
+    expect(config.nestingSource).toBe("builtin");
   });
 
-  effectTest("accepts only v4 documents and never reads an untrusted project", function* () {
+  effectTest("accepts v4/v5 documents and never reads an untrusted project", function* () {
     const paths = yield* step(fixture);
     for (const value of [{ version: 1 }, { version: 2 }, {}, { version: "4" }]) {
       yield* step(() => writeFile(paths.globalPath, JSON.stringify(value)));
@@ -218,6 +220,7 @@ describe("SubagentConfigStore v4", () => {
       { version: 4, defaultProfile: "generalist" },
       { version: 4, profiles: { delegate: "disabled" } },
       { version: 4, customFutureField: true },
+      { version: 4, nesting: { maxDirectChildren: 32, maxDepth: 8 } },
     ]) {
       yield* step(() => writeFile(paths.globalPath, JSON.stringify(document)));
       yield* step(() =>
@@ -308,26 +311,104 @@ describe("SubagentConfigStore v4", () => {
     );
   });
 
-  effectTest("does not rewrite an existing document when the patch changes nothing", function* () {
+  effectTest(
+    "upgrades a v4 document on save even when its route patch is otherwise empty",
+    function* () {
+      const paths = yield* step(fixture);
+      const raw = JSON.stringify({ version: 4 });
+      yield* step(() => writeFile(paths.globalPath, raw));
+      const inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      yield* step(() =>
+        withStore((store) =>
+          store.patchProfile(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profile: "worker",
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      );
+      expect(JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")))).toEqual({
+        version: 5,
+      });
+    },
+  );
+
+  effectTest("applies strict v5 nesting precedence and rejects out-of-range values", function* () {
     const paths = yield* step(fixture);
-    const raw = JSON.stringify({ version: 4 });
-    yield* step(() => writeFile(paths.globalPath, raw));
-    const inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
     yield* step(() =>
-      withStore((store) =>
-        store.patchProfile(paths.cwd, paths.agentDirectory, {
-          scope: "global",
-          profile: "worker",
-          expectedExists: true,
-          expectedDocument: inspection.globalDocument,
-          projectTrusted: true,
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({
+          version: 5,
+          nesting: { maxDirectChildren: 20, maxDepth: 6 },
         }),
       ),
     );
-    expect(yield* step(() => readFile(paths.globalPath, "utf8"))).toBe(raw);
+    yield* step(() =>
+      writeFile(
+        paths.projectPath,
+        JSON.stringify({
+          version: 5,
+          nesting: { maxDirectChildren: 4, maxDepth: 2 },
+        }),
+      ),
+    );
+    const trusted = yield* step(() =>
+      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+    );
+    expect(trusted.nesting).toEqual({ maxDirectChildren: 4, maxDepth: 2 });
+    expect(trusted.nestingSource).toBe("project");
+    const untrusted = yield* step(() =>
+      withStore((store) => store.load(paths.cwd, paths.agentDirectory, false)),
+    );
+    expect(untrusted.nesting).toEqual({ maxDirectChildren: 20, maxDepth: 6 });
+    expect(untrusted.nestingSource).toBe("global");
+
+    for (const nesting of [
+      { maxDirectChildren: 0, maxDepth: 3 },
+      { maxDirectChildren: 33, maxDepth: 3 },
+      { maxDirectChildren: 12, maxDepth: -1 },
+      { maxDirectChildren: 12, maxDepth: 9 },
+      { maxDirectChildren: 12.5, maxDepth: 3 },
+    ]) {
+      yield* step(() => writeFile(paths.globalPath, JSON.stringify({ version: 5, nesting })));
+      yield* step(() =>
+        expect(
+          withStore((store) => store.load(paths.cwd, paths.agentDirectory, false)),
+        ).rejects.toMatchObject({ operation: "activate", path: paths.globalPath }),
+      );
+    }
   });
+
+  effectTest(
+    "patches nesting and upgrades v4 documents through the single store door",
+    function* () {
+      const paths = yield* step(fixture);
+      yield* step(() => writeFile(paths.globalPath, JSON.stringify({ version: 4 })));
+      const inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      yield* step(() =>
+        withStore((store) =>
+          store.patchNesting(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            nesting: { maxDirectChildren: 7, maxDepth: 5 },
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      );
+      expect(JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")))).toEqual({
+        version: 5,
+        nesting: { maxDirectChildren: 7, maxDepth: 5 },
+      });
+    },
+  );
 
   effectTest("detects external edits instead of clobbering them", function* () {
     const paths = yield* step(fixture);

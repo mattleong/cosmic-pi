@@ -63,11 +63,29 @@ export interface BackendStartupState {
   readonly resumeToken?: BackendResumeToken | undefined;
 }
 
+export interface BackendProxyRequest {
+  readonly requestId: string;
+  readonly tool: string;
+  readonly argumentsJson: string;
+}
+
+export interface BackendProxyResult {
+  readonly content: ReadonlyArray<unknown>;
+  readonly details?: unknown;
+}
+
 export type BackendEvent =
   | { readonly type: "run_started"; readonly assignmentEpoch: number }
   | { readonly type: "run_settled"; readonly assignmentEpoch: number }
   | ({ readonly type: "report" } & BackendReport)
   | { readonly type: "activity"; readonly assignmentEpoch: number }
+  | {
+      readonly type: "native_agent_activity";
+      readonly assignmentEpoch: number;
+      readonly activityId: string;
+      readonly kind: string;
+      readonly state: "running" | "activity" | "completed" | "failed" | "stopped";
+    }
   | {
       readonly type: "assistant_message";
       readonly assignmentEpoch: number;
@@ -105,6 +123,14 @@ export type BackendEvent =
       readonly source: "runtime-extension";
       readonly message: string;
     }
+  | ({
+      readonly type: "proxy_request";
+      readonly respond: (
+        ok: boolean,
+        payloadJson: string,
+      ) => Effect.Effect<void, SubagentProcessError>;
+    } & BackendProxyRequest)
+  | { readonly type: "proxy_cancel"; readonly requestId: string }
   | { readonly type: "protocol_error"; readonly message: string }
   | {
       readonly type: "exit";
@@ -124,6 +150,10 @@ export interface BackendControls {
   readonly renameDisplay: (name: string) => Effect.Effect<void, SubagentError>;
   readonly reply: (requestId: string, message: string) => Effect.Effect<void, SubagentError>;
   readonly notifyPeers: (message: string) => Effect.Effect<void, SubagentError>;
+  /** Private Pi-only parent outcome delivery. Other runtimes leave it absent. */
+  readonly deliverNotification?:
+    | ((message: string) => Effect.Effect<void, SubagentError>)
+    | undefined;
 }
 
 export interface BackendHandle {

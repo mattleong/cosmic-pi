@@ -74,7 +74,13 @@ const boundedLine = (value: string, maximum: number): string =>
 export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
   const route = formatToolRoute(run.host, run.runtime, run.model, run.effort, run.fastMode);
-  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}`;
+  const tree = run.depth
+    ? ` · depth=${run.depth} · children=${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
+    : "";
+  const native = run.nativeActivity
+    ? ` · native=${run.nativeActivity.active}/${run.nativeActivity.total}`
+    : "";
+  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string =>
     `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
@@ -98,6 +104,13 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     field("Name", run.name),
     field("ID", run.id),
     field("State", runStateLabel(run.state)),
+    run.parentRunId ? field("Parent", run.parentRunId) : undefined,
+    run.depth !== undefined
+      ? field(
+          "Tree",
+          `depth ${run.depth} · ${run.directChildCount ?? 0} direct · ${run.descendantCount ?? 0} descendants`,
+        )
+      : undefined,
     run.profile ? field("Profile", run.profile) : undefined,
     field("Route", route),
     field(
@@ -143,6 +156,12 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     elapsed ? field("Elapsed", elapsed) : undefined,
     activity ? field("Activity", activity) : undefined,
     usage ? field("Usage", usage) : undefined,
+    run.nativeActivity
+      ? field(
+          "Native",
+          `${run.nativeActivity.active} active · ${run.nativeActivity.total} total${run.nativeActivity.latest ? ` · latest ${run.nativeActivity.latest.kind} ${run.nativeActivity.latest.state}` : ""}`,
+        )
+      : undefined,
     run.currentTool ? field("Current tool", run.currentTool) : undefined,
     run.progress ? field("Progress", run.progress) : undefined,
     run.warning ? field("Warning", run.warning) : undefined,

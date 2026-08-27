@@ -70,9 +70,9 @@ const environment = {
   forkAvailable: true,
 };
 
-describe("subagent v4 profile configuration and resolution", () => {
+describe("subagent v5 profile configuration and resolution", () => {
   it("ships seven explicit local Pi parent routes preserving profile defaults", () => {
-    expect(SUBAGENT_CONFIG_VERSION).toBe(4);
+    expect(SUBAGENT_CONFIG_VERSION).toBe(5);
     expect(PROFILE_IDS).toHaveLength(7);
     const config = resolved();
     for (const id of PROFILE_IDS) {
@@ -475,8 +475,9 @@ describe("subagent v4 profile configuration and resolution", () => {
     expect(decoded.diagnostics).toContain("global.profiles.worker[32+]");
   });
 
-  it("accepts only the current declared version", () => {
+  it("accepts v4 and v5 while rejecting other declared versions", () => {
     expect(decodeSubagentConfig({ version: 4 }, "global").unsupportedVersion).toBe(false);
+    expect(decodeSubagentConfig({ version: 5 }, "global").unsupportedVersion).toBe(false);
     const v3 = decodeSubagentConfig({ version: 3, denied: [] }, "global");
     expect(v3).toMatchObject({ unsupportedVersion: true });
     expect(v3.diagnostics).toEqual(expect.arrayContaining(["global.version", "global.<unknown>"]));
@@ -497,6 +498,7 @@ describe("subagent v4 profile configuration and resolution", () => {
       load: () => Effect.succeed(config),
       inspect: () => Effect.die("unused"),
       patchProfile: () => Effect.die("unused"),
+      patchNesting: () => Effect.die("unused"),
     });
     let attempts = 0;
     return Effect.runPromise(
@@ -533,6 +535,7 @@ describe("subagent v4 profile configuration and resolution", () => {
       load: () => Effect.succeed(config),
       inspect: () => Effect.die("unused"),
       patchProfile: () => Effect.die("unused"),
+      patchNesting: () => Effect.die("unused"),
     });
     return Effect.runPromise(
       SubagentProfileService.use((service) =>

@@ -8,7 +8,9 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import {
+  MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
+  SUPERVISOR_MCP_PROXY_TOOL_NAME,
   type SupervisorMcpToolArgumentsByName,
 } from "../supervisor/mcp-contract.ts";
 import {
@@ -22,12 +24,13 @@ import {
 
 type SupervisorMcpToolName = keyof SupervisorMcpToolArgumentsByName;
 
-const MAX_LINE_BYTES = 512 * 1024;
-const MAX_BRIDGE_TEXT_CHARS = 64 * 1024 + 128;
+const MAX_LINE_BYTES = 3 * 1024 * 1024;
+const MAX_BRIDGE_TEXT_CHARS = MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS + 128;
 const MAX_PENDING = 16;
 const WRITE_QUEUE_CAPACITY = 32;
 const CALL_TIMEOUT_MILLIS = 15_000;
 const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
+const PROXY_TIMEOUT_MILLIS = 60 * 60_000;
 const INITIALIZE_REQUEST_ID = "pi-bridge-initialize";
 const packagedHelperPath = fileURLToPath(new URL("./supervisor-mcp-helper.mjs", import.meta.url));
 
@@ -63,6 +66,14 @@ type BridgeOutboundMessage =
   | BridgeInitializedNotification
   | BridgeToolCallRequest;
 
+const BridgeNotification = Schema.Struct({
+  jsonrpc: Schema.optional(Schema.Literal("2.0")),
+  method: Schema.Literal("notifications/pi_subagents"),
+  params: Schema.Struct({
+    updateId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+    message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32 * 1024)),
+  }),
+});
 const BridgeResponseDiscriminant = Schema.Struct({ id: Schema.optional(Schema.Unknown) });
 const BridgeResponse = Schema.Struct({
   jsonrpc: Schema.optional(Schema.Literal("2.0")),
@@ -98,7 +109,8 @@ type BridgeReply =
       readonly kind: "initialized";
       readonly result: Schema.Schema.Type<typeof BridgeInitializeResult>;
     }
-  | { readonly kind: "text"; readonly text: string };
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "notification"; readonly message: string };
 
 const decodeInboundOption = Schema.decodeUnknownOption;
 
@@ -107,6 +119,12 @@ const classifyBridgeLine = (line: string): InboundClassification<BridgeReply> =>
   if (Option.isNone(parsed))
     return { kind: "protocol-error", reason: "Private supervisor bridge returned malformed JSON." };
   const value = parsed.value;
+  const notification = decodeInboundOption(BridgeNotification)(value);
+  if (Option.isSome(notification))
+    return {
+      kind: "event",
+      value: { kind: "notification", message: notification.value.params.message },
+    };
   const discriminant = decodeInboundOption(BridgeResponseDiscriminant)(value);
   if (Option.isNone(discriminant)) {
     return {
@@ -162,6 +180,7 @@ export interface PiSupervisorBridgeOpenOptions {
   /** Package-test seam only; production always uses the packaged helper. */
   readonly helperPath?: string | undefined;
   readonly initializeTimeoutMillis?: number | undefined;
+  readonly onNotification?: ((message: string) => void) | undefined;
 }
 
 const initializeRequest = (): BridgeInitializeRequest => ({
@@ -206,7 +225,9 @@ const makeBridgeClientDoor = (session: OpenBridgeSession): PiSupervisorBridgeCli
         const timeoutMillis =
           name === SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2]
             ? QUESTION_TIMEOUT_MILLIS
-            : CALL_TIMEOUT_MILLIS;
+            : name === SUPERVISOR_MCP_PROXY_TOOL_NAME
+              ? PROXY_TIMEOUT_MILLIS
+              : CALL_TIMEOUT_MILLIS;
         return session
           .call(requestId, encodeFrame(toolCallRequest(requestId, name, input)), timeoutMillis)
           .pipe(
@@ -253,6 +274,9 @@ export const openPiSupervisorBridge = (
       maxPendingCalls: MAX_PENDING,
       writeQueueCapacity: WRITE_QUEUE_CAPACITY,
       classifyInbound: classifyBridgeLine,
+      onEvent: (event) => {
+        if (event.kind === "notification") options.onNotification?.(event.message);
+      },
       unknownReplyPolicy: "ignore",
       cancelNotification: (id) =>
         `${JSON.stringify({

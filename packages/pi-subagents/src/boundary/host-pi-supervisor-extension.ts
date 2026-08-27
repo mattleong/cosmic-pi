@@ -3,8 +3,15 @@ import * as Context from "effect/Context";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
-import { defineTool, type AgentEndEvent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  type AgentEndEvent,
+  type AgentToolResult,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
 import { herdrAssignmentEpoch } from "../backend/herdr-assignment.ts";
 import {
@@ -16,16 +23,23 @@ import {
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+  SUPERVISOR_MCP_PROXY_TOOL_NAME,
   SUPERVISOR_MCP_TOOL_NAMES,
   type SupervisorMcpReportArguments,
   type SupervisorMcpToolArgumentsByName,
 } from "../supervisor/mcp-contract.ts";
 import { Type } from "typebox";
+import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
+import { encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
+import { registerSubagentTools } from "../tools/subagent.ts";
 import {
   openPiSupervisorBridge,
   type PiSupervisorBridgeClient,
 } from "./pi-supervisor-bridge-client.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
+import { subagentChildRunId } from "./host-environment.ts";
 import type { RpcSessionError } from "./rpc-session.ts";
 
 const MessageParameters = Type.Object(
@@ -67,6 +81,25 @@ interface AssignmentReportState {
   fallbackStarted: boolean;
   settledSuccessfully: boolean;
 }
+
+const ProxyResultSchema = Schema.Struct({
+  content: Schema.Array(
+    Schema.Struct({
+      type: Schema.Literal("text"),
+      text: Schema.String.check(Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS)),
+    }),
+  ).check(Schema.isMaxLength(64)),
+  details: Schema.optional(Schema.Unknown),
+});
+
+const decodeProxyResult = (source: string): AgentToolResult<unknown> | undefined => {
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyResultSchema))(source);
+  if (Option.isNone(decoded)) return undefined;
+  return {
+    content: [...decoded.value.content],
+    details: decoded.value.details ?? {},
+  };
+};
 
 const sameReportInput = (left: ReportInput, right: ReportInput): boolean =>
   left.delivery_id === right.delivery_id && left.report === right.report;
@@ -114,7 +147,28 @@ export default function registerPiSubagentSupervisorBridge(
     RpcSessionError
   >({
     makeRuntime: ({ configPath }) =>
-      makePiManagedRuntime(pi, Layer.effect(SupervisorBridge, dependencies.openBridge(configPath))),
+      makePiManagedRuntime(
+        pi,
+        Layer.effect(
+          SupervisorBridge,
+          dependencies.openBridge(configPath, {
+            onNotification: (message) => {
+              try {
+                pi.sendMessage(
+                  {
+                    customType: "pi-subagents-proxy-notification",
+                    content: message,
+                    display: true,
+                  },
+                  { deliverAs: "steer", triggerTurn: true },
+                );
+              } catch {
+                // Session shutdown can race a confirmed helper notification.
+              }
+            },
+          }),
+        ),
+      ),
     startup: () => SupervisorBridge.use(() => Effect.void),
   });
   let started = false;
@@ -262,6 +316,30 @@ export default function registerPiSubagentSupervisorBridge(
             },
           });
 
+          const proxyCall = (
+            input: import("../tools/schema.ts").SubagentToolInput,
+            signal?: AbortSignal,
+          ) => {
+            const encoded = encodeSubagentProxyInput(input);
+            return callBridge(
+              token,
+              SUPERVISOR_MCP_PROXY_TOOL_NAME,
+              { tool: encoded.tool, arguments_json: encoded.argumentsJson },
+              signal,
+            ).then((source) => {
+              const result = decodeProxyResult(source);
+              if (!result) throw new Error("Root coordinator returned an invalid response.");
+              return result;
+            });
+          };
+          registerSubagentTools(pi, {
+            environment: { cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() },
+            proxyCall: (input, signal) => proxyCall(input, signal),
+            run: () => Promise.reject(new Error("Delegated Pi uses the root coordinator proxy.")),
+          });
+          const runId = subagentChildRunId();
+          if (runId) registerSubagentProxyManagerCommand(pi, runId, proxyCall);
+
           const tools = [
             messageTool(
               SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
@@ -292,6 +370,7 @@ export default function registerPiSubagentSupervisorBridge(
                     name !== "contact_parent",
                 ),
               ...tools.map((tool) => tool.name),
+              ...SUBAGENT_TOOL_NAMES,
             ]),
           ]);
         });

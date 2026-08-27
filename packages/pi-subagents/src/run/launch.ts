@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { BackendLaunchRequest, BackendStartupState } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
+import { DEFAULT_SUBAGENT_NESTING_POLICY, type SubagentNestingPolicy } from "../config/schema.ts";
 import { isRetainableProfileCandidate } from "../profiles/model.ts";
 import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
@@ -20,10 +21,13 @@ import {
   UnsupportedSafeWriterOwnershipError,
 } from "./errors.ts";
 import { completeRunInitialization, type RunRecord } from "./internal.ts";
+import { descendantRunIds } from "./tree.ts";
 import { MAX_RETAINED_RUNS } from "./limits.ts";
 import {
   emptyUsage,
+  isActiveRunState,
   isTerminalRunState,
+  SUBAGENT_ROOT_RUN_ID,
   type StartSubagentRequest,
   type SubagentRunView,
 } from "./model.ts";
@@ -129,6 +133,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             code: "task_required",
             message: "Subagent task is required.",
           });
+        const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+        const nestingPolicy: SubagentNestingPolicy =
+          request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
         const normalizedClaims =
           request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
         if (normalizedClaims && !normalizedClaims.ok)
@@ -206,6 +213,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         const evictionEligible = (record: RunRecord): boolean =>
           !record.cleanupPending &&
           record.process === undefined &&
+          descendantRunIds(records, record.view.id).length === 0 &&
           writerPools
             .get(record.canonicalWriterCwd?.digest ?? "")
             ?.violationRunIds.has(record.view.id) !== true &&
@@ -250,7 +258,39 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 code: "retry_claim_stale",
                 message: `Failed predecessor ${request.supersedes.runId} no longer owns this next-candidate retry claim.`,
               });
-            const capacityFailure = processCapacityError(records, ownReservation);
+            const parent =
+              parentRunId === SUBAGENT_ROOT_RUN_ID ? undefined : records.get(parentRunId);
+            if (parentRunId !== SUBAGENT_ROOT_RUN_ID && !parent)
+              return yield* new InvalidSubagentRequestError({
+                code: "parent_run_not_found",
+                message: `Subagent parent ${parentRunId} is no longer registered.`,
+              });
+            if (parent && (parent.stoppedByParent || !isActiveRunState(parent.view.state)))
+              return yield* new InvalidSubagentRequestError({
+                code: "parent_run_disconnected",
+                message: `Subagent parent ${parentRunId} is not connected and cannot spawn a child.`,
+              });
+            const parentDepth = parent?.view.depth ?? 0;
+            if (parentDepth >= nestingPolicy.maxDepth)
+              return yield* new InvalidSubagentRequestError({
+                code: "nesting_depth_limit",
+                message: `Subagent nesting depth reached (${nestingPolicy.maxDepth}); ${parentRunId} cannot spawn another Pi run node.`,
+              });
+            if (
+              request.supersedes &&
+              predecessor &&
+              (predecessor.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) !== parentRunId
+            )
+              return yield* new InvalidSubagentRequestError({
+                code: "retry_parent_mismatch",
+                message: "A retry successor must keep its predecessor's parent.",
+              });
+            const capacityFailure = processCapacityError(
+              records,
+              parentRunId,
+              nestingPolicy.maxDirectChildren,
+              ownReservation,
+            );
             if (capacityFailure) return yield* capacityFailure;
             if (canonicalWriterCwd) {
               const writerFailure = writerConflictError(
@@ -316,6 +356,8 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                   : { ...withPredecessorRunId, remainingCandidateCount };
               const withSelectionAndWriteIntent = {
                 ...withRemainingCandidateCount,
+                parentRunId,
+                depth: (parent?.view.depth ?? 0) + 1,
                 selection: request.selection ?? {
                   source: "profile-candidate",
                   host: request.host,
@@ -402,6 +444,8 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 driver,
                 launch,
                 activeTools: new Map(),
+                nativeAgents: new Map(),
+                nativeAgentTotal: 0,
                 cleanupSettlement,
                 routeContinuation: request.routeContinuation,
                 retryExhausted: false,
@@ -455,7 +499,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             Effect.gen(function* () {
               if (isClosed()) return yield* runtimeClosedError();
               let candidate: RunRecord | undefined;
-              if (records.size >= MAX_RETAINED_RUNS) {
+              const terminalHistoryCount = [...records.values()].filter((record) =>
+                isTerminalRunState(record.view.state),
+              ).length;
+              if (terminalHistoryCount >= MAX_RETAINED_RUNS) {
                 candidate = [...records.values()]
                   .filter(
                     (record) =>
@@ -468,14 +515,12 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                       (left.view.endedAt ?? left.view.startedAt) -
                       (right.view.endedAt ?? right.view.startedAt),
                   )[0];
-                if (!candidate)
-                  return yield* new SubagentHistoryCapacityError({
-                    limit: MAX_RETAINED_RUNS,
-                    code: "history_outbox_capacity",
-                    message: `Subagent history/outbox capacity reached (${MAX_RETAINED_RUNS}); unresolved or claimed reports or cleanup ownership must be resolved before another run can start.`,
-                  });
-                if (candidate.runStateReclaimState !== "reclaimed") {
-                  const capacityFailure = processCapacityError(records);
+                if (candidate && candidate.runStateReclaimState !== "reclaimed") {
+                  const capacityFailure = processCapacityError(
+                    records,
+                    parentRunId,
+                    nestingPolicy.maxDirectChildren,
+                  );
                   if (capacityFailure) return yield* capacityFailure;
                   if (canonicalWriterCwd) {
                     const writerFailure = writerConflictError(
@@ -489,8 +534,12 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                     if (writerFailure) return yield* writerFailure;
                   }
                   candidate.evictionClaim = canonicalWriterCwd
-                    ? { writerCwdDigest: canonicalWriterCwd.digest, writeClaims }
-                    : {};
+                    ? {
+                        parentRunId,
+                        writerCwdDigest: canonicalWriterCwd.digest,
+                        writeClaims,
+                      }
+                    : { parentRunId };
                   return { kind: "reclaim" as const, candidate };
                 }
               }

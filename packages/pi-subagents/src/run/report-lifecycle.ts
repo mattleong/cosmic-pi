@@ -8,7 +8,7 @@ import {
   type BackendReport,
 } from "../backend/model.ts";
 import { SubagentProcessError } from "./errors.ts";
-import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
+import { clearRunNativeActivity, isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
 import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
@@ -92,6 +92,7 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     record.pauseOutcome = undefined;
     record.pauseRequested = false;
     record.activeTools.clear();
+    clearRunNativeActivity(record);
     const recordsCompletion = record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS;
     const generation = recordsCompletion
       ? ++record.completionGeneration

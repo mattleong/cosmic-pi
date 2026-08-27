@@ -4,7 +4,11 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
-import { decodeProfileCandidate } from "../config/schema.ts";
+import {
+  decodeProfileCandidate,
+  decodeSubagentNesting,
+  type SubagentNestingPolicy,
+} from "../config/schema.ts";
 import { MAX_PROFILE_CANDIDATES } from "./model.ts";
 import {
   cloneProfileRoute,
@@ -20,6 +24,7 @@ export type SessionProfileOverrides = Partial<Readonly<Record<ProfileId, Profile
 export interface SessionProfileOverrideSeed {
   readonly revision: number;
   readonly overrides: SessionProfileOverrides;
+  readonly nesting?: SubagentNestingPolicy | undefined;
 }
 
 export interface SessionProfileSnapshot extends SessionProfileOverrideSeed {
@@ -31,6 +36,12 @@ export interface SessionProfilePatch {
   readonly profile: ProfileId;
   /** Undefined clears the temporary declaration and reveals the loaded base route. */
   readonly route?: ProfileRoute | undefined;
+  readonly expectedRevision: number;
+}
+
+export interface SessionNestingPatch {
+  /** Undefined clears the session policy and reveals persistent configuration. */
+  readonly nesting?: SubagentNestingPolicy | undefined;
   readonly expectedRevision: number;
 }
 
@@ -62,6 +73,7 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
     Schema.isGreaterThanOrEqualTo(0),
   ),
   overrides: SessionOverridesInputSchema,
+  nesting: Schema.optional(Schema.Unknown),
 });
 const exactDecodeOptions = { onExcessProperty: "error" as const };
 
@@ -127,7 +139,10 @@ export const cloneSessionProfileOverrideSeed = (
     const route = seed.overrides[profile];
     if (route) overrides[profile] = cloneProfileRoute(route);
   }
-  return freezeSnapshot({ revision: Math.max(0, Math.floor(seed.revision)), overrides });
+  const base = { revision: Math.max(0, Math.floor(seed.revision)), overrides };
+  return freezeSnapshot(
+    seed.nesting === undefined ? base : { ...base, nesting: { ...seed.nesting } },
+  );
 };
 
 /** Strict unknown-boundary decoder for process-memory reload handoffs. */
@@ -153,12 +168,20 @@ export const decodeSessionProfileOverrideSeed = <ValueInput>(
     }
     overrides[profile] = { candidates };
   }
-  return cloneSessionProfileOverrideSeed({ revision: decoded.value.revision, overrides });
+  const nesting =
+    decoded.value.nesting === undefined ? undefined : decodeSubagentNesting(decoded.value.nesting);
+  if (decoded.value.nesting !== undefined && nesting === undefined) return undefined;
+  return cloneSessionProfileOverrideSeed(
+    nesting === undefined
+      ? { revision: decoded.value.revision, overrides }
+      : { revision: decoded.value.revision, overrides, nesting },
+  );
 };
 
 export const applySessionProfileOverrides = (
   baseConfig: ResolvedSubagentConfig,
   overrides: SessionProfileOverrides,
+  nesting?: SubagentNestingPolicy,
 ): ResolvedSubagentConfig => {
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const profiles = {} as Record<ProfileId, ProfileRoute>;
@@ -168,7 +191,13 @@ export const applySessionProfileOverrides = (
     profiles[profile] = cloneProfileRoute(route ?? baseConfig.profiles[profile]);
     if (route) profileSources[profile] = "session";
   }
-  return freezeSnapshot({ ...baseConfig, profiles, profileSources });
+  return freezeSnapshot({
+    ...baseConfig,
+    profiles,
+    profileSources,
+    nesting: nesting ? { ...nesting } : baseConfig.nesting,
+    nestingSource: nesting ? "session" : baseConfig.nestingSource,
+  });
 };
 
 export const makeSessionProfileSnapshot = (
@@ -176,16 +205,21 @@ export const makeSessionProfileSnapshot = (
   seed: SessionProfileOverrideSeed = emptySessionProfileOverrideSeed(),
 ): SessionProfileSnapshot => {
   const cloned = cloneSessionProfileOverrideSeed(seed);
-  return freezeSnapshot({
+  const base = {
     revision: cloned.revision,
     overrides: cloned.overrides,
     baseConfig,
-    effectiveConfig: applySessionProfileOverrides(baseConfig, cloned.overrides),
-  });
+    effectiveConfig: applySessionProfileOverrides(baseConfig, cloned.overrides, cloned.nesting),
+  };
+  return freezeSnapshot(cloned.nesting ? { ...base, nesting: cloned.nesting } : base);
 };
 
 export const sessionProfileSeed = (snapshot: SessionProfileSnapshot): SessionProfileOverrideSeed =>
-  freezeSnapshot({ revision: snapshot.revision, overrides: snapshot.overrides });
+  freezeSnapshot(
+    snapshot.nesting === undefined
+      ? { revision: snapshot.revision, overrides: snapshot.overrides }
+      : { revision: snapshot.revision, overrides: snapshot.overrides, nesting: snapshot.nesting },
+  );
 
 export const patchSessionProfileSnapshot = (
   snapshot: SessionProfileSnapshot,
@@ -207,12 +241,37 @@ export const patchSessionProfileSnapshot = (
   const overrides = { ...snapshot.overrides } satisfies Partial<Record<ProfileId, ProfileRoute>>;
   if (patch.route === undefined) delete overrides[patch.profile];
   else overrides[patch.profile] = cloneProfileRoute(patch.route);
-  return Effect.succeed(
-    makeSessionProfileSnapshot(snapshot.baseConfig, {
-      revision: snapshot.revision + 1,
-      overrides,
-    }),
-  );
+  const nextSeed: SessionProfileOverrideSeed = snapshot.nesting
+    ? { revision: snapshot.revision + 1, overrides, nesting: snapshot.nesting }
+    : { revision: snapshot.revision + 1, overrides };
+  return Effect.succeed(makeSessionProfileSnapshot(snapshot.baseConfig, nextSeed));
+};
+
+export const patchSessionNestingSnapshot = (
+  snapshot: SessionProfileSnapshot,
+  patch: SessionNestingPatch,
+): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> => {
+  if (patch.expectedRevision !== snapshot.revision)
+    return Effect.fail(
+      new SessionProfileConflictError({
+        expectedRevision: patch.expectedRevision,
+        actualRevision: snapshot.revision,
+        message:
+          "Session subagent settings changed while this page was open; refresh and try again.",
+      }),
+    );
+  const same =
+    snapshot.nesting?.maxDirectChildren === patch.nesting?.maxDirectChildren &&
+    snapshot.nesting?.maxDepth === patch.nesting?.maxDepth;
+  if (same) return Effect.succeed(snapshot);
+  const nextSeed: SessionProfileOverrideSeed = patch.nesting
+    ? {
+        revision: snapshot.revision + 1,
+        overrides: snapshot.overrides,
+        nesting: patch.nesting,
+      }
+    : { revision: snapshot.revision + 1, overrides: snapshot.overrides };
+  return Effect.succeed(makeSessionProfileSnapshot(snapshot.baseConfig, nextSeed));
 };
 
 export const clearSessionProfileSnapshot = (
@@ -229,10 +288,8 @@ export const clearSessionProfileSnapshot = (
       }),
     );
   if (Object.keys(snapshot.overrides).length === 0) return Effect.succeed(snapshot);
-  return Effect.succeed(
-    makeSessionProfileSnapshot(snapshot.baseConfig, {
-      revision: snapshot.revision + 1,
-      overrides: {},
-    }),
-  );
+  const nextSeed: SessionProfileOverrideSeed = snapshot.nesting
+    ? { revision: snapshot.revision + 1, overrides: {}, nesting: snapshot.nesting }
+    : { revision: snapshot.revision + 1, overrides: {} };
+  return Effect.succeed(makeSessionProfileSnapshot(snapshot.baseConfig, nextSeed));
 };

@@ -64,6 +64,10 @@ export interface RunEventDependencies {
   ) => Effect.Effect<SubagentRunView>;
   /** Starts asynchronous containment after an unambiguous native file-tool violation. */
   readonly onWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
+  readonly onProxyEvent: (
+    record: RunRecord,
+    event: Extract<BackendEvent, { readonly type: "proxy_request" | "proxy_cancel" }>,
+  ) => Effect.Effect<void>;
 }
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
@@ -79,6 +83,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     notify,
     failRun,
     onWriteClaimViolation,
+    onProxyEvent,
   } = dependencies;
 
   const handleContact = (
@@ -142,6 +147,8 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     });
 
   return (record: RunRecord, event: BackendEvent): Effect.Effect<void, SubagentError> => {
+    if (event.type === "proxy_request" || event.type === "proxy_cancel")
+      return onProxyEvent(record, event);
     if (event.type !== "exit" && isInactiveRunRecord(record)) {
       // A backend may report final cumulative usage/cost only at its native
       // result, after the accepted report already settled the run. That exact
@@ -165,6 +172,39 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 ? undefined
                 : { ...current, lastActivityAt: now },
             ),
+          ),
+          Effect.asVoid,
+        );
+      case "native_agent_activity":
+        return Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            mutateView(record, event.assignmentEpoch, (current) => {
+              const activityId = sanitizeDiagnosticText(event.activityId, 256);
+              const kind = sanitizeDiagnosticText(event.kind, 128);
+              if (event.state === "running") {
+                if (!record.nativeAgents.has(activityId) && record.nativeAgents.size < 64) {
+                  record.nativeAgents.set(activityId, { kind });
+                  record.nativeAgentTotal = Math.min(
+                    Number.MAX_SAFE_INTEGER,
+                    record.nativeAgentTotal + 1,
+                  );
+                }
+              } else if (event.state !== "activity") record.nativeAgents.delete(activityId);
+              return {
+                ...current,
+                lastActivityAt: now,
+                nativeActivity: {
+                  active: record.nativeAgents.size,
+                  total: record.nativeAgentTotal,
+                  latest: {
+                    id: activityId,
+                    kind,
+                    state: event.state,
+                    updatedAt: now,
+                  },
+                },
+              };
+            }),
           ),
           Effect.asVoid,
         );

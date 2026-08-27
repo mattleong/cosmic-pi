@@ -31,7 +31,9 @@ import {
   type SupervisorChannelHandle,
   type SupervisorChannelLayerOptions,
 } from "../src/boundary/supervisor-channel.ts";
+import { SUPERVISOR_MCP_PROXY_TOOL_NAME } from "../src/supervisor/mcp-contract.ts";
 import {
+  MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
   SupervisorAuthTokenSchema,
   SupervisorChannelIdSchema,
   type SupervisorChannelConfig,
@@ -96,6 +98,7 @@ interface OpenTestChannel {
 const openChannel = (
   runId = "agent-supervisor-test",
   options: Omit<SupervisorChannelLayerOptions, "agentDirectory"> = {},
+  allowPiProxy = false,
 ): Promise<OpenTestChannel> =>
   mkdtemp(join(tmpdir(), "pi-subagents-supervisor-")).then((root) => {
     temporaryDirectories.push(root);
@@ -110,7 +113,7 @@ const openChannel = (
       .then((scope) =>
         Effect.runPromise(
           makeSupervisorChannel({ agentDirectory, ...options })
-            .open({ runId })
+            .open({ runId, allowPiProxy })
             .pipe(Effect.provideService(Scope.Scope, scope)),
         ).then((handle) => ({ handle, scope, agentDirectory, projectDirectory })),
       );
@@ -198,7 +201,7 @@ const spawnHelper = (handle: SupervisorChannelHandle) => {
   return { child, rpc: new RpcClient(child) };
 };
 
-const initialize = (rpc: RpcClient) =>
+const initialize = (rpc: RpcClient, clientName = "test") =>
   rpc
     .request({
       jsonrpc: "2.0",
@@ -207,7 +210,7 @@ const initialize = (rpc: RpcClient) =>
       params: {
         protocolVersion: "2025-06-18",
         capabilities: {},
-        clientInfo: { name: "test", version: "1" },
+        clientInfo: { name: clientName, version: "1" },
       },
     })
     .then((initialized) => {
@@ -327,7 +330,7 @@ describe("private supervisor channel", () => {
         !Array.isArray(value.error) &&
         value.error.code === -32600,
     );
-    child.stdin.write(`${"x".repeat(512 * 1_024 + 1)}\n`);
+    child.stdin.write(`${"x".repeat(MAX_SUPERVISOR_CHANNEL_LINE_BYTES + 1)}\n`);
 
     expect(yield* step(() => rejected)).toMatchObject({
       id: null,
@@ -560,6 +563,67 @@ describe("private supervisor channel", () => {
     yield* step(() => Effect.runPromise(Scope.close(opened.scope, Exit.void)));
   });
 
+  effectTest("exposes the authenticated coordinator proxy only to delegated Pi", function* () {
+    const opened = yield* step(() => openChannel("agent-pi-proxy", {}, true));
+    const { child, rpc } = spawnHelper(opened.handle);
+    yield* step(() => initialize(rpc, "pi-subagents-pi-bridge"));
+    yield* step(() => Effect.runPromise(opened.handle.awaitReady));
+    yield* step(() => Effect.runPromise(opened.handle.setAssignmentEpoch(1)));
+
+    const listed = yield* step(() =>
+      rpc.request({ jsonrpc: "2.0", id: "list-proxy", method: "tools/list", params: {} }),
+    );
+    expect(listed).toMatchObject({
+      result: {
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: SUPERVISOR_MCP_PROXY_TOOL_NAME }),
+        ]),
+      },
+    });
+
+    const pending = toolCall(rpc, "proxy-call", SUPERVISOR_MCP_PROXY_TOOL_NAME, {
+      tool: "subagent_list",
+      arguments_json: "{}",
+    });
+    const event = yield* step(() => takeEvent(opened.handle));
+    expect(event).toMatchObject({
+      type: "proxy_request",
+      tool: "subagent_list",
+      argumentsJson: "{}",
+    });
+    if (event.type !== "proxy_request") throw new Error("expected proxy request");
+    yield* step(() =>
+      Effect.runPromise(
+        event.respond(
+          true,
+          JSON.stringify({ content: [{ type: "text", text: "No child runs." }], details: {} }),
+        ),
+      ),
+    );
+    expect(yield* step(() => pending)).toMatchObject({
+      result: { content: [{ text: expect.stringContaining("No child runs") }] },
+    });
+
+    const notification = rpc.next(
+      (value) =>
+        hasObjectRuntimeType(value) &&
+        value !== null &&
+        !Array.isArray(value) &&
+        value.method === "notifications/pi_subagents",
+    );
+    const delivered = Effect.runPromise(
+      opened.handle.deliverNotification("A descendant finished."),
+    );
+    expect(yield* step(() => notification)).toMatchObject({
+      params: { message: "A descendant finished." },
+    });
+    yield* step(() => delivered);
+
+    child.kill("SIGTERM");
+    yield* step(() => waitForExit(child));
+    yield* step(() => Effect.runPromise(Scope.close(opened.scope, Exit.void)));
+  });
+
   effectTest(
     "spawns the helper and keeps blocked questions concurrent, correlated, cancellable, and epoch-safe",
     function* () {
@@ -568,7 +632,7 @@ describe("private supervisor channel", () => {
 
       const config = yield* step(() => connectionConfig(handle));
       expect(config).toMatchObject({
-        version: 2,
+        version: 3,
         runId: handle.runId,
         host: "127.0.0.1",
         port: handle.metadata.port,
@@ -883,6 +947,7 @@ describe("private supervisor channel", () => {
       settled = true;
     });
     const update = yield* step(() => updatePromise);
+    if (update.kind !== "assignment") throw new Error("expected assignment update");
     yield* step(() => wait(50));
     expect(settled).toBe(false);
     yield* step(() =>
@@ -1283,7 +1348,7 @@ describe("private supervisor channel", () => {
       ).toMatchObject({ error: { code: -32700 } });
 
       const oversizedExit = waitForExit(child);
-      child.stdin.write(`${"x".repeat(512 * 1024 + 1)}\n`);
+      child.stdin.write(`${"x".repeat(MAX_SUPERVISOR_CHANNEL_LINE_BYTES + 1)}\n`);
       expect(yield* step(() => oversizedExit)).toBeDefined();
       yield* step(() => wait(10));
       yield* step(() => Effect.runPromise(handle.close));

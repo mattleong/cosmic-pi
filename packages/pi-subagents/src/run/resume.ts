@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import type { BackendStartupState } from "../backend/model.ts";
 import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
-import { processCapacityError, writerConflictError } from "./admission.ts";
+import { writerConflictError } from "./admission.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
 import {
@@ -18,7 +18,7 @@ import {
   UnsupportedSafeWriterOwnershipError,
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
-import { completeRunInitialization, type RunRecord } from "./internal.ts";
+import { clearRunNativeActivity, completeRunInitialization, type RunRecord } from "./internal.ts";
 import { isTerminalRunState, type SubagentCapability, type SubagentRunView } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
@@ -206,8 +206,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 }
                 const needsRespawn = selected.process === undefined;
                 if (needsRespawn) {
-                  const capacityFailure = processCapacityError(records, selected);
-                  if (capacityFailure) return yield* capacityFailure;
                   if (!selected.resumeToken)
                     return yield* new InvalidSubagentRequestError({
                       code: "backend_resume_unavailable",
@@ -219,6 +217,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 selected.pauseOutcome = undefined;
                 selected.pausedAssignmentEpoch = undefined;
                 selected.activeTools.clear();
+                clearRunNativeActivity(selected);
                 selected.notificationGeneration += 1;
                 delivery.discardQuestionLocked(selected.view.id);
                 selected.replyPendingRequestId = undefined;

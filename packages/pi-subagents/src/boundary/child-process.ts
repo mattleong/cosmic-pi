@@ -21,7 +21,11 @@ import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
-import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT, piToolsForWriteIntent } from "../run/tool-policy.ts";
+import {
+  CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+  piToolsForWriteIntent,
+  SUBAGENT_TOOL_NAMES,
+} from "../run/tool-policy.ts";
 import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
 import type { RuntimeApiKey } from "../run/model.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
@@ -162,7 +166,7 @@ export const childToolPolicy = (
   writeIntent: import("../domain/routing.ts").SubagentWriteIntent,
 ): ChildToolPolicy => ({
   enabled: piToolsForWriteIntent(activeTools, writeIntent),
-  excluded: ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+  excluded: CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
 });
 
 export const requestCooperativeAbort = (
@@ -340,7 +344,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     request.effort,
     ...(request.fastMode ? ["--pi-subagents-fast-mode"] : []),
     "--tools",
-    [...new Set([...toolPolicy.enabled, "contact_parent"])].join(","),
+    [...new Set([...toolPolicy.enabled, "contact_parent", ...SUBAGENT_TOOL_NAMES])].join(","),
     "--exclude-tools",
     toolPolicy.excluded,
     "--append-system-prompt",

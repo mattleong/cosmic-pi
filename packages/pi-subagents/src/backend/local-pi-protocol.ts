@@ -7,6 +7,7 @@ import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.t
 const MAX_PROTOCOL_NAME_CHARS = 256;
 const MAX_PROTOCOL_ERROR_CHARS = 64 * 1024;
 const MAX_MESSAGE_DELTA_CHARS = 1024 * 1024;
+const MAX_PROXY_PAYLOAD_CHARS = 2 * 1024 * 1024;
 
 const ProtocolIdSchema = Schema.String.check(
   Schema.isMinLength(1),
@@ -86,6 +87,18 @@ const ContactCancelSchema = Schema.Struct({
   type: Schema.Literal("contact_cancel"),
   requestId: ProtocolIdSchema,
 });
+const ProxyRequestSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("proxy_request"),
+  requestId: ProtocolIdSchema,
+  tool: ProtocolNameSchema,
+  argumentsJson: Schema.String.check(Schema.isMaxLength(MAX_PROXY_PAYLOAD_CHARS)),
+});
+const ProxyCancelSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("proxy_cancel"),
+  requestId: ProtocolIdSchema,
+});
 const ParentReplySchema = Schema.Struct({
   channel: Schema.Literal("pi-subagents"),
   type: Schema.Literal("parent_reply"),
@@ -97,8 +110,30 @@ const PeerNoticeSchema = Schema.Struct({
   type: Schema.Literal("peer_notice"),
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
 });
-export const LocalPiContactSchema = Schema.Union([ContactParentSchema, ContactCancelSchema]);
-export const LocalPiParentControlSchema = Schema.Union([ParentReplySchema, PeerNoticeSchema]);
+const ProxyResponseSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("proxy_response"),
+  requestId: ProtocolIdSchema,
+  ok: Schema.Boolean,
+  payloadJson: Schema.String.check(Schema.isMaxLength(MAX_PROXY_PAYLOAD_CHARS)),
+});
+const ProxyNotificationSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("proxy_notification"),
+  message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
+});
+export const LocalPiContactSchema = Schema.Union([
+  ContactParentSchema,
+  ContactCancelSchema,
+  ProxyRequestSchema,
+  ProxyCancelSchema,
+]);
+export const LocalPiParentControlSchema = Schema.Union([
+  ParentReplySchema,
+  PeerNoticeSchema,
+  ProxyResponseSchema,
+  ProxyNotificationSchema,
+]);
 export type LocalPiContact = Schema.Schema.Type<typeof LocalPiContactSchema>;
 export type LocalPiParentControl = Schema.Schema.Type<typeof LocalPiParentControlSchema>;
 export const decodeLocalPiContactOption = Schema.decodeUnknownOption(LocalPiContactSchema);

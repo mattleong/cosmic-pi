@@ -1,7 +1,11 @@
 import type { SubagentProjection, SubagentRunView } from "./model.ts";
 import { isActiveRunState } from "./model.ts";
 
-export const emptyProjection = (): SubagentProjection => ({ revision: 0, runs: [] });
+export const emptyProjection = (): SubagentProjection => ({
+  revision: 0,
+  root: { id: "root", depth: 0, directChildCount: 0, descendantCount: 0 },
+  runs: [],
+});
 
 export const sortRuns = (runs: ReadonlyArray<SubagentRunView>): ReadonlyArray<SubagentRunView> =>
   [...runs].sort((left, right) => {

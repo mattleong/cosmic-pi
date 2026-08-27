@@ -4,6 +4,8 @@ Part of the [pi-subagents](../README.md) architecture documentation. Routing pol
 
 ## Workspace behavior
 
+`/subagents settings` edits version-5 nesting policy in Session, Global, or trusted-Project scope. Direct children accept integers from 1 through 32 and depth accepts integers from 0 through 8. The controller rejects invalid input instead of clamping it. Session changes apply to later batches immediately. Persistent writes use `config/store.ts`, upgrade version 4 to version 5, and require `/reload`. Lowering a policy never stops admitted runs.
+
 `/subagents profiles` opens a full-screen Profiles → Route → Candidate editor for Session, Global, or trusted-Project declarations. Session routes are complete copy-on-write overlays, apply immediately to new launches, and write no files. Global and project edits use optimistic document concurrency through `config/store.ts`, preserve unrelated routes, and require `/reload`. Invalid intermediates never commit. Existing ordered candidates can be added, cloned, moved, removed, disabled, reset, or inherited without reordering another candidate.
 
 The stateful component lives at `src/settings/profile-workspace.ts`; `src/settings/ui/` contains only pure renderers, selectors, and picker projection. Disposal is idempotent. It ignores later input/render/invalidation and discards late save, clear, reload, and catalog UI continuations. Already submitted persistence still settles. Disposal aborts catalog work and the registry refresh, then clears the controller's render callback.
@@ -18,11 +20,11 @@ Claude and Codex discovery stays cancelable and keeps current/default fallback c
 
 ## Session handoff
 
-The authoritative session overlay survives `/tree`. During `/reload`, shutdown publishes only a frozen seed keyed by the current Pi session ID. The new instance first performs a shallow data-descriptor check of every known candidate-array length, without reading candidate elements, then schema-decodes the envelope and reapplies it to the newly loaded persistent base. Oversized or hostile envelopes are discarded. New, resume, fork, quit, and process restart clear the handoff.
+The authoritative session route and nesting overlay survives `/tree`. During `/reload`, shutdown publishes only a frozen seed keyed by the current Pi session ID. The new instance first performs a shallow data-descriptor check of every known candidate-array length, without reading candidate elements, then schema-decodes the envelope and reapplies it to the newly loaded persistent base. Oversized or hostile envelopes are discarded. New, resume, fork, quit, and process restart clear the handoff.
 
 ## Module responsibilities
 
-- `src/settings/controller.ts` owns `/subagents` command orchestration and host lifecycle callbacks.
+- `src/settings/controller.ts` owns root `/subagents`, `/subagents settings`, profile command orchestration, and host lifecycle callbacks. `proxy-controller.ts` owns the packaged nested-Pi subtree command and keeps its visibility root fixed.
 - `src/settings/profile-route-editor.ts` owns pure route draft operations and canonical validation messages.
 - `src/settings/profile-model-catalog.ts` owns atomic Pi catalog refresh and runtime-specific picker loading.
 - `src/settings/profile-workspace.ts` owns asynchronous workspace state and disposal.

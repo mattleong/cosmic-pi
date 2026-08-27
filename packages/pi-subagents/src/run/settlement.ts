@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import { type SubagentError, SubagentProcessError } from "./errors.ts";
-import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
+import { clearRunNativeActivity, isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import { isTerminalRunState, type SubagentRunView, type SubagentUsage } from "./model.ts";
 import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
@@ -83,6 +83,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         )
           return undefined;
         record.activeTools.clear();
+        clearRunNativeActivity(record);
         record.pausedAssignmentEpoch = assignmentEpoch;
         record.view = {
           ...record.view,
@@ -132,6 +133,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           record.pauseOutcome = undefined;
           record.pauseRequested = false;
           record.activeTools.clear();
+          clearRunNativeActivity(record);
           const hasDeliverableOutcome = state === "completed" || state === "failed";
           const recordDeliverableOutcome =
             hasDeliverableOutcome &&

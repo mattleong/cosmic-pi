@@ -46,6 +46,15 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     delivery,
   } = dependencies;
 
+  const withTreeMetadata = (view: SubagentRunView): SubagentRunView => {
+    const projected = currentProjection().runs.find((candidate) => candidate.id === view.id);
+    return snapshotView({
+      ...view,
+      directChildCount: projected?.directChildCount ?? 0,
+      descendantCount: projected?.descendantCount ?? 0,
+    });
+  };
+
   const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
     const { finalText: _finalText, ...withoutReport } = view;
     return snapshotView({
@@ -60,7 +69,8 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
 
   const observeRecord = (record: RunRecord, claimToken?: string): SubagentRunObservation => {
     const generation = record.completionGeneration;
-    if (!isAssignmentFinishedRunState(record.view.state)) return { run: snapshotView(record.view) };
+    const view = withTreeMetadata(record.view);
+    if (!isAssignmentFinishedRunState(view.state)) return { run: view };
     const unresolved = record.completionGenerations.has(generation);
     const owns =
       unresolved &&
@@ -68,7 +78,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       completionClaimOwner(record, generation) === claimToken;
     return (() => {
       const baseResult = {
-        run: owns ? snapshotView(record.view) : redactCompletionReport(record.view),
+        run: owns ? view : redactCompletionReport(view),
       };
       const withCompletionReceipt = owns
         ? {

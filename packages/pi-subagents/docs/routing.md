@@ -2,7 +2,7 @@
 
 Part of the [pi-subagents](../README.md) architecture documentation. See [ARCHITECTURE.md](../ARCHITECTURE.md) for the ownership map and cross-cutting invariants.
 
-## Version-4 routing domain
+## Version-5 routing and nesting domain
 
 A normalized candidate has `host`, `runtime`, `model`, `effort`, `context`, `writeIntent`, `fastMode`, and `closeOnReport`. Routes are disabled, one candidate, or ordered candidates. Configuration has no denied/discouraged policy, execution, lifetime, or generic tool-policy fields. Configured values normally pass through unchanged. The only launch-time rewrite is the protocol-specific Herdr fallback described below.
 
@@ -16,11 +16,11 @@ All six `local|herdr` × `pi|claude|codex` combinations are syntactically repres
 
 A present-invalid route fails closed. Missing trusted-project routes inherit global routes; missing global routes use built-ins. A complete in-memory session route overlays that loaded persistent result and records source `session`; removing it reveals the exact activation-time base again. Every built-in is an explicit local Pi parent candidate using profile context, write-intent, and effort defaults with `fastMode: false` and `closeOnReport: true`. Omitted launch profiles always resolve to `generalist`; only the seven declared profile IDs are accepted.
 
-Only version 4 and its exact root/candidate fields are accepted. Other versions and unknown fields fail activation; no migration or normalization path exists.
+Versions 4 and 5 are accepted. Version 4 receives `{maxDirectChildren:12,maxDepth:3}` and upgrades on the next store write. Version 5 may declare `nesting`; direct children must be an integer from 1 through 32 and depth an integer from 0 through 8. Present invalid values fail activation without clamping. Policy precedence is Session, trusted Project, Global, then Built-in. A start batch captures one route and policy revision. Admission counts active direct children and race reservations for one parent, with no tree-wide active-run budget.
 
 ## Candidate planning and host resolution
 
-Pure planning preserves declared order and resolves Pi model catalog/auth compatibility for local and Herdr Pi. Because sterile Herdr Pi disables extension discovery, the host boundary reads Pi's registered-provider provenance before model resolution and rejects every extension-registered provider before auth lookup or service ownership; provenance failure also fails closed. This provider-granular rule deliberately rejects a built-in provider while any extension overrides it, preventing credentials intended for extension routing from falling back to the built-in endpoint. Runtime credentials and environment-sourced Herdr-Pi API keys are resolved before service ownership and transferred only through the private ephemeral bootstrap; absent or malformed transferable credentials produce a typed candidate skip. The host boundary records dynamic typed skips in launch provenance. Host resolution continues to the next candidate only before service ownership begins.
+Pure planning preserves declared order and resolves Pi model catalog/auth compatibility for local and Herdr Pi. Herdr Pi performs normal trusted global extension discovery under `--no-approve`, so global extension-provider models remain eligible. Pi's project-trust loader blocks project-local providers and other protected project resources. Runtime credentials and environment-sourced Herdr-Pi API keys are resolved before service ownership and transferred only through the private ephemeral bootstrap; absent or malformed transferable credentials produce a typed candidate skip. The host boundary records dynamic typed skips in launch provenance. Host resolution continues to the next candidate only before service ownership begins.
 
 All six adapters are implemented. The shared registry resolves host/runtime/context and performs bounded executable/auth/model-effort/write-policy/integration/harness readiness before a run scope, writer lease, supervisor channel, topology mutation, or backend process is owned. Herdr readiness additionally requires protocol 20 and an exact calling pane inherited by the parent Pi. Any older or newer protocol, or a CLI/server protocol mismatch, blocks Herdr before topology changes and derives one local fallback at the same configured candidate index. The fallback preserves runtime, model, effort, context, write intent, fast mode, and exact claims, forces `closeOnReport:true`, and runs normal local preflight. A successful fallback records the actual local route plus a prominent warning; a failed local preflight becomes another typed skip before later configured candidates are considered. Missing or mismatched pane evidence otherwise skips that candidate before mutation. Once `SubagentService.start` begins, lease marking, topology mutation, spawn, transport uncertainty, or control errors never trigger candidate fallthrough.
 
@@ -36,7 +36,7 @@ Retry fails closed for non-failed, later-assignment, already-superseded, exhaust
 
 ## Public launch contract
 
-`subagent_start` accepts one required array of 1–12 agents. Each item contains:
+`subagent_start` accepts one required array of 1–32 agents, subject to the caller's effective direct-child capacity. Root calls create children of the virtual depth-0 root. Authenticated nested calls create children of the server-bound caller run; the public and proxy schemas contain no ancestry override. Each item contains:
 
 - required `task`;
 - optional `profile`;
@@ -58,4 +58,4 @@ Detailed responsibilities of the source files owning the behavior above:
 - `src/domain/routing.ts` — import-free leaf routing vocabulary: context/write-intent/host/runtime types, the effort scale, the shared runtime-native effort policy, and host-effort decoding. `src/domain/write-claims.ts` owns import-free exact-path normalization, conservative equality, bounds, and overlap policy. Profiles, config, run, backends, boundaries, and settings consume these leaves directly so the profile and run models stay cycle-free.
 - `src/profiles/` — fixed definitions, explicit built-in routes, ordered candidate planning, and a revisioned Effect-owned session override service. `model.ts` alone owns candidate constants, native-selector grammar, normalization/equality, structural fast-mode support, local-Pi/retainability predicates, ordered issue policy, route normalization, and labels. Runtime effort vocabulary stays in `domain/routing.ts`; authenticated fast-tier/catalog policy stays under `run/`. `session-overrides.ts` owns immutable overlay snapshots and conflict transitions.
 - `src/boundary/host-profile-resolution.ts` — Pi model/auth capture (local or Herdr), initial ordered candidate consumption, and fresh-environment resolution of frozen retry continuations. Typed readiness failures fall through only before service start.
-- `src/run/retry.ts` and `src/run/launch.ts` — exclusive failed-run claims, cleanup/exhaustion gates, retry/eviction exclusion, and atomic predecessor/successor admission lineage.
+- `src/run/retry.ts`, `src/run/tree.ts`, and `src/run/launch.ts` own exclusive failed-run claims, immutable ancestry, subtree visibility, per-parent capacity/depth admission, cleanup/exhaustion gates, retry/eviction exclusion, and atomic predecessor/successor lineage.

@@ -320,7 +320,38 @@ export const projectSubagentRunCard = (
     ...projectWriteCardFields(run, density),
     ...projectOptionalCardFields(run, density),
   };
-  const withProfile = profile === undefined ? base : { ...base, profile };
+  const parentRunId = optionalText(run.parentRunId, limits.id);
+  const withParent =
+    parentRunId === undefined
+      ? base
+      : {
+          ...base,
+          parentRunId,
+          depth: nonNegativeInteger(run.depth ?? 1),
+          directChildCount: nonNegativeInteger(run.directChildCount ?? 0),
+          descendantCount: nonNegativeInteger(run.descendantCount ?? 0),
+        };
+  const nativeLatestId = optionalText(run.nativeActivity?.latest?.id, 256);
+  let nativeActivity: SubagentRunCard["nativeActivity"];
+  if (run.nativeActivity) {
+    nativeActivity = {
+      active: nonNegativeInteger(run.nativeActivity.active),
+      total: nonNegativeInteger(run.nativeActivity.total),
+    };
+    if (run.nativeActivity.latest) {
+      const latestBase = {
+        kind: requiredText(run.nativeActivity.latest.kind, 128, "native-agent"),
+        state: run.nativeActivity.latest.state,
+        updatedAt: nonNegative(run.nativeActivity.latest.updatedAt),
+      };
+      nativeActivity = {
+        ...nativeActivity,
+        latest: nativeLatestId ? { ...latestBase, id: nativeLatestId } : latestBase,
+      };
+    }
+  }
+  const withNative = nativeActivity ? { ...withParent, nativeActivity } : withParent;
+  const withProfile = profile === undefined ? withNative : { ...withNative, profile };
   const finalText = optionalText(run.finalText, MAX_FINAL_TEXT_CHARS);
   const error = optionalText(run.error, MAX_ERROR_CHARS);
   const withFinal = finalText === undefined ? withProfile : { ...withProfile, finalText };

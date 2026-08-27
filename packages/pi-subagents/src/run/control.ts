@@ -9,7 +9,7 @@ import {
   type SubagentCapability,
   type SubagentRunView,
 } from "./model.ts";
-import type { RunRecord } from "./internal.ts";
+import { clearRunNativeActivity, type RunRecord } from "./internal.ts";
 import {
   InvalidSubagentRequestError,
   isOutcomeUncertain,
@@ -434,6 +434,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               if (record.pauseOutcome === pauseOutcome) record.pauseOutcome = undefined;
               record.pausedAssignmentEpoch = record.assignment.epoch;
               record.activeTools.clear();
+              clearRunNativeActivity(record);
               record.view = {
                 ...record.view,
                 state: "paused",
@@ -525,6 +526,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             selected.stoppedByParent = true;
             selected.cleanupPending = true;
             selected.activeTools.clear();
+            clearRunNativeActivity(selected);
             selected.view = {
               ...selected.view,
               state: "stopping",

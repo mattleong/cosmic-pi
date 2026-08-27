@@ -15,8 +15,10 @@ import { resolveSubagentConfig, type ResolvedSubagentConfig } from "./options.ts
 import {
   decodeSubagentConfig,
   type DecodedSubagentConfig,
+  LEGACY_SUBAGENT_CONFIG_VERSION,
   SUBAGENT_CONFIG_BASENAME,
   SUBAGENT_CONFIG_VERSION,
+  type SubagentNestingPolicy,
 } from "./schema.ts";
 
 export class SubagentConfigStoreError extends Schema.TaggedError<SubagentConfigStoreError>()(
@@ -50,6 +52,15 @@ export interface SubagentProfilePatch {
   readonly projectTrusted: boolean;
 }
 
+export interface SubagentNestingPatch {
+  readonly scope: SubagentConfigScope;
+  /** Undefined removes the declaration and reveals the lower-precedence policy. */
+  readonly nesting?: SubagentNestingPolicy | undefined;
+  readonly expectedExists: boolean;
+  readonly expectedDocument?: JsonObject | undefined;
+  readonly projectTrusted: boolean;
+}
+
 export interface SubagentConfigStoreContract {
   readonly paths: (cwd: string, agentDirectory: string) => Effect.Effect<SubagentConfigPaths>;
   readonly load: (
@@ -67,6 +78,11 @@ export interface SubagentConfigStoreContract {
     agentDirectory: string,
     patch: SubagentProfilePatch,
   ) => Effect.Effect<void, SubagentConfigStoreError>;
+  readonly patchNesting: (
+    cwd: string,
+    agentDirectory: string,
+    patch: SubagentNestingPatch,
+  ) => Effect.Effect<void, SubagentConfigStoreError>;
 }
 
 export class SubagentConfigStore extends Context.Service<
@@ -80,28 +96,28 @@ const unsupportedVersionError = (path: string) =>
   new SubagentConfigStoreError({
     operation: "activate",
     path,
-    message: `Subagents configuration must declare version ${SUBAGENT_CONFIG_VERSION} and use the current host/runtime route contract.`,
+    message: `Subagents configuration must declare version ${LEGACY_SUBAGENT_CONFIG_VERSION} or ${SUBAGENT_CONFIG_VERSION} and use the current route contract.`,
   });
 
 const unsupportedFieldsError = (path: string) =>
   new SubagentConfigStoreError({
     operation: "activate",
     path,
-    message: "Subagents configuration contains fields that are not part of version 4.",
+    message: "Subagents configuration contains fields that are not part of its declared version.",
   });
 
 const conflictError = (path: string) =>
   new SubagentConfigStoreError({
     operation: "update",
     path,
-    message: "Subagents settings changed on disk; reopen /subagents profiles and try again.",
+    message: "Subagents settings changed on disk; reopen /subagents settings and try again.",
   });
 
 const trustError = (path: string) =>
   new SubagentConfigStoreError({
     operation: "update",
     path,
-    message: "Project profile settings require a trusted project.",
+    message: "Project subagent settings require a trusted project.",
   });
 
 const stableJson = <ValueInput>(value: ValueInput): string => {
@@ -143,6 +159,11 @@ const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
     : candidate(route as DeclaredProfileCandidate);
 };
 
+const upgradeDocument = (current: JsonObject): JsonObject => ({
+  ...current,
+  version: SUBAGENT_CONFIG_VERSION,
+});
+
 const applyProfilePatch = (
   current: JsonObject,
   patch: Pick<SubagentProfilePatch, "profile" | "route">,
@@ -157,11 +178,28 @@ const applyProfilePatch = (
   const profiles: JsonObject = { ...currentProfiles };
   if (patch.route === undefined) delete profiles[patch.profile];
   else profiles[patch.profile] = routeJson(patch.route);
-  const next: JsonObject = { ...current, version: SUBAGENT_CONFIG_VERSION };
+  const next: JsonObject = upgradeDocument(current);
   if (Object.keys(profiles).length === 0) delete next.profiles;
   else next.profiles = profiles;
   return next;
 };
+
+const applyNestingPatch = (
+  current: JsonObject,
+  nesting: SubagentNestingPolicy | undefined,
+): JsonObject => {
+  const next = upgradeDocument(current);
+  if (nesting === undefined) delete next.nesting;
+  else
+    next.nesting = {
+      maxDirectChildren: nesting.maxDirectChildren,
+      maxDepth: nesting.maxDepth,
+    };
+  return next;
+};
+
+const isAcceptedVersion = (version: JsonObject[string] | undefined): boolean =>
+  version === LEGACY_SUBAGENT_CONFIG_VERSION || version === SUBAGENT_CONFIG_VERSION;
 
 export const subagentConfigStoreLayer = Layer.effect(
   SubagentConfigStore,
@@ -189,21 +227,23 @@ export const subagentConfigStoreLayer = Layer.effect(
           globalRaw ?? { version: SUBAGENT_CONFIG_VERSION },
           "global",
         );
-        if (
-          globalRaw !== undefined &&
-          (global.unsupportedVersion || global.file.version !== SUBAGENT_CONFIG_VERSION)
-        )
+        if (globalRaw !== undefined && global.unsupportedVersion)
           return yield* unsupportedVersionError(locations.global);
-        if (global.diagnostics.some((diagnostic) => diagnostic.endsWith(".<unknown>")))
+        if (
+          global.diagnostics.some(
+            (diagnostic) => diagnostic.endsWith(".<unknown>") || diagnostic === "global.nesting",
+          )
+        )
           return yield* unsupportedFieldsError(locations.global);
         const project =
           projectRaw === undefined ? undefined : decodeSubagentConfig(projectRaw, "project");
-        if (
-          projectRaw !== undefined &&
-          (project?.unsupportedVersion || project?.file.version !== SUBAGENT_CONFIG_VERSION)
-        )
+        if (projectRaw !== undefined && project?.unsupportedVersion)
           return yield* unsupportedVersionError(locations.project);
-        if (project?.diagnostics.some((diagnostic) => diagnostic.endsWith(".<unknown>")))
+        if (
+          project?.diagnostics.some(
+            (diagnostic) => diagnostic.endsWith(".<unknown>") || diagnostic === "project.nesting",
+          )
+        )
           return yield* unsupportedFieldsError(locations.project);
         const config = resolveSubagentConfig(
           (() => {
@@ -264,7 +304,7 @@ export const subagentConfigStoreLayer = Layer.effect(
                 stableJson(current) !== stableJson(patch.expectedDocument ?? {}))
             )
               return yield* conflictError(target);
-            if (!currentIsEmpty && current.version !== SUBAGENT_CONFIG_VERSION)
+            if (!currentIsEmpty && !isAcceptedVersion(current.version))
               return yield* unsupportedVersionError(target);
             return { value: undefined, document: applyProfilePatch(current, patch) };
           }),
@@ -275,6 +315,43 @@ export const subagentConfigStoreLayer = Layer.effect(
         );
       });
 
-    return SubagentConfigStore.of({ paths, load, inspect, patchProfile });
+    const patchNesting: SubagentConfigStoreContract["patchNesting"] = (
+      cwd,
+      agentDirectory,
+      patch,
+    ) =>
+      Effect.gen(function* () {
+        const locations = yield* paths(cwd, agentDirectory);
+        const target = patch.scope === "global" ? locations.global : locations.project;
+        if (patch.scope === "project" && !patch.projectTrusted) return yield* trustError(target);
+        if (!patch.expectedExists && patch.nesting === undefined) return;
+        if (patch.expectedExists) {
+          const expected = patch.expectedDocument ?? {};
+          if (stableJson(applyNestingPatch(expected, patch.nesting)) === stableJson(expected))
+            return;
+        }
+        const modifyObject = documents.modifyObject;
+        if (!modifyObject) return yield* storeError("update", target)();
+        yield* modifyObject(target, (current) =>
+          Effect.gen(function* () {
+            const currentIsEmpty = Object.keys(current).length === 0;
+            if (
+              (!patch.expectedExists && !currentIsEmpty) ||
+              (patch.expectedExists &&
+                stableJson(current) !== stableJson(patch.expectedDocument ?? {}))
+            )
+              return yield* conflictError(target);
+            if (!currentIsEmpty && !isAcceptedVersion(current.version))
+              return yield* unsupportedVersionError(target);
+            return { value: undefined, document: applyNestingPatch(current, patch.nesting) };
+          }),
+        ).pipe(
+          Effect.mapError((error) =>
+            error instanceof SubagentConfigStoreError ? error : storeError("update", target)(),
+          ),
+        );
+      });
+
+    return SubagentConfigStore.of({ paths, load, inspect, patchProfile, patchNesting });
   }),
 );

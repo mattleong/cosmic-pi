@@ -14,7 +14,7 @@ export class SubagentNotFoundError extends Schema.TaggedError<SubagentNotFoundEr
 
 export class SubagentCapacityError extends Schema.TaggedError<SubagentCapacityError>()(
   "SubagentCapacityError",
-  { limit: Schema.Number, message: Schema.String },
+  { limit: Schema.Number, code: Schema.optional(Schema.String), message: Schema.String },
 ) {}
 
 export class SubagentHistoryCapacityError extends Schema.TaggedError<SubagentHistoryCapacityError>()(

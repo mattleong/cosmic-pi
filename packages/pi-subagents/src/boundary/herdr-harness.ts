@@ -9,7 +9,10 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
-import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT } from "../run/tool-policy.ts";
+import {
+  CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+  SUBAGENT_TOOL_NAMES,
+} from "../run/tool-policy.ts";
 import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
 import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import { subagentRuntimeEfforts, type SubagentRuntime } from "../domain/routing.ts";
@@ -19,6 +22,7 @@ import {
   claudeAllowedTools,
   claudeSettings,
   CLAUDE_DENIED_TOOLS,
+  CLAUDE_NATIVE_AGENT_TOOLS,
   CLAUDE_READ_TOOLS,
   CLAUDE_WRITE_TOOLS,
 } from "../backend/claude-policy.ts";
@@ -89,7 +93,6 @@ const CODEX_DISABLED_FEATURES = [
   "image_generation",
   "in_app_browser",
   "memories",
-  "multi_agent",
   "plugins",
   "remote_plugin",
   "skill_search",
@@ -270,7 +273,10 @@ const claudeArgv = (
 ): ReadonlyArray<string> => {
   const tools = request.writeIntent === "writer" ? CLAUDE_WRITE_TOOLS : CLAUDE_READ_TOOLS;
   const writerPolicy = claudeWriterCwdPolicy(request.cwd);
-  const allowed = claudeAllowedTools(request.writeIntent, writerPolicy);
+  const allowed = [
+    ...claudeAllowedTools(request.writeIntent, writerPolicy),
+    ...CLAUDE_NATIVE_AGENT_TOOLS,
+  ];
   return [
     "--name",
     request.name,
@@ -315,6 +321,7 @@ const piArgv = (
     "bash",
     ...(request.writeIntent === "writer" ? ["edit", "write"] : []),
     ...SUPERVISOR_MCP_TOOL_NAMES,
+    ...SUBAGENT_TOOL_NAMES,
   ];
   return [
     "--name",
@@ -327,19 +334,17 @@ const piArgv = (
     "--session-dir",
     sessionDirectory,
     "--no-approve",
-    "--no-extensions",
     "--extension",
     integration,
     "--extension",
     fileURLToPath(new URL("./host-pi-supervisor-extension.ts", import.meta.url)),
     "--no-skills",
     "--no-prompt-templates",
-    "--no-themes",
     "--no-context-files",
     "--tools",
     tools.join(","),
     "--exclude-tools",
-    ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+    CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
     "--append-system-prompt",
     promptPath,
     "--pi-subagents-supervisor-config",
@@ -363,13 +368,14 @@ const codexConfig = (
     "[analytics]",
     "enabled = false",
     "[agents]",
-    "enabled = false",
+    "enabled = true",
     "[shell_environment_policy]",
     'inherit = "none"',
     "[features]",
     ...CODEX_DISABLED_FEATURES.map(
       (feature) => `${feature} = ${feature === "fast_mode" && request.fastMode}`,
     ),
+    "multi_agent = true",
     "hooks = true",
     `[projects.${tomlString(request.cwd)}]`,
     'trust_level = "untrusted"',
@@ -432,11 +438,21 @@ const prepareHarness = (
         const integration = integrationPath(options, runtime, agentDirectory, environment);
         const environmentReadyMarker = `pi-subagents-env-${nonce}`;
         const secretReadyMarker = `pi-subagents-secret-${nonce}`;
+        const runIdentityEnvironment = {
+          PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
+          PI_SUBAGENT_RUN_ID: request.runId,
+        };
         const environmentCommand = (topology: {
           readonly paneId: string;
           readonly tabId: string;
           readonly workspaceId: string;
-        }) => fixedEnvironmentCommand(environment, topology, environmentReadyMarker);
+        }) =>
+          fixedEnvironmentCommand(
+            environment,
+            topology,
+            environmentReadyMarker,
+            runIdentityEnvironment,
+          );
         const activationProbe = (attempt: number) => {
           const marker = `pi-subagents-activate-${nonce}-${attempt.toString()}`;
           return { command: printMarkerCommand(marker), marker };
@@ -484,6 +500,7 @@ const prepareHarness = (
                 argv: controlFreeArgv(claudeArgv(request, settingsPath, mcpPath, promptPath)),
                 environmentCommand: (topology) =>
                   fixedEnvironmentCommand(environment, topology, environmentReadyMarker, {
+                    ...runIdentityEnvironment,
                     CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1",
                   }),
                 environmentReadyMarker,

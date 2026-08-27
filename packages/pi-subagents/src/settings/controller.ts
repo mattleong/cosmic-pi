@@ -12,7 +12,14 @@ import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keyma
 import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
-import type { SubagentProfilePatch } from "../config/store.ts";
+import {
+  MAX_DIRECT_CHILDREN,
+  MAX_SUBAGENT_DEPTH,
+  MIN_DIRECT_CHILDREN,
+  MIN_SUBAGENT_DEPTH,
+  type SubagentNestingPolicy,
+} from "../config/schema.ts";
+import type { SubagentNestingPatch, SubagentProfilePatch } from "../config/store.ts";
 import {
   normalizeDeclaredProfileRoute,
   type ProfileCandidate,
@@ -20,6 +27,7 @@ import {
 } from "../profiles/model.ts";
 import {
   SessionProfileConflictError,
+  type SessionNestingPatch,
   type SessionProfilePatch,
 } from "../profiles/session-overrides.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
@@ -55,7 +63,9 @@ export interface FleetManagerActions {
   readonly rename: (id: string, name: string) => Promise<void>;
   readonly inspectProfiles: (projectTrusted: boolean) => Promise<ProfileSettingsInspection>;
   readonly patchProfile: (patch: SubagentProfilePatch) => Promise<void>;
+  readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<void>;
+  readonly patchSessionNesting: (patch: SessionNestingPatch) => Promise<void>;
   readonly clearSessionProfiles: (expectedRevision: number) => Promise<void>;
   readonly listNativeModels: (
     runtime: LocalCliRuntime,
@@ -477,6 +487,134 @@ function openProfileSettings(
   );
 }
 
+const boundedInteger = (value: string, minimum: number, maximum: number): number | undefined => {
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(value.trim())) return undefined;
+  const parsed = Number(value.trim());
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum
+    ? parsed
+    : undefined;
+};
+
+function openNestingSettings(
+  ctx: ExtensionCommandContext,
+  actions: FleetManagerActions,
+): Promise<void> {
+  if (!ctx.hasUI) return Promise.resolve();
+  const trusted = isProjectTrusted(ctx);
+  return actions.inspectProfiles(trusted).then((inspection) =>
+    ctx.ui
+      .select(
+        "Subagent nesting scope",
+        trusted ? ["Session", "Global", "Project"] : ["Session", "Global"],
+      )
+      .then((selectedScope) => {
+        if (!selectedScope) return;
+        const normalizedScope = selectedScope.toLowerCase();
+        if (
+          normalizedScope !== "session" &&
+          normalizedScope !== "global" &&
+          normalizedScope !== "project"
+        )
+          return;
+        const scope = normalizedScope;
+        const current: SubagentNestingPolicy =
+          scope === "session"
+            ? (inspection.session.nesting ?? inspection.session.effectiveConfig.nesting)
+            : scope === "project"
+              ? (inspection.project?.file.nesting ?? inspection.config.nesting)
+              : (inspection.global.file.nesting ?? inspection.config.nesting);
+        return ctx.ui
+          .select("Nesting policy", ["Set limits", "Inherit lower-precedence policy"])
+          .then((choice) => {
+            if (!choice) return;
+            if (choice.startsWith("Inherit")) {
+              if (scope === "session")
+                return actions.patchSessionNesting({
+                  expectedRevision: inspection.session.revision,
+                });
+              const expectedDocument =
+                scope === "project" ? inspection.projectDocument : inspection.globalDocument;
+              const patch: SubagentNestingPatch = {
+                scope,
+                expectedExists:
+                  scope === "project"
+                    ? inspection.projectDocument !== undefined
+                    : inspection.globalDocument !== undefined,
+                projectTrusted: trusted,
+              };
+              return actions
+                .patchNesting(expectedDocument ? { ...patch, expectedDocument } : patch)
+                .then(() =>
+                  ctx.ui.notify("Nesting policy saved. Run /reload to apply it.", "info"),
+                );
+            }
+            return ctx.ui
+              .input(
+                `Maximum direct children (${MIN_DIRECT_CHILDREN}-${MAX_DIRECT_CHILDREN})`,
+                current.maxDirectChildren.toString(),
+              )
+              .then((directText) => {
+                if (directText === undefined) return;
+                const maxDirectChildren = boundedInteger(
+                  directText,
+                  MIN_DIRECT_CHILDREN,
+                  MAX_DIRECT_CHILDREN,
+                );
+                if (maxDirectChildren === undefined) {
+                  ctx.ui.notify(
+                    "Maximum direct children is outside the accepted integer bounds.",
+                    "error",
+                  );
+                  return;
+                }
+                return ctx.ui
+                  .input(
+                    `Maximum depth (${MIN_SUBAGENT_DEPTH}-${MAX_SUBAGENT_DEPTH})`,
+                    current.maxDepth.toString(),
+                  )
+                  .then((depthText) => {
+                    if (depthText === undefined) return;
+                    const maxDepth = boundedInteger(
+                      depthText,
+                      MIN_SUBAGENT_DEPTH,
+                      MAX_SUBAGENT_DEPTH,
+                    );
+                    if (maxDepth === undefined) {
+                      ctx.ui.notify(
+                        "Maximum depth is outside the accepted integer bounds.",
+                        "error",
+                      );
+                      return;
+                    }
+                    const nesting = { maxDirectChildren, maxDepth };
+                    if (scope === "session")
+                      return actions.patchSessionNesting({
+                        expectedRevision: inspection.session.revision,
+                        nesting,
+                      });
+                    const expectedDocument =
+                      scope === "project" ? inspection.projectDocument : inspection.globalDocument;
+                    const patch: SubagentNestingPatch = {
+                      scope,
+                      nesting,
+                      expectedExists:
+                        scope === "project"
+                          ? inspection.projectDocument !== undefined
+                          : inspection.globalDocument !== undefined,
+                      projectTrusted: trusted,
+                    };
+                    return actions
+                      .patchNesting(expectedDocument ? { ...patch, expectedDocument } : patch)
+                      .then(() =>
+                        ctx.ui.notify("Nesting policy saved. Run /reload to apply it.", "info"),
+                      );
+                  });
+              });
+          });
+      }),
+  );
+}
+
 export function registerSubagentManagerCommand(
   pi: ExtensionAPI,
   bridge: SubagentProjectionBridge,
@@ -491,10 +629,15 @@ export function registerSubagentManagerCommand(
           description: "Configure profile routes (optionally scoped session/global/project)",
           values: ["session", "global", "project"],
         },
+        {
+          id: "settings",
+          description: "Configure nesting limits",
+        },
       ]),
     handler: (args, ctx) => {
       const command = args.trim().toLowerCase();
       if (!command) return openFleetManager(ctx, bridge, actions);
+      if (command === "settings") return openNestingSettings(ctx, actions);
       if (command === "profiles") return openProfileSettings(pi, ctx, bridge, actions);
       if (command === "profiles session")
         return openProfileSettings(pi, ctx, bridge, actions, "session");
@@ -503,7 +646,7 @@ export function registerSubagentManagerCommand(
       if (command === "profiles project")
         return openProfileSettings(pi, ctx, bridge, actions, "project");
       ctx.ui.notify(
-        "Usage: /subagents [profiles [session|global|project]] — omit arguments for the fleet inspector.",
+        "Usage: /subagents [settings | profiles [session|global|project]]; omit arguments for the fleet inspector.",
         "error",
       );
       return Promise.resolve();

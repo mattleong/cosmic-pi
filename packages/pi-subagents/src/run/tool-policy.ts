@@ -18,10 +18,9 @@ export const SUBAGENT_TOOL_NAMES = [
 ] as const;
 
 /**
- * Orchestration tools a child must never receive.
- *
- * Applied twice on purpose: the tool resolves the parent's active tools against it, and the child
- * process boundary passes it again as `--exclude-tools`.
+ * Orchestration tools excluded from inherited parent tools. Packaged Pi child integrations register
+ * the authenticated `subagent_*` proxies separately; competing Herdr/workflow orchestrators remain
+ * denied at the process boundary.
  */
 export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
   ...SUBAGENT_TOOL_NAMES,
@@ -37,6 +36,10 @@ export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
 ]);
 
 export const ORCHESTRATION_TOOL_DENYLIST_ARGUMENT = [...ORCHESTRATION_TOOL_DENYLIST].join(",");
+const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
+export const CHILD_ORCHESTRATION_TOOL_DENYLIST_ARGUMENT = [...ORCHESTRATION_TOOL_DENYLIST]
+  .filter((name) => !SUBAGENT_TOOL_NAME_SET.has(name))
+  .join(",");
 
 /** Shared bound/emptiness policy for every parent-authored message that reaches a child. */
 export const validateParentMessage = (
@@ -81,7 +84,7 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
   [
     "You are a subagent working for a supervising Pi session.",
     "Complete the assigned task directly. The parent owns orchestration, task partitioning, and final decisions.",
-    "Do not launch or propose additional subagents.",
+    "You may delegate bounded independent work through the private subagent tools. The root coordinator enforces your current direct-child and depth limits. Native Claude/Codex agents are internal runtime activity and are not Pi run-tree nodes.",
     ...(request.profile && request.profileGuidance
       ? [`Your assigned profile is ${request.profile}.\n\n${request.profileGuidance}`]
       : []),

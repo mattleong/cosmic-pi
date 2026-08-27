@@ -30,4 +30,64 @@ describe("local Codex protocol", () => {
       });
     }),
   );
+
+  it.effect("decodes bounded native-agent lifecycle without creating Pi run nodes", () =>
+    Effect.gen(function* () {
+      const spawned = yield* decodeCodexNotification("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "call-1",
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "completed",
+          senderThreadId: "thread-1",
+          receiverThreadIds: ["native-1"],
+          prompt: null,
+          model: "gpt-native",
+          reasoningEffort: "high",
+          agentsStates: { "native-1": { status: "running", message: null } },
+        },
+      });
+      expect(spawned).toMatchObject({
+        type: "native_activity",
+        activityId: "native-1",
+        kind: "spawnAgent",
+        state: "running",
+      });
+
+      const interrupted = yield* decodeCodexNotification("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "activity-1",
+          type: "subAgentActivity",
+          kind: "interrupted",
+          agentThreadId: "native-1",
+          agentPath: "root/reviewer",
+        },
+      });
+      expect(interrupted).toMatchObject({
+        type: "native_activity",
+        activityId: "native-1",
+        state: "stopped",
+      });
+    }),
+  );
+
+  it.effect("fails closed on malformed native-agent shapes", () =>
+    Effect.gen(function* () {
+      const error = yield* decodeCodexNotification("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "call-1",
+          type: "collabAgentToolCall",
+          tool: "unknownFutureTool",
+          status: "completed",
+        },
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("SchemaError");
+    }),
+  );
 });

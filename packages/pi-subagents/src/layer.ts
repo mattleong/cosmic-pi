@@ -24,7 +24,7 @@ import { subagentConfigStoreLayer } from "./config/store.ts";
 import { subagentProfileServiceLayer } from "./profiles/service.ts";
 import type { SessionProfileOverrideSeed } from "./profiles/session-overrides.ts";
 import type { SubagentProjection } from "./run/model.ts";
-import { SubagentService } from "./run/service.ts";
+import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
 
 /** One memoized registry owns all six implemented drivers and their shared boundary services. */
 const subagentBackendRegistryLayer = Layer.effect(
@@ -55,6 +55,7 @@ export interface SubagentLayerOptions {
   readonly publishSessionOverrides?: ((seed: SessionProfileOverrideSeed) => void) | undefined;
   readonly publish: (projection: SubagentProjection) => void;
   readonly notify: (notification: SubagentNotification) => SubagentNotificationDelivery | undefined;
+  readonly proxyHandler?: SubagentServiceOptions["proxyHandler"] | undefined;
 }
 
 export const makeSubagentLayer = (options: SubagentLayerOptions) => {
@@ -92,9 +93,15 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
     agentDirectory: options.agentDirectory,
   });
   const writerLeases = WriterLeaseService.layer({ agentDirectory: options.agentDirectory });
-  const service = SubagentService.layer({ publish: options.publish, notify: options.notify }).pipe(
-    Layer.provide(Layer.merge(backend, writerLeases)),
-  );
+  const serviceOptions: SubagentServiceOptions = {
+    publish: options.publish,
+    notify: options.notify,
+  };
+  const service = SubagentService.layer(
+    options.proxyHandler
+      ? { ...serviceOptions, proxyHandler: options.proxyHandler }
+      : serviceOptions,
+  ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles)));
   // Layer memoization shares both persistence and the backend registry with host preflight/service use.
   return Layer.mergeAll(service, profiles, configStore, backend, nativeModelCatalog);
 };

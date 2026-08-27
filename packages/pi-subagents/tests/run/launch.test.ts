@@ -170,7 +170,7 @@ describe("SubagentService", () => {
   });
 
   it.effect(
-    "enforces active and cleanup-owned capacity before admitting work after release",
+    "keeps direct-child capacity reserved until terminal process cleanup is confirmed",
     () => {
       const fake = fakeChildLayer();
       const projections: SubagentProjection[] = [];
@@ -203,23 +203,27 @@ describe("SubagentService", () => {
               ),
           ),
         );
-        const cleanupSaturation = yield* service
-          .start(request({ name: "thirteenth-cleanup" }))
+        const blockedDuringCleanup = yield* service
+          .start(request({ name: "blocked-during-cleanup" }))
           .pipe(Effect.flip);
-        expect(cleanupSaturation).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
-        expect(cleanupSaturation.message).toContain("finish cleanup");
+        expect(blockedDuringCleanup).toMatchObject({
+          _tag: "SubagentCapacityError",
+          limit: 12,
+        });
         expect(fake.controls).toHaveLength(12);
 
         yield* Deferred.succeed(cleanupGate, undefined);
         yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-        const admitted = yield* service.start(request({ name: "admitted-after-cleanup" }));
-        expect(admitted.state).toBe("running");
+        const admittedAfterCleanup = yield* service.start(
+          request({ name: "admitted-after-cleanup" }),
+        );
+        expect(admittedAfterCleanup.state).toBe("running");
         expect(fake.controls).toHaveLength(13);
       }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
 
-  it.effect("distinguishes cleanup-owned capacity saturation and bounded cleanup timeout", () => {
+  it.effect("retains bounded cleanup timeout while cleanup ownership holds capacity", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
     const layer = serviceLayer({
@@ -244,9 +248,9 @@ describe("SubagentService", () => {
           ),
         );
       }
-      const saturated = yield* service.start(request({ name: "capacity-probe" })).pipe(Effect.flip);
-      expect(saturated).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
-      expect(saturated.message).toContain("finish cleanup");
+      expect(
+        yield* service.start(request({ name: "capacity-probe" })).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
 
       const resuming = yield* service.resume(runs[0]!.id).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
@@ -262,7 +266,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.effect("bounds failed-delivery history at 50 and recovers admission after consumption", () => {
+  it.effect("does not turn unresolved history into a tree-wide admission budget", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
     let deliveryAttempts = 0;
@@ -297,22 +301,16 @@ describe("SubagentService", () => {
       }
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => deliveryAttempts === 1);
-      const capacity = yield* service
-        .start(request({ name: "capacity-rejected" }))
-        .pipe(Effect.flip);
-      expect(capacity).toMatchObject({
-        _tag: "SubagentHistoryCapacityError",
-        code: "history_outbox_capacity",
-        limit: 50,
-      });
-      expect(yield* service.list).toHaveLength(50);
+      const admitted = yield* service.start(request({ name: "admitted-with-outbox" }));
+      expect(admitted.state).toBe("running");
+      expect(yield* service.list).toHaveLength(51);
 
       expect((yield* service.status(firstId)).finalText).toBe("Report 1");
       expect(fake.reclaimedRunIds).toEqual([]);
       const recovered = yield* service.start(request({ name: "capacity-recovered" }));
       expect(recovered.state).toBe("running");
       const retained = yield* service.list;
-      expect(retained).toHaveLength(50);
+      expect(retained).toHaveLength(51);
       expect(retained.some((run) => run.id === firstId)).toBe(false);
       expect(fake.reclaimedRunIds).toEqual([firstId]);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
@@ -407,19 +405,6 @@ describe("SubagentService", () => {
       }).pipe(Layer.provide(fake.layer));
       return Effect.gen(function* () {
         const service = yield* SubagentService;
-        let oldestId = "";
-        for (let index = 0; index < 49; index += 1) {
-          const run = yield* service.start(request({ name: `phase-c-history-${index + 1}` }));
-          if (index === 0) oldestId = run.id;
-          fake.controls[index]?.offer({ type: "agent_settled" });
-          yield* yieldUntil(
-            () =>
-              projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
-              "completed",
-          );
-          yield* yieldUntil(() => fake.controls[index]?.released() === 1);
-        }
-        yield* TestClock.adjust("100 millis");
         const activeWriter = yield* service.start(
           request({
             name: "phase-c-active-writer",
@@ -427,6 +412,19 @@ describe("SubagentService", () => {
             writes: ["src/active.ts"],
           }),
         );
+        let oldestId = "";
+        for (let index = 0; index < 50; index += 1) {
+          const run = yield* service.start(request({ name: `phase-c-history-${index + 1}` }));
+          if (index === 0) oldestId = run.id;
+          fake.controls[index + 1]?.offer({ type: "agent_settled" });
+          yield* yieldUntil(
+            () =>
+              projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
+              "completed",
+          );
+          yield* yieldUntil(() => fake.controls[index + 1]?.released() === 1);
+        }
+        yield* TestClock.adjust("100 millis");
         reclaimGate = yield* Deferred.make<void>();
         const prospective = yield* service
           .start(
@@ -439,7 +437,7 @@ describe("SubagentService", () => {
           .pipe(Effect.forkScoped);
         yield* yieldUntil(() => fake.reclaimedRunIds.includes(oldestId));
 
-        fake.controls[49]?.offer({
+        fake.controls[0]?.offer({
           type: "tool_execution_start",
           toolCallId: "phase-c-violation",
           toolName: "edit",
@@ -488,19 +486,19 @@ describe("SubagentService", () => {
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
-      for (let index = 0; index < 40; index += 1) {
+      for (let index = 0; index < 10; index += 1)
+        yield* service.start(request({ name: `active-before-eviction-${index + 1}` }));
+      for (let index = 0; index < 50; index += 1) {
         const run = yield* service.start(request({ name: `candidate-${index + 1}` }));
-        fake.controls[index]?.offer({ type: "agent_settled" });
+        fake.controls[index + 10]?.offer({ type: "agent_settled" });
         yield* yieldUntil(
           () =>
             projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
             "completed",
         );
-        yield* yieldUntil(() => fake.controls[index]?.released() === 1);
+        yield* yieldUntil(() => fake.controls[index + 10]?.released() === 1);
       }
       yield* TestClock.adjust("100 millis");
-      for (let index = 0; index < 10; index += 1)
-        yield* service.start(request({ name: `active-before-eviction-${index + 1}` }));
       gate = yield* Deferred.make<void>();
       const startA = yield* service.start(request({ name: "evict-a" })).pipe(Effect.forkScoped);
       const startB = yield* service.start(request({ name: "evict-b" })).pipe(Effect.forkScoped);
@@ -514,7 +512,7 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(gate, undefined);
       expect((yield* Fiber.join(startA)).state).toBe("running");
       expect((yield* Fiber.join(startB)).state).toBe("running");
-      expect(yield* service.list).toHaveLength(50);
+      expect(yield* service.list).toHaveLength(60);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 

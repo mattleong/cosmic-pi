@@ -28,8 +28,10 @@ export interface RunNotificationDeliveryDependencies {
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** Serializes completion delivery ownership against claim acquisition. */
   readonly withCompletionGate: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** Host boundary; must be called outside the service lock. */
-  readonly notify: (notification: SubagentNotification) => SubagentNotificationDelivery | undefined;
+  /** Host/ancestor boundary; must be called outside the service lock. */
+  readonly notify: (
+    notification: SubagentNotification,
+  ) => Effect.Effect<SubagentNotificationDelivery | undefined>;
 }
 
 type ActionDeliveryState =
@@ -66,7 +68,7 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
             return;
           }
           const runs = selected.map((item) => item.notification);
-          const delivery = yield* Effect.sync(() => notify({ type: "completed", runs }));
+          const delivery = yield* notify({ type: "completed", runs });
           yield* withLock(
             Effect.sync(() => {
               const acknowledged = acknowledgeCompletionSelections(
@@ -116,11 +118,16 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
     Effect.flatMap((notifications) =>
       notifications.length === 0
         ? Effect.succeed<ActionDeliveryState>({ _tag: "Idle" })
-        : Effect.sync(() =>
-            notifications.map((notification) => ({
-              notification,
-              accepted: notify(notification)?.actionAccepted ?? true,
-            })),
+        : Effect.forEach(
+            notifications,
+            (notification) =>
+              notify(notification).pipe(
+                Effect.map((delivery) => ({
+                  notification,
+                  accepted: delivery?.actionAccepted ?? true,
+                })),
+              ),
+            { concurrency: 4 },
           ).pipe(
             Effect.flatMap((deliveries) =>
               withLock(

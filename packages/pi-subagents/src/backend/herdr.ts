@@ -330,6 +330,17 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
           .reply(requestId, message)
           .pipe(Effect.mapError((error) => processError("reply", error.code, error.message))),
       notifyPeers: () => Effect.fail(unsupported(runtime, "peer-notice")),
+      deliverNotification:
+        runtime === "pi"
+          ? (message: string) =>
+              supervisor
+                .deliverNotification(message)
+                .pipe(
+                  Effect.mapError((error) =>
+                    processError("deliver notification", error.code, error.message),
+                  ),
+                )
+          : undefined,
     },
     acknowledge: () => {},
     terminate,
@@ -351,7 +362,7 @@ export const makeHerdrBackendDriver = (
     Effect.gen(function* () {
       const launch = withHerdrSupervisorInstructions(runtime, request);
       const supervisor = yield* supervisors
-        .open({ runId: request.runId })
+        .open({ runId: request.runId, allowPiProxy: runtime === "pi" })
         .pipe(
           Effect.mapError((error) =>
             processError("open Herdr supervisor channel", error.code, error.message),

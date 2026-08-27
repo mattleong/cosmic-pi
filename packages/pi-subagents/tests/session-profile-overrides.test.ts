@@ -26,11 +26,19 @@ const route = (model: string): ProfileRoute => ({ candidates: [candidate(model)]
 
 const baseConfig = () => {
   const global = decodeSubagentConfig(
-    { version: 4, profiles: { reviewer: candidate("openai/global") } },
+    {
+      version: 5,
+      nesting: { maxDirectChildren: 20, maxDepth: 6 },
+      profiles: { reviewer: candidate("openai/global") },
+    },
     "global",
   );
   const project = decodeSubagentConfig(
-    { version: 4, profiles: { reviewer: candidate("openai/project") } },
+    {
+      version: 5,
+      nesting: { maxDirectChildren: 4, maxDepth: 2 },
+      profiles: { reviewer: candidate("openai/project") },
+    },
     "project",
   );
   return resolveSubagentConfig({
@@ -80,6 +88,31 @@ describe("session profile overrides", () => {
         expect(cleared.effectiveConfig.profileSources.reviewer).toBe("project");
         expect(published).toEqual([1, 2]);
       }),
+  );
+
+  it.effect("overlays and clears strict session nesting policy", () =>
+    Effect.gen(function* () {
+      const service = yield* makeSubagentProfileService(baseConfig());
+      const initial = yield* service.capture;
+      expect(initial.effectiveConfig.nesting).toEqual({ maxDirectChildren: 4, maxDepth: 2 });
+      expect(initial.effectiveConfig.nestingSource).toBe("project");
+
+      const overridden = yield* service.patchSessionNesting({
+        nesting: { maxDirectChildren: 7, maxDepth: 5 },
+        expectedRevision: initial.revision,
+      });
+      expect(overridden.effectiveConfig.nesting).toEqual({
+        maxDirectChildren: 7,
+        maxDepth: 5,
+      });
+      expect(overridden.effectiveConfig.nestingSource).toBe("session");
+
+      const cleared = yield* service.patchSessionNesting({
+        expectedRevision: overridden.revision,
+      });
+      expect(cleared.effectiveConfig.nesting).toEqual({ maxDirectChildren: 4, maxDepth: 2 });
+      expect(cleared.effectiveConfig.nestingSource).toBe("project");
+    }),
   );
 
   it.effect("commits session state when publication throws", () =>

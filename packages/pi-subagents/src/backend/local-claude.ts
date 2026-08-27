@@ -59,6 +59,14 @@ const RESULT_REPORT_GRACE = "10 seconds";
 const MCP_READY_ATTEMPTS = 100;
 const INITIALIZATION_PROBE = "pi-subagents native initialization probe";
 const ASSISTANT_USAGE_MESSAGE_LIMIT = 32;
+const CLAUDE_NATIVE_AGENT_START_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
+const CLAUDE_NATIVE_AGENT_TOOLS: ReadonlySet<string> = new Set([
+  "Agent",
+  "Task",
+  "TaskOutput",
+  "TaskStop",
+  "SendMessage",
+]);
 
 const unsupported = (capability: string) =>
   new UnsupportedSubagentCapabilityError({
@@ -108,6 +116,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   const controlResponses = new Map<string, PendingControl>();
   const nativeInitialization = Deferred.makeUnsafe<ClaudeNativeInitialization, SubagentError>();
   const toolNames = new Map<string, string>();
+  const nativeToolNames = new Map<string, string>();
   // Bounded identity of every confirmed outbound input so delayed or duplicate
   // replays of a known UUID stay nonfatal while unknown replays fail closed,
   // plus the owned result-expectation map/FIFO for exact result correlation.
@@ -140,6 +149,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       pendingInterrupt = undefined;
     }
     toolNames.clear();
+    nativeToolNames.clear();
     correlation.clear();
     assistantUsageByMessage.clear();
     supervisor.cancelPending(error.message);
@@ -306,6 +316,21 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             if (event.toolResults.length > 0)
               return Effect.gen(function* () {
                 for (const [index, result] of event.toolResults.entries()) {
+                  const nativeName = nativeToolNames.get(result.id);
+                  nativeToolNames.delete(result.id);
+                  if (nativeName) {
+                    yield* offer(
+                      {
+                        type: "native_agent_activity",
+                        assignmentEpoch,
+                        activityId: result.id,
+                        kind: nativeName,
+                        state: result.isError ? "failed" : "completed",
+                      },
+                      index === event.toolResults.length - 1 ? raw : undefined,
+                    );
+                    continue;
+                  }
                   const name = toolNames.get(result.id) ?? "ClaudeTool";
                   toolNames.delete(result.id);
                   yield* offer(
@@ -363,6 +388,17 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
           case "assistant":
             return Effect.gen(function* () {
               for (const tool of event.tools) {
+                if (CLAUDE_NATIVE_AGENT_TOOLS.has(tool.name)) {
+                  nativeToolNames.set(tool.id, tool.name);
+                  yield* offer({
+                    type: "native_agent_activity",
+                    assignmentEpoch,
+                    activityId: tool.id,
+                    kind: tool.name,
+                    state: CLAUDE_NATIVE_AGENT_START_TOOLS.has(tool.name) ? "running" : "completed",
+                  });
+                  continue;
+                }
                 toolNames.set(tool.id, tool.name);
                 yield* offer({
                   type: "tool_started",

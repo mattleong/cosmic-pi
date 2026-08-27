@@ -40,6 +40,7 @@ export type RpcSessionError =
 
 export type InboundClassification<Reply> =
   | { readonly kind: "reply"; readonly id: string; readonly value: Reply }
+  | { readonly kind: "event"; readonly value: Reply }
   | { readonly kind: "rejection"; readonly id: string; readonly detail: string }
   | { readonly kind: "ignore" }
   | { readonly kind: "protocol-error"; readonly reason: string };
@@ -60,6 +61,7 @@ export interface NdjsonRpcSessionOptions<Reply> {
   readonly maxPendingCalls: number;
   readonly writeQueueCapacity: number;
   readonly classifyInbound: (line: string) => InboundClassification<Reply>;
+  readonly onEvent?: ((value: Reply) => void) | undefined;
   readonly unknownReplyPolicy: "ignore" | "fail-session";
   /** Best-effort pre-encoded frame emitted when a call leaves without its reply. */
   readonly cancelNotification?: ((id: string) => string | undefined) | undefined;
@@ -315,6 +317,13 @@ const makeNdjsonRpcSession = <Reply>(
     const classifyLine = (line: string): void => {
       const classified = options.classifyInbound(line);
       switch (classified.kind) {
+        case "event":
+          try {
+            options.onEvent?.(classified.value);
+          } catch {
+            // Hostile event consumers cannot break transport ownership.
+          }
+          return;
         case "reply": {
           const entry = extractEntry(classified.id);
           if (entry) {

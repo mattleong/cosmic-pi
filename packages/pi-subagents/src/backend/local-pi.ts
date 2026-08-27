@@ -289,20 +289,41 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       return offerEvent(event, { type: "protocol_error", message: event.message });
     if (event.type === "parent_contact") {
       const contact = event.value;
-      const normalized: BackendEvent =
-        contact.type === "contact_parent"
-          ? {
+      const normalized: BackendEvent = (() => {
+        switch (contact.type) {
+          case "contact_parent":
+            return {
               type: "supervisor_contact",
               assignmentEpoch,
               requestId: contact.requestId,
               kind: contact.kind,
               message: contact.message,
-            }
-          : {
+            };
+          case "contact_cancel":
+            return {
               type: "supervisor_question_cancelled",
               assignmentEpoch,
               requestId: contact.requestId,
             };
+          case "proxy_request":
+            return {
+              type: "proxy_request",
+              requestId: contact.requestId,
+              tool: contact.tool,
+              argumentsJson: contact.argumentsJson,
+              respond: (ok, payloadJson) =>
+                child.sendContactControl({
+                  channel: "pi-subagents",
+                  type: "proxy_response",
+                  requestId: contact.requestId,
+                  ok,
+                  payloadJson,
+                }),
+            };
+          case "proxy_cancel":
+            return { type: "proxy_cancel", requestId: contact.requestId };
+        }
+      })();
       return offerEvent(event, normalized);
     }
     if (event.type === "exit")
@@ -434,6 +455,12 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       }),
     notifyPeers: (message: string) =>
       child.sendContactControl({ channel: "pi-subagents", type: "peer_notice", message }),
+    deliverNotification: (message: string) =>
+      child.sendContactControl({
+        channel: "pi-subagents",
+        type: "proxy_notification",
+        message,
+      }),
   };
 
   return {

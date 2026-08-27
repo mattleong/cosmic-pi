@@ -6,14 +6,16 @@ import {
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
   MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
+  MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS,
+  MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS,
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
 } from "./mcp-contract.ts";
 
-export const SUPERVISOR_CHANNEL_VERSION = 2 as const;
+export const SUPERVISOR_CHANNEL_VERSION = 3 as const;
 export const MAX_SUPERVISOR_CHANNEL_ID_CHARS = 128;
 export const MAX_SUPERVISOR_RUN_ID_CHARS = 80;
-export const MAX_SUPERVISOR_CHANNEL_LINE_BYTES = 512 * 1024;
+export const MAX_SUPERVISOR_CHANNEL_LINE_BYTES = 3 * 1024 * 1024;
 export const MAX_SUPERVISOR_CONFIG_BYTES = 4 * 1024;
 export const SUPERVISOR_AUTH_TOKEN_CHARS = 64;
 
@@ -72,6 +74,13 @@ export const SupervisorReportTextSchema = Schema.String.check(
   Schema.isMaxLength(MAX_SUPERVISOR_MCP_REPORT_CHARS),
   Schema.isPattern(NONBLANK_PATTERN),
 );
+export const SupervisorProxyToolSchema = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS),
+);
+export const SupervisorProxyJsonSchema = Schema.String.check(
+  Schema.isMaxLength(MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS),
+);
 
 export const SupervisorChannelConfigSchema = Schema.Struct({
   version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
@@ -114,12 +123,28 @@ export const SupervisorOpenSessionRpc = Rpc.make("SupervisorOpenSession", {
 
 export const SupervisorWatchAssignmentsRpc = Rpc.make("SupervisorWatchAssignments", {
   payload: AuthenticatedPayload,
-  success: Schema.Struct({
-    updateId: SupervisorChannelIdSchema,
-    assignmentEpoch: SupervisorAssignmentEpochSchema,
-  }),
+  success: Schema.Union([
+    Schema.Struct({
+      kind: Schema.Literal("assignment"),
+      updateId: SupervisorChannelIdSchema,
+      assignmentEpoch: SupervisorAssignmentEpochSchema,
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("notification"),
+      updateId: SupervisorChannelIdSchema,
+      message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32 * 1024)),
+    }),
+  ]),
   error: SupervisorRpcFailure,
   stream: true,
+});
+
+export const SupervisorAcknowledgeNotificationRpc = Rpc.make("SupervisorAcknowledgeNotification", {
+  payload: {
+    ...AuthenticatedPayload,
+    updateId: SupervisorChannelIdSchema,
+  },
+  error: SupervisorRpcFailure,
 });
 
 export const SupervisorAcknowledgeAssignmentRpc = Rpc.make("SupervisorAcknowledgeAssignment", {
@@ -174,6 +199,20 @@ export const SupervisorAcknowledgeQuestionReplyRpc = Rpc.make(
   },
 );
 
+export const SupervisorProxyRpc = Rpc.make("SupervisorProxy", {
+  payload: {
+    ...AuthenticatedPayload,
+    requestId: SupervisorChannelIdSchema,
+    tool: SupervisorProxyToolSchema,
+    argumentsJson: SupervisorProxyJsonSchema,
+  },
+  success: Schema.Struct({
+    ok: Schema.Boolean,
+    payloadJson: SupervisorProxyJsonSchema,
+  }),
+  error: SupervisorRpcFailure,
+});
+
 export const SupervisorReportRpc = Rpc.make("SupervisorReport", {
   payload: {
     ...AssignedPayload,
@@ -193,16 +232,25 @@ export const SupervisorRpcGroup = RpcGroup.make(
   SupervisorOpenSessionRpc,
   SupervisorWatchAssignmentsRpc,
   SupervisorAcknowledgeAssignmentRpc,
+  SupervisorAcknowledgeNotificationRpc,
   SupervisorProgressRpc,
   SupervisorWarningRpc,
   SupervisorQuestionRpc,
   SupervisorAcknowledgeQuestionReplyRpc,
+  SupervisorProxyRpc,
   SupervisorReportRpc,
 );
 
 export type SupervisorEvent = Extract<
   BackendEvent,
-  { readonly type: "supervisor_contact" | "supervisor_question_cancelled" | "report" }
+  {
+    readonly type:
+      | "supervisor_contact"
+      | "supervisor_question_cancelled"
+      | "report"
+      | "proxy_request"
+      | "proxy_cancel";
+  }
 >;
 
 export const validSupervisorReply = (value: string): boolean =>

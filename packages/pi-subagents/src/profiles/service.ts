@@ -14,8 +14,10 @@ import {
 import {
   clearSessionProfileSnapshot,
   makeSessionProfileSnapshot,
+  patchSessionNestingSnapshot,
   patchSessionProfileSnapshot,
   sessionProfileSeed,
+  type SessionNestingPatch,
   type SessionProfileConflictError,
   type SessionProfileOverrideSeed,
   type SessionProfilePatch,
@@ -32,6 +34,9 @@ export interface SubagentProfileServiceContract {
   ) => ProfileResolution;
   readonly patchSessionProfile: (
     patch: SessionProfilePatch,
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
+  readonly patchSessionNesting: (
+    patch: SessionNestingPatch,
   ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
   readonly clearSessionProfiles: (
     expectedRevision: number,
@@ -90,6 +95,8 @@ export const makeSubagentProfileService = (
         resolveProfilePlan(profile, snapshot.effectiveConfig, environment),
       patchSessionProfile: (patch) =>
         commit((current) => patchSessionProfileSnapshot(current, patch)),
+      patchSessionNesting: (patch) =>
+        commit((current) => patchSessionNestingSnapshot(current, patch)),
       clearSessionProfiles: (expectedRevision) =>
         commit((current) => clearSessionProfileSnapshot(current, expectedRevision)),
     });

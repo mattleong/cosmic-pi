@@ -8,7 +8,11 @@ import {
   type ProfileRoute,
   type ProfileRouteSource,
 } from "../profiles/model.ts";
-import type { DecodedSubagentConfig } from "./schema.ts";
+import {
+  DEFAULT_SUBAGENT_NESTING_POLICY,
+  type DecodedSubagentConfig,
+  type SubagentNestingPolicy,
+} from "./schema.ts";
 
 export interface ResolvedSubagentConfig {
   readonly globalConfigPath: string;
@@ -17,6 +21,8 @@ export interface ResolvedSubagentConfig {
   readonly globalConfigExists: boolean;
   readonly projectConfigExists: boolean;
   readonly fallbackProfile: ProfileId;
+  readonly nesting: SubagentNestingPolicy;
+  readonly nestingSource: "builtin" | "global" | "project" | "session";
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   readonly diagnostics: ReadonlyArray<string>;
@@ -57,6 +63,13 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
       profileSources[id] = "builtin";
     }
   }
+  const nesting =
+    project?.file.nesting ?? input.global.file.nesting ?? DEFAULT_SUBAGENT_NESTING_POLICY;
+  const nestingSource = project?.file.nesting
+    ? ("project" as const)
+    : input.global.file.nesting
+      ? ("global" as const)
+      : ("builtin" as const);
   return freezeSnapshot({
     globalConfigPath: input.globalConfigPath,
     projectConfigPath: input.projectConfigPath,
@@ -64,6 +77,8 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     globalConfigExists: input.globalConfigExists,
     projectConfigExists: input.projectTrusted && input.projectConfigExists,
     fallbackProfile: "generalist",
+    nesting: { ...nesting },
+    nestingSource,
     profiles,
     profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],

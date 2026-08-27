@@ -13,6 +13,7 @@ import {
 } from "pi-cosmic-core";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
+import type { BackendProxyRequest } from "../backend/model.ts";
 import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { SubagentConfigStore } from "../config/store.ts";
@@ -24,9 +25,12 @@ import {
   type SubagentRuntimeError,
 } from "../layer.ts";
 import type { SubagentProjection } from "../run/model.ts";
-import { SubagentService } from "../run/service.ts";
+import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
+import { executeSubagentActionEffect } from "../tools/execute.ts";
+import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
@@ -142,6 +146,26 @@ export function registerSubagentApplication(
                 ),
               publish: bridge.publish,
               notify,
+              proxyHandler: (
+                service: SubagentServiceContract,
+                callerRunId: string,
+                request: BackendProxyRequest,
+              ) => {
+                const input = decodeSubagentProxyRequest(request);
+                if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
+                return executeSubagentActionEffect(
+                  pi,
+                  {
+                    cwd: activation.cwd,
+                    projectTrusted: activation.projectTrusted,
+                  },
+                  input,
+                  undefined,
+                  undefined,
+                  activation.ctx,
+                  callerRunId,
+                ).pipe(Effect.provideService(SubagentService, service));
+              },
             };
             return withPublishSessionBaseConfigAndAdditionalFields;
           })(),
@@ -215,8 +239,22 @@ export function registerSubagentApplication(
         ),
       );
     },
+    patchNesting: (patch) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(SubagentConfigStore, (store) =>
+          store.patchNesting(activation.cwd, activation.agentDirectory, patch),
+        ),
+      );
+    },
     patchSessionProfile: (patch) =>
       run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))).then(
+        () => undefined,
+      ),
+    patchSessionNesting: (patch) =>
+      run(SubagentProfileService.use((profiles) => profiles.patchSessionNesting(patch))).then(
         () => undefined,
       ),
     clearSessionProfiles: (expectedRevision) =>

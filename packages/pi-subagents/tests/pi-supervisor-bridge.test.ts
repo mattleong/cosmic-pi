@@ -166,6 +166,29 @@ describe("packaged delegated-Pi supervisor bridge", () => {
       );
     }));
 
+  it("delivers root-pushed descendant outcomes to delegated Pi", () =>
+    fs.mkdtemp(join(tmpdir(), "pi-subagents-pi-bridge-notification-")).then((directory) => {
+      directories.push(directory);
+      const notifications: string[] = [];
+      return Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const channel = yield* makeSupervisorChannel({ agentDirectory: directory }).open({
+              runId: "agent-pi-notification",
+              allowPiProxy: true,
+            });
+            yield* openPiSupervisorBridge(channel.metadata.connectionConfigPath, {
+              onNotification: (message) => notifications.push(message),
+            });
+            yield* channel.awaitReady;
+            yield* channel.setAssignmentEpoch(1);
+            yield* channel.deliverNotification("Descendant report ready.");
+            expect(notifications).toEqual(["Descendant report ready."]);
+          }),
+        ),
+      );
+    }));
+
   it("preserves the maximum parent reply through the MCP bridge envelope", () =>
     fs.mkdtemp(join(tmpdir(), "pi-subagents-pi-bridge-max-reply-")).then((directory) => {
       directories.push(directory);

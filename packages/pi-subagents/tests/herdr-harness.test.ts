@@ -267,11 +267,15 @@ describe("Herdr native harness security", () => {
               test.supervisor,
             );
             expect(valueAfter(prepared.argv, "--tools")).toContain("Bash");
+            expect(valueAfter(prepared.argv, "--tools")).toContain("Agent");
+            expect(valueAfter(prepared.argv, "--tools")).toContain("TaskOutput");
             expect(valueAfter(prepared.argv, "--tools")).not.toContain("Edit");
             const allowed = valueAfter(prepared.argv, "--allowedTools")?.split(",") ?? [];
             expect(allowed).not.toContain("Bash");
             expect(allowed).not.toContain("Edit");
             expect(allowed).not.toContain("Write");
+            expect(allowed).toContain("Agent");
+            expect(allowed).toContain("TaskOutput");
             const settings = yield* Effect.promise(() =>
               readJsonFile(valueAfter(prepared.argv, "--settings")!),
             );
@@ -400,7 +404,8 @@ describe("Herdr native harness security", () => {
               fs.readFile(join(codexHome, "config.toml"), "utf8"),
             );
             expect(config).toContain('approval_policy = "never"');
-            expect(config).toContain("multi_agent = false");
+            expect(config).toContain("[agents]\nenabled = true");
+            expect(config).toContain("multi_agent = true");
             expect(config).toContain("[mcp_servers.pi_subagents_supervisor]");
             const auth = yield* Effect.promise(() => readJsonFile(join(codexHome, "auth.json")));
             expect(auth).toEqual({
@@ -506,7 +511,7 @@ describe("Herdr native harness security", () => {
       ),
     ));
 
-  it("loads only fixed Pi resources, fresh session state, child marker, and bridge tools", () =>
+  it("loads global Pi extensions/themes while trust-blocking project resources and adding private tools", () =>
     setup().then((test) =>
       Effect.runPromise(
         Effect.scoped(
@@ -514,17 +519,19 @@ describe("Herdr native harness security", () => {
             const prepared = yield* test.harness.prepare("pi", launch("pi"), test.supervisor);
             expect(valueAfter(prepared.argv, "--model")).toBe("openai-codex/gpt-5.6-sol");
             expect(valueAfter(prepared.argv, "--thinking")).toBe("xhigh");
-            expect(prepared.argv).toContain("--no-extensions");
+            expect(prepared.argv).not.toContain("--no-extensions");
+            expect(prepared.argv).toContain("--no-approve");
             expect(prepared.argv).toContain("--no-skills");
             expect(prepared.argv).toContain("--no-prompt-templates");
-            expect(prepared.argv).toContain("--no-themes");
+            expect(prepared.argv).not.toContain("--no-themes");
             expect(prepared.argv).toContain("--no-context-files");
             expect(prepared.argv.filter((value) => value === "--extension")).toHaveLength(2);
             expect(valueAfter(prepared.argv, "--tools")).toContain("bash");
             expect(valueAfter(prepared.argv, "--tools")).not.toContain("edit");
             expect(valueAfter(prepared.argv, "--tools")).not.toContain("write");
             expect(valueAfter(prepared.argv, "--tools")).toContain("supervisor_submit_report");
-            expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("subagent_start");
+            expect(valueAfter(prepared.argv, "--tools")).toContain("subagent_start");
+            expect(valueAfter(prepared.argv, "--exclude-tools")).not.toContain("subagent_start");
             expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("workflow_control");
             const promptPath = valueAfter(prepared.argv, "--append-system-prompt")!;
             expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(

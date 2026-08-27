@@ -161,13 +161,7 @@ export const preferredHerdrPiSelector = (
   snapshot: ProfileModelCatalogSnapshot,
   parentSelector?: string | undefined,
 ): string | undefined => {
-  const extensionProviders = snapshot.extensionProviderIds;
-  if (!extensionProviders) return undefined;
-  const excluded = new Set(extensionProviders);
-  const selectors = snapshot.piModels
-    .filter((model) => !excluded.has(model.provider))
-    .map(canonicalPiSelector)
-    .filter(isSafeNativeModelSelector);
+  const selectors = snapshot.piModels.map(canonicalPiSelector).filter(isSafeNativeModelSelector);
   return parentSelector && selectors.includes(parentSelector) ? parentSelector : selectors[0];
 };
 
@@ -282,20 +276,9 @@ export function loadCandidateModelPicker(
   if (candidate.runtime !== "pi") return loadNativeModels(input);
 
   const snapshot = input.piCatalog;
-  const extensionProviders = snapshot.extensionProviderIds
-    ? new Set(snapshot.extensionProviderIds)
-    : undefined;
-  const providerInspectionFailed = candidate.host === "herdr" && !extensionProviders;
-  const unavailableToHerdr =
-    candidate.host === "herdr" && extensionProviders
-      ? snapshot.piModels.filter((model) => extensionProviders.has(model.provider))
-      : [];
-  const availableModels =
-    candidate.host === "herdr"
-      ? extensionProviders
-        ? snapshot.piModels.filter((model) => !extensionProviders.has(model.provider))
-        : []
-      : snapshot.piModels;
+  // Herdr Pi loads trusted global extensions under --no-approve. Pi's trust loader, rather than
+  // provider registration provenance, blocks project-local provider resources.
+  const availableModels = snapshot.piModels;
   const parentModel = input.parentSelector
     ? snapshot.piModels.find((model) => canonicalPiSelector(model) === input.parentSelector)
     : undefined;
@@ -310,12 +293,6 @@ export function loadCandidateModelPicker(
       ? choice.choice.kind === "parent"
       : choice.choice.kind === "model" && choice.choice.selector === candidate.model,
   );
-  const currentSlash = candidate.model.indexOf("/");
-  const currentProvider = currentSlash > 0 ? candidate.model.slice(0, currentSlash) : undefined;
-  const currentUnavailableToHerdr =
-    candidate.host === "herdr" &&
-    currentProvider !== undefined &&
-    extensionProviders?.has(currentProvider) === true;
   const unavailableCurrent: ProfileModelPickerChoice | undefined = currentAvailable
     ? undefined
     : {
@@ -327,23 +304,16 @@ export function loadCandidateModelPicker(
           value: candidate.model,
           label: sanitizeTerminalLine(`${candidate.model} (current · unavailable)`),
           description: sanitizeTerminalLine(
-            providerInspectionFailed
-              ? "Keep the configured value or reopen after provider provenance is available"
-              : currentUnavailableToHerdr
-                ? "Herdr Pi disables extension providers; choose a compatible replacement"
-                : "Keep the configured value or choose an authenticated replacement",
+            "Keep the configured value or choose an authenticated replacement",
           ),
         },
         searchText: sanitizeTerminalLine(`${candidate.model} current unavailable configured`),
-        fastModeAvailable:
-          !providerInspectionFailed &&
-          !currentUnavailableToHerdr &&
-          advertisedChoices.some(
-            (choice) =>
-              choice.choice.kind === "model" &&
-              choice.choice.selector === candidate.model &&
-              choice.fastModeAvailable,
-          ),
+        fastModeAvailable: advertisedChoices.some(
+          (choice) =>
+            choice.choice.kind === "model" &&
+            choice.choice.selector === candidate.model &&
+            choice.fastModeAvailable,
+        ),
       };
   const choices = unavailableCurrent
     ? [unavailableCurrent, ...advertisedChoices]
@@ -352,15 +322,8 @@ export function loadCandidateModelPicker(
     (model) => !isSafeNativeModelSelector(canonicalPiSelector(model)),
   ).length;
   const warnings = [
-    providerInspectionFailed
-      ? "Pi provider provenance is unavailable, so Herdr Pi model choices are hidden fail-closed."
-      : unavailableCurrent
-        ? currentUnavailableToHerdr
-          ? "The configured model uses an extension-registered provider that sterile Herdr Pi cannot load. Keeping it makes no change; choose a compatible replacement."
-          : "The configured model is not currently authenticated. Keeping it makes no change; choose another model to replace it."
-        : undefined,
-    unavailableToHerdr.length > 0
-      ? `${unavailableToHerdr.length} authenticated model${unavailableToHerdr.length === 1 ? " was" : "s were"} omitted because Herdr Pi disables extension discovery.`
+    unavailableCurrent
+      ? "The configured model is not currently authenticated. Keeping it makes no change; choose another model to replace it."
       : undefined,
     unsafeModels > 0
       ? `${unsafeModels} authenticated model${unsafeModels === 1 ? " was" : "s were"} omitted because the canonical selector is unsafe.`

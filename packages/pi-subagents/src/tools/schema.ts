@@ -8,7 +8,12 @@ import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
-import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
+import {
+  MAX_PARENT_MESSAGE_CHARS,
+  MAX_PROTOCOL_ID_CHARS,
+  MAX_START_BATCH,
+  MAX_TARGET_RUNS,
+} from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 
 const NONBLANK_PATTERN = ".*\\S.*";
@@ -90,9 +95,10 @@ export const ModelsParameters = Type.Object(
 export const StartParameters = Type.Object(
   {
     agents: Type.Array(StartSpecParameters, {
-      description: "One to twelve independent subagents to launch with configured profile routing.",
+      description:
+        "One to thirty-two independent subagents to launch, subject to the caller's configured direct-child capacity.",
       minItems: 1,
-      maxItems: MAX_TARGET_RUNS,
+      maxItems: MAX_START_BATCH,
     }),
   },
   strictObjectOptions,

@@ -60,7 +60,7 @@ import {
 const { join } = nodePath;
 
 const LOOPBACK_HOST = "127.0.0.1" as const;
-const CHANNEL_ROOT = "supervisor-channels-v2";
+const CHANNEL_ROOT = "supervisor-channels-v3";
 const CONNECTION_CONFIG_FILE = "connection.json";
 const EVENT_CAPACITY = 64;
 const CONTACT_EVENT_CAPACITY = EVENT_CAPACITY - 1;
@@ -120,6 +120,7 @@ export interface SupervisorChannelHandle {
   readonly acceptedReportForEpoch: (
     epoch: number,
   ) => Effect.Effect<BackendReport | undefined, SupervisorChannelError>;
+  readonly deliverNotification: (message: string) => Effect.Effect<void, SupervisorChannelError>;
   readonly reply: (
     requestId: string,
     message: string,
@@ -136,6 +137,7 @@ export interface SupervisorChannelContract {
 
 export interface SupervisorChannelOpenRequest {
   readonly runId: string;
+  readonly allowPiProxy?: boolean | undefined;
 }
 
 export interface SupervisorChannelLayerOptions {
@@ -150,10 +152,17 @@ export interface SupervisorChannelLayerOptions {
   readonly authTimeoutMillis?: number | undefined;
 }
 
-interface AssignmentUpdate {
-  readonly updateId: SupervisorChannelId;
-  readonly assignmentEpoch: number;
-}
+type AssignmentUpdate =
+  | {
+      readonly kind: "assignment";
+      readonly updateId: SupervisorChannelId;
+      readonly assignmentEpoch: number;
+    }
+  | {
+      readonly kind: "notification";
+      readonly updateId: SupervisorChannelId;
+      readonly message: string;
+    };
 
 interface RpcPeer {
   readonly clientId: number;
@@ -187,6 +196,11 @@ interface PendingEpochAcknowledgement {
   readonly firstAcknowledgement: Deferred.Deferred<void, SupervisorChannelError>;
 }
 
+interface PendingNotificationAcknowledgement {
+  readonly peerId: number;
+  readonly acknowledgement: Deferred.Deferred<void, SupervisorChannelError>;
+}
+
 interface NodeChannelState {
   readonly runId: SupervisorRunId;
   readonly scope: Scope.Closeable;
@@ -196,10 +210,15 @@ interface NodeChannelState {
   readonly stateDirectory: string;
   readonly connectionConfigPath: string;
   readonly token: Redacted.Redacted<SupervisorAuthToken>;
+  readonly allowPiProxy: boolean;
   readonly assignmentEpochs: Set<number>;
   readonly questionEpochs: Set<number>;
   readonly reports: Map<SupervisorDeliveryId, AcceptedReport>;
   readonly epochAcknowledgements: Map<SupervisorChannelId, PendingEpochAcknowledgement>;
+  readonly notificationAcknowledgements: Map<
+    SupervisorChannelId,
+    PendingNotificationAcknowledgement
+  >;
   readonly readiness: Latch.Latch;
   pendingAssignmentEpoch: number | undefined;
   currentAssignmentEpoch: number;
@@ -449,6 +468,20 @@ const removePeer = (state: NodeChannelState, clientId: number): void => {
         ),
       );
   }
+  for (const [id, pending] of state.notificationAcknowledgements) {
+    if (pending.peerId !== clientId) continue;
+    state.notificationAcknowledgements.delete(id);
+    Deferred.doneUnsafe(
+      pending.acknowledgement,
+      Effect.fail(
+        channelError(
+          "deliver notification",
+          "notification_transport_closed",
+          "The delegated Pi notification transport closed before acknowledgement.",
+        ),
+      ),
+    );
+  }
   if (state.pendingQuestion?.peerId === clientId)
     cancelPendingQuestion(
       state,
@@ -614,6 +647,21 @@ const makeRpcHandlers = (state: NodeChannelState) =>
           Deferred.doneUnsafe(acknowledgement.firstAcknowledgement, Effect.void);
         }),
 
+      SupervisorAcknowledgeNotification: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          yield* requirePeer(state, options.client.id);
+          const pending = state.notificationAcknowledgements.get(payload.updateId);
+          if (!pending || pending.peerId !== options.client.id)
+            return yield* rpcFailure(
+              "notification_ack_mismatch",
+              "Notification acknowledgement did not match an issued update.",
+            );
+          state.notificationAcknowledgements.delete(payload.updateId);
+          Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
+        }),
+
       SupervisorProgress: (payload, options) =>
         Effect.gen(function* () {
           const guard = yield* currentConnectionGuard;
@@ -728,6 +776,44 @@ const makeRpcHandlers = (state: NodeChannelState) =>
           Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
         }),
 
+      SupervisorProxy: (payload, options) =>
+        Effect.gen(function* () {
+          const guard = yield* currentConnectionGuard;
+          yield* authorize(state, guard, options.client.id, payload);
+          yield* requirePeer(state, options.client.id);
+          if (!state.allowPiProxy)
+            return yield* rpcFailure(
+              "pi_proxy_forbidden",
+              "This authenticated supervisor channel does not belong to a Pi run.",
+            );
+          const response = Deferred.makeUnsafe<{
+            readonly ok: boolean;
+            readonly payloadJson: string;
+          }>();
+          const offered = Queue.offerUnsafe(state.events, {
+            type: "proxy_request",
+            requestId: payload.requestId,
+            tool: payload.tool,
+            argumentsJson: payload.argumentsJson,
+            respond: (ok, payloadJson) =>
+              Effect.sync(() => {
+                Deferred.doneUnsafe(response, Effect.succeed({ ok, payloadJson }));
+              }),
+          });
+          if (!offered)
+            return yield* rpcFailure("event_queue_full", "Supervisor event queue is full.");
+          return yield* Deferred.await(response).pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                Queue.offerUnsafe(state.events, {
+                  type: "proxy_cancel",
+                  requestId: payload.requestId,
+                });
+              }),
+            ),
+          );
+        }),
+
       SupervisorReport: (payload, options) =>
         Effect.gen(function* () {
           const guard = yield* currentConnectionGuard;
@@ -820,6 +906,18 @@ const closeNodeChannelEffect = (state: NodeChannelState) =>
             ),
           );
         state.epochAcknowledgements.clear();
+        for (const pending of state.notificationAcknowledgements.values())
+          Deferred.doneUnsafe(
+            pending.acknowledgement,
+            Effect.fail(
+              channelError(
+                "deliver notification",
+                "channel_closed",
+                "Supervisor channel closed before notification acknowledgement.",
+              ),
+            ),
+          );
+        state.notificationAcknowledgements.clear();
         for (const peer of state.peers.values()) Queue.endUnsafe(peer.assignments);
         state.peers.clear();
         yield* Queue.shutdown(state.events);
@@ -841,6 +939,7 @@ const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
+  allowPiProxy: boolean,
 ): Effect.Effect<NodeChannelState, SupervisorChannelError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
@@ -927,10 +1026,12 @@ const acquireNodeChannelEffect = (
           stateDirectory,
           connectionConfigPath,
           token,
+          allowPiProxy,
           assignmentEpochs: new Set(),
           questionEpochs: new Set(),
           reports: new Map(),
           epochAcknowledgements: new Map(),
+          notificationAcknowledgements: new Map(),
           readiness,
           pendingAssignmentEpoch: undefined,
           currentAssignmentEpoch: 0,
@@ -1015,7 +1116,7 @@ export const makeSupervisorChannel = (
       const runId: SupervisorRunId = request.runId;
       const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
       const state = yield* Effect.acquireRelease(
-        acquireNodeChannelEffect(options, runId, events),
+        acquireNodeChannelEffect(options, runId, events, request.allowPiProxy === true),
         (acquired) => closeNodeChannelEffect(acquired).pipe(Effect.orDie),
         { interruptible: true },
       );
@@ -1081,6 +1182,7 @@ export const makeSupervisorChannel = (
               });
               if (
                 Queue.offerUnsafe(peer.assignments, {
+                  kind: "assignment",
                   updateId,
                   assignmentEpoch: epoch,
                 })
@@ -1138,6 +1240,57 @@ export const makeSupervisorChannel = (
             .filter((entry) => entry.epoch === epoch)
             .sort((left, right) => left.sequence - right.sequence);
           return Effect.succeed(reports[0]?.report);
+        });
+
+      const deliverNotification: SupervisorChannelHandle["deliverNotification"] = (message) =>
+        Effect.gen(function* () {
+          const normalized = message.trim();
+          if (!state.allowPiProxy || !normalized || normalized.length > 32 * 1024)
+            return yield* channelError(
+              "deliver notification",
+              "notification_invalid",
+              "Delegated Pi notification is unavailable or invalid.",
+            );
+          const peer = [...state.peers.values()].find((candidate) => candidate.watching);
+          if (!peer)
+            return yield* channelError(
+              "deliver notification",
+              "supervisor_helper_unavailable",
+              "No authenticated delegated Pi helper is connected.",
+            );
+          const updateId = SupervisorChannelIdSchema.make(
+            `notification-${randomBytes(16).toString("hex")}`,
+          );
+          const acknowledgement = Deferred.makeUnsafe<void, SupervisorChannelError>();
+          state.notificationAcknowledgements.set(updateId, {
+            peerId: peer.clientId,
+            acknowledgement,
+          });
+          if (
+            !Queue.offerUnsafe(peer.assignments, {
+              kind: "notification",
+              updateId,
+              message: normalized,
+            })
+          ) {
+            state.notificationAcknowledgements.delete(updateId);
+            return yield* channelError(
+              "deliver notification",
+              "notification_outcome_uncertain",
+              "Delegated Pi notification queue is unavailable.",
+            );
+          }
+          const acknowledged = yield* Deferred.await(acknowledgement).pipe(
+            Effect.timeoutOption(REPLY_TIMEOUT),
+          );
+          if (Option.isNone(acknowledged)) {
+            state.notificationAcknowledgements.delete(updateId);
+            return yield* channelError(
+              "deliver notification",
+              "notification_outcome_uncertain",
+              "Delegated Pi notification acknowledgement timed out.",
+            );
+          }
         });
 
       const reply: SupervisorChannelHandle["reply"] = (requestId, message) =>
@@ -1203,6 +1356,7 @@ export const makeSupervisorChannel = (
         acceptedReportForEpoch,
         hasAcceptedReport: (epoch) =>
           acceptedReportForEpoch(epoch).pipe(Effect.map((report) => report !== undefined)),
+        deliverNotification,
         reply,
         cancelPending,
         close,

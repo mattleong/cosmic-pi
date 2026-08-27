@@ -17,11 +17,30 @@ import {
   type ProfileId,
 } from "../profiles/model.ts";
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
-export const SUBAGENT_CONFIG_VERSION = 4;
+export const SUBAGENT_CONFIG_VERSION = 5;
+export const LEGACY_SUBAGENT_CONFIG_VERSION = 4;
+
+export const DEFAULT_MAX_DIRECT_CHILDREN = 12;
+export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
+export const MIN_DIRECT_CHILDREN = 1;
+export const MAX_DIRECT_CHILDREN = 32;
+export const MIN_SUBAGENT_DEPTH = 0;
+export const MAX_SUBAGENT_DEPTH = 8;
+
+export interface SubagentNestingPolicy {
+  readonly maxDirectChildren: number;
+  readonly maxDepth: number;
+}
+
+export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.freeze({
+  maxDirectChildren: DEFAULT_MAX_DIRECT_CHILDREN,
+  maxDepth: DEFAULT_MAX_SUBAGENT_DEPTH,
+});
 
 export interface SubagentConfigFile {
   readonly version?: number | undefined;
   readonly profiles?: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>> | undefined;
+  readonly nesting?: SubagentNestingPolicy | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -37,6 +56,36 @@ export const ProfileRuntimeSchema = Schema.Literals(PROFILE_CANDIDATE_RUNTIMES);
 export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
 export const ProfileContextSchema = Schema.Literals(PROFILE_CANDIDATE_CONTEXTS);
 export const ProfileWriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
+
+const NestingContractSchema = Schema.Struct({
+  maxDirectChildren: Schema.Number.check(
+    Schema.isFinite(),
+    Schema.isInt(),
+    Schema.isGreaterThanOrEqualTo(MIN_DIRECT_CHILDREN),
+    Schema.isLessThanOrEqualTo(MAX_DIRECT_CHILDREN),
+  ),
+  maxDepth: Schema.Number.check(
+    Schema.isFinite(),
+    Schema.isInt(),
+    Schema.isGreaterThanOrEqualTo(MIN_SUBAGENT_DEPTH),
+    Schema.isLessThanOrEqualTo(MAX_SUBAGENT_DEPTH),
+  ),
+});
+
+const NESTING_KEYS = new Set(["maxDirectChildren", "maxDepth"]);
+
+export const decodeSubagentNesting = <ValueInput>(
+  value: ValueInput,
+): SubagentNestingPolicy | undefined => {
+  const record = decodedRecord(value);
+  if (!record || !ownKeysAre(record, NESTING_KEYS)) return undefined;
+  try {
+    const decoded = Schema.decodeUnknownOption(NestingContractSchema)(record);
+    return Option.isSome(decoded) ? Object.freeze({ ...decoded.value }) : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const CANDIDATE_KEYS = [
   "host",
@@ -218,11 +267,18 @@ export function decodeSubagentConfig<InputInput>(
   const decodedRoot = decodedRecord(input);
   const rawRoot = decodedRoot ?? {};
   if (!decodedRoot) diagnostics.push(scope);
-  if (!ownKeysAre(rawRoot, new Set(["version", "profiles"])))
-    diagnostics.push(`${scope}.<unknown>`);
-
   const versionField = readField(rawRoot, "version", `${scope}.version`, diagnostics);
+  const version = versionField.value;
+  const acceptedVersion =
+    version === SUBAGENT_CONFIG_VERSION || version === LEGACY_SUBAGENT_CONFIG_VERSION;
+  const allowedRootKeys =
+    version === LEGACY_SUBAGENT_CONFIG_VERSION
+      ? new Set(["version", "profiles"])
+      : new Set(["version", "profiles", "nesting"]);
+  if (!ownKeysAre(rawRoot, allowedRootKeys)) diagnostics.push(`${scope}.<unknown>`);
+
   const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
+  const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
   const decodedProfiles = decodedRecord(profilesField.value);
   if (profilesField.present && !decodedProfiles) diagnostics.push(`${scope}.profiles`);
   const profileRecord = decodedProfiles ?? {};
@@ -239,13 +295,20 @@ export function decodeSubagentConfig<InputInput>(
   if (!ownKeysAre(profileRecord, new Set<string>(PROFILE_IDS)))
     diagnostics.push(`${scope}.profiles.<unknown>`);
 
-  const version = versionField.value;
-  const unsupportedVersion = version !== SUBAGENT_CONFIG_VERSION;
+  const nesting =
+    version === SUBAGENT_CONFIG_VERSION && nestingField.present
+      ? decodeSubagentNesting(nestingField.value)
+      : undefined;
+  if (version === SUBAGENT_CONFIG_VERSION && nestingField.present && nesting === undefined)
+    diagnostics.push(`${scope}.nesting`);
+
+  const unsupportedVersion = !acceptedVersion;
   if (unsupportedVersion) diagnostics.push(`${scope}.version`);
 
   let file: SubagentConfigFile = {};
-  if (version === SUBAGENT_CONFIG_VERSION) file = { version };
+  if (acceptedVersion) file = { version };
   if (Object.keys(profiles).length > 0) file = { ...file, profiles };
+  if (nesting !== undefined) file = { ...file, nesting };
   return {
     file,
     diagnostics: [...new Set(diagnostics)],

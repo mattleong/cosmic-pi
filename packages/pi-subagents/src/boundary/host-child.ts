@@ -1,16 +1,25 @@
 // The child-only Pi/Node bridge is intentionally Promise- and callback-shaped.
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { Type } from "typebox";
+import { loadCodePreviewSettings } from "pi-code-previews";
+import { isProjectTrusted } from "pi-cosmic-core";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import type { SubagentToolInput } from "../tools/schema.ts";
+import { encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
+import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
+import { registerSubagentTools } from "../tools/subagent.ts";
 import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
 import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
-import { isSubagentChildProcess } from "./host-environment.ts";
+import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
 import {
   openLocalPiChildIpc,
   ParentContactError,
@@ -22,6 +31,34 @@ const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
+
+const ProxyResultSchema = Schema.Struct({
+  content: Schema.Array(
+    Schema.Struct({
+      type: Schema.Literal("text"),
+      text: Schema.String.check(Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS)),
+    }),
+  ).check(Schema.isMaxLength(64)),
+  details: Schema.optional(Schema.Unknown),
+});
+const ProxyFailureSchema = Schema.Struct({
+  message: Schema.String.check(Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS)),
+});
+
+const decodeProxyResult = (source: string): AgentToolResult<unknown> | undefined => {
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyResultSchema))(source);
+  if (Option.isNone(decoded)) return undefined;
+  return { content: [...decoded.value.content], details: decoded.value.details ?? {} };
+};
+
+const proxyFailure = (source: string): ParentContactError => {
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyFailureSchema))(source);
+  return new ParentContactError({
+    message: Option.isSome(decoded)
+      ? clipToolReply(decoded.value.message)
+      : "The root subagent coordinator rejected the call.",
+  });
+};
 
 type ContactParentEnvelope = Extract<LocalPiContact, { readonly type: "contact_parent" }>;
 type ContactCancelEnvelope = Extract<LocalPiContact, { readonly type: "contact_cancel" }>;
@@ -50,10 +87,43 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (runtimeApi.apiKey && runtimeApi.provider)
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
   const pending = new Map<string, Deferred.Deferred<string, ParentContactError>>();
+  const pendingProxy = new Map<
+    string,
+    Deferred.Deferred<AgentToolResult<unknown>, ParentContactError>
+  >();
+  let proxyToolsRegistered = false;
   const ipc: LocalPiChildIpcChannel = openLocalPiChildIpc();
   let detachIpc: (() => void) | undefined;
 
   const onControl = (message: LocalPiParentControl) => {
+    if (message.type === "proxy_response") {
+      const waiter = pendingProxy.get(message.requestId);
+      if (!waiter) return;
+      pendingProxy.delete(message.requestId);
+      const result = message.ok ? decodeProxyResult(message.payloadJson) : undefined;
+      Deferred.doneUnsafe(
+        waiter,
+        result
+          ? Effect.succeed(result)
+          : Effect.fail(message.ok ? proxyFailure("{}") : proxyFailure(message.payloadJson)),
+      );
+      return;
+    }
+    if (message.type === "proxy_notification") {
+      try {
+        pi.sendMessage(
+          {
+            customType: "pi-subagents-proxy-notification",
+            content: message.message,
+            display: true,
+          },
+          { deliverAs: "steer", triggerTurn: true },
+        );
+      } catch {
+        // The delegated Pi may already be shutting down.
+      }
+      return;
+    }
     if (message.type === "parent_reply") {
       const waiter = pending.get(message.requestId);
       if (!waiter) return;
@@ -90,13 +160,75 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
         ),
       );
     pending.clear();
+    for (const waiter of pendingProxy.values())
+      Deferred.doneUnsafe(
+        waiter,
+        Effect.fail(
+          new ParentContactError({ message: "The root subagent coordinator disconnected." }),
+        ),
+      );
+    pendingProxy.clear();
+  };
+
+  const proxyCall = (
+    input: SubagentToolInput,
+    signal: AbortSignal | undefined,
+  ): Promise<AgentToolResult<unknown>> => {
+    const requestId = `proxy-${process.pid}-${nextRequest++}`;
+    const encoded = encodeSubagentProxyInput(input);
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const waiter = Deferred.makeUnsafe<AgentToolResult<unknown>, ParentContactError>();
+        pendingProxy.set(requestId, waiter);
+        yield* ipc.sendContact({
+          channel: "pi-subagents",
+          type: "proxy_request",
+          requestId,
+          tool: encoded.tool,
+          argumentsJson: encoded.argumentsJson,
+        });
+        return yield* Deferred.await(waiter);
+      }).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : Effect.sync(() => {
+                if (!pendingProxy.delete(requestId)) return;
+                void Effect.runPromise(
+                  ipc
+                    .sendContact({
+                      channel: "pi-subagents",
+                      type: "proxy_cancel",
+                      requestId,
+                    })
+                    .pipe(Effect.ignore),
+                );
+              }),
+        ),
+      ),
+      { signal },
+    );
   };
 
   registerChildPiFastModeHook(pi, fastMode);
 
-  pi.on("session_start", () => {
-    if (detachIpc) return;
-    detachIpc = ipc.listen({ onControl, onDisconnect: rejectPending });
+  pi.on("session_start", (_event, ctx) => {
+    if (!detachIpc) detachIpc = ipc.listen({ onControl, onDisconnect: rejectPending });
+    if (proxyToolsRegistered) return;
+    return Promise.resolve(loadCodePreviewSettings(ctx.cwd, isProjectTrusted(ctx)))
+      .catch(() => undefined)
+      .then(() => {
+        if (proxyToolsRegistered) return;
+        registerSubagentTools(pi, {
+          environment: { cwd: ctx.cwd, projectTrusted: isProjectTrusted(ctx) },
+          proxyCall: (input, signal) => proxyCall(input, signal),
+          run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
+        });
+        pi.setActiveTools([...new Set([...pi.getActiveTools(), ...SUBAGENT_TOOL_NAMES])]);
+        const runId = subagentChildRunId();
+        if (runId) registerSubagentProxyManagerCommand(pi, runId, proxyCall);
+        proxyToolsRegistered = true;
+      });
   });
 
   pi.on("session_shutdown", () => {

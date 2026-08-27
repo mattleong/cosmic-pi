@@ -8,6 +8,9 @@ import type { SubagentRunObservation, SubagentServiceContract } from "../../../s
 type ObservationMethods = Pick<
   SubagentServiceContract,
   | "startSessionOwned"
+  | "startSessionOwnedFrom"
+  | "visibleList"
+  | "authorizeTargets"
   | "startRetrySessionOwned"
   | "claimRetryContinuation"
   | "releaseRetryClaim"
@@ -38,6 +41,11 @@ export type SubagentServiceDoubleInput = Omit<SubagentServiceContract, keyof Obs
 export function subagentServiceDouble(base: SubagentServiceDoubleInput): SubagentServiceContract {
   const startSessionOwned: SubagentServiceContract["startSessionOwned"] =
     base.startSessionOwned ?? base.start;
+  const startSessionOwnedFrom: SubagentServiceContract["startSessionOwnedFrom"] =
+    base.startSessionOwnedFrom ?? ((_callerRunId, request) => startSessionOwned(request));
+  const visibleList: SubagentServiceContract["visibleList"] = base.visibleList ?? (() => base.list);
+  const authorizeTargets: SubagentServiceContract["authorizeTargets"] =
+    base.authorizeTargets ?? (() => Effect.void);
   const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] =
     base.startRetrySessionOwned ?? base.start;
   const claimRetryContinuation: SubagentServiceContract["claimRetryContinuation"] =
@@ -100,6 +108,9 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
   return {
     ...base,
     startSessionOwned,
+    startSessionOwnedFrom,
+    visibleList,
+    authorizeTargets,
     startRetrySessionOwned,
     claimRetryContinuation,
     releaseRetryClaim,

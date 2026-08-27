@@ -2,8 +2,7 @@ import type { CanonicalWriterCwd } from "../boundary/writer-lease.ts";
 import { firstWriteClaimConflict } from "../domain/write-claims.ts";
 import { SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
-import { MAX_CONCURRENT_RUNS } from "./limits.ts";
-import { isActiveRunState } from "./model.ts";
+import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { writerPoolUnavailable } from "./writer-pool.ts";
 
@@ -19,17 +18,25 @@ const ownsWriterSlot = (record: RunRecord): boolean =>
 
 export const processCapacityError = (
   records: ReadonlyMap<string, RunRecord>,
+  parentRunId: string,
+  limit: number,
   excluded?: RunRecord,
 ): SubagentCapacityError | undefined => {
   const candidates = [...records.values()].filter((record) => record !== excluded);
-  if (candidates.filter(ownsProcessSlot).length < MAX_CONCURRENT_RUNS) return undefined;
-  const cleanupCount = candidates.filter((record) => record.cleanupPending).length;
+  const occupiedChildren = candidates.filter(
+    (record) =>
+      (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === parentRunId && ownsProcessSlot(record),
+  ).length;
+  const externalReservations = candidates.filter(
+    (record) =>
+      (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) !== parentRunId &&
+      record.evictionClaim?.parentRunId === parentRunId,
+  ).length;
+  if (occupiedChildren + externalReservations < limit) return undefined;
   return new SubagentCapacityError({
-    limit: MAX_CONCURRENT_RUNS,
-    message:
-      cleanupCount > 0
-        ? `Subagent capacity is temporarily occupied while ${cleanupCount} run${cleanupCount === 1 ? "" : "s"} finish cleanup; retry shortly.`
-        : `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an active run first.`,
+    limit,
+    code: "direct_child_capacity",
+    message: `Direct-child capacity reached for ${parentRunId} (${limit}). Stop an active run among this parent's direct children first.`,
   });
 };
 

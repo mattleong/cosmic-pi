@@ -35,7 +35,7 @@ import {
   type StartSubagentRequest,
   type SubagentRunView,
 } from "../run/model.ts";
-import { MAX_TARGET_RUNS } from "../run/limits.ts";
+import { MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import {
@@ -141,10 +141,10 @@ const startSpecs = (
   agents: ReadonlyArray<SubagentStartSpec>,
 ): Effect.Effect<ReadonlyArray<SubagentStartSpec>, InvalidSubagentRequestError> =>
   Effect.gen(function* () {
-    if (agents.length === 0 || agents.length > MAX_TARGET_RUNS)
+    if (agents.length === 0 || agents.length > MAX_START_BATCH)
       return yield* new InvalidSubagentRequestError({
         code: "agent_count_invalid",
-        message: `subagent_start requires between 1 and ${MAX_TARGET_RUNS} agents.`,
+        message: `subagent_start requires between 1 and ${MAX_START_BATCH} agents.`,
       });
     for (const agent of agents) {
       // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
@@ -318,14 +318,19 @@ const managementAcknowledgement = (
   }
 };
 
-export const executeSubagentAction = (
+export const executeSubagentActionEffect = (
   pi: ExtensionAPI,
-  runtime: SubagentToolRuntime,
+  environment: SubagentToolRuntime["environment"],
   input: SubagentToolInput,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
   ctx: ExtensionContext,
-): Promise<AgentToolResult<unknown>> => {
+  callerRunId?: string,
+): Effect.Effect<
+  AgentToolResult<unknown>,
+  SubagentError,
+  SubagentService | SubagentProfileService | import("../backend/service.ts").SubagentBackendRegistry
+> => {
   if (input.action === "models") {
     const discovery = Effect.gen(function* () {
       const profileService = yield* SubagentProfileService;
@@ -347,13 +352,19 @@ export const executeSubagentAction = (
         }),
       };
     });
-    return runtime.run(discovery, signal);
+    return discovery;
   }
 
   let latestAwaitRuns: ReadonlyArray<SubagentRunView> = [];
   const requestedAwaitUntil = input.action === "await" ? input.until : undefined;
   const effect = Effect.gen(function* () {
     const service = yield* SubagentService;
+    const authorize = (ids: ReadonlyArray<string>) =>
+      callerRunId ? service.authorizeTargets(callerRunId, ids) : Effect.void;
+    const startOwned = (request: StartSubagentRequest) =>
+      callerRunId
+        ? service.startSessionOwnedFrom(callerRunId, request)
+        : service.startSessionOwned(request);
     const consumeCompletions = (
       observations: ReadonlyArray<SubagentRunObservation>,
       fullyRenderedIds: ReadonlySet<string>,
@@ -371,29 +382,33 @@ export const executeSubagentAction = (
         return { runs, attentionRequired, text: formatted.text };
       });
     const finishStatus = (ids: ReadonlyArray<string>) =>
-      service.withStatusObservations(ids, ({ observations, missingIds }) => {
-        const actionFailures = missingIds.map(
-          (id): SubagentActionFailure => ({
-            id,
-            code: "SubagentNotFoundError",
-            message: `Subagent run not found: ${id}. Use subagent_list to refresh active run IDs.`,
+      authorize(ids).pipe(
+        Effect.andThen(
+          service.withStatusObservations(ids, ({ observations, missingIds }) => {
+            const actionFailures = missingIds.map(
+              (id): SubagentActionFailure => ({
+                id,
+                code: "SubagentNotFoundError",
+                message: `Subagent run not found: ${id}. Use subagent_list to refresh active run IDs.`,
+              }),
+            );
+            return Effect.gen(function* () {
+              const runs = observations.map((observation) => observation.run);
+              const failureText = formatActionFailures(actionFailures);
+              const attentionText = attentionRecoveryText(runs);
+              const prefix = [failureText, attentionText].filter(Boolean).join("\n\n");
+              const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
+              yield* consumeCompletions(observations, formatted.fullyRenderedIds);
+              return {
+                runs,
+                attentionRequired: attentionText.length > 0,
+                text: formatted.text,
+                actionFailures,
+              };
+            });
           }),
-        );
-        return Effect.gen(function* () {
-          const runs = observations.map((observation) => observation.run);
-          const failureText = formatActionFailures(actionFailures);
-          const attentionText = attentionRecoveryText(runs);
-          const prefix = [failureText, attentionText].filter(Boolean).join("\n\n");
-          const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
-          yield* consumeCompletions(observations, formatted.fullyRenderedIds);
-          return {
-            runs,
-            attentionRequired: attentionText.length > 0,
-            text: formatted.text,
-            actionFailures,
-          };
-        });
-      });
+        ),
+      );
 
     switch (input.action) {
       case "start": {
@@ -534,11 +549,17 @@ export const executeSubagentAction = (
         const profileService = yield* SubagentProfileService;
         const profileSnapshot = yield* profileService.capture;
         const resolveRequest = (spec: SubagentStartSpec) =>
-          resolveProfileStart(pi, spec, ctx, runtime.environment, profileSnapshot);
+          resolveProfileStart(pi, spec, ctx, environment, profileSnapshot).pipe(
+            Effect.map((request) => ({
+              ...request,
+              nestingPolicy: profileSnapshot.effectiveConfig.nesting,
+              nestingPolicyRevision: profileSnapshot.revision,
+            })),
+          );
         const launchOne = (spec: SubagentStartSpec, index: number) =>
           resolveRequest(spec).pipe(
             Effect.flatMap((request) =>
-              service.startSessionOwned(request).pipe(
+              startOwned(request).pipe(
                 Effect.map(
                   (run): SubagentStartOutcome => ({
                     index,
@@ -565,17 +586,18 @@ export const executeSubagentAction = (
         };
 
         const outcomes = yield* Effect.forEach(specs, launchOne, {
-          concurrency: MAX_TARGET_RUNS,
+          concurrency: MAX_START_BATCH,
         });
         return yield* summarize(outcomes);
       }
       case "list":
-        return { runs: yield* service.list };
+        return { runs: yield* callerRunId ? service.visibleList(callerRunId) : service.list };
       case "status":
         return yield* finishStatus(yield* requiredTargetIds(input.action, input.runIds));
       case "await": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
         const until = input.until;
+        yield* authorize(ids);
         let lastUpdate = "";
         const updateAwait = (runs: ReadonlyArray<SubagentRunView>) => {
           latestAwaitRuns = runs;
@@ -597,6 +619,7 @@ export const executeSubagentAction = (
       case "send": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
         const message = yield* requiredMessage(input.action, input.message);
+        yield* authorize(ids);
         const outcomes = yield* Effect.forEach(
           ids,
           (id) => service.send(id, message).pipe(matchActionOutcome(id)),
@@ -607,11 +630,15 @@ export const executeSubagentAction = (
       case "reply": {
         const id = yield* requiredRunId(input.action, input.runId);
         const message = yield* requiredMessage(input.action, input.message);
+        yield* authorize([id]);
         const outcome = yield* service.reply(id, message).pipe(matchActionOutcome(id));
         return singleOutcome(outcome);
       }
       case "retry": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
+        const profileService = yield* SubagentProfileService;
+        const policySnapshot = yield* profileService.capture;
+        yield* authorize(ids);
         const outcomes = yield* Effect.forEach(
           ids,
           (id) => {
@@ -619,7 +646,13 @@ export const executeSubagentAction = (
             const operation = Effect.acquireUseRelease(
               service.claimRetryContinuation(id),
               (claim) =>
-                resolveProfileRetry(pi, claim, ctx, runtime.environment).pipe(
+                resolveProfileRetry(pi, claim, ctx, environment).pipe(
+                  Effect.map((request) => ({
+                    ...request,
+                    parentRunId: claim.source.parentRunId,
+                    nestingPolicy: policySnapshot.effectiveConfig.nesting,
+                    nestingPolicyRevision: policySnapshot.revision,
+                  })),
                   Effect.catch((error) => {
                     const finalize =
                       subagentErrorCode(error) === "retry_route_exhausted"
@@ -655,6 +688,7 @@ export const executeSubagentAction = (
             message: 'subagent_lifecycle message is valid only when action="resume".',
           });
         const ids = yield* requiredTargetIds(input.action, input.runIds);
+        yield* authorize(ids);
         const outcomes = yield* Effect.forEach(
           ids,
           (id) => {
@@ -676,6 +710,7 @@ export const executeSubagentAction = (
       }
       case "rename": {
         const id = yield* requiredRunId(input.action, input.runId);
+        yield* authorize([id]);
         const outcome = yield* service.rename(id, input.name.trim()).pipe(matchActionOutcome(id));
         return singleOutcome(outcome);
       }
@@ -684,6 +719,7 @@ export const executeSubagentAction = (
         if (operation.action === "list")
           return yield* finishStatus(yield* requiredTargetIds(input.action, operation.runIds));
         const id = yield* requiredRunId(input.action, operation.runId);
+        yield* authorize([id]);
         const effect =
           operation.action === "grant"
             ? service.grantWriteClaims(id, operation.paths)
@@ -723,12 +759,9 @@ export const executeSubagentAction = (
   if (signal?.aborted) cancelAwait();
   else signal?.addEventListener("abort", cancelAwait, { once: true });
 
-  return runtime
-    .run(effect, signal)
-    .finally(() => {
-      signal?.removeEventListener("abort", cancelAwait);
-    })
-    .then(
+  return effect.pipe(
+    Effect.ensuring(Effect.sync(() => signal?.removeEventListener("abort", cancelAwait))),
+    Effect.map(
       (executionResult: {
         readonly runs: ReadonlyArray<SubagentRunView>;
         readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
@@ -790,5 +823,21 @@ export const executeSubagentAction = (
                       : managementAcknowledgement(input.action, runs);
         return { content: [{ type: "text", text: boundToolOutput(text) }], details };
       },
-    );
+    ),
+  );
 };
+
+export const executeSubagentAction = (
+  pi: ExtensionAPI,
+  runtime: SubagentToolRuntime,
+  input: SubagentToolInput,
+  signal: AbortSignal | undefined,
+  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+  ctx: ExtensionContext,
+): Promise<AgentToolResult<unknown>> =>
+  runtime.proxyCall
+    ? runtime.proxyCall(input, signal, onUpdate, ctx)
+    : runtime.run(
+        executeSubagentActionEffect(pi, runtime.environment, input, signal, onUpdate, ctx),
+        signal,
+      );

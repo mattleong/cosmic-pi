@@ -118,6 +118,30 @@ export const SubagentRunCardSchema = Schema.Struct({
   runtime: RuntimeSchema,
   closeOnReport: Schema.Boolean,
   reportGeneration: nonNegativeInteger,
+  parentRunId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  depth: Schema.optionalKey(nonNegativeInteger),
+  directChildCount: Schema.optionalKey(nonNegativeInteger),
+  descendantCount: Schema.optionalKey(nonNegativeInteger),
+  nativeActivity: Schema.optionalKey(
+    Schema.Struct({
+      active: nonNegativeInteger,
+      total: nonNegativeInteger,
+      latest: Schema.optionalKey(
+        Schema.Struct({
+          id: Schema.optionalKey(boundedString(256, 1)),
+          kind: boundedString(128, 1),
+          state: Schema.Literals([
+            "running",
+            "activity",
+            "completed",
+            "failed",
+            "stopped",
+          ] as const),
+          updatedAt: nonNegativeNumber,
+        }),
+      ),
+    }),
+  ),
   model: boundedString(MAX_CARD_MODEL_CHARS, 1),
   effort: EffortSchema,
   fastMode: Schema.Boolean,

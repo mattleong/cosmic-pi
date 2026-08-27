@@ -152,6 +152,36 @@ const Item = Schema.Struct({
 });
 const ItemStarted = Schema.Struct({ threadId: Id, turnId: Id, item: Item });
 const ItemCompleted = Schema.Struct({ threadId: Id, turnId: Id, item: Item });
+const NativeItemEnvelope = Schema.Struct({
+  threadId: Id,
+  turnId: Id,
+  item: Schema.Unknown,
+});
+const NativeItemDiscriminant = Schema.Struct({ type: Schema.optional(Schema.String) });
+const CollabAgentState = Schema.Struct({
+  status: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+  message: Schema.NullOr(Text),
+});
+const CollabAgentItem = Schema.Struct({
+  id: Id,
+  type: Schema.Literal("collabAgentToolCall"),
+  tool: Schema.Literals(["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent"] as const),
+  status: Schema.Literals(["inProgress", "completed", "failed"] as const),
+  senderThreadId: Id,
+  receiverThreadIds: Schema.Array(Id).check(Schema.isMaxLength(64)),
+  prompt: Schema.NullOr(Text),
+  model: Schema.NullOr(Text),
+  reasoningEffort: Schema.NullOr(Text),
+  agentsStates: Schema.Record(Schema.String, CollabAgentState),
+});
+const SubAgentActivityItem = Schema.Struct({
+  id: Id,
+  type: Schema.Literal("subAgentActivity"),
+  kind: Schema.Literals(["started", "interacted", "interrupted"] as const),
+  agentThreadId: Id,
+  agentPath: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
+});
+const exactDecodeOptions = { onExcessProperty: "error" as const };
 const AgentDelta = Schema.Struct({ threadId: Id, turnId: Id, itemId: Id, delta: Text });
 const UsageBreakdown = Schema.Struct({
   inputTokens: Count,
@@ -219,6 +249,14 @@ export type CodexNotification =
       readonly status: string;
       readonly diagnostic?: string | undefined;
     }
+  | {
+      readonly type: "native_activity";
+      readonly threadId: string;
+      readonly turnId: string;
+      readonly activityId: string;
+      readonly kind: string;
+      readonly state: "running" | "activity" | "failed" | "stopped";
+    }
   | { readonly type: "warning"; readonly message: string }
   | { readonly type: "ignored" };
 
@@ -242,6 +280,55 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
       }
       case "item/started":
       case "item/completed": {
+        const envelope = yield* Schema.decodeUnknownEffect(NativeItemEnvelope)(params);
+        const discriminant = yield* Schema.decodeUnknownEffect(NativeItemDiscriminant)(
+          envelope.item,
+        );
+        if (discriminant.type === "collabAgentToolCall") {
+          const item = yield* Schema.decodeUnknownEffect(
+            CollabAgentItem,
+            exactDecodeOptions,
+          )(envelope.item);
+          const receiver = item.receiverThreadIds[0];
+          const state =
+            method === "item/started" || item.status === "inProgress"
+              ? ("activity" as const)
+              : item.status === "failed"
+                ? ("failed" as const)
+                : item.tool === "spawnAgent" && receiver
+                  ? ("running" as const)
+                  : item.tool === "closeAgent" && receiver
+                    ? ("stopped" as const)
+                    : ("activity" as const);
+          return {
+            type: "native_activity" as const,
+            threadId: envelope.threadId,
+            turnId: envelope.turnId,
+            activityId: receiver ?? item.id,
+            kind: item.tool,
+            state,
+          };
+        }
+        if (discriminant.type === "subAgentActivity") {
+          const item = yield* Schema.decodeUnknownEffect(
+            SubAgentActivityItem,
+            exactDecodeOptions,
+          )(envelope.item);
+          if (method === "item/started") return { type: "ignored" as const };
+          return {
+            type: "native_activity" as const,
+            threadId: envelope.threadId,
+            turnId: envelope.turnId,
+            activityId: item.agentThreadId,
+            kind: `${item.kind}:${item.agentPath}`,
+            state:
+              item.kind === "started"
+                ? ("running" as const)
+                : item.kind === "interrupted"
+                  ? ("stopped" as const)
+                  : ("activity" as const),
+          };
+        }
         const schema = method === "item/started" ? ItemStarted : ItemCompleted;
         const value = yield* Schema.decodeUnknownEffect(schema)(params);
         return {

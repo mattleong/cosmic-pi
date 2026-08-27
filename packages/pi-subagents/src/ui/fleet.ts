@@ -2,6 +2,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { managerNoticeGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
   Input,
+  Key,
+  matchesKey,
   truncateToWidth,
   wrapTextWithAnsi,
   type Component,
@@ -35,6 +37,7 @@ import {
   type SubagentProjection,
   type SubagentRunView,
 } from "../run/model.ts";
+import { fleetTreeBranch, projectFleetTree, type FleetTreeRow } from "./fleet-tree.ts";
 import { formatRelativeAge, renderSubagentSessionOutput } from "./session-output.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
 
@@ -60,6 +63,8 @@ export interface FleetOptions {
   readonly requestRender: () => void;
   readonly close: () => void;
   readonly actions: FleetActions;
+  /** Nested Pi cannot navigate above this authenticated run. Root uses the virtual root node. */
+  readonly visibilityRootId?: string | undefined;
 }
 
 const canMessage = (run: SubagentRunView | undefined): boolean =>
@@ -95,7 +100,7 @@ const canStop = (run: SubagentRunView | undefined): boolean =>
 
 type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
 
-const FLEET_SHORTCUTS = new Set(["i", "m", "n", "r", "t", "x"]);
+const FLEET_SHORTCUTS = new Set(["h", "i", "l", "m", "n", "r", "t", "x"]);
 type FleetNotice = { readonly kind: "info" | "success" | "error"; readonly text: string };
 type FleetPrompt = {
   readonly kind: FleetPromptKind;
@@ -117,10 +122,19 @@ export class SubagentFleetComponent implements Component, Focusable {
   private readonly shell = new ListDetailShell();
   private readonly frame: ListDetailFrame;
   private readonly options: FleetOptions;
+  private readonly collapsedRunIds = new Set<string>();
 
   constructor(options: FleetOptions) {
     this.options = options;
     this.frame = listDetailFrame(options.theme);
+  }
+
+  private tree(projection: SubagentProjection) {
+    return projectFleetTree(
+      projection.runs,
+      this.options.visibilityRootId ?? "root",
+      this.collapsedRunIds,
+    );
   }
 
   get focused(): boolean {
@@ -136,18 +150,18 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (next.changed) this.pendingStop = undefined;
   }
 
-  private select(index: number, runs: ReadonlyArray<SubagentRunView>): void {
+  private select(index: number, rows: ReadonlyArray<FleetTreeRow>): void {
     this.applySelection(
       this.shell.select(
         index,
-        runs.map((run) => run.id),
+        rows.map((row) => row.run.id),
       ),
     );
   }
 
-  private reconcile(runs: ReadonlyArray<SubagentRunView>): void {
-    this.applySelection(this.shell.reconcile(runs.map((run) => run.id)));
-    const selected = runs[this.shell.state.selected];
+  private reconcile(rows: ReadonlyArray<FleetTreeRow>): void {
+    this.applySelection(this.shell.reconcile(rows.map((row) => row.run.id)));
+    const selected = rows[this.shell.state.selected]?.run;
     if (this.pendingStop && (this.pendingStop !== selected?.id || !canStop(selected)))
       this.pendingStop = undefined;
     if (this.prompt && this.prompt.runId !== selected?.id) this.prompt = undefined;
@@ -238,9 +252,12 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   handleInput(data: string): void {
-    const runs = this.options.getProjection().runs;
-    this.reconcile(runs);
-    const selected = runs[this.shell.state.selected];
+    const projection = this.options.getProjection();
+    const tree = this.tree(projection);
+    const rows = tree.rows;
+    this.reconcile(rows);
+    const selectedRow = rows[this.shell.state.selected];
+    const selected = selectedRow?.run;
     const matchesKeybinding = this.options.matchesKeybinding;
 
     if (this.prompt) {
@@ -269,8 +286,8 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.pendingStop = undefined;
       if (confirmedReservedShortcut(resolution, data, "x") && run && canStop(run))
         this.performAction(
-          `Stopping ${sanitizeTerminalLine(run.name)}…`,
-          `Stopped ${sanitizeTerminalLine(run.name)}.`,
+          `Stopping subtree at ${sanitizeTerminalLine(run.name)}…`,
+          `Stopped subtree at ${sanitizeTerminalLine(run.name)}.`,
           () => this.options.actions.stop(run.id),
         );
       else {
@@ -294,6 +311,24 @@ export class SubagentFleetComponent implements Component, Focusable {
 
     // Every notice, including errors, dismisses on the next navigation key.
     this.notice = undefined;
+    const fixedTreeDirection =
+      this.shell.state.pane === "list"
+        ? matchesKey(data, "h") || matchesKey(data, Key.left)
+          ? "back"
+          : matchesKey(data, "l") || matchesKey(data, Key.right)
+            ? "forward"
+            : undefined
+        : undefined;
+    if (fixedTreeDirection) {
+      if (selectedRow?.hasChildren) {
+        if (fixedTreeDirection === "back") this.collapsedRunIds.add(selectedRow.run.id);
+        else this.collapsedRunIds.delete(selectedRow.run.id);
+        this.shell.resetDetailScroll();
+        this.reconcile(this.tree(projection).rows);
+      }
+      this.options.requestRender();
+      return;
+    }
     const resolution = this.shell.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding,
@@ -344,8 +379,20 @@ export class SubagentFleetComponent implements Component, Focusable {
     }
 
     if (resolution.action === "confirm") {
-      // Enter policy stays local: every layout opens/toggles the detail pane on Enter.
       if (selected) this.shell.enterPane();
+      this.options.requestRender();
+      return;
+    }
+    if (
+      this.shell.state.pane === "list" &&
+      (resolution.action === "back" || resolution.action === "forward")
+    ) {
+      if (selectedRow?.hasChildren) {
+        if (resolution.action === "back") this.collapsedRunIds.add(selectedRow.run.id);
+        else this.collapsedRunIds.delete(selectedRow.run.id);
+        this.shell.resetDetailScroll();
+        this.reconcile(this.tree(projection).rows);
+      }
       this.options.requestRender();
       return;
     }
@@ -353,7 +400,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const motion = listDetailMotionFromAction(resolution.action);
     if (motion) {
       const result = this.shell.applyMotion(motion, {
-        rowCount: runs.length,
+        rowCount: rows.length,
         hasSelection: selected !== undefined,
       });
       if (result._tag === "Close") {
@@ -361,7 +408,7 @@ export class SubagentFleetComponent implements Component, Focusable {
         return;
       }
       if (result._tag === "Update" && result.movedSelection)
-        this.select(result.state.selected, runs);
+        this.select(result.state.selected, rows);
     }
     this.options.requestRender();
   }
@@ -372,17 +419,19 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (safeWidth === 0 || height === 0) return [];
     this.shell.syncLayout(safeWidth);
     const projection = this.options.getProjection();
-    const runs = projection.runs;
-    this.reconcile(runs);
-    const selected = runs[this.shell.state.selected];
+    const tree = this.tree(projection);
+    const rows = tree.rows;
+    this.reconcile(rows);
+    const selected = rows[this.shell.state.selected]?.run;
     this.shell.ensureSelectionPane(selected !== undefined);
-    const working = runs.filter(
+    const working = tree.runs.filter(
       (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
     ).length;
-    const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
-    const paused = runs.filter((run) => run.state === "paused").length;
-    const retained = runs.filter((run) => run.state === "reported").length;
-    const titleRaw = ` /subagents · ${runs.length} run${runs.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} retained` : ""} `;
+    const waiting = tree.runs.filter((run) => run.state === "waiting_for_parent").length;
+    const paused = tree.runs.filter((run) => run.state === "paused").length;
+    const retained = tree.runs.filter((run) => run.state === "reported").length;
+    const hidden = tree.runs.length - rows.length;
+    const titleRaw = ` /subagents · ${tree.runs.length} run${tree.runs.length === 1 ? "" : "s"}${hidden ? ` · ${rows.length} visible` : ""}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} retained` : ""} `;
     const title = truncateToWidth(titleRaw, Math.max(0, safeWidth - 2), "");
     const help = this.helpText(safeWidth, selected);
     const safeHelp = truncateToWidth(help, Math.max(0, safeWidth - 2), "");
@@ -397,10 +446,10 @@ export class SubagentFleetComponent implements Component, Focusable {
         const contentHeight = Math.max(0, bodyHeight - (showNotice ? 1 : 0));
         const content =
           this.shell.state.layout === "wide"
-            ? this.renderWide(safeWidth, contentHeight, runs, selected)
+            ? this.renderWide(safeWidth, contentHeight, rows, tree.runs, selected)
             : this.shell.state.layout === "stacked"
-              ? this.renderStacked(safeWidth, contentHeight, runs, selected)
-              : this.renderNarrow(safeWidth, contentHeight, runs, selected);
+              ? this.renderStacked(safeWidth, contentHeight, rows, tree.runs, selected)
+              : this.renderNarrow(safeWidth, contentHeight, rows, tree.runs, selected);
         return showNotice ? [this.renderNotice(safeWidth, this.notice!), ...content] : content;
       },
     });
@@ -473,13 +522,18 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private runLine(
-    run: SubagentRunView,
+    row: FleetTreeRow,
     index: number,
     width: number,
-    runs: ReadonlyArray<SubagentRunView>,
+    scopeRuns: ReadonlyArray<SubagentRunView>,
   ): string {
+    const { run } = row;
     const selected = index === this.shell.state.selected;
-    const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
+    const selection = selected ? this.options.theme.fg("accent", ">") : " ";
+    const branch = this.options.theme.fg("dim", fleetTreeBranch(row));
+    const disclosure = row.hasChildren
+      ? this.options.theme.fg("muted", row.expanded ? "▾" : "▸")
+      : " ";
     const frame = Math.floor(this.options.getNow() / 160);
     const glyph = this.options.theme.fg(
       runStateColor(run.state),
@@ -491,7 +545,7 @@ export class SubagentFleetComponent implements Component, Focusable {
         : run.state === "reported"
           ? `report ${run.reportGeneration} · retained`
           : runStateLabel(run.state);
-    const duplicateName = runs.some(
+    const duplicateName = scopeRuns.some(
       (candidate) => candidate.id !== run.id && candidate.name === run.name,
     );
     const shortId = run.id.length <= 14 ? run.id : `…${run.id.slice(-13)}`;
@@ -500,36 +554,44 @@ export class SubagentFleetComponent implements Component, Focusable {
       `${identity} · ${state} · ${run.writeIntent}${run.fastMode ? " · ⚡ fast" : ""}`,
     );
     return padListDetailRow(
-      `${prefix} ${glyph} ${selected ? this.options.theme.fg("accent", label) : label}`,
+      `${selection} ${branch}${disclosure} ${glyph} ${
+        selected ? this.options.theme.fg("accent", label) : label
+      }`,
       width,
     );
   }
 
-  private visibleRuns(runs: ReadonlyArray<SubagentRunView>, limit: number) {
+  private visibleRows(rows: ReadonlyArray<FleetTreeRow>, limit: number) {
     // The rendered window is the authoritative list page size for half/full-page motions,
     // so stacked layouts page by their actual visible rows rather than the full height.
-    const { start, end } = this.shell.visibleWindow(runs.length, limit);
-    return runs.slice(start, end).map((run, offset) => ({ run, index: start + offset }));
+    const { start, end } = this.shell.visibleWindow(rows.length, limit);
+    return rows.slice(start, end).map((row, offset) => ({ row, index: start + offset }));
   }
 
   private listHeading(
-    runs: ReadonlyArray<SubagentRunView>,
+    rows: ReadonlyArray<FleetTreeRow>,
     visible: ReadonlyArray<{ readonly index: number }>,
   ): string {
-    if (runs.length === 0) return "Subagents · none";
+    if (rows.length === 0) return "Subagents · none";
     const start = (visible[0]?.index ?? 0) + 1;
     const end = (visible.at(-1)?.index ?? 0) + 1;
-    return `Subagents · ${start}–${end} of ${runs.length}${start > 1 ? " · ↑ more" : ""}${end < runs.length ? " · ↓ more" : ""}`;
+    return `Subagents · ${start}–${end} of ${rows.length}${start > 1 ? " · ↑ more" : ""}${end < rows.length ? " · ↓ more" : ""}`;
   }
 
   private helpText(width: number, selected: SubagentRunView | undefined): string {
     const contentWidth = Math.max(0, width - 2);
-    const key = (id: FleetKeybindingId, fallback: string): string =>
-      filterReservedKeyLabel(
+    const key = (id: FleetKeybindingId, fallback: string): string => {
+      const printableFiltered = filterReservedKeyLabel(
         this.options.keybindingLabel?.(id, fallback) || fallback,
         FLEET_SHORTCUTS,
         fallback,
       );
+      const withoutTreeArrows = printableFiltered
+        .split("/")
+        .filter((label) => label !== "←" && label !== "→")
+        .join("/");
+      return withoutTreeArrows || fallback;
+    };
     const configuredNavigation = this.options.keybindingLabel
       ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
       : undefined;
@@ -555,14 +617,15 @@ export class SubagentFleetComponent implements Component, Focusable {
           ? "m New task"
           : "m Guide";
     if (!selected)
-      // No alternate help exists without a selected run, so no "? More" hint is offered.
-      return renderResponsiveManagerFooter(contentWidth, [["No runs", `${escape}/q Close`]]);
+      return renderResponsiveManagerFooter(contentWidth, [
+        ["No visible subagents", `${escape}/q Close`],
+      ]);
     const availableActions = [
       messageAction ? { full: messageAction, compact: messageAction } : undefined,
       canInterrupt(selected) ? { full: "i Interrupt", compact: "i Int" } : undefined,
       canResume(selected) ? { full: "r Resume", compact: "r Resume" } : undefined,
       canRename(selected) ? { full: "n Rename", compact: "n Name" } : undefined,
-      canStop(selected) ? { full: "x Stop", compact: "x Stop" } : undefined,
+      canStop(selected) ? { full: "x Stop subtree", compact: "x Stop tree" } : undefined,
     ].filter((item): item is { full: string; compact: string } => item !== undefined);
     const actions = availableActions.map((item) => item.full);
     const compactActions = availableActions.map((item) => item.compact);
@@ -573,15 +636,19 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.shell.state.pane === "list"
         ? "C-u/d Half · PgUp/PgDn Page · gg/G Ends"
         : "C-u/d · PgUp/PgDn Detail · gg/G";
+    const browsingTree = this.shell.state.pane === "list";
+    const primaryNavigation = browsingTree
+      ? `${navigation} Move · h/l or ←/→ Collapse/expand · ${enter} Inspect`
+      : `j/k Scroll · h/${escape} Back`;
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
-          `${navigation} Move · h/l Panes · ${expandedScrollHelp}`,
+          `${primaryNavigation} · ${expandedScrollHelp}`,
           compactActions.length > 0 ? compactActions.join(" · ") : "No run actions",
           `t Technical · ? Back · ${escape}/q Close`,
         ],
         [
-          `${navigation} · h/l · ${expandedScrollHelp}`,
+          primaryNavigation,
           compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
           `? Back · ${escape}/q`,
         ],
@@ -592,22 +659,26 @@ export class SubagentFleetComponent implements Component, Focusable {
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
       [
-        `${navigation} Move · h/l Panes · ${scrollHelp}`,
+        `${primaryNavigation} · ${scrollHelp}`,
         actions.length > 0 ? actions.join(" · ") : undefined,
         `t Technical · ? More · ${escape}/q Close`,
       ],
       [
-        `${navigation} · h/l · ${scrollHelp}`,
+        primaryNavigation,
         compactActions.length > 0 ? compactActions.join(" · ") : undefined,
         `? More · ${escape}/q`,
       ],
       width >= 60
         ? [
-            `${navigation} · h/l · gg/G`,
+            browsingTree ? `${navigation} · h/l · ${enter}` : `j/k · h/${escape}`,
             compactActions.length > 0 ? compactActions.join(" · ") : undefined,
             `? · ${escape}/q`,
           ]
-        : [`${navigation} · h/l`, "gg/G", `? More · ${escape}/q`],
+        : [
+            browsingTree ? `${navigation} · h/l` : `j/k · h/${escape}`,
+            `${enter} Inspect`,
+            `? More · ${escape}/q`,
+          ],
     ]);
   }
 
@@ -630,18 +701,19 @@ export class SubagentFleetComponent implements Component, Focusable {
   private renderWide(
     width: number,
     height: number,
-    runs: ReadonlyArray<SubagentRunView>,
+    rows: ReadonlyArray<FleetTreeRow>,
+    scopeRuns: ReadonlyArray<SubagentRunView>,
     selected: SubagentRunView | undefined,
   ): string[] {
     const { listWidth, detailWidth } = wideListDetailGeometry(width, 38, 0.42);
-    const visible = this.visibleRuns(runs, Math.max(1, height - 1));
+    const visible = this.visibleRows(rows, Math.max(1, height - 1));
     const focused = this.shell.state.pane === "list";
     const left = [
       this.options.theme.fg(
         focused ? "accent" : "muted",
-        `${focused ? "› " : ""}${this.listHeading(runs, visible)}`,
+        `${focused ? "› " : ""}${this.listHeading(rows, visible)}`,
       ),
-      ...visible.map(({ run, index }) => this.runLine(run, index, listWidth, runs)),
+      ...visible.map(({ row, index }) => this.runLine(row, index, listWidth, scopeRuns)),
     ];
     const right = this.detailWindow(this.detailLines(selected, detailWidth), height, detailWidth);
     return framedWideRows(this.frame, { left, right, height, listWidth, detailWidth });
@@ -650,19 +722,20 @@ export class SubagentFleetComponent implements Component, Focusable {
   private renderStacked(
     width: number,
     height: number,
-    runs: ReadonlyArray<SubagentRunView>,
+    rows: ReadonlyArray<FleetTreeRow>,
+    scopeRuns: ReadonlyArray<SubagentRunView>,
     selected: SubagentRunView | undefined,
   ): string[] {
     const inner = width - 2;
-    const listHeight = stackedListHeight(height, runs.length);
-    const visible = this.visibleRuns(runs, listHeight - 1);
+    const listHeight = stackedListHeight(height, rows.length);
+    const visible = this.visibleRows(rows, listHeight - 1);
     const focused = this.shell.state.pane === "list";
     const list = [
       this.options.theme.fg(
         focused ? "accent" : "muted",
-        `${focused ? "› " : ""}${this.listHeading(runs, visible)}`,
+        `${focused ? "› " : ""}${this.listHeading(rows, visible)}`,
       ),
-      ...visible.map(({ run, index }) => this.runLine(run, index, inner, runs)),
+      ...visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns)),
     ];
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
@@ -672,21 +745,22 @@ export class SubagentFleetComponent implements Component, Focusable {
   private renderNarrow(
     width: number,
     height: number,
-    runs: ReadonlyArray<SubagentRunView>,
+    rows: ReadonlyArray<FleetTreeRow>,
+    scopeRuns: ReadonlyArray<SubagentRunView>,
     selected: SubagentRunView | undefined,
   ): string[] {
     const inner = width - 2;
     const lines =
       this.shell.state.details && selected
         ? this.detailWindow(this.detailLines(selected, inner), height, inner)
-        : runs.length
+        : rows.length
           ? (() => {
-              const visible = this.visibleRuns(runs, Math.max(1, height - 1));
+              const visible = this.visibleRows(rows, Math.max(1, height - 1));
               if (height <= 1)
-                return visible.map(({ run, index }) => this.runLine(run, index, inner, runs));
+                return visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns));
               return [
-                this.options.theme.fg("accent", this.listHeading(runs, visible)),
-                ...visible.map(({ run, index }) => this.runLine(run, index, inner, runs)),
+                this.options.theme.fg("accent", this.listHeading(rows, visible)),
+                ...visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns)),
               ];
             })()
           : [

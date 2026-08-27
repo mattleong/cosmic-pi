@@ -90,10 +90,6 @@ const outcomeCode = (method: CodexRequest["method"]): string => {
  * surface as activity, forbidden nested-agent/collaboration items stay fatal,
  * and unknown future item types never fabricate tool lifecycle entries.
  */
-const FORBIDDEN_ITEM_TYPES: ReadonlySet<string> = new Set([
-  "collabAgentToolCall",
-  "subAgentActivity",
-]);
 const EXECUTABLE_ITEM_TOOL_NAMES = new Map<string, string>([
   ["commandExecution", "Bash"],
   ["fileChange", "ApplyPatch"],
@@ -205,6 +201,21 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
             return event.turnId === activeTurnId
               ? offer({ type: "activity", assignmentEpoch }, raw)
               : Effect.sync(() => child.acknowledge(raw));
+          case "native_activity":
+            if (event.turnId !== activeTurnId) {
+              child.acknowledge(raw);
+              return Effect.void;
+            }
+            return offer(
+              {
+                type: "native_agent_activity",
+                assignmentEpoch,
+                activityId: event.activityId,
+                kind: event.kind,
+                state: event.state,
+              },
+              raw,
+            );
           case "usage": {
             if (event.turnId !== activeTurnId) {
               child.acknowledge(raw);
@@ -225,14 +236,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               child.acknowledge(raw);
               return Effect.void;
             }
-            if (FORBIDDEN_ITEM_TYPES.has(event.item.type))
-              return offer(
-                {
-                  type: "protocol_error",
-                  message: "Codex emitted forbidden multi-agent activity.",
-                },
-                raw,
-              );
             const tool = executableToolName(event.item);
             if (tool === undefined)
               // agentMessage, reasoning, and unknown future informational items
@@ -258,14 +261,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               child.acknowledge(raw);
               return Effect.void;
             }
-            if (FORBIDDEN_ITEM_TYPES.has(event.item.type))
-              return offer(
-                {
-                  type: "protocol_error",
-                  message: "Codex emitted forbidden multi-agent activity.",
-                },
-                raw,
-              );
             if (event.item.type === "agentMessage") {
               const backendEvent: BackendEvent = (() => {
                 const baseResult = { type: "assistant_message" as const, assignmentEpoch };

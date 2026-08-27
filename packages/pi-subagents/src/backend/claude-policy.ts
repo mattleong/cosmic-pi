@@ -55,18 +55,25 @@ export const CLAUDE_INSPECTION_TOOLS: ReadonlyArray<string> = [
   "WebSearch",
   ...SUPERVISOR_NATIVE_TOOLS,
 ];
-export const CLAUDE_READ_TOOLS: ReadonlyArray<string> = ["Bash", ...CLAUDE_INSPECTION_TOOLS];
-export const CLAUDE_WRITE_TOOLS: ReadonlyArray<string> = [
-  "Bash",
-  "Edit",
-  ...CLAUDE_INSPECTION_TOOLS,
-];
-export const CLAUDE_DENIED_TOOLS: ReadonlyArray<string> = [
+export const CLAUDE_NATIVE_AGENT_TOOLS: ReadonlyArray<string> = [
   "Agent",
   "Task",
   "TaskOutput",
   "TaskStop",
   "SendMessage",
+];
+export const CLAUDE_READ_TOOLS: ReadonlyArray<string> = [
+  "Bash",
+  ...CLAUDE_INSPECTION_TOOLS,
+  ...CLAUDE_NATIVE_AGENT_TOOLS,
+];
+export const CLAUDE_WRITE_TOOLS: ReadonlyArray<string> = [
+  "Bash",
+  "Edit",
+  ...CLAUDE_INSPECTION_TOOLS,
+  ...CLAUDE_NATIVE_AGENT_TOOLS,
+];
+export const CLAUDE_DENIED_TOOLS: ReadonlyArray<string> = [
   "Skill",
   "EnterWorktree",
   "ExitWorktree",
@@ -131,7 +138,7 @@ export const claudeSettings = (
 ): ClaudeSettings => ({
   permissions: {
     defaultMode: "dontAsk",
-    allow: claudeAllowedTools(launch.writeIntent, writerPolicy),
+    allow: [...claudeAllowedTools(launch.writeIntent, writerPolicy), ...CLAUDE_NATIVE_AGENT_TOOLS],
     deny: CLAUDE_DENIED_TOOLS,
   },
   sandbox: {
@@ -166,7 +173,10 @@ export const claudeArgv = (
   writerPolicy: ClaudeWriterCwdPolicy | undefined,
 ): ReadonlyArray<string> => {
   const tools = launch.writeIntent === "writer" ? CLAUDE_WRITE_TOOLS : CLAUDE_READ_TOOLS;
-  const allowedTools = claudeAllowedTools(launch.writeIntent, writerPolicy);
+  const allowedTools = [
+    ...claudeAllowedTools(launch.writeIntent, writerPolicy),
+    ...CLAUDE_NATIVE_AGENT_TOOLS,
+  ];
   return [
     "--print",
     "--input-format",
@@ -176,6 +186,7 @@ export const claudeArgv = (
     "--verbose",
     "--include-partial-messages",
     "--replay-user-messages",
+    "--forward-subagent-text",
     "--model",
     launch.model,
     "--effort",

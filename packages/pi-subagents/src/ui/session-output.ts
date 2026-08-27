@@ -212,6 +212,13 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
     run.id,
     run.profile ? `profile ${run.profile}` : undefined,
     `${run.host}/${run.runtime}`,
+    run.parentRunId ? `parent ${run.parentRunId}` : undefined,
+    run.depth !== undefined
+      ? `depth ${run.depth} · children ${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
+      : undefined,
+    run.nativeActivity
+      ? `native ${run.nativeActivity.active} active/${run.nativeActivity.total} total`
+      : undefined,
     `closeOnReport=${run.closeOnReport}`,
     run.pid ? `pid ${run.pid}` : undefined,
     `report generation ${run.reportGeneration}`,

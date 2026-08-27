@@ -6,6 +6,7 @@ import type {
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
+import type { SubagentNestingPolicy } from "../config/schema.ts";
 import type {
   ProfileId,
   ProfileRouteContinuation,
@@ -93,6 +94,19 @@ export interface WriteClaimViolation {
   readonly observedAt: number;
 }
 
+export interface SubagentNativeActivity {
+  readonly active: number;
+  readonly total: number;
+  readonly latest?:
+    | {
+        readonly id?: string | undefined;
+        readonly kind: string;
+        readonly state: "running" | "activity" | "completed" | "failed" | "stopped";
+        readonly updatedAt: number;
+      }
+    | undefined;
+}
+
 export interface SubagentWriteAudit {
   readonly observedFileWrites: ReadonlyArray<string>;
   readonly violations: ReadonlyArray<WriteClaimViolation>;
@@ -105,6 +119,15 @@ export interface SubagentRunView {
   readonly task: string;
   readonly profile?: ProfileId | undefined;
   readonly selection: SubagentSelectionProvenance;
+  /** Immutable ancestry. Top-level runs name the root virtual node. */
+  readonly parentRunId?: string | undefined;
+  /** Root Pi is depth 0; top-level runs are depth 1. */
+  readonly depth?: number | undefined;
+  /** Bounded tree counts projected from the root-owned registry. */
+  readonly directChildCount?: number | undefined;
+  readonly descendantCount?: number | undefined;
+  /** Runtime-native agents remain internal activity and never become Pi run nodes. */
+  readonly nativeActivity?: SubagentNativeActivity | undefined;
   /** Failed predecessor continued explicitly through the remaining frozen profile route. */
   readonly predecessorRunId?: string | undefined;
   /** Successor admitted from this failed run's explicit retry claim. */
@@ -148,8 +171,18 @@ export interface SubagentRunView {
   readonly usage: SubagentUsage;
 }
 
+export const SUBAGENT_ROOT_RUN_ID = "root";
+
+export interface SubagentTreeRootView {
+  readonly id: typeof SUBAGENT_ROOT_RUN_ID;
+  readonly depth: 0;
+  readonly directChildCount: number;
+  readonly descendantCount: number;
+}
+
 export interface SubagentProjection {
   readonly revision: number;
+  readonly root?: SubagentTreeRootView | undefined;
   readonly runs: ReadonlyArray<SubagentRunView>;
 }
 
@@ -160,6 +193,11 @@ export interface SubagentRetrySupersession {
 
 export interface StartSubagentRequest {
   readonly name?: string | undefined;
+  /** Internal root-owned ancestry. This field is never accepted by public tool schemas. */
+  readonly parentRunId?: string | undefined;
+  /** One immutable policy revision captured by the complete start batch. */
+  readonly nestingPolicy?: SubagentNestingPolicy | undefined;
+  readonly nestingPolicyRevision?: number | undefined;
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly closeOnReport: boolean;
