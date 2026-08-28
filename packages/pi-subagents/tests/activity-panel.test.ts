@@ -6,7 +6,9 @@ import {
   emptyActivityPresentation,
   hasSubagentActivityPanelContent,
   projectSubagentActivityPanel,
+  renderProjectedSubagentActivityPanel,
   renderSubagentActivityPanel,
+  subagentActivityPanelCadence,
   type SubagentActivityPresentationSnapshot,
 } from "../src/ui/activity-panel.ts";
 import { view } from "./tools/fixtures/tool-harness.ts";
@@ -130,7 +132,7 @@ describe("persistent subagent activity panel", () => {
     });
 
     const lines = render([running, finished, other], live);
-    expect(lines[0]).toContain("Subagents · 1/2");
+    expect(lines[0]).toContain("Subagents · 1/2 awaited");
     expect(lines.find((line) => line.includes("Running target"))).toContain("◎");
     expect(lines.find((line) => line.includes("Other work"))).not.toContain("◎");
     expect(lines.join("\n")).not.toContain("Finished target");
@@ -149,7 +151,7 @@ describe("persistent subagent activity panel", () => {
   it("shows launch intent before the first run reaches the fleet projection", () => {
     const live = presentation({ starts: [{ requestedCount: 3 }] });
     expect(hasSubagentActivityPanelContent(projection([]), live)).toBe(true);
-    expect(render([], live)).toEqual([" Subagents · 3 starting · /subagents"]);
+    expect(render([], live)).toEqual([" Subagents · launching 3 · /subagents"]);
   });
 
   it("keeps concurrent start intent visible in an await header", () => {
@@ -159,7 +161,98 @@ describe("persistent subagent activity panel", () => {
       awaits: [{ runIds: [target.id], until: "all_finished" }],
     });
 
-    expect(render([target], live)[0]).toContain("Subagents · 0/1 · 2 starting · 1 working");
+    expect(render([target], live)[0]).toContain("Subagents · 0/1 awaited · launching 2 · 1 active");
+  });
+
+  it("summarizes overlapping await leases without flattening their wait modes", () => {
+    const first = view({ id: "first", name: "First" });
+    const second = view({ id: "second", name: "Second" });
+    const live = presentation({
+      awaits: [
+        { runIds: [first.id], until: "all_finished" },
+        { runIds: [first.id, second.id], until: "any_finished" },
+      ],
+    });
+
+    expect(render([first, second], live, 120)[0]).toContain("2 waits · all 0/1 · first of 2");
+    const compact = render([first, second], live, 35)[0] ?? "";
+    expect(compact).toContain("all 0/1");
+    expect(compact).toContain("/subagents");
+  });
+
+  it("keeps the title, attention, and manager command while dropping routine header data", () => {
+    const target = view({
+      id: "target",
+      name: "Target",
+      usage: {
+        input: 20,
+        output: 20,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 40,
+        cost: 0.001,
+      },
+    });
+    const waiting = view({ id: "waiting", state: "waiting_for_parent" });
+    const retained = view({ id: "retained", state: "reported" });
+    const live = presentation({
+      awaits: [{ runIds: [target.id], until: "all_finished" }],
+    });
+
+    const wide = render([target, waiting, retained], live, 120)[0] ?? "";
+    expect(wide).toContain("1 active");
+    expect(wide).toContain("1 waiting");
+    expect(wide).toContain("1 retained");
+    expect(wide).toContain("40 tok");
+    expect(wide).toContain("/subagents");
+
+    const compact = render([target, waiting, retained], live, 50)[0] ?? "";
+    expect(compact).toContain("Subagents");
+    expect(compact).toContain("0/1 awaited");
+    expect(compact).toContain("1 waiting");
+    expect(compact).toContain("/subagents");
+    expect(compact).not.toContain("1 active");
+    expect(compact).not.toContain("1 retained");
+    expect(compact).not.toContain("40 tok");
+
+    const attentionFirst = render([target, waiting], live, 35)[0] ?? "";
+    expect(attentionFirst).toContain("1 waiting");
+    expect(attentionFirst).not.toContain("awaited");
+    expect(attentionFirst).toContain("/subagents");
+
+    expect(render([target], live, 23)[0]).toBe(" Subagents · /subagents");
+    expect(render([target], live, 22)[0]).toBe(" /subagents");
+  });
+
+  it("derives ticker cadence only from rows with clock-dependent presentation", () => {
+    const cadence = (runs: ReadonlyArray<SubagentRunView>, live = emptyActivityPresentation()) =>
+      subagentActivityPanelCadence(projectSubagentActivityPanel(projection(runs), live));
+
+    expect(cadence([view({ state: "running" })])).toBe(160);
+    expect(cadence([view({ state: "starting" })])).toBe(160);
+    expect(cadence([view({ state: "waiting_for_parent" })])).toBe(1_000);
+    expect(cadence([view({ state: "paused" })])).toBe(1_000);
+    expect(cadence([view({ state: "stopping" })])).toBe(1_000);
+    expect(cadence([view({ state: "completed" })])).toBeUndefined();
+    expect(cadence([], presentation({ starts: [{ requestedCount: 2 }] }))).toBeUndefined();
+    expect(
+      cadence(
+        [view({ id: "done", state: "completed" })],
+        presentation({ awaits: [{ runIds: ["done"], until: "all_finished" }] }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("reuses projected structure while time-dependent rows continue to advance", () => {
+    const panel = projectSubagentActivityPanel(
+      projection([view({ id: "live", name: "Live", currentTool: "read", startedAt: 1 })]),
+    );
+    const first = renderProjectedSubagentActivityPanel(panel, 120, theme, 1_001).join("\n");
+    const second = renderProjectedSubagentActivityPanel(panel, 120, theme, 2_001).join("\n");
+
+    expect(first).toContain("1s");
+    expect(second).toContain("2s");
+    expect(second).not.toBe(first);
   });
 
   it("segments header emphasis and restores state-colored hierarchy identities", () => {
@@ -205,8 +298,8 @@ describe("persistent subagent activity panel", () => {
     );
 
     expect(calls).toContainEqual({ color: "success", text: "Subagents" });
-    expect(calls).toContainEqual({ color: "accent", text: "0/2" });
-    expect(calls).toContainEqual({ color: "muted", text: "1 working" });
+    expect(calls).toContainEqual({ color: "accent", text: "0/2 awaited" });
+    expect(calls).toContainEqual({ color: "muted", text: "1 active" });
     expect(calls).toContainEqual({ color: "dim", text: "/subagents" });
     const railCalls = calls.filter(({ text }) => /[│├└─]/u.test(text));
     expect(railCalls.length).toBeGreaterThan(0);

@@ -6,11 +6,16 @@ import {
   emptyActivityPresentation,
   hasSubagentActivityPanelContent,
   projectSubagentActivityPanel,
-  renderSubagentActivityPanel,
+  renderProjectedSubagentActivityPanel,
   subagentActivityPanelCadence,
   type SubagentActivityAwaitMode,
+  type SubagentActivityPanelProjection,
   type SubagentActivityPresentationSnapshot,
 } from "../ui/activity-panel.ts";
+import {
+  makeAdaptiveHostRefreshTicker,
+  type AdaptiveHostRefreshTicker,
+} from "./host-refresh-ticker.ts";
 
 const WIDGET_KEY = "pi-subagents.activity";
 
@@ -162,15 +167,30 @@ class SubagentActivityWidgetComponent implements Component {
   private readonly options: ActivityWidgetComponentOptions;
   private readonly unsubscribeProjection: () => void;
   private readonly unsubscribePresentation: () => void;
-  private stopTicker: (() => void) | undefined;
-  private tickerCadence: number | undefined;
+  private refreshTicker: AdaptiveHostRefreshTicker | undefined;
+  private panelCache:
+    | {
+        readonly projection: SubagentProjection;
+        readonly presentation: SubagentActivityPresentationSnapshot;
+        readonly panel: SubagentActivityPanelProjection;
+      }
+    | undefined;
+  private renderCache:
+    | {
+        readonly panel: SubagentActivityPanelProjection;
+        readonly width: number;
+        readonly lines: string[];
+      }
+    | undefined;
   private disposed = false;
 
   constructor(options: ActivityWidgetComponentOptions) {
     this.options = options;
     const refresh = () => {
       if (this.disposed) return;
-      this.syncTicker();
+      this.panelCache = undefined;
+      this.renderCache = undefined;
+      this.refreshTicker?.sync();
       try {
         this.options.tui.requestRender();
       } catch {
@@ -179,43 +199,44 @@ class SubagentActivityWidgetComponent implements Component {
     };
     this.unsubscribeProjection = options.subscribeProjection(refresh);
     this.unsubscribePresentation = options.presentation.subscribe(refresh);
-    this.syncTicker();
+    this.refreshTicker = makeAdaptiveHostRefreshTicker({
+      getCadence: () => subagentActivityPanelCadence(this.getPanel()),
+      startTicker: options.startTicker,
+      requestRender: () => {
+        this.renderCache = undefined;
+        options.tui.requestRender();
+      },
+    });
   }
 
-  private syncTicker(): void {
-    const panel = projectSubagentActivityPanel(
-      this.options.getProjection(),
-      this.options.presentation.get(),
-    );
-    const cadence = subagentActivityPanelCadence(panel);
-    if (cadence === this.tickerCadence) return;
-    this.stopTicker?.();
-    this.stopTicker = undefined;
-    this.tickerCadence = cadence;
-    if (cadence !== undefined)
-      this.stopTicker = this.options.startTicker(cadence, () => {
-        if (this.disposed) return;
-        try {
-          this.options.tui.requestRender();
-        } catch {
-          // The TUI may already be tearing down.
-        }
-      });
+  private getPanel(): SubagentActivityPanelProjection {
+    const projection = this.options.getProjection();
+    const presentation = this.options.presentation.get();
+    if (this.panelCache?.projection === projection && this.panelCache.presentation === presentation)
+      return this.panelCache.panel;
+    const panel = projectSubagentActivityPanel(projection, presentation);
+    this.panelCache = { projection, presentation, panel };
+    return panel;
   }
 
   render(width: number): string[] {
     if (this.disposed) return [];
-    return renderSubagentActivityPanel(
-      this.options.getProjection(),
-      this.options.presentation.get(),
-      width,
+    const safeWidth = Math.max(0, Math.floor(width));
+    const panel = this.getPanel();
+    if (this.renderCache?.panel === panel && this.renderCache.width === safeWidth)
+      return this.renderCache.lines;
+    const lines = renderProjectedSubagentActivityPanel(
+      panel,
+      safeWidth,
       this.options.theme,
       this.options.getNow(),
     );
+    this.renderCache = { panel, width: safeWidth, lines };
+    return lines;
   }
 
   invalidate(): void {
-    // Rendering reads current frozen projections and the shared clock.
+    this.renderCache = undefined;
   }
 
   dispose(): void {
@@ -223,9 +244,10 @@ class SubagentActivityWidgetComponent implements Component {
     this.disposed = true;
     this.unsubscribeProjection();
     this.unsubscribePresentation();
-    this.stopTicker?.();
-    this.stopTicker = undefined;
-    this.tickerCadence = undefined;
+    this.refreshTicker?.dispose();
+    this.refreshTicker = undefined;
+    this.panelCache = undefined;
+    this.renderCache = undefined;
     try {
       this.options.onDispose();
     } catch {

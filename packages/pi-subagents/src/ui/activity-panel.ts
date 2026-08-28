@@ -10,6 +10,7 @@ import {
 } from "../run/model.ts";
 import { fleetTreeBranch, projectFleetTree, type FleetTreeRow } from "./fleet-tree.ts";
 import { aggregateUsage, formatDuration } from "./metrics.ts";
+import { subagentUiRefreshCadence, type SubagentUiRefreshCadence } from "./refresh.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
 
 const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
@@ -103,18 +104,8 @@ export const hasSubagentActivityPanelContent = (
 
 export const subagentActivityPanelCadence = (
   panel: SubagentActivityPanelProjection,
-): number | undefined => {
-  if (
-    panel.rows.length === 0 &&
-    panel.presentation.starts.length === 0 &&
-    panel.presentation.awaits.length === 0
-  )
-    return undefined;
-  return panel.trackedRuns.some((run) => run.state === "starting" || run.state === "running") ||
-    panel.presentation.starts.length > 0
-    ? 160
-    : 1_000;
-};
+): SubagentUiRefreshCadence | undefined =>
+  subagentUiRefreshCadence(panel.trackedRuns, { includePausedElapsed: true });
 
 const shortRunId = (id: string): string => (id.length <= 14 ? id : `…${id.slice(-13)}`);
 
@@ -133,41 +124,103 @@ const runActivity = (run: SubagentRunView): string => {
 };
 
 type HeaderColor = "accent" | "success" | "warning" | "muted" | "dim";
-type HeaderPart = readonly [color: HeaderColor, text: string];
 
-const panelHeader = (panel: SubagentActivityPanelProjection, theme: Theme): string => {
+interface HeaderPart {
+  readonly color: HeaderColor;
+  readonly text: string;
+}
+
+interface OptionalHeaderPart extends HeaderPart {
+  /** Lower values survive longer when the header must shed detail. */
+  readonly priority: number;
+}
+
+const renderHeaderParts = (parts: ReadonlyArray<HeaderPart>, theme: Theme): string => {
+  const separator = theme.fg("dim", " · ");
+  return parts.map((part) => theme.fg(part.color, part.text)).join(separator);
+};
+
+const fitPanelHeader = (
+  optionalParts: ReadonlyArray<OptionalHeaderPart>,
+  width: number,
+  theme: Theme,
+): string => {
+  const title: HeaderPart = { color: "success", text: "Subagents" };
+  const command: HeaderPart = { color: "dim", text: "/subagents" };
+  const remaining = [...optionalParts];
+  for (;;) {
+    const rendered = renderHeaderParts([title, ...remaining, command], theme);
+    if (visibleWidth(rendered) <= width) return rendered;
+    if (remaining.length === 0) break;
+    const lowestValue = Math.max(...remaining.map((part) => part.priority));
+    let removeIndex = remaining.length - 1;
+    while (removeIndex > 0 && remaining[removeIndex]?.priority !== lowestValue) removeIndex -= 1;
+    remaining.splice(removeIndex, 1);
+  }
+  const commandOnly = theme.fg(command.color, command.text);
+  return visibleWidth(commandOnly) <= width ? commandOnly : truncateToWidth(commandOnly, width, "");
+};
+
+const panelHeader = (
+  panel: SubagentActivityPanelProjection,
+  width: number,
+  theme: Theme,
+): string => {
   const { trackedRuns, presentation } = panel;
-  const working = trackedRuns.filter(
+  const active = trackedRuns.filter(
     (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
   ).length;
   const waiting = trackedRuns.filter((run) => run.state === "waiting_for_parent").length;
   const paused = trackedRuns.filter((run) => run.state === "paused").length;
   const usage = aggregateUsage(trackedRuns, "compact");
-  const awaitIds = [...panel.awaitedRunIds];
-  const finishedTargets = panel.awaitedRuns.filter((run) =>
-    isAssignmentFinishedRunState(run.state),
-  ).length;
+  const awaitedRunsById = new Map(panel.awaitedRuns.map((run) => [run.id, run]));
+  const awaitParts: OptionalHeaderPart[] = [];
+  if (presentation.awaits.length > 1)
+    awaitParts.push({
+      color: "accent",
+      text: `${presentation.awaits.length} waits`,
+      priority: 2,
+    });
+  for (const awaiting of presentation.awaits) {
+    const runIds = [...new Set(awaiting.runIds)];
+    const finished = runIds.filter((runId) => {
+      const run = awaitedRunsById.get(runId);
+      return run !== undefined && isAssignmentFinishedRunState(run.state);
+    }).length;
+    awaitParts.push({
+      color: "accent",
+      text:
+        awaiting.until === "any_finished"
+          ? `first of ${runIds.length}`
+          : presentation.awaits.length === 1
+            ? `${finished}/${runIds.length} awaited`
+            : `all ${finished}/${runIds.length}`,
+      priority: 1,
+    });
+  }
   const startCount = presentation.starts.reduce(
     (total, starting) => total + starting.requestedCount,
     0,
   );
-  const awaitProgress =
-    presentation.awaits.length === 1 && presentation.awaits[0]?.until === "any_finished"
-      ? `first of ${awaitIds.length}`
-      : awaitIds.length > 0
-        ? `${finishedTargets}/${awaitIds.length}`
-        : undefined;
-  const parts: HeaderPart[] = [["success", "Subagents"]];
-  if (awaitProgress) parts.push(["accent", awaitProgress]);
-  if (startCount > 0) parts.push(["accent", `${startCount} starting`]);
-  if (working > 0) parts.push(["muted", `${working} working`]);
-  if (waiting > 0) parts.push(["warning", `${waiting} waiting`]);
-  if (paused > 0) parts.push(["warning", `${paused} paused`]);
-  if (panel.retainedCount > 0) parts.push(["muted", `${panel.retainedCount} retained`]);
-  if (usage) parts.push(["muted", usage]);
-  parts.push(["dim", "/subagents"]);
-  const separator = theme.fg("dim", " · ");
-  return parts.map(([color, text]) => theme.fg(color, text)).join(separator);
+  return fitPanelHeader(
+    [
+      ...awaitParts,
+      ...(startCount > 0
+        ? [{ color: "accent" as const, text: `launching ${startCount}`, priority: 1 }]
+        : []),
+      ...(active > 0 ? [{ color: "muted" as const, text: `${active} active`, priority: 2 }] : []),
+      ...(waiting > 0
+        ? [{ color: "warning" as const, text: `${waiting} waiting`, priority: 0 }]
+        : []),
+      ...(paused > 0 ? [{ color: "warning" as const, text: `${paused} paused`, priority: 0 }] : []),
+      ...(panel.retainedCount > 0
+        ? [{ color: "muted" as const, text: `${panel.retainedCount} retained`, priority: 3 }]
+        : []),
+      ...(usage ? [{ color: "muted" as const, text: usage, priority: 4 }] : []),
+    ],
+    width,
+    theme,
+  );
 };
 
 const renderActivityRow = (
@@ -233,20 +286,18 @@ const renderActivityRow = (
   return `${truncateToWidth(identity, identityWidth, "")}${separator}${truncateToWidth(fallbackActivity, metadataWidth, "")}`;
 };
 
-export const renderSubagentActivityPanel = (
-  projection: SubagentProjection,
-  presentation: SubagentActivityPresentationSnapshot,
+export const renderProjectedSubagentActivityPanel = (
+  panel: SubagentActivityPanelProjection,
   width: number,
   theme: Theme,
   now: number,
 ): string[] => {
   const safeWidth = Math.max(0, Math.floor(width));
   if (safeWidth === 0) return [];
-  const panel = projectSubagentActivityPanel(projection, presentation);
   if (
     panel.rows.length === 0 &&
-    presentation.starts.length === 0 &&
-    presentation.awaits.length === 0
+    panel.presentation.starts.length === 0 &&
+    panel.presentation.awaits.length === 0
   )
     return [];
   const inset = safeWidth > 1 ? " " : "";
@@ -260,7 +311,7 @@ export const renderSubagentActivityPanel = (
     [...nameCounts].flatMap(([name, count]) => (count > 1 ? [name] : [])),
   );
   return [
-    `${inset}${truncateToWidth(panelHeader(panel, theme), contentWidth, "")}`,
+    `${inset}${panelHeader(panel, contentWidth, theme)}`,
     ...panel.rows.map(
       (row) =>
         `${inset}${renderActivityRow(
@@ -276,3 +327,17 @@ export const renderSubagentActivityPanel = (
     ),
   ];
 };
+
+export const renderSubagentActivityPanel = (
+  projection: SubagentProjection,
+  presentation: SubagentActivityPresentationSnapshot,
+  width: number,
+  theme: Theme,
+  now: number,
+): string[] =>
+  renderProjectedSubagentActivityPanel(
+    projectSubagentActivityPanel(projection, presentation),
+    width,
+    theme,
+    now,
+  );

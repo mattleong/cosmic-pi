@@ -9,6 +9,10 @@ import {
 } from "pi-cosmic-core";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
+import {
+  makeAdaptiveHostRefreshTicker,
+  type AdaptiveHostRefreshTicker,
+} from "../boundary/host-refresh-ticker.ts";
 import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
@@ -34,6 +38,7 @@ import {
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
 import { isActiveRunState } from "../run/model.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
+import { subagentUiRefreshCadence } from "../ui/refresh.ts";
 import {
   declaredRouteForDraft,
   type ProfileRouteDraft,
@@ -114,22 +119,17 @@ function openFleetManager(
           rename: actions.rename,
         },
       });
+      let refreshTicker: AdaptiveHostRefreshTicker | undefined;
       unsubscribe = bridge.subscribe(() => {
         manager.invalidate();
+        refreshTicker?.sync();
         tui.requestRender();
       });
-      let lastAgeSecond = -1;
-      const stopSpinnerTicker = startHostUiTicker(160, () => {
-        const runs = bridge.get().runs;
-        if (runs.some((run) => run.state === "starting" || run.state === "running")) {
-          tui.requestRender();
-          return;
-        }
-        if (!runs.some((run) => run.endedAt !== undefined)) return;
-        const ageSecond = Math.floor(synchronousNow() / 1_000);
-        if (ageSecond === lastAgeSecond) return;
-        lastAgeSecond = ageSecond;
-        tui.requestRender();
+      refreshTicker = makeAdaptiveHostRefreshTicker({
+        getCadence: () =>
+          subagentUiRefreshCadence(bridge.get().runs, { includeTerminalAges: true }),
+        startTicker: startHostUiTicker,
+        requestRender: () => tui.requestRender(),
       });
       return {
         get focused() {
@@ -142,7 +142,7 @@ function openFleetManager(
         handleInput: (data) => manager.handleInput(data),
         invalidate: () => manager.invalidate(),
         dispose: () => {
-          stopSpinnerTicker();
+          refreshTicker?.dispose();
           unsubscribe();
         },
       };

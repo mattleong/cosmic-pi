@@ -30,7 +30,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/config/store.ts` is the single configuration persistence door (`CosmicUiConfigStore` Context service plus the resolve/update helpers). It builds on pi-cosmic-core's `makeScopedConfigStore` instantiated without a default document, so resolution never seeds or writes a config file; only explicit footer updates create documents. `src/config/schema.ts` owns the persisted shape, defaults, and fresh resolved fallback factory.
 - `src/probe/`, `src/settings/`, and `src/working/` are vertical application features. Repository probe policy stays under `src/probe/`.
 - `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
-- `src/boundary/` isolates Pi I/O and hostile synchronous host callbacks, including working-message updates. `host-exec.ts` is the sole Git/`gh` process boundary; it disables optional locks for every background Git probe while leaving `gh` arguments unchanged.
+- `src/boundary/` isolates Pi I/O and hostile synchronous host callbacks, including working-message updates. `host-status.ts` publishes sanitized compact status through TUI and RPC hosts while keeping Cosmic footer declaration and placement TUI-only. `host-exec.ts` is the sole Git/`gh` process boundary; it disables optional locks for every background Git probe while leaving `gh` arguments unchanged.
   `host-ui-ticker-pool.ts` multiplexes equal-cadence animation consumers onto one Effect fiber per
   cadence. One pool-level Effect `Scope` owns those fibers, so synchronous unsubscribe can interrupt
   one cadence and idempotent disposal closes and awaits the whole pool without a Promise registry.

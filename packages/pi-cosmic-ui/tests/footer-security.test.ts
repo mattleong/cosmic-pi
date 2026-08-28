@@ -61,6 +61,27 @@ describe("footer terminal safety", () => {
     expect(projection.extensionStatuses).toEqual([{ id: "hostile", text: "status text" }]);
   });
 
+  it("publishes sanitized compact status in RPC mode only", () => {
+    const setStatus = vi.fn();
+    const update = makeSetStatusSafely("status");
+    update(
+      extensionContextFixture({ mode: "rpc" as const, hasUI: true, ui: { setStatus } }),
+      "\x1b[31mready\x1b[0m\nnow",
+    );
+    expect(setStatus).toHaveBeenCalledWith("status", "ready now");
+
+    setStatus.mockClear();
+    update(
+      extensionContextFixture({ mode: "json" as const, hasUI: false, ui: { setStatus } }),
+      "hidden",
+    );
+    update(
+      extensionContextFixture({ mode: "print" as const, hasUI: false, ui: { setStatus } }),
+      "hidden",
+    );
+    expect(setStatus).not.toHaveBeenCalled();
+  });
+
   it("recognizes only complete anchored pi-tui image forms", () => {
     expect(isTerminalImageLine(kittyImage)).toBe(true);
     expect(isTerminalImageLine(itermImage)).toBe(true);

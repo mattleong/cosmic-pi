@@ -35,8 +35,9 @@ export const shutdownHostUiTickers = hostUiTickerOwner.shutdown;
 export const makeSetStatusSafely =
   (statusKey: string) =>
   (ctx: ExtensionContext | undefined, text?: string): void => {
-    if (!ctx || ctx.mode !== "tui") return;
+    if (!ctx) return;
     try {
+      if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
       const sanitized = text === undefined ? undefined : sanitizeTerminalLine(text) || undefined;
       ctx.ui.setStatus(statusKey, sanitized);
     } catch {
