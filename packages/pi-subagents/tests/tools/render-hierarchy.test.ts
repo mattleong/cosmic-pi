@@ -49,7 +49,7 @@ describe("hierarchical tool result rendering", () => {
   });
 
   it.each([20, 50, 73, 87])(
-    "keeps compact hierarchy identity and model-rail lines bounded at width %i",
+    "keeps compact hierarchy identity and model metadata lines bounded at width %i",
     (width) => {
       const busyTarget = view({
         id: "agent-r1-15",
@@ -84,7 +84,7 @@ describe("hierarchical tool result rendering", () => {
       });
 
       expect(rows.length).toBeGreaterThanOrEqual(details.cards.length * 2);
-      expect(rows.some((line) => line.includes("╰─"))).toBe(true);
+      expect(rows.every((line) => !line.includes("╰─"))).toBe(true);
       expect(rows.every((line) => visibleWidth(line) <= width)).toBe(true);
       if (width >= 73) {
         expect(rows.some((line) => line.includes("reviewer → local/pi"))).toBe(true);
@@ -129,7 +129,7 @@ describe("hierarchical tool result rendering", () => {
     if (details.action === "models") throw new Error("Expected list details.");
     const rows = renderResponsiveRunRows(details.cards, 20, theme, { hierarchy: {} });
 
-    expect(rows.some((line) => line.startsWith("│           ╰─"))).toBe(true);
+    expect(rows.some((line) => line.startsWith("│") && line.includes("scout"))).toBe(true);
     expect(rows.every((line) => visibleWidth(line) <= 20)).toBe(true);
   });
 
@@ -158,6 +158,29 @@ describe("hierarchical tool result rendering", () => {
     expect(visibleWidth(rows[0] ?? "")).toBeLessThanOrEqual(160);
   });
 
+  it("continues a parent trunk through its model metadata before the first child", () => {
+    const parent = view({
+      id: "only-parent",
+      name: "Only parent",
+      profile: "reviewer",
+      parentRunId: "root",
+      depth: 1,
+    });
+    const nested = view({
+      id: "only-child",
+      name: "Only child",
+      profile: "scout",
+      parentRunId: parent.id,
+      depth: 2,
+    });
+    const details = makeCompactToolDetails({ action: "list", runs: [nested, parent] });
+    if (details.action === "models") throw new Error("Expected list details.");
+    const rows = renderResponsiveRunRows(details.cards, 80, theme, { hierarchy: {} });
+
+    expect(rows).toContain("    │  reviewer → local/pi · openai-codex/gpt-5.6-sol:high");
+    expect(rows.every((line) => !line.includes("╰─"))).toBe(true);
+  });
+
   it("continues ancestor rails through model metadata lines", () => {
     const first = view({
       id: "first",
@@ -184,9 +207,9 @@ describe("hierarchical tool result rendering", () => {
     if (details.action === "models") throw new Error("Expected list details.");
     const rows = renderResponsiveRunRows(details.cards, 80, theme, { hierarchy: {} });
 
-    expect(rows).toContain("│   ╰─ reviewer → local/pi · openai-codex/gpt-5.6-sol:high");
-    expect(rows).toContain("│       ╰─ scout → local/pi · openai-codex/gpt-5.6-sol:high");
-    expect(rows).toContain("    ╰─ reviewer → local/pi · openai-codex/gpt-5.6-sol:high");
+    expect(rows).toContain("│   │  reviewer → local/pi · openai-codex/gpt-5.6-sol:high");
+    expect(rows).toContain("│          scout → local/pi · openai-codex/gpt-5.6-sol:high");
+    expect(rows).toContain("       reviewer → local/pi · openai-codex/gpt-5.6-sol:high");
   });
 
   it.each([

@@ -65,17 +65,16 @@ const themedRunRoute = (run: SubagentRunCard, theme: Theme): string =>
     `${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.fastMode ? " ⚡" : ""}`,
   )}`;
 
-interface MetadataRail {
-  readonly first: string;
-  readonly continuation: string;
+interface MetadataIndent {
+  readonly prefix: string;
 }
 
-const responsiveMetadataRail = (
+const responsiveMetadataIndent = (
   row: RunTreeRow<SubagentRunCard> | undefined,
   width: number,
-): MetadataRail => {
-  const rail = row ? runCardTreeMetadataBranch(row) : { first: "  ╰─ ", continuation: "     " };
-  return visibleWidth(rail.first) < width ? rail : { first: "╰─ ", continuation: "   " };
+): MetadataIndent => {
+  const metadata = row ? runCardTreeMetadataBranch(row) : { prefix: "     " };
+  return visibleWidth(metadata.prefix) < width ? metadata : { prefix: "   " };
 };
 
 const renderRouteRail = (
@@ -84,15 +83,11 @@ const renderRouteRail = (
   width: number,
   theme: Theme,
 ): string[] => {
-  const rail = responsiveMetadataRail(row, width);
-  const available = Math.max(1, width - visibleWidth(rail.first));
+  const metadata = responsiveMetadataIndent(row, width);
+  const prefix = theme.fg(runStateColor(run.state), metadata.prefix);
+  const available = Math.max(1, width - visibleWidth(metadata.prefix));
   const routeLines = wrapTextWithAnsi(themedRunRoute(run, theme), available);
-  return routeLines.map((line, index) =>
-    truncateToWidth(
-      `${theme.fg("dim", index === 0 ? rail.first : rail.continuation)}${line}`,
-      width,
-    ),
-  );
+  return routeLines.map((line) => truncateToWidth(`${prefix}${line}`, width));
 };
 
 const runUsage = (run: SubagentRunCard): string => formatUsage(run.usage, "tok");
