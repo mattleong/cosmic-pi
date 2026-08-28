@@ -15,7 +15,7 @@ import {
 } from "../profiles/model.ts";
 import type { SubagentRunView, SubagentUsage } from "../run/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
-import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
+import { MAX_PROTOCOL_ID_CHARS, MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { projectRunCardTree } from "./run-card-tree.ts";
 import {
   MAX_ERROR_CHARS,
@@ -194,23 +194,22 @@ const nonNegative = (value: number): number =>
   Number.isFinite(value) ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value)) : 0;
 const nonNegativeInteger = (value: number): number => Math.floor(nonNegative(value));
 
-const projectUsage = (usage: SubagentUsage): SubagentRunCard["usage"] => {
-  const base = {
-    input: nonNegative(usage.input),
-    output: nonNegative(usage.output),
-    cacheRead: nonNegative(usage.cacheRead),
-    cacheWrite: nonNegative(usage.cacheWrite),
-    totalTokens: nonNegative(usage.totalTokens),
-  };
-  return usage.cost === undefined ? base : { ...base, cost: nonNegative(usage.cost) };
-};
+const projectUsage = (usage: SubagentUsage): SubagentRunCard["usage"] => ({
+  input: nonNegative(usage.input),
+  output: nonNegative(usage.output),
+  cacheRead: nonNegative(usage.cacheRead),
+  cacheWrite: nonNegative(usage.cacheWrite),
+  totalTokens: nonNegative(usage.totalTokens),
+  ...(usage.cost !== undefined && { cost: nonNegative(usage.cost) }),
+});
 
 const projectSelection = (
   selection: SubagentRunView["selection"],
   density: DetailDensity,
 ): SubagentRunCard["selection"] => {
   const limits = STRING_LIMITS[density];
-  const base = {
+  const warning = optionalText(selection.warning, limits.provenance);
+  return {
     source: selection.source,
     reason: requiredText(
       selection.reason,
@@ -222,62 +221,51 @@ const projectSelection = (
       code: requiredText(candidate.code, MAX_FAILURE_CODE_CHARS, "unavailable"),
       reason: requiredText(candidate.reason, limits.provenance, "Unavailable."),
     })),
+    ...(selection.candidateIndex !== undefined && {
+      candidateIndex: nonNegativeInteger(selection.candidateIndex),
+    }),
+    ...(warning !== undefined && { warning }),
   };
-  const withCandidate =
-    selection.candidateIndex === undefined
-      ? base
-      : { ...base, candidateIndex: nonNegativeInteger(selection.candidateIndex) };
-  const warning = optionalText(selection.warning, limits.provenance);
-  return warning === undefined ? withCandidate : { ...withCandidate, warning };
 };
 
 const projectWriteCardFields = (
   run: SubagentRunView,
   density: DetailDensity,
 ): Partial<SubagentRunCard> => {
-  const base = {};
   const claimLimit = density === "full" ? MAX_WRITE_CLAIMS : density === "compact" ? 16 : 4;
   const projectedClaims = run.writeClaims
     ? run.writeClaims
         .slice(0, claimLimit)
         .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file"))
     : undefined;
-  const withClaims = projectedClaims
-    ? {
-        ...base,
-        writeClaims: projectedClaims,
-        writeClaimCount: nonNegativeInteger(run.writeClaims?.length ?? 0),
-      }
-    : base;
-  const withClaimOmission =
-    run.writeClaims && run.writeClaims.length > claimLimit
-      ? { ...withClaims, writeClaimsOmitted: true as const }
-      : withClaims;
   const observedLimit = density === "full" ? 64 : density === "compact" ? 16 : 0;
   const violationLimit = density === "full" ? 16 : density === "compact" ? 8 : 0;
-  const withAudit = run.writeAudit
-    ? {
-        ...withClaimOmission,
-        writeAudit: {
-          observedFileWrites: (observedLimit === 0
-            ? []
-            : run.writeAudit.observedFileWrites.slice(-observedLimit)
-          ).map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
-          violations: (violationLimit === 0
-            ? []
-            : run.writeAudit.violations.slice(-violationLimit)
-          ).map((violation) => ({
-            path: requiredText(violation.path, MAX_WRITE_CLAIM_CHARS, "unknown-file"),
-            toolName: requiredText(violation.toolName, 200, "unknown-tool"),
-            observedAt: nonNegative(violation.observedAt),
-          })),
-          bashWriteHints: nonNegativeInteger(run.writeAudit.bashWriteHints),
-        },
-      }
-    : withClaimOmission;
-  return run.writeAdmissionPaused === true
-    ? { ...withAudit, writeAdmissionPaused: true as const }
-    : withAudit;
+  return {
+    ...(projectedClaims !== undefined && {
+      writeClaims: projectedClaims,
+      writeClaimCount: nonNegativeInteger(run.writeClaims?.length ?? 0),
+    }),
+    ...(run.writeClaims !== undefined &&
+      run.writeClaims.length > claimLimit && { writeClaimsOmitted: true as const }),
+    ...(run.writeAudit !== undefined && {
+      writeAudit: {
+        observedFileWrites: (observedLimit === 0
+          ? []
+          : run.writeAudit.observedFileWrites.slice(-observedLimit)
+        ).map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
+        violations: (violationLimit === 0
+          ? []
+          : run.writeAudit.violations.slice(-violationLimit)
+        ).map((violation) => ({
+          path: requiredText(violation.path, MAX_WRITE_CLAIM_CHARS, "unknown-file"),
+          toolName: requiredText(violation.toolName, 200, "unknown-tool"),
+          observedAt: nonNegative(violation.observedAt),
+        })),
+        bashWriteHints: nonNegativeInteger(run.writeAudit.bashWriteHints),
+      },
+    }),
+    ...(run.writeAdmissionPaused === true && { writeAdmissionPaused: true as const }),
+  };
 };
 
 const projectOptionalCardFields = (
@@ -290,12 +278,13 @@ const projectOptionalCardFields = (
   const warning = optionalText(run.warning, limits.warning);
   const endedAt = run.endedAt === undefined ? undefined : nonNegative(run.endedAt);
   const question = optionalText(run.question?.message, limits.question);
-  const base = {};
-  const withCurrentTool = currentTool === undefined ? base : { ...base, currentTool };
-  const withProgress = progress === undefined ? withCurrentTool : { ...withCurrentTool, progress };
-  const withWarning = warning === undefined ? withProgress : { ...withProgress, warning };
-  const withEndedAt = endedAt === undefined ? withWarning : { ...withWarning, endedAt };
-  return question === undefined ? withEndedAt : { ...withEndedAt, question: { message: question } };
+  return {
+    ...(currentTool !== undefined && { currentTool }),
+    ...(progress !== undefined && { progress }),
+    ...(warning !== undefined && { warning }),
+    ...(endedAt !== undefined && { endedAt }),
+    ...(question !== undefined && { question: { message: question } }),
+  };
 };
 
 /** Explicit privacy projection from a run view to persisted renderer fields. */
@@ -305,7 +294,25 @@ export const projectSubagentRunCard = (
 ): SubagentRunCard => {
   const limits = STRING_LIMITS[density];
   const profile = run.profile && PROFILE_IDS.includes(run.profile) ? run.profile : undefined;
-  const base = {
+  const parentRunId = optionalText(run.parentRunId, limits.id);
+  const nativeLatestId = optionalText(run.nativeActivity?.latest?.id, 256);
+  const nativeActivity: SubagentRunCard["nativeActivity"] = run.nativeActivity
+    ? {
+        active: nonNegativeInteger(run.nativeActivity.active),
+        total: nonNegativeInteger(run.nativeActivity.total),
+        ...(run.nativeActivity.latest !== undefined && {
+          latest: {
+            kind: requiredText(run.nativeActivity.latest.kind, 128, "native-agent"),
+            state: run.nativeActivity.latest.state,
+            updatedAt: nonNegative(run.nativeActivity.latest.updatedAt),
+            ...(nativeLatestId !== undefined && { id: nativeLatestId }),
+          },
+        }),
+      }
+    : undefined;
+  const finalText = optionalText(run.finalText, MAX_FINAL_TEXT_CHARS);
+  const error = optionalText(run.error, MAX_ERROR_CHARS);
+  return {
     id: requiredText(run.id, limits.id, "unknown-run"),
     name: sanitizeName(run.name) || "subagent",
     state: run.state,
@@ -325,57 +332,34 @@ export const projectSubagentRunCard = (
     selection: projectSelection(run.selection, density),
     ...projectWriteCardFields(run, density),
     ...projectOptionalCardFields(run, density),
+    ...(parentRunId !== undefined && {
+      parentRunId,
+      depth: nonNegativeInteger(run.depth ?? 1),
+      directChildCount: nonNegativeInteger(run.directChildCount ?? 0),
+      descendantCount: nonNegativeInteger(run.descendantCount ?? 0),
+    }),
+    ...(nativeActivity !== undefined && { nativeActivity }),
+    ...(profile !== undefined && { profile }),
+    ...(finalText !== undefined && { finalText }),
+    ...(error !== undefined && { error }),
+    ...(run.finalText !== undefined &&
+      finalText?.length !== stripTerminalControls(run.finalText).length && {
+        finalTextTruncated: true as const,
+      }),
+    ...(run.error !== undefined &&
+      error?.length !== stripTerminalControls(run.error).length && {
+        errorTruncated: true as const,
+      }),
   };
-  const parentRunId = optionalText(run.parentRunId, limits.id);
-  const withParent =
-    parentRunId === undefined
-      ? base
-      : {
-          ...base,
-          parentRunId,
-          depth: nonNegativeInteger(run.depth ?? 1),
-          directChildCount: nonNegativeInteger(run.directChildCount ?? 0),
-          descendantCount: nonNegativeInteger(run.descendantCount ?? 0),
-        };
-  const nativeLatestId = optionalText(run.nativeActivity?.latest?.id, 256);
-  let nativeActivity: SubagentRunCard["nativeActivity"];
-  if (run.nativeActivity) {
-    nativeActivity = {
-      active: nonNegativeInteger(run.nativeActivity.active),
-      total: nonNegativeInteger(run.nativeActivity.total),
-    };
-    if (run.nativeActivity.latest) {
-      const latestBase = {
-        kind: requiredText(run.nativeActivity.latest.kind, 128, "native-agent"),
-        state: run.nativeActivity.latest.state,
-        updatedAt: nonNegative(run.nativeActivity.latest.updatedAt),
-      };
-      nativeActivity = {
-        ...nativeActivity,
-        latest: nativeLatestId ? { ...latestBase, id: nativeLatestId } : latestBase,
-      };
-    }
-  }
-  const withNative = nativeActivity ? { ...withParent, nativeActivity } : withParent;
-  const withProfile = profile === undefined ? withNative : { ...withNative, profile };
-  const finalText = optionalText(run.finalText, MAX_FINAL_TEXT_CHARS);
-  const error = optionalText(run.error, MAX_ERROR_CHARS);
-  const withFinal = finalText === undefined ? withProfile : { ...withProfile, finalText };
-  const withError = error === undefined ? withFinal : { ...withFinal, error };
-  const withFinalFlag =
-    run.finalText !== undefined && finalText?.length !== stripTerminalControls(run.finalText).length
-      ? { ...withError, finalTextTruncated: true as const }
-      : withError;
-  return run.error !== undefined && error?.length !== stripTerminalControls(run.error).length
-    ? { ...withFinalFlag, errorTruncated: true as const }
-    : withFinalFlag;
 };
 
 const omitReports = (card: SubagentRunCard): SubagentRunCard => {
   const { finalText, error, ...summary } = card;
-  const withFinalFlag =
-    finalText === undefined ? summary : { ...summary, finalTextTruncated: true as const };
-  return error === undefined ? withFinalFlag : { ...withFinalFlag, errorTruncated: true as const };
+  return {
+    ...summary,
+    ...(finalText !== undefined && { finalTextTruncated: true as const }),
+    ...(error !== undefined && { errorTruncated: true as const }),
+  };
 };
 
 const projectFailure = (
@@ -387,28 +371,27 @@ const projectFailure = (
   const maximumCode = density === "full" ? MAX_FAILURE_CODE_CHARS : density === "compact" ? 64 : 48;
   const name = optionalText(failure.name, density === "minimal" ? 48 : MAX_NAME_CHARS);
   const code = optionalText(failure.code, maximumCode);
-  const base = { index: nonNegativeInteger(failure.index) };
-  const withName = name === undefined ? base : { ...base, name };
-  const withMessage = {
-    ...withName,
-    message: requiredText(failure.message, maximumMessage, "Launch failed."),
-  };
-  const withCode = code === undefined ? withMessage : { ...withMessage, code };
-  if (!failure.admittedRun) return withCode;
+  const message = requiredText(failure.message, maximumMessage, "Launch failed.");
   const recovery = failure.admittedRun;
+  const admittedRun = recovery
+    ? {
+        runId: requiredText(
+          recovery.runId,
+          density === "full" ? MAX_PROTOCOL_ID_CHARS : density === "compact" ? 256 : 128,
+          "unknown-run",
+        ),
+        cleanupDisposition: recovery.cleanupDisposition,
+        retryDisposition: recovery.retryDisposition,
+        remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
+        hasRemainingCandidate: recovery.hasRemainingCandidate,
+      }
+    : undefined;
   return {
-    ...withCode,
-    admittedRun: {
-      runId: requiredText(
-        recovery.runId,
-        density === "full" ? MAX_PROTOCOL_ID_CHARS : density === "compact" ? 256 : 128,
-        "unknown-run",
-      ),
-      cleanupDisposition: recovery.cleanupDisposition,
-      retryDisposition: recovery.retryDisposition,
-      remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
-      hasRemainingCandidate: recovery.hasRemainingCandidate,
-    },
+    index: nonNegativeInteger(failure.index),
+    ...(name !== undefined && { name }),
+    message,
+    ...(code !== undefined && { code }),
+    ...(admittedRun !== undefined && { admittedRun }),
   };
 };
 
@@ -429,36 +412,34 @@ const projectStartEntry = (
     return { ...identity, status: "pending", routeStatus: "resolving" };
   if (entry.routeStatus === "unavailable")
     return { ...identity, status: "failed", routeStatus: "unavailable" };
-  const selectedBase = {
-    ...identity,
-    status: entry.status,
+  const warning = optionalText(
+    entry.warning,
+    density === "full" ? MAX_CARD_PROVENANCE_CHARS : density === "compact" ? 512 : 160,
+  );
+  const selectedFields = {
     routeStatus: "selected" as const,
     host: entry.host,
     runtime: entry.runtime,
     model: requiredText(entry.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
     effort: entry.effort,
     fastMode: entry.fastMode,
+    ...(entry.candidateIndex !== undefined && {
+      candidateIndex: nonNegativeInteger(entry.candidateIndex),
+    }),
+    ...(warning !== undefined && { warning }),
   };
-  const selected =
-    entry.candidateIndex === undefined
-      ? selectedBase
-      : { ...selectedBase, candidateIndex: nonNegativeInteger(entry.candidateIndex) };
-  const warning = optionalText(
-    entry.warning,
-    density === "full" ? MAX_CARD_PROVENANCE_CHARS : density === "compact" ? 512 : 160,
-  );
-  const withWarning = warning === undefined ? selected : { ...selected, warning };
   return entry.status === "started"
     ? {
-        ...withWarning,
+        ...identity,
         status: "started",
+        ...selectedFields,
         runId: requiredText(
           entry.runId,
           density === "full" ? MAX_PROTOCOL_ID_CHARS : density === "compact" ? 256 : 128,
           "unknown-run",
         ),
       }
-    : { ...withWarning, status: "failed" };
+    : { ...identity, status: "failed", ...selectedFields };
 };
 
 /** Explicit privacy projection for request-ordered start receipts. */
@@ -466,7 +447,7 @@ export const projectSubagentStartEntries = (
   entries: ReadonlyArray<SubagentStartEntry>,
   density: DetailDensity = "full",
 ): ReadonlyArray<SubagentStartEntry> =>
-  entries.slice(0, MAX_TARGET_RUNS).map((entry) => projectStartEntry(entry, density));
+  entries.slice(0, MAX_START_BATCH).map((entry) => projectStartEntry(entry, density));
 
 const profileLimits = (density: DetailDensity) =>
   density === "full"
@@ -488,7 +469,7 @@ export const projectSubagentProfileRoutes = (
 ): ReadonlyArray<SubagentProfileRouteCard> => {
   const limits = profileLimits(density);
   return profiles.slice(0, PROFILE_IDS.length).map((profile) => {
-    const base = {
+    return {
       id: profile.id,
       description: requiredText(profile.description, limits.description, "Profile route."),
       source: profile.source,
@@ -517,10 +498,8 @@ export const projectSubagentProfileRoutes = (
             ? boundedAsciiOr(candidate.reason, limits.reason, "Omitted.")
             : requiredText(candidate.reason, limits.reason, "Route detail omitted."),
       })),
+      ...(profile.defaultEffort !== undefined && { defaultEffort: profile.defaultEffort }),
     };
-    return profile.defaultEffort === undefined
-      ? base
-      : { ...base, defaultEffort: profile.defaultEffort };
   });
 };
 
@@ -534,10 +513,9 @@ const projectActionFailures = (
   const idLimit = density === "minimal" ? 64 : MAX_ACTION_FAILURE_ID_CHARS;
   return failures.slice(0, MAX_TARGET_RUNS).map((failure) => {
     const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
-    const base = { id: requiredText(failure.id, idLimit, "unknown-run") };
-    const withCode = code === undefined ? base : { ...base, code };
     return {
-      ...withCode,
+      id: requiredText(failure.id, idLimit, "unknown-run"),
+      ...(code !== undefined && { code }),
       message: requiredText(failure.message, messageLimit, "Action failed."),
     };
   });
@@ -558,17 +536,18 @@ const startDetailsCandidate = (
   input: StartDetailsInput,
   density: DetailDensity,
 ): SubagentStartDetails => {
-  const base: SubagentStartDetails = {
-    version: SUBAGENT_CARD_DETAILS_VERSION,
-    action: "start",
-    startEntries: projectSubagentStartEntries(input.startEntries, density),
-  };
   const failures = input.startFailures
     ? [...input.startFailures]
         .sort((left, right) => left.index - right.index)
+        .slice(0, MAX_START_BATCH)
         .map((failure) => projectFailure(failure, density))
     : undefined;
-  return failures && failures.length > 0 ? { ...base, startFailures: failures } : base;
+  return {
+    version: SUBAGENT_CARD_DETAILS_VERSION,
+    action: "start",
+    startEntries: projectSubagentStartEntries(input.startEntries, density),
+    ...(failures !== undefined && failures.length > 0 && { startFailures: failures }),
+  };
 };
 
 /** Makes strict version-2 start details. Start details never persist run cards. */
@@ -612,28 +591,19 @@ const awaitCandidate = (
   );
   const awaitedRunIds =
     targetCards.length > 0 ? targetCards.map((card) => card.id) : requestedAwaitedRunIds;
-  const base: SubagentAwaitDetails = {
+  const omitted = !includeReports && reportsWereOmitted(source);
+  return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "await",
     cards: [...targetCards, ...contextCards],
     awaitedRunIds,
     awaitUntil: input.awaitUntil,
+    ...(input.timedOut && { timedOut: true as const }),
+    ...(input.attentionRequired && { attentionRequired: true as const }),
+    ...(input.cancelled && { cancelled: true as const }),
+    ...(contextCandidates.length > contextSource.length && { contextOmitted: true as const }),
+    ...((input.contentOmitted || omitted) && { contentOmitted: true as const }),
   };
-  const withTimedOut = input.timedOut ? { ...base, timedOut: true as const } : base;
-  const withAttention = input.attentionRequired
-    ? { ...withTimedOut, attentionRequired: true as const }
-    : withTimedOut;
-  const withCancelled = input.cancelled
-    ? { ...withAttention, cancelled: true as const }
-    : withAttention;
-  const withContextOmission =
-    contextCandidates.length > contextSource.length
-      ? { ...withCancelled, contextOmitted: true as const }
-      : withCancelled;
-  const omitted = !includeReports && reportsWereOmitted(source);
-  return input.contentOmitted || omitted
-    ? { ...withContextOmission, contentOmitted: true as const }
-    : withContextOmission;
 };
 
 /** Makes strict version-2 await details with semantic fitting stages. */
@@ -672,17 +642,16 @@ const runDetailsCandidate = (
     const card = projectSubagentRunCard(run, density);
     return includeReports ? card : omitReports(card);
   });
-  const base: RunDetailsCandidate = {
+  const failures = projectActionFailures(input.actionFailures, density);
+  const omitted = !includeReports && reportsWereOmitted(source);
+  return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: input.action,
     cards,
     runCount: input.runs.length,
+    ...(failures !== undefined && failures.length > 0 && { actionFailures: failures }),
+    ...(omitted && { contentOmitted: true as const }),
   };
-  const failures = projectActionFailures(input.actionFailures, density);
-  const withFailures =
-    failures && failures.length > 0 ? { ...base, actionFailures: failures } : base;
-  const omitted = !includeReports && reportsWereOmitted(source);
-  return omitted ? { ...withFailures, contentOmitted: true as const } : withFailures;
 };
 
 const modelDetailsCandidate = (

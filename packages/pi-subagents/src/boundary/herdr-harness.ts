@@ -2,6 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -14,7 +15,6 @@ import {
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
-import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import { subagentRuntimeEfforts, type SubagentRuntime } from "../domain/routing.ts";
 import { SUPERVISOR_MCP_TOOL_NAMES } from "../supervisor/mcp-contract.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
@@ -344,7 +344,7 @@ const codexConfig = (
     `developer_instructions = ${tomlString(request.systemPrompt)}`,
     'approval_policy = "never"',
     `sandbox_mode = ${tomlString(request.writeIntent === "writer" ? "workspace-write" : "read-only")}`,
-    ...(request.fastMode ? [`service_tier = ${tomlString(SUBAGENT_FAST_SERVICE_TIER)}`] : []),
+    ...(request.fastMode ? [`service_tier = ${tomlString(FAST_SERVICE_TIER)}`] : []),
     'web_search = "disabled"',
     "allow_login_shell = false",
     "check_for_update_on_startup = false",

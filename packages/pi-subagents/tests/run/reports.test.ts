@@ -155,6 +155,56 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect("keeps a retained assignment owner alive after its send waiter is cancelled", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "cancelled-send-owner",
+        text: "First assignment complete.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+
+      const startGate = yield* Deferred.make<void>();
+      backend.controls[0]?.gateNextStart(startGate);
+      const sending = yield* service
+        .send(run.id, "Continue after the caller leaves.")
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () =>
+          backend.controls[0]?.assignmentEpochs.filter((epoch) => epoch === 2).length === 1 &&
+          projections.at(-1)?.runs[0]?.state === "starting",
+      );
+
+      yield* Fiber.interrupt(sending);
+      yield* Deferred.succeed(startGate, undefined);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+
+      expect(backend.controls[0]?.assignmentEpochs).toEqual([1, 2]);
+      expect(backend.controls[0]?.prompts.at(-1)).toBe("Continue after the caller leaves.");
+      expect(yield* service.status(run.id)).toMatchObject({
+        state: "running",
+        reportGeneration: 1,
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect(
     "claims retained reports, deduplicates delivery, begins the next assignment, and notifies a cancelled await exactly once",
     () => {
@@ -338,6 +388,58 @@ describe("SubagentService", () => {
           },
         ],
       });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("settles a retained issuing assignment when the backend fails its protocol", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "before-terminal-reconcile",
+        text: "First assignment complete.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+
+      const startGate = yield* Deferred.make<void>();
+      backend.controls[0]?.gateNextStart(startGate);
+      const sending = yield* service
+        .send(run.id, "Start the assignment that will fail closed.")
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () =>
+          backend.controls[0]?.assignmentEpochs.at(-1) === 2 &&
+          projections.at(-1)?.runs[0]?.state === "starting",
+      );
+      backend.controls[0]?.offer({
+        type: "protocol_error",
+        message: "Herdr prompt evidence expired.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      expect(projections.at(-1)?.runs[0]).toMatchObject({ state: "failed", reportGeneration: 1 });
+
+      yield* Deferred.succeed(startGate, undefined);
+      expect(yield* Fiber.join(sending).pipe(Effect.flip)).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "guidance_outcome_uncertain",
+      });
+      expect((yield* service.status(run.id)).state).toBe("failed");
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 

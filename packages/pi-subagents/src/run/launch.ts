@@ -679,8 +679,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         return yield* restore(initialize).pipe(
           Effect.onError((cause) =>
             Effect.gen(function* () {
-              const interruptedOnly =
-                cause.reasons.length > 0 && cause.reasons.every(Cause.isInterruptReason);
+              const interruptedOnly = Cause.hasInterruptsOnly(cause);
               yield* withLock(
                 Effect.sync(() => {
                   completeRunInitialization(reserved);

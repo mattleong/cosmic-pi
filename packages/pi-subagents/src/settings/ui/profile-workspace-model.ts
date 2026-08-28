@@ -4,12 +4,12 @@ import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
   isLocalPiProfileCandidate,
   isRetainableProfileCandidate,
+  supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileCandidateEffort,
   type ProfileId,
   type ProfileRouteSource,
 } from "../../profiles/model.ts";
-import { supportsSubagentFastMode } from "../../run/fast-mode.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   runtimeEfforts,

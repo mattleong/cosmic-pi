@@ -1,3 +1,4 @@
+import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -20,7 +21,6 @@ import {
   UnsupportedSubagentCapabilityError,
   type SubagentError,
 } from "../run/errors.ts";
-import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import type { SubagentUsage } from "../run/model.ts";
 import {
   decodeCodexEnvelope,
@@ -531,9 +531,9 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       return yield* protocolError(
         `Codex selected model ${started.model} instead of required model ${request.model}.`,
       );
-    if (request.fastMode && started.serviceTier !== SUBAGENT_FAST_SERVICE_TIER)
+    if (request.fastMode && started.serviceTier !== FAST_SERVICE_TIER)
       return yield* protocolError(
-        `Codex selected service tier ${started.serviceTier ?? "default"} instead of required ${SUBAGENT_FAST_SERVICE_TIER} fast mode.`,
+        `Codex selected service tier ${started.serviceTier ?? "default"} instead of required ${FAST_SERVICE_TIER} fast mode.`,
       );
     threadId = started.thread.id;
     sessionId = started.thread.sessionId ?? started.thread.id;

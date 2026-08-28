@@ -62,12 +62,10 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
               operation: "control",
               message: `Subagent ${record.view.id} has no active backend handle.`,
             });
-          return yield* use(process).pipe(Effect.forkIn(ownerScope, { startImmediately: true }));
+          return yield* use(process).pipe(Effect.forkChild({ startImmediately: true }));
         }),
       );
-      return yield* Fiber.join(transport).pipe(
-        Effect.onInterrupt(() => Fiber.interrupt(transport).pipe(Effect.asVoid)),
-      );
+      return yield* Fiber.join(transport);
     });
 
   const sendPeerNotices = (changedId: string) => {

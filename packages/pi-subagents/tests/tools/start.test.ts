@@ -1006,12 +1006,17 @@ describe("subagent tool", () => {
     },
   );
 
-  effectTest("starts a per-agent batch and keeps successful launches when one fails", function* () {
+  effectTest("keeps request-ordered receipts for a mixed 32-agent batch", function* () {
+    const failureIndex = 16;
+    const agents = Array.from({ length: 32 }, (_, index) => ({
+      task: index === failureIndex ? "Fail launch" : `Review area ${index + 1}`,
+      name: `launch-${index + 1}`,
+    }));
     const requests: StartSubagentRequest[] = [];
     const service = subagentServiceDouble({
       start: (input) =>
         Effect.sync(() => requests.push(input)).pipe(
-          Effect.flatMap((index) =>
+          Effect.flatMap((requestCount) =>
             input.task === "Fail launch"
               ? Effect.fail(
                   new SubagentProcessError({
@@ -1021,8 +1026,8 @@ describe("subagent tool", () => {
                 )
               : Effect.succeed(
                   view({
-                    id: `agent-${index}`,
-                    name: input.name ?? `agent-${index}`,
+                    id: `agent-${requestCount}`,
+                    name: input.name ?? `agent-${requestCount}`,
                     task: input.task,
                     model: input.model,
                   }),
@@ -1043,78 +1048,82 @@ describe("subagent tool", () => {
     const tool = captureSubagentTools(service, ["read", "grep"]).get("subagent_start");
 
     const result = yield* maybe(() =>
-      tool?.execute(
-        "call",
-        {
-          agents: [
-            { task: "Review auth", name: "duplicate" },
-            { task: "Fail launch", name: "broken" },
-            {
-              task: "Review storage",
-              name: "duplicate",
-            },
-          ],
-        },
-        undefined,
-        undefined,
-        context,
-      ),
+      tool?.execute("call", { agents }, undefined, undefined, context),
     );
 
-    expect(requests.map((request) => request.task)).toEqual([
-      "Review auth",
-      "Fail launch",
-      "Review storage",
-    ]);
+    expect(requests.map((request) => request.task)).toEqual(agents.map((agent) => agent.task));
+    expect(requests).toHaveLength(32);
     expect(requests[0]).toMatchObject({
       host: "local",
       runtime: "pi",
       model: "openai-codex/gpt-5.6-sol",
       effort: "high",
     });
-    expect(result?.content[0]?.text).toContain("Failed starts (1)");
-    expect(result?.content[0]?.text).toContain(
-      "#2 broken [SubagentProcessError]: simulated launch failure",
+    // SAFETY: This locally constructed test fixture satisfies the declared details contract.
+    const details = result?.details as
+      | {
+          readonly startEntries?: ReadonlyArray<{
+            readonly index: number;
+            readonly name: string;
+            readonly profile: string;
+            readonly status: "started" | "failed" | "pending";
+            readonly routeStatus: "selected" | "resolving" | "unavailable";
+            readonly host?: string;
+            readonly runtime?: string;
+            readonly model?: string;
+            readonly effort?: string;
+            readonly fastMode?: boolean;
+            readonly runId?: string;
+          }>;
+          readonly startFailures?: ReadonlyArray<{
+            readonly index: number;
+            readonly name?: string;
+            readonly message: string;
+            readonly code?: string;
+          }>;
+        }
+      | undefined;
+    expect(details?.startEntries).toHaveLength(32);
+    expect(details?.startEntries?.map((entry) => entry.index)).toEqual(
+      Array.from({ length: 32 }, (_, index) => index),
     );
-    expect(result?.content[0]?.text).toContain("agent-1");
-    expect(result?.content[0]?.text).toContain("agent-3");
-    expect(result?.details).toMatchObject({
-      version: 2,
-      action: "start",
-      startEntries: [
-        {
-          index: 0,
-          name: "duplicate",
-          profile: "generalist",
-          status: "started",
-          routeStatus: "selected",
-          host: "local",
-          runtime: "pi",
-          model: "openai-codex/gpt-5.6-sol",
-          runId: "agent-1",
-        },
-        {
-          index: 1,
-          name: "broken",
-          profile: "generalist",
-          status: "failed",
-          routeStatus: "selected",
-          host: "local",
-          runtime: "pi",
-          model: "openai-codex/gpt-5.6-sol",
-        },
-        {
-          index: 2,
-          name: "duplicate",
-          profile: "generalist",
-          status: "started",
-          routeStatus: "selected",
-          runId: "agent-3",
-        },
-      ],
-      startFailures: [{ index: 1, name: "broken", message: "simulated launch failure" }],
+    expect(details?.startEntries?.map((entry) => entry.name)).toEqual(
+      agents.map((agent) => agent.name),
+    );
+    expect(details?.startEntries?.[0]).toMatchObject({
+      index: 0,
+      profile: "generalist",
+      status: "started",
+      routeStatus: "selected",
+      host: "local",
+      runtime: "pi",
+      model: "openai-codex/gpt-5.6-sol",
+      effort: "high",
+      fastMode: false,
+      runId: "agent-1",
     });
-    expect(result?.details).not.toHaveProperty("cards");
+    const failedEntry = details?.startEntries?.[failureIndex];
+    expect(failedEntry).toMatchObject({
+      index: failureIndex,
+      name: "launch-17",
+      status: "failed",
+      routeStatus: "selected",
+    });
+    expect(details?.startFailures).toEqual([
+      {
+        index: failureIndex,
+        name: "launch-17",
+        message: "simulated launch failure",
+        code: "SubagentProcessError",
+      },
+    ]);
+    expect(details?.startFailures?.[0]?.index).toBe(failedEntry?.index);
+    expect(details?.startEntries?.at(-1)).toMatchObject({
+      index: 31,
+      status: "started",
+      runId: "agent-32",
+    });
+    expect(details).not.toHaveProperty("cards");
   });
 
   effectTest("rejects per-launch routing overrides before side effects", function* () {
@@ -1219,46 +1228,6 @@ describe("subagent tool", () => {
 
     expect(captures).toBe(1);
     expect(requests).toHaveLength(2);
-  });
-
-  effectTest("accepts exactly twelve batch starts at the runtime boundary", function* () {
-    const requests: StartSubagentRequest[] = [];
-    const start = (input: StartSubagentRequest) =>
-      Effect.sync(() => {
-        requests.push(input);
-        return view({ id: `agent-${requests.length}`, task: input.task });
-      });
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const service = subagentServiceFixture({
-      start,
-      startSessionOwned: start,
-    });
-    const tool = captureSubagentTools(service).get("subagent_start");
-
-    const result = yield* maybe(() =>
-      tool?.execute(
-        "call",
-        {
-          agents: Array.from({ length: 12 }, (_, index) => ({
-            task: `Review area ${index + 1}`,
-          })),
-        },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
-
-    expect(requests).toHaveLength(12);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const details = result?.details as
-      | { readonly startEntries?: ReadonlyArray<{ readonly index: number }> }
-      | undefined;
-    expect(details?.startEntries).toHaveLength(12);
-    expect(details?.startEntries?.map((entry) => entry.index)).toEqual(
-      Array.from({ length: 12 }, (_, index) => index),
-    );
-    expect(details).not.toHaveProperty("cards");
   });
 
   effectTest("rejects forged routing fields again at the host profile boundary", function* () {

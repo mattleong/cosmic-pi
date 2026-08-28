@@ -269,16 +269,15 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     });
   };
   const publish = Effect.uninterruptible(
-    Effect.suspend(() => {
-      const projection = frozenProjection(SubscriptionRef.getUnsafe(projectionRef).revision + 1);
-      return SubscriptionRef.set(projectionRef, projection).pipe(
-        Effect.andThen(
-          options.publish
-            ? Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore)
-            : Effect.void,
-        ),
-      );
-    }),
+    SubscriptionRef.updateAndGet(projectionRef, (current) =>
+      frozenProjection(current.revision + 1),
+    ).pipe(
+      Effect.flatMap((projection) =>
+        options.publish
+          ? Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore)
+          : Effect.void,
+      ),
+    ),
   );
   const waitForRevision = (after: number): Effect.Effect<void, SubagentRuntimeClosedError> =>
     SubscriptionRef.changes(projectionRef).pipe(

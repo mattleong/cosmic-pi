@@ -16,7 +16,6 @@ import {
   isCleanupUnconfirmed,
   isOutcomeUncertain,
 } from "../run/errors.ts";
-import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import {
   decodeSubagentEffort,
@@ -30,6 +29,7 @@ import type { SubagentRetryClaim } from "../run/retry.ts";
 import {
   profileCandidateLabel,
   PROFILE_IDS,
+  supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileDefinition,
   type ProfileRouteSource,
@@ -459,58 +459,39 @@ const resolvePlannedStart = (
     });
     const activeTools =
       concrete.runtime === "pi" ? yield* piRootActiveToolSnapshot(pi.getActiveTools()) : [];
-    return (() => {
-      const baseResult = {};
-      const withName = input.rawInput.name?.trim()
-        ? { ...baseResult, name: input.rawInput.name.trim() }
-        : baseResult;
-      const withWrites = normalizedClaims
-        ? { ...withName, writes: normalizedClaims.claims }
-        : withName;
-      const withHostAndAdditionalFields = {
-        ...withWrites,
-        host: concrete.host,
-        runtime: concrete.runtime,
-        closeOnReport: concrete.closeOnReport,
-        fastMode: concrete.fastMode,
-        task,
-        profile: input.definition.id,
-        profileGuidance: input.definition.guidance,
-        selection: selected.selection,
-        routeContinuation,
-        cwd: environment.cwd,
-        context: selected.attempt.effectiveContext,
-        writeIntent: selected.attempt.writeIntent,
-        model: concrete.model,
-      };
-      const withSupersedes = input.retry
-        ? {
-            ...withHostAndAdditionalFields,
-            supersedes: {
-              runId: input.retry.sourceRunId,
-              claimToken: input.retry.claimToken,
-            },
-          }
-        : withHostAndAdditionalFields;
-      const withRuntimeApiKey = concrete.runtimeApiKey
-        ? { ...withSupersedes, runtimeApiKey: concrete.runtimeApiKey }
-        : withSupersedes;
-      const withEffortAndAdditionalFields = {
-        ...withRuntimeApiKey,
-        effort: concrete.effort,
-        effortWasExplicit: concrete.effortWasExplicit,
-        activeTools,
-        projectTrusted: environment.projectTrusted,
-        parentSessionId: ctx.sessionManager.getSessionId(),
-      };
-      const withParentSessionFile = parentSessionFile
-        ? { ...withEffortAndAdditionalFields, parentSessionFile }
-        : withEffortAndAdditionalFields;
-      const withParentLeafId = parentLeafId
-        ? { ...withParentSessionFile, parentLeafId }
-        : withParentSessionFile;
-      return withParentLeafId;
-    })() satisfies StartSubagentRequest;
+    const name = input.rawInput.name?.trim();
+    const request: StartSubagentRequest = {
+      ...(name && { name }),
+      ...(normalizedClaims && { writes: normalizedClaims.claims }),
+      host: concrete.host,
+      runtime: concrete.runtime,
+      closeOnReport: concrete.closeOnReport,
+      fastMode: concrete.fastMode,
+      task,
+      profile: input.definition.id,
+      profileGuidance: input.definition.guidance,
+      selection: selected.selection,
+      routeContinuation,
+      cwd: environment.cwd,
+      context: selected.attempt.effectiveContext,
+      writeIntent: selected.attempt.writeIntent,
+      model: concrete.model,
+      ...(input.retry && {
+        supersedes: {
+          runId: input.retry.sourceRunId,
+          claimToken: input.retry.claimToken,
+        },
+      }),
+      ...(concrete.runtimeApiKey && { runtimeApiKey: concrete.runtimeApiKey }),
+      effort: concrete.effort,
+      effortWasExplicit: concrete.effortWasExplicit,
+      activeTools,
+      projectTrusted: environment.projectTrusted,
+      parentSessionId: ctx.sessionManager.getSessionId(),
+      ...(parentSessionFile && { parentSessionFile }),
+      ...(parentLeafId && { parentLeafId }),
+    };
+    return request;
   });
 
 export const resolveProfileStart = (

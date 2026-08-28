@@ -3,7 +3,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import type { BackendStartupState } from "../backend/model.ts";
 import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
@@ -131,18 +130,17 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
     id: string,
   ): Effect.Effect<void, SubagentNotFoundError | SubagentProcessError> =>
     waitForRunCleanup(id).pipe(
-      Effect.timeoutOption("10 seconds"),
-      Effect.flatMap((outcome) =>
-        Option.isSome(outcome)
-          ? Effect.void
-          : Effect.fail(
-              new SubagentProcessError({
-                operation: "resume",
-                code: "cleanup_timeout",
-                message: `Subagent ${id} cleanup did not finish within 10 seconds; inspect with subagent_status before retrying resume.`,
-              }),
-            ),
-      ),
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () =>
+          Effect.fail(
+            new SubagentProcessError({
+              operation: "resume",
+              code: "cleanup_timeout",
+              message: `Subagent ${id} cleanup did not finish within 10 seconds; inspect with subagent_status before retrying resume.`,
+            }),
+          ),
+      }),
     );
 
   const resume = (id: string, message?: string): Effect.Effect<SubagentRunView, SubagentError> =>

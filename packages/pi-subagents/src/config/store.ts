@@ -135,24 +135,16 @@ const stableJson = <ValueInput>(value: ValueInput): string => {
 
 const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
   if (route === "disabled") return route;
-  const candidate = (value: DeclaredProfileCandidate): JsonObject =>
-    (() => {
-      const baseResult = {
-        host: value.host,
-        runtime: value.runtime,
-        model: value.model,
-        effort: value.effort,
-        context: value.context,
-        writeIntent: value.writeIntent,
-      };
-      const withFastMode =
-        value.fastMode === undefined ? baseResult : { ...baseResult, fastMode: value.fastMode };
-      const withCloseOnReport =
-        value.closeOnReport === undefined
-          ? withFastMode
-          : { ...withFastMode, closeOnReport: value.closeOnReport };
-      return withCloseOnReport;
-    })();
+  const candidate = (value: DeclaredProfileCandidate): JsonObject => ({
+    host: value.host,
+    runtime: value.runtime,
+    model: value.model,
+    effort: value.effort,
+    context: value.context,
+    writeIntent: value.writeIntent,
+    ...(value.fastMode !== undefined && { fastMode: value.fastMode }),
+    ...(value.closeOnReport !== undefined && { closeOnReport: value.closeOnReport }),
+  });
   // SAFETY: Configuration decoding validates the persisted value before this typed access.
   return Array.isArray(route)
     ? (route as ReadonlyArray<DeclaredProfileCandidate>).map(candidate)
@@ -186,14 +178,14 @@ const applyProfilePatch = (
 
 const applyNestingPatch = (
   current: JsonObject,
-  nesting: SubagentNestingPolicy | undefined,
+  patch: Pick<SubagentNestingPatch, "nesting">,
 ): JsonObject => {
   const next = upgradeDocument(current);
-  if (nesting === undefined) delete next.nesting;
+  if (patch.nesting === undefined) delete next.nesting;
   else
     next.nesting = {
-      maxDirectChildren: nesting.maxDirectChildren,
-      maxDepth: nesting.maxDepth,
+      maxDirectChildren: patch.nesting.maxDirectChildren,
+      maxDepth: patch.nesting.maxDepth,
     };
   return next;
 };
@@ -276,11 +268,20 @@ export const subagentConfigStoreLayer = Layer.effect(
     const load: SubagentConfigStoreContract["load"] = (cwd, agentDirectory, projectTrusted) =>
       inspect(cwd, agentDirectory, projectTrusted).pipe(Effect.map((result) => result.config));
 
-    const patchProfile: SubagentConfigStoreContract["patchProfile"] = (
-      cwd,
-      agentDirectory,
-      patch,
-    ) =>
+    const patchDocument = <
+      Patch extends {
+        readonly scope: SubagentConfigScope;
+        readonly expectedExists: boolean;
+        readonly expectedDocument?: JsonObject | undefined;
+        readonly projectTrusted: boolean;
+      },
+    >(
+      cwd: string,
+      agentDirectory: string,
+      patch: Patch,
+      apply: (current: JsonObject, patch: Patch) => JsonObject,
+      missingIsNoop: boolean,
+    ): Effect.Effect<void, SubagentConfigStoreError> =>
       Effect.gen(function* () {
         const locations = yield* paths(cwd, agentDirectory);
         const target = patch.scope === "global" ? locations.global : locations.project;
@@ -288,10 +289,10 @@ export const subagentConfigStoreLayer = Layer.effect(
         // A patch that leaves the expected document unchanged (or removes a key from a
         // nonexistent file) must not create or rewrite a version-only file.
         if (!patch.expectedExists) {
-          if (patch.route === undefined) return;
+          if (missingIsNoop) return;
         } else {
           const expected = patch.expectedDocument ?? {};
-          if (stableJson(applyProfilePatch(expected, patch)) === stableJson(expected)) return;
+          if (stableJson(apply(expected, patch)) === stableJson(expected)) return;
         }
         const modifyObject = documents.modifyObject;
         if (!modifyObject) return yield* storeError("update", target)();
@@ -306,7 +307,7 @@ export const subagentConfigStoreLayer = Layer.effect(
               return yield* conflictError(target);
             if (!currentIsEmpty && !isAcceptedVersion(current.version))
               return yield* unsupportedVersionError(target);
-            return { value: undefined, document: applyProfilePatch(current, patch) };
+            return { value: undefined, document: apply(current, patch) };
           }),
         ).pipe(
           Effect.mapError((error) =>
@@ -315,42 +316,17 @@ export const subagentConfigStoreLayer = Layer.effect(
         );
       });
 
+    const patchProfile: SubagentConfigStoreContract["patchProfile"] = (
+      cwd,
+      agentDirectory,
+      patch,
+    ) => patchDocument(cwd, agentDirectory, patch, applyProfilePatch, patch.route === undefined);
+
     const patchNesting: SubagentConfigStoreContract["patchNesting"] = (
       cwd,
       agentDirectory,
       patch,
-    ) =>
-      Effect.gen(function* () {
-        const locations = yield* paths(cwd, agentDirectory);
-        const target = patch.scope === "global" ? locations.global : locations.project;
-        if (patch.scope === "project" && !patch.projectTrusted) return yield* trustError(target);
-        if (!patch.expectedExists && patch.nesting === undefined) return;
-        if (patch.expectedExists) {
-          const expected = patch.expectedDocument ?? {};
-          if (stableJson(applyNestingPatch(expected, patch.nesting)) === stableJson(expected))
-            return;
-        }
-        const modifyObject = documents.modifyObject;
-        if (!modifyObject) return yield* storeError("update", target)();
-        yield* modifyObject(target, (current) =>
-          Effect.gen(function* () {
-            const currentIsEmpty = Object.keys(current).length === 0;
-            if (
-              (!patch.expectedExists && !currentIsEmpty) ||
-              (patch.expectedExists &&
-                stableJson(current) !== stableJson(patch.expectedDocument ?? {}))
-            )
-              return yield* conflictError(target);
-            if (!currentIsEmpty && !isAcceptedVersion(current.version))
-              return yield* unsupportedVersionError(target);
-            return { value: undefined, document: applyNestingPatch(current, patch.nesting) };
-          }),
-        ).pipe(
-          Effect.mapError((error) =>
-            error instanceof SubagentConfigStoreError ? error : storeError("update", target)(),
-          ),
-        );
-      });
+    ) => patchDocument(cwd, agentDirectory, patch, applyNestingPatch, patch.nesting === undefined);
 
     return SubagentConfigStore.of({ paths, load, inspect, patchProfile, patchNesting });
   }),

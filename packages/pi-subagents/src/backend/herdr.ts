@@ -1,4 +1,3 @@
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -259,14 +258,19 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
                 remote.agentStatus !== baseline.agentStatus ||
                 remote.interactiveReady !== baseline.interactiveReady;
               if (changed) return confirmStarted(epoch);
-              if (remaining <= 1)
-                return Effect.fail(
-                  processError(
-                    "start",
-                    "herdr_prompt_outcome_uncertain",
-                    "Herdr prompt delivery remained uncertain without a causal accepted report or bounded post-prompt topology/state-change evidence.",
-                  ),
+              if (remaining <= 1) {
+                const error = processError(
+                  "start",
+                  "herdr_prompt_outcome_uncertain",
+                  "Herdr prompt delivery remained uncertain without a causal accepted report or bounded post-prompt topology/state-change evidence.",
                 );
+                promptIssuingEpoch = 0;
+                reconcilingEpoch = 0;
+                return offer({ type: "protocol_error", message: error.message }).pipe(
+                  Effect.andThen(finish("Herdr prompt evidence expired without causal execution.")),
+                  Effect.andThen(Effect.fail(error)),
+                );
+              }
               return Effect.sleep(RECONCILE_INTERVAL).pipe(
                 Effect.andThen(reconcilePromptEvidence(epoch, baseline, remaining - 1)),
               );
@@ -291,36 +295,18 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
           unknownStatusPolls = 0;
           const baseline = yield* hosted.inspect;
           promptIssuingEpoch = epoch;
-          const prompt = yield* hosted
-            .prompt(assignmentPrompt(runtime, message, epoch))
-            .pipe(Effect.exit);
-          if (prompt._tag === "Success") {
-            // Herdr 0.8 responds after queueing text and scheduling delayed Enter. The
-            // response is dispatch evidence, not proof that the assignment executed.
-            reconcilingEpoch = epoch;
-            yield* reconcilePromptEvidence(epoch, prompt.value);
-            return;
-          }
-          const error = Cause.squash(prompt.cause);
-          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-          const processFailure =
-            error &&
-            hasObjectRuntimeType(error) &&
-            "_tag" in error &&
-            error._tag === "SubagentProcessError"
-              ? (error as SubagentProcessError)
-              : undefined;
-          if (processFailure !== undefined && isOutcomeUncertain(processFailure)) {
-            reconcilingEpoch = epoch;
-            yield* reconcilePromptEvidence(epoch, baseline);
-            return;
-          }
-          promptIssuingEpoch = 0;
-          reconcilingEpoch = 0;
-          return yield* (
-            processFailure ??
-              processError("start", "herdr_prompt_failed", "Herdr prompt delivery failed.")
+          const prompt = yield* hosted.prompt(assignmentPrompt(runtime, message, epoch)).pipe(
+            Effect.catch((error) => {
+              if (isOutcomeUncertain(error)) return Effect.void;
+              promptIssuingEpoch = 0;
+              reconcilingEpoch = 0;
+              return Effect.fail(error);
+            }),
           );
+          // Herdr 0.8 responds after queueing text and scheduling delayed Enter. The
+          // response is dispatch evidence, not proof that the assignment executed.
+          reconcilingEpoch = epoch;
+          yield* reconcilePromptEvidence(epoch, prompt ?? baseline);
         }),
       steer: (_message: string) => Effect.fail(unsupported(runtime, "steer")),
       interrupt: Effect.fail(unsupported(runtime, "interrupt")),

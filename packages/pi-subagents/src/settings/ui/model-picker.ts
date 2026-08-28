@@ -1,9 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
+import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
-import { isSafeNativeModelSelector, type ProfileId } from "../../profiles/model.ts";
-import { SUBAGENT_FAST_SERVICE_TIER, supportsSubagentFastMode } from "../../run/fast-mode.ts";
+import {
+  isSafeNativeModelSelector,
+  supportsSubagentFastMode,
+  type ProfileId,
+} from "../../profiles/model.ts";
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
 import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
@@ -114,14 +118,14 @@ export const createNativeModelChoices = (
           `${boundedMiddle(sanitizeTerminalLine(model.label || model.selector), 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
         ),
         description: sanitizeTerminalLine(
-          `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${model.description ? ` · ${boundedMiddle(sanitizeTerminalLine(model.description), 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(SUBAGENT_FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
+          `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${model.description ? ` · ${boundedMiddle(sanitizeTerminalLine(model.description), 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
         ),
       },
       searchText: sanitizeTerminalLine(
         `${model.selector} ${model.label} ${model.description ?? ""}`,
       ),
       supportedEfforts: model.supportedEfforts,
-      fastModeAvailable: model.supportedServiceTiers.includes(SUBAGENT_FAST_SERVICE_TIER),
+      fastModeAvailable: model.supportedServiceTiers.includes(FAST_SERVICE_TIER),
     }));
 
 export interface ProfileModelPickerContext {

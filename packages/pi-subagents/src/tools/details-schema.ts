@@ -19,7 +19,12 @@ import {
   profileCandidateValidationIssues,
   type ProfileCandidate,
 } from "../profiles/model.ts";
-import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import {
+  MAX_PROTOCOL_ID_CHARS,
+  MAX_START_BATCH,
+  MAX_TARGET_RUNS,
+  MAX_TOOL_OUTPUT_CHARS,
+} from "../run/limits.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
 import {
@@ -278,10 +283,10 @@ export const CompactToolActionFailureSchema = Schema.Struct({
 export const SubagentStartDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
   action: Schema.Literal("start"),
-  startEntries: boundedArray(SubagentStartEntrySchema, MAX_TARGET_RUNS).check(
+  startEntries: boundedArray(SubagentStartEntrySchema, MAX_START_BATCH).check(
     Schema.isMinLength(1),
   ),
-  startFailures: Schema.optionalKey(boundedArray(SubagentCardFailureSchema, MAX_TARGET_RUNS)),
+  startFailures: Schema.optionalKey(boundedArray(SubagentCardFailureSchema, MAX_START_BATCH)),
 });
 
 export const SubagentAwaitDetailsSchema = Schema.Struct({
@@ -482,8 +487,8 @@ const preflight = <ValueInput>(value: ValueInput): boolean => {
   if (action === "start")
     return (
       rootKeysAllowed(record, START_KEYS) &&
-      preflightArray(record, "startEntries", MAX_TARGET_RUNS) &&
-      preflightArray(record, "startFailures", MAX_TARGET_RUNS)
+      preflightArray(record, "startEntries", MAX_START_BATCH) &&
+      preflightArray(record, "startFailures", MAX_START_BATCH)
     );
   if (action === "await")
     return (

@@ -291,6 +291,26 @@ describe("persisted subagent details version 2", () => {
     ).toBeUndefined();
     expect(rootElementReads).toBe(0);
 
+    let startElementReads = 0;
+    const oversizedStartEntries = new Proxy(
+      Array.from({ length: 33 }, (_, index) => startedEntry(index)),
+      {
+        get(target, key) {
+          if (key === "length") return target.length;
+          startElementReads += 1;
+          throw new Error("start entry was read");
+        },
+      },
+    );
+    expect(
+      decodeStartAwaitCardDetails({
+        version: 2,
+        action: "start",
+        startEntries: oversizedStartEntries,
+      }),
+    ).toBeUndefined();
+    expect(startElementReads).toBe(0);
+
     const source = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
     let capabilityReads = 0;
     // SAFETY: The forged oversized array deliberately violates the decoded capability contract.
@@ -493,6 +513,49 @@ describe("persisted subagent details version 2", () => {
     const forgedFailure = clone(details);
     forgedFailure.startFailures![0]!.index = 0;
     expect(decodeStartAwaitCardDetails(forgedFailure)).toBeUndefined();
+  });
+
+  it("fits and strictly decodes 32 dense start failures without dropping receipt order", () => {
+    const entries: SubagentStartEntry[] = Array.from({ length: 32 }, (_, index) => ({
+      index,
+      name: `launch-${index}-${"n".repeat(300)}`,
+      profile: "p".repeat(64),
+      status: "failed",
+      routeStatus: "selected",
+      host: "local",
+      runtime: "pi",
+      model: "m".repeat(512),
+      effort: "high",
+      fastMode: false,
+      candidateIndex: index,
+      warning: "w".repeat(1_024),
+    }));
+    const startFailures = Array.from({ length: 32 }, (_, index) => ({
+      index,
+      name: `launch-${index}-${"n".repeat(300)}`,
+      code: "c".repeat(128),
+      message: "failure ".concat("m".repeat(512)),
+    })).reverse();
+
+    const details = makeStartDetails({ startEntries: entries, startFailures });
+    const serialized = JSON.stringify(details);
+
+    expect(details.startEntries).toHaveLength(32);
+    expect(details.startFailures).toHaveLength(32);
+    expect(details.startEntries.map((entry) => entry.index)).toEqual(
+      Array.from({ length: 32 }, (_, index) => index),
+    );
+    expect(details.startFailures?.map((failure) => failure.index)).toEqual(
+      Array.from({ length: 32 }, (_, index) => index),
+    );
+    expect(details.startEntries[0]).toMatchObject({ candidateIndex: 0 });
+    expect(details.startEntries[0]?.name.length).toBeLessThanOrEqual(48);
+    expect(serialized.length).toBeLessThanOrEqual(48_000);
+    expectDeeplyFrozen(details);
+
+    const decoded = decodeStartAwaitCardDetails(details);
+    expect(decoded).toEqual(details);
+    expectDeeplyFrozen(decoded);
   });
 
   it("persists admitted-run recovery in request order and rejects forged dispositions", () => {

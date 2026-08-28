@@ -1,4 +1,3 @@
-import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
 import type {
   SubagentContextMode,
@@ -12,6 +11,7 @@ import {
   isLocalPiProfileCandidate,
   normalizeProfileId,
   profileCandidateLabel,
+  supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileId,
   type ProfileRoute,

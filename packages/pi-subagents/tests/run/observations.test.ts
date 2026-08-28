@@ -126,33 +126,45 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.effect("wakes multiple subscribers across non-terminal and terminal revisions", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const first = yield* service.start(request({ name: "revision-first" }));
-      const second = yield* service.start(request({ name: "revision-second" }));
-      let firstUpdates = 0;
-      let secondUpdates = 0;
-      const firstAwait = yield* service
-        .awaitTerminal([first.id], "all_finished", () => firstUpdates++)
-        .pipe(Effect.forkScoped);
-      const secondAwait = yield* service
-        .awaitTerminal([second.id], "all_finished", () => secondUpdates++)
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(() => firstUpdates > 0 && secondUpdates > 0);
+  it.effect(
+    "wakes multiple subscribers across consecutive non-terminal and terminal revisions",
+    () => {
+      const fake = fakeChildLayer();
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({
+        publish: (projection) => projections.push(projection),
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const first = yield* service.start(request({ name: "revision-first" }));
+        const second = yield* service.start(request({ name: "revision-second" }));
+        let firstUpdates = 0;
+        let secondUpdates = 0;
+        const firstAwait = yield* service
+          .awaitTerminal([first.id], "all_finished", () => firstUpdates++)
+          .pipe(Effect.forkScoped);
+        const secondAwait = yield* service
+          .awaitTerminal([second.id], "all_finished", () => secondUpdates++)
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => firstUpdates > 0 && secondUpdates > 0);
 
-      yield* service.rename(first.id, "revision-first-renamed");
-      yield* yieldUntil(() => firstUpdates > 1 && secondUpdates > 1);
-      fake.controls[0]?.offer({ type: "agent_settled" });
-      expect((yield* Fiber.join(firstAwait))[0]?.state).toBe("completed");
-      expect(secondAwait.pollUnsafe()).toBeUndefined();
+        yield* service.rename(first.id, "revision-first-renamed");
+        yield* yieldUntil(() => firstUpdates > 1 && secondUpdates > 1);
+        fake.controls[0]?.offer({ type: "agent_settled" });
+        expect((yield* Fiber.join(firstAwait))[0]?.state).toBe("completed");
+        expect(secondAwait.pollUnsafe()).toBeUndefined();
 
-      fake.controls[1]?.offer({ type: "agent_settled" });
-      expect((yield* Fiber.join(secondAwait))[0]?.state).toBe("completed");
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
-  });
+        fake.controls[1]?.offer({ type: "agent_settled" });
+        expect((yield* Fiber.join(secondAwait))[0]?.state).toBe("completed");
+
+        const finalProjection = yield* service.projection;
+        expect(projections.map((projection) => projection.revision)).toEqual(
+          Array.from({ length: projections.length }, (_, index) => index + 1),
+        );
+        expect(finalProjection).toEqual(projections.at(-1));
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
 
   it.effect("fails subscribed awaits when the service scope closes", () => {
     const fake = fakeChildLayer();

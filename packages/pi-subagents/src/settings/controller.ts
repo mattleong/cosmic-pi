@@ -22,6 +22,7 @@ import {
 import type { SubagentNestingPatch, SubagentProfilePatch } from "../config/store.ts";
 import {
   normalizeDeclaredProfileRoute,
+  supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
@@ -30,7 +31,6 @@ import {
   type SessionNestingPatch,
   type SessionProfilePatch,
 } from "../profiles/session-overrides.ts";
-import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
 import { isActiveRunState } from "../run/model.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";

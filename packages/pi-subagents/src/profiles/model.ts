@@ -1,6 +1,7 @@
 import { supportsFastModel } from "pi-better-openai/fast-models";
 import * as Equivalence from "effect/Equivalence";
 import {
+  SUBAGENT_EFFORTS,
   subagentRuntimeSupportsEffort,
   type SubagentContextMode,
   type SubagentEffort,
@@ -33,16 +34,7 @@ export const PROFILE_CANDIDATE_HOSTS = ["local", "herdr"] as const;
 export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude", "codex"] as const;
 export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
 export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
-export const PROFILE_CANDIDATE_EFFORTS = [
-  "default",
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export const PROFILE_CANDIDATE_EFFORTS = ["default", ...SUBAGENT_EFFORTS] as const;
 export const PROFILE_NATIVE_MODEL_DEFAULTS = {
   claude: "claude-opus-5",
   codex: "gpt-5.6-codex",
@@ -144,13 +136,11 @@ const splitPiModelSelector = (
  * Static persisted-route policy. `parent` is deferred to the live parent-model check, explicit Pi
  * selectors must already be priority-tier eligible, and Codex defers tier support to its catalog.
  */
-export const supportsProfileFastModeStatically = (
-  candidate: Pick<ProfileCandidate, "runtime" | "model">,
-): boolean => {
-  if (candidate.runtime === "codex") return isNativeProfileModelSelector("codex", candidate.model);
-  if (candidate.runtime !== "pi") return false;
-  if (candidate.model === "parent") return true;
-  const selected = splitPiModelSelector(candidate.model);
+export const supportsSubagentFastMode = (runtime: SubagentRuntime, model: string): boolean => {
+  if (runtime === "codex") return isNativeProfileModelSelector("codex", model);
+  if (runtime !== "pi") return false;
+  if (model === "parent") return true;
+  const selected = splitPiModelSelector(model);
   return selected ? supportsFastModel(selected.provider, selected.model) : false;
 };
 
@@ -181,7 +171,7 @@ export const profileCandidateValidationIssues = (
     issues.push({ code: "fork_requires_local_pi" });
   if (!candidate.closeOnReport && !isRetainableProfileCandidate(candidate))
     issues.push({ code: "retention_requires_herdr_read_only" });
-  if (candidate.fastMode && !supportsProfileFastModeStatically(candidate))
+  if (candidate.fastMode && !supportsSubagentFastMode(candidate.runtime, candidate.model))
     issues.push({ code: "fast_mode_unsupported" });
   if (
     candidate.effort !== "default" &&

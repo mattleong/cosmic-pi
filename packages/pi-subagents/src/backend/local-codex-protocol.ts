@@ -1,7 +1,7 @@
+import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 
 const MAX_ID_CHARS = 256;
 const MAX_METHOD_CHARS = 128;
@@ -428,7 +428,7 @@ export interface CodexThreadStartRequest {
     readonly ephemeral: true;
     readonly experimentalRawEvents: false;
     readonly model: string;
-    readonly serviceTier?: typeof SUBAGENT_FAST_SERVICE_TIER | undefined;
+    readonly serviceTier?: typeof FAST_SERVICE_TIER | undefined;
     readonly multiAgentMode: "explicitRequestOnly";
     readonly sandbox: "workspace-write" | "read-only";
   };
@@ -451,7 +451,7 @@ export interface CodexTurnStartRequest {
     readonly effort: string;
     readonly environments: ReadonlyArray<never>;
     readonly model: string;
-    readonly serviceTier?: typeof SUBAGENT_FAST_SERVICE_TIER | undefined;
+    readonly serviceTier?: typeof FAST_SERVICE_TIER | undefined;
     readonly multiAgentMode: "explicitRequestOnly";
     readonly sandboxPolicy:
       | {
@@ -523,7 +523,7 @@ export const threadStartRequest = (
     sandbox: request.writeIntent === "writer" ? "workspace-write" : "read-only",
   };
   const params: CodexThreadStartRequest["params"] = request.fastMode
-    ? { ...base, serviceTier: SUBAGENT_FAST_SERVICE_TIER }
+    ? { ...base, serviceTier: FAST_SERVICE_TIER }
     : base;
   return { id, method: "thread/start", params };
 };
@@ -556,7 +556,7 @@ export const turnStartRequest = (
         : { type: "readOnly", networkAccess: false },
   };
   const params: CodexTurnStartRequest["params"] = fastMode
-    ? { ...base, serviceTier: SUBAGENT_FAST_SERVICE_TIER }
+    ? { ...base, serviceTier: FAST_SERVICE_TIER }
     : base;
   return { id, method: "turn/start", params };
 };

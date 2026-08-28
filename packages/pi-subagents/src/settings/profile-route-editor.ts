@@ -1,13 +1,13 @@
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
-import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import {
   cloneProfileCandidates as cloneCandidates,
   MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate as cloneCandidate,
   PROFILE_NATIVE_MODEL_DEFAULTS,
   profileCandidateValidationIssues,
+  supportsSubagentFastMode,
   type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
   type ProfileCandidate,

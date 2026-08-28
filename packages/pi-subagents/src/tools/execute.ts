@@ -205,21 +205,18 @@ const profileDiscovery = (
       };
     });
     return [
-      (() => {
-        const baseResult = {
-          id: definition.id,
-          description: definition.description,
-          source: snapshot.effectiveConfig.profileSources[definition.id],
-          isDefault: definition.id === "generalist",
-          defaultContext: definition.defaultContext,
-          defaultWriteIntent: definition.defaultWriteIntent,
-        };
-        const withDefaultEffort = definition.defaultEffort
-          ? { ...baseResult, defaultEffort: definition.defaultEffort }
-          : baseResult;
-        const withCandidates = { ...withDefaultEffort, candidates };
-        return withCandidates;
-      })(),
+      {
+        id: definition.id,
+        description: definition.description,
+        source: snapshot.effectiveConfig.profileSources[definition.id],
+        isDefault: definition.id === "generalist",
+        defaultContext: definition.defaultContext,
+        defaultWriteIntent: definition.defaultWriteIntent,
+        ...(definition.defaultEffort !== undefined && {
+          defaultEffort: definition.defaultEffort,
+        }),
+        candidates,
+      } satisfies SubagentProfileView,
     ];
   });
 };
@@ -350,7 +347,7 @@ export const executeSubagentActionEffect = (
   pi: ExtensionAPI,
   environment: SubagentToolRuntime["environment"],
   input: SubagentToolInput,
-  signal: AbortSignal | undefined,
+  _signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
   ctx: ExtensionContext,
   callerRunId?: string,
@@ -460,24 +457,20 @@ export const executeSubagentActionEffect = (
         const partialOutcomes = new Map<number, SubagentStartOutcome>();
         const requestedProfileFor = (spec: SubagentStartSpec): string =>
           sanitizeTerminalLine(spec.profile?.trim() || "generalist");
-        const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRoute =>
-          (() => {
-            const baseResult = {
-              profile: request.profile ?? "generalist",
-              host: request.host,
-              runtime: request.runtime,
-              model: request.model,
-              effort: request.effort,
-              fastMode: request.fastMode,
-            };
-            const withCandidateIndex =
-              request.selection?.candidateIndex === undefined
-                ? baseResult
-                : { ...baseResult, candidateIndex: request.selection.candidateIndex };
-            return request.selection?.warning
-              ? { ...withCandidateIndex, warning: request.selection.warning }
-              : withCandidateIndex;
-          })();
+        const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRoute => {
+          const candidateIndex = request.selection?.candidateIndex;
+          const warning = request.selection?.warning;
+          return {
+            profile: request.profile ?? "generalist",
+            host: request.host,
+            runtime: request.runtime,
+            model: request.model,
+            effort: request.effort,
+            fastMode: request.fastMode,
+            ...(candidateIndex !== undefined && { candidateIndex }),
+            ...(warning !== undefined && warning.length > 0 && { warning }),
+          };
+        };
         const startEntriesFor = (
           outcomes: ReadonlyMap<number, SubagentStartOutcome>,
         ): ReadonlyArray<SubagentStartEntry> =>
@@ -490,43 +483,35 @@ export const executeSubagentActionEffect = (
             } as const;
             if (!outcome) return { ...base, status: "pending", routeStatus: "resolving" };
             if ("run" in outcome)
-              return (() => {
-                const baseResult = {
-                  ...base,
-                  profile: outcome.run.profile ?? base.profile,
-                  status: "started" as const,
-                  routeStatus: "selected" as const,
-                  host: outcome.run.host,
-                  runtime: outcome.run.runtime,
-                  model: outcome.run.model,
-                  effort: outcome.run.effort,
-                  fastMode: outcome.run.fastMode,
-                };
-                const withCandidateIndex =
-                  outcome.run.selection.candidateIndex === undefined
-                    ? baseResult
-                    : {
-                        ...baseResult,
-                        candidateIndex: outcome.run.selection.candidateIndex,
-                      };
-                const withWarning = outcome.run.selection.warning
-                  ? { ...withCandidateIndex, warning: outcome.run.selection.warning }
-                  : withCandidateIndex;
-                const withRunId = { ...withWarning, runId: outcome.run.id };
-                return withRunId;
-              })();
+              return {
+                ...base,
+                profile: outcome.run.profile ?? base.profile,
+                status: "started" as const,
+                routeStatus: "selected" as const,
+                host: outcome.run.host,
+                runtime: outcome.run.runtime,
+                model: outcome.run.model,
+                effort: outcome.run.effort,
+                fastMode: outcome.run.fastMode,
+                ...(outcome.run.selection.candidateIndex !== undefined && {
+                  candidateIndex: outcome.run.selection.candidateIndex,
+                }),
+                ...(outcome.run.selection.warning !== undefined &&
+                  outcome.run.selection.warning.length > 0 && {
+                    warning: outcome.run.selection.warning,
+                  }),
+                runId: outcome.run.id,
+              };
             if (outcome.resolvedRoute) {
               const { candidateIndex, warning, ...route } = outcome.resolvedRoute;
-              const selectedBase = {
+              return {
                 ...base,
                 status: "failed" as const,
                 routeStatus: "selected" as const,
                 ...route,
+                ...(warning !== undefined && warning.length > 0 && { warning }),
+                ...(candidateIndex !== undefined && { candidateIndex }),
               };
-              const selectedFailure = warning ? { ...selectedBase, warning } : selectedBase;
-              return candidateIndex === undefined
-                ? selectedFailure
-                : { ...selectedFailure, candidateIndex };
             }
             return {
               ...base,
@@ -539,27 +524,21 @@ export const executeSubagentActionEffect = (
           index: number,
           error: SubagentError,
           resolvedRoute?: SubagentStartResolvedRoute,
-        ): SubagentStartOutcome =>
-          (() => {
-            const baseResult = {
+        ): SubagentStartOutcome => {
+          const name = spec.name?.trim();
+          const admittedRun = getFailedStartRecovery(error);
+          return {
+            index,
+            failure: {
               index,
-              failure: (() => {
-                const baseResult = { index };
-                const withName = spec.name?.trim()
-                  ? { ...baseResult, name: spec.name.trim() }
-                  : baseResult;
-                const withMessageAndCode = {
-                  ...withName,
-                  message: error.message,
-                  code: subagentErrorCode(error),
-                };
-                const admittedRun = getFailedStartRecovery(error);
-                return admittedRun ? { ...withMessageAndCode, admittedRun } : withMessageAndCode;
-              })(),
-            };
-            const withResolvedRoute = resolvedRoute ? { ...baseResult, resolvedRoute } : baseResult;
-            return withResolvedRoute;
-          })();
+              ...(name !== undefined && name.length > 0 && { name }),
+              message: error.message,
+              code: subagentErrorCode(error),
+              ...(admittedRun !== undefined && { admittedRun }),
+            },
+            ...(resolvedRoute !== undefined && { resolvedRoute }),
+          };
+        };
         const publishOutcome = (outcome: SubagentStartOutcome): Effect.Effect<void> => {
           partialOutcomes.set(outcome.index, outcome);
           const ordered = [...partialOutcomes.values()].sort(
@@ -576,15 +555,13 @@ export const executeSubagentActionEffect = (
           );
           const pending = pendingEntries.length;
           const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pending > 0 ? ` · ${pending} pending (${pendingEntries.join(", ")})` : ""}.`;
-          const updateDetailsBase = { startEntries: startEntriesFor(partialOutcomes) };
-          const updateDetailsInput =
-            failures.length > 0
-              ? { ...updateDetailsBase, startFailures: failures }
-              : updateDetailsBase;
           return Effect.sync(() =>
             onUpdate?.({
               content: [{ type: "text", text: summary }],
-              details: makeStartDetails(updateDetailsInput),
+              details: makeStartDetails({
+                startEntries: startEntriesFor(partialOutcomes),
+                ...(failures.length > 0 && { startFailures: failures }),
+              }),
             }),
           ).pipe(
             Effect.catchDefect(() => Effect.void),
@@ -789,45 +766,39 @@ export const executeSubagentActionEffect = (
     }
   });
 
-  const cancelAwait = () => {
+  const renderAwaitCancellation = Effect.try(() => {
     if (input.action !== "await" || !requestedAwaitUntil) return;
-    try {
-      const unfinished = latestAwaitRuns.filter(
-        (run) => !isAssignmentFinishedRunState(run.state),
-      ).length;
-      const attention = attentionRecoveryText(latestAwaitRuns);
-      const hierarchy =
-        latestAwaitRuns.length > 0
-          ? formatAwaitProgress(
-              latestAwaitRuns,
-              requestedAwaitUntil,
-              boundedAwaitContext(latestAwaitRuns, latestAwaitContextRuns),
-            )
-          : "";
-      const summary =
-        latestAwaitRuns.length === 0
-          ? "Await canceled before progress was observed; selected subagents may still be unfinished."
-          : `Await canceled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.`;
-      const text = [summary, hierarchy, attention].filter(Boolean).join("\n\n");
-      onUpdate?.({
-        content: [{ type: "text", text }],
-        details: makeAwaitDetails({
-          runs: latestAwaitRuns,
-          contextRuns: latestAwaitContextRuns,
-          awaitedRunIds: requestedAwaitIds,
-          awaitUntil: requestedAwaitUntil,
-          cancelled: true,
-        }),
-      });
-    } catch {
-      // Cancellation rendering is best effort and cannot own the waiter lifecycle.
-    }
-  };
-  if (signal?.aborted) cancelAwait();
-  else signal?.addEventListener("abort", cancelAwait, { once: true });
+    const unfinished = latestAwaitRuns.filter(
+      (run) => !isAssignmentFinishedRunState(run.state),
+    ).length;
+    const attention = attentionRecoveryText(latestAwaitRuns);
+    const hierarchy =
+      latestAwaitRuns.length > 0
+        ? formatAwaitProgress(
+            latestAwaitRuns,
+            requestedAwaitUntil,
+            boundedAwaitContext(latestAwaitRuns, latestAwaitContextRuns),
+          )
+        : "";
+    const summary =
+      latestAwaitRuns.length === 0
+        ? "Await canceled before progress was observed; selected subagents may still be unfinished."
+        : `Await canceled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.`;
+    const text = [summary, hierarchy, attention].filter(Boolean).join("\n\n");
+    onUpdate?.({
+      content: [{ type: "text", text }],
+      details: makeAwaitDetails({
+        runs: latestAwaitRuns,
+        contextRuns: latestAwaitContextRuns,
+        awaitedRunIds: requestedAwaitIds,
+        awaitUntil: requestedAwaitUntil,
+        cancelled: true,
+      }),
+    });
+  }).pipe(Effect.ignore);
 
   return effect.pipe(
-    Effect.ensuring(Effect.sync(() => signal?.removeEventListener("abort", cancelAwait))),
+    Effect.onInterrupt(() => renderAwaitCancellation),
     Effect.map(
       (executionResult: {
         readonly runs: ReadonlyArray<SubagentRunView>;
@@ -842,30 +813,24 @@ export const executeSubagentActionEffect = (
         const startFailures = executionResult.startFailures ?? [];
         const startEntries = executionResult.startEntries;
         const actionFailures = executionResult.actionFailures ?? [];
-        const startDetailsBase = {
+        const startDetailsInput = {
           // Every start result contains the complete request-ordered receipt.
           startEntries: startEntries ?? [],
+          ...(startFailures.length > 0 && { startFailures }),
         };
-        const startDetailsInput =
-          startFailures.length > 0 ? { ...startDetailsBase, startFailures } : startDetailsBase;
-        const awaitDetailsBase = {
+        const awaitDetailsInput = {
           runs,
           contextRuns: awaitContextRuns,
           awaitedRunIds: requestedAwaitIds,
           awaitUntil: input.action === "await" ? input.until : ("all_finished" as const),
+          ...(attentionRequired === true && { attentionRequired: true as const }),
         };
-        const awaitDetailsInput = attentionRequired
-          ? { ...awaitDetailsBase, attentionRequired: true as const }
-          : awaitDetailsBase;
-        const compactDetailsBase = {
+        const compactDetailsInput = {
           action:
             input.action === "start" || input.action === "await" ? ("list" as const) : input.action,
           runs,
+          ...(actionFailures.length > 0 && { actionFailures }),
         };
-        const compactDetailsInput =
-          actionFailures.length > 0
-            ? { ...compactDetailsBase, actionFailures }
-            : compactDetailsBase;
         const details: unknown =
           input.action === "start"
             ? makeStartDetails(startDetailsInput)

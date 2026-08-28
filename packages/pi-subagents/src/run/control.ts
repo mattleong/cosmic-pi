@@ -99,139 +99,25 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       );
     });
 
-  const send = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
+  const finalizeGuidance = (
+    record: RunRecord,
+    message: string,
+    allowReported: boolean,
+  ): Effect.Effect<SubagentRunView, InvalidSubagentRequestError> =>
     Effect.gen(function* () {
-      const normalized = yield* validateParentMessage(message, "Guidance message is required.");
-      const selected = yield* withLock(
-        Effect.gen(function* () {
-          const selected = yield* requireRecord(id);
-          if (selected.view.state === "waiting_for_parent")
-            return yield* new InvalidSubagentRequestError({
-              code: "run_waiting_for_parent",
-              message: `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
-            });
-          if (selected.replyPendingRequestId)
-            return yield* new InvalidSubagentRequestError({
-              code: "reply_in_flight",
-              message: `Subagent ${id} already has a parent reply in flight.`,
-            });
-          if (selected.view.state === "reported" && selected.view.closeOnReport === false) {
-            if (!hasRetainedAssignmentCapacity(selected))
-              return yield* new InvalidSubagentRequestError({
-                code: "report_delivery_backlog",
-                message: `Subagent ${id} has ${selected.completionGenerations.size} unresolved report generations; wait for parent delivery or claim the latest report before beginning another assignment.`,
-              });
-            const attemptToken = allocateAssignmentAttemptToken();
-            const previous = {
-              view: snapshotView(selected.view),
-              latestAssistantText: selected.latestAssistantText,
-              warningSlots: { ...selected.warningSlots },
-              assignment: { ...selected.assignment },
-              activeTools: [...selected.activeTools.entries()] as const,
-              pauseRequested: selected.pauseRequested,
-              pauseOutcome: selected.pauseOutcome,
-              replyPendingRequestId: selected.replyPendingRequestId,
-            };
-            selected.pausedAssignmentEpoch = undefined;
-            selected.latestAssistantText = undefined;
-            selected.warningSlots = emptyRunWarningSlots();
-            selected.assignment = {
-              epoch: selected.nextAssignmentEpoch++,
-              phase: "issuing",
-              attemptToken,
-              startedObserved: false,
-              outcomeUncertain: false,
-              pendingRunSettled: false,
-            };
-            selected.view = {
-              ...selected.view,
-              state: "starting",
-              endedAt: undefined,
-              finalText: undefined,
-              progress: undefined,
-              warning: undefined,
-              error: undefined,
-              lastActivityAt: yield* Clock.currentTimeMillis,
-            };
-            yield* publish;
-            return {
-              record: selected,
-              retained: true as const,
-              previous,
-              attemptToken,
-            };
-          }
-          // A retained report starts a new assignment through `controls.start`; it is not
-          // active-turn steering and does not rely on the backend's `steer` capability.
-          yield* requireCapability(selected, "steer");
-          if (selected.view.state === "paused" || selected.view.state === "completed") {
-            const recovery = hasSubagentCapability(selected.view, "resume")
-              ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
-              : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
-            return yield* new InvalidSubagentRequestError({
-              code: "run_not_running",
-              message: `Subagent ${id} is ${selected.view.state}; ${recovery}.`,
-            });
-          }
-          if (selected.view.state === "starting")
-            return yield* new InvalidSubagentRequestError({
-              code: "run_starting",
-              message: `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
-            });
-          if (selected.view.state !== "running")
-            return yield* new InvalidSubagentRequestError({
-              code: "run_not_running",
-              message: `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
-            });
-          return { record: selected, retained: false as const };
-        }),
-      );
-      const record = selected.record;
-      yield* selected.retained
-        ? beginAssignmentBackend(record, normalized, selected.attemptToken).pipe(
-            Effect.tapError((error) => {
-              if (error._tag === "SubagentProcessError" && isOutcomeUncertain(error))
-                return retainUncertainAssignment(record, selected.attemptToken, error.message);
-              return withLock(
-                Effect.gen(function* () {
-                  if (record.assignment.attemptToken !== selected.attemptToken) return;
-                  const sessionEvents = record.view.sessionEvents;
-                  record.view = { ...selected.previous.view, sessionEvents };
-                  record.latestAssistantText = selected.previous.latestAssistantText;
-                  record.warningSlots = selected.previous.warningSlots;
-                  record.assignment = selected.previous.assignment;
-                  record.activeTools.clear();
-                  for (const [toolCallId, toolName] of selected.previous.activeTools)
-                    record.activeTools.set(toolCallId, toolName);
-                  record.pauseRequested = selected.previous.pauseRequested;
-                  record.pauseOutcome = selected.previous.pauseOutcome;
-                  record.replyPendingRequestId = selected.previous.replyPendingRequestId;
-                  yield* publish;
-                }),
-              );
-            }),
-          )
-        : steerBackend(record, normalized).pipe(
-            Effect.tapError((error) =>
-              error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
-                ? retainControlWarning(record, error.message)
-                : Effect.void,
-            ),
-          );
       const now = yield* Clock.currentTimeMillis;
       return yield* withLock(
         Effect.gen(function* () {
-          if (record.view.state === "reported" && selected.retained)
-            return snapshotView(record.view);
+          if (allowReported && record.view.state === "reported") return snapshotView(record.view);
           if (record.view.state !== "running")
             return yield* new InvalidSubagentRequestError({
               code: "guidance_outcome_uncertain",
-              message: `Subagent ${id} changed state after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
+              message: `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
             });
           if (record.replyPendingRequestId)
             return yield* new InvalidSubagentRequestError({
               code: "guidance_outcome_uncertain",
-              message: `Subagent ${id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
+              message: `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
             });
           record.view = {
             ...record.view,
@@ -239,7 +125,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             sessionEvents: appendNoticeSessionEvent(
               record.view.sessionEvents,
               "parent",
-              `Guidance: ${normalized}`,
+              `Guidance: ${message}`,
               now,
             ),
           };
@@ -247,6 +133,143 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           return snapshotView(record.view);
         }),
       );
+    });
+
+  const send = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
+    Effect.gen(function* () {
+      const normalized = yield* validateParentMessage(message, "Guidance message is required.");
+      const selected = yield* Effect.uninterruptibleMask(() =>
+        Effect.gen(function* () {
+          const selected = yield* withLock(
+            Effect.gen(function* () {
+              const selected = yield* requireRecord(id);
+              if (selected.view.state === "waiting_for_parent")
+                return yield* new InvalidSubagentRequestError({
+                  code: "run_waiting_for_parent",
+                  message: `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
+                });
+              if (selected.replyPendingRequestId)
+                return yield* new InvalidSubagentRequestError({
+                  code: "reply_in_flight",
+                  message: `Subagent ${id} already has a parent reply in flight.`,
+                });
+              if (selected.view.state === "reported" && selected.view.closeOnReport === false) {
+                if (!hasRetainedAssignmentCapacity(selected))
+                  return yield* new InvalidSubagentRequestError({
+                    code: "report_delivery_backlog",
+                    message: `Subagent ${id} has ${selected.completionGenerations.size} unresolved report generations; wait for parent delivery or claim the latest report before beginning another assignment.`,
+                  });
+                const attemptToken = allocateAssignmentAttemptToken();
+                const previous = {
+                  view: snapshotView(selected.view),
+                  latestAssistantText: selected.latestAssistantText,
+                  warningSlots: { ...selected.warningSlots },
+                  assignment: { ...selected.assignment },
+                  activeTools: [...selected.activeTools.entries()] as const,
+                  pauseRequested: selected.pauseRequested,
+                  pauseOutcome: selected.pauseOutcome,
+                  replyPendingRequestId: selected.replyPendingRequestId,
+                };
+                selected.pausedAssignmentEpoch = undefined;
+                selected.latestAssistantText = undefined;
+                selected.warningSlots = emptyRunWarningSlots();
+                selected.assignment = {
+                  epoch: selected.nextAssignmentEpoch++,
+                  phase: "issuing",
+                  attemptToken,
+                  startedObserved: false,
+                  outcomeUncertain: false,
+                  pendingRunSettled: false,
+                };
+                selected.view = {
+                  ...selected.view,
+                  state: "starting",
+                  endedAt: undefined,
+                  finalText: undefined,
+                  progress: undefined,
+                  warning: undefined,
+                  error: undefined,
+                  lastActivityAt: yield* Clock.currentTimeMillis,
+                };
+                yield* publish;
+                return {
+                  record: selected,
+                  retained: true as const,
+                  previous,
+                  attemptToken,
+                };
+              }
+              // A retained report starts a new assignment through `controls.start`; it is not
+              // active-turn steering and does not rely on the backend's `steer` capability.
+              yield* requireCapability(selected, "steer");
+              if (selected.view.state === "paused" || selected.view.state === "completed") {
+                const recovery = hasSubagentCapability(selected.view, "resume")
+                  ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
+                  : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
+                return yield* new InvalidSubagentRequestError({
+                  code: "run_not_running",
+                  message: `Subagent ${id} is ${selected.view.state}; ${recovery}.`,
+                });
+              }
+              if (selected.view.state === "starting")
+                return yield* new InvalidSubagentRequestError({
+                  code: "run_starting",
+                  message: `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
+                });
+              if (selected.view.state !== "running")
+                return yield* new InvalidSubagentRequestError({
+                  code: "run_not_running",
+                  message: `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
+                });
+              return { record: selected, retained: false as const };
+            }),
+          );
+          if (!selected.retained) return selected;
+
+          const record = selected.record;
+          const commit = Effect.gen(function* () {
+            yield* beginAssignmentBackend(record, normalized, selected.attemptToken).pipe(
+              Effect.tapError((error) => {
+                if (error._tag === "SubagentProcessError" && isOutcomeUncertain(error))
+                  return retainUncertainAssignment(record, selected.attemptToken, error.message);
+                return withLock(
+                  Effect.gen(function* () {
+                    if (record.assignment.attemptToken !== selected.attemptToken) return;
+                    const sessionEvents = record.view.sessionEvents;
+                    record.view = { ...selected.previous.view, sessionEvents };
+                    record.latestAssistantText = selected.previous.latestAssistantText;
+                    record.warningSlots = selected.previous.warningSlots;
+                    record.assignment = selected.previous.assignment;
+                    record.activeTools.clear();
+                    for (const [toolCallId, toolName] of selected.previous.activeTools)
+                      record.activeTools.set(toolCallId, toolName);
+                    record.pauseRequested = selected.previous.pauseRequested;
+                    record.pauseOutcome = selected.previous.pauseOutcome;
+                    record.replyPendingRequestId = selected.previous.replyPendingRequestId;
+                    yield* publish;
+                  }),
+                );
+              }),
+            );
+            return yield* finalizeGuidance(record, normalized, true);
+          });
+          const commitFiber = yield* commit.pipe(
+            Effect.forkIn(ownerScope, { startImmediately: true }),
+          );
+          return { ...selected, commitFiber };
+        }),
+      );
+      if (selected.retained) return yield* Fiber.join(selected.commitFiber);
+
+      const record = selected.record;
+      yield* steerBackend(record, normalized).pipe(
+        Effect.tapError((error) =>
+          error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
+            ? retainControlWarning(record, error.message)
+            : Effect.void,
+        ),
+      );
+      return yield* finalizeGuidance(record, normalized, false);
     });
 
   const reply = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>

@@ -294,6 +294,15 @@ describe("SubagentConfigStore v5", () => {
       ),
     );
     yield* step(() =>
+      withStore((store) =>
+        store.patchNesting(paths.cwd, paths.agentDirectory, {
+          scope: "project",
+          expectedExists: false,
+          projectTrusted: true,
+        }),
+      ),
+    );
+    yield* step(() =>
       expect(readFile(paths.projectPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" }),
     );
     yield* step(() =>
@@ -301,6 +310,15 @@ describe("SubagentConfigStore v5", () => {
         store.patchProfile(paths.cwd, paths.agentDirectory, {
           scope: "global",
           profile: "worker",
+          expectedExists: false,
+          projectTrusted: true,
+        }),
+      ),
+    );
+    yield* step(() =>
+      withStore((store) =>
+        store.patchNesting(paths.cwd, paths.agentDirectory, {
+          scope: "global",
           expectedExists: false,
           projectTrusted: true,
         }),
@@ -465,8 +483,21 @@ describe("SubagentConfigStore v5", () => {
         ),
       ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
     );
-    expect(
-      JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8"))).profiles.scout.effort,
-    ).toBe("high");
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.patchNesting(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            nesting: { maxDirectChildren: 8, maxDepth: 4 },
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+    );
+    const saved = JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")));
+    expect(saved.profiles.scout.effort).toBe("high");
+    expect(saved.nesting).toBeUndefined();
   });
 });
