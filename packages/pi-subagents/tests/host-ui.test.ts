@@ -141,13 +141,13 @@ describe("subagent activity widget host", () => {
     const toolPresentation = bridge.bindToolPresentation();
     const release = toolPresentation.beginAwait([target.id], "all_finished");
     const awaiting = component?.render(100).join("\n") ?? "";
-    expect(awaiting).toContain("Waiting for subagents · 0/1");
+    expect(awaiting).toContain("Subagents · 0/1");
     expect(awaiting.split("\n").find((line) => line.includes("Target"))).toContain("◎");
     expect(awaiting.split("\n").find((line) => line.includes("Other"))).not.toContain("◎");
 
     release();
     expect(component?.render(100).join("\n")).toContain("Subagents · 2 working");
-    expect(component?.render(100).join("\n")).not.toContain("Waiting for subagents");
+    expect(component?.render(100).join("\n")).not.toContain("0/1");
     bridge.clear();
   });
 
@@ -206,7 +206,7 @@ describe("subagent activity widget host", () => {
     staleToolPresentation.beginStart(3)();
     staleRelease();
     expect(staleToolPresentation.isLiveHierarchyAvailable()).toBe(false);
-    expect(component?.render(100).join("\n")).toContain("Waiting for subagents · 0/1");
+    expect(component?.render(100).join("\n")).toContain("Subagents · 0/1");
     expect(component?.render(100).join("\n")).not.toContain("Starting 3");
     expect(firstSetWidget).toHaveBeenLastCalledWith("pi-subagents.activity", undefined, {
       placement: "aboveEditor",

@@ -151,20 +151,15 @@ const panelHeader = (panel: SubagentActivityPanelProjection, theme: Theme): stri
     (total, starting) => total + starting.requestedCount,
     0,
   );
-  const hasAwait = presentation.awaits.length > 0;
-  const heading =
-    presentation.awaits.length === 1
-      ? presentation.awaits[0]?.until === "any_finished"
-        ? "Waiting for first subagent"
-        : "Waiting for subagents"
-      : presentation.awaits.length > 1
-        ? "Waiting for subagents"
-        : startCount > 0
-          ? `Starting ${startCount} subagent${startCount === 1 ? "" : "s"}`
-          : "Subagents";
-  const parts: HeaderPart[] = [[hasAwait || startCount > 0 ? "accent" : "success", heading]];
-  if (awaitIds.length > 0) parts.push(["accent", `${finishedTargets}/${awaitIds.length}`]);
-  if (hasAwait && startCount > 0) parts.push(["muted", `${startCount} starting`]);
+  const awaitProgress =
+    presentation.awaits.length === 1 && presentation.awaits[0]?.until === "any_finished"
+      ? `first of ${awaitIds.length}`
+      : awaitIds.length > 0
+        ? `${finishedTargets}/${awaitIds.length}`
+        : undefined;
+  const parts: HeaderPart[] = [["success", "Subagents"]];
+  if (awaitProgress) parts.push(["accent", awaitProgress]);
+  if (startCount > 0) parts.push(["accent", `${startCount} starting`]);
   if (working > 0) parts.push(["muted", `${working} working`]);
   if (waiting > 0) parts.push(["warning", `${waiting} waiting`]);
   if (paused > 0) parts.push(["warning", `${paused} paused`]);

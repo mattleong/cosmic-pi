@@ -130,16 +130,26 @@ describe("persistent subagent activity panel", () => {
     });
 
     const lines = render([running, finished, other], live);
-    expect(lines[0]).toContain("Waiting for subagents · 1/2");
+    expect(lines[0]).toContain("Subagents · 1/2");
     expect(lines.find((line) => line.includes("Running target"))).toContain("◎");
     expect(lines.find((line) => line.includes("Other work"))).not.toContain("◎");
     expect(lines.join("\n")).not.toContain("Finished target");
   });
 
+  it("keeps wait-first mode as compact progress beside the static title", () => {
+    const first = view({ id: "first", name: "First" });
+    const second = view({ id: "second", name: "Second" });
+    const live = presentation({
+      awaits: [{ runIds: [first.id, second.id], until: "any_finished" }],
+    });
+
+    expect(render([first, second], live)[0]).toContain("Subagents · first of 2");
+  });
+
   it("shows launch intent before the first run reaches the fleet projection", () => {
     const live = presentation({ starts: [{ requestedCount: 3 }] });
     expect(hasSubagentActivityPanelContent(projection([]), live)).toBe(true);
-    expect(render([], live)).toEqual([" Starting 3 subagents · /subagents"]);
+    expect(render([], live)).toEqual([" Subagents · 3 starting · /subagents"]);
   });
 
   it("keeps concurrent start intent visible in an await header", () => {
@@ -149,9 +159,7 @@ describe("persistent subagent activity panel", () => {
       awaits: [{ runIds: [target.id], until: "all_finished" }],
     });
 
-    expect(render([target], live)[0]).toContain(
-      "Waiting for subagents · 0/1 · 2 starting · 1 working",
-    );
+    expect(render([target], live)[0]).toContain("Subagents · 0/1 · 2 starting · 1 working");
   });
 
   it("segments header emphasis and restores state-colored hierarchy identities", () => {
@@ -196,7 +204,7 @@ describe("persistent subagent activity panel", () => {
       10_001,
     );
 
-    expect(calls).toContainEqual({ color: "accent", text: "Waiting for subagents" });
+    expect(calls).toContainEqual({ color: "success", text: "Subagents" });
     expect(calls).toContainEqual({ color: "accent", text: "0/2" });
     expect(calls).toContainEqual({ color: "muted", text: "1 working" });
     expect(calls).toContainEqual({ color: "dim", text: "/subagents" });
