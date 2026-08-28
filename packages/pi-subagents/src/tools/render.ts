@@ -22,6 +22,7 @@ import {
   type SubagentRunCard,
 } from "./details.ts";
 import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
+import { renderExpansionAffordance } from "./render-affordance.ts";
 import {
   renderCompactResultComponent,
   renderProfileRoutesComponent,
@@ -114,8 +115,7 @@ const reportAffordance = (
       : reportCount === 0
         ? `${failureCount} failure detail${failureCount === 1 ? "" : "s"}`
         : `${reportCount} report${reportCount === 1 ? "" : "s"} · ${failureCount} failure${failureCount === 1 ? "" : "s"}`;
-  const hint = expanded ? "" : " · ctrl+o to expand";
-  return `${theme.fg("accent", expanded ? "▾" : "▸")} ${theme.fg("muted", `${label}${hint}`)}`;
+  return renderExpansionAffordance(label, expanded, theme);
 };
 
 const expandedRunDiagnostics = (
@@ -326,7 +326,7 @@ class RunOverviewComponent implements Component {
             ),
           ]
         : this.failures.length > 0 && !this.expanded
-          ? [this.theme.fg("dim", "▸ failure details · expand to view")]
+          ? [renderExpansionAffordance("failure details", false, this.theme)]
           : []),
     ];
   }
@@ -593,7 +593,7 @@ export const renderSubagentResult = (
   if (!expanded) {
     const lines = text.split("\n");
     if (lines.length > 12)
-      text = `${lines.slice(0, 11).join("\n")}\n… [${lines.length - 11} more lines · expand to view]`;
+      text = `${lines.slice(0, 11).join("\n")}\n… [${lines.length - 11} more lines · ctrl+o to expand]`;
   }
   return new Text(
     theme.fg(isPartial ? "warning" : "toolOutput", text || (isPartial ? "Working…" : "Done")),

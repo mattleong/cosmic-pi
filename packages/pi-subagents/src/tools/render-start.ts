@@ -12,6 +12,7 @@ import { managerNoticeGlyph, managerStateGlyph, startingSpinnerFrame } from "pi-
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import type { SubagentStartEntry } from "./details.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery, formatToolRoute } from "./format.ts";
+import { renderExpansionAffordance } from "./render-affordance.ts";
 import { failureRecovery } from "./render-management.ts";
 import type { SubagentStartSpec } from "./schema.ts";
 import type { SubagentStartFailure } from "./subagent.ts";
@@ -38,8 +39,11 @@ export const renderSubagentStartCall = (
   const summary = sanitizeTerminalLine(requested);
   const clippedSummary =
     summary.length <= 160 ? summary : `${safeTextPrefix(summary, 146)}… [truncated]`;
+  const taskAffordance = expanded
+    ? ""
+    : ` ${renderExpansionAffordance("ctrl+o to view tasks", false, theme, "")}`;
   const header = new Text(
-    `${theme.fg("toolTitle", theme.bold(title))}${clippedSummary ? ` ${theme.fg("dim", clippedSummary)}` : ""}`,
+    `${theme.fg("toolTitle", theme.bold(title))}${clippedSummary ? ` ${theme.fg("dim", clippedSummary)}` : ""}${taskAffordance}`,
     0,
     0,
   );
@@ -310,7 +314,12 @@ class StartReceiptComponent implements Component {
       ),
       ...failureDetails,
       ...(!this.expanded && this.failures.length > 0
-        ? [truncateToWidth(this.theme.fg("dim", "▸ failure details · expand to view"), safeWidth)]
+        ? [
+            truncateToWidth(
+              renderExpansionAffordance("failure details", false, this.theme),
+              safeWidth,
+            ),
+          ]
         : []),
       ...(!this.partial && started > 0
         ? [truncateToWidth(this.theme.fg("dim", "→ /subagents for live status"), safeWidth)]

@@ -1,8 +1,14 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import {
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+  type Component,
+} from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { formatToolRoute } from "./format.ts";
+import { renderExpansionAffordance } from "./render-affordance.ts";
 import type {
   CompactSubagentToolDetails,
   SubagentProfileCandidateCard,
@@ -255,19 +261,25 @@ const renderActionFailures = (
   details: RunToolDetails,
   width: number,
   theme: Theme,
+  expanded: boolean,
 ): ReadonlyArray<string> =>
   (details.actionFailures ?? []).flatMap((failure) => {
     const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
     const recovery = failureRecovery(failure.code, failure.message);
+    const summary = theme.fg(
+      "error",
+      `${managerStateGlyph("failed")} ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
+    );
+    const summaryLines = expanded
+      ? wrapTextWithAnsi(summary, width)
+      : [truncateToWidth(summary, width)];
+    const hidden = !expanded && visibleWidth(summary) > width;
     return [
-      truncateToWidth(
-        theme.fg(
-          "error",
-          `${managerStateGlyph("failed")} ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
-        ),
-        width,
-      ),
+      ...summaryLines,
       truncateToWidth(theme.fg("accent", `  Next: ${recovery}`), width),
+      ...(hidden
+        ? [truncateToWidth(renderExpansionAffordance("failure text", false, theme), width)]
+        : []),
     ];
   });
 
@@ -320,7 +332,7 @@ class CompactResultComponent implements Component {
         safeWidth,
       ),
       ...omissionLines,
-      ...renderActionFailures(this.details, safeWidth, this.theme),
+      ...renderActionFailures(this.details, safeWidth, this.theme, this.expanded),
     ];
   }
 

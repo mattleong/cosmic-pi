@@ -5,7 +5,10 @@ import { makeAwaitDetails, makeCompactToolDetails } from "../../src/tools/detail
 import { renderSubagentResult } from "../../src/tools/render.ts";
 import { formatAwaitSummary } from "../../src/tools/render-await.ts";
 import { renderResponsiveRunRows } from "../../src/tools/render-run-rows.ts";
-import { renderStartReceiptComponent } from "../../src/tools/render-start.ts";
+import {
+  renderStartReceiptComponent,
+  renderSubagentStartCall,
+} from "../../src/tools/render-start.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
 // SAFETY: This fixture implements the Theme methods consumed by semantic result rendering.
@@ -449,6 +452,78 @@ describe("hierarchical tool result rendering", () => {
     expect(rows[0]).toMatch(/^├── .*First reviewer/);
     expect(rows[1]).toMatch(/^│   └── .*Nested scout/);
     expect(rows[2]).toMatch(/^└── .*Second reviewer/);
+  });
+
+  it("advertises hidden start tasks with the shared expansion affordance", () => {
+    const agents = [
+      { task: "Inspect the renderer.", name: "Renderer scout", profile: "scout" },
+    ] as const;
+    const collapsed = renderSubagentStartCall(agents, theme, false).render(120).join("\n");
+    const expanded = renderSubagentStartCall(agents, theme, true).render(120).join("\n");
+
+    expect(collapsed).toContain("▸ ctrl+o to view tasks");
+    expect(expanded).toContain("Task: Inspect the renderer.");
+    expect(expanded).not.toContain("ctrl+o to view tasks");
+  });
+
+  it("uses the shared expansion affordance for hidden launch failures", () => {
+    const failure = {
+      index: 0,
+      name: "Unavailable verification",
+      code: "unavailable",
+      message: "No route was available.",
+    };
+    const entry = {
+      index: 0,
+      name: "Unavailable verification",
+      profile: "reviewer",
+      status: "failed" as const,
+      routeStatus: "unavailable" as const,
+    };
+    const collapsed = renderStartReceiptComponent([failure], [entry], false, theme)
+      .render(120)
+      .join("\n");
+    const expanded = renderStartReceiptComponent([failure], [entry], true, theme)
+      .render(120)
+      .join("\n");
+
+    expect(collapsed).toContain("▸ failure details · ctrl+o to expand");
+    expect(expanded).not.toContain("ctrl+o to expand");
+  });
+
+  it("marks truncated action-failure text as expandable", () => {
+    const message = `Failure prefix ${"detail ".repeat(15)}failure tail`;
+    const details = makeCompactToolDetails({
+      action: "stop",
+      runs: [],
+      actionFailures: [{ id: "agent-failed", code: "stop_failed", message }],
+    });
+    const collapsed = renderSubagentResult({ content: [], details }, false, false, theme)
+      .render(60)
+      .join("\n");
+    const expanded = renderSubagentResult({ content: [], details }, false, true, theme)
+      .render(60)
+      .join("\n");
+
+    expect(collapsed).toContain("▸ failure text · ctrl+o to expand");
+    expect(collapsed).not.toContain("failure tail");
+    expect(expanded).toContain("failure tail");
+    expect(expanded).not.toContain("ctrl+o to expand");
+  });
+
+  it("points truncated fallback output to ctrl+o", () => {
+    const text = Array.from({ length: 13 }, (_, index) => `line ${index + 1}`).join("\n");
+    const collapsed = renderSubagentResult(
+      { content: [{ type: "text", text }] },
+      false,
+      false,
+      theme,
+    )
+      .render(120)
+      .join("\n");
+
+    expect(collapsed).toContain("2 more lines · ctrl+o to expand");
+    expect(collapsed).not.toContain("expand to view");
   });
 
   it.each([
