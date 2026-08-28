@@ -5,9 +5,9 @@ packages:
   - packages/pi-code-mode/runtime
 
 catalog:
-  "@earendil-works/pi-ai": 0.84.0
-  "@earendil-works/pi-coding-agent": 0.84.0
-  "@earendil-works/pi-tui": 0.84.0
+  "@earendil-works/pi-ai": 0.84.3
+  "@earendil-works/pi-coding-agent": 0.84.3
+  "@earendil-works/pi-tui": 0.84.3
   "@effect/platform-node": 4.0.0-rc.111
   "@effect/vitest": 4.0.0-rc.111
   "@oxlint/plugins": 1.78.0

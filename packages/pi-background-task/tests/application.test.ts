@@ -1,17 +1,25 @@
 // Promise assertions characterize the Pi lifecycle boundary.
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionHandler,
+import {
+  createEventBus,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
 import {
+  BACKGROUND_TASK_CODE_MODE_QUERY,
+  BACKGROUND_TASK_CODE_MODE_VERSION,
+  normalizeBackgroundTaskCodeModeCapability,
+  type BackgroundTaskCodeModeCapability,
+} from "../src/code-mode/protocol.ts";
+import {
   registerBackgroundTaskApplication,
   type BackgroundTaskApplicationBoundaries,
 } from "../src/application.ts";
+import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
 type Handler = ExtensionHandler<any, any>;
 
@@ -19,7 +27,7 @@ interface CapturedBackgroundTool {
   readonly name: string;
   readonly execute: (
     id: string,
-    input: { readonly action: "list" },
+    input: BackgroundTaskToolInput,
     signal: AbortSignal,
     onUpdate: undefined,
     context: ExtensionContext,
@@ -52,12 +60,18 @@ const context = (cwd: string): ExtensionContext =>
 
 const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"]) => {
   const handlers = new Map<string, Handler>();
+  const events = createEventBus();
   const tools: CapturedBackgroundTool[] = [];
-  const registerTool = vi.fn((tool: CapturedBackgroundTool) => tools.push(tool));
+  const activeTools: string[] = [];
+  const registerTool = vi.fn((tool: CapturedBackgroundTool) => {
+    tools.push(tool);
+    if (!activeTools.includes(tool.name)) activeTools.push(tool.name);
+  });
   const fixture = {
-    events: undefined,
+    events,
     registerCommand: vi.fn(),
     registerTool,
+    getActiveTools: () => [...activeTools],
     on: (name: string, handler: Handler) => handlers.set(name, handler),
   };
   // SAFETY: Each test invokes only the ExtensionAPI members explicitly implemented above.
@@ -67,6 +81,8 @@ const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings
   return {
     tools,
     registerTool,
+    events,
+    activeTools,
     emit: (name: "session_start" | "turn_end" | "session_shutdown", ctx: ExtensionContext) =>
       Promise.resolve(handlers.get(name)?.({}, ctx)),
   };
@@ -174,6 +190,116 @@ describe("background-task Pi lifecycle", () => {
 
       expect(app.registerTool).not.toHaveBeenCalled();
       yield* Effect.promise(() => app.emit("session_shutdown", ctx));
+    }),
+  );
+
+  it.effect("publishes one current-session Code Mode capability and revokes it on shutdown", () =>
+    Effect.gen(function* () {
+      const app = harness(() => Promise.resolve());
+      const ctx = extensionContextFixture({
+        ...context(process.cwd()),
+        sessionManager: {
+          getSessionId: () => "session-1",
+          getSessionFile: () => undefined,
+        },
+      });
+      yield* Effect.promise(() => app.emit("session_start", ctx));
+
+      expect(() =>
+        app.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
+          version: BACKGROUND_TASK_CODE_MODE_VERSION,
+          sessionId: "session-1",
+          respond: () => Promise.reject(new Error("contained response rejection")),
+        }),
+      ).not.toThrow();
+
+      const wrongSession: BackgroundTaskCodeModeCapability[] = [];
+      app.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
+        version: BACKGROUND_TASK_CODE_MODE_VERSION,
+        sessionId: "other-session",
+        respond: <Candidate>(candidate: Candidate) => {
+          const capability = normalizeBackgroundTaskCodeModeCapability(candidate);
+          if (capability) wrongSession.push(capability);
+        },
+      });
+      expect(wrongSession).toEqual([]);
+
+      const discovered: BackgroundTaskCodeModeCapability[] = [];
+      app.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
+        version: BACKGROUND_TASK_CODE_MODE_VERSION,
+        sessionId: "session-1",
+        respond: <Candidate>(candidate: Candidate) => {
+          const capability = normalizeBackgroundTaskCodeModeCapability(candidate);
+          if (capability) discovered.push(capability);
+        },
+      });
+      expect(discovered).toHaveLength(1);
+      const capability = discovered[0];
+      if (!capability) throw new Error("background capability was not discovered");
+      yield* Effect.promise(() =>
+        expect(
+          capability.execute(
+            "nested-list-refused",
+            { action: "list" },
+            new AbortController().signal,
+            0,
+          ),
+        ).rejects.toMatchObject({ _tag: "InvalidBackgroundCommandError" }),
+      );
+      const result = yield* Effect.promise(() =>
+        capability.execute(
+          "nested-list",
+          { action: "list", state: "all" },
+          new AbortController().signal,
+          4_096,
+        ),
+      );
+      expect(result).toEqual({ action: "list", text: "No background tasks.", tasks: [] });
+
+      const started = yield* Effect.promise(() =>
+        capability.execute(
+          "nested-start",
+          {
+            action: "start",
+            command: `node -e "setTimeout(() => {}, 10000)"`,
+          },
+          new AbortController().signal,
+          4_096,
+        ),
+      );
+      if (started.action !== "start") throw new Error("nested start returned the wrong action");
+      const taskId = started.snapshot.id;
+      const topLevelTool = app.tools[0];
+      if (!topLevelTool) throw new Error("top-level background tool was not registered");
+      const status = yield* Effect.promise(() =>
+        topLevelTool.execute(
+          "top-level-status",
+          { action: "status", id: taskId },
+          new AbortController().signal,
+          undefined,
+          ctx,
+        ),
+      );
+      expect(status).toMatchObject({ details: { snapshot: { id: taskId } } });
+
+      app.activeTools.splice(0, app.activeTools.length);
+      yield* Effect.promise(() =>
+        expect(
+          capability.execute(
+            "deactivated-list",
+            { action: "list" },
+            new AbortController().signal,
+            4_096,
+          ),
+        ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+      );
+
+      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
+      yield* Effect.promise(() =>
+        expect(
+          capability.execute("stale-list", { action: "list" }, new AbortController().signal, 1_024),
+        ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+      );
     }),
   );
 

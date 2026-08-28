@@ -2,9 +2,10 @@
 
 `pi-code-mode` owns one Effect-managed Pi extension. It provides trusted-project configuration,
 the session lifecycle, `/code-mode-settings`, and one `code_mode` tool. A tool call runs one
-confined JavaScript program over exactly seven supplied Pi built-ins under `tools.pi`: `read`,
-`bash`, `edit`, `write`, `grep`, `find`, and `ls`. The private runtime also supplies
-`tools.$codemode.search`.
+confined JavaScript program over seven core Pi built-ins under `tools.pi`: `read`, `bash`, `edit`,
+`write`, `grep`, `find`, and `ls`. Windows sessions also supply `tools.pi.powershell`. The reviewed
+`tools.session.backgroundTask` leaf reaches the current `pi-background-task` runtime through its
+versioned session protocol. The private runtime supplies `tools.$codemode.search`.
 
 The interpreter is the nested `pi-code-mode-runtime` workspace package under `runtime/` (ADR
 0003). Its TypeScript source ships in this package and loads through one computed relative import
@@ -20,14 +21,15 @@ Only runtime source and legal or provenance documents ship.
   the only persistence door, `CodeModeConfigStore`.
 - `src/settings/` owns command dispatch, completions, list behavior, custom integer flow, and
   notifications. `src/boundary/host-ui.ts` is the Promise and callback adapter for Pi dialogs.
-- `src/tools/` owns the exact guest catalog, execution admission, UTF-8 limits, progress state,
+- `src/tools/` owns the reviewed guest catalog, execution admission, UTF-8 limits, progress state,
   result formatting, failure-detail retention, tool registration, active-list reconciliation,
   and renderer ticker cleanup.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
   legacy details, `tool-renderer.ts` renders calls and results, and `result-output.ts` projects
   small structured results without changing model-visible text.
-- `src/boundary/` contains the runtime import, all seven fresh Pi built-in adapters, the guarded
-  progress publisher, Pi dialog adapters, and the process-memory deactivation handoff.
+- `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
+  Windows PowerShell, the explicit Background Tasks protocol client, the guarded progress
+  publisher, Pi dialog adapters, and the process-memory deactivation handoff.
 - `tests/` covers configuration, atomic commits, lifecycle races, dialogs, adapters, limits,
   interpreter integration, progress, retention, and fail-soft rendering. `runtime/tests/` remains
   owned by the private runtime package.
@@ -103,23 +105,29 @@ persisted row after an active failure.
 
 ## Tool execution and limits
 
-The catalog is exactly the seven `tools.pi` leaves plus runtime-owned search. Inputs pass Effect
-Schema before dispatch. Fresh Pi definitions execute directly, so nested calls bypass Pi
-`tool_call` and `tool_result` middleware, approvals, previews, registered overrides, and
-session-specific operations (ADR 0004).
+The catalog contains seven core `tools.pi` leaves, conditional Windows PowerShell, the fixed
+`tools.session.backgroundTask` adapter, and runtime-owned search. Inputs pass Effect Schema before
+dispatch. Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and
+`tool_result` middleware, approvals, previews, registered overrides, and session-specific
+operations (ADR 0004). Background Tasks calls query one stable-session, token-checked Promise
+capability on each invocation. They never dispatch the registered top-level definition (ADR 0006).
 
 Interpreter confinement limits JavaScript, not supplied-tool authority. Bash has full local-user
 process, environment, network, and filesystem authority. Read, edit, and write accept relative,
 absolute, and home-relative paths. Mutations happen immediately and cancellation cannot roll them
-back. Nested results carry text only; images are refused and built-in result details are dropped.
+back. Pi built-in results carry text only; images are refused and built-in result details are
+dropped. Background Tasks returns a copied structured result with bounded text and metadata.
 
 Each execution applies source, time, call-count, result, cumulative child-output, and discovery
 budgets. The final `clampModelVisibleText` bounds all model-visible success, failure, cancellation,
 source-refusal, and unexpected-error text by exact UTF-8 bytes without splitting a code point.
 Zero bytes yields empty text. Only the stale or missing-state refusal uses a fixed bounded message
 because no current configuration exists. Successful nested text and catchable failure text share
-one cumulative budget. An output-overrun refusal is itself admitted through `admitFailure`, so
-repeated caught overruns cannot create free diagnostic text.
+one cumulative budget. Structured Background Tasks output is charged as compact JSON. The
+provider first receives the current remaining allowance, capped at 16 MiB, and refuses an
+oversized projection before copying snapshots; the consumer then applies bounded schemas, repeats
+the aggregate estimate, and performs exact atomic admission. An output-overrun refusal is itself admitted through `admitFailure`, so repeated
+caught overruns cannot create free diagnostic text.
 
 Progress starts immediately. Queued admission and decoded running labels publish synchronously;
 status-only changes coalesce to a 16 ms host frame, and settlement flushes the latest snapshot.

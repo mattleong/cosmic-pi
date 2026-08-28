@@ -253,6 +253,20 @@ describe("code mode application lifecycle at the Pi boundary", () => {
     }),
   );
 
+  it.effect("builds a Windows catalog when the native PowerShell definition is present", () =>
+    Effect.gen(function* () {
+      const h = applicationHarness({
+        makeNestedDefinitions: () => opaqueHostFixture({ powershell: {} }),
+      });
+      const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+      yield* Effect.promise(() => h.start(ctx));
+      const registered = h.registerTool.mock.calls[0]?.[0];
+      expect(registered?.description).toContain("Windows-only tools.pi.powershell");
+      expect(registered?.description).toContain("tools.session.backgroundTask");
+      yield* Effect.promise(() => h.shutdown(ctx));
+    }),
+  );
+
   it.effect("builds the catalog from state published while preview loading was pending", () =>
     Effect.gen(function* () {
       const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -275,6 +289,7 @@ describe("code mode application lifecycle at the Pi boundary", () => {
       const registered = h.registerTool.mock.calls[0]?.[0];
       const expected = buildCodeModeToolDefinition({
         catalogBudget: 7,
+        includePowerShell: false,
         execute: () => Promise.reject(new Error("not executed")),
       });
       expect(registered?.description).toBe(expected.description);

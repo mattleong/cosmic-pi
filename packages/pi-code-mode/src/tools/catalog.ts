@@ -1,12 +1,16 @@
 /**
- * The exact guest catalog: all seven Pi built-ins under `tools.pi` plus the runtime-owned
- * `tools.$codemode.search`. The Pi leaves dispatch directly against fresh built-in definitions;
- * they intentionally do not inherit Pi middleware, registered overrides, or approval/preview
- * extensions. MCP and arbitrary dynamic dispatch remain outside this package.
+ * The reviewed guest catalog: Pi built-ins under `tools.pi`, the explicit session-scoped
+ * Background Tasks adapter under `tools.session`, and runtime-owned discovery. Pi definitions
+ * dispatch directly; the background adapter uses its own versioned current-session protocol.
  */
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { BackgroundTaskToolInput } from "pi-background-task/code-mode";
 import { CodeMode, Tool, toolError } from "../boundary/codemode-runtime.ts";
+import {
+  BackgroundTaskCodeModeOutputSchema,
+  type BackgroundTaskDispatch,
+} from "../boundary/host-background-task.ts";
 import type { NestedPiToolDispatch, PiGuestToolName } from "../boundary/host-builtin-tools.ts";
 import type { CumulativeOutputBudget } from "./limits.ts";
 
@@ -16,7 +20,7 @@ const ReadInput = Schema.Struct({
   offset: Schema.optionalKey(Schema.Number),
   limit: Schema.optionalKey(Schema.Number),
 });
-const BashInput = Schema.Struct({
+const ShellInput = Schema.Struct({
   command: Schema.String,
   timeout: Schema.optionalKey(Schema.Number),
 });
@@ -51,6 +55,35 @@ const LsInput = Schema.Struct({
   path: Schema.optionalKey(Schema.String),
   limit: Schema.optionalKey(Schema.Number),
 });
+const PositiveFinite = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0.001));
+const NonNegativeInteger = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+const BackgroundTaskInput = Schema.Struct({
+  action: Schema.Literals(["start", "list", "status", "logs", "wait", "stop", "stop_all", "clear"]),
+  command: Schema.optionalKey(Schema.String),
+  cwd: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  timeoutSeconds: Schema.optionalKey(PositiveFinite),
+  id: Schema.optionalKey(Schema.String),
+  state: Schema.optionalKey(Schema.Literals(["active", "completed", "all"])),
+  until: Schema.optionalKey(Schema.Literals(["exit", "output"])),
+  contains: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
+  afterCursor: Schema.optionalKey(NonNegativeInteger),
+  tailLines: Schema.optionalKey(
+    Schema.Number.check(
+      Schema.isFinite(),
+      Schema.isInt(),
+      Schema.isBetween({ minimum: 1, maximum: 2_000 }),
+    ),
+  ),
+  waitSeconds: Schema.optionalKey(
+    Schema.Number.check(Schema.isFinite(), Schema.isBetween({ minimum: 0, maximum: 120 })),
+  ),
+  force: Schema.optionalKey(Schema.Boolean),
+});
 
 const GUEST_TOOL_DESCRIPTIONS = {
   read:
@@ -62,6 +95,10 @@ const GUEST_TOOL_DESCRIPTIONS = {
     "Bash overrides or session-specific shell options. Output is limited to a 2,000-line/50 KiB " +
     "tail; larger full output is saved to a temporary file named in the result. Optional timeout " +
     "is in seconds; nonzero exit, timeout, and abort are catchable tool failures.",
+  powershell:
+    "Execute a command through Pi's native Windows PowerShell implementation with full local-user " +
+    "process, filesystem, environment, and network authority. Available only on Windows and does " +
+    "not inherit registered overrides or session-specific shell options.",
   edit:
     "Edit one unrestricted relative, absolute, or home-relative file with a non-empty canonical " +
     "edits array. Every oldText must uniquely match the original file and edits must not overlap. " +
@@ -78,7 +115,8 @@ const GUEST_TOOL_DESCRIPTIONS = {
 
 const GUEST_TOOL_INPUTS = {
   read: ReadInput,
-  bash: BashInput,
+  bash: ShellInput,
+  powershell: ShellInput,
   edit: EditInput,
   write: WriteInput,
   grep: GrepInput,
@@ -94,48 +132,96 @@ const guestTool = <Name extends PiGuestToolName>(name: Name, invoke: NestedPiToo
     run: (input) => invoke(name, input),
   });
 
-/** The `pi` namespace exposed to programs; every leaf validates input with Effect Schema. */
-export const makeCodeModeGuestTools = (invoke: NestedPiToolDispatch) => ({
-  pi: {
-    read: guestTool("read", invoke),
-    bash: guestTool("bash", invoke),
-    edit: guestTool("edit", invoke),
-    write: guestTool("write", invoke),
-    grep: guestTool("grep", invoke),
-    find: guestTool("find", invoke),
-    ls: guestTool("ls", invoke),
-  },
-});
+const backgroundTaskTool = (invoke: BackgroundTaskDispatch) =>
+  Tool.make({
+    description:
+      "Start and manage session-scoped local background commands through the explicit " +
+      "pi-background-task adapter. Tasks may outlive this Code Mode call but are terminated " +
+      "when the Pi session closes. Use wait once at a dependency barrier instead of polling.",
+    input: BackgroundTaskInput,
+    output: BackgroundTaskCodeModeOutputSchema,
+    run: (input) => invoke(input satisfies BackgroundTaskToolInput),
+  });
+
+export interface CodeModeCatalogOptions {
+  /** True only when the current platform supplied a native PowerShell definition. */
+  readonly includePowerShell: boolean;
+}
+
+/** The tool tree exposed to programs; every leaf validates input with Effect Schema. */
+export const makeCodeModeGuestTools = (
+  invokePi: NestedPiToolDispatch,
+  invokeBackgroundTask: BackgroundTaskDispatch,
+  options: CodeModeCatalogOptions,
+) => {
+  const portablePi = {
+    read: guestTool("read", invokePi),
+    bash: guestTool("bash", invokePi),
+    edit: guestTool("edit", invokePi),
+    write: guestTool("write", invokePi),
+    grep: guestTool("grep", invokePi),
+    find: guestTool("find", invokePi),
+    ls: guestTool("ls", invokePi),
+  };
+  return {
+    pi: options.includePowerShell
+      ? { ...portablePi, powershell: guestTool("powershell", invokePi) }
+      : portablePi,
+    session: {
+      backgroundTask: backgroundTaskTool(invokeBackgroundTask),
+    },
+  };
+};
 
 /**
- * Composes one execution's guest tools: nested dispatch followed by cumulative-output
- * admission. The admitted value is the exact string entering the guest, counted exactly once.
+ * Composes one execution's guest tools with cumulative-output admission. Structured background
+ * results are charged as compact JSON; existing built-in strings retain raw UTF-8 accounting.
  */
 export const makeExecutionGuestTools = (
-  dispatch: NestedPiToolDispatch,
+  dispatchPi: NestedPiToolDispatch,
+  dispatchBackgroundTask: BackgroundTaskDispatch,
   budget: CumulativeOutputBudget,
+  options: CodeModeCatalogOptions,
 ) =>
-  makeCodeModeGuestTools((name, input) =>
-    dispatch(name, input).pipe(
-      Effect.catchTag("ToolError", (error) =>
-        Effect.fail(toolError(budget.admitFailure(error.message))),
+  makeCodeModeGuestTools(
+    (name, input) =>
+      dispatchPi(name, input).pipe(
+        Effect.catchTag("ToolError", (error) =>
+          Effect.fail(toolError(budget.admitFailure(error.message))),
+        ),
+        Effect.flatMap((guestData) => {
+          const admission = budget.admit(guestData);
+          return admission.admitted
+            ? Effect.succeed(guestData)
+            : Effect.fail(toolError(budget.admitFailure(admission.message)));
+        }),
       ),
-      Effect.flatMap((guestData) => {
-        const admission = budget.admit(guestData);
-        return admission.admitted
-          ? Effect.succeed(guestData)
-          : Effect.fail(toolError(budget.admitFailure(admission.message)));
-      }),
-    ),
+    (input) =>
+      dispatchBackgroundTask(input).pipe(
+        Effect.catchTag("ToolError", (error) =>
+          Effect.fail(toolError(budget.admitFailure(error.message))),
+        ),
+        Effect.flatMap((guestData) => {
+          const serialized = JSON.stringify(guestData) ?? "";
+          const admission = budget.admit(serialized);
+          return admission.admitted
+            ? Effect.succeed(guestData)
+            : Effect.fail(toolError(budget.admitFailure(admission.message)));
+        }),
+      ),
+    options,
   );
 
-/**
- * Model-facing catalog instructions for the tool description, produced by the runtime's
- * budgeted discovery renderer over the same tool shapes the program will see. The preview
- * leaves are deliberately not executable.
- */
-export const describeCodeModeCatalog = (catalogBudget: number): string =>
+/** Model-facing catalog instructions rendered over the same shapes the program will see. */
+export const describeCodeModeCatalog = (
+  catalogBudget: number,
+  options: CodeModeCatalogOptions,
+): string =>
   CodeMode.make({
-    tools: makeCodeModeGuestTools(() => Effect.fail(toolError("Tool preview is not executable."))),
+    tools: makeCodeModeGuestTools(
+      () => Effect.fail(toolError("Tool preview is not executable.")),
+      () => Effect.fail(toolError("Tool preview is not executable.")),
+      options,
+    ),
     discovery: { catalogBudget },
   }).instructions();

@@ -26,6 +26,12 @@ describe("defensive formatters", () => {
   it("derives bounded activity from decoded inputs", () => {
     expect(describeNestedActivity("pi.read", { path: "src/a.ts" })).toBe("Read src/a.ts");
     expect(describeNestedActivity("pi.grep", { pattern: "TODO" })).toBe("Search TODO in cwd");
+    expect(describeNestedActivity("pi.powershell", { command: "Get-ChildItem" })).toBe(
+      "Run Get-ChildItem",
+    );
+    expect(describeNestedActivity("session.backgroundTask", { action: "wait", id: "bg-2" })).toBe(
+      "Background wait bg-2",
+    );
   });
 });
 

@@ -52,6 +52,9 @@ const ActivityInputSchema = Schema.Struct({
   command: Schema.optional(Schema.Unknown),
   pattern: Schema.optional(Schema.Unknown),
   query: Schema.optional(Schema.Unknown),
+  action: Schema.optional(Schema.Unknown),
+  id: Schema.optional(Schema.Unknown),
+  name: Schema.optional(Schema.Unknown),
 });
 type ActivityField = keyof typeof ActivityInputSchema.Type;
 
@@ -77,6 +80,7 @@ export const describeNestedActivity = <Name, Input>(name: Name, input: Input): s
     case "pi.read":
       return `Read ${at("file")}`;
     case "pi.bash":
+    case "pi.powershell":
       return `Run ${activityField(input, "command") ?? "command"}`;
     case "pi.edit":
       return `Edit ${at("file")}`;
@@ -88,6 +92,14 @@ export const describeNestedActivity = <Name, Input>(name: Name, input: Input): s
       return `Find ${activityField(input, "pattern") ?? "pattern"} in ${at("cwd")}`;
     case "pi.ls":
       return `List ${at("cwd")}`;
+    case "session.backgroundTask": {
+      const action = activityField(input, "action") ?? "manage";
+      const target =
+        activityField(input, "id") ??
+        activityField(input, "name") ??
+        activityField(input, "command");
+      return `Background ${action}${target === undefined ? "" : ` ${target}`}`;
+    }
     case "$codemode.search": {
       const query = activityField(input, "query");
       return query === undefined ? "Discover tools" : `Discover tools for ${query}`;

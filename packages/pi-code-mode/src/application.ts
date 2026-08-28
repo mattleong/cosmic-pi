@@ -18,6 +18,7 @@ import {
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import {
+  hasNestedPowerShell,
   makeNestedPiToolDefinitions,
   type NestedPiToolDefinitions,
 } from "./boundary/host-builtin-tools.ts";
@@ -50,6 +51,8 @@ import {
 
 interface CodeModeSessionInput extends CodeModeLayerInput {
   readonly ctx: ExtensionContext;
+  /** Stable Pi session identity captured once; optional capabilities fail closed without it. */
+  readonly sessionId: CodeModeSessionKey | undefined;
   /** Revoked before this session's runtime can finish a late uninterruptible publication. */
   readonly publicationOwner: MutableRef.MutableRef<boolean>;
 }
@@ -151,11 +154,14 @@ export function registerCodeModeApplication(
         wrapped = boundaries.wrapTool(
           buildCodeModeToolDefinition({
             catalogBudget: state.config.catalogBudget,
+            includePowerShell: hasNestedPowerShell(definitions),
             execute: makeCodeModeToolExecute({
               isCurrent,
               getState: () => MutableRef.get(stateRef),
               runInSession: (effect, signal) => slot.run(effect, signal),
               definitions,
+              events: pi.events,
+              sessionId: input.sessionId,
               retainFailureDetails: failureDetails.retain,
             }),
           }),
@@ -218,7 +224,16 @@ export function registerCodeModeApplication(
     const projectTrusted = isProjectTrusted(ctx);
     const publicationOwner = MutableRef.make(true);
     return slot
-      .start({ ctx, cwd: captured.cwd, projectTrusted, publicationOwner }, captured.signal)
+      .start(
+        {
+          ctx,
+          cwd: captured.cwd,
+          projectTrusted,
+          publicationOwner,
+          sessionId: sessionKey,
+        },
+        captured.signal,
+      )
       .then(() => undefined);
   };
 

@@ -118,7 +118,7 @@ export function registerCodeModeSettingsController(
   };
 
   const helpLines = (state: CodeModeState | undefined): string[] => [
-    "Code Mode settings (the code_mode tool runs confined programs over all Pi built-ins)",
+    "Code Mode settings (the code_mode tool runs confined programs over reviewed supplied tools)",
     ...CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => {
       const current = state ? `=${String(state.config[descriptor.id])}` : "";
       return `  ${descriptor.id}${current}  — ${descriptor.description}`;

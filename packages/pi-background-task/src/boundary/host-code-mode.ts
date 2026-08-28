@@ -1,0 +1,173 @@
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
+import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import { invokeHostCallback, PiSessionRuntimeError } from "pi-cosmic-core";
+import {
+  BACKGROUND_TASK_CODE_MODE_QUERY,
+  BACKGROUND_TASK_CODE_MODE_VERSION,
+  normalizeBackgroundTaskCodeModeQuery,
+  type BackgroundTaskCodeModeCapability,
+} from "../code-mode/protocol.ts";
+import { projectBackgroundTaskCodeModeOutput } from "../code-mode/output.ts";
+import { InvalidBackgroundCommandError } from "../task/errors.ts";
+import { BackgroundTaskService } from "../task/service.ts";
+import { executeBackgroundTaskCommand } from "../tools/command.ts";
+import type { BackgroundTaskToolInput } from "../tools/schema.ts";
+
+const PositiveFinite = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0.001));
+const NonNegativeInteger = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+const BackgroundTaskInputSchema = Schema.Struct({
+  action: Schema.Literals(["start", "list", "status", "logs", "wait", "stop", "stop_all", "clear"]),
+  command: Schema.optionalKey(Schema.String),
+  cwd: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  timeoutSeconds: Schema.optionalKey(PositiveFinite),
+  id: Schema.optionalKey(Schema.String),
+  state: Schema.optionalKey(Schema.Literals(["active", "completed", "all"])),
+  until: Schema.optionalKey(Schema.Literals(["exit", "output"])),
+  contains: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
+  afterCursor: Schema.optionalKey(NonNegativeInteger),
+  tailLines: Schema.optionalKey(
+    Schema.Number.check(
+      Schema.isFinite(),
+      Schema.isInt(),
+      Schema.isBetween({ minimum: 1, maximum: 2_000 }),
+    ),
+  ),
+  waitSeconds: Schema.optionalKey(
+    Schema.Number.check(Schema.isFinite(), Schema.isBetween({ minimum: 0, maximum: 120 })),
+  ),
+  force: Schema.optionalKey(Schema.Boolean),
+});
+
+const decodeInput = Schema.decodeUnknownEffect(BackgroundTaskInputSchema);
+
+export const backgroundTaskCodeModeSessionId = (ctx: ExtensionContext): string | undefined =>
+  invokeHostCallback(() => {
+    const sessionId = ctx.sessionManager?.getSessionId?.();
+    return Predicate.isString(sessionId) && sessionId.length > 0 ? sessionId : undefined;
+  }, undefined);
+
+export interface BackgroundTaskCodeModeActivation {
+  readonly sessionId: string | undefined;
+  readonly tokenCurrent: () => boolean;
+  readonly toolActive: () => boolean;
+  readonly sessionCwd: string;
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>,
+    signal?: AbortSignal,
+  ) => Promise<A>;
+}
+
+export interface BackgroundTaskCodeModeHost {
+  readonly activate: (activation: BackgroundTaskCodeModeActivation) => void;
+  readonly deactivate: () => void;
+  readonly dispose: () => void;
+}
+
+/**
+ * Installs the synchronous query listener. The returned host publishes only one current,
+ * session-bound Promise capability and never exposes the service or runtime itself.
+ */
+export const makeBackgroundTaskCodeModeHost = (
+  events: ExtensionAPI["events"],
+): BackgroundTaskCodeModeHost => {
+  let current:
+    | {
+        readonly activation: BackgroundTaskCodeModeActivation;
+        readonly capability: BackgroundTaskCodeModeCapability;
+      }
+    | undefined;
+
+  const deactivate = (): void => {
+    current = undefined;
+  };
+
+  const unsubscribe = events.on(BACKGROUND_TASK_CODE_MODE_QUERY, (value) => {
+    const query = normalizeBackgroundTaskCodeModeQuery(value);
+    const selected = current;
+    if (
+      !query ||
+      !selected ||
+      query.sessionId !== selected.capability.sessionId ||
+      !invokeHostCallback(selected.activation.tokenCurrent, false) ||
+      !invokeHostCallback(selected.activation.toolActive, false)
+    )
+      return;
+    invokeHostCallback(() => query.respond(selected.capability), undefined);
+  });
+
+  return {
+    activate: (activation) => {
+      deactivate();
+      const sessionId = activation.sessionId;
+      if (sessionId === undefined) return;
+      let owner:
+        | {
+            readonly activation: BackgroundTaskCodeModeActivation;
+            readonly capability: BackgroundTaskCodeModeCapability;
+          }
+        | undefined;
+      const capability: BackgroundTaskCodeModeCapability = Object.freeze({
+        version: BACKGROUND_TASK_CODE_MODE_VERSION,
+        sessionId,
+        execute: (
+          _callId: string,
+          input: BackgroundTaskToolInput,
+          signal: AbortSignal,
+          maxOutputBytes: number,
+        ) => {
+          if (
+            current !== owner ||
+            !invokeHostCallback(activation.tokenCurrent, false) ||
+            !invokeHostCallback(activation.toolActive, false)
+          ) {
+            return Promise.reject(
+              new PiSessionRuntimeError({
+                operation: "background-task-code-mode",
+                message: "Background Tasks is not active for this session.",
+              }),
+            );
+          }
+          return activation.run(
+            decodeInput(input).pipe(
+              Effect.flatMap((decoded) =>
+                executeBackgroundTaskCommand(
+                  decoded satisfies BackgroundTaskToolInput,
+                  activation.sessionCwd,
+                  { maxTextBytes: maxOutputBytes },
+                ),
+              ),
+              Effect.flatMap((result) => {
+                const projection = projectBackgroundTaskCodeModeOutput(result, maxOutputBytes);
+                return projection._tag === "Accepted"
+                  ? Effect.succeed(projection.output)
+                  : Effect.fail(
+                      new InvalidBackgroundCommandError({
+                        message:
+                          "Background task result exceeds the current Code Mode child-output allowance. " +
+                          "Use a narrower action or filter and retry.",
+                      }),
+                    );
+              }),
+            ),
+            signal,
+          );
+        },
+      });
+      owner = Object.freeze({ activation, capability });
+      current = owner;
+    },
+    deactivate,
+    dispose: () => {
+      deactivate();
+      invokeHostCallback(unsubscribe, undefined);
+    },
+  };
+};

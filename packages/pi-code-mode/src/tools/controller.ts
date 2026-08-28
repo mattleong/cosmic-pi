@@ -133,27 +133,31 @@ const parameters = Type.Object({
   ),
 });
 
-const DESCRIPTION_HEADER =
-  "Run one confined JavaScript program that orchestrates all seven Pi built-ins " +
+const descriptionHeader = (includePowerShell: boolean) =>
+  "Run one confined JavaScript program that orchestrates Pi's seven core built-ins " +
   "(tools.pi.read, tools.pi.bash, tools.pi.edit, tools.pi.write, tools.pi.grep, " +
-  "tools.pi.find, tools.pi.ls) in a single tool call: sequence, transform, filter, branch, " +
-  "and parallelize nested calls, then return only the data you need. The tree-walk " +
-  "interpreter itself has no ambient filesystem, network, process, module, or timer APIs; " +
-  "authority comes from supplied tools. In particular, bash/edit/write grant full local-user " +
-  "process, network, environment, and unrestricted filesystem authority. Session-configured " +
-  "limits bound interpreter time, call count, and model-visible bytes but cannot prevent or " +
-  "undo tool side effects.\n" +
+  `tools.pi.find, tools.pi.ls)${includePowerShell ? ", the Windows-only tools.pi.powershell built-in," : ""} ` +
+  "and the explicit tools.session.backgroundTask adapter in a single tool call. Sequence, " +
+  "transform, filter, branch, and parallelize nested calls, then return only the data you " +
+  "need. The tree-walk interpreter itself has no ambient filesystem, network, process, module, " +
+  "or timer APIs; authority comes from supplied tools. Shell, edit, write, and background-task " +
+  "start operations grant full local-user process, network, environment, and unrestricted " +
+  "filesystem authority. Session-configured limits bound interpreter time, call count, and " +
+  "model-visible bytes but cannot prevent or undo tool side effects. A started background task " +
+  "may outlive the Code Mode call and is owned until Pi session shutdown.\n" +
   "\n" +
-  "Nested Pi calls are dispatched directly against fresh built-in definitions: they BYPASS " +
+  "Nested Pi calls are dispatched directly against fresh built-in definitions. They BYPASS " +
   "Pi tool_call/tool_result middleware, approval and preview extensions, registered tool " +
-  "overrides, and session-specific tool operations. Nested bash therefore uses Pi's default " +
-  "local shell implementation rather than any configured or overridden top-level Bash. Paths " +
-  "may be relative, absolute, or home-relative; code_mode does not confine tool effects to " +
-  "the project directory.";
+  "overrides, and session-specific tool operations. The Background Tasks leaf uses only its " +
+  "versioned current-session capability and likewise does not dispatch a registered tool. " +
+  "Nested shells use Pi's default local implementations. Paths may be relative, absolute, or " +
+  "home-relative; code_mode does not confine tool effects to the project directory.";
 
 export interface CodeModeToolDefinitionInput {
   /** Discovery catalog budget (estimated tokens) captured at registration time. */
   readonly catalogBudget: number;
+  /** Whether this registration includes Pi's native Windows PowerShell definition. */
+  readonly includePowerShell: boolean;
   readonly execute: CodeModeToolExecute;
   /** Test seam for the host-render ticker; production uses the shared Cosmic UI boundary. */
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
@@ -164,9 +168,14 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
   return defineTool({
     name: CODE_MODE_TOOL_NAME,
     label: "Code Mode",
-    description: `${DESCRIPTION_HEADER}\n\n${describeCodeModeCatalog(input.catalogBudget)}`,
+    description: `${descriptionHeader(input.includePowerShell)}\n\n${describeCodeModeCatalog(
+      input.catalogBudget,
+      {
+        includePowerShell: input.includePowerShell,
+      },
+    )}`,
     promptSnippet:
-      "Run one confined script that orchestrates Pi read/bash/edit/write/grep/find/ls calls",
+      "Run one confined script that orchestrates Pi built-ins and session background tasks",
     promptGuidelines: [
       "Use code_mode when one task needs several dependent or parallel Pi built-in calls whose " +
         "intermediate results you would otherwise echo through the transcript; write one small " +

@@ -11,12 +11,7 @@ import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { managerNoticeGlyph, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import type { SubagentStartEntry } from "./details.ts";
-import {
-  failedStartRecoveryAction,
-  formatFailedStartRecovery,
-  formatToolModel,
-  formatToolRoute,
-} from "./format.ts";
+import { failedStartRecoveryAction, formatFailedStartRecovery, formatToolRoute } from "./format.ts";
 import { failureRecovery } from "./render-management.ts";
 import type { SubagentStartSpec } from "./schema.ts";
 import type { SubagentStartFailure } from "./subagent.ts";
@@ -155,25 +150,24 @@ const receiptRow = (
           `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)} · ${theme.fg("muted", profile)} · ${theme.fg("toolOutput", route)}${id ? ` · ${theme.fg("muted", id)}` : ""}${recoveryStatus ? theme.fg(recovery?.retryDisposition === "eligible" ? "accent" : "warning", recoveryStatus) : ""}`,
         ]
       : (() => {
-          const lines = [
-            `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)}`,
-            `  ${theme.fg("muted", profile)}`,
-          ];
-          if (selectedRoute(entry)) {
-            lines.push(
-              `  ${theme.fg("toolOutput", `${entry.host ?? "local"}/${entry.runtime ?? "pi"}`)}`,
-              `  ${theme.fg(
+          const lines = [`${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)}`];
+          const routeValue = selectedRoute(entry)
+            ? `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg(
                 "toolOutput",
-                formatToolModel(
+                formatToolRoute(
+                  entry.host ?? "local",
+                  entry.runtime ?? "pi",
                   entry.model ?? "unknown model",
                   entry.effort ?? "off",
                   entry.fastMode,
                 ),
-              )}`,
-            );
-          } else {
-            lines.push(`  ${theme.fg("toolOutput", route)}`);
-          }
+              )}`
+            : `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", route)}`;
+          lines.push(
+            ...wrapTextWithAnsi(routeValue, Math.max(1, safeWidth - 5)).map(
+              (line, index) => `${theme.fg("dim", index === 0 ? "  ╰─ " : "     ")}${line}`,
+            ),
+          );
           if (id) lines.push(`  ${theme.fg("muted", id)}`);
           if (recovery)
             lines.push(

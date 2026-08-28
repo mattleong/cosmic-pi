@@ -1,7 +1,7 @@
 {
   "name": "pi-code-mode",
   "version": "0.2.0",
-  "description": "Code Mode for pi: a confined code_mode agent tool that orchestrates all seven Pi built-ins from one interpreted program, with trusted-project scoped settings.",
+  "description": "Code Mode for pi: a confined code_mode agent tool that orchestrates Pi built-ins and an explicit session-scoped background-task adapter from one interpreted program.",
   "keywords": [
     "code-mode",
     "pi",
@@ -55,6 +55,7 @@
   "dependencies": {
     "acorn": "catalog:",
     "effect": "catalog:",
+    "pi-background-task": "workspace:*",
     "pi-code-previews": "workspace:*",
     "pi-cosmic-core": "workspace:*",
     "pi-cosmic-ui": "workspace:*",

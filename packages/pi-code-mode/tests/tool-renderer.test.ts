@@ -11,6 +11,7 @@ type StartUiTicker = (intervalMs: number, tick: () => void) => () => void;
 const definition = (startUiTicker: StartUiTicker = () => () => undefined) =>
   buildCodeModeToolDefinition({
     catalogBudget: 0,
+    includePowerShell: false,
     execute: () => Promise.reject(new Error("not executed")),
     startUiTicker,
   });

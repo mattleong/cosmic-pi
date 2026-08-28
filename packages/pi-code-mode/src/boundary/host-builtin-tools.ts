@@ -1,5 +1,5 @@
 /**
- * Package-local adapters over all seven Pi built-in tool definitions.
+ * Package-local adapters over seven core Pi definitions plus Windows-only PowerShell.
  *
  * These adapters deliberately dispatch nested Code Mode calls directly against fresh built-in
  * definitions. Nested calls therefore bypass Pi middleware, approval/preview extensions,
@@ -14,6 +14,7 @@ import {
   createFindToolDefinition,
   createGrepToolDefinition,
   createLsToolDefinition,
+  createPowerShellToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
   type AgentToolResult,
@@ -28,10 +29,12 @@ import { toolError, type ToolError } from "./codemode-runtime.ts";
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 export type PiGuestToolInput = Parameters<AnyToolDefinition["execute"]>[1];
 
-/** The seven built-in definitions one Code Mode session dispatches against. */
+/** The built-in definitions one Code Mode session dispatches against. */
 export interface NestedPiToolDefinitions {
   readonly read: AnyToolDefinition;
   readonly bash: AnyToolDefinition;
+  /** Pi's native Windows shell tool. Omitted on other platforms. */
+  readonly powershell?: AnyToolDefinition;
   readonly edit: AnyToolDefinition;
   readonly write: AnyToolDefinition;
   readonly grep: AnyToolDefinition;
@@ -41,16 +44,29 @@ export interface NestedPiToolDefinitions {
 
 export type PiGuestToolName = keyof NestedPiToolDefinitions;
 
+export const hasNestedPowerShell = (
+  definitions: NestedPiToolDefinitions,
+): definitions is NestedPiToolDefinitions & { readonly powershell: AnyToolDefinition } =>
+  definitions.powershell !== undefined;
+
 /** Live factory: current built-in definitions bound to the session working directory. */
-export const makeNestedPiToolDefinitions = (cwd: string): NestedPiToolDefinitions => ({
-  read: createReadToolDefinition(cwd),
-  bash: createBashToolDefinition(cwd),
-  edit: createEditToolDefinition(cwd),
-  write: createWriteToolDefinition(cwd),
-  grep: createGrepToolDefinition(cwd),
-  find: createFindToolDefinition(cwd),
-  ls: createLsToolDefinition(cwd),
-});
+export const makeNestedPiToolDefinitions = (
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): NestedPiToolDefinitions => {
+  const portable = {
+    read: createReadToolDefinition(cwd),
+    bash: createBashToolDefinition(cwd),
+    edit: createEditToolDefinition(cwd),
+    write: createWriteToolDefinition(cwd),
+    grep: createGrepToolDefinition(cwd),
+    find: createFindToolDefinition(cwd),
+    ls: createLsToolDefinition(cwd),
+  };
+  return platform === "win32"
+    ? { ...portable, powershell: createPowerShellToolDefinition(cwd) }
+    : portable;
+};
 
 /** Tolerant shape of a nested `AgentToolResult` at this unknown boundary. */
 const NestedToolResultSchema = Schema.Struct({
@@ -125,6 +141,9 @@ export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): Nested
       nestedCalls += 1;
       const callId = `${options.toolCallId}/${name}/${nestedCalls}`;
       const definition = options.definitions[name];
+      if (definition === undefined) {
+        return Effect.fail(toolError(`Nested tool '${name}' is unavailable on this platform.`));
+      }
       return Effect.tryPromise({
         try: (interruptSignal) =>
           definition.execute(callId, input, interruptSignal, undefined, options.ctx),

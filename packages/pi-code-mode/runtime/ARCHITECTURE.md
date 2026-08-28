@@ -13,9 +13,10 @@ directory so its TypeScript `src/` tree ships inside the `pi-code-mode` tarball
 and loads directly through Pi/Jiti; `pi-code-mode` consumes it exclusively
 through the relative-path boundary door `src/boundary/codemode-runtime.ts`.
 The `pi-code-mode` extension owns every
-Pi-facing concern above this boundary: the outer `code_mode` agent tool, adapters for all
-seven `tools.pi` built-ins, their deliberate direct-dispatch authority policy (ADR 0004),
-and the Pi host limits (program source size, cumulative nested output).
+Pi-facing concern above this boundary: the outer `code_mode` agent tool, adapters for seven core
+`tools.pi` built-ins and Windows PowerShell, the explicit Background Tasks session adapter, their
+authority policies (ADRs 0004 and 0006), and the Pi host limits (program source size, cumulative
+nested output).
 
 ## Source map
 

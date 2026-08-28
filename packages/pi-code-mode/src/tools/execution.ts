@@ -8,11 +8,14 @@ import * as Predicate from "effect/Predicate";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
+  ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { CodeMode, type CodeModeResult } from "../boundary/codemode-runtime.ts";
+import { makeBackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import {
+  hasNestedPowerShell,
   makeNestedPiToolDispatch,
   type NestedPiToolDefinitions,
 } from "../boundary/host-builtin-tools.ts";
@@ -51,8 +54,12 @@ export interface CodeModeExecutionEnvironment {
   readonly getState: () => CodeModeState | undefined;
   /** Runs one effect on the current session runtime; the signal interrupts the fiber. */
   readonly runInSession: <A>(effect: Effect.Effect<A>, signal?: AbortSignal) => Promise<A>;
-  /** All seven built-in Pi definitions captured for this registration's cwd. */
+  /** Pi built-in definitions captured for this registration's cwd and platform. */
   readonly definitions: NestedPiToolDefinitions;
+  /** Shared extension event bus used only for the explicit Background Tasks protocol. */
+  readonly events: ExtensionAPI["events"];
+  /** Stable Pi session id captured at activation; absence makes the adapter fail closed. */
+  readonly sessionId: string | undefined;
   /** Runtime execution boundary; injectable for compatibility tests. */
   readonly executeCodeMode?: typeof CodeMode.execute;
   /** One-shot handoff to the `tool_result` hook for failures Pi converts to details `{}`. */
@@ -60,6 +67,8 @@ export interface CodeModeExecutionEnvironment {
 }
 
 const MAX_TRACKED_CALL_ENTRIES = 256;
+/** Hard ceiling for one structured protocol result before schema decoding or JSON admission. */
+const MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES = 16 * 1_024 * 1_024;
 
 type MutableCallCounts = { -readonly [Key in keyof CodeModeCallCounts]: CodeModeCallCounts[Key] };
 
@@ -193,10 +202,19 @@ export const makeCodeModeToolExecute =
           ctx,
           toolCallId,
         });
+        const dispatchBackgroundTask = makeBackgroundTaskDispatch({
+          events: environment.events,
+          sessionId: environment.sessionId,
+          toolCallId,
+          maxOutputBytes: () =>
+            Math.min(budget.remaining(), MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES),
+        });
 
         const execution = (environment.executeCodeMode ?? CodeMode.execute)({
           code: params.code,
-          tools: makeExecutionGuestTools(dispatch, budget),
+          tools: makeExecutionGuestTools(dispatch, dispatchBackgroundTask, budget, {
+            includePowerShell: hasNestedPowerShell(environment.definitions),
+          }),
           limits: {
             timeoutMs: config.timeoutMs,
             maxToolCalls: config.maxToolCalls,

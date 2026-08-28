@@ -65,6 +65,7 @@ export interface CumulativeOutputBudget {
    */
   readonly admitFailure: (message: string) => string;
   readonly used: () => number;
+  readonly remaining: () => number;
 }
 
 /**
@@ -95,6 +96,7 @@ export const makeCumulativeOutputBudget = (limitBytes: number): CumulativeOutput
       return admitted;
     },
     used: () => used,
+    remaining: () => Math.max(0, limitBytes - used),
   };
 };
 

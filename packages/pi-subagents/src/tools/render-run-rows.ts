@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import {
   animatedRunStateGlyph,
@@ -9,7 +9,12 @@ import {
 } from "../ui/run-state.ts";
 import type { SubagentRunCard } from "./details.ts";
 import { formatCost, formatDuration, formatTokenCount, formatUsage } from "../ui/metrics.ts";
-import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
+import {
+  projectRunCardTree,
+  runCardTreeBranch,
+  runCardTreeMetadataBranch,
+  type RunTreeRow,
+} from "./run-card-tree.ts";
 
 const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 
@@ -48,15 +53,45 @@ export const aggregateRunUsage = (runs: ReadonlyArray<SubagentRunCard>): string 
 const padVisible = (value: string, width: number): string =>
   `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
 
-const runRoute = (run: SubagentRunCard, width: number): string => {
-  const hostRoute = `${run.host ?? "local"}/${run.runtime ?? "pi"} · `;
-  const suffix = `:${run.effort}${run.fastMode ? " ⚡" : ""}`;
-  const profile = run.profile ? `[${sanitizeTerminalLine(run.profile)}] ` : "";
-  const fixedWidth = visibleWidth(profile) + visibleWidth(hostRoute) + visibleWidth(suffix);
-  const modelWidth = Math.max(1, width - fixedWidth);
-  return truncateToWidth(
-    `${profile}${hostRoute}${truncateToWidth(sanitizeTerminalLine(run.model), modelWidth)}${suffix}`,
-    width,
+const runProfile = (run: SubagentRunCard): string =>
+  sanitizeTerminalLine(run.profile ?? "generalist");
+
+const runRoute = (run: SubagentRunCard): string =>
+  `${runProfile(run)} → ${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.fastMode ? " ⚡" : ""}`;
+
+const themedRunRoute = (run: SubagentRunCard, theme: Theme): string =>
+  `${theme.fg("muted", runProfile(run))} ${theme.fg("dim", "→")} ${theme.fg(
+    "toolOutput",
+    `${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.fastMode ? " ⚡" : ""}`,
+  )}`;
+
+interface MetadataRail {
+  readonly first: string;
+  readonly continuation: string;
+}
+
+const responsiveMetadataRail = (
+  row: RunTreeRow<SubagentRunCard> | undefined,
+  width: number,
+): MetadataRail => {
+  const rail = row ? runCardTreeMetadataBranch(row) : { first: "  ╰─ ", continuation: "     " };
+  return visibleWidth(rail.first) < width ? rail : { first: "╰─ ", continuation: "   " };
+};
+
+const renderRouteRail = (
+  run: SubagentRunCard,
+  row: RunTreeRow<SubagentRunCard> | undefined,
+  width: number,
+  theme: Theme,
+): string[] => {
+  const rail = responsiveMetadataRail(row, width);
+  const available = Math.max(1, width - visibleWidth(rail.first));
+  const routeLines = wrapTextWithAnsi(themedRunRoute(run, theme), available);
+  return routeLines.map((line, index) =>
+    truncateToWidth(
+      `${theme.fg("dim", index === 0 ? rail.first : rail.continuation)}${line}`,
+      width,
+    ),
   );
 };
 
@@ -103,6 +138,7 @@ export const renderResponsiveRunRows = (
     ),
   );
   const usages = displayRuns.map(runUsage);
+  const routes = displayRuns.map(runRoute);
   const intentWidth = intents.reduce((max, intent) => Math.max(max, visibleWidth(intent)), 0);
   const minimumIdentityWidth = options.hierarchy ? 24 : 16;
   const identityWidth = Math.min(
@@ -122,11 +158,15 @@ export const renderResponsiveRunRows = (
     : 0;
   const routeWidth =
     safeWidth - identityWidth - intentWidth - stateWidth - usageWidth - (hasUsage ? 12 : 9);
-  if (safeWidth >= 88 && routeWidth >= 12)
+  if (
+    safeWidth >= 88 &&
+    routeWidth >= 12 &&
+    routes.every((route) => visibleWidth(route) <= routeWidth)
+  )
     return displayRuns.map((run, index) => {
       const color = runStateColor(run.state);
       const identity = theme.fg(color, truncateToWidth(identities[index] ?? "", identityWidth));
-      const route = theme.fg("toolOutput", runRoute(run, routeWidth));
+      const route = themedRunRoute(run, theme);
       const intent = theme.fg(
         run.writeIntent === "writer" ? "warning" : "muted",
         intents[index] ?? "",
@@ -136,11 +176,12 @@ export const renderResponsiveRunRows = (
       const usageColumn = hasUsage ? ` · ${padVisible(usage, usageWidth)}` : "";
       return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(intent, intentWidth)}${usageColumn} · ${padVisible(state, stateWidth)}`;
     });
-  return displayRuns.map((run, index) => {
+  return displayRuns.flatMap((run, index) => {
     const color = runStateColor(run.state);
     const identity = identities[index] ?? "";
     const compactStatus = [
       runStateLabel(run.state),
+      run.currentTool ? sanitizeTerminalLine(run.currentTool) : undefined,
       run.writeIntent === "writer" ? "writer" : undefined,
       usages[index],
     ]
@@ -148,16 +189,19 @@ export const renderResponsiveRunRows = (
       .join(" · ");
     const compactMinimumIdentityWidth = Math.min(24, Math.max(8, Math.floor(safeWidth * 0.45)));
     const maximumStatusWidth = safeWidth - compactMinimumIdentityWidth - 3;
-    if (maximumStatusWidth < 7) return truncateToWidth(theme.fg(color, identity), safeWidth);
-    const compactStatusWidth = Math.min(
-      visibleWidth(compactStatus),
-      Math.max(7, Math.floor(safeWidth * 0.36)),
-      maximumStatusWidth,
-    );
-    const compactIdentityWidth = safeWidth - compactStatusWidth - 3;
-    return `${truncateToWidth(
-      theme.fg(color, identity),
-      compactIdentityWidth,
-    )} · ${truncateToWidth(theme.fg(color, compactStatus), compactStatusWidth)}`;
+    const identityLine = (() => {
+      if (maximumStatusWidth < 7) return truncateToWidth(theme.fg(color, identity), safeWidth);
+      const compactStatusWidth = Math.min(
+        visibleWidth(compactStatus),
+        Math.max(7, Math.floor(safeWidth * 0.36)),
+        maximumStatusWidth,
+      );
+      const compactIdentityWidth = safeWidth - compactStatusWidth - 3;
+      return `${truncateToWidth(
+        theme.fg(color, identity),
+        compactIdentityWidth,
+      )} · ${truncateToWidth(theme.fg(color, compactStatus), compactStatusWidth)}`;
+    })();
+    return [identityLine, ...renderRouteRail(run, treeRows?.[index], safeWidth, theme)];
   });
 };

@@ -1,6 +1,6 @@
 # ADR 0004: Code Mode exposes all Pi built-ins
 
-- Status: Accepted
+- Status: Accepted; platform and explicit session capabilities expanded by ADR 0006
 - Date: 2026-08-12
 - Supersedes in part: ADR 0003, "The integration is read-only, and nested dispatch is a prerequisite for more"
 
@@ -27,6 +27,10 @@ than Pi's normal built-in tool surface without providing a security boundary use
 - `tools.pi.grep`
 - `tools.pi.find`
 - `tools.pi.ls`
+
+ADR 0006 adds Windows-only `tools.pi.powershell` and the explicit
+`tools.session.backgroundTask` protocol adapter. They do not change this ADR's direct-dispatch
+contract for the seven core definitions.
 
 The extension continues to instantiate fresh Pi built-in definitions and dispatch them directly.
 This is an intentional product contract, not an emulation of top-level dispatch. Nested calls do

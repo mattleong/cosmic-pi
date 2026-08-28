@@ -1,17 +1,18 @@
 # pi-code-mode
 
 Code Mode for pi: one `code_mode` agent tool that runs a confined, interpreted JavaScript
-program orchestrating all seven Pi built-ins (`tools.pi.read`, `tools.pi.bash`,
-`tools.pi.edit`, `tools.pi.write`, `tools.pi.grep`, `tools.pi.find`, `tools.pi.ls`) in a
+program orchestrating seven core Pi built-ins (`tools.pi.read`, `tools.pi.bash`,
+`tools.pi.edit`, `tools.pi.write`, `tools.pi.grep`, `tools.pi.find`, `tools.pi.ls`), native
+`tools.pi.powershell` on Windows, and the explicit `tools.session.backgroundTask` adapter in a
 single tool call, with trusted-project-only scoped settings.
 
 The program is TypeScript-transpiled, Acorn-parsed, and executed by a vendored tree-walk
 interpreter (OpenCode 2 Code Mode; see ADR 0003) — never `eval`, `Function`, `node:vm`, or a
 child JavaScript process. The interpreter provides no ambient filesystem, network, process,
 environment, module, or timer APIs; programs can only call the supplied tool tree and the
-runtime's own `tools.$codemode.search` discovery tool. Supplied Bash, edit, and write tools
-intentionally confer full local-user process, network, environment, and unrestricted
-filesystem authority (ADR 0004). The interpreter lives in the private
+runtime's own `tools.$codemode.search` discovery tool. Supplied shell, edit, write, and
+background-task start operations intentionally confer full local-user process, network,
+environment, and unrestricted filesystem authority (ADRs 0004 and 0006). The interpreter lives in the private
 `pi-code-mode-runtime` workspace package nested at `runtime/` inside this package; its
 TypeScript `runtime/src/` tree ships inside this package and Pi/Jiti loads it directly.
 
@@ -58,24 +59,31 @@ sanitized against terminal control injection, and result-projection failures ret
 custom result instead of surrendering to Pi's raw generic fallback.
 Presentation never changes the model-visible result, details, or any execution limit.
 
-## Full built-in authority and direct nested dispatch
+## Supplied tool authority and direct nested dispatch
 
 Tools invoked from inside a Code Mode program are dispatched **directly** against fresh Pi
 built-in definitions. They intentionally bypass `tool_call`/`tool_result` middleware,
 approval and preview extensions, registered tool overrides, and session-specific tool
-operations. Nested Bash therefore uses Pi's default local implementation rather than a
-configured prefix, shell hook, sandbox, remote operation, or other top-level override.
+operations. Nested Bash and PowerShell therefore use Pi's default local implementations rather
+than configured prefixes, shell hooks, sandboxes, remote operations, or other top-level
+overrides. PowerShell is present only on Windows.
 
 Enabling Code Mode means accepting the program authored by the agent as the authorization for
 its nested operations. Do not rely on Pi middleware, approval prompts, registered overrides, or
 claim observers to inspect or stop those operations. Enforce any required restriction outside
 Code Mode, or disable the tool.
 
-Bash can execute processes, use the inherited shell environment and network, and mutate
+Shell tools can execute processes, use the inherited environment and network, and mutate
 arbitrary paths. Read, edit, and write accept paths outside the project, including absolute
 and home-relative paths. `code_mode` is an orchestration runtime, not a permission, process,
 network, filesystem, or project-containment sandbox. MCP and arbitrary dynamic dispatch remain
 separate. See ADR 0004.
+
+`tools.session.backgroundTask` is one reviewed adapter, not registered-tool dispatch. It queries
+a versioned `pi-background-task` capability for the same stable Pi session on each invocation.
+The provider must be loaded, current, and active. A started task may outlive the Code Mode call;
+Background Tasks owns it and terminates it at Pi session shutdown. Deactivating the top-level
+`background_task` tool also makes the nested adapter unavailable. See ADR 0006.
 
 ## Availability policy
 
@@ -119,9 +127,12 @@ output and catchable nested failure text entering the program. An exact success 
 admitted, the first success overrun is refused, failure text is truncated to the remaining
 budget, and accounting stays exact under the interpreter's fixed nested concurrency of 8.
 This is a post-settlement context/reliability bound: it cannot prevent or roll back a tool's
-side effects. Nested results are plain text; image content is refused. Edit diff/patch details
-and Bash result details are not passed into the guest, although Bash's text truncation notice
-and temporary full-output path remain visible.
+side effects. Pi built-in results are plain text; image content is refused. Edit diff/patch
+details and shell result details are not passed into the guest, although shell truncation notices
+and temporary full-output paths remain visible. Background Tasks returns copied structured data.
+The provider bounds text and estimates JSON size against the current remaining allowance before
+copying snapshots; the consumer repeats that aggregate check before charging compact JSON to the
+same cumulative budget.
 
 ## `/code-mode-settings`
 

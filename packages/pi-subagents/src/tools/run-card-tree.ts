@@ -49,7 +49,21 @@ export const projectRunCardTree = <Node extends RunTreeNode>(
   return rows;
 };
 
+const ancestorRail = <Node extends RunTreeNode>(row: RunTreeRow<Node>): string =>
+  row.ancestorContinues.map((continued) => (continued ? "│   " : "    ")).join("");
+
 export const runCardTreeBranch = <Node extends RunTreeNode>(row: RunTreeRow<Node>): string =>
-  `${row.ancestorContinues.map((continued) => (continued ? "│   " : "    ")).join("")}${
-    row.isLastSibling ? "└── " : "├── "
-  }`;
+  `${ancestorRail(row)}${row.isLastSibling ? "└── " : "├── "}`;
+
+export interface RunTreeMetadataBranch {
+  readonly first: string;
+  readonly continuation: string;
+}
+
+/** Hanging metadata rail beneath one tree row while preserving every ancestor continuation. */
+export const runCardTreeMetadataBranch = <Node extends RunTreeNode>(
+  row: RunTreeRow<Node>,
+): RunTreeMetadataBranch => {
+  const stem = `${ancestorRail(row)}${row.isLastSibling ? "    " : "│   "}`;
+  return { first: `${stem}╰─ `, continuation: `${stem}   ` };
+};

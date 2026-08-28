@@ -235,6 +235,21 @@ Default collapsed rendering should show:
 
 Terminal states use success, warning, or error colors. Expanded results include cwd, PID, exit details, dropped-log information, and a bounded log tail. Tool rendering must sanitize terminal control sequences and obey render width. The package decorates its own tool definition with the public `pi-code-previews` cooperative shell after loading trusted session settings, preserving tool ownership while sharing configured shell chrome and timing.
 
+### 5.4 Code Mode adapter
+
+`pi-background-task/code-mode` exports a versioned synchronous query protocol for the one reviewed
+`tools.session.backgroundTask` Code Mode leaf. The provider responds only when the query and active
+runtime share a stable Pi session id, the captured slot token remains current, and the top-level
+`background_task` tool is active.
+
+The capability runs the same action Effect and same service registry as the top-level tool. It
+returns copied structured snapshots, wait data, bounded log text, and log cursor metadata. Code
+Mode supplies the current remaining child-output allowance, capped at 16 MiB. The provider bounds
+text while formatting and estimates the structured JSON size before copying snapshots. No service,
+Layer, runtime, Ref, or scope crosses the protocol. A Code Mode timeout or cancellation
+interrupts an active wait or log call. A completed start remains owned by Background Tasks and may
+outlive the outer Code Mode call until explicit stop or Pi session shutdown. See ADR 0006.
+
 ## 6. Human-facing launcher
 
 ### `/tasks`
@@ -360,7 +375,11 @@ Expected tagged errors include:
 
 ## 11. Package layout
 
-The package follows the repository's small-extension conventions while nesting the multi-file task feature: `extension.ts`, `layer.ts`, and `application.ts` at the `src/` root; `config/` with its single `store.ts` persistence door; `settings/controller.ts` for the `/tasks` command; `boundary/` for the Pi status bridge and the local-process adapter; `task/` for the Effect-owned domain (service, model with its merged pure projection helpers, errors, bounded log buffer, UTF-8 accounting); `tools/` for the `background_task` registration; `ui/` for pure presentation; and package-root `tests/`. See the package `ARCHITECTURE.md` for the current source map.
+The package follows the repository's small-extension conventions while nesting the multi-file task feature: `extension.ts`, `layer.ts`, and `application.ts` at the `src/` root; `config/` with its single `store.ts` persistence door; `settings/controller.ts` for the `/tasks` command; `boundary/` for Pi status, Code Mode protocol, and local-process adapters; `task/` for the
+Effect-owned domain (service, model with its merged pure projection helpers, errors, bounded log
+buffer, UTF-8 accounting); `tools/` for the shared command executor, schema, and
+`background_task` registration; `code-mode/` plus the public `protocol.ts` re-export for the plain
+cross-extension contract; `ui/` for pure presentation; and package-root `tests/`. See the package `ARCHITECTURE.md` for the current source map.
 
 `ui/` remains pure; Effect resources stay in `task/`; Node and Pi adapters stay in `boundary/`. Shared process utilities should move to `pi-cosmic-core` only if a second package needs the same abstraction.
 

@@ -1,6 +1,6 @@
 # ADR 0003: Vendored Code Mode runtime and two-package architecture
 
-- Status: Accepted; integration policy superseded in part by ADR 0004
+- Status: Accepted; integration policy superseded in part by ADR 0004 and expanded by ADR 0006
 - Date: 2026-08-11
 
 ## Context
@@ -40,9 +40,10 @@ host concerns, and without depending on an unpublished upstream package.
    the nested workspace manifest is repository-only.
 2. `packages/pi-code-mode/` is the public Pi extension that owns registration,
    trusted-project-only scoped settings, session lifecycle,
-   `/code-mode-settings`, all seven Pi built-in adapters under ADR 0004
-   (`tools.pi.read/bash/edit/write/grep/find/ls` over fresh built-in definition
-   factories), and the one outer `code_mode` agent tool (registered per session
+   `/code-mode-settings`, seven core Pi built-in adapters under ADR 0004
+   (`tools.pi.read/bash/edit/write/grep/find/ls` over fresh built-in definition factories),
+   Windows PowerShell and the explicit Background Tasks adapter under ADR 0006, and the one outer
+   `code_mode` agent tool (registered per session
    start when `CodeModeState.available`, wrapped with the `pi-code-previews`
    cooperative shell after `loadCodePreviewSettings` completes).
 

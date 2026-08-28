@@ -8,6 +8,10 @@ import {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
 } from "pi-cosmic-core";
+import {
+  backgroundTaskCodeModeSessionId,
+  makeBackgroundTaskCodeModeHost,
+} from "./boundary/host-code-mode.ts";
 import { makeProjectionBridge } from "./boundary/host-ui.ts";
 import { BackgroundTaskConfigStore } from "./config/store.ts";
 import { BackgroundTaskService } from "./task/service.ts";
@@ -34,6 +38,7 @@ export function registerBackgroundTaskApplication(
   boundaries: BackgroundTaskApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
   const bridge = makeProjectionBridge(pi.events);
+  const codeModeHost = makeBackgroundTaskCodeModeHost(pi.events);
 
   const slot = makePiSessionRuntimeSlot<
     BackgroundTaskSessionInput,
@@ -61,14 +66,30 @@ export function registerBackgroundTaskApplication(
         const config = yield* BackgroundTaskConfigStore;
         return { showFooterStatus: config.showFooterStatus };
       }),
-    onActivated: ({ ctx }, _token, prepared) => {
+    onActivated: ({ ctx, cwd }, token, prepared) => {
       // Only the current-generation activation reaches this hook, and settings are already
       // loaded, so the cooperative-shell wrapper captures the fresh shell mode here.
       registerBackgroundTaskTool(pi, { run });
+      codeModeHost.activate({
+        sessionId: backgroundTaskCodeModeSessionId(ctx),
+        sessionCwd: cwd,
+        tokenCurrent: () => slot.isCurrent(token),
+        toolActive: () => {
+          try {
+            return pi.getActiveTools().includes("background_task");
+          } catch {
+            return false;
+          }
+        },
+        run,
+      });
       bridge.setFooterEnabled(prepared.showFooterStatus);
       bridge.setContext(ctx);
     },
-    onDeactivated: () => bridge.clear(),
+    onDeactivated: () => {
+      codeModeHost.deactivate();
+      bridge.clear();
+    },
   });
 
   // Synchronous activation gate: while a replacement start is still loading settings, the
@@ -94,6 +115,7 @@ export function registerBackgroundTaskApplication(
   });
 
   pi.on("session_start", (_event, ctx) => {
+    codeModeHost.deactivate();
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable" || captured.aborted) {
       bridge.clear();
@@ -109,7 +131,8 @@ export function registerBackgroundTaskApplication(
   });
 
   pi.on("session_shutdown", () => {
+    codeModeHost.deactivate();
     bridge.clear();
-    return slot.shutdown();
+    return slot.shutdown().finally(codeModeHost.dispose);
   });
 }

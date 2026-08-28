@@ -29,7 +29,8 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./code-mode": "./src/protocol.ts"
   },
   "publishConfig": {
     "access": "public"

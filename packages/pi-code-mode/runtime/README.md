@@ -21,8 +21,9 @@ tools the host supplies.
   dependencies (`acorn`, `effect`, `typescript`) itself.
 - **Host-neutral.** It registers no Pi extension and imports nothing from Pi.
   The `pi-code-mode` extension owns the Pi-facing integration: the `code_mode`
-  agent tool, adapters for all seven `tools.pi` built-ins, their supplied-tool
-  authority policy, and the Pi-specific host limits are layered above this boundary.
+  agent tool, adapters for seven core `tools.pi` built-ins and Windows PowerShell, the
+  explicit Background Tasks session adapter, their supplied-tool authority policy, and the
+  Pi-specific host limits are layered above this boundary.
 - **Observable.** An optional additive lifecycle callback reports queued, running, succeeded,
   failed, and cancelled tool calls with stable execution-local ids and durations. Existing
   start/end hooks and guest-visible execution semantics remain compatible.

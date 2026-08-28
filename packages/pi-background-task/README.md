@@ -12,6 +12,19 @@ The main Pi footer uses natural status text such as `2 background tasks active Â
 
 `background_task` tool calls use the `pi-code-previews` cooperative shell, including its configured background or border treatment and tool-call timing. Log results show a 12-line head/tail preview by default; use `Ctrl+O` (or the configured `app.tools.expand` binding) to reveal the full fetched output. Trusted project preview settings are loaded before the tool is registered for a session.
 
+## Code Mode adapter
+
+When `pi-code-mode` is also loaded, a Code Mode program can call
+`tools.session.backgroundTask`. The adapter uses the same action names, task registry, bounded log
+text, wait barriers, and shutdown cleanup as the top-level tool. Structured results include task
+snapshots and cursor metadata so a program does not need to parse display text.
+
+The adapter queries the exported `pi-background-task/code-mode` protocol on each nested call. It
+runs only when both extensions share a stable Pi session id, this runtime's slot token is current,
+and the top-level `background_task` tool remains active. It does not expose the service or execute
+a registered tool definition. A started task may outlive the Code Mode call, but never the Pi
+session.
+
 ## Lifecycle
 
 Background tasks are non-interactive in the MVP and are always terminated when the Pi session reloads, switches, forks, or shuts down. Tasks have no default runtime timeout; the agent may provide one per start. A failed or unconfirmed stop remains active in `stopping` and retains capacity until the operating-system process handle confirms exit; the tool reports a typed termination failure rather than fabricating completion.

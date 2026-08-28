@@ -75,9 +75,11 @@ describe("makeCumulativeOutputBudget", () => {
     expect(budget.admit("aaaa")).toEqual({ admitted: true });
     expect(budget.admit("bbbb")).toEqual({ admitted: true });
     expect(budget.used()).toBe(8);
+    expect(budget.remaining()).toBe(2);
     // Exact threshold: the remaining 2 bytes are admitted.
     expect(budget.admit("cc").admitted).toBe(true);
     expect(budget.used()).toBe(10);
+    expect(budget.remaining()).toBe(0);
   });
 
   it("refuses the first overrun deterministically without consuming the budget", () => {
