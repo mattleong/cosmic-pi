@@ -9,12 +9,7 @@ import {
 } from "../ui/run-state.ts";
 import type { SubagentRunCard } from "./details.ts";
 import { formatCost, formatDuration, formatTokenCount, formatUsage } from "../ui/metrics.ts";
-import {
-  projectRunCardTree,
-  runCardTreeBranch,
-  runCardTreeMetadataBranch,
-  type RunTreeRow,
-} from "./run-card-tree.ts";
+import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
 
 const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 
@@ -38,7 +33,13 @@ export const runTiming = (run: {
   return [elapsed, active].filter(Boolean).join(" · ");
 };
 
-export const aggregateRunUsage = (runs: ReadonlyArray<SubagentRunCard>): string => {
+export const aggregateRunUsage = (
+  runs: ReadonlyArray<{
+    readonly usage?:
+      | { readonly totalTokens: number; readonly cost?: number | undefined }
+      | undefined;
+  }>,
+): string => {
   const tokens = runs.reduce((total, run) => total + (run.usage?.totalTokens ?? 0), 0);
   const knownCosts = runs.flatMap((run) => (run.usage?.cost === undefined ? [] : [run.usage.cost]));
   const cost = knownCosts.reduce((total, value) => total + value, 0);
@@ -65,32 +66,45 @@ const themedRunRoute = (run: SubagentRunCard, theme: Theme): string =>
     `${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.fastMode ? " ⚡" : ""}`,
   )}`;
 
-interface MetadataIndent {
-  readonly prefix: string;
-}
-
-const responsiveMetadataIndent = (
-  row: RunTreeRow<SubagentRunCard> | undefined,
-  width: number,
-): MetadataIndent => {
-  const metadata = row ? runCardTreeMetadataBranch(row) : { prefix: "     " };
-  return visibleWidth(metadata.prefix) < width ? metadata : { prefix: "   " };
-};
-
-const renderRouteRail = (
-  run: SubagentRunCard,
-  row: RunTreeRow<SubagentRunCard> | undefined,
-  width: number,
-  theme: Theme,
-): string[] => {
-  const metadata = responsiveMetadataIndent(row, width);
-  const prefix = theme.fg(runStateColor(run.state), metadata.prefix);
-  const available = Math.max(1, width - visibleWidth(metadata.prefix));
+const renderRouteRail = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
+  const prefix = width > 5 ? "     " : "   ";
+  const available = Math.max(1, width - visibleWidth(prefix));
   const routeLines = wrapTextWithAnsi(themedRunRoute(run, theme), available);
   return routeLines.map((line) => truncateToWidth(`${prefix}${line}`, width));
 };
 
 const runUsage = (run: SubagentRunCard): string => formatUsage(run.usage, "tok");
+
+const renderHierarchyRow = (
+  run: SubagentRunCard,
+  identity: string,
+  usage: string,
+  width: number,
+  theme: Theme,
+): string => {
+  const color = runStateColor(run.state);
+  const themedIdentity = theme.fg(color, identity);
+  const timing = runTiming(run);
+  const metadata = [
+    themedRunRoute(run, theme),
+    run.writeIntent === "writer" ? theme.fg("warning", "writer") : undefined,
+    usage ? theme.fg("muted", usage) : undefined,
+    run.currentTool ? theme.fg("accent", sanitizeTerminalLine(run.currentTool)) : undefined,
+    timing ? theme.fg("muted", timing) : undefined,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(theme.fg("dim", " · "));
+  const combined = `${themedIdentity}${theme.fg("dim", " · ")}${metadata}`;
+  if (visibleWidth(combined) <= width) return combined;
+  if (width < 12) return truncateToWidth(themedIdentity, width);
+  const identityWidth = Math.min(visibleWidth(identity), Math.max(8, Math.floor(width * 0.42)));
+  const metadataWidth = width - identityWidth - 3;
+  if (metadataWidth < 8) return truncateToWidth(themedIdentity, width);
+  return `${truncateToWidth(themedIdentity, identityWidth)}${theme.fg(
+    "dim",
+    " · ",
+  )}${truncateToWidth(metadata, metadataWidth)}`;
+};
 
 export interface ResponsiveRunRowOptions {
   readonly frame?: number;
@@ -133,6 +147,10 @@ export const renderResponsiveRunRows = (
     ),
   );
   const usages = displayRuns.map(runUsage);
+  if (treeRows)
+    return displayRuns.map((run, index) =>
+      renderHierarchyRow(run, identities[index] ?? "", usages[index] ?? "", safeWidth, theme),
+    );
   const routes = displayRuns.map(runRoute);
   const intentWidth = intents.reduce((max, intent) => Math.max(max, visibleWidth(intent)), 0);
   const minimumIdentityWidth = options.hierarchy ? 24 : 16;
@@ -197,6 +215,6 @@ export const renderResponsiveRunRows = (
         compactIdentityWidth,
       )} · ${truncateToWidth(theme.fg(color, compactStatus), compactStatusWidth)}`;
     })();
-    return [identityLine, ...renderRouteRail(run, treeRows?.[index], safeWidth, theme)];
+    return [identityLine, ...renderRouteRail(run, safeWidth, theme)];
   });
 };

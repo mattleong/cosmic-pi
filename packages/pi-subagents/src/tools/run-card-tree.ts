@@ -7,7 +7,6 @@ export interface RunTreeRow<Node extends RunTreeNode> {
   readonly run: Node;
   readonly isLastSibling: boolean;
   readonly ancestorContinues: ReadonlyArray<boolean>;
-  readonly hasChildren: boolean;
 }
 
 /** Parent-before-child projection over a bounded card set; incomplete parents become roots. */
@@ -40,7 +39,7 @@ export const projectRunCardTree = <Node extends RunTreeNode>(
     if (visited.has(run.id)) return;
     visited.add(run.id);
     const descendants = children.get(run.id) ?? [];
-    rows.push({ run, isLastSibling, ancestorContinues, hasChildren: descendants.length > 0 });
+    rows.push({ run, isLastSibling, ancestorContinues });
     descendants.forEach((child, index) =>
       visit(child, index === descendants.length - 1, [...ancestorContinues, !isLastSibling]),
     );
@@ -55,14 +54,3 @@ const ancestorRail = <Node extends RunTreeNode>(row: RunTreeRow<Node>): string =
 
 export const runCardTreeBranch = <Node extends RunTreeNode>(row: RunTreeRow<Node>): string =>
   `${ancestorRail(row)}${row.isLastSibling ? "└── " : "├── "}`;
-
-export interface RunTreeMetadataBranch {
-  readonly prefix: string;
-}
-
-/** Metadata indentation beneath one tree row while preserving sibling and child continuations. */
-export const runCardTreeMetadataBranch = <Node extends RunTreeNode>(
-  row: RunTreeRow<Node>,
-): RunTreeMetadataBranch => ({
-  prefix: `${ancestorRail(row)}${row.isLastSibling ? "    " : "│   "}${row.hasChildren ? "│  " : "   "}`,
-});

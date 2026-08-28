@@ -3,6 +3,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { makeAwaitDetails, makeCompactToolDetails } from "../../src/tools/details.ts";
 import { renderSubagentResult } from "../../src/tools/render.ts";
+import { formatAwaitSummary } from "../../src/tools/render-await.ts";
 import { renderResponsiveRunRows } from "../../src/tools/render-run-rows.ts";
 import { renderStartReceiptComponent } from "../../src/tools/render-start.ts";
 import { view } from "./fixtures/tool-harness.ts";
@@ -29,6 +30,62 @@ const render = (details: HierarchyDetails, partial: boolean, width: number) =>
   renderSubagentResult({ content: [], details }, partial, false, theme).render(width);
 
 describe("hierarchical tool result rendering", () => {
+  it("uses the same one-line await summary and run rows before and after settlement", () => {
+    const settledTarget = view({
+      id: "settled-target",
+      name: "Settled target",
+      state: "stopped",
+      endedAt: 2,
+      usage: {
+        input: 20_000,
+        output: 10_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 30_000,
+        cost: 0.002,
+      },
+    });
+    const settledChild = view({
+      id: "settled-child",
+      name: "Settled child",
+      state: "stopped",
+      parentRunId: settledTarget.id,
+      depth: 2,
+      endedAt: 2,
+    });
+    const details = makeAwaitDetails({
+      runs: [settledTarget],
+      contextRuns: [settledChild],
+      awaitedRunIds: [settledTarget.id],
+      awaitUntil: "all_finished",
+    });
+
+    const awaiting = render(details, true, 160);
+    const completed = render(details, false, 160);
+
+    expect(awaiting).toEqual(completed);
+    expect(awaiting).toHaveLength(details.cards.length + 1);
+    expect(awaiting[0]).toContain("1/1 finished");
+    expect(awaiting[0]).toContain("30k tokens");
+    expect(awaiting[0]).toContain("◎ targets");
+    expect(awaiting.slice(1).every((line) => !line.includes("stopped"))).toBe(true);
+    expect(awaiting.every((line) => !line.startsWith("Total usage"))).toBe(true);
+  });
+
+  it.each([
+    [{ cancelled: true }, "Await canceled"],
+    [{ timedOut: true }, "Await timed out"],
+    [{ attentionRequired: true }, "parent reply required"],
+  ] as const)("keeps the %s outcome in the one-line summary", (outcome, expected) => {
+    const summary = formatAwaitSummary([target], "all_finished", "12k tokens", outcome);
+
+    expect(summary).toContain(expected);
+    expect(summary).toContain("0/1 finished");
+    expect(summary).toContain("12k tokens");
+    expect(summary).toContain("◎ targets");
+    expect(summary).not.toContain("\n");
+  });
+
   it.each([20, 50, 100])("keeps list and await lines within width %i", (width) => {
     const list = render(
       makeCompactToolDetails({ action: "list", runs: [child, target] }),
@@ -48,8 +105,8 @@ describe("hierarchical tool result rendering", () => {
     expect([...list, ...awaitProgress].every((line) => visibleWidth(line) <= width)).toBe(true);
   });
 
-  it.each([20, 50, 73, 87])(
-    "keeps compact hierarchy identity and model metadata lines bounded at width %i",
+  it.each([1, 20, 50, 87, 120, 160])(
+    "keeps one hierarchy row per run bounded at width %i",
     (width) => {
       const busyTarget = view({
         id: "agent-r1-15",
@@ -83,17 +140,17 @@ describe("hierarchical tool result rendering", () => {
         hierarchy: { awaitedRunIds: new Set([busyTarget.id]) },
       });
 
-      expect(rows.length).toBeGreaterThanOrEqual(details.cards.length * 2);
-      expect(rows.every((line) => !line.includes("╰─"))).toBe(true);
+      expect(rows).toHaveLength(details.cards.length);
+      expect(rows.every((line) => !line.includes("running"))).toBe(true);
       expect(rows.every((line) => visibleWidth(line) <= width)).toBe(true);
-      if (width >= 73) {
+      if (width >= 120) {
         expect(rows.some((line) => line.includes("reviewer → local/pi"))).toBe(true);
         expect(rows.some((line) => line.includes("openai-codex/gpt-5.6-sol:high"))).toBe(true);
       }
     },
   );
 
-  it("preserves deep ancestor rails when only a narrow model payload remains", () => {
+  it("preserves deep ancestor branches in narrow one-line rows", () => {
     const root = view({
       id: "root-run",
       name: "Root reviewer",
@@ -129,7 +186,8 @@ describe("hierarchical tool result rendering", () => {
     if (details.action === "models") throw new Error("Expected list details.");
     const rows = renderResponsiveRunRows(details.cards, 20, theme, { hierarchy: {} });
 
-    expect(rows.some((line) => line.startsWith("│") && line.includes("scout"))).toBe(true);
+    expect(rows).toHaveLength(details.cards.length);
+    expect(rows.some((line) => line.startsWith("│"))).toBe(true);
     expect(rows.every((line) => visibleWidth(line) <= 20)).toBe(true);
   });
 
@@ -158,7 +216,7 @@ describe("hierarchical tool result rendering", () => {
     expect(visibleWidth(rows[0] ?? "")).toBeLessThanOrEqual(160);
   });
 
-  it("continues a parent trunk through its model metadata before the first child", () => {
+  it("keeps a sole parent and child on one line each", () => {
     const parent = view({
       id: "only-parent",
       name: "Only parent",
@@ -177,11 +235,13 @@ describe("hierarchical tool result rendering", () => {
     if (details.action === "models") throw new Error("Expected list details.");
     const rows = renderResponsiveRunRows(details.cards, 80, theme, { hierarchy: {} });
 
-    expect(rows).toContain("    │  reviewer → local/pi · openai-codex/gpt-5.6-sol:high");
-    expect(rows.every((line) => !line.includes("╰─"))).toBe(true);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatch(/^└── .*Only parent/);
+    expect(rows[1]).toMatch(/^    └── .*Only child/);
+    expect(rows.every((line) => !line.includes("running"))).toBe(true);
   });
 
-  it("continues ancestor rails through model metadata lines", () => {
+  it("preserves ancestor branches across sibling rows", () => {
     const first = view({
       id: "first",
       name: "First reviewer",
@@ -207,9 +267,10 @@ describe("hierarchical tool result rendering", () => {
     if (details.action === "models") throw new Error("Expected list details.");
     const rows = renderResponsiveRunRows(details.cards, 80, theme, { hierarchy: {} });
 
-    expect(rows).toContain("│   │  reviewer → local/pi · openai-codex/gpt-5.6-sol:high");
-    expect(rows).toContain("│          scout → local/pi · openai-codex/gpt-5.6-sol:high");
-    expect(rows).toContain("       reviewer → local/pi · openai-codex/gpt-5.6-sol:high");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatch(/^├── .*First reviewer/);
+    expect(rows[1]).toMatch(/^│   └── .*Nested scout/);
+    expect(rows[2]).toMatch(/^└── .*Second reviewer/);
   });
 
   it.each([

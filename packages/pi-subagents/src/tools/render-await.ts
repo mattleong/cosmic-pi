@@ -17,15 +17,29 @@ interface AwaitProgressRun {
   readonly startedAt?: number | undefined;
   readonly lastActivityAt?: number | undefined;
   readonly endedAt?: number | undefined;
+  readonly usage?: { readonly totalTokens: number; readonly cost?: number | undefined } | undefined;
 }
 
-const awaitProgressHeader = (
+export interface AwaitSummaryOutcome {
+  readonly timedOut?: boolean | undefined;
+  readonly attentionRequired?: boolean | undefined;
+  readonly cancelled?: boolean | undefined;
+}
+
+export const formatAwaitSummary = (
   runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
+  usage = "",
+  outcome: AwaitSummaryOutcome = {},
 ): string => {
   const finished = runs.filter((run) => isAssignmentFinishedRunState(run.state)).length;
-  const condition =
-    until === "all_finished" ? "Waiting for all subagents" : "Waiting for first subagent";
+  const failed = runs.filter((run) => run.state === "failed").length;
+  const mode = until === "all_finished" ? "Await all" : "Await first";
+  const heading = outcome.cancelled
+    ? "Await canceled"
+    : outcome.timedOut
+      ? "Await timed out"
+      : mode;
   const unfinishedStates = [
     "starting",
     "running",
@@ -33,21 +47,38 @@ const awaitProgressHeader = (
     "paused",
     "stopping",
   ] as const;
-  const activeSummary = unfinishedStates
-    .flatMap((state) => {
-      const count = runs.filter((run) => run.state === state).length;
-      return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
-    })
-    .join(" · ");
-  if (finished === runs.length)
-    return `${runs.length} subagent${runs.length === 1 ? "" : "s"} finished`;
-  return `${condition} · ${finished} of ${runs.length} subagents finished${activeSummary ? ` · ${activeSummary}` : ""}`;
+  const activeSummary = unfinishedStates.flatMap((state) => {
+    const count = runs.filter((run) => run.state === state).length;
+    return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
+  });
+  const firstFinished =
+    until === "any_finished"
+      ? runs
+          .filter((run) => isAssignmentFinishedRunState(run.state))
+          .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0]
+      : undefined;
+  const firstSummary = firstFinished
+    ? `${sanitizeTerminalLine(firstFinished.name)} ${
+        firstFinished.state === "reported"
+          ? "reported first · retained"
+          : `${runStateLabel(firstFinished.state)} first`
+      }`
+    : undefined;
+  return [
+    heading,
+    ...(runs.length > 0 ? [`${finished}/${runs.length} finished`] : []),
+    ...(outcome.attentionRequired ? ["parent reply required"] : []),
+    ...(firstSummary ? [firstSummary] : []),
+    ...activeSummary,
+    ...(failed > 0 ? [`${failed} failed`] : []),
+    ...(usage ? [usage] : []),
+    "◎ targets",
+    "descendants context",
+  ].join(" · ");
 };
 
 const awaitRunStatus = (run: AwaitProgressRun): string =>
-  sanitizeTerminalLine(
-    [runStateLabel(run.state), run.currentTool, runTiming(run)].filter(Boolean).join(" · "),
-  );
+  sanitizeTerminalLine([run.currentTool, runTiming(run)].filter(Boolean).join(" · "));
 
 export const formatAwaitProgress = (
   runs: ReadonlyArray<AwaitProgressRun>,
@@ -56,19 +87,21 @@ export const formatAwaitProgress = (
 ): string => {
   const awaitedIds = new Set(runs.map((run) => run.id));
   const allRuns = [...runs, ...contextRuns.filter((run) => !awaitedIds.has(run.id))];
+  const usage = aggregateRunUsage(allRuns);
   return [
-    awaitProgressHeader(runs, until),
-    "◎ awaited target · descendants are context",
-    ...projectRunCardTree(allRuns).map(
-      (row) =>
-        `${runCardTreeBranch(row)}${awaitedIds.has(row.run.id) ? "◎ " : ""}${runStateGlyph(row.run.state)} ${sanitizeTerminalLine(row.run.name)} (${sanitizeTerminalLine(row.run.id)}) · ${awaitRunStatus(row.run)}`,
-    ),
+    formatAwaitSummary(runs, until, usage),
+    ...projectRunCardTree(allRuns).map((row) => {
+      const status = awaitRunStatus(row.run);
+      return `${runCardTreeBranch(row)}${awaitedIds.has(row.run.id) ? "◎ " : ""}${runStateGlyph(row.run.state)} ${sanitizeTerminalLine(row.run.name)} (${sanitizeTerminalLine(row.run.id)})${status ? ` · ${status}` : ""}`;
+    }),
   ].join("\n");
 };
 
 const awaitHeaderColor = (
   runs: ReadonlyArray<SubagentRunCard>,
+  outcome: AwaitSummaryOutcome,
 ): "warning" | "success" | "error" => {
+  if (outcome.cancelled || outcome.timedOut || outcome.attentionRequired) return "warning";
   if (runs.some((run) => run.state === "failed")) return "error";
   return runs.length > 0 && runs.every((run) => isAssignmentFinishedRunState(run.state))
     ? "success"
@@ -86,6 +119,7 @@ class AwaitProgressComponent implements Component {
   private readonly until: SubagentAwaitUntil;
   private readonly theme: Theme;
   private readonly hierarchy: AwaitProgressHierarchy;
+  private readonly outcome: AwaitSummaryOutcome;
 
   constructor(
     runs: ReadonlyArray<SubagentRunCard>,
@@ -93,12 +127,14 @@ class AwaitProgressComponent implements Component {
     until: SubagentAwaitUntil,
     theme: Theme,
     hierarchy: AwaitProgressHierarchy,
+    outcome: AwaitSummaryOutcome,
   ) {
     this.runs = runs;
     this.targets = targets;
     this.until = until;
     this.theme = theme;
     this.hierarchy = hierarchy;
+    this.outcome = outcome;
   }
 
   render(width: number): string[] {
@@ -108,13 +144,9 @@ class AwaitProgressComponent implements Component {
     return [
       truncateToWidth(
         this.theme.fg(
-          awaitHeaderColor(this.targets),
-          awaitProgressHeader(this.targets, this.until),
+          awaitHeaderColor(this.targets, this.outcome),
+          formatAwaitSummary(this.targets, this.until, usage, this.outcome),
         ),
-        safeWidth,
-      ),
-      truncateToWidth(
-        this.theme.fg("dim", "◎ awaited target · descendants are context"),
         safeWidth,
       ),
       ...(this.hierarchy.contextOmitted
@@ -125,12 +157,8 @@ class AwaitProgressComponent implements Component {
             ),
           ]
         : []),
-      ...(usage
-        ? [truncateToWidth(this.theme.fg("dim", `Total usage · ${usage}`), safeWidth)]
-        : []),
       ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
         frame,
-        status: awaitRunStatus,
         hierarchy: this.hierarchy,
       }),
     ];
@@ -202,4 +230,5 @@ export const renderAwaitProgressComponent = (
   until: SubagentAwaitUntil,
   theme: Theme,
   hierarchy: AwaitProgressHierarchy,
-): Component => new AwaitProgressComponent(runs, targets, until, theme, hierarchy);
+  outcome: AwaitSummaryOutcome = {},
+): Component => new AwaitProgressComponent(runs, targets, until, theme, hierarchy, outcome);

@@ -16,7 +16,6 @@ import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
-import { runStateLabel } from "../ui/run-state.ts";
 import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
@@ -28,7 +27,7 @@ import {
   renderProfileRoutesComponent,
   type SemanticOutcomeBanner,
 } from "./render-management.ts";
-import { renderAwaitProgressComponent } from "./render-await.ts";
+import { formatAwaitSummary, renderAwaitProgressComponent } from "./render-await.ts";
 import { aggregateRunUsage, renderResponsiveRunRows } from "./render-run-rows.ts";
 import {
   renderStartFailures,
@@ -177,20 +176,13 @@ class RunOverviewComponent implements Component {
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
     const usage = aggregateRunUsage(this.runs);
+    const isAwaitHierarchy = this.hierarchy?.awaitedRunIds !== undefined;
     const outcomeRuns = this.hierarchy?.awaitedRunIds
       ? this.runs.filter((run) => this.hierarchy?.awaitedRunIds?.has(run.id))
       : this.runs;
     return [
       ...(this.banner
         ? [truncateToWidth(this.theme.fg(this.banner.color, this.banner.text), safeWidth)]
-        : []),
-      ...(this.hierarchy?.awaitedRunIds
-        ? [
-            truncateToWidth(
-              this.theme.fg("dim", "◎ awaited target · descendants are context"),
-              safeWidth,
-            ),
-          ]
         : []),
       ...(this.hierarchy?.contextOmitted
         ? [
@@ -200,7 +192,7 @@ class RunOverviewComponent implements Component {
             ),
           ]
         : []),
-      ...(usage
+      ...(!isAwaitHierarchy && usage
         ? [truncateToWidth(this.theme.fg("dim", `Total usage · ${usage}`), safeWidth)]
         : []),
       ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
@@ -409,49 +401,29 @@ export const awaitResultBanner = (details: {
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
-}): SemanticOutcomeBanner | undefined => {
+  readonly usage?: string | undefined;
+}): SemanticOutcomeBanner => {
   const runs = details.runs ?? [];
-  const unfinished = runs.filter((run) => !isAssignmentFinishedRunState(run.state));
-  const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
-  const attention = waiting > 0 ? ` · parent reply required for ${waiting}` : "";
-  if (details.cancelled)
-    return {
-      color: "warning",
-      text:
-        runs.length === 0
-          ? "Await canceled"
-          : `Await canceled · ${unfinished.length} unfinished${attention}`,
-    };
-  if (details.timedOut)
-    return {
-      color: "warning",
-      text: `Await timed out · ${unfinished.length} unfinished${attention}`,
-    };
-  if (details.attentionRequired)
-    return {
-      color: "warning",
-      text: `Parent reply required for ${waiting} subagent${waiting === 1 ? "" : "s"}`,
-    };
-  if (details.awaitUntil !== "any_finished") {
-    if (runs.length === 0 || unfinished.length > 0) return undefined;
-    const failed = runs.filter((run) => run.state === "failed").length;
-    return {
-      color: failed > 0 ? "error" : "success",
-      text: `${runs.length} subagent${runs.length === 1 ? "" : "s"} finished${failed > 0 ? ` · ${failed} failed` : ""}`,
-    };
-  }
-  const first = runs
+  const finishedRuns = runs
     .filter((run) => isAssignmentFinishedRunState(run.state))
-    .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0];
-  if (!first) return undefined;
-  const name = sanitizeTerminalLine(first.name);
-  const outcome =
-    first.state === "reported"
-      ? "reported first · backend retained"
-      : `${runStateLabel(first.state)} first`;
+    .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity));
+  const failed = runs.filter((run) => run.state === "failed").length;
+  const interrupted = details.cancelled || details.timedOut || details.attentionRequired;
+  const firstFinished = finishedRuns[0];
+  const color: SemanticOutcomeBanner["color"] = interrupted
+    ? "warning"
+    : details.awaitUntil === "any_finished" && firstFinished
+      ? firstFinished.state === "failed"
+        ? "error"
+        : "accent"
+      : failed > 0
+        ? "error"
+        : runs.length > 0 && finishedRuns.length === runs.length
+          ? "success"
+          : "warning";
   return {
-    color: first.state === "failed" ? "error" : "accent",
-    text: `${name} ${outcome}${unfinished.length > 0 ? ` · ${unfinished.length} unfinished` : ""}${attention}`,
+    color,
+    text: formatAwaitSummary(runs, details.awaitUntil ?? "all_finished", details.usage, details),
   };
 };
 
@@ -527,23 +499,17 @@ export const renderSubagentResult = (
   if (isPartial && details?.action === "await" && details.awaitUntil) {
     const targets = awaitTargets(details);
     const hierarchy = awaitHierarchy(details);
-    if (details.cancelled)
-      return new RunOverviewComponent(
-        details.cards,
-        [],
-        false,
-        theme,
-        [],
-        awaitResultBanner({ ...details, runs: targets }),
-        true,
-        hierarchy,
-      );
     return renderAwaitProgressComponent(
       details.cards,
       targets,
       details.awaitUntil,
       theme,
       hierarchy,
+      {
+        cancelled: details.cancelled,
+        timedOut: details.timedOut,
+        attentionRequired: details.attentionRequired,
+      },
     );
   }
   if (isPartial && details?.action === "start")
@@ -564,7 +530,11 @@ export const renderSubagentResult = (
     const targets = awaitTargets(details);
     const hierarchy = awaitHierarchy(details);
     const banner = includeContentOmission(
-      awaitResultBanner({ ...details, runs: targets }),
+      awaitResultBanner({
+        ...details,
+        runs: targets,
+        usage: aggregateRunUsage(details.cards),
+      }),
       details.contentOmitted,
     );
     if (expanded) {
