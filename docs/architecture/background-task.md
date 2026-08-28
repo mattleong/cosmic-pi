@@ -415,12 +415,12 @@ Effect Schema validates persisted unknown data. Invalid fields fall back indepen
 
 ## 13. Mode behavior
 
-| Mode  | Agent tool | `/tasks` launcher       | `/tasks status`           | Task manager | Footer status |
-| ----- | ---------- | ----------------------- | ------------------------- | ------------ | ------------- |
+| Mode  | Agent tool | `/tasks` launcher       | `/tasks status`            | Task manager | Footer status |
+| ----- | ---------- | ----------------------- | -------------------------- | ------------ | ------------- |
 | TUI   | Full       | Opens manager           | Reports effective settings | Full-screen  | Full          |
 | RPC   | Full       | Reports TUI requirement | Reports effective settings | Unsupported  | None          |
-| JSON  | Full       | No-op                   | No-op                     | Unsupported  | None          |
-| Print | Full       | No-op                   | No-op                     | Unsupported  | None          |
+| JSON  | Full       | No-op                   | No-op                      | Unsupported  | None          |
+| Print | Full       | No-op                   | No-op                      | Unsupported  | None          |
 
 The tool must remain useful without UI. UI methods and full-screen manager code are guarded with `ctx.mode === "tui"`.
 

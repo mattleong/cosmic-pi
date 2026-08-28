@@ -45,8 +45,6 @@ const MUTATING_OPERATIONS = new Set([
   "start agent",
   "prompt agent",
   "close pane",
-  "activate herdr tab",
-  "restore focus",
 ]);
 
 const BoundedId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
@@ -220,10 +218,6 @@ export interface HerdrCliContract {
     text: string,
   ) => Effect.Effect<HerdrAgent, SubagentProcessError>;
   readonly closePane: (paneId: string) => Effect.Effect<void, SubagentProcessError>;
-  readonly focusTab: (
-    tabId: string,
-    operation: "activate herdr tab" | "restore focus",
-  ) => Effect.Effect<void, SubagentProcessError>;
 }
 
 export interface HerdrCliLayerOptions {
@@ -864,7 +858,6 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         CONFIRMED_AGENT_PROMPT_REJECTION_CODES,
       ).pipe(Effect.flatMap((source) => decodeAgentResponse("prompt agent", source))),
     closePane: (paneId) => ok(["pane", "close", paneId], "close pane"),
-    focusTab: (tabId, operation) => ok(["tab", "focus", tabId], operation),
   };
 };
 

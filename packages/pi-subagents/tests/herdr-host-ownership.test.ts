@@ -21,6 +21,7 @@ describe("Herdr launch ownership hardening", () => {
     );
     const scenario = Effect.gen(function* () {
       const host = yield* HerdrHost;
+      const initialFocus = fake.focusedTopology();
       const hosted = yield* host.launch("pi", launch("agent-committed-mismatch"), {
         ...supervisor,
         runId: "agent-committed-mismatch",
@@ -42,6 +43,8 @@ describe("Herdr launch ownership hardening", () => {
       expect(fake.closedPanes).toEqual([]);
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
+      expect(fake.focusedTopology()).toEqual(initialFocus);
+      expect(fake.focusOperations).toEqual([]);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
     return Effect.gen(function* () {
       expect(Exit.isFailure(yield* scenario.pipe(Effect.exit))).toBe(true);
@@ -132,8 +135,9 @@ describe("Herdr launch ownership hardening", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.live("quarantines a pane whose terminal identity changes during shell readiness", () => {
+  it.live("quarantines terminal drift without changing focus", () => {
     const fake = fakeTopology();
+    fake.switchToOtherTab();
     fake.replaceTerminalOnFirstShellInspection();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
@@ -142,6 +146,7 @@ describe("Herdr launch ownership hardening", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
+      const initialFocus = fake.focusedTopology();
       const runScope = yield* Scope.make();
       const launched = yield* host
         .launch("pi", launch("agent-replaced-terminal"), {
@@ -152,31 +157,8 @@ describe("Herdr launch ownership hardening", () => {
       expect(Exit.isFailure(launched)).toBe(true);
       expect(fake.paneCommands).toEqual([]);
       expect(fake.cleanupAuthorizations()).toBe(0);
-      expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
-  });
-
-  it.live("quarantines terminal drift observed after activation focus and before input", () => {
-    const fake = fakeTopology();
-    fake.driftAfterFocus();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
-    return Effect.gen(function* () {
-      const host = yield* HerdrHost;
-      const runScope = yield* Scope.make();
-      const launched = yield* host
-        .launch("pi", launch("agent-post-focus-drift"), {
-          ...supervisor,
-          runId: "agent-post-focus-drift",
-        })
-        .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
-      expect(Exit.isFailure(launched)).toBe(true);
-      expect(fake.paneCommands).toEqual([]);
-      expect(fake.callerPaneLive()).toBe(true);
-      expect(fake.cleanupAuthorizations()).toBe(0);
+      expect(fake.focusedTopology()).toEqual(initialFocus);
+      expect(fake.focusOperations).toEqual([]);
       expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
@@ -304,12 +286,11 @@ describe("Herdr launch ownership hardening", () => {
 
   it.live("quarantines mismatched process-info, start-response, and post-start name evidence", () =>
     Effect.gen(function* () {
-      for (const mismatch of ["process", "start", "name", "focus"] as const) {
+      for (const mismatch of ["process", "start", "name"] as const) {
         const fake = fakeTopology();
         if (mismatch === "process") fake.returnWrongProcessInfoPane();
         if (mismatch === "start") fake.returnMismatchedStartedAgent();
         if (mismatch === "name") fake.duplicateAgentNameAfterStart();
-        if (mismatch === "focus") fake.driftDuringFocusRestoration();
         const layer = HerdrHost.layer.pipe(
           Layer.provide(
             Layer.merge(
@@ -470,15 +451,17 @@ describe("Herdr launch ownership hardening", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
+      const initialFocus = fake.focusedTopology();
       const runScope = yield* Scope.make();
       const launched = yield* host
-        .launch("pi", launch("agent-replaced-initial-focus"), {
+        .launch("pi", launch("agent-replaced-caller-tab"), {
           ...supervisor,
-          runId: "agent-replaced-initial-focus",
+          runId: "agent-replaced-caller-tab",
         })
         .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
       expect(Exit.isFailure(launched)).toBe(true);
       expect(fake.focusOperations).toEqual([]);
+      expect(fake.focusedTopology()).toEqual(initialFocus);
       expect(fake.closedPanes).toEqual([]);
       expect(fake.callerPaneLive()).toBe(true);
       expect(Exit.isFailure(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
@@ -501,16 +484,18 @@ describe("Herdr launch ownership hardening", () => {
       fake.switchToOtherTab();
       expect(yield* hosted.inspect).toMatchObject({ paneId: hosted.paneId });
       expect(yield* hosted.prompt("continue inspection")).toMatchObject({ paneId: hosted.paneId });
+      const switchedFocus = fake.focusedTopology();
       yield* hosted.close;
-      expect(fake.focusedTab()).toBe("user:other");
+      expect(fake.focusedTopology()).toEqual(switchedFocus);
+      expect(fake.focusOperations).toEqual([]);
       expect(fake.closedPanes).toEqual([hosted.paneId]);
       expect(fake.callerPaneLive()).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.live("refuses a second activation probe after newer user focus", () => {
+  it.live("retries focus-free pane input after the user switches tabs", () => {
     const fake = fakeTopology();
-    fake.moveFocusToOriginalAfterFirstProbe();
+    fake.switchToOtherTabAfterFirstProbe();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
         Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
@@ -518,21 +503,29 @@ describe("Herdr launch ownership hardening", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const result = yield* Effect.result(
-        host.launch("pi", launch("agent-focus-between-probes"), {
-          ...supervisor,
-          runId: "agent-focus-between-probes",
-        }),
-      );
-      expect(result).toMatchObject({
-        _tag: "Failure",
-        failure: { code: "herdr_focus_changed" },
+      const hosted = yield* host.launch("pi", launch("agent-focus-between-probes"), {
+        ...supervisor,
+        runId: "agent-focus-between-probes",
       });
-      expect(fake.paneCommands.map(({ operation }) => operation)).toEqual(["activate pane input"]);
-      expect(
-        fake.focusOperations.filter((operation) => operation === "activate herdr tab"),
-      ).toEqual(["activate herdr tab"]);
-      expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.activationConfirmations.get(hosted.paneId)).toBe(2);
+      expect(fake.paneCommands.map(({ operation }) => operation).slice(0, 2)).toEqual([
+        "activate pane input",
+        "activate pane input",
+      ]);
+      expect(fake.focusedTopology()).toEqual({
+        workspaceId: "user",
+        tabId: "user:other",
+        paneId: undefined,
+      });
+      expect(fake.focusOperations).toEqual([]);
+      yield* hosted.close;
+      expect(fake.focusedTopology()).toEqual({
+        workspaceId: "user",
+        tabId: "user:other",
+        paneId: undefined,
+      });
+      expect(fake.focusOperations).toEqual([]);
+      expect(fake.closedPanes).toEqual([hosted.paneId]);
       expect(fake.callerPaneLive()).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });

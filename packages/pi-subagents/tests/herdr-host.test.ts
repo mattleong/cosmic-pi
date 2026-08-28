@@ -22,6 +22,7 @@ describe("session-owned Herdr topology", () => {
       );
       return Effect.gen(function* () {
         const host = yield* HerdrHost;
+        const initialFocus = fake.focusedTopology();
         const first = yield* host.launch("pi", launch("agent-1"), supervisor);
         const second = yield* host.launch("pi", launch("agent-2"), {
           ...supervisor,
@@ -41,14 +42,19 @@ describe("session-owned Herdr topology", () => {
           ]),
         );
         expect(fake.shellInspectedPanes).toEqual(new Set([first.paneId, second.paneId]));
+        expect(fake.focusedTopology()).toEqual(initialFocus);
+        expect(fake.focusOperations).toEqual([]);
 
         yield* first.close;
         expect(fake.closedPanes).toEqual([first.paneId]);
         expect(fake.cleanupAuthorizations()).toBe(1);
+        expect(fake.focusedTopology()).toEqual(initialFocus);
         yield* second.close;
         expect(fake.closedPanes).toEqual([first.paneId, second.paneId]);
         expect(fake.callerPaneLive()).toBe(true);
         expect(fake.cleanupAuthorizations()).toBe(2);
+        expect(fake.focusedTopology()).toEqual(initialFocus);
+        expect(fake.focusOperations).toEqual([]);
       }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
@@ -226,6 +232,7 @@ describe("session-owned Herdr topology", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
+      const initialFocus = fake.focusedTopology();
       const result = yield* Effect.result(
         host.launch("pi", launch("agent-activation-failure"), {
           ...supervisor,
@@ -249,7 +256,8 @@ describe("session-owned Herdr topology", () => {
       expect(fake.closedPanes).toEqual(["user:p1"]);
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
-      expect(fake.focusedTab()).toBe("user:t");
+      expect(fake.focusedTopology()).toEqual(initialFocus);
+      expect(fake.focusOperations).toEqual([]);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
@@ -282,10 +290,10 @@ describe("session-owned Herdr topology", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.live("does not restore stale focus after rollback closes the owned pane", () => {
+  it.live("does not override newer user focus during focus-free receipt retry and rollback", () => {
     const fake = fakeTopology();
     fake.dropEveryActivationProbe();
-    fake.moveFocusToOtherOnPaneClose();
+    fake.switchToOtherTabAfterFirstProbe();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
         Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
@@ -293,14 +301,23 @@ describe("session-owned Herdr topology", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      yield* Effect.result(
+      const result = yield* Effect.result(
         host.launch("pi", launch("agent-newer-user-focus"), {
           ...supervisor,
           runId: "agent-newer-user-focus",
         }),
       );
-      expect(fake.focusedTab()).toBe("user:other");
-      expect(fake.focusOperations.filter((operation) => operation === "restore focus")).toEqual([]);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { code: "herdr_pane_input_unavailable" },
+      });
+      expect(fake.focusedTopology()).toEqual({
+        workspaceId: "user",
+        tabId: "user:other",
+        paneId: undefined,
+      });
+      expect(fake.focusOperations).toEqual([]);
+      expect(fake.closedPanes).toEqual(["user:p1"]);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
@@ -314,6 +331,7 @@ describe("session-owned Herdr topology", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
+      const initialFocus = fake.focusedTopology();
       const result = yield* Effect.result(
         host.launch("pi", launch("agent-pane-busy"), {
           ...supervisor,
@@ -327,14 +345,14 @@ describe("session-owned Herdr topology", () => {
       expect(fake.closedPanes).toEqual(["user:p1"]);
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
-      expect(fake.focusedTab()).toBe("user:t");
+      expect(fake.focusedTopology()).toEqual(initialFocus);
+      expect(fake.focusOperations).toEqual([]);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.live("rolls back before committing a run when focus restoration fails", () => {
+  it.live("launches into the exact caller tab while another tab remains focused", () => {
     const fake = fakeTopology();
     fake.switchToOtherTab();
-    fake.failRestoreFocus();
     const layer = HerdrHost.layer.pipe(
       Layer.provide(
         Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
@@ -342,19 +360,49 @@ describe("session-owned Herdr topology", () => {
     );
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const result = yield* Effect.result(
-        host.launch("pi", launch("agent-focus-failure"), {
-          ...supervisor,
-          runId: "agent-focus-failure",
-        }),
-      );
-      expect(result).toMatchObject({
-        _tag: "Failure",
-        failure: { code: "herdr_restore_focus_outcome_uncertain" },
+      const initialFocus = fake.focusedTopology();
+      const hosted = yield* host.launch("pi", launch("agent-unfocused-target"), {
+        ...supervisor,
+        runId: "agent-unfocused-target",
       });
-      expect(fake.closedPanes).toEqual(["user:p1"]);
-      expect(fake.callerPaneLive()).toBe(true);
-      expect(fake.cleanupAuthorizations()).toBe(1);
+      expect(hosted.tabId).toBe("user:t");
+      expect(fake.focusedTopology()).toEqual(initialFocus);
+      expect(fake.focusOperations).toEqual([]);
+      yield* hosted.close;
+      expect(fake.closedPanes).toEqual([hosted.paneId]);
+      expect(fake.focusedTopology()).toEqual(initialFocus);
+      expect(fake.focusOperations).toEqual([]);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.live("closes a focused owned pane without issuing a focus command", () => {
+    const fake = fakeTopology();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const hosted = yield* host.launch(
+        "pi",
+        { ...launch("agent-focused-close"), closeOnReport: true },
+        { ...supervisor, runId: "agent-focused-close" },
+      );
+      fake.focusPaneAsUser(hosted.paneId);
+      expect(fake.focusedTopology()).toEqual({
+        workspaceId: "user",
+        tabId: "user:t",
+        paneId: hosted.paneId,
+      });
+      yield* hosted.close;
+      expect(fake.closedPanes).toEqual([hosted.paneId]);
+      expect(fake.focusedTopology()).toEqual({
+        workspaceId: "user",
+        tabId: "user:t",
+        paneId: fake.callerPaneId,
+      });
+      expect(fake.focusOperations).toEqual([]);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 

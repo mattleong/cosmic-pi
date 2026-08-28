@@ -163,7 +163,6 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
     waitForAvailableShell,
     activatePaneInput,
     confirmShellInput,
-    restoreFocus,
   } = makeHerdrLaunchSafety(cli, exactPaneContext);
 
   const runSelectorsAbsent = (snapshot: HerdrSnapshot, run: OwnedRun): boolean =>
@@ -323,7 +322,6 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           run.launchCleanup.cleanupConfirmed = true;
           run.harness.authorizeCleanup();
         }).pipe(Effect.uninterruptible);
-        yield* restoreFocus(before, run.tabId);
       }),
     );
 
@@ -471,15 +469,14 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           yield* waitForAvailableShell(pane, invalidateProvisional);
           // The harmless activation receipt may be retried once after a receipt timeout because
           // neither attempt mutates state beyond its unique private receipt.
-          yield* activatePaneInput(before, pane, harness, invalidateProvisional);
+          yield* activatePaneInput(pane, harness, invalidateProvisional);
           // Herdr process detection can briefly publish a stale agent classification after shell
           // startup/activation even while process-info proves the exact foreground owner is still
           // the pane shell. Wait without sending input until both bounded evidence sources agree.
-          yield* waitForAvailableShell(pane, invalidateProvisional, true);
+          yield* waitForAvailableShell(pane, invalidateProvisional);
           yield* requireAvailableProvisionalPane(
             pane,
             "prepare pane environment",
-            true,
             invalidateProvisional,
           );
           yield* cli.runPaneCommand(
@@ -495,15 +492,14 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           yield* inspectProvisionalPane(pane, "confirm pane environment", invalidateProvisional);
           // The environment-ready receipt precedes the final exec. Re-prove the exact foreground
           // shell, then require a second receipt from input executed by that replacement shell.
-          yield* waitForAvailableShell(pane, invalidateProvisional, true);
+          yield* waitForAvailableShell(pane, invalidateProvisional);
           yield* confirmShellInput(pane, harness, "environment", invalidateProvisional);
           if (harness.secretCommand) {
             // Re-prove foreground-shell ownership before sending credential bootstrap into the pane.
-            yield* waitForAvailableShell(pane, invalidateProvisional, true);
+            yield* waitForAvailableShell(pane, invalidateProvisional);
             yield* requireAvailableProvisionalPane(
               pane,
               "load pane secrets",
-              true,
               invalidateProvisional,
             );
             yield* cli.runPaneCommand(pane.paneId, harness.secretCommand, "load pane secrets");
@@ -511,17 +507,15 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             yield* inspectProvisionalPane(pane, "confirm pane secrets", invalidateProvisional);
             // Re-prove the foreground shell, then prove it accepted another command after the
             // secret bootstrap completed.
-            yield* waitForAvailableShell(pane, invalidateProvisional, true);
+            yield* waitForAvailableShell(pane, invalidateProvisional);
             yield* confirmShellInput(pane, harness, "secrets", invalidateProvisional);
           }
           // Private receipts prove causal command execution without depending on observable PTY
-          // output. Agent start still requires the exact replacement shell to own the foreground
-          // while the owned tab remains focused.
-          yield* waitForAvailableShell(pane, invalidateProvisional, true);
+          // output. Agent start still requires the exact replacement shell to own the foreground.
+          yield* waitForAvailableShell(pane, invalidateProvisional);
           yield* requireAvailableProvisionalPane(
             pane,
             "start agent",
-            true,
             invalidateProvisional,
             agentName,
           );
@@ -574,7 +568,6 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             );
           };
           yield* cli.snapshot.pipe(Effect.flatMap(validateStartedOwnership));
-          yield* restoreFocus(before, pane.tabId, validateStartedOwnership);
           records.set(run.runId, run);
           const hosted: HerdrHostedAgent = {
             runId: run.runId,
@@ -636,20 +629,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
                 onSuccess: () =>
                   Effect.sync(() => {
                     launchCleanup.cleanupConfirmed = true;
-                  }).pipe(
-                    Effect.andThen(
-                      restoreFocus(before, provisional.pane.tabId).pipe(
-                        Effect.mapError((focusError) =>
-                          processError(
-                            error.operation,
-                            error.code ?? "herdr_launch_failed",
-                            `${error.message} Focus restoration also failed: ${focusError.message}`,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Effect.andThen(Effect.fail(error)),
-                  ),
+                  }).pipe(Effect.andThen(Effect.fail(error))),
               }),
             );
           }),
