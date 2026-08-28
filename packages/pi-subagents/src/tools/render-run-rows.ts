@@ -39,6 +39,7 @@ export const aggregateRunUsage = (
       | { readonly totalTokens: number; readonly cost?: number | undefined }
       | undefined;
   }>,
+  style: "long" | "compact" = "long",
 ): string => {
   const tokens = runs.reduce((total, run) => total + (run.usage?.totalTokens ?? 0), 0);
   const knownCosts = runs.flatMap((run) => (run.usage?.cost === undefined ? [] : [run.usage.cost]));
@@ -47,8 +48,9 @@ export const aggregateRunUsage = (
   // A subtotal over runs with unknown costs is explicitly marked as a lower bound.
   const partial = costKnown && knownCosts.length < runs.length;
   if (tokens <= 0 && (!costKnown || cost === 0)) return "";
-  const costPart = costKnown ? ` · ${partial ? "≥ " : ""}${formatCost(cost)}` : "";
-  return `${formatTokenCount(tokens)} tokens${costPart}`;
+  const lowerBound = partial ? (style === "compact" ? "≥" : "≥ ") : "";
+  const costPart = costKnown ? ` · ${lowerBound}${formatCost(cost)}` : "";
+  return `${formatTokenCount(tokens)} ${style === "compact" ? "tok" : "tokens"}${costPart}`;
 };
 
 const padVisible = (value: string, width: number): string =>
@@ -75,15 +77,19 @@ const renderRouteRail = (run: SubagentRunCard, width: number, theme: Theme): str
 
 const runUsage = (run: SubagentRunCard): string => formatUsage(run.usage, "tok");
 
+interface RunIdentity {
+  readonly plain: string;
+  readonly themed: string;
+}
+
 const renderHierarchyRow = (
   run: SubagentRunCard,
-  identity: string,
+  identity: RunIdentity,
   usage: string,
   width: number,
   theme: Theme,
 ): string => {
-  const color = runStateColor(run.state);
-  const themedIdentity = theme.fg(color, identity);
+  const themedIdentity = identity.themed;
   const timing = runTiming(run);
   const metadata = [
     themedRunRoute(run, theme),
@@ -97,7 +103,10 @@ const renderHierarchyRow = (
   const combined = `${themedIdentity}${theme.fg("dim", " · ")}${metadata}`;
   if (visibleWidth(combined) <= width) return combined;
   if (width < 12) return truncateToWidth(themedIdentity, width);
-  const identityWidth = Math.min(visibleWidth(identity), Math.max(8, Math.floor(width * 0.42)));
+  const identityWidth = Math.min(
+    visibleWidth(identity.plain),
+    Math.max(8, Math.floor(width * 0.42)),
+  );
   const metadataWidth = width - identityWidth - 3;
   if (metadataWidth < 8) return truncateToWidth(themedIdentity, width);
   return `${truncateToWidth(themedIdentity, identityWidth)}${theme.fg(
@@ -126,16 +135,20 @@ export const renderResponsiveRunRows = (
   const safeWidth = Math.max(1, width);
   const treeRows = options.hierarchy ? projectRunCardTree(runs) : undefined;
   const displayRuns = treeRows?.map((row) => row.run) ?? runs;
-  const identities = displayRuns.map((run, index) => {
+  const identities = displayRuns.map((run, index): RunIdentity => {
     const glyph =
       options.frame === undefined
         ? runStateGlyph(run.state)
         : animatedRunStateGlyph(run.state, options.frame);
-    const id = options.fullId ? run.id : shortRunId(run.id);
+    const id = sanitizeTerminalLine(options.fullId ? run.id : shortRunId(run.id));
     const row = treeRows?.[index];
     const branch = row ? runCardTreeBranch(row) : "";
     const awaited = options.hierarchy?.awaitedRunIds?.has(run.id) ? "◎ " : "";
-    return `${branch}${awaited}${glyph} ${sanitizeTerminalLine(run.name)} · ${sanitizeTerminalLine(id)}`;
+    const identity = `${branch}${awaited}${glyph} ${sanitizeTerminalLine(run.name)}`;
+    return {
+      plain: `${identity} · ${id}`,
+      themed: `${theme.fg(runStateColor(run.state), identity)}${theme.fg("dim", " · ")}${theme.fg("muted", id)}`,
+    };
   });
   const intents = displayRuns.map((run) =>
     sanitizeTerminalLine(run.writeIntent ?? "intent unknown"),
@@ -149,13 +162,19 @@ export const renderResponsiveRunRows = (
   const usages = displayRuns.map(runUsage);
   if (treeRows)
     return displayRuns.map((run, index) =>
-      renderHierarchyRow(run, identities[index] ?? "", usages[index] ?? "", safeWidth, theme),
+      renderHierarchyRow(
+        run,
+        identities[index] ?? { plain: "", themed: "" },
+        usages[index] ?? "",
+        safeWidth,
+        theme,
+      ),
     );
   const routes = displayRuns.map(runRoute);
   const intentWidth = intents.reduce((max, intent) => Math.max(max, visibleWidth(intent)), 0);
   const minimumIdentityWidth = options.hierarchy ? 24 : 16;
   const identityWidth = Math.min(
-    Math.max(minimumIdentityWidth, ...identities.map((identity) => visibleWidth(identity))),
+    Math.max(minimumIdentityWidth, ...identities.map((identity) => visibleWidth(identity.plain))),
     Math.max(minimumIdentityWidth, Math.floor(safeWidth * (options.hierarchy ? 0.4 : 0.28))),
   );
   const stateWidth = Math.min(
@@ -178,7 +197,7 @@ export const renderResponsiveRunRows = (
   )
     return displayRuns.map((run, index) => {
       const color = runStateColor(run.state);
-      const identity = theme.fg(color, truncateToWidth(identities[index] ?? "", identityWidth));
+      const identity = truncateToWidth(identities[index]?.themed ?? "", identityWidth);
       const route = themedRunRoute(run, theme);
       const intent = theme.fg(
         run.writeIntent === "writer" ? "warning" : "muted",
@@ -191,7 +210,7 @@ export const renderResponsiveRunRows = (
     });
   return displayRuns.flatMap((run, index) => {
     const color = runStateColor(run.state);
-    const identity = identities[index] ?? "";
+    const identity = identities[index] ?? { plain: "", themed: "" };
     const compactStatus = [
       runStateLabel(run.state),
       run.currentTool ? sanitizeTerminalLine(run.currentTool) : undefined,
@@ -203,7 +222,7 @@ export const renderResponsiveRunRows = (
     const compactMinimumIdentityWidth = Math.min(24, Math.max(8, Math.floor(safeWidth * 0.45)));
     const maximumStatusWidth = safeWidth - compactMinimumIdentityWidth - 3;
     const identityLine = (() => {
-      if (maximumStatusWidth < 7) return truncateToWidth(theme.fg(color, identity), safeWidth);
+      if (maximumStatusWidth < 7) return truncateToWidth(identity.themed, safeWidth);
       const compactStatusWidth = Math.min(
         visibleWidth(compactStatus),
         Math.max(7, Math.floor(safeWidth * 0.36)),
@@ -211,7 +230,7 @@ export const renderResponsiveRunRows = (
       );
       const compactIdentityWidth = safeWidth - compactStatusWidth - 3;
       return `${truncateToWidth(
-        theme.fg(color, identity),
+        identity.themed,
         compactIdentityWidth,
       )} · ${truncateToWidth(theme.fg(color, compactStatus), compactStatusWidth)}`;
     })();

@@ -226,7 +226,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     renderCall: (args, theme) =>
       renderSubagentCall(
         `Await ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
-        `${args.until === "all_finished" ? "until all finish" : "until first finishes"} · ${args.runIds.join(", ")}`,
+        "",
         theme,
       ),
     renderResult: sharedRenderResult,

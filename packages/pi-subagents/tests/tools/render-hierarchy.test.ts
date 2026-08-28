@@ -65,9 +65,11 @@ describe("hierarchical tool result rendering", () => {
 
     expect(awaiting).toEqual(completed);
     expect(awaiting).toHaveLength(details.cards.length + 1);
-    expect(awaiting[0]).toContain("1/1 finished");
-    expect(awaiting[0]).toContain("30k tokens");
-    expect(awaiting[0]).toContain("◎ targets");
+    expect(awaiting[0]).toContain("1/1");
+    expect(awaiting[0]).toContain("30k tok");
+    expect(awaiting[0]).toContain("◎1 target");
+    expect(awaiting[0]).toContain("1 descendant");
+    expect(awaiting[0]).not.toContain("finished");
     expect(awaiting.slice(1).every((line) => !line.includes("stopped"))).toBe(true);
     expect(awaiting.every((line) => !line.startsWith("Total usage"))).toBe(true);
   });
@@ -77,13 +79,189 @@ describe("hierarchical tool result rendering", () => {
     [{ timedOut: true }, "Await timed out"],
     [{ attentionRequired: true }, "parent reply required"],
   ] as const)("keeps the %s outcome in the one-line summary", (outcome, expected) => {
-    const summary = formatAwaitSummary([target], "all_finished", "12k tokens", outcome);
+    const summary = formatAwaitSummary([target], "all_finished", "12k tok", outcome);
 
     expect(summary).toContain(expected);
-    expect(summary).toContain("0/1 finished");
-    expect(summary).toContain("12k tokens");
-    expect(summary).toContain("◎ targets");
+    expect(summary).toContain("0/1");
+    expect(summary).toContain("12k tok");
+    expect(summary).toContain("◎1 target");
+    expect(summary).not.toContain("finished");
     expect(summary).not.toContain("\n");
+  });
+
+  it("collapses completed report previews into one counted affordance", () => {
+    const first = view({
+      id: "report-a",
+      name: "Report A",
+      state: "completed",
+      endedAt: 2,
+      finalText: "First report body.",
+      progress: "Stale completed progress.",
+      warning: "Run warning retained.",
+      writeIntent: "writer",
+      writeClaims: ["src/report.ts"],
+      selection: {
+        source: "profile-candidate",
+        reason: "Selected fallback candidate.",
+        candidateIndex: 1,
+        skippedCandidates: [
+          {
+            candidateIndex: 0,
+            candidate: "local/pi/first-model",
+            code: "unavailable",
+            reason: "First candidate unavailable.",
+          },
+        ],
+        warning: "Selection warning retained.",
+      },
+    });
+    const second = view({
+      id: "report-b",
+      name: "Report B",
+      state: "reported",
+      closeOnReport: false,
+      reportGeneration: 1,
+      endedAt: 3,
+      finalText: "Second report body.",
+      progress: "Stale reported progress.",
+    });
+    const details = makeAwaitDetails({
+      runs: [first, second],
+      awaitedRunIds: [first.id, second.id],
+      awaitUntil: "all_finished",
+    });
+
+    const collapsed = render(details, false, 160);
+    const expanded = renderSubagentResult({ content: [], details }, false, true, theme).render(160);
+
+    expect(
+      collapsed.filter((line) => line.includes("▸ 2 final reports · ctrl+o to expand")),
+    ).toHaveLength(1);
+    expect(collapsed.join("\n")).not.toContain("First report body.");
+    expect(collapsed.join("\n")).not.toContain("Second report body.");
+    const expandedText = expanded.join("\n");
+    expect(expandedText).toContain("1/2 · Report A");
+    expect(expandedText).toContain("2/2 · Report B");
+    expect(expandedText).toContain("First report body.");
+    expect(expandedText).toContain("Second report body.");
+    expect(expandedText).toContain("Writer claims · src/report.ts");
+    expect(expandedText).toContain("Run warning retained.");
+    expect(expandedText).toContain("skipped local/pi/first-model");
+    expect(expandedText).toContain("Selection warning retained.");
+    expect(expandedText).toContain("retain backend · assignment 1");
+    expect(expandedText).toContain("Report B is retained");
+    expect(expandedText).not.toContain("Stale completed progress.");
+    expect(expandedText).not.toContain("Stale reported progress.");
+    expect(expandedText).not.toContain("ID:");
+    expect(expandedText).not.toContain("context=");
+    expect(expandedText).not.toContain("capabilities=");
+    expect(expandedText).not.toContain("close after report");
+    expect(expandedText).not.toContain("Report 1 of 2");
+    expect(expandedText).not.toContain("ctrl+o to expand");
+  });
+
+  it("keeps active progress in expanded await cards", () => {
+    const active = view({ id: "active", name: "Active", progress: "Still working." });
+    const details = makeAwaitDetails({
+      runs: [active],
+      awaitedRunIds: [active.id],
+      awaitUntil: "all_finished",
+      timedOut: true,
+    });
+    const expanded = renderSubagentResult({ content: [], details }, false, true, theme).render(120);
+
+    expect(expanded.join("\n")).toContain("Progress: Still working.");
+  });
+
+  it("retains routine diagnostics for expanded non-await cards", () => {
+    const status = makeCompactToolDetails({ action: "status", runs: [target] });
+    const expanded = renderSubagentResult(
+      { content: [], details: status },
+      false,
+      true,
+      theme,
+    ).render(160);
+    const text = expanded.join("\n");
+
+    expect(text).toContain("ID: parent");
+    expect(text).toContain("profile-candidate");
+    expect(text).toContain("context=fresh");
+    expect(text).toContain("close after report");
+    expect(text).toContain("capabilities=");
+  });
+
+  it("keeps failure labels in shortened expanded section headings", () => {
+    const report = view({
+      id: "mixed-report",
+      name: "Mixed report",
+      state: "completed",
+      endedAt: 2,
+      finalText: "Report body.",
+    });
+    const failure = view({
+      id: "mixed-failure",
+      name: "Mixed failure",
+      state: "failed",
+      endedAt: 3,
+      error: "Failure body.",
+    });
+    const details = makeAwaitDetails({
+      runs: [report, failure],
+      awaitedRunIds: [report.id, failure.id],
+      awaitUntil: "all_finished",
+    });
+    const expanded = renderSubagentResult({ content: [], details }, false, true, theme).render(160);
+    const text = expanded.join("\n");
+
+    expect(text).toContain("1/2 · Mixed report");
+    expect(text).toContain("Failure 2/2 · Mixed failure");
+    expect(text).toContain("Report body.");
+    expect(text).toContain("Failure body.");
+  });
+
+  it("counts targets and visible descendants in the compact await header", () => {
+    const firstTarget = view({
+      id: "target-a",
+      name: "Target A",
+      usage: {
+        input: 60_000,
+        output: 40_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 100_000,
+        cost: 0.0091,
+      },
+    });
+    const secondTarget = view({
+      id: "target-b",
+      name: "Target B",
+      usage: {
+        input: 30_000,
+        output: 24_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 54_000,
+      },
+    });
+    const descendants = [
+      view({ id: "child-a1", name: "Child A1", parentRunId: firstTarget.id, depth: 2 }),
+      view({ id: "child-a2", name: "Child A2", parentRunId: firstTarget.id, depth: 2 }),
+      view({ id: "child-b1", name: "Child B1", parentRunId: secondTarget.id, depth: 2 }),
+      view({ id: "child-b2", name: "Child B2", parentRunId: secondTarget.id, depth: 2 }),
+    ];
+    const details = makeAwaitDetails({
+      runs: [firstTarget, secondTarget],
+      contextRuns: descendants,
+      awaitedRunIds: [firstTarget.id, secondTarget.id],
+      awaitUntil: "all_finished",
+    });
+    const lines = render(details, true, 240);
+
+    expect(lines[0]).toContain("0/2");
+    expect(lines[0]).toContain("154k tok");
+    expect(lines[0]).toContain("≥$0.0091");
+    expect(lines[0]).toContain("◎2 targets");
+    expect(lines[0]).toContain("4 descendants");
   });
 
   it.each([20, 50, 100])("keeps list and await lines within width %i", (width) => {

@@ -24,6 +24,8 @@ export interface AwaitSummaryOutcome {
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
+  readonly targetCount?: number | undefined;
+  readonly descendantCount?: number | undefined;
 }
 
 export const formatAwaitSummary = (
@@ -34,6 +36,8 @@ export const formatAwaitSummary = (
 ): string => {
   const finished = runs.filter((run) => isAssignmentFinishedRunState(run.state)).length;
   const failed = runs.filter((run) => run.state === "failed").length;
+  const targetCount = outcome.targetCount ?? runs.length;
+  const descendantCount = outcome.descendantCount ?? 0;
   const mode = until === "all_finished" ? "Await all" : "Await first";
   const heading = outcome.cancelled
     ? "Await canceled"
@@ -66,14 +70,16 @@ export const formatAwaitSummary = (
     : undefined;
   return [
     heading,
-    ...(runs.length > 0 ? [`${finished}/${runs.length} finished`] : []),
+    ...(targetCount > 0 ? [`${finished}/${targetCount}`] : []),
     ...(outcome.attentionRequired ? ["parent reply required"] : []),
     ...(firstSummary ? [firstSummary] : []),
     ...activeSummary,
     ...(failed > 0 ? [`${failed} failed`] : []),
     ...(usage ? [usage] : []),
-    "◎ targets",
-    "descendants context",
+    `◎${targetCount} target${targetCount === 1 ? "" : "s"}`,
+    ...(descendantCount > 0
+      ? [`${descendantCount} descendant${descendantCount === 1 ? "" : "s"}`]
+      : []),
   ].join(" · ");
 };
 
@@ -87,9 +93,12 @@ export const formatAwaitProgress = (
 ): string => {
   const awaitedIds = new Set(runs.map((run) => run.id));
   const allRuns = [...runs, ...contextRuns.filter((run) => !awaitedIds.has(run.id))];
-  const usage = aggregateRunUsage(allRuns);
+  const usage = aggregateRunUsage(allRuns, "compact");
   return [
-    formatAwaitSummary(runs, until, usage),
+    formatAwaitSummary(runs, until, usage, {
+      targetCount: awaitedIds.size,
+      descendantCount: allRuns.length - runs.length,
+    }),
     ...projectRunCardTree(allRuns).map((row) => {
       const status = awaitRunStatus(row.run);
       return `${runCardTreeBranch(row)}${awaitedIds.has(row.run.id) ? "◎ " : ""}${runStateGlyph(row.run.state)} ${sanitizeTerminalLine(row.run.name)} (${sanitizeTerminalLine(row.run.id)})${status ? ` · ${status}` : ""}`;
@@ -140,12 +149,18 @@ class AwaitProgressComponent implements Component {
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
     const frame = Math.floor(synchronousNow() / 160);
-    const usage = aggregateRunUsage(this.runs);
+    const usage = aggregateRunUsage(this.runs, "compact");
+    const targetIds = this.hierarchy.awaitedRunIds ?? new Set(this.targets.map((run) => run.id));
+    const summary = {
+      ...this.outcome,
+      targetCount: targetIds.size,
+      descendantCount: this.runs.filter((run) => !targetIds.has(run.id)).length,
+    };
     return [
       truncateToWidth(
         this.theme.fg(
           awaitHeaderColor(this.targets, this.outcome),
-          formatAwaitSummary(this.targets, this.until, usage, this.outcome),
+          formatAwaitSummary(this.targets, this.until, usage, summary),
         ),
         safeWidth,
       ),

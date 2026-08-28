@@ -110,36 +110,102 @@ const reportAffordance = (
   const failureCount = sections.length - reportCount;
   const label =
     failureCount === 0
-      ? `final report${reportCount === 1 ? "" : "s"}`
+      ? `${reportCount} final report${reportCount === 1 ? "" : "s"}`
       : reportCount === 0
-        ? `failure detail${failureCount === 1 ? "" : "s"}`
-        : "reports and failures";
-  return theme.fg("dim", `${expanded ? "▾" : "▸"} ${label}${expanded ? "" : " · expand to view"}`);
+        ? `${failureCount} failure detail${failureCount === 1 ? "" : "s"}`
+        : `${reportCount} report${reportCount === 1 ? "" : "s"} · ${failureCount} failure${failureCount === 1 ? "" : "s"}`;
+  const hint = expanded ? "" : " · ctrl+o to expand";
+  return `${theme.fg("accent", expanded ? "▾" : "▸")} ${theme.fg("muted", `${label}${hint}`)}`;
 };
 
-const reportPreviews = (
-  runs: ReadonlyArray<SubagentRunCard>,
+const expandedRunDiagnostics = (
+  run: SubagentRunCard,
   width: number,
   theme: Theme,
+  includeRoutine: boolean,
 ): ReadonlyArray<string> => {
-  const previews = runs.flatMap((run) => {
-    const firstLine = run.finalText
-      ?.split("\n")
-      .map((line) => line.trim())
-      .find(Boolean)
-      ?.replace(/^#{1,6}\s+/, "");
-    if (!firstLine) return [];
-    return [
-      truncateToWidth(
-        theme.fg("dim", `↳ ${sanitizeTerminalLine(run.name)}: ${sanitizeTerminalLine(firstLine)}`),
+  const profile = run.profile ? `${sanitizeTerminalLine(run.profile)} · ` : "";
+  const selectionSummary = sanitizeTerminalLine(
+    `${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`,
+  );
+  const retention =
+    run.closeOnReport === false
+      ? `retain backend · assignment ${run.reportGeneration || 1}`
+      : `close after report · assignment ${run.reportGeneration || 1}`;
+  const routineDetails = [
+    run.context ? `context=${run.context}` : undefined,
+    retention,
+    run.capabilities ? `capabilities=${run.capabilities.join(", ") || "none"}` : undefined,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" · ");
+  const fallbackSelected =
+    (run.selection.candidateIndex ?? 0) > 0 || run.selection.skippedCandidates.length > 0;
+  const claimCount = run.writeClaimCount ?? run.writeClaims?.length ?? 0;
+  const omittedClaimCount = Math.max(0, claimCount - (run.writeClaims?.length ?? 0));
+  const writerSummary =
+    run.writeIntent !== "writer"
+      ? undefined
+      : run.writeClaims
+        ? `Writer claims · ${run.writeClaims.join(", ")}${omittedClaimCount > 0 ? ` · ${omittedClaimCount} omitted` : ""}`
+        : "Writer · exclusive cwd";
+  return [
+    ...(includeRoutine
+      ? [
+          ...wrapTextWithAnsi(theme.fg("dim", `ID: ${sanitizeTerminalLine(run.id)}`), width),
+          ...wrapTextWithAnsi(theme.fg("dim", selectionSummary), width),
+          ...wrapTextWithAnsi(theme.fg("dim", routineDetails), width),
+        ]
+      : [
+          ...(fallbackSelected ? wrapTextWithAnsi(theme.fg("dim", selectionSummary), width) : []),
+          ...(run.closeOnReport === false
+            ? wrapTextWithAnsi(theme.fg("dim", retention), width)
+            : []),
+          ...(writerSummary ? wrapTextWithAnsi(theme.fg("warning", writerSummary), width) : []),
+          ...(run.writeAdmissionPaused
+            ? wrapTextWithAnsi(theme.fg("warning", "Writer admission paused"), width)
+            : []),
+          ...(run.writeAudit?.violations ?? []).flatMap((violation) =>
+            wrapTextWithAnsi(
+              theme.fg(
+                "error",
+                sanitizeTerminalLine(
+                  `Write claim violation · ${violation.path} · ${violation.toolName}`,
+                ),
+              ),
+              width,
+            ),
+          ),
+        ]),
+    ...(run.progress && !isAssignmentFinishedRunState(run.state)
+      ? wrapTextWithAnsi(
+          theme.fg("accent", `  Progress: ${sanitizeTerminalLine(run.progress)}`),
+          width,
+        )
+      : []),
+    ...(run.warning
+      ? wrapTextWithAnsi(
+          theme.fg("warning", `  Warning: ${sanitizeTerminalLine(run.warning)}`),
+          width,
+        )
+      : []),
+    ...run.selection.skippedCandidates.flatMap((candidate) =>
+      wrapTextWithAnsi(
+        theme.fg(
+          "dim",
+          sanitizeTerminalLine(
+            `  skipped ${candidate.candidate} [${candidate.code}] · ${candidate.reason}`,
+          ),
+        ),
         width,
       ),
-    ];
-  });
-  if (previews.length <= 3) return previews;
-  return [
-    ...previews.slice(0, 3),
-    theme.fg("dim", `… ${previews.length - 3} more report previews · expand to view`),
+    ),
+    ...(run.selection.warning
+      ? wrapTextWithAnsi(
+          theme.fg("warning", sanitizeTerminalLine(`  ${run.selection.warning}`)),
+          width,
+        )
+      : []),
   ];
 };
 
@@ -200,62 +266,9 @@ class RunOverviewComponent implements Component {
         hierarchy: this.hierarchy,
       }),
       ...(this.expanded
-        ? this.runs.flatMap((run) => {
-            const profile = run.profile ? `${sanitizeTerminalLine(run.profile)} · ` : "";
-            const summary = sanitizeTerminalLine(
-              `${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`,
-            );
-            const retention =
-              run.closeOnReport === false
-                ? `retain backend · assignment ${run.reportGeneration || 1}`
-                : `close after report · assignment ${run.reportGeneration || 1}`;
-            const details = [
-              run.context ? `context=${run.context}` : undefined,
-              retention,
-              run.capabilities
-                ? `capabilities=${run.capabilities.join(", ") || "none"}`
-                : undefined,
-            ]
-              .filter((value): value is string => value !== undefined)
-              .join(" · ");
-            return [
-              ...wrapTextWithAnsi(
-                this.theme.fg("dim", `ID: ${sanitizeTerminalLine(run.id)}`),
-                safeWidth,
-              ),
-              ...wrapTextWithAnsi(this.theme.fg("dim", summary), safeWidth),
-              ...wrapTextWithAnsi(this.theme.fg("dim", details), safeWidth),
-              ...(run.progress
-                ? wrapTextWithAnsi(
-                    this.theme.fg("accent", `  Progress: ${sanitizeTerminalLine(run.progress)}`),
-                    safeWidth,
-                  )
-                : []),
-              ...(run.warning
-                ? wrapTextWithAnsi(
-                    this.theme.fg("warning", `  Warning: ${sanitizeTerminalLine(run.warning)}`),
-                    safeWidth,
-                  )
-                : []),
-              ...run.selection.skippedCandidates.flatMap((candidate) =>
-                wrapTextWithAnsi(
-                  this.theme.fg(
-                    "dim",
-                    sanitizeTerminalLine(
-                      `  skipped ${candidate.candidate} [${candidate.code}] · ${candidate.reason}`,
-                    ),
-                  ),
-                  safeWidth,
-                ),
-              ),
-              ...(run.selection.warning
-                ? wrapTextWithAnsi(
-                    this.theme.fg("warning", sanitizeTerminalLine(`  ${run.selection.warning}`)),
-                    safeWidth,
-                  )
-                : []),
-            ];
-          })
+        ? this.runs.flatMap((run) =>
+            expandedRunDiagnostics(run, safeWidth, this.theme, !isAwaitHierarchy),
+          )
         : []),
       ...renderStartFailures(this.failures, this.expanded, this.theme)
         .split("\n")
@@ -301,9 +314,6 @@ class RunOverviewComponent implements Component {
             safeWidth,
           ),
         ),
-      ...(!this.expanded && this.showReportOutcomes
-        ? reportPreviews(outcomeRuns, safeWidth, this.theme)
-        : []),
       ...attentionRecoveryText(this.runs)
         .split("\n")
         .filter(Boolean)
@@ -372,16 +382,12 @@ export const renderExpandedStartAwaitResult = (
   if (sections.length === 0) return container;
   for (const [index, section] of sections.entries()) {
     container.addChild(new Spacer(1));
-    const heading = section.kind === "report" ? "Report" : "Failure";
+    const heading =
+      section.kind === "report"
+        ? `${index + 1}/${sections.length} · ${section.name}`
+        : `Failure ${index + 1}/${sections.length} · ${section.name}`;
     container.addChild(
-      new Text(
-        theme.fg(
-          section.kind === "report" ? "accent" : "error",
-          `${heading} ${index + 1} of ${sections.length} — ${section.name}`,
-        ),
-        0,
-        0,
-      ),
+      new Text(theme.fg(section.kind === "report" ? "accent" : "error", heading), 0, 0),
     );
     if (section.kind === "report")
       container.addChild(
@@ -402,6 +408,8 @@ export const awaitResultBanner = (details: {
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
   readonly usage?: string | undefined;
+  readonly targetCount?: number | undefined;
+  readonly descendantCount?: number | undefined;
 }): SemanticOutcomeBanner => {
   const runs = details.runs ?? [];
   const finishedRuns = runs
@@ -529,11 +537,14 @@ export const renderSubagentResult = (
       );
     const targets = awaitTargets(details);
     const hierarchy = awaitHierarchy(details);
+    const targetIds = hierarchy.awaitedRunIds ?? new Set(targets.map((run) => run.id));
     const banner = includeContentOmission(
       awaitResultBanner({
         ...details,
         runs: targets,
-        usage: aggregateRunUsage(details.cards),
+        usage: aggregateRunUsage(details.cards, "compact"),
+        targetCount: targetIds.size,
+        descendantCount: details.cards.filter((run) => !targetIds.has(run.id)).length,
       }),
       details.contentOmitted,
     );
