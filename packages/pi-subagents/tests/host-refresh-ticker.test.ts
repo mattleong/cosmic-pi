@@ -40,6 +40,27 @@ describe("adaptive host refresh ticker", () => {
     expect(events).toHaveLength(4);
   });
 
+  it("retries an unchanged cadence after host ticker startup fails", () => {
+    const stop = vi.fn();
+    const startTicker = vi
+      .fn<(intervalMs: number, tick: () => void) => () => void>()
+      .mockImplementationOnce(() => {
+        throw new Error("ticker unavailable");
+      })
+      .mockImplementationOnce(() => stop);
+    const ticker = makeAdaptiveHostRefreshTicker({
+      getCadence: () => 160,
+      startTicker,
+      requestRender: vi.fn(),
+    });
+
+    expect(startTicker).toHaveBeenCalledOnce();
+    ticker.sync();
+    expect(startTicker).toHaveBeenCalledTimes(2);
+    ticker.dispose();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("ignores late ticks after disposal and contains host callback failures", () => {
     let tick: (() => void) | undefined;
     const stop = vi.fn();

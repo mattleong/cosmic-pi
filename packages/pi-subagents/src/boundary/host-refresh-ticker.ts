@@ -39,7 +39,7 @@ export const makeAdaptiveHostRefreshTicker = (
     }
     if (next === cadence) return;
     stopCurrent();
-    cadence = next;
+    cadence = undefined;
     if (next === undefined) return;
     try {
       stopTicker = options.startTicker(next, () => {
@@ -50,6 +50,7 @@ export const makeAdaptiveHostRefreshTicker = (
           // The TUI may already be tearing down.
         }
       });
+      cadence = next;
     } catch {
       stopTicker = undefined;
     }

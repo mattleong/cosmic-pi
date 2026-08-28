@@ -223,6 +223,44 @@ const panelHeader = (
   );
 };
 
+type RunRouteLayout = "full" | "compact" | "model";
+
+const renderRunRoute = (
+  run: SubagentRunView,
+  theme: Theme,
+  layout: RunRouteLayout,
+  dimmed: boolean,
+): string => {
+  const profile = sanitizeTerminalLine(run.profile ?? "generalist");
+  const hostRuntime = `${sanitizeTerminalLine(run.host)}/${sanitizeTerminalLine(run.runtime)}`;
+  const providerModel = sanitizeTerminalLine(run.model);
+  const providerSeparator = providerModel.indexOf("/");
+  const modelName =
+    providerSeparator < 0 ? providerModel : providerModel.slice(providerSeparator + 1);
+  const effort = sanitizeTerminalLine(run.effort);
+  const fast = run.fastMode ? " ⚡" : "";
+  const model = `${providerModel}:${effort}${fast}`;
+  const narrowModel = `${modelName}:${effort}${fast}`;
+  const plain =
+    layout === "model"
+      ? `${profile} · ${narrowModel}`
+      : layout === "compact"
+        ? `${profile} ${hostRuntime} ${model}`
+        : `${profile} → ${hostRuntime} · ${model}`;
+  if (dimmed) return theme.fg("dim", plain);
+  if (layout === "model")
+    return `${theme.fg("muted", profile)}${theme.fg("dim", " · ")}${theme.fg(
+      "toolOutput",
+      narrowModel,
+    )}`;
+  return layout === "compact"
+    ? `${theme.fg("muted", profile)} ${theme.fg("toolOutput", `${hostRuntime} ${model}`)}`
+    : `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg(
+        "toolOutput",
+        `${hostRuntime} · ${model}`,
+      )}`;
+};
+
 const renderActivityRow = (
   row: FleetTreeRow,
   panel: SubagentActivityPanelProjection,
@@ -247,24 +285,26 @@ const renderActivityRow = (
       )}`
     : "";
   const identity = `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}`;
-  if (ancestorOnly) return truncateToWidth(identity, width, "");
-  const activity = runActivity(run);
+  const routeLayout: RunRouteLayout = tier === "wide" ? "full" : "model";
+  const route = renderRunRoute(run, theme, routeLayout, ancestorOnly);
+  const compactRoute = renderRunRoute(
+    run,
+    theme,
+    tier === "wide" ? "compact" : "model",
+    ancestorOnly,
+  );
+  const activity = ancestorOnly ? "" : runActivity(run);
   const attention = run.state === "waiting_for_parent" || run.state === "paused";
-  const profile = theme.fg("muted", sanitizeTerminalLine(run.profile ?? "generalist"));
   const themedActivity = activity ? theme.fg(attention ? "warning" : "accent", activity) : "";
-  const elapsed = runElapsed(run, now);
+  const elapsed = ancestorOnly ? "" : runElapsed(run, now);
   const themedElapsed = elapsed ? theme.fg("dim", elapsed) : "";
   const separator = theme.fg("dim", " · ");
-  const metadataVariants = (() => {
-    if (tier === "wide")
-      return [
-        [profile, themedActivity, themedElapsed],
-        [themedActivity, themedElapsed],
-        [themedActivity],
-      ];
-    if (tier === "stacked") return [[themedActivity, themedElapsed], [themedActivity]];
-    return attention ? [[themedActivity]] : [];
-  })()
+  const metadataVariants = [
+    [route, themedActivity, themedElapsed],
+    [route, themedActivity],
+    [route, themedElapsed],
+    [route],
+  ]
     .map((parts) => parts.filter(Boolean).join(separator))
     .filter(Boolean);
 
@@ -273,17 +313,13 @@ const renderActivityRow = (
     if (visibleWidth(combined) <= width) return combined;
   }
 
-  const fallbackActivity = attention ? themedActivity : "";
-  if (!fallbackActivity || width < 12) return truncateToWidth(identity, width, "");
-  const maximumMetadataWidth = width - 3 - 8;
-  if (maximumMetadataWidth < 6) return truncateToWidth(identity, width, "");
-  const metadataWidth = Math.min(
-    visibleWidth(fallbackActivity),
-    maximumMetadataWidth,
-    Math.max(6, Math.floor(width * 0.38)),
-  );
-  const identityWidth = width - metadataWidth - 3;
-  return `${truncateToWidth(identity, identityWidth, "")}${separator}${truncateToWidth(fallbackActivity, metadataWidth, "")}`;
+  if (width < 12) return truncateToWidth(identity, width, "");
+  const minimumIdentityWidth = tier === "narrow" ? 6 : 8;
+  const maximumRouteWidth = width - minimumIdentityWidth - visibleWidth(separator);
+  if (maximumRouteWidth < 8) return truncateToWidth(identity, width, "");
+  const routeWidth = Math.min(visibleWidth(compactRoute), maximumRouteWidth);
+  const identityWidth = width - routeWidth - visibleWidth(separator);
+  return `${truncateToWidth(identity, identityWidth, "")}${separator}${truncateToWidth(compactRoute, routeWidth, "")}`;
 };
 
 export const renderProjectedSubagentActivityPanel = (

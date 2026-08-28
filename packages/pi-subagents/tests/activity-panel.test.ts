@@ -319,15 +319,18 @@ describe("persistent subagent activity panel", () => {
     expect(
       calls.some(({ color, text }) => color === "dim" && text.includes("Finished parent")),
     ).toBe(true);
-    expect(calls.some(({ text }) => text === "planner")).toBe(false);
+    expect(
+      calls.some(({ color, text }) => color === "dim" && text.includes("planner → local/pi")),
+    ).toBe(true);
   });
 
-  it("drops responsive metadata before clipping identity and retains narrow attention", () => {
+  it("uses profile plus a provider-free model and effort label below 100 columns", () => {
     const running = view({
       id: "responsive",
       name: "Responsive run",
       profile: "scout",
       currentTool: "read",
+      fastMode: true,
     });
     const waiting = view({
       id: "waiting",
@@ -336,27 +339,31 @@ describe("persistent subagent activity panel", () => {
       state: "waiting_for_parent",
     });
 
+    const veryNarrow = render([running], emptyActivityPresentation(), 40).join("\n");
     const narrow = render([running], emptyActivityPresentation(), 59).join("\n");
     const stacked = render([running], emptyActivityPresentation(), 60).join("\n");
     const stackedMaximum = render([running], emptyActivityPresentation(), 99).join("\n");
     const wide = render([running], emptyActivityPresentation(), 100).join("\n");
     const narrowAttention = render([waiting], emptyActivityPresentation(), 59).join("\n");
 
-    expect(narrow).toContain("Responsive run");
-    expect(narrow).not.toContain("scout");
-    expect(narrow).not.toContain("read");
-    expect(narrow).not.toContain("10s");
-    expect(stacked).toContain("read");
-    expect(stacked).toContain("10s");
-    expect(stacked).not.toContain("scout");
-    expect(stackedMaximum).not.toContain("scout");
+    for (const output of [veryNarrow, narrow, stacked, stackedMaximum]) {
+      expect(output).toContain("scout · gpt-5.6-sol:high ⚡");
+      expect(output).not.toContain("local/pi");
+      expect(output).not.toContain("openai-codex/");
+    }
     expect(wide).toContain("scout");
+    expect(wide).toContain("local/pi");
+    expect(wide).toContain("openai-codex/g");
+    expect(narrow).toContain("Responsive run");
     expect(wide).toContain("read");
-    expect(narrowAttention).toContain("waiting for reply");
-    expect(narrowAttention).not.toContain("reviewer");
+    expect(wide).toContain("10s");
+    expect(narrowAttention).toContain("reviewer · gpt-5.6-sol:high");
+    expect(narrowAttention).not.toContain("waiting for reply");
+    expect(narrowAttention).not.toContain("local/pi");
+    expect(narrowAttention).not.toContain("openai-codex/");
   });
 
-  it("drops routine metadata before clipping long identities", () => {
+  it("clips long identities before profile, route, and model", () => {
     const stackedName = "s".repeat(53);
     const wideName = "w".repeat(93);
     const stacked = render(
@@ -384,10 +391,13 @@ describe("persistent subagent activity panel", () => {
       100,
     )[1];
 
-    expect(stacked).toContain(stackedName);
+    expect(stacked).not.toContain(stackedName);
+    expect(stacked).toContain("scout · gpt-5.6-sol:high");
+    expect(stacked).not.toContain("local/pi");
+    expect(stacked).not.toContain("openai-codex/");
     expect(stacked).not.toContain("read");
-    expect(wide).toContain(wideName);
-    expect(wide).not.toContain("scout");
+    expect(wide).not.toContain(wideName);
+    expect(wide).toContain("scout local/pi openai-codex/gpt-5.6-sol:high");
     expect(wide).not.toContain("read");
   });
 
