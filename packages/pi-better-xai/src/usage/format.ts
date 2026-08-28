@@ -14,7 +14,7 @@ import {
   usedToLeftPercent,
   type JsonHttpResponseSchema,
 } from "pi-cosmic-core";
-import { getXaiCredentials, refreshRejectedXaiCredentials } from "../auth/auth.ts";
+import { getXaiCredentials, recoverRejectedXaiCredentials } from "../auth/auth.ts";
 
 export const BILLING_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const MONTHLY_BILLING_URL = `${BILLING_BASE_URL}/billing`;
@@ -261,7 +261,10 @@ export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
   if (!credentials) return undefined;
   let responses = yield* fetchUsageResponses(credentials.accessToken);
   if (responses[0]._tag === "Rejected" && responses[0].status === 401) {
-    const refreshed = yield* refreshRejectedXaiCredentials(authPath, credentials.accessToken).pipe(
+    const replacement = yield* recoverRejectedXaiCredentials(
+      authPath,
+      credentials.accessToken,
+    ).pipe(
       Effect.mapError(
         () =>
           new XaiUsageError({
@@ -270,8 +273,8 @@ export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
           }),
       ),
     );
-    if (refreshed !== undefined) {
-      credentials = refreshed;
+    if (replacement !== undefined) {
+      credentials = replacement;
       responses = yield* fetchUsageResponses(credentials.accessToken);
     }
   }

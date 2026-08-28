@@ -112,6 +112,7 @@ export function registerBackgroundTaskApplication(
     stop: (id) =>
       run(BackgroundTaskService.use((service) => service.stop(id))).then(() => undefined),
     clear: () => run(BackgroundTaskService.use((service) => service.clear)).then(() => undefined),
+    status: () => run(BackgroundTaskConfigStore),
   });
 
   pi.on("session_start", (_event, ctx) => {

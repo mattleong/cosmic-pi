@@ -17,7 +17,11 @@ import { TOOL_PARAMS, type CodexImageResult, type ToolParams } from "./types.ts"
 const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_COMMAND = "openai-image";
 
-const resultText = (result: CodexImageResult): string => {
+type CodexImageDetails = Omit<CodexImageResult, "data">;
+
+const imageDetails = ({ data: _data, ...details }: CodexImageResult): CodexImageDetails => details;
+
+const resultText = (result: CodexImageDetails): string => {
   const parts = [
     `Generated image using OpenAI image_generation tool via openai-codex/${result.model}.`,
     `Action: ${result.action}.`,
@@ -31,18 +35,22 @@ const resultText = (result: CodexImageResult): string => {
 const isOptionalString = <Value>(value: Value): value is Value & (string | undefined) =>
   value === undefined || Predicate.isString(value);
 
-const isCodexImageResult = <Value>(value: Value): value is Value & CodexImageResult =>
+const isCodexImageDetails = <Value>(value: Value): value is Value & CodexImageDetails =>
   Predicate.isObject(value) &&
   Predicate.isString(value.id) &&
   Predicate.isString(value.status) &&
   Predicate.isString(value.prompt) &&
   isOptionalString(value.revisedPrompt) &&
-  Predicate.isString(value.data) &&
   Predicate.isString(value.mimeType) &&
   isOptionalString(value.savedPath) &&
   Predicate.isString(value.model) &&
   Predicate.isString(value.action) &&
   Predicate.isString(value.outputFormat);
+
+const isLegacyCodexImageResult = <Value>(value: Value): value is Value & CodexImageResult =>
+  isCodexImageDetails(value) &&
+  Predicate.hasProperty(value, "data") &&
+  Predicate.isString(value.data);
 
 const isImageContent = <Value>(
   value: Value,
@@ -63,25 +71,30 @@ export function registerOpenAIImage(
     updateContext(ctx);
     return run(generateEffect(params), signal);
   };
-  pi.registerMessageRenderer<CodexImageResult>("openai-image", (message, _options, theme) => {
-    const result = message.details;
-    const text = isCodexImageResult(result)
-      ? resultText(result)
+  pi.registerMessageRenderer<CodexImageDetails>("openai-image", (message, _options, theme) => {
+    const details = isCodexImageDetails(message.details) ? message.details : undefined;
+    const text = details
+      ? resultText(details)
       : Predicate.isString(message.content)
         ? message.content
         : message.content
             .filter((part) => part.type === "text")
             .map((part) => part.text)
             .join("\n");
+    const contentImage = Array.isArray(message.content)
+      ? message.content.find(isImageContent)
+      : undefined;
     let image: { data: string; mimeType: string; savedPath?: string } | undefined;
-    if (isCodexImageResult(result))
-      image = result.savedPath
-        ? { data: result.data, mimeType: result.mimeType, savedPath: result.savedPath }
-        : { data: result.data, mimeType: result.mimeType };
-    else if (Array.isArray(message.content)) {
-      const part = message.content.find(isImageContent);
-      if (part) image = part;
-    }
+    if (contentImage)
+      image = details?.savedPath ? { ...contentImage, savedPath: details.savedPath } : contentImage;
+    else if (isLegacyCodexImageResult(message.details))
+      image = message.details.savedPath
+        ? {
+            data: message.details.data,
+            mimeType: message.details.mimeType,
+            savedPath: message.details.savedPath,
+          }
+        : { data: message.details.data, mimeType: message.details.mimeType };
     const container = new Container();
     const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
     box.addChild(new Text(`${theme.fg("accent", theme.bold("[openai-image]"))}\n\n${text}`, 0, 0));
@@ -137,6 +150,7 @@ export function registerOpenAIImage(
         .then((result) => {
           if (Option.isNone(result)) return undefined;
           const image = result.value;
+          const details = imageDetails(image);
           return Promise.resolve()
             .then(() =>
               pi.sendMessage({
@@ -146,7 +160,7 @@ export function registerOpenAIImage(
                   { type: "image", data: image.data, mimeType: image.mimeType },
                 ],
                 display: true,
-                details: image,
+                details,
               }),
             )
             .catch(() => {
@@ -182,7 +196,7 @@ export function registerOpenAIImage(
           { type: "text", text: resultText(result) },
           { type: "image" as const, data: result.data, mimeType: result.mimeType },
         ],
-        details: result,
+        details: imageDetails(result),
       }));
     },
   });

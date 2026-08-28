@@ -254,13 +254,13 @@ outlive the outer Code Mode call until explicit stop or Pi session shutdown. See
 
 ### `/tasks`
 
-This is the only slash command in the MVP. It opens the interactive task manager in TUI mode and does not accept operational subcommands.
+This is the only slash command in the MVP. `/tasks` opens the interactive task manager in TUI mode. `/tasks status` reports the normalized configuration held by the active session runtime and does not reread configuration files or open the manager. Other arguments preserve the `/tasks` manager behavior. The command has no operational task subcommands.
 
 Starting, listing, reading, waiting, stopping, and clearing tasks are agent-facing operations exposed through `background_task`. A user who wants work placed in the background asks the main agent naturally rather than manually translating that intent into process commands.
 
 The TUI manager may still provide direct stop and clear controls as an emergency human override. It does not provide a command-entry field or a separate path for starting tasks.
 
-In RPC mode, `/tasks` reports that the manager requires TUI. JSON and print modes have no UI response channel, so the command is a no-op there. Programmatic clients use the `background_task` tool.
+In RPC mode, `/tasks` reports that the manager requires TUI while `/tasks status` reports effective settings through the host notification channel. JSON and print modes have no UI response channel, so both forms are no-ops there. Programmatic clients use the `background_task` tool.
 
 ## 7. TUI manager
 
@@ -354,7 +354,7 @@ The service masks interruption only while it claims stop ownership. Owner waits 
 
 - `extension.ts` registers Pi callbacks only.
 - `layer.ts` composes the scoped runtime.
-- `application.ts` wires session lifecycle, tools, commands, status, and UI projection through the shared session-runtime slot. Trusted code-preview settings load as the first step of runtime startup, after the slot has deactivated the prior runtime. Startup returns only `showFooterStatus`; the bridge already owns the empty initial and cleared projections. Superseded session starts never reach the settings boundary, and only the current-generation activation registers the tool. Application Effect execution is gated synchronously on slot activation, so stale tool or manager calls made while a replacement start is still loading settings fail with a typed `PiSessionRuntimeError` rather than reaching the unactivated next runtime.
+- `application.ts` wires session lifecycle, tools, commands, status, and UI projection through the shared session-runtime slot. Trusted code-preview settings load as the first step of runtime startup, after the slot has deactivated the prior runtime. Startup returns only `showFooterStatus`; the bridge already owns the empty initial and cleared projections. `/tasks status` reads `BackgroundTaskConfigStore` through the activation-gated runner, so it sees the normalized current-generation value without another document read. Superseded session starts never reach the settings boundary, and only the current-generation activation registers the tool. Application Effect execution is gated synchronously on slot activation, so stale tool or manager calls made while a replacement start is still loading settings fail with a typed `PiSessionRuntimeError` rather than reaching the unactivated next runtime.
 - `BackgroundTaskService` is the sole owner of the task registry and child scopes.
 - Process monitors run in one fixed child scope owned by the service; each monitor scopes its process handle, output fiber, and timeout fiber, with a completion Deferred per task.
 - Registry mutation is serialized. Concurrent start/stop/exit/shutdown events cannot produce duplicate settlement or lose a task.
@@ -415,12 +415,12 @@ Effect Schema validates persisted unknown data. Invalid fields fall back indepen
 
 ## 13. Mode behavior
 
-| Mode  | Agent tool | `/tasks` launcher       | Task manager | Footer status |
-| ----- | ---------- | ----------------------- | ------------ | ------------- |
-| TUI   | Full       | Opens manager           | Full-screen  | Full          |
-| RPC   | Full       | Reports TUI requirement | Unsupported  | None          |
-| JSON  | Full       | No-op                   | Unsupported  | None          |
-| Print | Full       | No-op                   | Unsupported  | None          |
+| Mode  | Agent tool | `/tasks` launcher       | `/tasks status`           | Task manager | Footer status |
+| ----- | ---------- | ----------------------- | ------------------------- | ------------ | ------------- |
+| TUI   | Full       | Opens manager           | Reports effective settings | Full-screen  | Full          |
+| RPC   | Full       | Reports TUI requirement | Reports effective settings | Unsupported  | None          |
+| JSON  | Full       | No-op                   | No-op                     | Unsupported  | None          |
+| Print | Full       | No-op                   | No-op                     | Unsupported  | None          |
 
 The tool must remain useful without UI. UI methods and full-screen manager code are guarded with `ctx.mode === "tui"`.
 
@@ -471,6 +471,7 @@ Cover:
 
 - Tool action validation and result/error rendering.
 - `/tasks` manager launch and non-TUI fallback behavior.
+- `/tasks status` reports the active generation's normalized config without rereading documents or opening the manager.
 - `session_shutdown` closes the runtime once for quit, reload, new, resume, and fork.
 - TUI manager subscription disposal and width-safe rendering.
 - Non-TUI fallbacks.

@@ -27,6 +27,7 @@ type RenderCacheOwner = {
 };
 
 const renderCache = new Map<string, RenderCacheEntry>();
+const ansiCache = new Map<string, string>();
 let renderCacheChars = 0;
 let renderCacheOwner: RenderCacheOwner | undefined;
 
@@ -45,6 +46,7 @@ function claimRenderCache(highlighter: ShikiHighlighter, theme: string): void {
 export function discardShikiRenderCache(highlighter: ShikiHighlighter): void {
   if (renderCacheOwner?.highlighter !== highlighter) return;
   clearRenderCache();
+  ansiCache.clear();
   renderCacheOwner = undefined;
 }
 
@@ -191,7 +193,6 @@ function ansiFromToken(token: { content: string; color?: string; fontStyle?: num
   }
   return open + escapeControlChars(token.content) + close;
 }
-const ansiCache = new Map<string, string>();
 function ansiFg(hex: string): string {
   const cached = ansiCache.get(hex);
   if (cached !== undefined) return cached;

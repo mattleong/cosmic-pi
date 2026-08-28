@@ -199,6 +199,30 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
   return credentials;
 });
 
+const getModelRegistryXaiCredentials = Effect.fn("XaiAuth.getModelRegistryXaiCredentials")(
+  function* () {
+    const registryToken = yield* ModelRegistryAuth.use((registry) => registry.getApiKey).pipe(
+      Effect.mapError(
+        () =>
+          new XaiAuthError({ operation: "registry", message: "Unable to read xAI credentials." }),
+      ),
+    );
+    const registryAccess = registryToken?.trim();
+    if (!registryAccess) return undefined;
+    const teamId = yield* extractTeamIdFromJwt(registryAccess);
+    const registryCredentials: XaiAuthResultCredentials = {
+      accessToken: Redacted.make(registryAccess, { label: "xAI access token" }),
+      source: "modelRegistry" as const,
+    };
+    return teamId ? { ...registryCredentials, teamId } : registryCredentials;
+  },
+);
+
+const hasDifferentAccessToken = (
+  credentials: XaiAuthResultCredentials,
+  rejectedAccessToken: Redacted.Redacted<string>,
+): boolean => Redacted.value(credentials.accessToken) !== Redacted.value(rejectedAccessToken);
+
 /** Refresh a file-owned credential only when it matches the provider-rejected token. */
 export const refreshRejectedXaiCredentials = Effect.fn("XaiAuth.refreshRejectedXaiCredentials")(
   function* (authPath: string, rejectedAccessToken: Redacted.Redacted<string>) {
@@ -211,6 +235,35 @@ export const refreshRejectedXaiCredentials = Effect.fn("XaiAuth.refreshRejectedX
       return undefined;
     const refreshed = yield* refreshXaiToken(authPath, current.credentials.refreshToken);
     return { ...refreshed, source: "authFile" as const } satisfies XaiAuthResultCredentials;
+  },
+);
+
+/** Resolve at most one replacement for a provider-rejected credential. */
+export const recoverRejectedXaiCredentials = Effect.fn("XaiAuth.recoverRejectedXaiCredentials")(
+  function* (authPath: string, rejectedAccessToken: Redacted.Redacted<string>) {
+    const refreshAttempt = yield* refreshRejectedXaiCredentials(authPath, rejectedAccessToken).pipe(
+      Effect.result,
+    );
+    if (
+      refreshAttempt._tag === "Success" &&
+      refreshAttempt.success !== undefined &&
+      hasDifferentAccessToken(refreshAttempt.success, rejectedAccessToken)
+    )
+      return refreshAttempt.success;
+
+    // The host registry can change independently of the auth file. Re-resolve it after a failed
+    // or unusable file refresh, but never send the credential the provider already rejected.
+    const registryAttempt = yield* getModelRegistryXaiCredentials().pipe(Effect.result);
+    if (
+      registryAttempt._tag === "Success" &&
+      registryAttempt.success !== undefined &&
+      hasDifferentAccessToken(registryAttempt.success, rejectedAccessToken)
+    )
+      return registryAttempt.success;
+
+    // Preserve the existing refresh failure when no usable alternate source is available.
+    if (refreshAttempt._tag === "Failure") return yield* refreshAttempt.failure;
+    return undefined;
   },
 );
 
@@ -249,26 +302,12 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
       return { _tag: "Found", credentials: auth } as const;
   }
 
-  const registryToken = yield* ModelRegistryAuth.use((registry) => registry.getApiKey).pipe(
-    Effect.mapError(
-      () => new XaiAuthError({ operation: "registry", message: "Unable to read xAI credentials." }),
-    ),
-    Effect.result,
-  );
-  if (registryToken._tag === "Success") {
-    const registryAccess = registryToken.success?.trim();
-    if (registryAccess) {
-      const teamId = yield* extractTeamIdFromJwt(registryAccess);
-      const registryCredentials: XaiAuthResultCredentials = {
-        accessToken: Redacted.make(registryAccess, { label: "xAI access token" }),
-        source: "modelRegistry" as const,
-      };
-      const credentials: XaiAuthResultCredentials = teamId
-        ? { ...registryCredentials, teamId }
-        : registryCredentials;
-      return { _tag: "Found", credentials } as const satisfies XaiAuthResult;
-    }
-  }
+  const registryCredentials = yield* getModelRegistryXaiCredentials().pipe(Effect.result);
+  if (registryCredentials._tag === "Success" && registryCredentials.success !== undefined)
+    return {
+      _tag: "Found",
+      credentials: registryCredentials.success,
+    } as const satisfies XaiAuthResult;
   if (auth?.accessToken && (auth.expires === undefined || now < auth.expires))
     return { _tag: "Found", credentials: auth } as const;
   if (refreshFailure)
@@ -278,11 +317,11 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
       message: refreshFailure.message,
     } as const;
   if (fileResult._tag === "Malformed" || fileResult._tag === "Unavailable") return fileResult;
-  if (registryToken._tag === "Failure")
+  if (registryCredentials._tag === "Failure")
     return {
       _tag: "Unavailable",
-      operation: registryToken.failure.operation,
-      message: registryToken.failure.message,
+      operation: registryCredentials.failure.operation,
+      message: registryCredentials.failure.message,
     } as const;
   return { _tag: "Missing" } as const;
 });

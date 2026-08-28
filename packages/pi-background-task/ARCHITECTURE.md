@@ -6,7 +6,8 @@
 
 - `src/extension.ts` is the thin Pi registration entrypoint; `src/layer.ts` owns session Layer
   composition; `src/application.ts` owns session lifecycle, tool, `/tasks`, footer, and Code Mode
-  capability wiring.
+  capability wiring. `src/settings/controller.ts` routes `/tasks status` to the active runtime's
+  normalized config and keeps `/tasks` manager actions at Promise-shaped host boundaries.
 - `src/config/` — schema/defaults, normalization, and `store.ts` as the single persistence door.
 - `src/boundary/local-process.ts` — scoped Effect ChildProcess and process-tree adapter. Effect owns detached shell spawning, output streams, force escalation, and release; the boundary retains immediate graceful signal dispatch, the POSIX post-leader group sweep, and the Windows `taskkill /pid PID /T /F` tree terminator as a raw bounded `Effect.callback` around Node spawn. The terminator is deliberately not a scoped Effect spawner: its interruption cleanup (typically the 2-second timeout) synchronously removes the settle listeners, installs a harmless late-error listener, SIGKILLs, and unrefs without awaiting taskkill's own exit, so a hung taskkill can never hang the interrupting finalizer join. It requests color (`FORCE_COLOR=1` default, explicit `FORCE_COLOR`/`NO_COLOR` honored), and the bounded ingress queue evicts the oldest event when recent output must replace a full queue.
 - `src/boundary/host-ui.ts` — exception-safe Pi status projection bridge for the footer and `/tasks`.

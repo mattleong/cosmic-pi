@@ -20,14 +20,16 @@ const authPath = "/agent/auth.json";
 // runtime values (tagged errors, redacted credentials) for secret fragments.
 const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
 
-const registryLayer = (token?: string) =>
+const registryEffectLayer = (getApiKey: Effect.Effect<string | undefined>) =>
   Layer.succeed(
     ModelRegistryAuth,
     ModelRegistryAuth.of({
-      getApiKey: Effect.succeed(token),
+      getApiKey,
       isUsingOAuth: () => Effect.succeed(true),
     }),
   );
+
+const registryLayer = (token?: string) => registryEffectLayer(Effect.succeed(token));
 
 const provideRequest = (http: ReturnType<typeof jsonHttpTestLayer>) =>
   Layer.mergeAll(makeInMemoryDocuments().layer, registryLayer("registry-owned-test-token"), http);
@@ -76,6 +78,100 @@ describe("requestXaiUsage resources", () => {
       expect(serializedSnapshot(result)).not.toContain(expiredAccess);
       expect(serializedSnapshot(result)).not.toContain(refreshSecret);
       expect(serializedSnapshot(result)).not.toContain(refreshedAccess);
+    }).pipe(provideBuiltLayer(layer));
+  });
+
+  it.effect(
+    "falls back to a changed registry token when the rejected file token cannot refresh",
+    () => {
+      const rejectedAccess = "rejected-file-access-secret";
+      const refreshSecret = "failed-refresh-secret";
+      const registryAccess = "replacement-registry-secret";
+      const documents = makeInMemoryDocuments({
+        [authPath]: {
+          xai: {
+            type: "oauth",
+            access: rejectedAccess,
+            refresh: refreshSecret,
+          },
+        },
+      });
+      let registryLookups = 0;
+      let refreshAttempts = 0;
+      let monthlyRequests = 0;
+      const registry = registryEffectLayer(
+        Effect.sync(() => {
+          registryLookups++;
+          return registryLookups === 1 ? rejectedAccess : registryAccess;
+        }),
+      );
+      const http = jsonHttpTestLayer((request) => {
+        if (request.method === "POST") {
+          refreshAttempts++;
+          return Effect.succeed(jsonHttpRawResponse(503, "refresh unavailable"));
+        }
+        if (request.url.includes("format=credits"))
+          return Effect.succeed(jsonHttpRawResponse(200, JSON.stringify({ config: {} })));
+        monthlyRequests++;
+        return Effect.succeed(
+          request.headers?.Authorization === `Bearer ${registryAccess}`
+            ? jsonHttpRawResponse(200, JSON.stringify({ config: {} }))
+            : jsonHttpRawResponse(401, "rejected"),
+        );
+      });
+      const layer = Layer.mergeAll(documents.layer, registry, http);
+
+      return Effect.gen(function* () {
+        const result = yield* requestXaiUsage(authPath);
+        expect(result?.snapshot.monthlyUsed).toBeNull();
+        expect(refreshAttempts).toBe(1);
+        expect(registryLookups).toBe(2);
+        expect(monthlyRequests).toBe(2);
+        for (const secret of [rejectedAccess, refreshSecret, registryAccess])
+          expect(serializedSnapshot(result)).not.toContain(secret);
+      }).pipe(provideBuiltLayer(layer));
+    },
+  );
+
+  it.effect("does not retry when the registry still returns the rejected token", () => {
+    const rejectedAccess = "unchanged-rejected-secret";
+    const documents = makeInMemoryDocuments({
+      [authPath]: {
+        xai: {
+          type: "oauth",
+          access: rejectedAccess,
+        },
+      },
+    });
+    let registryLookups = 0;
+    let refreshAttempts = 0;
+    let monthlyRequests = 0;
+    const registry = registryEffectLayer(
+      Effect.sync(() => {
+        registryLookups++;
+        return rejectedAccess;
+      }),
+    );
+    const http = jsonHttpTestLayer((request) => {
+      if (request.method === "POST") {
+        refreshAttempts++;
+        return Effect.succeed(jsonHttpRawResponse(500, "unexpected refresh"));
+      }
+      if (request.url.includes("format=credits"))
+        return Effect.succeed(jsonHttpRawResponse(200, JSON.stringify({ config: {} })));
+      monthlyRequests++;
+      return Effect.succeed(jsonHttpRawResponse(401, "rejected"));
+    });
+    const layer = Layer.mergeAll(documents.layer, registry, http);
+
+    return Effect.gen(function* () {
+      const result = yield* requestXaiUsage(authPath).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure.operation).toBe("monthly");
+      expect(refreshAttempts).toBe(0);
+      expect(registryLookups).toBe(2);
+      expect(monthlyRequests).toBe(1);
+      expect(serializedSnapshot(result)).not.toContain(rejectedAccess);
     }).pipe(provideBuiltLayer(layer));
   });
 

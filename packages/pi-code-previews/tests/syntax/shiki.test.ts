@@ -31,6 +31,17 @@ const highlighter = (dispose: () => void) => {
   return fixture as typeof fixture & ShikiHighlighter;
 };
 
+const makeAnsiColorProbe = () => {
+  let conversions = 0;
+  const color = {
+    replace: () => {
+      conversions++;
+      return "#ffffff";
+    },
+  };
+  return { color, conversions: () => conversions };
+};
+
 const renderInSyntaxSession = (marker: string, rendered: () => void) => {
   const fixture = {
     dispose: () => undefined,
@@ -487,13 +498,14 @@ describe("session syntax service", () => {
     });
   });
 
-  it.effect("session finalization discards cache entries owned by its highlighter", () => {
+  it.effect("session finalization discards caches owned by its highlighter", () => {
     let renders = 0;
+    const color = makeAnsiColorProbe();
     const fixture = {
       dispose: () => undefined,
       codeToTokensBase: (code: string) => {
         renders++;
-        return [[{ content: `${renders}:${code}`, color: "#ffffff" }]];
+        return [[{ content: `${renders}:${code}`, color: color.color }]];
       },
     };
     // SAFETY: This cache scenario invokes only dispose and codeToTokensBase.
@@ -521,10 +533,51 @@ describe("session syntax service", () => {
       yield* renderSession;
       yield* renderSession;
       assert.equal(renders, 2);
+      assert.equal(color.conversions(), 2);
     });
   });
 
-  it.effect("stale highlighter cleanup preserves a newer highlighter's cache", () =>
+  it.effect("replacement discards color conversions owned by the previous highlighter", () => {
+    const color = makeAnsiColorProbe();
+    const previousFixture = {
+      dispose: () => undefined,
+      codeToTokensBase: (code: string) => [[{ content: `previous:${code}`, color: color.color }]],
+    };
+    const nextFixture = {
+      dispose: () => undefined,
+      codeToTokensBase: (code: string) => [[{ content: `next:${code}`, color: color.color }]],
+    };
+    // SAFETY: This cache scenario invokes only dispose and codeToTokensBase.
+    const previous = previousFixture as typeof previousFixture & ShikiHighlighter;
+    // SAFETY: This cache scenario invokes only dispose and codeToTokensBase.
+    const next = nextFixture as typeof nextFixture & ShikiHighlighter;
+    const adapter = ShikiAdapter.of({
+      create: (theme) => Effect.succeed(theme === "old" ? previous : next),
+      loadLanguage: () => Effect.void,
+    });
+
+    return CodePreviewSyntaxService.use((service) =>
+      Effect.gen(function* () {
+        setCodePreviewSettings({
+          ...codePreviewSettings,
+          syntaxHighlighting: true,
+          shikiTheme: "old",
+        });
+        yield* service.initialize("old");
+        assert.ok(renderWithShiki("same source", "typescript"));
+        setCodePreviewSettings({ ...codePreviewSettings, shikiTheme: "next" });
+        yield* service.initialize("next");
+        assert.ok(renderWithShiki("same source", "typescript"));
+        assert.equal(color.conversions(), 2);
+      }),
+    ).pipe(
+      provideBuiltLayer(
+        CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+      ),
+    );
+  });
+
+  it.effect("stale highlighter cleanup preserves a newer highlighter's caches", () =>
     Effect.gen(function* () {
       setCodePreviewSettings({
         ...codePreviewSettings,
@@ -533,11 +586,12 @@ describe("session syntax service", () => {
       });
       const staleCandidate = yield* Deferred.make<ShikiHighlighter>();
       let currentRenders = 0;
+      const color = makeAnsiColorProbe();
       const currentFixture = {
         dispose: () => undefined,
         codeToTokensBase: (code: string) => {
           currentRenders++;
-          return [[{ content: `current:${code}`, color: "#ffffff" }]];
+          return [[{ content: `current:${code}`, color: color.color }]];
         },
       };
       // SAFETY: This cache scenario invokes only dispose and codeToTokensBase.
@@ -560,7 +614,9 @@ describe("session syntax service", () => {
           );
           yield* Fiber.join(stale);
           assert.ok(renderWithShiki("same source", "typescript"));
-          assert.equal(currentRenders, 1);
+          assert.ok(renderWithShiki("different source", "typescript"));
+          assert.equal(currentRenders, 2);
+          assert.equal(color.conversions(), 1);
         }),
       ).pipe(
         provideBuiltLayer(

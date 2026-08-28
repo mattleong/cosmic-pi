@@ -7,7 +7,7 @@
 - `src/extension.ts` is the thin Pi registration entrypoint.
 - `src/layer.ts` composes the session Layer.
 - `src/application.ts` owns session lifecycle, deferred tool registration, and inline `/ask-user` command registration.
-- `src/boundary/host-dialogs.ts` adapts RPC and TUI dialogs. RPC calls receive interruption-linked signals. The TUI callback has no-throw, token-owned settlement.
+- `src/boundary/host-dialogs.ts` adapts RPC and TUI dialogs. RPC walks interruption-linked native answer, optional-note, and final review dialogs; review can submit, replace one answer, or cancel without returning drafts. The TUI callback has no-throw, token-owned settlement.
 - `src/boundary/host-external-editor.ts` owns Pi settings, scoped temporary files, and the inherited-terminal child process. Each call runs one named `Effect.runPromiseExit` boundary that builds the file/process Layer in a fresh scope, provides its context, closes the scope before the exit is observed, and sanitizes edited text before returning it to Pi's editor.
 - `src/boundary/host-ui.ts` is the synchronous active-dialog and status bridge. It stores one resume callback and no raw terminal listener.
 - `src/questionnaire/` owns the TypeBox request schema and cross-module request types, immutable answer and state contracts, semantic validation, the pure reducer, typed errors, and the serialized Effect service. Choice and question schema values stay private to `schema.ts`.
@@ -21,7 +21,7 @@ The runtime slot and activation token admit calls only to the current session. `
 
 The application builds `AskUserService.use(service => service.ask(request))`, checks the current activation token, and runs that Effect through the session slot. The tool module sees only `(request, signal) => Promise<AskUserOutcome>`. This keeps Effect services and runtime admission out of synchronous tool rendering.
 
-The dialog component owns only in-progress presentation state. Its reducer is pure. Submitted answers become ordinary tool-result details; cancellation deliberately returns no drafts.
+The TUI dialog component owns only its in-progress presentation state, and its reducer is pure. RPC keeps its answer and note drafts in one boundary-local array until the native review submits. Submitted answers become ordinary tool-result details; cancellation in either mode deliberately returns no drafts.
 
 The active-dialog bridge exposes only resume behavior and a status projection. Pressing `b` uses Pi's `setHidden(true)`, which transfers focus away from the mounted overlay. `/ask-user`, registered directly by `application.ts`, restores it with `setHidden(false)`, which restores overlay focus. The extension never registers a hidden raw terminal listener, so it cannot steal keys from unrelated overlays.
 
@@ -46,9 +46,9 @@ After the lazy TUI import settles, the dialog boundary checks interruption befor
 Lifecycle tests assert tool registration timing through the preview-settings Promise, stale replacement rejection, best-effort activation past a rejected loader, and contained command notification; generic slot replacement and cancellation behavior is delegated to `pi-cosmic-core`. Service and host-boundary tests cover semaphore serialization, interrupted queue removal, the observable immediate-abort path around the native lazy import, and rejection before bridge activation. Production has no test-only importer seam, so tests do not pause inside module resolution itself.
 
 - TUI uses the full custom overlay.
-- RPC walks native `select` and `input` dialogs sequentially.
+- RPC uses native `select` and `input` dialogs only. Single-select keeps the inline custom-answer action. Multi-select first separates listed choices from custom text, and invalid listed-choice syntax is re-prompted rather than reinterpreted. Each answer can receive a note bounded by `MAX_NOTE_LENGTH`; the final review can submit, revisit one question while retaining its note, or cancel.
 - JSON and print modes never receive the tool.
 
 ## Security and privacy
 
-Question prompts, previews, answers, and notes are session content. They are never logged, placed in errors, or added to telemetry attributes. Semantic validation errors identify only one-based question and choice positions, never request content. Prompt guidance explicitly forbids collecting credentials. Host dialogs, tool responses, tool renderers, dialog renderers, previews, and external-editor output each strip terminal controls at their own consumption boundary. Tests cover mixed malformed render content, array over-cardinality, control stripping, and Unicode titles alongside lifecycle, cancellation, serialization, and bridge-token ownership.
+Question prompts, previews, answers, and notes are session content. They are never logged, placed in errors, or added to telemetry attributes. Semantic validation errors identify only one-based question and choice positions, never request content. Prompt guidance explicitly forbids collecting credentials. Host dialogs, including RPC note and review summaries, tool responses, tool renderers, dialog renderers, previews, and external-editor output each strip terminal controls at their own consumption boundary. Tests cover mixed malformed render content, array over-cardinality, control stripping, and Unicode titles alongside lifecycle, cancellation, serialization, and bridge-token ownership.

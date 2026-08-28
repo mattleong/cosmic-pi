@@ -1,10 +1,16 @@
 import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { expect, layer } from "@effect/vitest";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
+import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
+import { expect, it, layer } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, vi } from "vitest";
@@ -12,11 +18,14 @@ import betterOpenAI, {
   betterOpenAIWithDependencies,
   type BetterOpenAIExtensionDependencies,
 } from "../src/extension.ts";
+import { registerOpenAIImage } from "../src/image/register.ts";
+import type { CodexImageResult } from "../src/image/types.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
 afterEach(() => {
   vi.unstubAllEnvs();
+  resetCapabilitiesCache();
 });
 
 interface TestConfigDocument {
@@ -140,6 +149,122 @@ const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
       expect(predicate()).toBe(true);
     }),
   );
+
+it.effect("image command and tool results keep one base64 payload and still render it", () =>
+  Effect.gen(function* () {
+    const generated: CodexImageResult = {
+      id: "image-1",
+      status: "completed",
+      prompt: "draw a comet",
+      revisedPrompt: "Draw a bright comet.",
+      data: Buffer.from("one authoritative image payload").toString("base64"),
+      mimeType: "image/png",
+      savedPath: "/tmp/generated-comet.png",
+      model: "gpt-image-1",
+      action: "generate",
+      outputFormat: "png",
+    };
+    const commands = new Map<string, Command>();
+    let tool: any;
+    let renderer: any;
+    const sendMessage = vi.fn();
+    const piFixture = {
+      registerCommand(name: string, options: { handler: Command }) {
+        commands.set(name, options.handler);
+      },
+      registerMessageRenderer(_customType: string, value: any) {
+        renderer = value;
+      },
+      registerTool(value: any) {
+        tool = value;
+      },
+      sendMessage,
+    };
+    const runFixture = vi
+      .fn()
+      .mockResolvedValueOnce(Option.some(generated))
+      .mockResolvedValue(generated);
+    // SAFETY: The mock returns the command and tool values expected by these two runner calls.
+    const run = runFixture as Parameters<typeof registerOpenAIImage>[1];
+    // SAFETY: The fixture implements every ExtensionAPI method exercised by image registration.
+    const pi = piFixture as typeof piFixture & ExtensionAPI;
+    registerOpenAIImage(pi, run, vi.fn());
+    const contextFixture = {
+      model: { id: "gpt-5.5" },
+      signal: undefined,
+      ui: { notify: vi.fn() },
+    };
+    // SAFETY: The fixture implements every context member exercised by the command and tool.
+    const ctx = contextFixture as typeof contextFixture & ExtensionCommandContext;
+
+    yield* Effect.promise(() =>
+      Promise.resolve(commands.get("openai-image")?.("draw a comet", ctx)),
+    );
+    const commandMessage = sendMessage.mock.calls[0]?.[0];
+    const toolResult = yield* Effect.promise<AgentToolResult<unknown>>(() =>
+      tool.execute("call", { prompt: "draw a comet" }, undefined, undefined, ctx),
+    );
+    const { data: _data, ...metadata } = generated;
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(commandMessage).toMatchObject({
+      customType: "openai-image",
+      display: true,
+      details: metadata,
+    });
+    expect(commandMessage.details).not.toHaveProperty("data");
+    expect(toolResult.details).toEqual(metadata);
+    expect(toolResult.details).not.toHaveProperty("data");
+    expect(commandMessage.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Saved: /tmp/generated-comet.png"),
+      },
+      { type: "image", data: generated.data, mimeType: generated.mimeType },
+    ]);
+    expect(toolResult.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Prompt: draw a comet"),
+      },
+      { type: "image", data: generated.data, mimeType: generated.mimeType },
+    ]);
+    expect(commandMessage.content).not.toContainEqual({
+      type: "text",
+      text: expect.stringContaining(generated.data),
+    });
+    expect(toolResult.content).not.toContainEqual({
+      type: "text",
+      text: expect.stringContaining(generated.data),
+    });
+
+    setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+    const renderTheme = {
+      bold: (text: string) => text,
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+    };
+    const currentMessage = { ...commandMessage, role: "custom", timestamp: 0 };
+    const textOnlyMessage = {
+      ...currentMessage,
+      content: commandMessage.content.filter((part: { type: string }) => part.type !== "image"),
+    };
+    const renderOptions = { expanded: false, outputPad: 1 };
+    const currentRendered = renderer(currentMessage, renderOptions, renderTheme).render(120);
+    const textOnlyRendered = renderer(textOnlyMessage, renderOptions, renderTheme).render(120);
+    const legacyRendered = renderer(
+      { ...textOnlyMessage, details: generated },
+      renderOptions,
+      renderTheme,
+    ).render(120);
+
+    // Both the current content-owned payload and the legacy details-owned payload must create
+    // an Image child. The saved path also appears in the text, so checking that copy alone would
+    // not protect image rendering.
+    expect(currentRendered).not.toEqual(textOnlyRendered);
+    expect(legacyRendered).toEqual(currentRendered);
+  }),
+);
 
 layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
   it.effect("activates only the replacement after its preview loader wins", () =>

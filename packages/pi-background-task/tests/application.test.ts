@@ -1,10 +1,16 @@
 // Promise assertions characterize the Pi lifecycle boundary.
+import { tmpdir } from "node:os";
 import {
   createEventBus,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
   type ExtensionHandler,
+  type ExtensionUIContext,
+  type KeybindingsManager,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -19,9 +25,36 @@ import {
   registerBackgroundTaskApplication,
   type BackgroundTaskApplicationBoundaries,
 } from "../src/application.ts";
+import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts";
+import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
+import {
+  registerTaskManagerCommand,
+  type TaskManagerActions,
+  type TaskManagerCommandActions,
+} from "../src/settings/controller.ts";
+import type { BackgroundTaskState, BackgroundTaskView } from "../src/task/model.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
 type Handler = ExtensionHandler<any, any>;
+type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
+type TestCustomFactory<Value> = (
+  tui: TUI,
+  theme: Theme,
+  keybindings: KeybindingsManager,
+  done: (result: Value) => void,
+) => Component | Promise<Component>;
+type ManagerSurface = Component & {
+  readonly render: (width: number) => string[];
+  readonly handleInput: (data: string) => void;
+  readonly dispose: () => void;
+};
+
+const nodeFs = process.getBuiltinModule("node:fs");
+const nodePath = process.getBuiltinModule("node:path");
+if (!nodeFs || !nodePath) throw new Error("Node fs/path builtins are unavailable.");
+const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = nodeFs;
+const { join } = nodePath;
+const processEnv: NodeJS.ProcessEnv = process.env;
 
 interface CapturedBackgroundTool {
   readonly name: string;
@@ -49,6 +82,11 @@ const extensionContextFixture = <Fixture extends object>(
   return fixture as Fixture & ExtensionContext;
 };
 
+function hostFixture<Value>(fixture: Partial<Value>): Value {
+  // SAFETY: Each call constructs an owned test double for only the named host surface in use.
+  return fixture as Value;
+}
+
 const context = (cwd: string): ExtensionContext =>
   extensionContextFixture({
     cwd,
@@ -61,6 +99,7 @@ const context = (cwd: string): ExtensionContext =>
 const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"]) => {
   const handlers = new Map<string, Handler>();
   const events = createEventBus();
+  let command: RegisteredCommand | undefined;
   const tools: CapturedBackgroundTool[] = [];
   const activeTools: string[] = [];
   const registerTool = vi.fn((tool: CapturedBackgroundTool) => {
@@ -69,7 +108,9 @@ const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings
   });
   const fixture = {
     events,
-    registerCommand: vi.fn(),
+    registerCommand: vi.fn((_name: string, definition: RegisteredCommand) => {
+      command = definition;
+    }),
     registerTool,
     getActiveTools: () => [...activeTools],
     on: (name: string, handler: Handler) => handlers.set(name, handler),
@@ -85,8 +126,126 @@ const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings
     activeTools,
     emit: (name: "session_start" | "turn_end" | "session_shutdown", ctx: ExtensionContext) =>
       Promise.resolve(handlers.get(name)?.({}, ctx)),
+    runCommand: (args: string, ctx: ExtensionCommandContext) => {
+      if (!command) return Promise.reject(new Error("task command was not registered"));
+      return Promise.resolve(command.handler(args, ctx));
+    },
   };
 };
+
+const managerTask = (state: BackgroundTaskState): BackgroundTaskView => {
+  const activeOrSettled = {
+    id: "manager-task",
+    name: "manager-task",
+    command: "manager-command",
+    cwd: "/tmp",
+    state,
+    startedAt: 0,
+    logCursor: 0,
+    droppedLogBytes: 0,
+    logs: [],
+  };
+  return state === "running" ? activeOrSettled : { ...activeOrSettled, endedAt: 1 };
+};
+
+function taskManagerHarness(state: BackgroundTaskState, actions: TaskManagerActions, args = "") {
+  let command: RegisteredCommand | undefined;
+  let surface: ManagerSurface | undefined;
+  let closed = false;
+  const notify = vi.fn();
+  const custom: ExtensionUIContext["custom"] = <Value>(
+    factory: TestCustomFactory<Value>,
+  ): Promise<Value> => {
+    const completion = Deferred.makeUnsafe<Value>();
+    const created = factory(
+      hostFixture<TUI>({
+        terminal: hostFixture<TUI["terminal"]>({ rows: 8 }),
+        requestRender: vi.fn(),
+      }),
+      hostFixture<Theme>({
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      }),
+      hostFixture<KeybindingsManager>({ matches: () => false }),
+      (value) => {
+        closed = true;
+        void Deferred.doneUnsafe(completion, Effect.succeed(value));
+      },
+    );
+    if (created instanceof Promise)
+      throw new Error("task manager factory unexpectedly became async");
+    // SAFETY: registerTaskManagerCommand synchronously returns its complete manager surface.
+    surface = created as ManagerSurface;
+    return Effect.runPromise(Deferred.await(completion));
+  };
+  const ctx = hostFixture<ExtensionCommandContext>({
+    cwd: "/tmp",
+    mode: "tui",
+    hasUI: true,
+    signal: undefined,
+    ui: hostFixture<ExtensionUIContext>({ custom, notify }),
+  });
+  const pi = hostFixture<ExtensionAPI>({
+    registerCommand: (_name: string, definition: RegisteredCommand) => {
+      command = definition;
+    },
+  });
+  const bridge = hostFixture<BackgroundTaskProjectionBridge>({
+    get: () => ({ tasks: [managerTask(state)] }),
+    subscribe: () => () => {},
+  });
+  registerTaskManagerCommand(pi, bridge, {
+    ...actions,
+    status: () => Promise.resolve(DEFAULT_BACKGROUND_TASK_CONFIG),
+  });
+  if (!command) throw new Error("task manager command was not registered");
+  const opened = Promise.resolve(command.handler(args, ctx));
+  if (!surface) throw new Error("task manager surface did not open synchronously");
+  const openedSurface = surface;
+  return {
+    notify,
+    surface: openedSurface,
+    isOpen: () => !closed,
+    close: Effect.gen(function* () {
+      openedSurface.handleInput("\x1b");
+      yield* Effect.promise(() => opened);
+      openedSurface.dispose();
+    }),
+  };
+}
+
+function taskCommandHarness(status: TaskManagerCommandActions["status"], notify = vi.fn()) {
+  let command: RegisteredCommand | undefined;
+  const custom = vi.fn();
+  const ctx = hostFixture<ExtensionCommandContext>({
+    cwd: "/tmp",
+    mode: "rpc",
+    hasUI: true,
+    signal: undefined,
+    ui: hostFixture<ExtensionUIContext>({ custom, notify }),
+  });
+  const pi = hostFixture<ExtensionAPI>({
+    registerCommand: (_name: string, definition: RegisteredCommand) => {
+      command = definition;
+    },
+  });
+  const bridge = hostFixture<BackgroundTaskProjectionBridge>({
+    get: () => ({ tasks: [] }),
+    subscribe: () => () => {},
+  });
+  registerTaskManagerCommand(pi, bridge, {
+    stop: () => Promise.resolve(),
+    clear: () => Promise.resolve(),
+    status,
+  });
+  if (!command) throw new Error("task command was not registered");
+  const registered = command;
+  return {
+    custom,
+    notify,
+    run: (args: string) => Promise.resolve(registered.handler(args, ctx)),
+  };
+}
 
 describe("background-task Pi lifecycle", () => {
   it.effect("skips superseded settings loads so only the latest generation activates", () =>
@@ -109,6 +268,58 @@ describe("background-task Pi lifecycle", () => {
       expect(loads).toEqual([[`${process.cwd()}/second`, false]]);
       yield* Effect.promise(() => app.emit("session_shutdown", secondContext));
     }),
+  );
+
+  it.effect("reports the active generation's normalized config without rereading it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const agentDirectory = mkdtempSync(join(tmpdir(), "pi-background-task-agent-"));
+          const cwd = mkdtempSync(join(tmpdir(), "pi-background-task-project-"));
+          const configDirectory = join(cwd, ".pi", "extensions");
+          const configPath = join(configDirectory, "pi-background-task.json");
+          const previousAgentDirectory = processEnv.PI_CODING_AGENT_DIR;
+          mkdirSync(configDirectory, { recursive: true });
+          writeFileSync(configPath, '{"maxRunning":100,"maxWaitSeconds":300}');
+          processEnv.PI_CODING_AGENT_DIR = agentDirectory;
+          return { agentDirectory, configPath, cwd, previousAgentDirectory };
+        }),
+        (current) =>
+          Effect.sync(() => {
+            if (current.previousAgentDirectory === undefined) delete processEnv.PI_CODING_AGENT_DIR;
+            else processEnv.PI_CODING_AGENT_DIR = current.previousAgentDirectory;
+            rmSync(current.agentDirectory, { recursive: true, force: true });
+            rmSync(current.cwd, { recursive: true, force: true });
+          }),
+      );
+      const app = harness(() => Promise.resolve());
+      const notify = vi.fn();
+      const ctx = hostFixture<ExtensionContext & ExtensionCommandContext>({
+        cwd: fixture.cwd,
+        signal: undefined,
+        isProjectTrusted: () => true,
+        hasUI: true,
+        mode: "rpc",
+        ui: hostFixture<ExtensionUIContext>({ notify }),
+      });
+
+      yield* Effect.gen(function* () {
+        yield* Effect.promise(() => app.emit("session_start", ctx));
+        writeFileSync(fixture.configPath, '{"maxRunning":2,"maxWaitSeconds":4}');
+
+        yield* Effect.promise(() => app.runCommand("status", ctx));
+        const firstMessage = notify.mock.calls[0]?.[0];
+        expect(firstMessage).toEqual(expect.stringContaining("maxRunning: 64"));
+        expect(firstMessage).toEqual(expect.stringContaining("maxWaitSeconds: 120"));
+
+        notify.mockClear();
+        yield* Effect.promise(() => app.emit("session_start", ctx));
+        yield* Effect.promise(() => app.runCommand("status", ctx));
+        const replacementMessage = notify.mock.calls[0]?.[0];
+        expect(replacementMessage).toEqual(expect.stringContaining("maxRunning: 2"));
+        expect(replacementMessage).toEqual(expect.stringContaining("maxWaitSeconds: 4"));
+      }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
+    }).pipe(Effect.scoped),
   );
 
   it.effect("ignores turn_end while the runtime slot is inactive", () =>
@@ -316,4 +527,107 @@ describe("background-task Pi lifecycle", () => {
       expect(app.registerTool).not.toHaveBeenCalled();
     }),
   );
+});
+
+describe("/tasks command", () => {
+  it.effect("reports the current effective settings without opening the TUI manager", () => {
+    const status = vi.fn(() =>
+      Promise.resolve({
+        ...DEFAULT_BACKGROUND_TASK_CONFIG,
+        maxRunning: 64,
+        maxWaitSeconds: 120,
+        shellPath: "/bin/\u001b[31mzsh\nspoof",
+      }),
+    );
+    const command = taskCommandHarness(status);
+    return Effect.gen(function* () {
+      yield* Effect.promise(() => command.run("  StAtUs  "));
+
+      expect(status).toHaveBeenCalledOnce();
+      expect(command.custom).not.toHaveBeenCalled();
+      expect(command.notify).toHaveBeenCalledOnce();
+      const [message, level] = command.notify.mock.calls[0] ?? [];
+      expect(level).toBe("info");
+      expect(message).toEqual(expect.stringContaining("maxRunning: 64"));
+      expect(message).toEqual(expect.stringContaining("maxWaitSeconds: 120"));
+      expect(message).toEqual(expect.stringContaining("shellPath: /bin/zsh spoof"));
+      expect(message).not.toContain("\u001b");
+    });
+  });
+
+  it.effect("preserves the manager fallback for non-status arguments", () => {
+    const manager = taskManagerHarness(
+      "exited",
+      {
+        stop: () => Promise.resolve(),
+        clear: () => Promise.resolve(),
+      },
+      "anything",
+    );
+    return Effect.sync(() => expect(manager.isOpen()).toBe(true)).pipe(
+      Effect.ensuring(manager.close),
+    );
+  });
+
+  it.effect("contains a rejecting host notification callback", () => {
+    const notify = vi.fn(() => Promise.reject(new Error("host notification rejected")));
+    const command = taskCommandHarness(
+      () => Promise.resolve(DEFAULT_BACKGROUND_TASK_CONFIG),
+      notify,
+    );
+    return Effect.gen(function* () {
+      yield* Effect.promise(() => command.run("status"));
+      yield* Effect.promise(() => Promise.resolve());
+      expect(notify).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.effect("reports a status lookup failure without rejecting the command", () => {
+    const failure = "session settings unavailable";
+    const command = taskCommandHarness(() => Promise.reject(new Error(failure)));
+    return Effect.gen(function* () {
+      yield* Effect.promise(() => command.run("status"));
+
+      expect(command.notify).toHaveBeenCalledWith(expect.stringContaining(failure), "error");
+    });
+  });
+});
+
+describe("/tasks action feedback", () => {
+  it.effect("shows a stop failure while leaving the manager available to close normally", () => {
+    const failure = "termination failure surfaced";
+    const manager = taskManagerHarness("running", {
+      stop: () => Promise.reject(new Error(failure)),
+      clear: () => Promise.resolve(),
+    });
+    return Effect.gen(function* () {
+      manager.surface.render(120);
+      manager.surface.handleInput("x");
+      manager.surface.handleInput("x");
+      yield* Effect.promise(() =>
+        vi.waitFor(() =>
+          expect(manager.notify).toHaveBeenCalledWith(expect.stringContaining(failure), "error"),
+        ),
+      );
+      expect(manager.isOpen()).toBe(true);
+    }).pipe(Effect.ensuring(manager.close));
+  });
+
+  it.effect("shows a clear failure while leaving the manager available to close normally", () => {
+    const failure = "clear failure surfaced";
+    const manager = taskManagerHarness("exited", {
+      stop: () => Promise.resolve(),
+      clear: () => Promise.reject(new Error(failure)),
+    });
+    return Effect.gen(function* () {
+      manager.surface.render(120);
+      manager.surface.handleInput("c");
+      yield* Effect.promise(() =>
+        vi.waitFor(() =>
+          expect(manager.notify).toHaveBeenCalledWith(expect.stringContaining(failure), "error"),
+        ),
+      );
+      expect(manager.isOpen()).toBe(true);
+    }).pipe(Effect.ensuring(manager.close));
+  });
 });

@@ -93,11 +93,11 @@ The overlay shows question/answer progress, live text limits, mode-specific cont
 | Mode  | Behavior                                                               |
 | ----- | ---------------------------------------------------------------------- |
 | TUI   | Full tabbed overlay, previews, notes, collapse/resume, external editor |
-| RPC   | Sequential native select/input dialogs                                 |
+| RPC   | Native answer, optional-note, and review/edit/submit/cancel dialogs    |
 | JSON  | Tool omitted                                                           |
 | Print | Tool omitted                                                           |
 
-RPC hosts cannot show Pi's custom overlay, so tabs, notes, collapse, and side-by-side preview layout are TUI-only. Bounded preview text is included in the native dialog title.
+RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, and side-by-side preview layout are TUI-only. RPC uses interruption-linked native dialogs, includes bounded preview text in question titles, and offers an optional bounded note after each answer. Multi-select questions first ask whether to choose listed options or write a custom answer; the listed path accepts only in-range choice numbers and re-prompts invalid input. A final native review shows sanitized answer summaries and lets the user submit, edit any answer, or cancel. Cancellation always discards every answer and note draft.
 
 ## Development
 
