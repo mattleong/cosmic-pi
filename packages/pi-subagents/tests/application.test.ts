@@ -433,6 +433,57 @@ describe("subagent Pi registration", () => {
     },
   );
 
+  effectTest("owns the activity widget across activation, turns, and shutdown", function* () {
+    const handlers = new Map<string, Handler>();
+    let active = ["read"];
+    const setWidget = vi.fn();
+    const setStatus = vi.fn();
+    const pi = extensionApiFixture({
+      registerTool: vi.fn((tool: { readonly name: string }) => {
+        active = [...new Set([...active, tool.name])];
+      }),
+      registerCommand: vi.fn(),
+      on: vi.fn((name: string, handler: Handler) => {
+        handlers.set(name, handler);
+      }),
+      getActiveTools: vi.fn(() => [...active]),
+      setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
+        active = [...names];
+      }),
+      sendMessage: vi.fn(),
+    });
+    registerSubagentApplication(pi, {
+      getAgentDirectory: testAgentDirectory,
+      loadSettings: () => Promise.resolve(),
+    });
+    const ctx = extensionContextFixture({
+      cwd: process.cwd(),
+      signal: undefined,
+      hasUI: true,
+      mode: "tui" as const,
+      isProjectTrusted: () => true,
+      ui: { setWidget, setStatus, notify: vi.fn() },
+    });
+
+    yield* settle(() => handlers.get("session_start")?.({ reason: "startup" }, ctx));
+    expect(setWidget).toHaveBeenCalledWith("pi-subagents.activity", expect.any(Function), {
+      placement: "aboveEditor",
+    });
+
+    const staleSetWidget = vi.fn();
+    const stale = extensionContextFixture({
+      ...ctx,
+      ui: { ...ctx.ui, setWidget: staleSetWidget },
+    });
+    yield* settle(() => handlers.get("turn_end")?.({}, stale));
+    expect(staleSetWidget).not.toHaveBeenCalled();
+
+    yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
+    expect(setWidget).toHaveBeenLastCalledWith("pi-subagents.activity", undefined, {
+      placement: "aboveEditor",
+    });
+  });
+
   effectTest("fails activation visibly when subagent tool registration throws", function* () {
     const handlers = new Map<string, Handler>();
     const notify = vi.fn();

@@ -41,7 +41,7 @@ export const renderSubagentStartCall = (
     summary.length <= 160 ? summary : `${safeTextPrefix(summary, 146)}… [truncated]`;
   const taskAffordance = expanded
     ? ""
-    : ` ${renderExpansionAffordance("ctrl+o to view tasks", false, theme, "")}`;
+    : ` ${renderExpansionAffordance("tasks & launch details", false, theme)}`;
   const header = new Text(
     `${theme.fg("toolTitle", theme.bold(title))}${clippedSummary ? ` ${theme.fg("dim", clippedSummary)}` : ""}${taskAffordance}`,
     0,
@@ -214,12 +214,12 @@ const receiptHeader = (
   if (failed === 0)
     return theme.fg(
       warnings > 0 ? "warning" : "success",
-      `${warnings > 0 ? managerNoticeGlyph("warning") : managerStateGlyph("done")} Started ${started} subagent${started === 1 ? "" : "s"}${warnings > 0 ? ` · ${warnings} route warning${warnings === 1 ? "" : "s"}` : ""}`,
+      `${warnings > 0 ? managerNoticeGlyph("warning") : managerStateGlyph("done")} ${started} started${warnings > 0 ? ` · ${warnings} route warning${warnings === 1 ? "" : "s"}` : ""}`,
     );
   if (started > 0)
     return theme.fg(
       "warning",
-      `${managerNoticeGlyph("warning")} Started ${started} of ${total} subagents · ${failed} failed`,
+      `${managerNoticeGlyph("warning")} ${started}/${total} started · ${failed} failed`,
     );
   return theme.fg(
     "error",
@@ -302,21 +302,51 @@ class StartReceiptComponent implements Component {
           ];
         })
       : [];
+    const showAllEntries = this.partial || this.expanded;
+    const collapsedOutcomes =
+      this.partial || this.expanded
+        ? []
+        : entries.flatMap((entry) => {
+            if (entry.status === "failed")
+              return receiptRow(
+                entry,
+                safeWidth,
+                this.theme,
+                this.failures.find((failure) => failure.index === entry.index),
+              );
+            if (!selectedRoute(entry) || !entry.warning) return [];
+            return [
+              truncateToWidth(
+                this.theme.fg(
+                  "warning",
+                  `${managerNoticeGlyph("warning")} ${sanitizeTerminalLine(entry.name)} · ${sanitizeTerminalLine(entry.warning)}`,
+                ),
+                safeWidth,
+              ),
+            ];
+          });
     return [
       truncateToWidth(receiptHeader(entries, this.partial, this.theme), safeWidth),
-      ...entries.flatMap((entry) =>
-        receiptRow(
-          entry,
-          safeWidth,
-          this.theme,
-          this.failures.find((failure) => failure.index === entry.index),
-        ),
-      ),
+      ...(showAllEntries
+        ? entries.flatMap((entry) =>
+            receiptRow(
+              entry,
+              safeWidth,
+              this.theme,
+              this.failures.find((failure) => failure.index === entry.index),
+            ),
+          )
+        : collapsedOutcomes),
       ...failureDetails,
-      ...(!this.expanded && this.failures.length > 0
+      ...(!this.partial &&
+      !this.expanded &&
+      entries.some(
+        (entry) =>
+          entry.status === "failed" || (selectedRoute(entry) && entry.warning !== undefined),
+      )
         ? [
             truncateToWidth(
-              renderExpansionAffordance("failure details", false, this.theme),
+              renderExpansionAffordance("launch details", false, this.theme),
               safeWidth,
             ),
           ]

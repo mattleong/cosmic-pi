@@ -158,6 +158,7 @@ export const captureSubagentTools = (
   environment = { cwd: "/project", projectTrusted: true },
   thinkingLevel: string | number = "high",
   startUiTicker?: SubagentToolRuntime["startUiTicker"],
+  toolPresentation?: SubagentToolRuntime["toolPresentation"],
 ): ReadonlyMap<string, CapturedTool> => {
   const tools = new Map<string, CapturedTool>();
   const piFixture = {
@@ -181,8 +182,10 @@ export const captureSubagentTools = (
     (() => {
       const baseResult = {};
       const withStartUiTicker = startUiTicker ? { ...baseResult, startUiTicker } : baseResult;
-      const withEnvironmentAndRun = { ...withStartUiTicker, environment, run };
-      return withEnvironmentAndRun;
+      const withToolPresentation = toolPresentation
+        ? { ...withStartUiTicker, toolPresentation }
+        : withStartUiTicker;
+      return { ...withToolPresentation, environment, run };
     })(),
   );
   return tools;

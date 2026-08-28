@@ -1,7 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { makeAwaitDetails, makeCompactToolDetails } from "../../src/tools/details.ts";
+import {
+  makeAwaitDetails,
+  makeCompactToolDetails,
+  makeStartDetails,
+} from "../../src/tools/details.ts";
 import { renderSubagentResult } from "../../src/tools/render.ts";
 import { formatAwaitSummary } from "../../src/tools/render-await.ts";
 import { renderResponsiveRunRows } from "../../src/tools/render-run-rows.ts";
@@ -33,7 +37,7 @@ const render = (details: HierarchyDetails, partial: boolean, width: number) =>
   renderSubagentResult({ content: [], details }, partial, false, theme).render(width);
 
 describe("hierarchical tool result rendering", () => {
-  it("uses the same one-line await summary and run rows before and after settlement", () => {
+  it("keeps live fallback rows partial and settles to a compact durable summary", () => {
     const settledTarget = view({
       id: "settled-target",
       name: "Settled target",
@@ -66,8 +70,14 @@ describe("hierarchical tool result rendering", () => {
     const awaiting = render(details, true, 160);
     const completed = render(details, false, 160);
 
-    expect(awaiting).toEqual(completed);
     expect(awaiting).toHaveLength(details.cards.length + 1);
+    expect(awaiting[0]).toContain("Waiting for subagents");
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toContain("✓ 1/1 finished");
+    expect(completed[0]).toContain("30k tok");
+    expect(completed[0]).toContain("1 descendant");
+    expect(completed[0]).not.toContain("Waiting for subagents");
+    expect(completed[0]).not.toContain("◎1 target");
     expect(awaiting[0]).toContain("1/1");
     expect(awaiting[0]).toContain("30k tok");
     expect(awaiting[0]).toContain("◎1 target");
@@ -75,12 +85,91 @@ describe("hierarchical tool result rendering", () => {
     expect(awaiting[0]).not.toContain("finished");
     expect(awaiting.slice(1).every((line) => !line.includes("stopped"))).toBe(true);
     expect(awaiting.every((line) => !line.startsWith("Total usage"))).toBe(true);
+
+    const expanded = renderSubagentResult({ content: [], details }, false, true, theme).render(160);
+    expect(expanded.join("\n")).toContain("Settled target");
+    expect(expanded.join("\n")).toContain("Settled child");
+  });
+
+  it("omits partial start and await hierarchy when the persistent panel owns it", () => {
+    const awaitDetails = makeAwaitDetails({
+      runs: [target],
+      contextRuns: [child],
+      awaitedRunIds: [target.id],
+      awaitUntil: "all_finished",
+    });
+    const hiddenAwait = renderSubagentResult(
+      { content: [], details: awaitDetails },
+      true,
+      false,
+      theme,
+      { panelOwnsLiveHierarchy: true },
+    ).render(120);
+
+    const startDetails = makeStartDetails({
+      startEntries: [
+        {
+          index: 0,
+          name: "Starting scout",
+          profile: "scout",
+          status: "pending",
+          routeStatus: "resolving",
+        },
+      ],
+    });
+    const hiddenStart = renderSubagentResult(
+      { content: [], details: startDetails },
+      true,
+      false,
+      theme,
+      { panelOwnsLiveHierarchy: true },
+    ).render(120);
+
+    const replayedAwait = renderSubagentResult(
+      { content: [], details: awaitDetails },
+      false,
+      false,
+      theme,
+      { panelOwnsLiveHierarchy: true },
+    ).render(120);
+    const replayedStart = renderSubagentResult(
+      { content: [], details: startDetails },
+      false,
+      false,
+      theme,
+      { panelOwnsLiveHierarchy: true },
+    ).render(120);
+
+    expect(hiddenAwait).toEqual([]);
+    expect(hiddenStart).toEqual([]);
+    expect(replayedAwait).not.toEqual([]);
+    expect(replayedStart).not.toEqual([]);
+  });
+
+  it("uses an outcome-first settled wait-for-first summary", () => {
+    const first = view({
+      id: "first",
+      name: "First scout",
+      state: "completed",
+      endedAt: 2,
+    });
+    const other = view({ id: "other", name: "Other scout", state: "running" });
+
+    const summary = formatAwaitSummary([other, first], "any_finished", "12k tok", {
+      settled: true,
+      targetCount: 2,
+    });
+
+    expect(summary).toContain("✓ First scout finished first · 1/2");
+    expect(summary).toContain("1 running");
+    expect(summary).not.toContain("Waiting for first subagent");
+    expect(summary).not.toContain("◎2 targets");
   });
 
   it.each([
     [{ cancelled: true }, "Await canceled"],
     [{ timedOut: true }, "Await timed out"],
-    [{ attentionRequired: true }, "parent reply required"],
+    [{ attentionRequired: true }, "Parent reply required"],
   ] as const)("keeps the %s outcome in the one-line summary", (outcome, expected) => {
     const summary = formatAwaitSummary([target], "all_finished", "12k tok", outcome);
 
@@ -147,6 +236,10 @@ describe("hierarchical tool result rendering", () => {
     expect(expandedText).toContain("2/2 · Report B");
     expect(expandedText).toContain("First report body.");
     expect(expandedText).toContain("Second report body.");
+    expect(expandedText).toContain("Run outcomes");
+    expect(expandedText.indexOf("First report body.")).toBeLessThan(
+      expandedText.indexOf("Run outcomes"),
+    );
     expect(expandedText).toContain("Writer claims · src/report.ts");
     expect(expandedText).toContain("Run warning retained.");
     expect(expandedText).toContain("skipped local/pi/first-model");
@@ -461,9 +554,38 @@ describe("hierarchical tool result rendering", () => {
     const collapsed = renderSubagentStartCall(agents, theme, false).render(120).join("\n");
     const expanded = renderSubagentStartCall(agents, theme, true).render(120).join("\n");
 
-    expect(collapsed).toContain("▸ ctrl+o to view tasks");
+    expect(collapsed).toContain("▸ tasks & launch details · ctrl+o to expand");
     expect(expanded).toContain("Task: Inspect the renderer.");
-    expect(expanded).not.toContain("ctrl+o to view tasks");
+    expect(expanded).not.toContain("ctrl+o to expand");
+  });
+
+  it("keeps successful start receipts outcome-focused", () => {
+    const collapsed = renderStartReceiptComponent(
+      [],
+      [
+        {
+          index: 0,
+          name: "Successful scout",
+          profile: "scout",
+          status: "started",
+          routeStatus: "selected",
+          host: "local",
+          runtime: "pi",
+          model: "openai-codex/gpt-5.6-luna",
+          effort: "medium",
+          fastMode: false,
+          runId: "agent-r1-1",
+        },
+      ],
+      false,
+      theme,
+    )
+      .render(120)
+      .join("\n");
+
+    expect(collapsed).toContain("✓ 1 started");
+    expect(collapsed).not.toContain("Started 1 subagent");
+    expect(collapsed).not.toContain("launch details");
   });
 
   it("uses the shared expansion affordance for hidden launch failures", () => {
@@ -487,7 +609,7 @@ describe("hierarchical tool result rendering", () => {
       .render(120)
       .join("\n");
 
-    expect(collapsed).toContain("▸ failure details · ctrl+o to expand");
+    expect(collapsed).toContain("▸ launch details · ctrl+o to expand");
     expect(expanded).not.toContain("ctrl+o to expand");
   });
 
@@ -549,8 +671,8 @@ describe("hierarchical tool result rendering", () => {
       },
       expected: "reviewer → no eligible route/model",
     },
-  ])("shows the $label route state on compact start receipts", ({ entry, expected }) => {
-    const lines = renderStartReceiptComponent([], [entry], false, theme).render(44);
+  ])("shows the $label route state in expanded start receipts", ({ entry, expected }) => {
+    const lines = renderStartReceiptComponent([], [entry], true, theme).render(44);
     expect(lines.some((line) => line.includes(expected))).toBe(true);
     expect(lines.every((line) => visibleWidth(line) <= 44)).toBe(true);
   });
@@ -573,7 +695,7 @@ describe("hierarchical tool result rendering", () => {
           runId: "agent-r4-14",
         },
       ],
-      false,
+      true,
       theme,
     ).render(72);
 

@@ -354,6 +354,7 @@ export function registerSubagentApplication(
               cwd: activation.cwd,
               projectTrusted: activation.projectTrusted,
             },
+            toolPresentation: bridge.bindToolPresentation(),
             run: (effect, signal) => run(effect, signal),
           });
           const activatedByRegistration = deactivateSubagentTools(pi);
@@ -383,9 +384,9 @@ export function registerSubagentApplication(
     return prepareActivation(ctx, false, sessionKey && seed ? { sessionKey, seed } : undefined);
   });
 
-  pi.on("turn_end", (_event, ctx) => {
+  pi.on("turn_end", () => {
     if (!currentActivation) return;
-    bridge.setContext(ctx);
+    bridge.setContext(currentActivation.ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, true));

@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
+import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
@@ -24,6 +25,7 @@ export interface AwaitSummaryOutcome {
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
+  readonly settled?: boolean | undefined;
   readonly targetCount?: number | undefined;
   readonly descendantCount?: number | undefined;
 }
@@ -38,12 +40,7 @@ export const formatAwaitSummary = (
   const failed = runs.filter((run) => run.state === "failed").length;
   const targetCount = outcome.targetCount ?? runs.length;
   const descendantCount = outcome.descendantCount ?? 0;
-  const mode = until === "all_finished" ? "Await all" : "Await first";
-  const heading = outcome.cancelled
-    ? "Await canceled"
-    : outcome.timedOut
-      ? "Await timed out"
-      : mode;
+  const mode = until === "all_finished" ? "Waiting for subagents" : "Waiting for first subagent";
   const unfinishedStates = [
     "starting",
     "running",
@@ -68,15 +65,32 @@ export const formatAwaitSummary = (
           : `${runStateLabel(firstFinished.state)} first`
       }`
     : undefined;
+  const interrupted = outcome.cancelled || outcome.timedOut || outcome.attentionRequired;
+  const settledNormally = outcome.settled === true && !interrupted;
+  const completionFailed =
+    until === "any_finished" ? firstFinished?.state === "failed" : failed > 0;
+  const completionGlyph = managerStateGlyph(completionFailed ? "failed" : "done");
+  const heading = outcome.cancelled
+    ? "Await canceled"
+    : outcome.timedOut
+      ? "Await timed out"
+      : outcome.attentionRequired
+        ? "Parent reply required"
+        : settledNormally
+          ? until === "any_finished" && firstSummary
+            ? `${completionGlyph} ${firstSummary}`
+            : `${completionGlyph} ${finished}/${targetCount} finished`
+          : mode;
+  const progressInHeading = settledNormally && until === "all_finished";
+  const firstInHeading = settledNormally && until === "any_finished" && firstSummary !== undefined;
   return [
     heading,
-    ...(targetCount > 0 ? [`${finished}/${targetCount}`] : []),
-    ...(outcome.attentionRequired ? ["parent reply required"] : []),
-    ...(firstSummary ? [firstSummary] : []),
+    ...(targetCount > 0 && !progressInHeading ? [`${finished}/${targetCount}`] : []),
+    ...(firstSummary && !firstInHeading ? [firstSummary] : []),
     ...activeSummary,
     ...(failed > 0 ? [`${failed} failed`] : []),
     ...(usage ? [usage] : []),
-    `◎${targetCount} target${targetCount === 1 ? "" : "s"}`,
+    ...(outcome.settled ? [] : [`◎${targetCount} target${targetCount === 1 ? "" : "s"}`]),
     ...(descendantCount > 0
       ? [`${descendantCount} descendant${descendantCount === 1 ? "" : "s"}`]
       : []),

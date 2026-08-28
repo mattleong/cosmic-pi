@@ -104,6 +104,32 @@ describe("subagent tool", () => {
     },
   );
 
+  effectTest("releases persistent start presentation after execution settles", function* () {
+    const release = vi.fn();
+    const presentation = {
+      beginStart: vi.fn(() => release),
+      beginAwait: vi.fn(() => () => undefined),
+      isLiveHierarchyAvailable: vi.fn(() => true),
+    };
+    const tool = captureSubagentTools(
+      startCapturingService([]),
+      ["read"],
+      fallbackProfileService,
+      undefined,
+      { cwd: "/project", projectTrusted: true },
+      "high",
+      undefined,
+      presentation,
+    ).get("subagent_start");
+
+    yield* maybe(() =>
+      tool?.execute("call", { agents: [{ task: "Review auth" }] }, undefined, undefined, context),
+    );
+
+    expect(presentation.beginStart).toHaveBeenCalledWith(1);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   effectTest("threads exact writes claims only through writer profiles", function* () {
     const requests: StartSubagentRequest[] = [];
     const tools = captureSubagentTools(startCapturingService(requests));

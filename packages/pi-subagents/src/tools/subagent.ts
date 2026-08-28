@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { withCodePreviewShell } from "pi-code-previews";
 import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
+import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import { startHostUiTicker } from "../boundary/host-ui.ts";
 import type { ProfileCandidate, ProfileId, ProfileRouteSource } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
@@ -121,6 +122,7 @@ export interface SubagentToolRuntime {
       ) => Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>>)
     | undefined;
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
+  readonly toolPresentation?: SubagentToolPresentation | undefined;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentService | SubagentProfileService | SubagentBackendRegistry>,
     signal?: AbortSignal,
@@ -129,19 +131,43 @@ export interface SubagentToolRuntime {
 
 export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRuntime): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
+  const settlePresentation = <A>(release: () => void, operation: () => Promise<A>): Promise<A> => {
+    const releaseSafely = () => {
+      try {
+        release();
+      } catch {
+        // Presentation teardown cannot replace the tool outcome.
+      }
+    };
+    let pending: Promise<A>;
+    try {
+      pending = operation();
+    } catch (error) {
+      releaseSafely();
+      throw error;
+    }
+    return pending.finally(releaseSafely);
+  };
   const sharedRenderResult = (
     result: Parameters<typeof renderSubagentResult>[0],
     options: { readonly isPartial: boolean; readonly expanded: boolean },
     theme: Theme,
     context?: SubagentToolRenderContext,
   ) => {
+    const details = decodeStartAwaitCardDetails(result.details);
+    const panelOwnsLiveHierarchy =
+      options.isPartial &&
+      (details?.action === "start" || details?.action === "await") &&
+      runtime.toolPresentation?.isLiveHierarchyAvailable() === true;
     syncAwaitProgressTicker(
-      decodeStartAwaitCardDetails(result.details),
-      options.isPartial,
+      details,
+      options.isPartial && !panelOwnsLiveHierarchy,
       context,
       startUiTicker,
     );
-    return renderSubagentResult(result, options.isPartial, options.expanded, theme);
+    return renderSubagentResult(result, options.isPartial, options.expanded, theme, {
+      panelOwnsLiveHierarchy,
+    });
   };
 
   const models = defineTool({
@@ -176,7 +202,11 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     parameters: StartParameters,
     prepareArguments: prepareSubagentStartArguments,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { ...input, action: "start" }, signal, onUpdate, ctx),
+      settlePresentation(
+        runtime.toolPresentation?.beginStart(input.agents.length) ?? (() => undefined),
+        () =>
+          executeSubagentAction(pi, runtime, { ...input, action: "start" }, signal, onUpdate, ctx),
+      ),
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(args.agents, theme, context?.expanded === true),
     renderResult: sharedRenderResult,
@@ -213,7 +243,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
 
   const awaitTool = defineTool({
     name: SUBAGENT_TOOL_NAMES[4],
-    label: "Await Subagents",
+    label: "Wait for Subagents",
     description:
       "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Awaited targets control completion and report claims; bounded visible descendants appear only as hierarchy context. Returns early if a target needs a parent reply, then call it again after subagent_reply. A retained target in reported state counts as finished for its current assignment.",
     promptSnippet: "Wait at a dependency or synthesis barrier for selected subagent reports",
@@ -222,10 +252,17 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     ],
     parameters: AwaitParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { ...input, action: "await" }, signal, onUpdate, ctx),
+      settlePresentation(
+        runtime.toolPresentation?.beginAwait(
+          [...new Set(input.runIds.map((id) => id.trim()).filter(Boolean))],
+          input.until,
+        ) ?? (() => undefined),
+        () =>
+          executeSubagentAction(pi, runtime, { ...input, action: "await" }, signal, onUpdate, ctx),
+      ),
     renderCall: (args, theme) =>
       renderSubagentCall(
-        `Await ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
+        args.until === "all_finished" ? "Waiting for subagents" : "Waiting for first subagent",
         "",
         theme,
       ),

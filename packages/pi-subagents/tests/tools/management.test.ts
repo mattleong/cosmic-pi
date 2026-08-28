@@ -1,7 +1,7 @@
 // Promise assertions are test-runner boundaries.
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { beforeAll, describe, expect } from "vitest";
+import { beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, maybe, step } from "../support/effect-test.ts";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
@@ -10,6 +10,7 @@ import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
   context,
+  fallbackProfileService,
   startCapturingService,
   view,
 } from "./fixtures/tool-harness.ts";
@@ -297,6 +298,46 @@ describe("subagent tool", () => {
       );
     yield* step(() => expect(immediate).rejects.toBeDefined());
     expect(immediateUpdates.at(-1)).toContain("Await canceled before progress was observed");
+  });
+
+  effectTest("scopes persistent await presentation to tool execution", function* () {
+    const service = subagentServiceDouble({
+      ...startCapturingService([]),
+      withAwaitTerminalObservations: () => Effect.never,
+    });
+    const release = vi.fn();
+    const presentation = {
+      beginStart: vi.fn(() => () => undefined),
+      beginAwait: vi.fn(() => release),
+      isLiveHierarchyAvailable: vi.fn(() => true),
+    };
+    const tools = captureSubagentTools(
+      service,
+      ["read"],
+      fallbackProfileService,
+      undefined,
+      { cwd: "/project", projectTrusted: true },
+      "high",
+      undefined,
+      presentation,
+    );
+    const controller = new AbortController();
+    const executing = tools
+      .get("subagent_await")
+      ?.execute(
+        "call",
+        { runIds: ["agent-1"], until: "all_finished" },
+        controller.signal,
+        undefined,
+        context,
+      );
+
+    yield* step(() => Promise.resolve());
+    expect(presentation.beginAwait).toHaveBeenCalledWith(["agent-1"], "all_finished");
+    expect(release).not.toHaveBeenCalled();
+    controller.abort();
+    yield* step(() => expect(executing).rejects.toBeDefined());
+    expect(release).toHaveBeenCalledOnce();
   });
 
   effectTest(

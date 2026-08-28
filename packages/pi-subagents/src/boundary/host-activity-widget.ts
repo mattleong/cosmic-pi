@@ -1,0 +1,346 @@
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import { synchronousNow } from "pi-cosmic-core";
+import type { SubagentProjection } from "../run/model.ts";
+import {
+  emptyActivityPresentation,
+  hasSubagentActivityPanelContent,
+  projectSubagentActivityPanel,
+  renderSubagentActivityPanel,
+  subagentActivityPanelCadence,
+  type SubagentActivityAwaitMode,
+  type SubagentActivityPresentationSnapshot,
+} from "../ui/activity-panel.ts";
+
+const WIDGET_KEY = "pi-subagents.activity";
+
+type PresentationLease =
+  | { readonly action: "start"; readonly requestedCount: number }
+  | {
+      readonly action: "await";
+      readonly runIds: ReadonlyArray<string>;
+      readonly until: SubagentActivityAwaitMode;
+    };
+
+export interface SubagentToolPresentation {
+  readonly beginStart: (requestedCount: number) => () => void;
+  readonly beginAwait: (
+    runIds: ReadonlyArray<string>,
+    until: SubagentActivityAwaitMode,
+  ) => () => void;
+  readonly isLiveHierarchyAvailable: () => boolean;
+}
+
+export interface SubagentActivityPresentationController {
+  readonly get: () => SubagentActivityPresentationSnapshot;
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly bindToolPresentation: () => SubagentToolPresentation;
+  readonly isPanelAvailable: () => boolean;
+  readonly setPanelAvailable: (available: boolean) => void;
+  readonly clear: () => void;
+}
+
+export const makeSubagentActivityPresentation = (
+  onChange: () => void = () => undefined,
+): SubagentActivityPresentationController => {
+  let revision = 0;
+  let generation = 0;
+  let panelAvailable = false;
+  let nextLeaseId = 0;
+  let snapshot = emptyActivityPresentation();
+  const leases = new Map<number, PresentationLease>();
+  const listeners = new Set<() => void>();
+
+  const notify = () => {
+    try {
+      onChange();
+    } catch {
+      // Presentation callbacks are best effort during host teardown.
+    }
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch {
+        // One stale widget cannot block another presentation listener.
+      }
+    }
+  };
+  const publish = () => {
+    revision += 1;
+    snapshot = Object.freeze({
+      revision,
+      starts: Object.freeze(
+        [...leases.values()]
+          .filter(
+            (lease): lease is Extract<PresentationLease, { action: "start" }> =>
+              lease.action === "start",
+          )
+          .map((lease) => Object.freeze({ requestedCount: lease.requestedCount })),
+      ),
+      awaits: Object.freeze(
+        [...leases.values()]
+          .filter(
+            (lease): lease is Extract<PresentationLease, { action: "await" }> =>
+              lease.action === "await",
+          )
+          .map((lease) =>
+            Object.freeze({
+              runIds: Object.freeze([...lease.runIds]),
+              until: lease.until,
+            }),
+          ),
+      ),
+    });
+    notify();
+  };
+  const acquire = (lease: PresentationLease): (() => void) => {
+    const id = ++nextLeaseId;
+    leases.set(id, lease);
+    publish();
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      if (!leases.delete(id)) return;
+      publish();
+    };
+  };
+
+  return {
+    get: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    bindToolPresentation: () => {
+      const ownerGeneration = generation;
+      return {
+        beginStart: (requestedCount) =>
+          ownerGeneration === generation
+            ? acquire({
+                action: "start",
+                requestedCount: Number.isFinite(requestedCount)
+                  ? Math.max(0, Math.floor(requestedCount))
+                  : 0,
+              })
+            : () => undefined,
+        beginAwait: (runIds, until) =>
+          ownerGeneration === generation
+            ? acquire({ action: "await", runIds: [...new Set(runIds)], until })
+            : () => undefined,
+        isLiveHierarchyAvailable: () => ownerGeneration === generation && panelAvailable,
+      };
+    },
+    isPanelAvailable: () => panelAvailable,
+    setPanelAvailable: (available) => {
+      if (panelAvailable === available) return;
+      panelAvailable = available;
+      notify();
+    },
+    clear: () => {
+      generation += 1;
+      const changed = panelAvailable || leases.size > 0;
+      panelAvailable = false;
+      leases.clear();
+      if (changed) publish();
+    },
+  };
+};
+
+interface ActivityWidgetComponentOptions {
+  readonly theme: Theme;
+  readonly tui: TUI;
+  readonly getProjection: () => SubagentProjection;
+  readonly subscribeProjection: (listener: () => void) => () => void;
+  readonly presentation: SubagentActivityPresentationController;
+  readonly startTicker: (intervalMs: number, tick: () => void) => () => void;
+  readonly getNow: () => number;
+  readonly onDispose: () => void;
+}
+
+class SubagentActivityWidgetComponent implements Component {
+  private readonly options: ActivityWidgetComponentOptions;
+  private readonly unsubscribeProjection: () => void;
+  private readonly unsubscribePresentation: () => void;
+  private stopTicker: (() => void) | undefined;
+  private tickerCadence: number | undefined;
+  private disposed = false;
+
+  constructor(options: ActivityWidgetComponentOptions) {
+    this.options = options;
+    const refresh = () => {
+      if (this.disposed) return;
+      this.syncTicker();
+      try {
+        this.options.tui.requestRender();
+      } catch {
+        // The TUI may already be tearing down.
+      }
+    };
+    this.unsubscribeProjection = options.subscribeProjection(refresh);
+    this.unsubscribePresentation = options.presentation.subscribe(refresh);
+    this.syncTicker();
+  }
+
+  private syncTicker(): void {
+    const panel = projectSubagentActivityPanel(
+      this.options.getProjection(),
+      this.options.presentation.get(),
+    );
+    const cadence = subagentActivityPanelCadence(panel);
+    if (cadence === this.tickerCadence) return;
+    this.stopTicker?.();
+    this.stopTicker = undefined;
+    this.tickerCadence = cadence;
+    if (cadence !== undefined)
+      this.stopTicker = this.options.startTicker(cadence, () => {
+        if (this.disposed) return;
+        try {
+          this.options.tui.requestRender();
+        } catch {
+          // The TUI may already be tearing down.
+        }
+      });
+  }
+
+  render(width: number): string[] {
+    if (this.disposed) return [];
+    return renderSubagentActivityPanel(
+      this.options.getProjection(),
+      this.options.presentation.get(),
+      width,
+      this.options.theme,
+      this.options.getNow(),
+    );
+  }
+
+  invalidate(): void {
+    // Rendering reads current frozen projections and the shared clock.
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.unsubscribeProjection();
+    this.unsubscribePresentation();
+    this.stopTicker?.();
+    this.stopTicker = undefined;
+    this.tickerCadence = undefined;
+    try {
+      this.options.onDispose();
+    } catch {
+      // Host disposal is best effort while the UI is tearing down.
+    }
+  }
+}
+
+class EmptyActivityWidgetComponent implements Component {
+  render(): string[] {
+    return [];
+  }
+
+  invalidate(): void {}
+}
+
+export interface SubagentActivityWidgetHost {
+  readonly setContext: (ctx: ExtensionContext | undefined) => void;
+  readonly clear: () => void;
+}
+
+export interface SubagentActivityWidgetHostOptions {
+  readonly getProjection: () => SubagentProjection;
+  readonly subscribeProjection: (listener: () => void) => () => void;
+  readonly presentation: SubagentActivityPresentationController;
+  readonly startTicker: (intervalMs: number, tick: () => void) => () => void;
+  readonly getNow?: (() => number) | undefined;
+}
+
+export const makeSubagentActivityWidgetHost = (
+  options: SubagentActivityWidgetHostOptions,
+): SubagentActivityWidgetHost => {
+  let context: ExtensionContext | undefined;
+  let component: SubagentActivityWidgetComponent | undefined;
+  let generation = 0;
+  const getNow = options.getNow ?? synchronousNow;
+
+  const disposeComponent = () => {
+    component?.dispose();
+    component = undefined;
+  };
+  const clearCurrent = () => {
+    generation += 1;
+    disposeComponent();
+    options.presentation.setPanelAvailable(false);
+    const previous = context;
+    context = undefined;
+    if (!previous) return;
+    try {
+      previous.ui.setWidget(WIDGET_KEY, undefined, { placement: "aboveEditor" });
+    } catch {
+      // Host UI may already be tearing down.
+    }
+  };
+
+  return {
+    setContext: (next) => {
+      if (context === next && options.presentation.isPanelAvailable()) return;
+      clearCurrent();
+      if (!next) return;
+      let usable = false;
+      try {
+        usable = next.hasUI && next.mode === "tui";
+      } catch {
+        usable = false;
+      }
+      if (!usable) return;
+      context = next;
+      const ownerGeneration = generation;
+      let factoryFailed = false;
+      try {
+        next.ui.setWidget(
+          WIDGET_KEY,
+          (tui, theme) => {
+            if (ownerGeneration !== generation || context !== next)
+              return new EmptyActivityWidgetComponent();
+            disposeComponent();
+            try {
+              const created = new SubagentActivityWidgetComponent({
+                theme,
+                tui,
+                getProjection: options.getProjection,
+                subscribeProjection: options.subscribeProjection,
+                presentation: options.presentation,
+                startTicker: options.startTicker,
+                getNow,
+                onDispose: () => {
+                  if (ownerGeneration === generation && context === next)
+                    options.presentation.setPanelAvailable(false);
+                },
+              });
+              component = created;
+              return created;
+            } catch {
+              factoryFailed = true;
+              options.presentation.setPanelAvailable(false);
+              return new EmptyActivityWidgetComponent();
+            }
+          },
+          { placement: "aboveEditor" },
+        );
+        options.presentation.setPanelAvailable(!factoryFailed);
+      } catch {
+        context = undefined;
+        disposeComponent();
+        options.presentation.setPanelAvailable(false);
+      }
+    },
+    clear: clearCurrent,
+  };
+};
+
+export const shouldSuppressSubagentFooter = (
+  projection: SubagentProjection,
+  presentation: SubagentActivityPresentationController,
+): boolean =>
+  presentation.isPanelAvailable() &&
+  hasSubagentActivityPanelContent(projection, presentation.get());

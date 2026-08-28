@@ -209,48 +209,57 @@ const expandedRunDiagnostics = (
   ];
 };
 
+interface RunOverviewOptions {
+  readonly expanded: boolean;
+  readonly reportSections: ReadonlyArray<RunReportSection>;
+  readonly banner?: SemanticOutcomeBanner | undefined;
+  readonly showReportOutcomes?: boolean | undefined;
+  readonly hierarchy?: RunOverviewHierarchy | undefined;
+  readonly showRunRows?: boolean | undefined;
+  readonly showOutcomeDetails?: boolean | undefined;
+  readonly showReportAffordance?: boolean | undefined;
+  readonly showContextOmission?: boolean | undefined;
+}
+
 class RunOverviewComponent implements Component {
   private readonly runs: ReadonlyArray<SubagentRunCard>;
   private readonly failures: ReadonlyArray<SubagentStartFailure>;
-  private readonly expanded: boolean;
   private readonly theme: Theme;
-  private readonly reportSections: ReadonlyArray<RunReportSection>;
-  private readonly banner: SemanticOutcomeBanner | undefined;
-  private readonly showReportOutcomes: boolean;
-  private readonly hierarchy: RunOverviewHierarchy | undefined;
+  private readonly options: RunOverviewOptions;
 
   constructor(
     runs: ReadonlyArray<SubagentRunCard>,
     failures: ReadonlyArray<SubagentStartFailure>,
-    expanded: boolean,
     theme: Theme,
-    reportSections: ReadonlyArray<RunReportSection>,
-    banner?: SemanticOutcomeBanner,
-    showReportOutcomes = true,
-    hierarchy?: RunOverviewHierarchy,
+    options: RunOverviewOptions,
   ) {
     this.runs = runs;
     this.failures = failures;
-    this.expanded = expanded;
     this.theme = theme;
-    this.reportSections = reportSections;
-    this.banner = banner;
-    this.showReportOutcomes = showReportOutcomes;
-    this.hierarchy = hierarchy;
+    this.options = options;
   }
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
     const usage = aggregateRunUsage(this.runs);
-    const isAwaitHierarchy = this.hierarchy?.awaitedRunIds !== undefined;
-    const outcomeRuns = this.hierarchy?.awaitedRunIds
-      ? this.runs.filter((run) => this.hierarchy?.awaitedRunIds?.has(run.id))
+    const hierarchy = this.options.hierarchy;
+    const showRunRows = this.options.showRunRows !== false;
+    const showOutcomeDetails = this.options.showOutcomeDetails !== false;
+    const showReportOutcomes = this.options.showReportOutcomes !== false;
+    const isAwaitHierarchy = hierarchy?.awaitedRunIds !== undefined;
+    const outcomeRuns = hierarchy?.awaitedRunIds
+      ? this.runs.filter((run) => hierarchy.awaitedRunIds?.has(run.id))
       : this.runs;
     return [
-      ...(this.banner
-        ? [truncateToWidth(this.theme.fg(this.banner.color, this.banner.text), safeWidth)]
+      ...(this.options.banner
+        ? [
+            truncateToWidth(
+              this.theme.fg(this.options.banner.color, this.options.banner.text),
+              safeWidth,
+            ),
+          ]
         : []),
-      ...(this.hierarchy?.contextOmitted
+      ...(this.options.showContextOmission !== false && hierarchy?.contextOmitted
         ? [
             truncateToWidth(
               this.theme.fg("warning", "Some descendant context was omitted from this card."),
@@ -261,23 +270,29 @@ class RunOverviewComponent implements Component {
       ...(!isAwaitHierarchy && usage
         ? [truncateToWidth(this.theme.fg("dim", `Total usage · ${usage}`), safeWidth)]
         : []),
-      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
-        fullId: this.expanded,
-        hierarchy: this.hierarchy,
-      }),
-      ...(this.expanded
+      ...(showRunRows
+        ? renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
+            fullId: this.options.expanded,
+            hierarchy,
+          })
+        : []),
+      ...(this.options.expanded && showRunRows
         ? this.runs.flatMap((run) =>
             expandedRunDiagnostics(run, safeWidth, this.theme, !isAwaitHierarchy),
           )
         : []),
-      ...renderStartFailures(this.failures, this.expanded, this.theme)
+      ...renderStartFailures(this.failures, this.options.expanded, this.theme)
         .split("\n")
         .filter(Boolean)
         .map((line) => truncateToWidth(line, safeWidth)),
       ...outcomeRuns
         .filter(
           (run) =>
-            this.showReportOutcomes && run.state === "completed" && !run.finalText && !run.error,
+            showOutcomeDetails &&
+            showReportOutcomes &&
+            run.state === "completed" &&
+            !run.finalText &&
+            !run.error,
         )
         .map((run) =>
           truncateToWidth(
@@ -288,44 +303,52 @@ class RunOverviewComponent implements Component {
             safeWidth,
           ),
         ),
-      ...this.runs
-        .filter((run) => run.state === "reported" && run.closeOnReport === false)
-        .map((run) =>
-          truncateToWidth(
-            this.theme.fg(
-              "dim",
-              `${sanitizeTerminalLine(run.name)} is retained · use subagent_send for its next assignment.`,
-            ),
-            safeWidth,
-          ),
-        ),
-      ...this.runs
-        .filter((run) => run.state === "paused")
-        .map((run) =>
-          truncateToWidth(
-            this.theme.fg(
-              "warning",
-              run.capabilities === undefined
-                ? `${sanitizeTerminalLine(run.name)} is paused · check resume support with subagent_status, or stop it with subagent_lifecycle.`
-                : run.capabilities.includes("resume")
-                  ? `${sanitizeTerminalLine(run.name)} is paused · resume or stop it with subagent_lifecycle.`
-                  : `${sanitizeTerminalLine(run.name)} cannot resume · stop it and start a replacement.`,
-            ),
-            safeWidth,
-          ),
-        ),
-      ...attentionRecoveryText(this.runs)
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => truncateToWidth(this.theme.fg("warning", line), safeWidth)),
-      ...(this.reportSections.length > 0
+      ...(showOutcomeDetails
+        ? this.runs
+            .filter((run) => run.state === "reported" && run.closeOnReport === false)
+            .map((run) =>
+              truncateToWidth(
+                this.theme.fg(
+                  "dim",
+                  `${sanitizeTerminalLine(run.name)} is retained · use subagent_send for its next assignment.`,
+                ),
+                safeWidth,
+              ),
+            )
+        : []),
+      ...(showOutcomeDetails
+        ? this.runs
+            .filter((run) => run.state === "paused")
+            .map((run) =>
+              truncateToWidth(
+                this.theme.fg(
+                  "warning",
+                  run.capabilities === undefined
+                    ? `${sanitizeTerminalLine(run.name)} is paused · check resume support with subagent_status, or stop it with subagent_lifecycle.`
+                    : run.capabilities.includes("resume")
+                      ? `${sanitizeTerminalLine(run.name)} is paused · resume or stop it with subagent_lifecycle.`
+                      : `${sanitizeTerminalLine(run.name)} cannot resume · stop it and start a replacement.`,
+                ),
+                safeWidth,
+              ),
+            )
+        : []),
+      ...(showOutcomeDetails
+        ? attentionRecoveryText(this.runs)
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => truncateToWidth(this.theme.fg("warning", line), safeWidth))
+        : []),
+      ...(this.options.showReportAffordance !== false && this.options.reportSections.length > 0
         ? [
             truncateToWidth(
-              reportAffordance(this.reportSections, this.expanded, this.theme),
+              reportAffordance(this.options.reportSections, this.options.expanded, this.theme),
               safeWidth,
             ),
           ]
-        : this.failures.length > 0 && !this.expanded
+        : this.options.showReportAffordance !== false &&
+            this.failures.length > 0 &&
+            !this.options.expanded
           ? [renderExpansionAffordance("failure details", false, this.theme)]
           : []),
     ];
@@ -336,7 +359,7 @@ class RunOverviewComponent implements Component {
   }
 }
 
-/** Collapsed start/await rendering: run summaries, launch failures, and the report affordance. */
+/** Collapsed start/await rendering: outcome, recovery, and report disclosure. */
 export const renderStartAwaitOverviewComponent = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
@@ -344,42 +367,22 @@ export const renderStartAwaitOverviewComponent = (
   banner?: SemanticOutcomeBanner,
   hierarchy?: RunOverviewHierarchy,
   reportRuns: ReadonlyArray<SubagentRunCard> = runs,
+  showRunRows = true,
 ): Component =>
-  new RunOverviewComponent(
-    runs,
-    failures,
-    false,
-    theme,
-    expandedRunReportSections(reportRuns),
+  new RunOverviewComponent(runs, failures, theme, {
+    expanded: false,
+    reportSections: expandedRunReportSections(reportRuns),
     banner,
-    true,
+    showReportOutcomes: true,
     hierarchy,
-  );
+    showRunRows,
+  });
 
-export const renderExpandedStartAwaitResult = (
-  runs: ReadonlyArray<SubagentRunCard>,
+const appendReportSections = (
+  container: Container,
+  sections: ReadonlyArray<RunReportSection>,
   theme: Theme,
-  failures: ReadonlyArray<SubagentStartFailure> = [],
-  banner?: SemanticOutcomeBanner,
-  showReportOutcomes = true,
-  hierarchy?: RunOverviewHierarchy,
-  reportRuns: ReadonlyArray<SubagentRunCard> = runs,
-): Component => {
-  const container = new Container();
-  const sections = showReportOutcomes ? expandedRunReportSections(reportRuns) : [];
-  container.addChild(
-    new RunOverviewComponent(
-      runs,
-      failures,
-      true,
-      theme,
-      sections,
-      banner,
-      showReportOutcomes,
-      hierarchy,
-    ),
-  );
-  if (sections.length === 0) return container;
+): void => {
   for (const [index, section] of sections.entries()) {
     container.addChild(new Spacer(1));
     const heading =
@@ -397,6 +400,61 @@ export const renderExpandedStartAwaitResult = (
       );
     else container.addChild(new Text(theme.fg("error", section.text), 2, 0));
   }
+};
+
+export const renderExpandedStartAwaitResult = (
+  runs: ReadonlyArray<SubagentRunCard>,
+  theme: Theme,
+  failures: ReadonlyArray<SubagentStartFailure> = [],
+  banner?: SemanticOutcomeBanner,
+  showReportOutcomes = true,
+  hierarchy?: RunOverviewHierarchy,
+  reportRuns: ReadonlyArray<SubagentRunCard> = runs,
+  reportsFirst = false,
+): Component => {
+  const container = new Container();
+  const sections = showReportOutcomes ? expandedRunReportSections(reportRuns) : [];
+  if (!reportsFirst) {
+    container.addChild(
+      new RunOverviewComponent(runs, failures, theme, {
+        expanded: true,
+        reportSections: sections,
+        banner,
+        showReportOutcomes,
+        hierarchy,
+      }),
+    );
+    appendReportSections(container, sections, theme);
+    return container;
+  }
+
+  container.addChild(
+    new RunOverviewComponent(runs, [], theme, {
+      expanded: false,
+      reportSections: [],
+      banner,
+      showReportOutcomes: false,
+      hierarchy,
+      showRunRows: false,
+      showOutcomeDetails: false,
+      showReportAffordance: false,
+    }),
+  );
+  appendReportSections(container, sections, theme);
+  if (sections.length > 0) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("muted", "Run outcomes"), 0, 0));
+  }
+  container.addChild(
+    new RunOverviewComponent(runs, failures, theme, {
+      expanded: true,
+      reportSections: [],
+      showReportOutcomes,
+      hierarchy,
+      showReportAffordance: false,
+      showContextOmission: false,
+    }),
+  );
   return container;
 };
 
@@ -431,7 +489,10 @@ export const awaitResultBanner = (details: {
           : "warning";
   return {
     color,
-    text: formatAwaitSummary(runs, details.awaitUntil ?? "all_finished", details.usage, details),
+    text: formatAwaitSummary(runs, details.awaitUntil ?? "all_finished", details.usage, {
+      ...details,
+      settled: true,
+    }),
   };
 };
 
@@ -494,6 +555,18 @@ const awaitHierarchy = (details: {
   contextOmitted: details.contextOmitted,
 });
 
+export interface SubagentResultRenderOptions {
+  readonly panelOwnsLiveHierarchy?: boolean | undefined;
+}
+
+class EmptyLiveHierarchyComponent implements Component {
+  render(): string[] {
+    return [];
+  }
+
+  invalidate(): void {}
+}
+
 export const renderSubagentResult = (
   result: {
     readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
@@ -502,8 +575,15 @@ export const renderSubagentResult = (
   isPartial: boolean,
   expanded: boolean,
   theme: Theme,
+  options: SubagentResultRenderOptions = {},
 ): Component => {
   const details = decodeStartAwaitCardDetails(result.details);
+  if (
+    isPartial &&
+    options.panelOwnsLiveHierarchy &&
+    (details?.action === "start" || details?.action === "await")
+  )
+    return new EmptyLiveHierarchyComponent();
   if (isPartial && details?.action === "await" && details.awaitUntil) {
     const targets = awaitTargets(details);
     const hierarchy = awaitHierarchy(details);
@@ -557,11 +637,20 @@ export const renderSubagentResult = (
         true,
         hierarchy,
         targets,
+        true,
       );
       if (!details.contentOmitted) return rendered;
       return recoveredOmittedFallback(result.content, theme) ?? rendered;
     }
-    return renderStartAwaitOverviewComponent(details.cards, theme, [], banner, hierarchy, targets);
+    return renderStartAwaitOverviewComponent(
+      details.cards,
+      theme,
+      [],
+      banner,
+      hierarchy,
+      targets,
+      false,
+    );
   }
   const compact = decodeCompactToolDetails(result.details);
   if (compact?.action === "models" && compact.profiles)
@@ -575,16 +664,13 @@ export const renderSubagentResult = (
       (cards, isExpanded, banner, showReports) =>
         isExpanded
           ? renderExpandedStartAwaitResult(cards, theme, [], banner, showReports, hierarchy)
-          : new RunOverviewComponent(
-              cards,
-              [],
-              false,
-              theme,
-              showReports ? expandedRunReportSections(cards) : [],
+          : new RunOverviewComponent(cards, [], theme, {
+              expanded: false,
+              reportSections: showReports ? expandedRunReportSections(cards) : [],
               banner,
-              showReports,
+              showReportOutcomes: showReports,
               hierarchy,
-            ),
+            }),
     );
     if (!expanded || !compact.contentOmitted) return rendered;
     return recoveredOmittedFallback(result.content, theme) ?? rendered;
