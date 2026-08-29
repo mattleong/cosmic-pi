@@ -1,30 +1,24 @@
 // Promise-shaped driver characterization intentionally remains at this test boundary.
 import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import { describe, expect, it, test } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { afterEach, vi } from "vitest";
-import { provideBuiltLayer } from "pi-cosmic-core";
 import { nodeFsPromises } from "./support/node-builtins.ts";
 import {
   AdvisorRuntime,
   AdvisorRuntimeService,
   advisorRuntimeServiceLayer,
-  MAX_ADVISOR_CHECKPOINT_CHARS,
-  MAX_ADVISOR_CHECKPOINT_ID_CHARS,
   MAX_ADVISOR_STREAM_CHARS,
   MAX_ADVISOR_TOOL_ROUNDS,
   makeAdvisorControlMailbox,
   NoDiscoveryAdvisorResourceLoader,
-  parseAdvisorCheckpointEffect,
   type AdvisorCheckpoint,
   type AdvisorCheckpointRequest,
   type AdvisorRuntimeStartOptions,
@@ -32,7 +26,6 @@ import {
 import { ADVISOR_TOOL_NAMES } from "../src/runtime/tools.ts";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import { AdvisorModelError, type AdvisorUsageTelemetry } from "../src/runtime/client.ts";
-import { capturedTelemetrySnapshot, makeCapturedTracer } from "pi-cosmic-core/testing";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 import {
   childFactoryLayerFrom,
@@ -138,11 +131,6 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
 
 /** Serialized snapshot for content-leak assertions at this Promise-shaped test boundary. */
 const serializedSnapshot = <ValueInput>(value: ValueInput): string => JSON.stringify(value);
-
-/** Drives the production Effect checkpoint decoder synchronously for deterministic assertions. */
-function parseCheckpoint(raw: string) {
-  return Effect.runSync(parseAdvisorCheckpointEffect(raw));
-}
 
 function checkpointJson(request: AdvisorCheckpointRequest) {
   return JSON.stringify({
@@ -1348,110 +1336,6 @@ describe("AdvisorRuntime", () => {
       expect(source).not.toContain("agent.state.messages =");
     }),
   );
-
-  test("strictly validates checkpoint correlation fields", () => {
-    const request: AdvisorCheckpointRequest = {
-      checkpointId: "cp",
-      processedThrough: 4,
-      observations: "",
-      focus: "standard",
-    };
-    expect(parseCheckpoint(checkpointJson(request))).toMatchObject({
-      checkpointId: "cp",
-      processedThrough: 4,
-    });
-    const withSecret = JSON.stringify({
-      ...JSON.parse(checkpointJson(request)),
-      stateSummary: "api_key=sk-abcdefghijklmnop and Bearer abc.def.ghi",
-    });
-    const sanitized = parseCheckpoint(withSecret);
-    expect(sanitized.stateSummary).not.toMatch(/sk-abcdefghijklmnop|abc\.def\.ghi/);
-    expect(sanitized.stateSummary).toContain("REDACTED");
-    expect(() => parseCheckpoint("{}")).toThrow();
-    expect(() => parseCheckpoint("not json")).toThrow();
-    expect(() =>
-      parseCheckpoint(
-        JSON.stringify({ ...JSON.parse(checkpointJson(request)), suggestions: null }),
-      ),
-    ).toThrow("suggestions must be an array");
-    // The dual key set is gone: a checkpoint without suggestions is invalid, never accepted.
-    const missingSuggestions = Object.fromEntries(
-      Object.entries(
-        Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(
-          JSON.parse(checkpointJson(request)),
-        ),
-      ).filter(([key]) => key !== "suggestions"),
-    );
-    expect(() => parseCheckpoint(JSON.stringify(missingSuggestions))).toThrow(
-      "checkpoint fields are invalid",
-    );
-    expect(() => parseCheckpoint("x".repeat(MAX_ADVISOR_CHECKPOINT_CHARS + 1))).toThrow(
-      "maximum response size",
-    );
-    expect(() =>
-      parseCheckpoint(
-        JSON.stringify({
-          ...JSON.parse(checkpointJson(request)),
-          checkpointId: "x".repeat(MAX_ADVISOR_CHECKPOINT_ID_CHARS + 1),
-        }),
-      ),
-    ).toThrow("checkpoint ID");
-  });
-
-  it.effect("captures redacted checkpoint decode spans with typed failures", () =>
-    Effect.gen(function* () {
-      const captured = makeCapturedTracer();
-      for (const raw of [
-        "not json sk-secret /secret/path accountId=acct_hidden",
-        "x".repeat(MAX_ADVISOR_CHECKPOINT_CHARS + 1),
-      ]) {
-        const exit = yield* Effect.exit(
-          parseAdvisorCheckpointEffect(raw).pipe(provideBuiltLayer(captured.layer)),
-        );
-        expect(exit._tag).toBe("Failure");
-        if (exit._tag === "Failure") {
-          const failure = Cause.findErrorOption(exit.cause);
-          expect(failure._tag).toBe("Some");
-          if (failure._tag === "Some") expect(failure.value).toBeInstanceOf(Error);
-          expect(Cause.hasDies(exit.cause)).toBe(false);
-        }
-      }
-      expect(captured.spans.map((span) => span.name)).toContain("pi-advisor.checkpoint.decode");
-      const telemetry = capturedTelemetrySnapshot(captured);
-      expect(telemetry).not.toContain("sk-secret");
-      expect(telemetry).not.toContain("/secret/path");
-      expect(telemetry).not.toContain("acct_hidden");
-    }),
-  );
-
-  test("rejects duplicate fingerprints before blocker verification can correlate them", () => {
-    const request: AdvisorCheckpointRequest = {
-      checkpointId: "duplicate",
-      processedThrough: 1,
-      observations: "",
-      focus: "standard",
-    };
-    const finding = {
-      fingerprint: "same-blocker",
-      category: "correctness",
-      severity: "blocker",
-      confidence: "high",
-      evidenceBasis: "direct",
-      issue: "Wrong result.",
-      evidence: "The output contradicts the claim.",
-      recommendation: "Correct the result.",
-    };
-    expect(() =>
-      parseCheckpoint(
-        JSON.stringify({
-          ...JSON.parse(checkpointJson(request)),
-          verdict: "revise",
-          summary: "Two blockers.",
-          findings: [finding, { ...finding, issue: "Another wrong result." }],
-        }),
-      ),
-    ).toThrow("distinct fingerprints");
-  });
 });
 
 it.effect("control mailbox is capacity-one, coalescing, and rejects offers after shutdown", () =>

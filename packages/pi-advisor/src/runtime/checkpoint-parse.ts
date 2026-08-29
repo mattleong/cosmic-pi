@@ -1,49 +1,50 @@
-import * as Predicate from "effect/Predicate";
-
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { isRecord } from "../shared/utils.ts";
-import { parseAdvisorReviewValue } from "../review/parse.ts";
-import { AdvisorReviewParseError } from "../review/schema.ts";
-import { redactSensitiveText } from "../domain/redaction.ts";
+import type * as SchemaAST from "effect/SchemaAST";
+import type * as SchemaIssue from "effect/SchemaIssue";
+import { ADVISOR_REVIEW_SIZE_FILTER_IDENTIFIER } from "../review/schema.ts";
 import { AdvisorModelError } from "./client.ts";
 import {
-  AdvisorCheckpointWireSchema,
+  ADVISOR_STATE_SUMMARY_SIZE_FILTER_IDENTIFIER,
+  AdvisorCheckpointSchema,
+  AdvisorRuntimeResetRequiredError,
   MAX_ADVISOR_CHECKPOINT_CHARS,
-  MAX_ADVISOR_CHECKPOINT_ID_CHARS,
-  MAX_ADVISOR_STATE_SUMMARY_CHARS,
   type AdvisorCheckpoint,
 } from "./types.ts";
 
-/**
- * Checkpoint decoding.
- *
- * Like the review parser, this performs one wire gate plus one invariant assertion on the emitted
- * checkpoint. Granular diagnostics run on the value that failed the gate so exact-key, correlation,
- * and review-lane messages keep priority over the generic schema-validation message.
- */
+const STRICT_CHECKPOINT_PARSE_OPTIONS = {
+  onExcessProperty: "error",
+  reportInput: false,
+} as const satisfies SchemaAST.ParseOptions;
+const RESPONSE_FORMAT_MESSAGE = "Advisor checkpoint response format is invalid.";
+const RESET_REQUIRED_RESPONSE_FORMAT_MESSAGE =
+  "Advisor checkpoint response format requires a fresh context.";
+const MAX_INSPECTED_SCHEMA_ISSUES = 64;
+
+const responseFormatError = (): AdvisorModelError =>
+  new AdvisorModelError({ message: RESPONSE_FORMAT_MESSAGE, kind: "response-format" });
+const resetRequiredResponseFormatError = (): AdvisorRuntimeResetRequiredError =>
+  new AdvisorRuntimeResetRequiredError({
+    message: RESET_REQUIRED_RESPONSE_FORMAT_MESSAGE,
+    kind: "response-format",
+  });
+
 export const decodeAdvisorCheckpoint = Effect.fn("AdvisorCheckpoint.decode")(function* (
   raw: string,
 ) {
   if (raw.length > MAX_ADVISOR_CHECKPOINT_CHARS) {
-    return yield* new AdvisorModelError({
-      message: "Advisor checkpoint exceeds the maximum response size.",
-    });
+    return yield* resetRequiredResponseFormatError();
   }
-  return yield* Effect.try({
-    try: () => parseCheckpointText(raw),
-    catch: (error) =>
-      error instanceof AdvisorModelError
-        ? error
-        : // Embedded review diagnostics keep their exact message inside the checkpoint error type.
-          new AdvisorModelError({
-            message:
-              error instanceof AdvisorReviewParseError
-                ? error.message
-                : "Advisor checkpoint failed schema validation.",
-          }),
-  });
+  return yield* Schema.decodeUnknownEffect(
+    Schema.fromJsonString(AdvisorCheckpointSchema),
+    STRICT_CHECKPOINT_PARSE_OPTIONS,
+  )(raw).pipe(
+    Effect.mapError((error) =>
+      isResetRequiredSchemaFailure(error)
+        ? resetRequiredResponseFormatError()
+        : responseFormatError(),
+    ),
+  );
 });
 
 export const parseAdvisorCheckpointEffect = (
@@ -51,72 +52,41 @@ export const parseAdvisorCheckpointEffect = (
 ): Effect.Effect<AdvisorCheckpoint, AdvisorModelError> =>
   decodeAdvisorCheckpoint(raw).pipe(Effect.withSpan("pi-advisor.checkpoint.decode"));
 
-function parseCheckpointText(raw: string): AdvisorCheckpoint {
-  const trimmed = raw.trim();
-  const gated = Schema.decodeUnknownOption(Schema.fromJsonString(AdvisorCheckpointWireSchema), {
-    onExcessProperty: "error",
-  })(trimmed);
-  if (Option.isSome(gated)) return finishCheckpoint(gated.value);
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(trimmed);
-  if (Option.isNone(decoded))
-    throw new AdvisorModelError({ message: "Advisor returned malformed checkpoint JSON." });
-  normalizeCheckpoint(decoded.value);
-  throw new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." });
+function isResetRequiredSchemaFailure(error: Schema.SchemaError): boolean {
+  // JSON.parse rejection is the root JSON-string encoding with one direct InvalidValue issue.
+  if (error.issue._tag === "Encoding" && error.issue.issue._tag === "InvalidValue") return true;
+  return containsFilterIdentifier(
+    error.issue,
+    new Set([ADVISOR_REVIEW_SIZE_FILTER_IDENTIFIER, ADVISOR_STATE_SUMMARY_SIZE_FILTER_IDENTIFIER]),
+  );
 }
 
-function finishCheckpoint<GatedInput>(gated: GatedInput): AdvisorCheckpoint {
-  const checkpoint = normalizeCheckpoint(gated);
-  if (Option.isNone(Schema.decodeUnknownOption(AdvisorCheckpointWireSchema)(checkpoint))) {
-    throw new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." });
+/** Bounded structural inspection only. Issues and their input never cross this function. */
+function containsFilterIdentifier(
+  root: SchemaIssue.Issue,
+  identifiers: ReadonlySet<string>,
+): boolean {
+  const pending: SchemaIssue.Issue[] = [root];
+  let inspected = 0;
+  while (pending.length > 0 && inspected < MAX_INSPECTED_SCHEMA_ISSUES) {
+    const issue = pending.pop()!;
+    inspected += 1;
+    switch (issue._tag) {
+      case "Filter":
+        if (identifiers.has(issue.filter.annotations?.identifier ?? "")) return true;
+        pending.push(issue.issue);
+        break;
+      case "Encoding":
+      case "Pointer":
+        pending.push(issue.issue);
+        break;
+      case "Composite":
+      case "AnyOf":
+        for (let index = issue.issues.length - 1; index >= 0; index -= 1) {
+          pending.push(issue.issues[index]!);
+        }
+        break;
+    }
   }
-  return checkpoint;
-}
-
-/** Granular correlation/exact-key diagnostics on an already-decoded JSON value. */
-function normalizeCheckpoint<ParsedInput>(parsed: ParsedInput): AdvisorCheckpoint {
-  if (!isRecord(parsed))
-    throw new AdvisorModelError({ message: "Advisor checkpoint must be an object." });
-  const expected = [
-    "checkpointId",
-    "processedThrough",
-    "stateSummary",
-    "verdict",
-    "summary",
-    "suggestions",
-    "findings",
-  ].sort();
-  const keys = Object.keys(parsed).sort();
-  const exact =
-    keys.length === expected.length && expected.every((key, index) => key === keys[index]);
-  if (!exact) {
-    throw new AdvisorModelError({ message: "Advisor checkpoint fields are invalid." });
-  }
-  if (
-    !Predicate.isString(parsed.checkpointId) ||
-    !parsed.checkpointId ||
-    parsed.checkpointId.length > MAX_ADVISOR_CHECKPOINT_ID_CHARS
-  ) {
-    throw new AdvisorModelError({ message: "Advisor checkpoint ID is invalid." });
-  }
-  if (!Number.isSafeInteger(parsed.processedThrough) || Number(parsed.processedThrough) < 0) {
-    throw new AdvisorModelError({ message: "Advisor processedThrough is invalid." });
-  }
-  if (
-    !Predicate.isString(parsed.stateSummary) ||
-    parsed.stateSummary.length > MAX_ADVISOR_STATE_SUMMARY_CHARS
-  ) {
-    throw new AdvisorModelError({ message: "Advisor state summary is invalid or too large." });
-  }
-  const review = parseAdvisorReviewValue({
-    verdict: parsed.verdict,
-    summary: parsed.summary,
-    suggestions: parsed.suggestions,
-    findings: parsed.findings,
-  });
-  return {
-    checkpointId: parsed.checkpointId,
-    processedThrough: Number(parsed.processedThrough),
-    stateSummary: redactSensitiveText(parsed.stateSummary),
-    ...review,
-  };
+  return false;
 }

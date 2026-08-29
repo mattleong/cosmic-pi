@@ -1,13 +1,16 @@
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 /**
  * Snapshot unknown JavaScript values without invoking getters. Proxy traps are
  * treated as invalid input. The result is bounded plain data suitable for Schema.
  */
 export const SAFE_DATA_MAX_DEPTH = 16;
 export const SAFE_DATA_MAX_ENTRIES = 256;
+
+const isMutableJsonObject = (
+  value: Schema.MutableJson | undefined,
+): value is Schema.MutableJsonObject => Predicate.isObject(value);
 
 const snapshotDataUnchecked = <ValueInput>(
   value: ValueInput,
@@ -64,17 +67,13 @@ const snapshotDataUnchecked = <ValueInput>(
 };
 
 export function snapshotData<ValueInput>(value: ValueInput): Schema.MutableJson | undefined {
-  const snapshot = snapshotDataUnchecked(value);
-  const decoded = Schema.decodeUnknownOption(Schema.MutableJson)(snapshot);
-  return Option.isSome(decoded) ? decoded.value : undefined;
+  return snapshotDataUnchecked(value);
 }
 
 export function snapshotDataRecord<ValueInput>(
   value: ValueInput,
 ): Schema.MutableJsonObject | undefined {
   const snapshot = snapshotDataUnchecked(value);
-  const decoded = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.MutableJson))(
-    snapshot,
-  );
-  return Option.isSome(decoded) ? decoded.value : undefined;
+  if (!isMutableJsonObject(snapshot)) return undefined;
+  return { ...snapshot };
 }

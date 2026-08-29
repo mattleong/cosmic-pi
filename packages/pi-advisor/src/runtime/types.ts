@@ -1,21 +1,20 @@
 import { type AgentSession, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
 import * as Scope from "effect/Scope";
 import type { SynchronousIngress } from "pi-cosmic-core";
 import type { ResolvedAdvisorConfig } from "../config/options.ts";
-import { AdvisorModelError, type AdvisorUsageTelemetry } from "./client.ts";
+import { redactSensitiveText } from "../domain/redaction.ts";
 import {
-  AdvisorFindingWireSchema,
-  AdvisorSuggestionWireSchema,
+  AdvisorReviewFieldsSchema,
+  makeAdvisorReviewFingerprintFilter,
+  makeAdvisorReviewLaneFilter,
+  makeAdvisorReviewSizeFilter,
   type AdvisorReview,
   type AdvisorReviewFocus,
-} from "../review/index.ts";
-import {
-  MAX_ADVISOR_FINDINGS,
-  MAX_ADVISOR_SUGGESTIONS,
-  MAX_ADVISOR_SUMMARY_CHARS,
 } from "../review/schema.ts";
+import { AdvisorModelError, type AdvisorUsageTelemetry } from "./client.ts";
 
 export const MAX_ADVISOR_STATE_SUMMARY_CHARS = 4_000;
 export const MAX_ADVISOR_CHECKPOINT_CHARS = 64_000;
@@ -23,20 +22,43 @@ export const MAX_ADVISOR_CHECKPOINT_ID_CHARS = 256;
 export const MAX_ADVISOR_TOOL_ROUNDS = 12;
 export const MAX_ADVISOR_STREAM_CHARS = 128_000;
 export const DEFAULT_ADVISOR_SESSION_ABORT_TIMEOUT_MS = 30_000;
-const CheckpointFields = {
-  checkpointId: Schema.String.check(
-    Schema.isNonEmpty(),
-    Schema.isMaxLength(MAX_ADVISOR_CHECKPOINT_ID_CHARS),
-  ),
-  processedThrough: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
-  stateSummary: Schema.String.check(Schema.isMaxLength(MAX_ADVISOR_STATE_SUMMARY_CHARS)),
-  verdict: Schema.Literals(["pass", "suggest", "revise"]),
-  summary: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(MAX_ADVISOR_SUMMARY_CHARS)),
-  suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(
-    Schema.isMaxLength(MAX_ADVISOR_SUGGESTIONS),
-  ),
-  findings: Schema.Array(AdvisorFindingWireSchema).check(Schema.isMaxLength(MAX_ADVISOR_FINDINGS)),
-};
+export const ADVISOR_STATE_SUMMARY_SIZE_FILTER_IDENTIFIER =
+  "pi-advisor/checkpoint/state-summary-size";
+
+const CheckpointIdSchema = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(MAX_ADVISOR_CHECKPOINT_ID_CHARS),
+);
+const RawStateSummarySchema = Schema.String.check(
+  Schema.makeFilter((summary: string) => summary.length <= MAX_ADVISOR_STATE_SUMMARY_CHARS, {
+    identifier: ADVISOR_STATE_SUMMARY_SIZE_FILTER_IDENTIFIER,
+  }),
+);
+const StateSummarySchema = RawStateSummarySchema.pipe(
+  Schema.decodeTo(Schema.String, {
+    decode: SchemaGetter.transform(redactSensitiveText),
+    encode: SchemaGetter.transform((summary) => summary),
+  }),
+);
+const AdvisorCheckpointFieldsSchema = Schema.Struct({
+  checkpointId: CheckpointIdSchema,
+  processedThrough: Schema.Natural,
+  stateSummary: StateSummarySchema,
+  ...AdvisorReviewFieldsSchema.fields,
+});
+const AdvisorCheckpointEncodedInputSchema = Schema.toEncoded(AdvisorCheckpointFieldsSchema);
+const AdvisorCheckpointBoundedEncodedSchema = AdvisorCheckpointEncodedInputSchema.check(
+  makeAdvisorReviewSizeFilter<Schema.Schema.Type<typeof AdvisorCheckpointEncodedInputSchema>>(),
+);
+const AdvisorCheckpointNormalizedSchema = AdvisorCheckpointBoundedEncodedSchema.pipe(
+  Schema.decodeTo(AdvisorCheckpointFieldsSchema),
+);
+type StrictAdvisorCheckpoint = Schema.Schema.Type<typeof AdvisorCheckpointNormalizedSchema>;
+export const AdvisorCheckpointSchema = AdvisorCheckpointNormalizedSchema.check(
+  makeAdvisorReviewLaneFilter<StrictAdvisorCheckpoint>(),
+  makeAdvisorReviewFingerprintFilter<StrictAdvisorCheckpoint>(),
+);
+
 const UsageNumberSchema = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
 export const AdvisorUsageWireSchema = Schema.Struct({
   cacheRead: Schema.optional(UsageNumberSchema),
@@ -46,13 +68,8 @@ export const AdvisorUsageWireSchema = Schema.Struct({
   totalTokens: Schema.optional(UsageNumberSchema),
   cost: Schema.optional(Schema.Struct({ total: Schema.optional(UsageNumberSchema) })),
 });
-export const AdvisorCheckpointWireSchema = Schema.Struct(CheckpointFields);
 export class AdvisorRuntimeResetRequiredError extends AdvisorModelError {}
-export interface AdvisorCheckpoint extends AdvisorReview {
-  checkpointId: string;
-  processedThrough: number;
-  stateSummary: string;
-}
+export type AdvisorCheckpoint = Schema.Schema.Type<typeof AdvisorCheckpointSchema>;
 export interface AdvisorCheckpointRequest {
   checkpointId: string;
   processedThrough: number;

@@ -7,7 +7,7 @@ import {
   type AdvisorFindingDedupeRollback,
   type AdvisorFindingDedupeState,
 } from "../src/review/dedupe.ts";
-import type { AdvisorFinding } from "../src/review/index.ts";
+import type { AdvisorFinding } from "../src/review/schema.ts";
 
 /** Drives the immutable reducers the way application state does. */
 function dedupeDriver(capacity?: number) {

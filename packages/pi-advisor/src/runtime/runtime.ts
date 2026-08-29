@@ -12,7 +12,7 @@ export {
   MAX_ADVISOR_TOOL_ROUNDS,
   MAX_ADVISOR_STREAM_CHARS,
   DEFAULT_ADVISOR_SESSION_ABORT_TIMEOUT_MS,
-  AdvisorCheckpointWireSchema,
+  AdvisorCheckpointSchema,
   AdvisorRuntimeResetRequiredError,
   type AdvisorCheckpoint,
   type AdvisorCheckpointRequest,

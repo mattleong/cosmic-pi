@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { AdvisorSeverity } from "../src/review/index.ts";
+import type { AdvisorSeverity } from "../src/review/schema.ts";
 import {
   ADVISOR_IMMUNITY_COMPLETED_TURNS,
   armAdvisorInterruption,

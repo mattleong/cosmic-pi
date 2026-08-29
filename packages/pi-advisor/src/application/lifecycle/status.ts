@@ -10,7 +10,7 @@ import {
   STATUS_SPINNER_DELAY_MS,
   STATUS_SPINNER_FRAMES,
   STATUS_SPINNER_INTERVAL_MS,
-} from "../controller-types.ts";
+} from "../controller.ts";
 
 export const makeLifecycleStatusControls = (options: {
   readonly statusService: AdvisorStatusServiceContract;

@@ -9,7 +9,7 @@ import {
   type AdvisorEmissionGuardState,
   type AdvisorEmissionRollback,
 } from "../src/review/emission-guard.ts";
-import type { AdvisorReview, AdvisorSeverity } from "../src/review/index.ts";
+import type { AdvisorReview, AdvisorSeverity } from "../src/review/schema.ts";
 
 /** Drives the immutable emission reducers the way application state does. */
 function emissionGuard(records: readonly string[] = [], capacity?: number) {
@@ -18,8 +18,8 @@ function emissionGuard(records: readonly string[] = [], capacity?: number) {
       ? createAdvisorEmissionGuardState(records)
       : createAdvisorEmissionGuardState(records, capacity);
   return {
-    evaluate(checkpointId: string, review: AdvisorReview) {
-      const result = evaluateAdvisorEmission(state, checkpointId, review);
+    evaluate(review: AdvisorReview) {
+      const result = evaluateAdvisorEmission(state, review);
       state = result.state;
       return result.decision;
     },
@@ -63,7 +63,7 @@ describe("advisor emission guard", () => {
       findings: [],
     };
     expect(isContentFreeAdvisorReview(pass)).toBe(true);
-    expect(guard.evaluate("one", pass)).toEqual({ accepted: false, reason: "pass" });
+    expect(guard.evaluate(pass)).toEqual({ accepted: false, reason: "pass" });
   });
 
   test("suppresses malformed revise output whose fields only repeat no-issue/pass phrases", () => {
@@ -89,34 +89,20 @@ describe("advisor emission guard", () => {
       ],
     };
     expect(isContentFreeAdvisorReview(malformed)).toBe(true);
-    expect(emissionGuard().evaluate("malformed", malformed)).toEqual({
+    expect(emissionGuard().evaluate(malformed)).toEqual({
       accepted: false,
       reason: "content-free",
     });
   });
 
-  test("accepts at most one delivery per checkpoint without consuming a later slot", () => {
-    const guard = emissionGuard();
-    expect(guard.evaluate("one", review("concern")).accepted).toBe(true);
-    expect(guard.evaluate("one", review("blocker"))).toEqual({
-      accepted: false,
-      reason: "checkpoint-budget",
-    });
-    expect(guard.evaluate("two", review("blocker")).accepted).toBe(true);
-    expect(guard.evaluate("one", review("blocker", "A different issue"))).toEqual({
-      accepted: false,
-      reason: "checkpoint-budget",
-    });
-  });
-
   test("suppresses equal/lower normalized duplicates and accepts escalation", () => {
     const guard = emissionGuard();
-    expect(guard.evaluate("one", review("concern")).accepted).toBe(true);
-    expect(guard.evaluate("two", review("concern", " missing TIMEOUT handling "))).toEqual({
+    expect(guard.evaluate(review("concern")).accepted).toBe(true);
+    expect(guard.evaluate(review("concern", " missing TIMEOUT handling "))).toEqual({
       accepted: false,
       reason: "duplicate",
     });
-    expect(guard.evaluate("three", review("blocker", "Missing timeout handling."))).toMatchObject({
+    expect(guard.evaluate(review("blocker", "Missing timeout handling."))).toMatchObject({
       accepted: true,
       severity: "blocker",
     });
@@ -124,16 +110,16 @@ describe("advisor emission guard", () => {
 
   test("rolls back severity escalation without deleting the prior hash", () => {
     const guard = emissionGuard();
-    expect(guard.evaluate("one", review("concern")).accepted).toBe(true);
-    const escalation = guard.evaluate("two", review("blocker", "Missing timeout handling."));
+    expect(guard.evaluate(review("concern")).accepted).toBe(true);
+    const escalation = guard.evaluate(review("blocker", "Missing timeout handling."));
     if (!escalation.accepted) throw new Error("expected escalation");
     guard.rollback(escalation.rollback);
 
-    expect(guard.evaluate("retry-concern", review("concern"))).toEqual({
+    expect(guard.evaluate(review("concern"))).toEqual({
       accepted: false,
       reason: "duplicate",
     });
-    expect(guard.evaluate("retry-blocker", review("blocker"))).toMatchObject({
+    expect(guard.evaluate(review("blocker"))).toMatchObject({
       accepted: true,
     });
   });
@@ -142,35 +128,35 @@ describe("advisor emission guard", () => {
     const guard = emissionGuard([], 1);
     const first = review("concern", "First issue");
     const second = review("concern", "Second issue");
-    expect(guard.evaluate("one", first).accepted).toBe(true);
-    const accepted = guard.evaluate("two", second);
+    expect(guard.evaluate(first).accepted).toBe(true);
+    const accepted = guard.evaluate(second);
     if (!accepted.accepted) throw new Error("expected accepted emission");
     guard.rollback(accepted.rollback);
 
-    expect(guard.evaluate("first-retry", first)).toEqual({
+    expect(guard.evaluate(first)).toEqual({
       accepted: false,
       reason: "duplicate",
     });
-    expect(guard.evaluate("second-retry", second)).toMatchObject({ accepted: true });
+    expect(guard.evaluate(second)).toMatchObject({ accepted: true });
   });
 
   test("rolls back an accepted recovery that never reached delivery", () => {
     const guard = emissionGuard();
-    const accepted = guard.evaluate("aborted", review("blocker"));
+    const accepted = guard.evaluate(review("blocker"));
     if (!accepted.accepted) throw new Error("expected accepted emission");
     guard.rollback(accepted.rollback);
 
     expect(guard.exportRecords()).toEqual([]);
-    expect(guard.evaluate("retry", review("blocker"))).toMatchObject({ accepted: true });
+    expect(guard.evaluate(review("blocker"))).toMatchObject({ accepted: true });
   });
 
   test("restores only bounded sanitized severity/hash records", () => {
     const first = emissionGuard();
-    first.evaluate("one", review("concern"));
+    first.evaluate(review("concern"));
     const records = first.exportRecords();
     expect(records).toEqual([expect.stringMatching(/^concern:[a-f\d]{64}$/)]);
     const restored = emissionGuard(["garbage", ...records]);
-    expect(restored.evaluate("two", review("concern"))).toEqual({
+    expect(restored.evaluate(review("concern"))).toEqual({
       accepted: false,
       reason: "duplicate",
     });

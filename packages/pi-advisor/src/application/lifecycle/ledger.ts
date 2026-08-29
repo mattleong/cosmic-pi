@@ -2,8 +2,11 @@ import * as Predicate from "effect/Predicate";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ADVISOR_CHECKPOINT_ENTRY_TYPE, createCheckpointLedger } from "../../checkpoint/ledger.ts";
-import { exportAdvisorEmissionRecords } from "../../review/emission-guard.ts";
-import { UNREADABLE_PARENT_ANCHOR, type ParentAnchor } from "../controller-types.ts";
+import {
+  exportAdvisorEmissionRecords,
+  rollbackAdvisorEmission,
+} from "../../review/emission-guard.ts";
+import { UNREADABLE_PARENT_ANCHOR, type ParentAnchor } from "../controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
 import type { SessionRefs } from "./session-refs.ts";
 
@@ -23,6 +26,9 @@ export const makeLedgerPersistence = (options: {
       return;
     const state = options.getState();
     const pending = state.pendingPersistentRecovery;
+    const durableEmissionGuard = pending
+      ? rollbackAdvisorEmission(state.emissionGuard, pending.emissionRollback)
+      : state.emissionGuard;
     try {
       options.pi.appendEntry(
         ADVISOR_CHECKPOINT_ENTRY_TYPE,
@@ -40,8 +46,10 @@ export const makeLedgerPersistence = (options: {
               }
             : state.interventionBudget,
           findingLifecycle: state.findingLifecycle.records,
-          emissionHashes: exportAdvisorEmissionRecords(state.emissionGuard).filter(
-            (record) => !pending || !record.endsWith(`:${pending.emission.hash}`),
+          emissionHashes: exportAdvisorEmissionRecords(durableEmissionGuard).filter(
+            (record) =>
+              !pending?.emissionRollback.wasNewHash ||
+              !record.endsWith(`:${pending.emissionRollback.hash}`),
           ),
         }),
       );

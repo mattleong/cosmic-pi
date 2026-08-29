@@ -10,7 +10,7 @@ import {
   type AdvisorFindingLifecycleState,
   type AdvisorFindingRecord,
 } from "../src/review/finding-lifecycle.ts";
-import type { AdvisorFinding } from "../src/review/index.ts";
+import type { AdvisorFinding } from "../src/review/schema.ts";
 
 /** Drives the immutable lifecycle reducers the way application state does. */
 function lifecycleDriver() {

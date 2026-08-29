@@ -1,26 +1,35 @@
-import { emptyAdvisorOutcomes, type AdvisorSessionMetrics } from "../domain/metrics.ts";
-import { emptyAdvisorFindingDedupe, type AdvisorFindingDedupeState } from "../review/dedupe.ts";
+import { normalizeAdvisorConfig, type ResolvedAdvisorConfig } from "../config/options.ts";
+import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
+import {
+  emptyAdvisorFindingDedupe,
+  rollbackAdvisorFindingDedupe,
+  type AdvisorFindingDedupeRollback,
+  type AdvisorFindingDedupeState,
+} from "../review/dedupe.ts";
 import {
   createAdvisorEmissionGuardState,
+  rollbackAdvisorEmission,
   type AdvisorEmissionGuardState,
+  type AdvisorEmissionRollback,
 } from "../review/emission-guard.ts";
 import {
+  acknowledgeAdvisorFindings,
   emptyAdvisorFindingLifecycle,
   type AdvisorFindingLifecycleState,
 } from "../review/finding-lifecycle.ts";
 import {
   emptyAdvisorInterventionBudget,
+  sanitizeInterventionBudgetSnapshot,
   type AdvisorInterventionBudgetSnapshot,
 } from "../review/intervention-budget.ts";
 import {
-  emptyAdvisorPerspectiveBudget,
-  type AdvisorPerspectiveBudgetState,
-} from "../review/perspective-budget.ts";
-import { emptyAdvisorRoutingState, type AdvisorRoutingStateSnapshot } from "../review/routing.ts";
-import { normalizeAdvisorConfig, type ResolvedAdvisorConfig } from "../config/options.ts";
-import type { AdvisorFindingDedupeRollback } from "../review/dedupe.ts";
-import type { AdvisorEmissionRollback } from "../review/emission-guard.ts";
-import type { AdvisorReview } from "../review/index.ts";
+  armAdvisorInterruption,
+  clearAdvisorCancellation,
+  emptyAdvisorRoutingState,
+  latchAdvisorCancellation,
+  type AdvisorRoutingStateSnapshot,
+} from "../review/routing.ts";
+import type { AdvisorReview } from "../review/schema.ts";
 import type {
   AdvisorToolTrajectoryDetectorState,
   AdvisorTrajectoryDetectorState,
@@ -28,19 +37,9 @@ import type {
 
 export interface AdvisorInterventionReceipt {
   readonly ids: readonly string[];
-  readonly count: number;
   readonly cancellationEpoch: number;
   readonly requestSequence: number;
 }
-export interface AdvisorResourceSummary {
-  readonly activeToolNames: readonly string[];
-  readonly backlog: number;
-  readonly backgroundState: "idle" | "queued" | "reviewing";
-  readonly processedSequence: number;
-  readonly queuedReviews: number;
-  readonly sequence: number;
-}
-
 export interface AdvisorActiveTrajectoryState {
   readonly abortAllowed: boolean;
   readonly detector: AdvisorTrajectoryDetectorState;
@@ -58,28 +57,18 @@ export interface AdvisorActiveTrajectoryState {
 
 export interface AdvisorPersistentRecoveryState {
   readonly review: AdvisorReview;
-  readonly phase: "final" | "progress";
-  readonly epoch: number;
-  readonly parentTurnId: number;
-  readonly configRevision: number;
-  readonly cancellationEpoch: number;
-  readonly findingIds: readonly string[];
-  readonly budgetBefore: AdvisorInterventionBudgetSnapshot;
-  readonly dedupeRollback: AdvisorFindingDedupeRollback;
-  readonly emission: {
-    readonly checkpointId: string;
-    readonly hash: string;
-    readonly rollback: AdvisorEmissionRollback;
-  };
-}
-
-export interface AdvisorAbortState {
   readonly epoch: number;
   readonly parentTurnId: number;
   readonly turnIndex: number;
   readonly trajectoryId: number;
   readonly cancellationEpoch: number;
+  readonly findingIds: readonly string[];
+  readonly budgetBefore: AdvisorInterventionBudgetSnapshot;
+  readonly dedupeRollback: AdvisorFindingDedupeRollback;
+  readonly emissionRollback: AdvisorEmissionRollback;
 }
+
+export type AdvisorRecoveryOutcome = "guidance" | "card-only" | "none";
 
 /**
  * Pure application-domain authority. Resource handles (Queue, Fiber, Scope,
@@ -87,21 +76,15 @@ export interface AdvisorAbortState {
  */
 export interface AdvisorApplicationState {
   readonly config: ResolvedAdvisorConfig;
-  readonly started: boolean;
   readonly metrics: AdvisorSessionMetrics;
-  readonly resourceSummary: AdvisorResourceSummary;
-  readonly guidancePaths: readonly string[];
-  readonly hasLastCandidate: boolean;
   readonly activeTrajectory: AdvisorActiveTrajectoryState | undefined;
   readonly pendingPersistentRecovery: AdvisorPersistentRecoveryState | undefined;
-  readonly abortInProgress: AdvisorAbortState | undefined;
   readonly epoch: number;
   readonly cancellationEpoch: number;
   readonly parentTurnId: number;
   readonly requestSequence: number;
   readonly findingDedupe: AdvisorFindingDedupeState;
   readonly findingLifecycle: AdvisorFindingLifecycleState;
-  readonly perspectiveBudget: AdvisorPerspectiveBudgetState;
   readonly interventionBudget: AdvisorInterventionBudgetSnapshot;
   readonly emissionGuard: AdvisorEmissionGuardState;
   readonly routing: AdvisorRoutingStateSnapshot;
@@ -111,29 +94,18 @@ export interface AdvisorApplicationState {
 }
 
 export const emptyAdvisorSessionMetrics = (): AdvisorSessionMetrics => ({
-  attempted: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
+  cards: 0,
+  corrections: 0,
   cost: 0,
-  discarded: 0,
-  failure: 0,
-  inputTokens: 0,
   modelResponses: 0,
-  outputTokens: 0,
-  outcomes: emptyAdvisorOutcomes(),
-  pass: 0,
-  revise: 0,
-  skippedReviews: {},
-  suppressedFindings: 0,
   settledReviews: 0,
   totalDurationMs: 0,
   totalTokens: 0,
-  usageByModel: {},
 });
 
 /**
  * Synchronous atomic domain boundary required by Pi's immediate callbacks. Transitions replace one
- * immutable state snapshot before any renderer projection is published; resources are never stored.
+ * immutable state snapshot; resources are never stored.
  */
 export const makeAdvisorApplicationStateStore = (initial: AdvisorApplicationState) => {
   let current = initial;
@@ -150,28 +122,15 @@ export const initialAdvisorApplicationState = (
   config: ResolvedAdvisorConfig = normalizeAdvisorConfig({}, ""),
 ): AdvisorApplicationState => ({
   config,
-  started: false,
   metrics: emptyAdvisorSessionMetrics(),
-  resourceSummary: {
-    activeToolNames: [],
-    backlog: 0,
-    backgroundState: "idle",
-    processedSequence: 0,
-    queuedReviews: 0,
-    sequence: 0,
-  },
-  guidancePaths: [],
-  hasLastCandidate: false,
   activeTrajectory: undefined,
   pendingPersistentRecovery: undefined,
-  abortInProgress: undefined,
   epoch: 0,
   cancellationEpoch: 0,
   parentTurnId: 0,
   requestSequence: 0,
   findingDedupe: emptyAdvisorFindingDedupe(),
   findingLifecycle: emptyAdvisorFindingLifecycle(),
-  perspectiveBudget: emptyAdvisorPerspectiveBudget(),
   interventionBudget: emptyAdvisorInterventionBudget(),
   emissionGuard: createAdvisorEmissionGuardState(),
   routing: emptyAdvisorRoutingState(),
@@ -180,23 +139,104 @@ export const initialAdvisorApplicationState = (
   reportedDiagnostics: [],
 });
 
+export function settleAdvisorPendingRecovery(
+  state: AdvisorApplicationState,
+  expected: AdvisorPersistentRecoveryState,
+  outcome: AdvisorRecoveryOutcome,
+): AdvisorApplicationState {
+  if (state.pendingPersistentRecovery !== expected) return state;
+  const settled = { ...state, pendingPersistentRecovery: undefined };
+  if (outcome === "guidance")
+    return recordAdvisorReceipt(
+      {
+        ...settled,
+        findingLifecycle: acknowledgeAdvisorFindings(state.findingLifecycle, expected.findingIds),
+        routing: armAdvisorInterruption(state.routing),
+      },
+      expected.findingIds,
+    );
+  if (outcome === "card-only") return settled;
+  return {
+    ...settled,
+    emissionGuard: rollbackAdvisorEmission(state.emissionGuard, expected.emissionRollback),
+    findingDedupe: rollbackAdvisorFindingDedupe(state.findingDedupe, expected.dedupeRollback),
+    interventionBudget: sanitizeInterventionBudgetSnapshot({
+      ...expected.budgetBefore,
+      correctionUsed: true,
+    }),
+  };
+}
+
+export const clearAdvisorPendingRecovery = (
+  state: AdvisorApplicationState,
+): AdvisorApplicationState => {
+  const pending = state.pendingPersistentRecovery;
+  return pending ? settleAdvisorPendingRecovery(state, pending, "none") : state;
+};
+
+/** Resets only policy that is scoped to one genuine user request. */
 export const resetAdvisorRequestDomain = (
   state: AdvisorApplicationState,
 ): AdvisorApplicationState => ({
   ...state,
-  cancellationEpoch: state.cancellationEpoch + 1,
-  requestSequence: state.requestSequence + 1,
   findingDedupe: emptyAdvisorFindingDedupe(state.findingDedupe.capacity),
-  perspectiveBudget: emptyAdvisorPerspectiveBudget(),
   interventionBudget: emptyAdvisorInterventionBudget(),
   emissionGuard: createAdvisorEmissionGuardState([], state.emissionGuard.capacity),
-  pendingReceipt: undefined,
 });
 
-export const recordAdvisorReceipt = (
+export const initializeAdvisorSession = (
+  state: AdvisorApplicationState,
+  config: ResolvedAdvisorConfig,
+): AdvisorApplicationState => ({
+  ...initialAdvisorApplicationState(config),
+  epoch: state.epoch,
+  cancellationEpoch: state.cancellationEpoch,
+});
+
+export const beginAdvisorUserRequest = (
+  state: AdvisorApplicationState,
+): AdvisorApplicationState => {
+  const next = resetAdvisorRequestDomain(clearAdvisorPendingRecovery(state));
+  return {
+    ...next,
+    activeTrajectory: undefined,
+    pendingReceipt: undefined,
+    cancellationEpoch: state.cancellationEpoch + 1,
+    requestSequence: state.requestSequence + 1,
+    findingLifecycle: state.findingLifecycle,
+    routing: clearAdvisorCancellation(state.routing),
+  };
+};
+
+export const cancelAdvisorRequest = (state: AdvisorApplicationState): AdvisorApplicationState => {
+  const next = clearAdvisorPendingRecovery(state);
+  return {
+    ...next,
+    cancellationEpoch: state.cancellationEpoch + 1,
+    pendingReceipt: undefined,
+    routing: latchAdvisorCancellation(state.routing),
+  };
+};
+
+export const commitAdvisorConfig = (
+  state: AdvisorApplicationState,
+  nextConfig: ResolvedAdvisorConfig,
+): AdvisorApplicationState => {
+  const disabling = state.config.enabled && !nextConfig.enabled;
+  const next = resetAdvisorRequestDomain(clearAdvisorPendingRecovery(state));
+  return {
+    ...next,
+    config: nextConfig,
+    cancellationEpoch: state.cancellationEpoch + 1,
+    findingLifecycle: emptyAdvisorFindingLifecycle(),
+    routing: disabling ? latchAdvisorCancellation(state.routing) : state.routing,
+  };
+};
+
+export function recordAdvisorReceipt(
   state: AdvisorApplicationState,
   ids: readonly string[],
-): AdvisorApplicationState => {
+): AdvisorApplicationState {
   const prior = state.pendingReceipt;
   return {
     ...state,
@@ -205,9 +245,8 @@ export const recordAdvisorReceipt = (
         prior?.requestSequence === state.requestSequence
           ? [...new Set([...prior.ids, ...ids])].slice(0, 5)
           : [...ids],
-      count: prior?.requestSequence === state.requestSequence ? prior.count + 1 : 1,
       cancellationEpoch: state.cancellationEpoch,
       requestSequence: state.requestSequence,
     },
   };
-};
+}

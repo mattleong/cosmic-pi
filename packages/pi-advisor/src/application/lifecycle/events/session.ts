@@ -8,9 +8,7 @@ import { selectAdvisorOnboardingAtHostBoundary } from "../../../boundary/host-on
 import { summarizeAdvisorReview } from "../../../checkpoint/ledger.ts";
 import { getAdvisorConfigPath } from "../../../config/options.ts";
 import { loadAdvisorInstructionsEffect } from "../../../review/instructions.ts";
-import { emptyAdvisorRoutingState } from "../../../review/routing.ts";
-import { AdvisorExtensionError, extensionError } from "../../controller-types.ts";
-import { initialAdvisorApplicationState } from "../../state.ts";
+import { AdvisorExtensionError, extensionError } from "../../controller.ts";
 import type { EventsDeps } from "./types.ts";
 
 export const makeSessionLifecycle = (d: EventsDeps) => {
@@ -18,8 +16,11 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
   const sessionInitializeEffect = (input: AdvisorSessionInput) =>
     Effect.gen(function* () {
       const ctx = input.ctx;
-      d.advanceDomainCounter("epoch");
-      d.advanceDomainCounter("cancellationEpoch");
+      d.updateApplicationState((state) => ({
+        ...state,
+        epoch: state.epoch + 1,
+        cancellationEpoch: state.cancellationEpoch + 1,
+      }));
       refs.pendingExplicitStart = undefined;
       yield* d.checkpointOrchestrator.cancelAll();
       refs.removeHostCancellation?.();
@@ -30,10 +31,7 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
       let hostCancellationPending = false;
       let hostCancellationActive = false;
       const applyHostCancellation = () => {
-        d.latchCancellation();
-        d.clearPendingRecovery();
-        d.clearPendingReceipt();
-        d.advanceDomainCounter("cancellationEpoch");
+        d.cancelRequest();
         d.persistCurrentLedger(ctx);
       };
       const latchHostCancellation = () => {
@@ -52,38 +50,17 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
         const loadedConfig = yield* d.configStore
           .load(configPath)
           .pipe(Effect.mapError(extensionError("config load")));
-        refs.configRevision += 1;
-        d.updateApplicationState(() => initialAdvisorApplicationState(loadedConfig));
-        refs.childStartedOnce = false;
+        d.initializeSession(loadedConfig);
         refs.instructions = yield* loadAdvisorInstructionsEffect(
           d.currentConfig().configPath,
           input.cwd,
           input.projectTrusted,
         ).pipe(Effect.mapError(extensionError("instruction load")));
-        d.updateApplicationState((state) => ({
-          ...state,
-          guidancePaths: [...refs.instructions.paths],
-          hasLastCandidate: false,
-        }));
         refs.pendingExplicitStart = undefined;
         refs.lastCandidate = undefined;
-        d.setDomainCounter("parentTurnId", 0);
         refs.checkpointId = 0;
-        d.advanceDomainCounter("cancellationEpoch");
-        d.resetRequestDomain(true);
-        d.setDomainCounter("requestSequence", 0);
-        d.updateApplicationState((state) => ({
-          ...state,
-          routing: emptyAdvisorRoutingState(),
-        }));
         refs.latestStateSummary = "";
         refs.latestDurableSummary = summarizeAdvisorReview();
-        d.updateApplicationState((state) => ({
-          ...state,
-          reportedFailures: [],
-          reportedDiagnostics: [],
-        }));
-        yield* d.publishControllerSnapshot();
         if (hostCancellationPending)
           return yield* new AdvisorExtensionError({
             operation: "session initialization",
@@ -99,10 +76,8 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
           !d.currentConfig().setupDismissed &&
           ctx.mode === "tui"
         ) {
-          const onboarding = Effect.tryPromise({
-            try: () => selectAdvisorOnboardingAtHostBoundary(ctx),
-            catch: extensionError("setup"),
-          }).pipe(
+          const onboardingConfigPath = d.currentConfig().configPath;
+          const onboarding = selectAdvisorOnboardingAtHostBoundary(ctx).pipe(
             Effect.flatMap((selected) => {
               if (!selected) return Effect.void;
               const patch =
@@ -114,29 +89,18 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
                       setupDismissed: true,
                     }
                   : { setupDismissed: true };
-              return d.configStore
-                .patch(patch, d.currentConfig().configPath, (next) =>
+              return d.persistCommandConfig(patch, onboardingConfigPath).pipe(
+                Effect.catch(() =>
                   Effect.sync(() => {
-                    refs.configRevision += 1;
-                    d.updateApplicationState((state) => ({ ...state, config: next }));
+                    d.notifyBestEffort(ctx, "Could not save Advisor setup.", "warning");
                   }),
-                )
-                .pipe(
-                  Effect.flatMap(() =>
-                    selected.type === "model" ? d.startRuntimeEffect(ctx) : Effect.void,
-                  ),
-                );
+                ),
+                Effect.asVoid,
+              );
             }),
             Effect.catch(() => Effect.void),
           );
-          yield* Effect.try({
-            try: () => d.parentExecutor.fork(onboarding),
-            catch: () =>
-              new AdvisorExtensionError({
-                operation: "setup admission",
-                message: "Advisor setup could not be admitted.",
-              }),
-          }).pipe(Effect.ignore);
+          yield* Effect.forkIn(onboarding, d.applicationScope, { startImmediately: true });
         }
       });
       yield* initialize.pipe(
@@ -176,8 +140,7 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
       d.ingest({ type: "tree", marker: "Parent active branch changed." });
       refs.pendingExplicitStart = undefined;
       refs.lastCandidate = undefined;
-      d.updateApplicationState((state) => ({ ...state, hasLastCandidate: false }));
-      d.resetRequestDomain(true);
+      d.resetSessionTreeDomain();
     }).pipe(Effect.andThen(d.startRuntimeEffect(ctx, "restore-branch")), Effect.asVoid);
 
   return { sessionInitializeEffect, sessionShutdownEffect, compactEffect, treeEffect };

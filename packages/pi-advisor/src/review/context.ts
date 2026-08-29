@@ -1,7 +1,9 @@
 import * as Predicate from "effect/Predicate";
 
 import { redactSensitiveText, stringifyRedactedObservation } from "../domain/redaction.ts";
+import { snapshotDataRecord } from "../domain/safe-data.ts";
 import { isRecord } from "../shared/utils.ts";
+
 export const DEFAULT_MAX_CONTEXT_CHARS = 240_000;
 
 export const ADVISOR_CONTEXT_TRUNCATION_MARKER = "[... advisor context truncated ...]";
@@ -53,13 +55,13 @@ export function buildAdvisorContext(options: BuildAdvisorContextOptions): Adviso
     return result ? [result] : [];
   });
   const latestUser = findLatestUser(serialized);
-  const candidateMessageIndex = findCandidateMessageIndex(serialized, options.candidate);
+  const candidate = redactSensitiveText(options.candidate).trim();
+  const candidateMessageIndex = findCandidateMessageIndex(serialized, candidate);
   const historyNewestFirst = serialized
     .filter(
       (message) => message.index !== latestUser?.index && message.index !== candidateMessageIndex,
     )
     .reverse();
-  const candidate = options.candidate.trim();
   const userRequest = latestUser?.text.trim() ?? "[No genuine user request was found.]";
   const allHistory = historyNewestFirst.map(formatHistoryMessage);
   const candidateHeading =
@@ -195,42 +197,43 @@ function serializeMessage<ValueInput>(
   value: ValueInput,
   index: number,
 ): SerializedMessage | undefined {
-  if (!isRecord(value) || !Predicate.isString(value.role)) return undefined;
+  const snapshot = snapshotDataRecord(value);
+  if (!snapshot || !Predicate.isString(snapshot.role)) return undefined;
 
-  switch (value.role) {
+  switch (snapshot.role) {
     case "user":
-      return withText(index, "user", serializeContent(value.content, true));
+      return withText(index, "user", serializeContent(snapshot.content, true));
     case "assistant":
-      return withText(index, "assistant", serializeAssistantContent(value.content));
+      return withText(index, "assistant", serializeAssistantContent(snapshot.content));
     case "toolResult": {
-      const toolName = nonEmptyString(value.toolName) ?? "unknown tool";
-      const errorSuffix = value.isError === true ? ", error" : "";
+      const toolName = nonEmptyString(snapshot.toolName) ?? "unknown tool";
+      const errorSuffix = snapshot.isError === true ? ", error" : "";
       return withText(
         index,
         `tool result: ${toolName}${errorSuffix}`,
-        serializeContent(value.content, true),
+        serializeContent(snapshot.content, true),
       );
     }
     case "custom": {
-      if (value.customType === "advisor-review" || value.display === false) return undefined;
-      const customType = nonEmptyString(value.customType) ?? "extension message";
+      if (snapshot.customType === "advisor-review" || snapshot.display === false) return undefined;
+      const customType = nonEmptyString(snapshot.customType) ?? "extension message";
       return withText(
         index,
         `extension context: ${customType}`,
-        serializeContent(value.content, true),
+        serializeContent(snapshot.content, true),
       );
     }
     case "bashExecution": {
-      if (value.excludeFromContext === true) return undefined;
-      const command = nonEmptyString(value.command);
-      const output = Predicate.isString(value.output) ? value.output : "";
+      if (snapshot.excludeFromContext === true) return undefined;
+      const command = nonEmptyString(snapshot.command);
+      const output = Predicate.isString(snapshot.output) ? snapshot.output : "";
       const text = [command ? `$ ${command}` : undefined, output].filter(Boolean).join("\n");
       return withText(index, "shell execution", text);
     }
     case "branchSummary":
-      return withText(index, "branch summary", nonEmptyString(value.summary));
+      return withText(index, "branch summary", nonEmptyString(snapshot.summary));
     case "compactionSummary":
-      return withText(index, "conversation summary", nonEmptyString(value.summary));
+      return withText(index, "conversation summary", nonEmptyString(snapshot.summary));
     default:
       return undefined;
   }
@@ -242,7 +245,9 @@ function withText(
   text: string | undefined,
 ): SerializedMessage | undefined {
   const normalized = text?.trim();
-  return normalized ? { index, role, text: redactSensitiveText(normalized) } : undefined;
+  return normalized
+    ? { index, role: redactSensitiveText(role), text: redactSensitiveText(normalized) }
+    : undefined;
 }
 
 function serializeAssistantContent<ContentInput>(content: ContentInput): string {

@@ -4,12 +4,12 @@ import {
   summarizeAdvisorReview,
   type AdvisorDurableReviewSummary,
 } from "../../checkpoint/ledger.ts";
-import type { AdvisorReviewQueue } from "../../queue/service.ts";
+import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import type { LoadedAdvisorInstructions } from "../../review/instructions.ts";
 import type { AdvisorRuntimeServiceContract } from "../../runtime/runtime.ts";
 import type { AdvisorSessionInput } from "../../boundary/host-context.ts";
 import type { CancellationLatch } from "../controller-helpers.ts";
-import type { LastCandidate, ParentAnchor } from "../controller-types.ts";
+import type { LastCandidate, ParentAnchor } from "../controller.ts";
 
 export type ActiveTrajectoryResource = {
   readonly id: number;
@@ -19,7 +19,6 @@ export type ActiveTrajectoryResource = {
 
 export interface SessionRefs {
   removeHostCancellation: (() => void) | undefined;
-  configRevision: number;
   checkpointId: number;
   queue: AdvisorReviewQueue | undefined;
   runtime: AdvisorRuntimeServiceContract | undefined;
@@ -30,7 +29,6 @@ export interface SessionRefs {
   pendingExplicitStart: number | undefined;
   explicitStartSequence: number;
   lastCandidate: LastCandidate | undefined;
-  childStartedOnce: boolean;
   trajectorySequence: number;
   activeTrajectoryResource: ActiveTrajectoryResource | undefined;
   activeToolCalls: Map<string, { toolName: string; args: unknown }>;
@@ -41,7 +39,6 @@ export interface SessionRefs {
 
 export const createSessionRefs = (): SessionRefs => ({
   removeHostCancellation: undefined,
-  configRevision: 0,
   checkpointId: 0,
   queue: undefined,
   runtime: undefined,
@@ -52,7 +49,6 @@ export const createSessionRefs = (): SessionRefs => ({
   pendingExplicitStart: undefined,
   explicitStartSequence: 0,
   lastCandidate: undefined,
-  childStartedOnce: false,
   trajectorySequence: 0,
   activeTrajectoryResource: undefined,
   activeToolCalls: new Map(),

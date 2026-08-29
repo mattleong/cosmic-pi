@@ -125,6 +125,94 @@ describe("buildAdvisorContext", () => {
     expect(result.transcript).toContain("REDACTED");
   });
 
+  test("redacts the candidate before correlation and deduplicates its redacted message", () => {
+    const result = buildAdvisorContext({
+      candidate: "Answer with openaiApiKey=candidate-secret",
+      messages: [
+        { role: "user", content: "Give me the answer" },
+        {
+          role: "assistant",
+          content: [text("Answer with openaiApiKey=message-secret")],
+        },
+      ],
+    });
+
+    expect(result.transcript).not.toMatch(/candidate-secret|message-secret/);
+    expect(result.transcript.match(/Answer with openaiApiKey=\[REDACTED\]/g)).toHaveLength(1);
+    expect(result.includedHistoryMessageCount).toBe(0);
+  });
+
+  test("redacts dynamic tool and extension headings", () => {
+    const result = buildAdvisorContext({
+      candidate: "done",
+      messages: [
+        { role: "user", content: "inspect" },
+        {
+          role: "toolResult",
+          toolName: "openaiClientSecret=tool-heading-secret",
+          content: [text("tool output")],
+        },
+        {
+          role: "custom",
+          customType: "authToken=custom-heading-secret",
+          content: "extension output",
+        },
+      ],
+    });
+
+    expect(result.transcript).not.toMatch(/tool-heading-secret|custom-heading-secret/);
+    expect(result.transcript).toContain(
+      "[tool result: openaiClientSecret=[REDACTED]]\ntool output",
+    );
+    expect(result.transcript).toContain(
+      "[extension context: authToken=[REDACTED]]\nextension output",
+    );
+  });
+
+  test("ignores hostile message values without invoking accessors or throwing", () => {
+    let getterCalls = 0;
+    const accessor = Object.defineProperties(
+      {},
+      {
+        role: { enumerable: true, value: "user" },
+        content: {
+          enumerable: true,
+          get() {
+            getterCalls += 1;
+            throw new Error("content getter executed");
+          },
+        },
+      },
+    );
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("message proxy trap executed");
+        },
+      },
+    );
+    const nestedHostile = {
+      role: "toolResult",
+      toolName: "read",
+      content: hostile,
+    };
+    const messages: readonly unknown[] = [
+      null,
+      42,
+      accessor,
+      hostile,
+      nestedHostile,
+      { role: "user", content: "safe request" },
+    ];
+
+    expect(() => buildAdvisorContext({ candidate: "done", messages })).not.toThrow();
+    const result = buildAdvisorContext({ candidate: "done", messages });
+    expect(result.transcript).toContain("safe request");
+    expect(result.includedHistoryMessageCount).toBe(0);
+    expect(getterCalls).toBe(0);
+  });
+
   test("fills a bounded transcript with newest context and marks omitted history", () => {
     const result = buildAdvisorContext({
       maxChars: 520,

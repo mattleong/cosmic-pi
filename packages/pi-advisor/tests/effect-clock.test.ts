@@ -17,7 +17,10 @@ import { standaloneAdvisorExecutor } from "./support/executor.ts";
 import { agentSessionFixture } from "./support/agent-session.ts";
 import { ADVISOR_CATCH_UP_TIMEOUT_MS, awaitAdvisorCatchUpEffect } from "../src/extension.ts";
 import { LONG_TURN_REVIEW_MS } from "../src/review/trajectory.ts";
-import { makeAdvisorReviewQueue, type AdvisorReviewQueueOptions } from "../src/queue/service.ts";
+import {
+  makeAdvisorReviewQueue,
+  type AdvisorReviewQueueOptions,
+} from "../src/queue/review-queue.ts";
 import {
   AdvisorRuntime,
   AdvisorRuntimeResetRequiredError,
@@ -152,7 +155,7 @@ describe("advisor Effect clock boundaries", () => {
       const queue = yield* makeAdvisorReviewQueue(effects, {} satisfies AdvisorReviewQueueOptions);
       queue.ingest(1, { type: "user", text: "first" });
       const first = yield* queue
-        .checkpointEffect({ checkpointId: "first", focus: "standard", parentTurnId: 1 })
+        .checkpointEffect({ checkpointId: "first", focus: "standard" })
         .pipe(Effect.forkChild({ startImmediately: true }));
       const wait = yield* awaitAdvisorCatchUpEffect(
         Fiber.join(first).pipe(
@@ -170,7 +173,6 @@ describe("advisor Effect clock boundaries", () => {
         yield* queue.checkpointEffect({
           checkpointId: "second",
           focus: "standard",
-          parentTurnId: 2,
         }),
       ).toMatchObject({ checkpointId: "second" });
       yield* queue.disposeEffect();
@@ -545,7 +547,7 @@ describe("advisor Effect clock boundaries", () => {
       const queue = yield* makeAdvisorReviewQueue(effects);
       queue.ingest(1, { type: "user", text: "pending" });
       const checkpoint = yield* queue
-        .checkpointEffect({ checkpointId: "hung", focus: "standard", parentTurnId: 1 })
+        .checkpointEffect({ checkpointId: "hung", focus: "standard" })
         .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }));
       yield* Effect.yieldNow;
       const shutdown = yield* queue

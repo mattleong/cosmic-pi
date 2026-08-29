@@ -1,19 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
-import type { AdvisorExtensionDependencies } from "./application/controller-types.ts";
-import { advisorControllerApplicationLayer } from "./application/lifecycle.ts";
+import type { AdvisorExtensionDependencies } from "./application/controller.ts";
+import { advisorControllerApplicationLayer } from "./application/lifecycle/layer.ts";
 import { advisorPlatformLayer, type AdvisorEffectExecutor } from "./boundary/executor.ts";
-import type { AdvisorHostBindings } from "./boundary/host-bindings.ts";
 import { configStoreLayer } from "./config/store.ts";
 import { failureLoggerLayer } from "./logging/logger.ts";
-import { advisorReviewQueueServiceLayer } from "./queue/service.ts";
 import { advisorChildFactoryLayer, advisorRuntimeServiceLayer } from "./runtime/runtime.ts";
 
 export interface AdvisorApplicationLayerOptions {
   readonly pi: ExtensionAPI;
   readonly executor: AdvisorEffectExecutor;
   readonly dependencies: AdvisorExtensionDependencies;
-  readonly hostBindings: AdvisorHostBindings;
 }
 
 /** Sole composition root for one Advisor session application. */
@@ -25,7 +22,6 @@ export const makeAdvisorApplicationLayer = (options: AdvisorApplicationLayerOpti
     advisorRuntimeServiceLayer(options.executor).pipe(Layer.provide(advisorChildFactoryLayer));
   const dependenciesLayer = Layer.mergeAll(
     runtimeServiceLayer,
-    advisorReviewQueueServiceLayer,
     resolvedConfigStoreLayer,
     loggerLayer,
   ).pipe(Layer.provide(advisorPlatformLayer));

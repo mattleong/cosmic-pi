@@ -23,11 +23,7 @@ import {
   canDeliverAdvisorIntervention,
   commitAdvisorIntervention,
 } from "../../review/intervention-budget.ts";
-import { type AdvisorReview } from "../../review/index.ts";
-import {
-  commitAdvisorPerspective,
-  selectAdvisorPerspective,
-} from "../../review/perspective-budget.ts";
+import { type AdvisorReview } from "../../review/schema.ts";
 import {
   armAdvisorInterruption,
   isAdvisorImmunityActive,
@@ -36,9 +32,9 @@ import {
 } from "../../review/routing.ts";
 import { advisorActiveToolCount } from "../../review/trajectory.ts";
 import type { AdvisorCheckpoint } from "../../runtime/runtime.ts";
-import type { AdvisorReviewQueue } from "../../queue/service.ts";
+import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import type { AdvisorApplicationState } from "../state.ts";
-import type { ReviewPhase, ReviewSource } from "../controller-types.ts";
+import type { ReviewPhase, ReviewSource } from "../controller.ts";
 import {
   incrementBounded,
   sendAdvisorAdvice,
@@ -64,7 +60,9 @@ export interface DeliveryDeps {
   readonly updateApplicationState: (
     update: (state: AdvisorApplicationState) => AdvisorApplicationState,
   ) => void;
-  readonly mutateMetrics: (mutate: (next: AdvisorApplicationState["metrics"]) => void) => void;
+  readonly updateMetrics: (
+    update: (metrics: AdvisorApplicationState["metrics"]) => AdvisorApplicationState["metrics"],
+  ) => void;
   readonly ingest: (input: Parameters<AdvisorReviewQueue["ingest"]>[1]) => void;
   readonly recordReceipt: (ids: readonly string[]) => void;
   readonly notifyBestEffort: (
@@ -72,7 +70,6 @@ export interface DeliveryDeps {
     message: string,
     level: "info" | "warning" | "error",
   ) => void;
-  readonly getConfigRevision: () => number;
 }
 
 export const makeDeliver =
@@ -88,11 +85,7 @@ export const makeDeliver =
     trajectoryId?: number,
   ): AdvisorRoute => {
     const discardAtDeliveryBoundary = (): AdvisorRoute => {
-      d.mutateMetrics((next) => {
-        next.discarded += 1;
-        next.outcomes.discarded += 1;
-        next.lastAction = "discarded";
-      });
+      d.updateMetrics((metrics) => ({ ...metrics, lastAction: "discarded" }));
       return "silent";
     };
     const deliveryCancelled = () =>
@@ -106,17 +99,20 @@ export const makeDeliver =
       findings: checkpoint.findings,
     };
     const explicitlyRequested = source === "last";
+    if (phase === "final" && (review.verdict === "pass" || review.verdict === "suggest"))
+      d.updateApplicationState((state) => ({
+        ...state,
+        findingLifecycle: reconcileAdvisorFindings(state.findingLifecycle, [], {
+          scope,
+          completedTurn: state.routing.completedPrimaryTurns,
+          complete: true,
+        }).state,
+      }));
     const suppress = (lastAction: "suppressed" | "pass" = "suppressed"): "silent" => {
-      d.mutateMetrics((next) => {
-        next.outcomes.suppressed += 1;
-        next.lastAction = lastAction;
-      });
+      d.updateMetrics((metrics) => ({ ...metrics, lastAction }));
       return "silent";
     };
     if (review.verdict === "suggest") {
-      d.mutateMetrics((next) => {
-        next.suggest = incrementBounded(next.suggest);
-      });
       const manualSuggestion = explicitlyRequested;
       const automaticPerspective = phase === "progress" && source === "automatic-progress";
       if (!manualSuggestion && !automaticPerspective) return suppress();
@@ -125,9 +121,7 @@ export const makeDeliver =
         !canDeliverAdvisorIntervention(d.getState().interventionBudget, "concern")
       )
         return suppress();
-      const suggestion = manualSuggestion
-        ? review.suggestions[0]
-        : selectAdvisorPerspective(d.getState().perspectiveBudget, review.suggestions);
+      const suggestion = review.suggestions[0];
       if (!suggestion) {
         if (explicitlyRequested)
           d.notifyBestEffort(ctx, "Advisor found no useful suggestion.", "info");
@@ -150,22 +144,15 @@ export const makeDeliver =
       if (automaticPerspective)
         d.updateApplicationState((state) => ({
           ...state,
-          perspectiveBudget: commitAdvisorPerspective(state.perspectiveBudget, suggestion),
           // A perspective is the request's ordinary visible intervention; only a
           // later verified blocker may escalate after it.
           interventionBudget: commitAdvisorIntervention(state.interventionBudget, "concern", false),
         }));
-      d.mutateMetrics((next) => {
-        if (manualSuggestion) {
-          next.outcomes.advice += 1;
-          next.lastAction = "advice";
-        } else {
-          next.outcomes.perspective += 1;
-          next.perspectivesDelivered = incrementBounded(next.perspectivesDelivered);
-          next.lastAction = "perspective";
-        }
-        next.cards = incrementBounded(next.cards);
-      });
+      d.updateMetrics((metrics) => ({
+        ...metrics,
+        cards: incrementBounded(metrics.cards),
+        lastAction: manualSuggestion ? "advice" : "perspective",
+      }));
       if (published.guidanceSent)
         d.ingest({
           type: "advisor_intervention",
@@ -182,31 +169,11 @@ export const makeDeliver =
       return "push-direct";
     }
     if (review.verdict === "pass") {
-      if (phase === "final") {
-        d.updateApplicationState((state) => ({
-          ...state,
-          findingLifecycle: reconcileAdvisorFindings(state.findingLifecycle, [], {
-            scope,
-            completedTurn: state.routing.completedPrimaryTurns,
-            complete: true,
-          }).state,
-        }));
-      }
-      d.mutateMetrics((next) => {
-        next.pass += 1;
-        next.outcomes.pass += 1;
-        next.lastAction = "pass";
-      });
+      d.updateMetrics((metrics) => ({ ...metrics, lastAction: "pass" }));
       if (explicitlyRequested) d.notifyBestEffort(ctx, "Advisor found no issues.", "info");
       return "silent";
     }
-    d.mutateMetrics((next) => {
-      next.outcomes.findings += 1;
-    });
     const gated = gateAdvisorFindings(review.findings);
-    d.mutateMetrics((next) => {
-      next.suppressedFindings = (next.suppressedFindings ?? 0) + gated.suppressed;
-    });
     const lifecycle = reconcileAdvisorFindings(d.getState().findingLifecycle, gated.actionable, {
       scope,
       completedTurn: d.getState().routing.completedPrimaryTurns,
@@ -222,9 +189,6 @@ export const makeDeliver =
       findingLifecycle: lifecycle.state,
       findingDedupe: filtered.state,
     }));
-    d.mutateMetrics((next) => {
-      next.suppressedFindings = (next.suppressedFindings ?? 0) + filtered.suppressed;
-    });
     if (filtered.findings.length === 0) {
       if (explicitlyRequested) d.notifyBestEffort(ctx, "Advisor found no new issues.", "info");
       return suppress();
@@ -239,11 +203,7 @@ export const makeDeliver =
           : state.emissionGuard,
       }));
     };
-    const emissionResult = evaluateAdvisorEmission(
-      d.getState().emissionGuard,
-      checkpoint.checkpointId,
-      filteredReview,
-    );
+    const emissionResult = evaluateAdvisorEmission(d.getState().emissionGuard, filteredReview);
     d.updateApplicationState((state) => ({ ...state, emissionGuard: emissionResult.state }));
     const emission = emissionResult.decision;
     if (!emission.accepted) {
@@ -251,9 +211,6 @@ export const makeDeliver =
       if (explicitlyRequested) d.notifyBestEffort(ctx, "Advisor found no new issues.", "info");
       return suppress(emission.reason === "pass" ? "pass" : "suppressed");
     }
-    d.mutateMetrics((next) => {
-      next.revise += 1;
-    });
     const { severity } = emission;
     const currentState = d.getState();
     const trajectory =
@@ -261,15 +218,10 @@ export const makeDeliver =
         ? currentState.activeTrajectory
         : undefined;
     const aborting = Boolean(
-      (currentState.abortInProgress &&
-        currentState.abortInProgress.epoch === currentState.epoch &&
-        currentState.abortInProgress.parentTurnId === currentState.parentTurnId &&
-        currentState.abortInProgress.cancellationEpoch === currentState.cancellationEpoch) ||
-      (currentState.pendingPersistentRecovery &&
-        currentState.pendingPersistentRecovery.epoch === currentState.epoch &&
-        currentState.pendingPersistentRecovery.parentTurnId === currentState.parentTurnId &&
-        currentState.pendingPersistentRecovery.cancellationEpoch ===
-          currentState.cancellationEpoch),
+      currentState.pendingPersistentRecovery &&
+      currentState.pendingPersistentRecovery.epoch === currentState.epoch &&
+      currentState.pendingPersistentRecovery.parentTurnId === currentState.parentTurnId &&
+      currentState.pendingPersistentRecovery.cancellationEpoch === currentState.cancellationEpoch,
     );
     const budgeted = !explicitlyRequested;
     if (budgeted && !canDeliverAdvisorIntervention(d.getState().interventionBudget, severity)) {
@@ -339,15 +291,16 @@ export const makeDeliver =
         action: outcome,
         requestSequence: d.getState().requestSequence,
       });
-      d.mutateMetrics((next) => {
-        next.outcomes[outcome] += 1;
-        next.interventionsDelivered = (next.interventionsDelivered ?? 0) + 1;
-      });
+      d.updateMetrics((metrics) => ({
+        ...metrics,
+        corrections: incrementBounded(metrics.corrections),
+      }));
     };
     const recordCard = (): void =>
-      d.mutateMetrics((next) => {
-        next.cards = incrementBounded(next.cards);
-      });
+      d.updateMetrics((metrics) => ({
+        ...metrics,
+        cards: incrementBounded(metrics.cards),
+      }));
     const publishLocalCard = (commitBudget = budgeted): boolean => {
       const published = sendAdvisorAdvice(d.pi, filteredReview);
       if (!published.appended) return false;
@@ -390,9 +343,7 @@ export const makeDeliver =
         d.notifyBestEffort(ctx, "Advisor could not show its review card.", "warning");
         return suppress();
       }
-      d.mutateMetrics((next) => {
-        next.lastAction = "advice";
-      });
+      d.updateMetrics((metrics) => ({ ...metrics, lastAction: "advice" }));
     } else if (route === "steer-live" || route === "trigger-correction") {
       const outcome = phase === "progress" ? "guidance" : "revision";
       const published = publishCorrection(outcome, route === "trigger-correction");
@@ -406,18 +357,17 @@ export const makeDeliver =
           routing: armAdvisorInterruption(state.routing),
         }));
       else route = "push-direct";
-      d.mutateMetrics((next) => {
-        next.lastAction = published.guidanceSent ? outcome : "advice";
-      });
+      d.updateMetrics((metrics) => ({
+        ...metrics,
+        lastAction: published.guidanceSent ? outcome : "advice",
+      }));
     } else {
       if (!trajectory || trajectoryId === undefined) {
         if (!publishLocalCard()) {
           rollbackUndelivered(emission);
           return suppress();
         }
-        d.mutateMetrics((next) => {
-          next.lastAction = "advice";
-        });
+        d.updateMetrics((metrics) => ({ ...metrics, lastAction: "advice" }));
         return "push-direct";
       }
       const budgetBefore = d.getState().interventionBudget;
@@ -430,37 +380,23 @@ export const makeDeliver =
         ...state,
         pendingPersistentRecovery: {
           review: filteredReview,
-          phase,
-          epoch: state.epoch,
-          parentTurnId: state.parentTurnId,
-          configRevision: d.getConfigRevision(),
-          cancellationEpoch: state.cancellationEpoch,
-          findingIds,
-          budgetBefore,
-          dedupeRollback: filtered.rollback,
-          emission: {
-            checkpointId: checkpoint.checkpointId,
-            hash: emission.hash,
-            rollback: emission.rollback,
-          },
-        },
-        abortInProgress: {
           epoch: state.epoch,
           parentTurnId: state.parentTurnId,
           turnIndex: trajectory.turnIndex,
           trajectoryId,
           cancellationEpoch: state.cancellationEpoch,
+          findingIds,
+          budgetBefore,
+          dedupeRollback: filtered.rollback,
+          emissionRollback: emission.rollback,
         },
       }));
-      d.mutateMetrics((next) => {
-        next.lastAction = "recovery";
-      });
+      d.updateMetrics((metrics) => ({ ...metrics, lastAction: "recovery" }));
       const abortResult = abortAdvisorParentAtHostBoundary(ctx);
       if (!abortResult.ok) {
         d.updateApplicationState((state) => ({
           ...state,
           pendingPersistentRecovery: undefined,
-          abortInProgress: undefined,
           interventionBudget: budgetBefore,
         }));
         const published = publishCorrection("guidance", false);
@@ -474,9 +410,10 @@ export const makeDeliver =
             ...state,
             routing: armAdvisorInterruption(state.routing),
           }));
-        d.mutateMetrics((next) => {
-          next.lastAction = published.guidanceSent ? "guidance" : "advice";
-        });
+        d.updateMetrics((metrics) => ({
+          ...metrics,
+          lastAction: published.guidanceSent ? "guidance" : "advice",
+        }));
         d.notifyBestEffort(ctx, abortResult.error.message, "warning");
         return published.guidanceSent ? "steer-live" : "push-direct";
       }

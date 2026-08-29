@@ -1,4 +1,12 @@
-import { advisorDelay } from "../../../boundary/clock.ts";
+import type {
+  ExtensionContext,
+  MessageUpdateEvent,
+  ToolExecutionEndEvent,
+  ToolExecutionStartEvent,
+  ToolExecutionUpdateEvent,
+  TurnStartEvent,
+} from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
 import { safeObservationJson } from "../../../domain/candidate.ts";
 import {
   advisorActiveToolCount,
@@ -15,9 +23,10 @@ import {
 import type { AdvisorActiveTrajectoryState } from "../../state.ts";
 import type { EventsDeps } from "./types.ts";
 
-export const registerTrajectoryEvents = (d: EventsDeps): void => {
+export const makeTrajectoryEventHandlers = (d: EventsDeps) => {
   const refs = d.refs;
-  d.hostBindings.registerEvent("turn_start", (event, ctx) => {
+
+  const turnStart = (event: TurnStartEvent, ctx: ExtensionContext): Effect.Effect<void> => {
     d.clearPersistentTrajectory();
     d.clearPendingRecovery();
     const receipt = d.getState().pendingReceipt;
@@ -31,13 +40,10 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
         findingIds: receipt.ids,
         requestSequence: d.getState().requestSequence,
       });
-      d.mutateMetrics((next) => {
-        next.interventionsAcknowledged = (next.interventionsAcknowledged ?? 0) + receipt.count;
-      });
     }
     d.clearPendingReceipt();
     d.advanceDomainCounter("parentTurnId");
-    if (!d.currentConfig().enabled || !d.currentConfig().configured) return;
+    if (!d.currentConfig().enabled || !d.currentConfig().configured) return Effect.void;
     const observation: AdvisorActiveTrajectoryState = {
       abortAllowed: false,
       detector: emptyAdvisorTrajectoryDetector(),
@@ -52,27 +58,24 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
     };
     d.updateApplicationState((state) => ({ ...state, activeTrajectory: observation }));
     refs.activeTrajectoryResource = { id: observation.id, ctx };
-    refs.activeTrajectoryResource.cancelTimer = advisorDelay(
-      d.parentExecutor,
-      LONG_TURN_REVIEW_MS,
-      () => {
-        const current = d.getState().activeTrajectory;
-        if (!current || current.id !== observation.id || current.reviewQueued) return;
-        d.mutateTrajectory(observation.id, (next) => ({ ...next, reviewQueued: true }));
-        d.requestCheckpoint({
-          ctx,
-          focus: "trajectory",
-          phase: "progress",
-          source: "automatic-progress",
-          requiresEnabled: true,
-          trajectoryId: observation.id,
-          abortOnBlocker: false,
-        });
-      },
-    );
-  });
+    refs.activeTrajectoryResource.cancelTimer = d.scheduleDelay(LONG_TURN_REVIEW_MS, () => {
+      const current = d.getState().activeTrajectory;
+      if (!current || current.id !== observation.id || current.reviewQueued) return;
+      d.mutateTrajectory(observation.id, (next) => ({ ...next, reviewQueued: true }));
+      d.requestCheckpoint({
+        ctx,
+        focus: "trajectory",
+        phase: "progress",
+        source: "automatic-progress",
+        requiresEnabled: true,
+        trajectoryId: observation.id,
+        abortOnBlocker: false,
+      });
+    });
+    return Effect.void;
+  };
 
-  d.hostBindings.registerEvent("message_update", (event, _ctx) => {
+  const messageUpdate = (event: MessageUpdateEvent): Effect.Effect<void> => {
     const update = event.assistantMessageEvent;
     if (update.type === "text_delta") {
       d.ingest({ type: "assistant_text_delta", text: update.delta });
@@ -80,8 +83,8 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
       d.ingest({ type: "assistant_thinking_delta", text: update.delta });
     }
     const observation = d.getState().activeTrajectory;
-    if (!observation || observation.reviewQueued) return;
-    if (update.type !== "text_delta" && update.type !== "thinking_delta") return;
+    if (!observation || observation.reviewQueued) return Effect.void;
+    if (update.type !== "text_delta" && update.type !== "thinking_delta") return Effect.void;
     const channel = update.type === "thinking_delta" ? "thinking" : "text";
     const trajectoryResult = pushAdvisorTrajectory(observation.detector, channel, update.delta);
     const signal = trajectoryResult.signal;
@@ -113,9 +116,10 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
           }
         : base;
     });
-    if (!signal || !next) return;
+    if (!signal || !next) return Effect.void;
     const currentResource = refs.activeTrajectoryResource;
-    if (!currentResource || currentResource.id !== observation.id || next.reviewQueued) return;
+    if (!currentResource || currentResource.id !== observation.id || next.reviewQueued)
+      return Effect.void;
     d.mutateTrajectory(observation.id, (current) => ({ ...current, reviewQueued: true }));
     currentResource.cancelTimer?.();
     delete currentResource.cancelTimer;
@@ -128,9 +132,10 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
       trajectoryId: observation.id,
       abortOnBlocker: next.abortAllowed,
     });
-  });
+    return Effect.void;
+  };
 
-  d.hostBindings.registerEvent("tool_execution_start", (event, _ctx) => {
+  const toolExecutionStart = (event: ToolExecutionStartEvent): Effect.Effect<void> => {
     refs.activeToolCalls.set(event.toolCallId, { toolName: event.toolName, args: event.args });
     const trajectory = d.getState().activeTrajectory;
     if (trajectory) {
@@ -150,18 +155,20 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
       toolName: event.toolName,
       args: safeObservationJson(event.args),
     });
-  });
+    return Effect.void;
+  };
 
-  d.hostBindings.registerEvent("tool_execution_update", (event, _ctx) => {
+  const toolExecutionUpdate = (event: ToolExecutionUpdateEvent): Effect.Effect<void> => {
     d.ingest({
       type: "tool_update",
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       update: safeObservationJson(event.partialResult),
     });
-  });
+    return Effect.void;
+  };
 
-  d.hostBindings.registerEvent("tool_execution_end", (event, _ctx) => {
+  const toolExecutionEnd = (event: ToolExecutionEndEvent): Effect.Effect<void> => {
     const call = refs.activeToolCalls.get(event.toolCallId);
     refs.activeToolCalls.delete(event.toolCallId);
     d.ingest({
@@ -172,7 +179,7 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
       isError: event.isError,
     });
     const observation = d.getState().activeTrajectory;
-    if (!observation) return;
+    if (!observation) return Effect.void;
     const terminal = {
       parentTurnId: d.getState().parentTurnId,
       toolCallId: event.toolCallId,
@@ -204,7 +211,7 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
       };
       return signal && !concreteProgress ? { ...base, loopReason: signal.reason } : base;
     });
-    if (concreteProgress || !signal || !next || next.reviewQueued) return;
+    if (concreteProgress || !signal || !next || next.reviewQueued) return Effect.void;
     d.ingest({
       type: "trajectory_signal",
       kind: signal.kind,
@@ -214,7 +221,7 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
       abortSafe: signal.abortSafe,
     });
     const currentResource = refs.activeTrajectoryResource;
-    if (!currentResource || currentResource.id !== observation.id) return;
+    if (!currentResource || currentResource.id !== observation.id) return Effect.void;
     d.mutateTrajectory(observation.id, (current) => ({ ...current, reviewQueued: true }));
     d.requestCheckpoint({
       ctx: currentResource.ctx,
@@ -225,5 +232,14 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
       trajectoryId: observation.id,
       abortOnBlocker: true,
     });
-  });
+    return Effect.void;
+  };
+
+  return {
+    turnStart,
+    messageUpdate,
+    toolExecutionStart,
+    toolExecutionUpdate,
+    toolExecutionEnd,
+  };
 };

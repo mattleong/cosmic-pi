@@ -121,6 +121,7 @@ export const makeCheckpointOrchestrator = (
         } catch {
           // Admission already failed; invalidation is best-effort bookkeeping.
         }
+        finalize(entry);
         // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
         return {
           invalidate: hooks.invalidate,

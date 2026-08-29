@@ -2,10 +2,8 @@ import { createHash } from "node:crypto";
 import { advisorSeverityRank, type AdvisorReview, type AdvisorSeverity } from "./schema.ts";
 
 export const MAX_EMISSION_HISTORY = 32;
-export type EmissionSuppressionReason = "pass" | "content-free" | "duplicate" | "checkpoint-budget";
+export type EmissionSuppressionReason = "pass" | "content-free" | "duplicate";
 export interface AdvisorEmissionRollback {
-  checkpointId: string;
-  checkpointEvicted: string[];
   hash: string;
   previousSeverity?: AdvisorSeverity;
   wasNewHash: boolean;
@@ -18,8 +16,6 @@ export interface AdvisorEmissionGuardState {
   readonly capacity: number;
   readonly seen: Readonly<Record<string, AdvisorSeverity>>;
   readonly order: readonly string[];
-  readonly acceptedCheckpoints: readonly string[];
-  readonly checkpointOrder: readonly string[];
 }
 export function normalizeEmissionContent(value: string): string {
   return value
@@ -57,8 +53,6 @@ export const createAdvisorEmissionGuardState = (
     capacity: Math.max(1, capacity),
     seen: {},
     order: [],
-    acceptedCheckpoints: [],
-    checkpointOrder: [],
   };
   let current = state;
   for (const record of records.slice(-state.capacity)) {
@@ -81,14 +75,11 @@ export interface AdvisorEmissionEvaluation {
 
 export const evaluateAdvisorEmission = (
   state: AdvisorEmissionGuardState,
-  checkpointId: string,
   review: AdvisorReview,
 ): AdvisorEmissionEvaluation => {
   if (review.verdict === "pass") return { state, decision: { accepted: false, reason: "pass" } };
   if (isContentFreeAdvisorReview(review))
     return { state, decision: { accepted: false, reason: "content-free" } };
-  if (state.acceptedCheckpoints.includes(checkpointId))
-    return { state, decision: { accepted: false, reason: "checkpoint-budget" } };
   const severity = highestAdvisorSeverity(review);
   const normalized = normalizeReview(review);
   if (!severity || !normalized)
@@ -98,30 +89,13 @@ export const evaluateAdvisorEmission = (
   if (previousSeverity && advisorSeverityRank(previousSeverity) >= advisorSeverityRank(severity))
     return { state, decision: { accepted: false, reason: "duplicate" } };
   const baseRollback: AdvisorEmissionRollback = {
-    checkpointId,
-    checkpointEvicted: [],
     hash,
     wasNewHash: previousSeverity === undefined,
     hashEvicted: [],
   };
   const rollback: AdvisorEmissionRollback =
     previousSeverity === undefined ? baseRollback : { ...baseRollback, previousSeverity };
-  const acceptedCheckpoints = [...state.acceptedCheckpoints, checkpointId];
-  const checkpointOrder = [...state.checkpointOrder, checkpointId];
-  while (checkpointOrder.length > state.capacity) {
-    const stale = checkpointOrder.shift();
-    if (stale) {
-      rollback.checkpointEvicted.push(stale);
-      const index = acceptedCheckpoints.indexOf(stale);
-      if (index >= 0) acceptedCheckpoints.splice(index, 1);
-    }
-  }
-  const next = recordHash(
-    { ...state, acceptedCheckpoints, checkpointOrder },
-    hash,
-    severity,
-    rollback.hashEvicted,
-  );
+  const next = recordHash(state, hash, severity, rollback.hashEvicted);
   return { state: next, decision: { accepted: true, hash, severity, rollback } };
 };
 
@@ -129,12 +103,6 @@ export const rollbackAdvisorEmission = (
   state: AdvisorEmissionGuardState,
   token: AdvisorEmissionRollback,
 ): AdvisorEmissionGuardState => {
-  const acceptedCheckpoints = state.acceptedCheckpoints.filter((id) => id !== token.checkpointId);
-  const checkpointOrder = state.checkpointOrder.filter((id) => id !== token.checkpointId);
-  for (const id of [...token.checkpointEvicted].reverse()) {
-    if (!acceptedCheckpoints.includes(id)) acceptedCheckpoints.unshift(id);
-    if (!checkpointOrder.includes(id)) checkpointOrder.unshift(id);
-  }
   const seen = { ...state.seen } satisfies Record<string, AdvisorSeverity>;
   const order = [...state.order];
   if (token.wasNewHash) {
@@ -146,7 +114,7 @@ export const rollbackAdvisorEmission = (
     seen[evicted.hash] = evicted.severity;
     if (!order.includes(evicted.hash)) order.unshift(evicted.hash);
   }
-  return { ...state, seen, order, acceptedCheckpoints, checkpointOrder };
+  return { ...state, seen, order };
 };
 
 export const exportAdvisorEmissionRecords = (state: AdvisorEmissionGuardState): string[] =>

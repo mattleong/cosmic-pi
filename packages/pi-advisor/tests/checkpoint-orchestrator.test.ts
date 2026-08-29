@@ -49,6 +49,39 @@ it.effect(
     ),
 );
 
+it.effect("finalizes bookkeeping when the initial checkpoint fork throws", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // SAFETY: This test executor deliberately preserves the executor contract except for the tested fork defect.
+      const executor = {
+        ...standaloneAdvisorExecutor,
+        fork: (() => {
+          throw new Error("fork unavailable");
+        }) as typeof standaloneAdvisorExecutor.fork,
+      };
+      const orchestrator = yield* makeTestCheckpointOrchestrator(executor);
+      let invalidations = 0;
+      let finalizations = 0;
+      const checkpoint = orchestrator.start(Effect.void, {
+        invalidate: () => {
+          invalidations += 1;
+        },
+        finalizeCancellation: () => {
+          finalizations += 1;
+        },
+        cancelActive: Effect.void,
+      });
+
+      expect(invalidations).toBe(1);
+      expect(finalizations).toBe(1);
+      expect(orchestrator.activeCount()).toBe(0);
+      expect((yield* checkpoint.settlement)._tag).toBe("Failure");
+      yield* orchestrator.cancelAll();
+      expect(finalizations).toBe(1);
+    }),
+  ),
+);
+
 it.effect("awaits delayed active cancellation exactly once before cancelAll settles", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -17,6 +17,7 @@ export const ADVISOR_MODEL_ERROR_KINDS = [
   "timeout",
   "unavailable",
   "aborted",
+  "response-format",
   "unknown",
 ] as const;
 export type AdvisorModelErrorKind = (typeof ADVISOR_MODEL_ERROR_KINDS)[number];

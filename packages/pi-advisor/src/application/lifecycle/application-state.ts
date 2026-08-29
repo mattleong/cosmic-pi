@@ -1,81 +1,49 @@
-import * as Effect from "effect/Effect";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
+import { emptyAdvisorFindingLifecycle } from "../../review/finding-lifecycle.ts";
+import type { AdvisorCommandSnapshot } from "../../settings/types.ts";
 import {
-  advisorFindingLifecycleCounts,
-  emptyAdvisorFindingLifecycle,
-} from "../../review/finding-lifecycle.ts";
-import { latchAdvisorCancellation } from "../../review/routing.ts";
-import type { AdvisorControllerSnapshot } from "../../ui/projection.ts";
-import {
+  beginAdvisorUserRequest,
+  cancelAdvisorRequest,
+  clearAdvisorPendingRecovery,
+  commitAdvisorConfig,
+  initializeAdvisorSession,
   makeAdvisorApplicationStateStore,
   recordAdvisorReceipt,
   resetAdvisorRequestDomain,
   type AdvisorActiveTrajectoryState,
   type AdvisorApplicationState,
 } from "../state.ts";
-import { cloneSessionMetrics } from "./metrics.ts";
 import type { createSessionRefs } from "./session-refs.ts";
 
 export const makeLifecycleApplicationState = (options: {
   readonly store: ReturnType<typeof makeAdvisorApplicationStateStore>;
   readonly refs: ReturnType<typeof createSessionRefs>;
-  readonly publish: (next: AdvisorControllerSnapshot) => Effect.Effect<void>;
-  readonly publishNow: (next: AdvisorControllerSnapshot) => void;
+  readonly activeCheckpointCount: () => number;
 }) => {
-  const { store, refs, publish, publishNow } = options;
-  const controllerSnapshot = (state: AdvisorApplicationState): AdvisorControllerSnapshot => ({
-    config: state.config,
-    metrics: {
-      ...state.metrics,
-      ...state.resourceSummary,
-      childResets: state.metrics.childResets ?? 0,
-      guidancePaths: state.guidancePaths,
-      hasLastCandidate: state.hasLastCandidate,
-      findingLifecycle: advisorFindingLifecycleCounts(state.findingLifecycle),
-      interventionBudget: state.interventionBudget,
-    },
-    started: state.started,
-  });
-  const refreshResourceSummary = (): AdvisorApplicationState =>
-    store.transition((state) => ({
-      ...state,
-      resourceSummary: {
-        activeToolNames: refs.queue?.activeToolNames ?? [],
-        backlog: refs.queue?.backlog ?? 0,
-        backgroundState: refs.queue?.hasActiveCheckpoint
-          ? "reviewing"
-          : refs.queue && refs.queue.pendingCheckpoints > 0
-            ? "queued"
-            : "idle",
-        processedSequence: refs.queue?.processedThrough ?? 0,
-        queuedReviews: refs.queue?.pendingCheckpoints ?? 0,
-        sequence: refs.queue?.sequence ?? 0,
-      },
-    }));
-  const publishControllerSnapshotNow = (): void => {
-    const state = refreshResourceSummary();
-    publishNow(controllerSnapshot(state));
+  const { store, refs } = options;
+  const captureCommandSnapshot = (): AdvisorCommandSnapshot => {
+    const state = store.get();
+    const queue = refs.queue;
+    const active = (queue?.hasActiveCheckpoint ?? false) || options.activeCheckpointCount() > 0;
+    const pending = queue?.pendingCheckpoints ?? 0;
+    return {
+      config: state.config,
+      metrics: state.metrics,
+      activity: active ? "reviewing" : pending > 0 ? "queued" : "idle",
+      hasLastCandidate: refs.lastCandidate !== undefined,
+    };
   };
-  const publishControllerSnapshot = (): Effect.Effect<void> =>
-    Effect.suspend(() => {
-      const state = refreshResourceSummary();
-      return publish(controllerSnapshot(state));
-    });
   const updateApplicationState = (
     update: (state: AdvisorApplicationState) => AdvisorApplicationState,
   ): void => {
     store.transition(update);
-    publishControllerSnapshotNow();
   };
-  const mutateMetrics = (mutate: (next: ReturnType<typeof cloneSessionMetrics>) => void): void => {
-    updateApplicationState((state) => {
-      const next = cloneSessionMetrics(state.metrics);
-      mutate(next);
-      return { ...state, metrics: next };
-    });
+  const updateMetrics = (
+    update: (metrics: AdvisorApplicationState["metrics"]) => AdvisorApplicationState["metrics"],
+  ): void => {
+    updateApplicationState((state) => ({ ...state, metrics: update(state.metrics) }));
   };
   const currentConfig = (): ResolvedAdvisorConfig => store.get().config;
-  const isStarted = (): boolean => store.get().started;
   const mutateTrajectory = (
     id: number,
     mutate: (next: AdvisorActiveTrajectoryState) => AdvisorActiveTrajectoryState,
@@ -88,53 +56,57 @@ export const makeLifecycleApplicationState = (options: {
     });
     return result;
   };
-  const setDomainCounter = (
-    key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
-    value: number,
-  ): number => {
-    updateApplicationState((state) => ({ ...state, [key]: value }));
+  const advanceDomainCounter = (key: "epoch" | "parentTurnId"): number => {
+    let value = 0;
+    updateApplicationState((state) => {
+      value = state[key] + 1;
+      return { ...state, [key]: value };
+    });
     return value;
   };
-  const advanceDomainCounter = (
-    key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
-  ): number => setDomainCounter(key, store.get()[key] + 1);
   const recordReceipt = (ids: readonly string[]): void => {
     updateApplicationState((state) => recordAdvisorReceipt(state, ids));
   };
   const clearPendingReceipt = (): void => {
     updateApplicationState((state) => ({ ...state, pendingReceipt: undefined }));
   };
-  const latchCancellation = (): void => {
-    updateApplicationState((state) => ({
-      ...state,
-      routing: latchAdvisorCancellation(state.routing),
-    }));
+  const clearPendingRecovery = (): void => {
+    updateApplicationState(clearAdvisorPendingRecovery);
   };
-  const resetRequestDomain = (resetLifecycle = false): void => {
-    updateApplicationState((state) => {
-      const reset = resetAdvisorRequestDomain(state);
-      return {
-        ...reset,
-        cancellationEpoch: state.cancellationEpoch,
-        requestSequence: state.requestSequence,
-        findingLifecycle: resetLifecycle ? emptyAdvisorFindingLifecycle() : state.findingLifecycle,
-      };
-    });
+  const initializeSession = (config: ResolvedAdvisorConfig): void => {
+    updateApplicationState((state) => initializeAdvisorSession(state, config));
+  };
+  const beginUserRequest = (): void => {
+    updateApplicationState(beginAdvisorUserRequest);
+  };
+  const cancelRequest = (): void => {
+    updateApplicationState(cancelAdvisorRequest);
+  };
+  const commitConfig = (config: ResolvedAdvisorConfig): void => {
+    updateApplicationState((state) => commitAdvisorConfig(state, config));
+  };
+  const resetSessionTreeDomain = (): void => {
+    updateApplicationState((state) => ({
+      ...resetAdvisorRequestDomain(state),
+      findingLifecycle: emptyAdvisorFindingLifecycle(),
+      pendingReceipt: undefined,
+    }));
   };
 
   return {
-    publishControllerSnapshotNow,
-    publishControllerSnapshot,
+    captureCommandSnapshot,
     updateApplicationState,
-    mutateMetrics,
+    updateMetrics,
     currentConfig,
-    isStarted,
     mutateTrajectory,
-    setDomainCounter,
     advanceDomainCounter,
     recordReceipt,
     clearPendingReceipt,
-    latchCancellation,
-    resetRequestDomain,
+    clearPendingRecovery,
+    initializeSession,
+    beginUserRequest,
+    cancelRequest,
+    commitConfig,
+    resetSessionTreeDomain,
   } as const;
 };

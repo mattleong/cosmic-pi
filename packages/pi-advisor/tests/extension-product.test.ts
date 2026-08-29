@@ -2,8 +2,16 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, test } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { vi } from "vitest";
-import { normalizeAdvisorConfig } from "../src/config/options.ts";
+import { type JsonObject } from "pi-cosmic-core";
+import { yieldUntil } from "pi-cosmic-core/testing";
+import {
+  ADVISOR_CHECKPOINT_ENTRY_TYPE,
+  type AdvisorCheckpointLedger,
+} from "../src/checkpoint/ledger.ts";
+import { normalizeAdvisorConfig, patchAdvisorConfig } from "../src/config/options.ts";
+import { AdvisorConfigStoreError, ConfigStore } from "../src/config/store.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
 import { ADVISOR_REVIEW_ACTION_TYPE, ADVISOR_REVIEW_CARD_TYPE } from "../src/ui/review-card.ts";
@@ -38,7 +46,7 @@ function finding(
         severity,
         confidence: "high",
         evidenceBasis: "direct",
-        issue: `${severity} issue`,
+        issue: `${fingerprint} issue`,
         evidence: "direct evidence",
         recommendation: "apply the fix",
       },
@@ -100,12 +108,14 @@ function harness(
     setupSelection?: string;
     failCardAppends?: number;
     failActionAppend?: boolean;
+    failConfigPatch?: boolean;
+    memoryConfigPatch?: boolean;
     failSend?: boolean;
   } = {},
 ) {
   const registry = handlerRegistry();
   const { commands, registerCommand } = commandRegistry();
-  const { layer: runtimeServiceLayer, pending, requests } = controllableRuntimeService();
+  const { layer: runtimeServiceLayer, pending, requests, runtimes } = controllableRuntimeService();
   const entries: AdvisorHostEntry[] = [
     {
       id: "anchor",
@@ -154,19 +164,50 @@ function harness(
       hasConfiguredAuth: vi.fn(() => true),
     },
   });
+  const loadedConfig = normalizeAdvisorConfig(
+    options.configured === false
+      ? { enabled: options.enabled ?? false, setupDismissed: false }
+      : { enabled: true, provider: "p", model: "m", setupDismissed: true },
+    "/config",
+  );
+  const baseDocument: JsonObject = {
+    enabled: loadedConfig.enabled,
+    setupDismissed: loadedConfig.setupDismissed,
+  };
+  const providerDocument: JsonObject = loadedConfig.provider
+    ? { ...baseDocument, provider: loadedConfig.provider }
+    : baseDocument;
+  let configDocument: JsonObject = loadedConfig.model
+    ? { ...providerDocument, model: loadedConfig.model }
+    : providerDocument;
+  const memoryConfigStore = Layer.succeed(
+    ConfigStore,
+    ConfigStore.of({
+      load: (path = loadedConfig.configPath) =>
+        Effect.succeed(normalizeAdvisorConfig(configDocument, path)),
+      patch: (patch, path = loadedConfig.configPath, afterCommit) => {
+        if (options.failConfigPatch)
+          return Effect.fail(
+            new AdvisorConfigStoreError({
+              operation: "update",
+              message: "sensitive persistence failure",
+            }),
+          );
+        configDocument = patchAdvisorConfig(configDocument, patch);
+        const next = normalizeAdvisorConfig(configDocument, path);
+        return (afterCommit ? afterCommit(next) : Effect.void).pipe(Effect.as(next));
+      },
+    }),
+  );
   createAdvisorExtension({
-    configStore: configStoreLayerFromLoad(() =>
-      normalizeAdvisorConfig(
-        options.configured === false
-          ? { enabled: options.enabled ?? false, setupDismissed: false }
-          : { enabled: true, provider: "p", model: "m", setupDismissed: true },
-        "/config",
-      ),
-    ),
+    configStore:
+      options.failConfigPatch || options.memoryConfigPatch
+        ? memoryConfigStore
+        : configStoreLayerFromLoad(() => loadedConfig),
     runtimeService: runtimeServiceLayer,
   })(pi);
   const emit = <Event>(name: string, event: Event) => registry.emitWithContext(name, event, ctx);
-  return { pi, ctx, commands, requests, pending, entries, sent, emit };
+  return { pi, ctx, commands, requests, pending, runtimes, entries, sent, emit };
 }
 
 const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
@@ -199,6 +240,50 @@ const createManualCard = (
     yield* Effect.promise(() => tick());
   });
 
+// SAFETY: The harness stores checkpoint entries written from the typed ledger publisher.
+const latestLedger = (value: ReturnType<typeof harness>): AdvisorCheckpointLedger | undefined =>
+  [...value.entries].reverse().find((entry) => entry.customType === ADVISOR_CHECKPOINT_ENTRY_TYPE)
+    ?.data as AdvisorCheckpointLedger | undefined;
+
+const settleRecovery = (
+  value: ReturnType<typeof harness>,
+  beforeSettlement: () => void = () => undefined,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    yield* invoke(value.emit("turn_start", { type: "turn_start", turnIndex: 2 }));
+    yield* invoke(
+      value.emit("message_update", {
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          delta: "repeat-this-unit".repeat(12),
+        },
+      }),
+    );
+    yield* Effect.promise(() => tick());
+    value.pending.at(-1)!.resolve(finding(value.requests.at(-1)!, "blocker", "recovery-blocker"));
+    yield* Effect.promise(() => tick());
+    expect(value.requests.at(-1)?.focus).toBe("blocker-verification");
+    value.pending.at(-1)!.resolve(finding(value.requests.at(-1)!, "blocker", "recovery-blocker"));
+    yield* Effect.promise(() => tick());
+    expect(value.ctx.abort).toHaveBeenCalledOnce();
+    beforeSettlement();
+    yield* invoke(
+      value.emit("turn_end", {
+        type: "turn_end",
+        turnIndex: 2,
+        message: { role: "assistant", content: [], stopReason: "aborted" },
+        toolResults: [],
+      }),
+    );
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    yield* invoke(value.emit("agent_settled", { type: "agent_settled" }));
+    yield* Effect.promise(() => tick());
+  });
+
 describe("Advisor extension product behavior", () => {
   it.effect("default disabled unconfigured sessions do not open onboarding", () =>
     Effect.gen(function* () {
@@ -224,6 +309,61 @@ describe("Advisor extension product behavior", () => {
       yield* invoke(nonUi.emit("session_start", { type: "session_start" }));
       expect(nonUi.ctx.ui.select).not.toHaveBeenCalled();
     }),
+  );
+
+  it.effect("automatic onboarding uses the shared commit and starts one configured runtime", () =>
+    Effect.gen(function* () {
+      const value = harness({
+        configured: false,
+        enabled: true,
+        setupSelection: "setup-provider/setup-model",
+        memoryConfigPatch: true,
+      });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* yieldUntil(() => value.runtimes.length === 1);
+
+      expect(value.runtimes[0]!.driver.start).toHaveBeenCalledOnce();
+      expect(value.runtimes[0]!.driver.start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            enabled: true,
+            provider: "setup-provider",
+            model: "setup-model",
+            setupDismissed: true,
+          }),
+        }),
+      );
+      expect(value.ctx.ui.notify).not.toHaveBeenCalledWith(
+        "Could not save Advisor setup.",
+        "warning",
+      );
+    }),
+  );
+
+  it.effect(
+    "automatic onboarding reports a bounded persistence failure without partial startup",
+    () =>
+      Effect.gen(function* () {
+        const value = harness({
+          configured: false,
+          enabled: true,
+          setupSelection: "setup-provider/setup-model",
+          failConfigPatch: true,
+        });
+        yield* invoke(value.emit("session_start", { type: "session_start" }));
+        yield* Effect.promise(() => tick());
+
+        expect(value.ctx.ui.notify).toHaveBeenCalledWith(
+          "Could not save Advisor setup.",
+          "warning",
+        );
+        const notifications = vi
+          .mocked(value.ctx.ui.notify)
+          .mock.calls.flatMap((call) => call.map(String))
+          .join("\n");
+        expect(notifications).not.toContain("sensitive persistence failure");
+        expect(value.requests).toHaveLength(0);
+      }),
   );
 
   it.effect("ordinary progress turns ingest and return immediately without a checkpoint", () =>
@@ -262,7 +402,7 @@ describe("Advisor extension product behavior", () => {
       });
   });
 
-  it.effect("a material final concern creates a card and corrects the parent", () =>
+  it.effect("a material final concern records one card and one delivered correction", () =>
     Effect.gen(function* () {
       const value = harness();
       yield* invoke(value.emit("session_start", { type: "session_start" }));
@@ -273,6 +413,12 @@ describe("Advisor extension product behavior", () => {
       expect(value.sent).toHaveLength(1);
       expect(value.sent[0]).toMatchObject({ customType: "pi-advisor-guidance-v1", display: false });
       expect(serializedSnapshot(value.sent[0])).not.toContain("direct evidence");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("usage", value.ctx as never));
+      expect(value.ctx.ui.notify).toHaveBeenLastCalledWith(
+        expect.stringContaining("Responses/reviews/cards: 0 / 1 / 1\nCorrections: 1"),
+        "info",
+      );
     }),
   );
 
@@ -294,7 +440,7 @@ describe("Advisor extension product behavior", () => {
     }),
   );
 
-  it.effect("Fix sends compact guidance and a tombstone; Dismiss sends no guidance", () =>
+  it.effect("Fix records delivered guidance once; Dismiss sends no guidance", () =>
     Effect.gen(function* () {
       const value = harness();
       yield* invoke(value.emit("session_start", { type: "session_start" }));
@@ -307,6 +453,12 @@ describe("Advisor extension product behavior", () => {
         customType: ADVISOR_REVIEW_ACTION_TYPE,
         data: { action: "fix" },
       });
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("usage", value.ctx as never));
+      expect(value.ctx.ui.notify).toHaveBeenLastCalledWith(
+        expect.stringContaining("Responses/reviews/cards: 0 / 2 / 1\nCorrections: 1"),
+        "info",
+      );
 
       yield* createManualCard(value, suggestion);
       const before = value.sent.length;
@@ -326,6 +478,27 @@ describe("Advisor extension product behavior", () => {
         customType: ADVISOR_REVIEW_ACTION_TYPE,
         data: { action: "dismiss" },
       });
+    }),
+  );
+
+  it.effect("dashboard activity and candidate actions come from current command state", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const turn = value.emit("turn_end", finalTurn());
+      yield* Effect.promise(() => tick());
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("", value.ctx as never));
+      expect(value.ctx.ui.select).toHaveBeenLastCalledWith(expect.any(String), [
+        "Change model",
+        "Review last",
+        "Cancel review",
+        "Turn off",
+        "Usage",
+        "Done",
+      ]);
+      value.pending.at(-1)!.resolve(pass(value.requests.at(-1)!));
+      yield* invoke(turn);
     }),
   );
 
@@ -350,6 +523,106 @@ describe("Advisor extension product behavior", () => {
         false,
       );
       expect(value.sent).toHaveLength(0);
+    }),
+  );
+
+  it.effect("a complete final suggestion resolves an acknowledged concern without delivery", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, (request) => finding(request, "concern", "resolved-concern"));
+      expect(latestLedger(value)?.findingLifecycle?.[0]?.status).toBe("acknowledged");
+      const cards = value.entries.filter(
+        (entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE,
+      ).length;
+      const guidance = value.sent.length;
+
+      yield* settleAutomatic(value, suggestion);
+
+      expect(latestLedger(value)?.findingLifecycle?.[0]?.status).toBe("resolved");
+      expect(
+        value.entries.filter((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE),
+      ).toHaveLength(cards);
+      expect(value.sent).toHaveLength(guidance);
+    }),
+  );
+
+  it.effect("recovery guidance settles with one recovery card, receipt, and routing update", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* createManualCard(value, (request) => finding(request, "concern", "recovery-blocker"));
+      const priorEmissionHashes = latestLedger(value)?.emissionHashes;
+      const priorCards = value.entries.filter(
+        (entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE,
+      ).length;
+      yield* settleRecovery(value, () => {
+        expect(latestLedger(value)?.emissionHashes).toEqual(priorEmissionHashes);
+      });
+
+      expect(
+        value.entries.filter((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE),
+      ).toHaveLength(priorCards + 1);
+      expect(value.sent).toHaveLength(1);
+      expect(value.pi.sendMessage).toHaveBeenCalledWith(expect.anything(), {
+        deliverAs: "steer",
+        triggerTurn: true,
+      });
+      expect(latestLedger(value)).toMatchObject({
+        findingLifecycle: [{ status: "acknowledged" }],
+        routing: { immunityUntilCompletedTurn: 4 },
+      });
+
+      yield* invoke(value.emit("turn_start", { type: "turn_start", turnIndex: 3 }));
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("review", value.ctx as never));
+      yield* Effect.promise(() => tick());
+      expect(value.requests.at(-1)?.observations).toContain("advisor_intervention");
+      expect(value.requests.at(-1)?.observations).toContain("advisor_intervention_receipt");
+      value.pending.at(-1)!.resolve(pass(value.requests.at(-1)!));
+      yield* Effect.promise(() => tick());
+    }),
+  );
+
+  it.effect("card-only recovery keeps dedupe state and suppresses a duplicate", () =>
+    Effect.gen(function* () {
+      const value = harness({ failSend: true });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* settleRecovery(value);
+      expect(latestLedger(value)).toMatchObject({
+        findingLifecycle: [{ status: "open" }],
+        emissionHashes: [expect.stringMatching(/^blocker:/)],
+      });
+
+      yield* createManualCard(value, (request) => finding(request, "blocker", "recovery-blocker"));
+
+      expect(
+        value.entries.filter((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE),
+      ).toHaveLength(1);
+      expect(value.sent).toHaveLength(0);
+    }),
+  );
+
+  it.effect("undelivered recovery rolls back delivery state for one manual retry", () =>
+    Effect.gen(function* () {
+      const value = harness({ failCardAppends: 1, failSend: true });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      yield* settleAutomatic(value, pass);
+      yield* settleRecovery(value);
+      expect(latestLedger(value)).toMatchObject({
+        findingLifecycle: [{ status: "open" }],
+        emissionHashes: [],
+        routing: { interventionBudget: { correctionUsed: true, delivered: 0 } },
+      });
+
+      yield* createManualCard(value, (request) => finding(request, "blocker", "recovery-blocker"));
+
+      expect(
+        value.entries.filter((entry) => entry.customType === ADVISOR_REVIEW_CARD_TYPE),
+      ).toHaveLength(1);
+      expect(latestLedger(value)?.emissionHashes).toEqual([expect.stringMatching(/^blocker:/)]);
     }),
   );
 
@@ -395,6 +668,12 @@ describe("Advisor extension product behavior", () => {
       expect(value.ctx.ui.notify).toHaveBeenCalledWith(
         expect.stringContaining("card remains open"),
         "error",
+      );
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      yield* invoke(value.commands.get("advisor")!.handler("usage", value.ctx as never));
+      expect(value.ctx.ui.notify).toHaveBeenLastCalledWith(
+        expect.stringContaining("Corrections: 0"),
+        "info",
       );
     }),
   );

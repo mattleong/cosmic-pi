@@ -5,11 +5,17 @@
  * a log, span, projection, or model prompt passes through here.
  */
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
 import { stringifyJson } from "../boundary/json.ts";
-import * as Schema from "effect/Schema";
-import { snapshotData } from "./safe-data.ts";
 import { isRecord } from "../shared/utils.ts";
+import { snapshotData } from "./safe-data.ts";
+
+const SENSITIVE_KEY_PATTERN =
+  /(?:^|[_-])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|authorization|password|passwd|secret|token|client[_-]?secret|private[_-]?key)$/i;
+
+const SENSITIVE_ASSIGNMENT_PATTERN =
+  /(["']?)\b(?=[A-Za-z\d_-]*(?:api|key|access|refresh|auth|authorization|password|passwd|secret|token|client|private))([A-Za-z][A-Za-z\d_-]*)(["']?)(\s*[:=]\s*)((?:Bearer\s+)?)(?:(["'])([^"'\r\n]*)\6|[^\s,;}"'\]]+)/gi;
 
 /** Central recursive credential redaction used by every observation/delta path. */
 export function redactObservationValue<ValueInput>(value: ValueInput) {
@@ -41,16 +47,16 @@ export function stringifyRedactedObservation<ValueInput>(value: ValueInput): str
 }
 
 export function redactSensitiveText(value: string): string {
-  return value
-    .replace(
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-      "[REDACTED PRIVATE KEY]",
-    )
+  const privateKeysRedacted = value.replace(
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    "[REDACTED PRIVATE KEY]",
+  );
+  const assignmentsRedacted =
+    privateKeysRedacted.includes(":") || privateKeysRedacted.includes("=")
+      ? redactSensitiveAssignments(privateKeysRedacted)
+      : privateKeysRedacted;
+  return assignmentsRedacted
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+/gi, "Bearer [REDACTED]")
-    .replace(
-      /["']?\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|passwd|secret|token|client[_-]?secret|private[_-]?key)(?:[_-][A-Za-z0-9]+)*)\b["']?\s*[:=]\s*(?:Bearer\s+)?["']?[^\s,;"'}]+["']?/gi,
-      "$1=[REDACTED]",
-    )
     .replace(
       /\b(sk-[A-Za-z0-9_-]{12,}|gh[opusr]_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{20,})\b/g,
       "[REDACTED CREDENTIAL]",
@@ -58,8 +64,25 @@ export function redactSensitiveText(value: string): string {
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED TOKEN]");
 }
 
-function isSensitiveKey(key: string): boolean {
-  return /(?:^|[_-])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|passwd|secret|token|client[_-]?secret|private[_-]?key)(?:$|[_-])/i.test(
-    key,
+function redactSensitiveAssignments(value: string): string {
+  return value.replace(
+    SENSITIVE_ASSIGNMENT_PATTERN,
+    (
+      match,
+      openingKeyQuote: string,
+      key: string,
+      closingKeyQuote: string,
+      delimiter: string,
+      bearer: string,
+      valueQuote: string | undefined,
+    ) => {
+      if (openingKeyQuote !== closingKeyQuote || !isSensitiveKey(key)) return match;
+      const quote = valueQuote ?? "";
+      return `${openingKeyQuote}${key}${closingKeyQuote}${delimiter}${bearer}${quote}[REDACTED]${quote}`;
+    },
   );
+}
+
+function isSensitiveKey(key: string): boolean {
+  return SENSITIVE_KEY_PATTERN.test(key.replace(/([a-z\d])([A-Z])/g, "$1_$2"));
 }

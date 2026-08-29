@@ -1,43 +1,118 @@
-/** Unconfigured AdvisorController stub used before session application wiring. */
+import type {
+  AgentSettledEvent,
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+  MessageEndEvent,
+  MessageUpdateEvent,
+  ToolExecutionEndEvent,
+  ToolExecutionStartEvent,
+  ToolExecutionUpdateEvent,
+  TurnEndEvent,
+  TurnStartEvent,
+} from "@earendil-works/pi-coding-agent";
+import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { normalizeAdvisorConfig } from "../config/options.ts";
-import { makeAdvisorResourceState } from "../runtime/resource-state.ts";
-import { makeAdvisorProjection } from "../ui/projection.ts";
-import { AdvisorController, AdvisorExtensionError } from "./controller-types.ts";
-import { emptyAdvisorSessionMetrics } from "./state.ts";
+import type * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executor.ts";
+import type { AdvisorAbortInput, AdvisorSessionInput } from "../boundary/host-context.ts";
+import type { ConfigStore } from "../config/store.ts";
+import type { FailureLogger } from "../logging/logger.ts";
+import type { AdvisorRuntimeService } from "../runtime/runtime.ts";
 
-export { AdvisorController, AdvisorExtensionError } from "./controller-types.ts";
+export class AdvisorExtensionError extends Schema.TaggedError<AdvisorExtensionError>()(
+  "AdvisorExtensionError",
+  { operation: Schema.String, message: Schema.String },
+) {}
+export const extensionError = (operation: string) => () =>
+  new AdvisorExtensionError({ operation, message: `Advisor ${operation} failed.` });
 
-export const advisorControllerLayer = Layer.effect(
+export const STATUS_KEY = "pi-advisor";
+export const STATUS_SPINNER_DELAY_MS = 200;
+export const STATUS_SPINNER_INTERVAL_MS = 120;
+export const STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+export const UNREADABLE_PARENT_ANCHOR = Symbol("pi-advisor/unreadable-parent-anchor");
+export type ParentAnchor = string | null | typeof UNREADABLE_PARENT_ANCHOR;
+export const ADVISOR_CATCH_UP_TIMEOUT_MS = 10_000;
+export type ReviewPhase = "final" | "progress";
+export type CheckpointSettlement = "completed" | "discarded" | "failed";
+export type AdvisorCatchUpOutcome = CheckpointSettlement | "timeout" | "cancelled";
+export const awaitAdvisorCatchUpEffect = (
+  settlement: Effect.Effect<CheckpointSettlement>,
+  timeoutMs: number,
+  cancellation: Effect.Effect<"cancelled"> = Effect.never,
+  onTimeout: Effect.Effect<void> = Effect.void,
+): Effect.Effect<AdvisorCatchUpOutcome> =>
+  settlement.pipe(
+    Effect.raceFirst(Effect.sleep(Duration.millis(timeoutMs)).pipe(Effect.as("timeout" as const))),
+    Effect.raceFirst(cancellation),
+    Effect.flatMap((outcome) =>
+      outcome === "timeout" ? onTimeout.pipe(Effect.as(outcome)) : Effect.succeed(outcome),
+    ),
+    Effect.withSpan("pi-advisor.catch-up"),
+  );
+
+export interface AdvisorCheckpointHandle {
+  readonly abortInput: AdvisorAbortInput;
+  invalidate(): void;
+  cancelEffect: Effect.Effect<void>;
+  settlement: Effect.Effect<CheckpointSettlement>;
+}
+export type ReviewSource = "automatic-final" | "automatic-progress" | "last";
+
+export interface LastCandidate {
+  candidate: string;
+}
+
+export type AdvisorApplicationEvent =
+  | AgentSettledEvent
+  | MessageEndEvent
+  | MessageUpdateEvent
+  | ToolExecutionEndEvent
+  | ToolExecutionStartEvent
+  | ToolExecutionUpdateEvent
+  | TurnEndEvent
+  | TurnStartEvent;
+
+export interface AdvisorControllerContract {
+  readonly sessionInitialize: (
+    input: AdvisorSessionInput,
+  ) => Effect.Effect<unknown, AdvisorExtensionError>;
+  readonly sessionShutdown: () => Effect.Effect<unknown, AdvisorExtensionError>;
+  readonly compact: (ctx: ExtensionContext) => Effect.Effect<unknown, AdvisorExtensionError>;
+  readonly tree: (ctx: ExtensionContext) => Effect.Effect<unknown, AdvisorExtensionError>;
+  readonly event: (
+    name: string,
+    event: AdvisorApplicationEvent,
+    ctx: ExtensionContext,
+  ) => Effect.Effect<unknown, AdvisorExtensionError>;
+  readonly command: (
+    args: string,
+    ctx: ExtensionCommandContext,
+  ) => Effect.Effect<unknown, AdvisorExtensionError>;
+}
+
+export class AdvisorController extends Context.Service<
   AdvisorController,
-  Effect.gen(function* () {
-    const resources = yield* makeAdvisorResourceState();
-    const projection = yield* makeAdvisorProjection({
-      config: normalizeAdvisorConfig({}, ""),
-      metrics: emptyAdvisorSessionMetrics(),
-      started: false,
-    });
-    const unavailable = (operation: string) =>
-      Effect.fail(
-        new AdvisorExtensionError({
-          operation,
-          message: "Advisor application controller is not configured.",
-        }),
-      );
-    const service = AdvisorController.of({
-      getSnapshot: projection.getSnapshot,
-      publish: (next) => projection.replace(next).pipe(Effect.orDie),
-      replaceChild: resources.replaceChild,
-      stopChild: () => resources.stopChild,
-      sessionInitialize: () => unavailable("session initialize"),
-      sessionShutdown: () => unavailable("session shutdown"),
-      event: (name) => unavailable(name),
-      compact: () => unavailable("session compact"),
-      tree: () => unavailable("session tree"),
-      command: (name) => unavailable(`command ${name}`),
-    });
-    yield* Effect.addFinalizer(() => resources.stopChild);
-    return service;
-  }),
-);
+  AdvisorControllerContract
+>()("pi-advisor/application/controller/AdvisorController") {}
+
+export interface AdvisorExtensionDependencies {
+  /** Effect-typed ConfigStore override; production composition uses `configStoreLayer`. */
+  configStore?: Layer.Layer<ConfigStore, never, AdvisorPlatform> | undefined;
+  /** Effect-typed FailureLogger override; production composition uses `failureLoggerLayer`. */
+  failureLogger?: Layer.Layer<FailureLogger, never, AdvisorPlatform> | undefined;
+  /**
+   * Effect-typed runtime-service override; production composition uses
+   * `advisorRuntimeServiceLayer` with the production `AdvisorChildFactory`.
+   */
+  runtimeService?: Layer.Layer<AdvisorRuntimeService, never, AdvisorPlatform> | undefined;
+}
+
+export interface AdvisorControllerApplicationOptions {
+  readonly pi: ExtensionAPI;
+  readonly executor: AdvisorEffectExecutor;
+  readonly dependencies: AdvisorExtensionDependencies;
+}

@@ -1,4 +1,4 @@
-/** Thin Pi registration boundary for the Advisor application. */
+/** Thin Pi registration and sole application Effect-to-Promise boundary. */
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -13,7 +13,6 @@ import {
 } from "pi-cosmic-core";
 import { makeFooterStatusDeclaration } from "pi-cosmic-ui/boundary/host-status";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executor.ts";
-import { makeAdvisorHostBindings } from "../boundary/host-bindings.ts";
 import { registerAdvisorReviewCardRendererAtHostBoundary } from "../boundary/host-review-cards.ts";
 import {
   captureAdvisorSessionInputAtHostBoundary,
@@ -21,18 +20,21 @@ import {
 } from "../boundary/host-context.ts";
 import { makeAdvisorApplicationLayer } from "../layer.ts";
 import {
+  ADVISOR_COMMAND_DESCRIPTION,
+  completeAdvisorCommandArguments,
+} from "../settings/controller.ts";
+import {
   AdvisorController,
   AdvisorExtensionError,
   STATUS_KEY,
+  type AdvisorApplicationEvent,
   type AdvisorControllerContract,
   type AdvisorExtensionDependencies,
-} from "./controller-types.ts";
-import { ADVISOR_COMMAND_DESCRIPTION } from "../settings/controller.ts";
+} from "./controller.ts";
 
 export function createAdvisorExtension(dependencies: AdvisorExtensionDependencies = {}) {
   return function registerPersistentAdvisorExtension(pi: ExtensionAPI): void {
     registerAdvisorReviewCardRendererAtHostBoundary(pi);
-    const hostBindings = makeAdvisorHostBindings();
     const footerPlacement = makeFooterStatusDeclaration({
       events: pi.events,
       owner: STATUS_KEY,
@@ -61,7 +63,6 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       pi,
       executor: sessionExecutor,
       dependencies,
-      hostBindings,
     });
     parentSlot = makePiSessionRuntimeSlot<
       AdvisorSessionInput,
@@ -77,8 +78,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       startup: (input) =>
         Effect.gen(function* () {
           const controller = yield* AdvisorController;
-          // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-          yield* controller.sessionInitialize(undefined as never, input);
+          yield* controller.sessionInitialize(input);
         }),
       onActivated: ({ ctx }) => footerPlacement.activate(ctx),
       onDeactivated: () => footerPlacement.shutdown(),
@@ -92,20 +92,18 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         () => undefined,
         () => undefined,
       );
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const forwardEvent = <Event>(
+    const forwardEvent = (
       name: string,
-      event: Event,
+      event: AdvisorApplicationEvent,
       ctx: ExtensionContext,
     ): Promise<void> =>
-      ignoreFailure(runController((controller) => controller.event(name, event as never, ctx)));
+      ignoreFailure(runController((controller) => controller.event(name, event, ctx)));
 
     pi.registerCommand("advisor", {
       description: ADVISOR_COMMAND_DESCRIPTION,
-      getArgumentCompletions: (prefix) =>
-        hostBindings.commandDefinition("advisor")?.getArgumentCompletions?.(prefix) ?? null,
+      getArgumentCompletions: completeAdvisorCommandArguments,
       handler: (args, ctx) =>
-        ignoreFailure(runController((controller) => controller.command("advisor", args, ctx))),
+        ignoreFailure(runController((controller) => controller.command(args, ctx))),
     });
 
     pi.on("session_start", (_event, ctx) => {
@@ -114,19 +112,16 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         ? parentSlot.start(captured.input, captured.input.signal).then(() => undefined)
         : parentSlot.shutdown().then(() => undefined);
     });
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    pi.on("session_shutdown", (event, ctx) =>
-      runController((controller) => controller.sessionShutdown(event as never, ctx))
+    pi.on("session_shutdown", (_event, _ctx) =>
+      runController((controller) => controller.sessionShutdown())
         .catch(() => undefined)
         .then(() => parentSlot.shutdown()),
     );
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    pi.on("session_compact", (event, ctx) =>
-      ignoreFailure(runController((controller) => controller.compact(event as never, ctx))),
+    pi.on("session_compact", (_event, ctx) =>
+      ignoreFailure(runController((controller) => controller.compact(ctx))),
     );
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    pi.on("session_tree", (event, ctx) =>
-      ignoreFailure(runController((controller) => controller.tree(event as never, ctx))),
+    pi.on("session_tree", (_event, ctx) =>
+      ignoreFailure(runController((controller) => controller.tree(ctx))),
     );
     pi.on("message_end", (event, ctx) => forwardEvent("message_end", event, ctx));
     pi.on("turn_start", (event, ctx) => forwardEvent("turn_start", event, ctx));

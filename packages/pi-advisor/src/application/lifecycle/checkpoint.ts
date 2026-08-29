@@ -3,8 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type * as Scope from "effect/Scope";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { advisorNow } from "../../boundary/clock.ts";
-import type { AdvisorEffectExecutor, AdvisorPlatform } from "../../boundary/executor.ts";
 import type { CheckpointOrchestratorContract } from "../../checkpoint/orchestrator.ts";
 import {
   captureAdvisorAbortInputAtHostBoundary,
@@ -13,9 +11,10 @@ import {
 } from "../../boundary/host-context.ts";
 import { ADVISOR_OPERATION_TIMEOUT_MS, type ResolvedAdvisorConfig } from "../../config/options.ts";
 import type { FailureLoggerContract } from "../../logging/logger.ts";
-import type { AdvisorReviewQueue } from "../../queue/service.ts";
+import type { AdvisorReviewQueueError } from "../../queue/errors.ts";
+import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
-import type { AdvisorReviewFocus } from "../../review/index.ts";
+import type { AdvisorReviewFocus } from "../../review/schema.ts";
 import {
   awaitAdvisorCatchUpEffect,
   extensionError,
@@ -24,13 +23,11 @@ import {
   type ParentAnchor,
   type ReviewPhase,
   type ReviewSource,
-} from "../controller-types.ts";
+} from "../controller.ts";
 import {
   applyBlockerVerification,
-  incrementBounded,
   isVerificationCandidate,
   classifyFailure,
-  verificationFingerprints,
 } from "../controller-helpers.ts";
 import type { AdvisorApplicationState } from "../state.ts";
 import type { DeliverFn } from "./delivery.ts";
@@ -40,7 +37,6 @@ export interface CheckpointRefs {
   queue: AdvisorReviewQueue | undefined;
   runtimeCursor: { anchor: ParentAnchor; fingerprint: string } | undefined;
   checkpointId: number;
-  configRevision: number;
   latestStateSummary: string;
   latestDurableSummary: ReturnType<typeof summarizeAdvisorReview>;
 }
@@ -51,15 +47,11 @@ export interface CheckpointDeps {
   readonly updateApplicationState: (
     update: (state: AdvisorApplicationState) => AdvisorApplicationState,
   ) => void;
-  readonly mutateMetrics: (mutate: (next: AdvisorApplicationState["metrics"]) => void) => void;
+  readonly updateMetrics: (
+    update: (metrics: AdvisorApplicationState["metrics"]) => AdvisorApplicationState["metrics"],
+  ) => void;
   readonly currentConfig: () => ResolvedAdvisorConfig;
-  readonly isStarted: () => boolean;
-  readonly advanceDomainCounter: (
-    key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
-  ) => number;
-  readonly latchCancellation: () => void;
-  readonly clearPendingRecovery: () => void;
-  readonly clearPendingReceipt: () => void;
+  readonly cancelRequest: () => void;
   readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
   readonly persistLedger: (anchor: ParentAnchor) => void;
   readonly notifyBestEffort: CheckpointNotify;
@@ -67,14 +59,13 @@ export interface CheckpointDeps {
   readonly failureLogger: FailureLoggerContract;
   readonly applicationScope: Scope.Scope;
   readonly checkpointOrchestrator: CheckpointOrchestratorContract;
-  readonly parentExecutor: AdvisorEffectExecutor;
-  readonly runSessionEffect: <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) => Promise<A>;
+  readonly now: () => number;
   readonly startRuntimeEffect: (
     ctx: ExtensionContext,
     restoration?: "preserve-live" | "restore-branch",
     allowDisabled?: boolean,
-  ) => Effect.Effect<number | undefined, never, AdvisorPlatform>;
-  readonly stopRuntime: () => Promise<void>;
+  ) => Effect.Effect<number | undefined>;
+  readonly stopRuntimeEffect: () => Effect.Effect<void>;
   readonly deliver: DeliverFn;
   readonly fingerprint: () => string;
   readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
@@ -85,6 +76,15 @@ export interface CheckpointDeps {
     startedAt: number,
   ) => AdvisorApplicationState["metrics"];
   readonly catchUpTimeoutMs: number;
+}
+
+interface CheckpointOwnerGeneration {
+  readonly epoch: number;
+  readonly cancellationEpoch: number;
+  readonly parentTurnId: number;
+  readonly requestSequence: number;
+  readonly anchor: ParentAnchor;
+  readonly queue: AdvisorReviewQueue;
 }
 
 type CheckpointNotify = (
@@ -106,38 +106,66 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
     const abortCapture = captureAdvisorAbortInputAtHostBoundary(options.ctx);
     if (!abortCapture.ok) return undefined;
     const requestAbortInput = abortCapture.input;
-    if (
-      (!d.refs.queue || !d.isStarted()) &&
-      (!d.currentConfig().enabled || !d.currentConfig().configured)
-    ) {
+    if (!d.refs.queue && (!d.currentConfig().enabled || !d.currentConfig().configured)) {
       return undefined;
     }
+    const admissionState = d.getState();
+    const admission: Pick<
+      CheckpointOwnerGeneration,
+      "cancellationEpoch" | "parentTurnId" | "requestSequence" | "anchor"
+    > = {
+      cancellationEpoch: admissionState.cancellationEpoch,
+      parentTurnId: admissionState.parentTurnId,
+      requestSequence: admissionState.requestSequence,
+      anchor: d.parentAnchor(options.ctx),
+    };
     let validForDelivery = true;
-    let requestEpoch = d.getState().epoch;
-    let requestCancellationEpoch = d.getState().cancellationEpoch;
     let activeQueue: AdvisorReviewQueue | undefined;
     let activeCheckpointId: string | undefined;
+    let providerFailureKind: string | undefined;
+    let ownerGeneration: CheckpointOwnerGeneration | undefined;
     const ledgerScope = d.lifecycleScope(options.ctx);
-    const startedAt = advisorNow(d.parentExecutor);
-    let durationRecorded = false;
-    let outcomeRecorded = false;
-    const finishReviewDuration = () => {
-      if (durationRecorded) return;
-      durationRecorded = true;
+    const startedAt = d.now();
+    let reviewSettled = false;
+    const settleReview = (settlement: CheckpointSettlement): CheckpointSettlement => {
+      if (reviewSettled) return settlement;
+      reviewSettled = true;
       d.updateApplicationState((state) => ({
         ...state,
         metrics: d.recordReviewDuration(state.metrics, startedAt),
       }));
+      return settlement;
     };
-    const discardRequest = (): CheckpointSettlement => {
-      if (!outcomeRecorded) {
-        outcomeRecorded = true;
-        d.mutateMetrics((next) => {
-          next.discarded += 1;
-          next.outcomes.discarded += 1;
-        });
-      }
-      return "discarded";
+    const discardRequest = (): CheckpointSettlement => settleReview("discarded");
+    const mapCheckpointError = (operation: string) => (error: AdvisorReviewQueueError) => {
+      providerFailureKind = classifyFailure(error);
+      return extensionError(operation)();
+    };
+    const admissionIsCurrent = (state: AdvisorApplicationState = d.getState()): boolean => {
+      return (
+        validForDelivery &&
+        admission.cancellationEpoch === state.cancellationEpoch &&
+        admission.parentTurnId === state.parentTurnId &&
+        admission.requestSequence === state.requestSequence &&
+        !parentSignalAborted(requestAbortInput) &&
+        (!options.requiresEnabled || (state.config.enabled && state.config.configured)) &&
+        d.branchContains(options.ctx, admission.anchor) &&
+        (options.trajectoryId === undefined || state.activeTrajectory?.id === options.trajectoryId)
+      );
+    };
+    const requestIsCurrent = (): boolean => {
+      const owner = ownerGeneration;
+      if (!owner) return false;
+      const state = d.getState();
+      return (
+        admissionIsCurrent(state) &&
+        !parentHasPendingMessages(options.ctx) &&
+        owner.queue === d.refs.queue &&
+        owner.epoch === state.epoch &&
+        owner.cancellationEpoch === state.cancellationEpoch &&
+        owner.parentTurnId === state.parentTurnId &&
+        owner.requestSequence === state.requestSequence
+      );
     };
     const checkpointSettlement = Effect.gen(function* () {
       const cursorMismatch =
@@ -152,84 +180,53 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
           "restore-branch",
           !options.requiresEnabled,
         );
-        if (restartEpoch === undefined || restartEpoch !== d.getState().epoch) {
-          // A restart that failed or was superseded still consumed a real attempt window;
-          // account the discard (and its review duration) like every other discard path.
-          finishReviewDuration();
+        if (restartEpoch === undefined || restartEpoch !== d.getState().epoch)
           return discardRequest();
-        }
       }
-      if (!validForDelivery || !d.refs.queue || !d.isStarted() || !d.refs.runtimeCursor)
-        return "discarded";
+      if (!admissionIsCurrent() || !d.refs.queue || !d.refs.runtimeCursor) return discardRequest();
       if (
         options.trajectoryId !== undefined &&
         d.getState().activeTrajectory?.id !== options.trajectoryId
       )
-        return "discarded";
+        return discardRequest();
 
       activeQueue = d.refs.queue;
-      requestEpoch = d.getState().epoch;
-      requestCancellationEpoch = d.getState().cancellationEpoch;
-      const requestParentTurnId = d.getState().parentTurnId;
-      const requestConfigRevision = d.refs.configRevision;
-      const anchor = d.parentAnchor(options.ctx);
-      const id = `advisor-${requestEpoch}-${++d.refs.checkpointId}`;
+      const state = d.getState();
+      const owner: CheckpointOwnerGeneration = {
+        epoch: state.epoch,
+        cancellationEpoch: state.cancellationEpoch,
+        parentTurnId: state.parentTurnId,
+        requestSequence: state.requestSequence,
+        anchor: admission.anchor,
+        queue: activeQueue,
+      };
+      ownerGeneration = owner;
+      const id = `advisor-${owner.epoch}-${++d.refs.checkpointId}`;
       activeCheckpointId = id;
-      d.mutateMetrics((next) => {
-        next.attempted += 1;
-      });
       let checkpoint = yield* activeQueue
         .checkpointEffect({
           checkpointId: id,
           focus: options.focus,
-          parentTurnId: requestParentTurnId,
         })
-        .pipe(Effect.mapError(extensionError("checkpoint")));
-      const requestIsCurrent = () =>
-        validForDelivery &&
-        requestEpoch === d.getState().epoch &&
-        requestCancellationEpoch === d.getState().cancellationEpoch &&
-        requestParentTurnId === d.getState().parentTurnId &&
-        requestConfigRevision === d.refs.configRevision &&
-        !parentSignalAborted(requestAbortInput) &&
-        (!options.requiresEnabled || (d.currentConfig().enabled && d.currentConfig().configured)) &&
-        !parentHasPendingMessages(options.ctx) &&
-        d.branchContains(options.ctx, anchor) &&
-        (options.trajectoryId === undefined ||
-          d.getState().activeTrajectory?.id === options.trajectoryId);
+        .pipe(Effect.mapError(mapCheckpointError("checkpoint")));
       if (!requestIsCurrent()) return discardRequest();
       const verifyBlocker =
         options.source !== "last" && checkpoint.findings.some(isVerificationCandidate);
       if (verifyBlocker) {
-        d.mutateMetrics((next) => {
-          next.blockerVerificationAttempts = (next.blockerVerificationAttempts ?? 0) + 1;
-        });
-        const verificationId = `advisor-${requestEpoch}-${++d.refs.checkpointId}`;
+        const verificationId = `advisor-${owner.epoch}-${++d.refs.checkpointId}`;
         activeCheckpointId = verificationId;
         const verification = yield* activeQueue
           .checkpointEffect({
             checkpointId: verificationId,
             focus: "blocker-verification",
-            parentTurnId: requestParentTurnId,
             verificationReview: checkpoint,
           })
-          .pipe(Effect.mapError(extensionError("verification checkpoint")));
+          .pipe(Effect.mapError(mapCheckpointError("verification checkpoint")));
         if (!requestIsCurrent()) return discardRequest();
-        const proposedBlockers = verificationFingerprints(checkpoint.findings);
         checkpoint = applyBlockerVerification(checkpoint, verification);
-        const retainedBlockers = verificationFingerprints(checkpoint.findings);
-        d.mutateMetrics((next) => {
-          next.blockersVerified = (next.blockersVerified ?? 0) + retainedBlockers.size;
-          next.blockersRejected =
-            (next.blockersRejected ?? 0) +
-            Math.max(0, proposedBlockers.size - retainedBlockers.size);
-        });
       }
-      finishReviewDuration();
       if (!requestIsCurrent()) {
-        d.mutateMetrics((next) => {
-          next.lastAction = "discarded";
-        });
+        d.updateMetrics((metrics) => ({ ...metrics, lastAction: "discarded" }));
         return discardRequest();
       }
 
@@ -242,40 +239,35 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
         options.ctx,
         requestAbortInput,
         ledgerScope,
-        requestCancellationEpoch,
+        owner.cancellationEpoch,
         options.abortOnBlocker ? options.trajectoryId : undefined,
       );
-      d.refs.runtimeCursor = { anchor, fingerprint: d.fingerprint() };
-      d.persistLedger(anchor);
-      outcomeRecorded = true;
-      return "completed" as const;
+      d.refs.runtimeCursor = {
+        anchor: owner.anchor,
+        fingerprint: d.fingerprint(),
+      };
+      d.persistLedger(owner.anchor);
+      return settleReview("completed");
     }).pipe(
       Effect.catch((error) =>
         Effect.gen(function* () {
-          finishReviewDuration();
-          if (requestEpoch !== d.getState().epoch || !validForDelivery) return discardRequest();
-          outcomeRecorded = true;
-          const kind = classifyFailure(error);
-          d.mutateMetrics((next) => {
-            next.failure += 1;
-            next.outcomes.failures += 1;
-            next.lastAction = "failure";
-            next.lastFailureKind = kind;
-          });
+          if (!requestIsCurrent()) return discardRequest();
+          const kind = providerFailureKind ?? classifyFailure(error);
+          settleReview("failed");
+          d.updateMetrics((metrics) => ({ ...metrics, lastAction: "failure" }));
+          const config = d.currentConfig();
           const baseDetails = {
             contextChars: activeQueue?.backlog ?? 0,
             durationMs: d.getState().metrics.latestDurationMs ?? 0,
             error,
             timeoutMs: ADVISOR_OPERATION_TIMEOUT_MS,
           };
-          const withModel = d.currentConfig().model
-            ? { ...baseDetails, model: d.currentConfig().model }
-            : baseDetails;
-          const failureDetails = d.currentConfig().provider
-            ? { ...withModel, provider: d.currentConfig().provider }
+          const withModel = config.model ? { ...baseDetails, model: config.model } : baseDetails;
+          const failureDetails = config.provider
+            ? { ...withModel, provider: config.provider }
             : withModel;
           yield* Effect.forkIn(
-            d.failureLogger.log(d.currentConfig().configPath, failureDetails),
+            d.failureLogger.log(config.configPath, failureDetails),
             d.applicationScope,
           );
           d.setAdvisorStatus(options.ctx, "advisor: unavailable");
@@ -290,7 +282,10 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
               "warning",
             );
           }
-          if (kind === "authentication") void d.stopRuntime();
+          if (kind === "authentication")
+            yield* Effect.forkIn(d.stopRuntimeEffect(), d.applicationScope, {
+              startImmediately: true,
+            });
           return "failed" as const;
         }),
       ),
@@ -305,7 +300,6 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       return targetQueue && targetId ? targetQueue.cancelCheckpointEffect(targetId) : Effect.void;
     });
     const finalizeCancellation = () => {
-      finishReviewDuration();
       discardRequest();
     };
     const orchestrated = d.checkpointOrchestrator.start(checkpointSettlement, {
@@ -320,8 +314,8 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       settlement: orchestrated.settlement.pipe(
         Effect.map(
           Exit.match({
-            onFailure: () => "failed" as const,
-            onSuccess: (value) => value,
+            onFailure: () => settleReview("failed"),
+            onSuccess: (value) => settleReview(value),
           }),
         ),
       ),
@@ -333,28 +327,13 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
     ctx: ExtensionContext,
   ): Effect.Effect<void> =>
     Effect.suspend(() => {
-      d.mutateMetrics((next) => {
-        next.catchUpWaits = incrementBounded(next.catchUpWaits);
-        next.activeCatchUpWaits = incrementBounded(next.activeCatchUpWaits);
-      });
-      const recordTimeout = () => {
-        d.mutateMetrics((next) => {
-          next.catchUpTimeouts = incrementBounded(next.catchUpTimeouts);
-        });
-      };
       let cancellationRecorded = false;
       const recordCancellation = () => {
         if (cancellationRecorded) return;
         cancellationRecorded = true;
         handle.invalidate();
-        d.advanceDomainCounter("cancellationEpoch");
-        d.latchCancellation();
-        d.clearPendingRecovery();
-        d.clearPendingReceipt();
+        d.cancelRequest();
         d.persistCurrentLedger(ctx);
-        d.mutateMetrics((next) => {
-          next.catchUpCancellations = incrementBounded(next.catchUpCancellations);
-        });
       };
       const cancellation = Effect.callback<"cancelled", AdvisorHostContextError>((resume) => {
         const registered = registerAdvisorAbortListenerAtHostBoundary(handle.abortInput, () => {
@@ -385,29 +364,8 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
         handle.settlement,
         d.catchUpTimeoutMs,
         cancellation,
-        Effect.sync(recordTimeout).pipe(Effect.andThen(handle.cancelEffect)),
-      ).pipe(
-        Effect.tap((outcome) =>
-          Effect.sync(() => {
-            if (outcome === "failed") {
-              d.mutateMetrics((next) => {
-                next.catchUpFailures = incrementBounded(next.catchUpFailures);
-              });
-            }
-          }),
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            d.mutateMetrics((next) => {
-              next.activeCatchUpWaits = Math.max(0, (next.activeCatchUpWaits ?? 1) - 1);
-            });
-          }),
-        ),
-        Effect.asVoid,
-      );
+        handle.cancelEffect,
+      ).pipe(Effect.asVoid);
     });
-  const awaitCatchUp = (handle: AdvisorCheckpointHandle, ctx: ExtensionContext): Promise<void> =>
-    d.runSessionEffect(awaitCatchUpEffectOwned(handle, ctx));
-
-  return { requestCheckpoint, awaitCatchUpEffectOwned, awaitCatchUp };
+  return { requestCheckpoint, awaitCatchUpEffectOwned };
 };

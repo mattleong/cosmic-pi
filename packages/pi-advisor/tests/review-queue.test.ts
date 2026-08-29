@@ -1,1067 +1,859 @@
-// Promise-shaped driver characterization intentionally remains at this test boundary.
-import * as Cause from "effect/Cause";
-import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as ManagedRuntime from "effect/ManagedRuntime";
-import type * as Scope from "effect/Scope";
 import { describe, expect, it } from "@effect/vitest";
-import { afterEach, vi } from "vitest";
-import { deferred, tick } from "./support/async.ts";
-import type {
-  AdvisorCheckpoint,
-  AdvisorCheckpointRequest,
-  AdvisorRuntimeServiceContract,
-  AdvisorRuntimeStartOptions,
-} from "../src/runtime/runtime.ts";
-
-/** Test-local Promise-shaped harness driver wrapped into the Effect service below. */
-interface AdvisorRuntimeDriver {
-  readonly activeToolNames: readonly string[];
-  start(options: AdvisorRuntimeStartOptions): Promise<void>;
-  checkpoint(request: AdvisorCheckpointRequest): Promise<AdvisorCheckpoint>;
-  steer(observations: string): Promise<boolean>;
-  reprime(seed: string, stateSummary?: string): Promise<void>;
-  abort(): Promise<void>;
-  dispose(): Promise<void>;
-}
+import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import type * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import { vi } from "vitest";
 import {
   AdvisorQueueBatchDroppedError,
   AdvisorQueueCancelledError,
   AdvisorQueueCorrelationMismatchError,
   AdvisorQueueDisposedError,
   AdvisorQueueResetRequiredError,
+  type AdvisorReviewQueueError,
 } from "../src/queue/errors.ts";
 import {
-  AdvisorReviewQueueService,
-  type AdvisorReviewQueue,
+  makeAdvisorReviewQueue,
   MAX_PENDING_CHECKPOINTS,
-  advisorReviewQueueServiceLayer,
-  type AdvisorReviewQueueOptions,
-  type QueuedCheckpoint,
-} from "../src/queue/service.ts";
+  type AdvisorReviewQueue,
+  type ReviewQueueCheckpointRequest,
+} from "../src/queue/review-queue.ts";
 import { AdvisorModelError } from "../src/runtime/client.ts";
+import {
+  AdvisorRuntimeResetRequiredError,
+  type AdvisorCheckpoint,
+  type AdvisorCheckpointRequest,
+  type AdvisorRuntimeServiceContract,
+} from "../src/runtime/runtime.ts";
 
-type TestQueue = AdvisorReviewQueue & {
-  checkpoint: (
-    request: Parameters<AdvisorReviewQueue["checkpointEffect"]>[0],
-  ) => Promise<AdvisorCheckpoint>;
-  dispose: () => Promise<void>;
-};
+const result = (request: AdvisorCheckpointRequest): AdvisorCheckpoint => ({
+  checkpointId: request.checkpointId,
+  processedThrough: request.processedThrough,
+  stateSummary: "compact state",
+  verdict: "pass",
+  summary: "No issue.",
+  suggestions: [],
+  findings: [],
+});
 
-const activeQueueCleanups = new Set<() => Promise<void>>();
+const resetRequired = () =>
+  new AdvisorRuntimeResetRequiredError({
+    message: "opaque reset-required failure",
+    kind: "response-format",
+  });
 
-afterEach(() =>
-  Promise.all([...activeQueueCleanups].map((cleanup) => cleanup())).then(() => undefined),
-);
+const makeRuntime = (
+  overrides: Partial<AdvisorRuntimeServiceContract> = {},
+): AdvisorRuntimeServiceContract => ({
+  activeToolNames: () => [],
+  start: () => Effect.void,
+  checkpoint: (request) => Effect.succeed(result(request)),
+  steer: () => Effect.succeed(false),
+  reprime: () => Effect.void,
+  abort: () => Effect.void,
+  dispose: () => Effect.void,
+  ...overrides,
+});
 
-function makeQueue(
-  driver: AdvisorRuntimeDriver,
-  options: AdvisorReviewQueueOptions = {},
-): Promise<TestQueue> {
-  const runtime: AdvisorRuntimeServiceContract = {
-    activeToolNames: () => driver.activeToolNames,
-    start: (value) => Effect.tryPromise({ try: () => driver.start(value), catch: modelError }),
-    checkpoint: (value) =>
-      Effect.tryPromise({ try: () => driver.checkpoint(value), catch: modelError }),
-    steer: (value) => Effect.tryPromise({ try: () => driver.steer(value), catch: modelError }),
-    reprime: (seed, state) =>
-      Effect.tryPromise({ try: () => driver.reprime(seed, state), catch: modelError }),
-    abort: () =>
-      Effect.tryPromise({ try: () => driver.abort(), catch: modelError }).pipe(
-        Effect.catch(() => Effect.void),
-      ),
-    dispose: () =>
-      Effect.tryPromise({ try: () => driver.dispose(), catch: modelError }).pipe(
-        Effect.catch(() => Effect.void),
-      ),
+const makeCallGate = <Input, Output, Error = never>() => {
+  const calls: Input[] = [];
+  const completions: Array<Deferred.Deferred<Output, Error>> = [];
+  const notices = new Map<number, Deferred.Deferred<Input>>();
+  const notice = (index: number): Deferred.Deferred<Input> => {
+    const existing = notices.get(index);
+    if (existing) return existing;
+    const created = Deferred.makeUnsafe<Input>();
+    notices.set(index, created);
+    return created;
   };
-  const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
-  return managed
-    .runPromise(AdvisorReviewQueueService)
-    .then((service) => managed.runPromise(service.make(runtime, options)))
-    .then((made) => {
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const queue = made as TestQueue;
-      const dispose = (): Promise<void> => {
-        if (!activeQueueCleanups.delete(dispose)) return Promise.resolve();
-        return managed.runPromise(queue.disposeEffect()).finally(() => managed.dispose());
-      };
-      activeQueueCleanups.add(dispose);
-      queue.checkpoint = (request) => managed.runPromise(queue.checkpointEffect(request));
-      queue.dispose = dispose;
-      return queue;
-    });
-}
-
-const modelError = <ErrorInput>(error: ErrorInput) =>
-  error instanceof AdvisorModelError
-    ? error
-    : new AdvisorModelError({ message: error instanceof Error ? error.message : "test failure" });
-
-function result(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
   return {
-    checkpointId: request.checkpointId,
-    processedThrough: request.processedThrough,
-    stateSummary: "compact state",
-    verdict: "pass",
-    summary: "No issue.",
-    suggestions: [],
-    findings: [],
+    calls,
+    call: (input: Input): Effect.Effect<Output, Error> =>
+      Effect.suspend(() => {
+        const index = calls.length;
+        calls.push(input);
+        const completion = Deferred.makeUnsafe<Output, Error>();
+        completions.push(completion);
+        Deferred.doneUnsafe(notice(index), Effect.succeed(input));
+        return Deferred.await(completion);
+      }),
+    awaitCall: (index: number): Effect.Effect<Input> =>
+      calls[index] === undefined ? Deferred.await(notice(index)) : Effect.succeed(calls[index]),
+    succeed: (index: number, output: Output): Effect.Effect<boolean> => {
+      const completion = completions[index];
+      return completion ? Deferred.succeed(completion, output) : Effect.succeed(false);
+    },
+    fail: (index: number, error: Error): Effect.Effect<boolean> => {
+      const completion = completions[index];
+      return completion ? Deferred.fail(completion, error) : Effect.succeed(false);
+    },
   };
-}
-
-function runtimeHarness() {
-  const calls: string[] = [];
-  const pending: Array<ReturnType<typeof deferred<AdvisorCheckpoint>>> = [];
-  const requests: AdvisorCheckpointRequest[] = [];
-  const runtime: AdvisorRuntimeDriver = {
-    activeToolNames: [],
-    start: vi.fn(() => Promise.resolve(undefined)),
-    checkpoint: vi.fn((request: AdvisorCheckpointRequest) => {
-      calls.push(`checkpoint:${request.checkpointId}`);
-      requests.push(request);
-      const wait = deferred<AdvisorCheckpoint>();
-      pending.push(wait);
-      return wait.promise;
-    }),
-    steer: vi.fn(() => {
-      calls.push("steer");
-      return Promise.resolve(true);
-    }),
-    reprime: vi.fn(() => Promise.resolve(undefined)),
-    abort: vi.fn(() => {
-      calls.push("abort");
-      return Promise.resolve(undefined);
-    }),
-    dispose: vi.fn(() => Promise.resolve(undefined)),
-  };
-  return { calls, pending, requests, runtime };
-}
-
-const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
-  Effect.promise(() => Promise.resolve(value).then(() => undefined));
-
-/** Captures the synchronous ingest throw at this Promise-shaped test boundary. */
-const ingestAfterDisposalOutcome = (queue: TestQueue) => {
-  try {
-    queue.ingest(1, { type: "user", text: "late" });
-    return undefined;
-  } catch (error) {
-    return error;
-  }
 };
+
+const forkCheckpoint = (queue: AdvisorReviewQueue, request: ReviewQueueCheckpointRequest) =>
+  queue.checkpointEffect(request).pipe(Effect.forkChild({ startImmediately: true }));
+
+const queueError = <A>(exit: Exit.Exit<A, AdvisorReviewQueueError>) =>
+  exit._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined;
 
 describe("AdvisorReviewQueue", () => {
-  it.effect("ManagedRuntime disposal alone finalizes an acquired queue exactly once", () =>
+  it.effect("parent scope disposal finalizes an acquired queue exactly once", () =>
     Effect.gen(function* () {
       let disposals = 0;
-      const runtime: AdvisorRuntimeServiceContract = {
-        activeToolNames: () => [],
-        start: () => Effect.void,
-        checkpoint: () => Effect.never,
-        steer: () => Effect.succeed(false),
-        reprime: () => Effect.void,
-        abort: () => Effect.void,
-        dispose: () =>
-          Effect.sync(() => {
-            disposals += 1;
+      yield* Effect.scoped(
+        makeAdvisorReviewQueue(
+          makeRuntime({
+            dispose: () =>
+              Effect.sync(() => {
+                disposals += 1;
+              }),
           }),
-      };
-      const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
-      const service = yield* Effect.promise(() => managed.runPromise(AdvisorReviewQueueService));
-      yield* Effect.promise(() => managed.runPromise(service.make(runtime)));
-      yield* Effect.promise(() => managed.dispose());
+        ).pipe(Effect.asVoid),
+      );
       expect(disposals).toBe(1);
-    }),
-  );
-
-  it.effect("explicit disposal closes the queue child scope before the layer scope", () =>
-    Effect.gen(function* () {
-      let disposals = 0;
-      const runtime: AdvisorRuntimeServiceContract = {
-        activeToolNames: () => [],
-        start: () => Effect.void,
-        checkpoint: () => Effect.never,
-        steer: () => Effect.succeed(false),
-        reprime: () => Effect.void,
-        abort: () => Effect.void,
-        dispose: () =>
-          Effect.sync(() => {
-            disposals += 1;
-          }),
-      };
-      const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
-      const service = yield* Effect.promise(() => managed.runPromise(AdvisorReviewQueueService));
-      const queue = yield* Effect.promise(() => managed.runPromise(service.make(runtime)));
-      const scopeDescriptor = Object.getOwnPropertyDescriptor(queue, "resourceScope");
-      if (!scopeDescriptor || !("value" in scopeDescriptor)) throw new Error("missing queue scope");
-      const queueScope: Scope.Closeable = scopeDescriptor.value;
-
-      expect(queueScope.state._tag).not.toBe("Closed");
-      yield* Effect.promise(() => managed.runPromise(queue.disposeEffect()));
-      expect(queueScope.state._tag).toBe("Closed");
-      expect(disposals).toBe(1);
-
-      yield* Effect.promise(() => managed.dispose());
-      expect(disposals).toBe(1);
-    }),
-  );
-
-  it.effect("serializes two checkpoints and does not ordinarily abort the first", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "request" });
-      const first = queue.checkpoint({ checkpointId: "one", focus: "standard", parentTurnId: 1 });
-      const second = queue.checkpoint({ checkpointId: "two", focus: "standard", parentTurnId: 1 });
-      yield* Effect.promise(() => tick());
-
-      expect(harness.calls).toEqual(["checkpoint:one"]);
-      expect(queue.pendingCheckpoints).toBe(2);
-      expect(queue.activeToolNames).toEqual([]);
-      expect(harness.runtime.abort).not.toHaveBeenCalled();
-      const firstRequest = harness.requests[0];
-      if (!firstRequest) throw new Error("missing request");
-      harness.pending[0]?.resolve(result(firstRequest));
-      yield* Effect.promise(() => expect(first).resolves.toMatchObject({ checkpointId: "one" }));
-      yield* Effect.promise(() => tick());
-      expect(harness.calls).toEqual(["checkpoint:one", "checkpoint:two"]);
-      const secondRequest = harness.requests[1];
-      if (!secondRequest) throw new Error("missing second request");
-      harness.pending[1]?.resolve(result(secondRequest));
-      yield* Effect.promise(() => expect(second).resolves.toMatchObject({ checkpointId: "two" }));
-      expect(queue.pendingCheckpoints).toBe(0);
     }),
   );
 
   it.effect(
-    "interrupting an active checkpoint caller aborts owned work and leaves the queue reusable",
+    "explicit disposal closes the child scope and remains exact once at parent release",
     () =>
       Effect.gen(function* () {
-        const harness = runtimeHarness();
-        const settled = vi.fn();
-        const queue = yield* Effect.promise(() =>
-          makeQueue(harness.runtime, { onCheckpointSettled: settled }),
-        );
-        queue.ingest(1, { type: "user", text: "interrupted" });
-        const caller = yield* Effect.forkChild(
-          queue.checkpointEffect({
-            checkpointId: "interrupted",
-            focus: "standard",
-            parentTurnId: 1,
+        let disposals = 0;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const queue = yield* makeAdvisorReviewQueue(
+              makeRuntime({
+                dispose: () =>
+                  Effect.sync(() => {
+                    disposals += 1;
+                  }),
+              }),
+            );
+            yield* queue.disposeEffect();
+            yield* queue.disposeEffect();
+            expect(disposals).toBe(1);
           }),
         );
-        yield* Effect.promise(() =>
-          vi.waitFor(() => expect(harness.runtime.checkpoint).toHaveBeenCalledOnce()),
-        );
-
-        expect(queue.pendingCheckpoints).toBe(1);
-        yield* Fiber.interrupt(caller);
-        yield* Effect.promise(() =>
-          vi.waitFor(() => expect(harness.runtime.abort).toHaveBeenCalledOnce()),
-        );
-        expect(queue.pendingCheckpoints).toBe(0);
-        expect(queue.hasActiveCheckpoint).toBe(false);
-        expect(settled).toHaveBeenCalledOnce();
-
-        queue.ingest(2, { type: "user", text: "later" });
-        const later = queue.checkpoint({
-          checkpointId: "later",
-          focus: "standard",
-          parentTurnId: 2,
-        });
-        yield* Effect.promise(() => tick());
-        expect(harness.requests.map((request) => request.checkpointId)).toEqual([
-          "interrupted",
-          "later",
-        ]);
-        harness.pending[1]?.resolve(result(harness.requests[1]!));
-        yield* Effect.promise(() =>
-          expect(later).resolves.toMatchObject({ checkpointId: "later" }),
-        );
-        expect(queue.pendingCheckpoints).toBe(0);
-        yield* Effect.promise(() => queue.dispose());
+        expect(disposals).toBe(1);
       }),
   );
 
-  it.effect("interrupting a queued checkpoint caller removes only its admitted waiter", () =>
+  it.effect("serializes checkpoints in FIFO order", () =>
     Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "active" });
-      const active = queue.checkpoint({
-        checkpointId: "active",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-      const queuedCaller = yield* Effect.forkChild(
-        queue.checkpointEffect({
-          checkpointId: "queued",
-          focus: "standard",
-          parentTurnId: 1,
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const queue = yield* makeAdvisorReviewQueue(makeRuntime({ checkpoint: checkpoints.call }));
+      queue.ingest(1, { type: "user", text: "one" });
+      const first = yield* forkCheckpoint(queue, { checkpointId: "one", focus: "standard" });
+      yield* checkpoints.awaitCall(0);
+      const second = yield* forkCheckpoint(queue, { checkpointId: "two", focus: "standard" });
+      yield* Effect.yieldNow;
+      expect(checkpoints.calls.map((request) => request.checkpointId)).toEqual(["one"]);
+      yield* checkpoints.succeed(0, result(checkpoints.calls[0]!));
+      yield* checkpoints.awaitCall(1);
+      expect(checkpoints.calls.map((request) => request.checkpointId)).toEqual(["one", "two"]);
+      yield* checkpoints.succeed(1, result(checkpoints.calls[1]!));
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+    }),
+  );
+
+  it.effect("normal settlement runs barrier and hooks before caller completion", () =>
+    Effect.gen(function* () {
+      const events: string[] = [];
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: (request) =>
+            Effect.sync(() => {
+              events.push("runtime");
+              return result(request);
+            }),
         }),
-      );
-      yield* Effect.promise(() => tick());
-
-      expect(queue.pendingCheckpoints).toBe(2);
-      yield* Fiber.interrupt(queuedCaller);
-      expect(queue.pendingCheckpoints).toBe(1);
-      expect(harness.runtime.abort).not.toHaveBeenCalled();
-
-      harness.pending[0]?.resolve(result(harness.requests[0]!));
-      yield* invoke(active);
-      expect(queue.pendingCheckpoints).toBe(0);
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect("interrupting after atomic settlement does not decrement the next queued waiter", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      const settlementReached = deferred<void>();
-      const releaseCompletion = deferred<void>();
-      const prototype = Object.getPrototypeOf(queue);
-      const settleClaimedWaiterEffect: (
-        waiter: QueuedCheckpoint,
-        processedThrough?: number,
-      ) => Effect.Effect<boolean> = prototype.settleClaimedWaiterEffect.bind(queue);
-      Object.defineProperty(queue, "settleClaimedWaiterEffect", {
-        configurable: true,
-        value: (waiter: QueuedCheckpoint, processedThrough?: number) =>
-          settleClaimedWaiterEffect(waiter, processedThrough).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                settlementReached.resolve();
-              }),
-            ),
-            Effect.flatMap((settled) =>
-              Effect.promise(() => releaseCompletion.promise).pipe(Effect.as(settled)),
-            ),
-          ),
-      });
-
-      queue.ingest(1, { type: "user", text: "first" });
-      const firstCaller = yield* Effect.forkChild(
-        queue.checkpointEffect({ checkpointId: "first", focus: "standard", parentTurnId: 1 }),
-        { startImmediately: true },
-      );
-      yield* Effect.promise(() => tick());
-      const second = queue.checkpoint({
-        checkpointId: "second",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-      expect(queue.pendingCheckpoints).toBe(2);
-
-      harness.pending[0]?.resolve(result(harness.requests[0]!));
-      yield* Effect.promise(() => settlementReached.promise);
-      expect(queue.hasActiveCheckpoint).toBe(false);
-      expect(queue.pendingCheckpoints).toBe(1);
-      yield* Fiber.interrupt(firstCaller);
-      expect(queue.pendingCheckpoints).toBe(1);
-      expect(harness.runtime.abort).not.toHaveBeenCalled();
-
-      releaseCompletion.resolve();
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.checkpointId).toBe("second");
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(second);
-      expect(queue.pendingCheckpoints).toBe(0);
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect("coalesces and live-steers bounded deltas without committing them", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "assistant_text_delta", text: "before" });
-      const checkpoint = queue.checkpoint({
-        checkpointId: "one",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-
-      const startedAt = performance.now();
-      for (let index = 0; index < 2_000; index += 1) {
-        queue.ingest(1, { type: "assistant_thinking_delta", text: "x" });
-      }
-      expect(performance.now() - startedAt).toBeLessThan(250);
-      yield* Effect.promise(() => tick());
-      expect(harness.runtime.steer).toHaveBeenCalledOnce();
-      expect(harness.runtime.steer).toHaveBeenCalledWith(
-        expect.stringContaining("assistant_thinking_delta"),
-      );
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const steering = String(
-        (harness.runtime.steer as ReturnType<typeof vi.fn>).mock.calls[0]?.[0],
-      );
-      expect(steering.length).toBeLessThan(20_000);
-      expect(harness.runtime.abort).not.toHaveBeenCalled();
-      const request = harness.requests[0];
-      if (!request) throw new Error("missing request");
-      harness.pending[0]?.resolve(result(request));
-      yield* invoke(checkpoint);
-      expect(queue.processedThrough).toBe(1);
-      expect(queue.backlog).toBeGreaterThan(0);
-
-      const catchUp = queue.checkpoint({
-        checkpointId: "two",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.observations).toContain("assistant_thinking_delta");
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(catchUp);
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect("drains an observation that arrives while live steering is unresolved", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const firstSteer = deferred<boolean>();
-      const secondSteer = deferred<boolean>();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.steer as ReturnType<typeof vi.fn>)
-        .mockImplementationOnce(() => firstSteer.promise)
-        .mockImplementationOnce(() => secondSteer.promise);
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "assistant_text_delta", text: "checkpoint seed" });
-      const checkpoint = queue.checkpoint({
-        checkpointId: "one",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-
-      queue.ingest(1, { type: "assistant_text_delta", text: "first live delta" });
-      yield* Effect.promise(() => tick());
-      expect(harness.runtime.steer).toHaveBeenCalledOnce();
-      queue.ingest(1, { type: "assistant_text_delta", text: "second in-flight delta" });
-      firstSteer.resolve(true);
-      yield* Effect.promise(() => tick());
-
-      expect(harness.runtime.steer).toHaveBeenCalledTimes(2);
-      expect(harness.runtime.steer).toHaveBeenLastCalledWith(
-        expect.stringContaining("second in-flight delta"),
-      );
-      secondSteer.resolve(true);
-      const request = harness.requests[0];
-      if (!request) throw new Error("missing request");
-      harness.pending[0]?.resolve(result(request));
-      yield* invoke(checkpoint);
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect("freezes exact pre-pump checkpoint barriers across a seq1/seq2 coalescing race", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "assistant_text_delta", text: "seq1" });
-      const first = queue.checkpoint({ checkpointId: "one", focus: "standard", parentTurnId: 1 });
-      queue.ingest(1, { type: "assistant_text_delta", text: "seq2" });
-      const second = queue.checkpoint({ checkpointId: "two", focus: "standard", parentTurnId: 1 });
-      yield* Effect.promise(() => tick());
-
-      expect(harness.requests[0]?.processedThrough).toBe(1);
-      expect(harness.requests[0]?.observations).toContain("seq1");
-      expect(harness.requests[0]?.observations).not.toContain("seq2");
-      harness.pending[0]?.resolve(result(harness.requests[0]!));
-      yield* invoke(first);
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.processedThrough).toBe(2);
-      expect(harness.requests[1]?.observations).toContain("seq2");
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(second);
-    }),
-  );
-
-  it.effect("retains a shared-target barrier when one queued checkpoint is cancelled", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "active" });
-      const active = queue.checkpoint({
-        checkpointId: "active",
-        focus: "standard",
-        parentTurnId: 1,
-        targetSequence: 1,
-      });
-      yield* Effect.promise(() => tick());
-
-      queue.ingest(1, { type: "assistant_text_delta", text: "frozen-seq2" });
-      const cancelled = queue
-        .checkpoint({
-          checkpointId: "cancel-shared",
-          focus: "standard",
-          parentTurnId: 1,
-          targetSequence: 2,
-        })
-        .catch((error) => error);
-      const survivor = queue.checkpoint({
-        checkpointId: "survive-shared",
-        focus: "standard",
-        parentTurnId: 1,
-        targetSequence: 2,
-      });
-      yield* queue.cancelCheckpointEffect("cancel-shared");
-      expect(yield* Effect.promise(() => cancelled)).toBeInstanceOf(AdvisorQueueCancelledError);
-      queue.ingest(1, { type: "assistant_text_delta", text: "later-seq3" });
-
-      harness.pending[0]?.resolve(result(harness.requests[0]!));
-      yield* invoke(active);
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.checkpointId).toBe("survive-shared");
-      expect(harness.requests[1]?.observations).toContain("frozen-seq2");
-      expect(harness.requests[1]?.observations).not.toContain("later-seq3");
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(survivor);
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect("retains a shared-target barrier when the oldest queued checkpoint is evicted", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "active" });
-      const active = queue.checkpoint({
-        checkpointId: "active",
-        focus: "standard",
-        parentTurnId: 1,
-        targetSequence: 1,
-      });
-      yield* Effect.promise(() => tick());
-
-      queue.ingest(1, { type: "assistant_text_delta", text: "frozen-seq2" });
-      const evicted = queue
-        .checkpoint({
-          checkpointId: "evicted-shared",
-          focus: "standard",
-          parentTurnId: 1,
-          targetSequence: 2,
-        })
-        .catch((error) => error);
-      const survivor = queue.checkpoint({
-        checkpointId: "survive-shared",
-        focus: "standard",
-        parentTurnId: 1,
-        targetSequence: 2,
-      });
-      const filler = Array.from({ length: MAX_PENDING_CHECKPOINTS - 1 }, (_, index) =>
-        queue
-          .checkpoint({
-            checkpointId: `filler-${index}`,
-            focus: "standard",
-            parentTurnId: 1,
-            targetSequence: 2,
-          })
-          .catch((error) => error),
-      );
-      yield* Effect.promise(() => tick());
-      expect(yield* Effect.promise(() => evicted)).toBeInstanceOf(AdvisorQueueBatchDroppedError);
-      queue.ingest(1, { type: "assistant_text_delta", text: "later-seq3" });
-
-      harness.pending[0]?.resolve(result(harness.requests[0]!));
-      yield* invoke(active);
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.checkpointId).toBe("survive-shared");
-      expect(harness.requests[1]?.observations).toContain("frozen-seq2");
-      expect(harness.requests[1]?.observations).not.toContain("later-seq3");
-      yield* Effect.promise(() => queue.dispose());
-      yield* Effect.promise(() => Promise.allSettled([survivor, ...filler]));
-    }),
-  );
-
-  it.effect("freezes seq1 tool_update before seq2 same-tool replacement in the pre-pump race", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "tool_update", toolCallId: "c", toolName: "read", update: "seq1" });
-      const first = queue.checkpoint({ checkpointId: "one", focus: "standard", parentTurnId: 1 });
-      queue.ingest(1, { type: "tool_update", toolCallId: "c", toolName: "read", update: "seq2" });
-      const second = queue.checkpoint({ checkpointId: "two", focus: "standard", parentTurnId: 1 });
-      yield* Effect.promise(() => tick());
-
-      expect(harness.requests[0]?.processedThrough).toBe(1);
-      expect(harness.requests[0]?.observations).toContain("seq1");
-      expect(harness.requests[0]?.observations).not.toContain("seq2");
-      harness.pending[0]?.resolve(result(harness.requests[0]!));
-      yield* invoke(first);
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.processedThrough).toBe(2);
-      expect(harness.requests[1]?.observations).toContain("seq2");
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(second);
-    }),
-  );
-
-  it.effect("retains failed or idle-race live delivery for the next coherent checkpoint", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.steer as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false);
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "initial" });
-      const first = queue.checkpoint({ checkpointId: "one", focus: "standard", parentTurnId: 1 });
-      yield* Effect.promise(() => tick());
-      queue.ingest(1, { type: "assistant_text_delta", text: "late-must-survive" });
-      yield* Effect.promise(() => tick());
-      harness.pending[0]?.resolve(result(harness.requests[0]!));
-      yield* invoke(first);
-
-      expect(queue.processedThrough).toBe(1);
-      const retry = queue.checkpoint({ checkpointId: "two", focus: "standard", parentTurnId: 1 });
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.processedThrough).toBe(2);
-      expect(harness.requests[1]?.observations).toContain("late-must-survive");
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(retry);
-      expect(queue.processedThrough).toBe(2);
-    }),
-  );
-
-  it.effect("requeues an in-flight observation batch after checkpoint failure", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "must survive" });
-      const failed = queue.checkpoint({
-        checkpointId: "failed",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-      for (let index = 0; index < 1_000; index += 1) {
-        queue.ingest(1, { type: "assistant_text_delta", text: `later-${index}` });
-      }
-      harness.pending[0]?.resolve({ ...result(harness.requests[0]!), checkpointId: "wrong" });
-      yield* Effect.promise(() => expect(failed).rejects.toThrow("correlation"));
-
-      const retry = queue.checkpoint({ checkpointId: "retry", focus: "standard", parentTurnId: 1 });
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.observations).toContain("must survive");
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(retry);
-      expect(queue.processedThrough).toBe(1_001);
-    }),
-  );
-
-  it.effect("reports correlation validation as a typed queue failure, not a defect", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
-        (request: AdvisorCheckpointRequest) =>
-          Promise.resolve({ ...result(request), checkpointId: "wrong" }),
-      );
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "request" });
-      const exit = yield* Effect.exit(
-        queue.checkpointEffect({ checkpointId: "expected", focus: "standard", parentTurnId: 1 }),
-      );
-      expect(exit._tag).toBe("Failure");
-      if (exit._tag === "Failure") {
-        const failure = Cause.findErrorOption(exit.cause);
-        expect(failure._tag).toBe("Some");
-        if (failure._tag === "Some") {
-          expect(failure.value).toBeInstanceOf(AdvisorQueueCorrelationMismatchError);
-          expect(failure.value._tag).toBe("CorrelationMismatch");
-        }
-        expect(Cause.hasDies(exit.cause)).toBe(false);
-      }
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect("preserves typed provider failure text for parent classification", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-        new Error("Advisor authentication failed; credential unavailable."),
-      );
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "request" });
-      yield* Effect.promise(() =>
-        expect(
-          queue.checkpoint({ checkpointId: "auth", focus: "standard", parentTurnId: 1 }),
-        ).rejects.toThrow(/authentication.*credential/i),
-      );
-    }),
-  );
-
-  it.effect("re-primes at the current cursor and bounds overflow retry to one", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      let attempt = 0;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
-        (request: AdvisorCheckpointRequest) => {
-          attempt += 1;
-          if (attempt === 1) return Promise.reject(new Error("context overflow"));
-          return Promise.resolve(result(request));
+        {
+          onCheckpointStart: () => events.push("start"),
+          onCheckpointSettled: () => events.push("settled"),
         },
       );
-      const reset = vi.fn();
-      const queue = yield* Effect.promise(() =>
-        makeQueue(harness.runtime, {
-          getReprimeState: () => ({ seed: "current cursor", stateSummary: "compact" }),
-          onRuntimeReset: reset,
-        }),
-      );
-      queue.ingest(1, { type: "user", text: "bounded batch" });
-      yield* Effect.promise(() =>
-        expect(
-          queue.checkpoint({ checkpointId: "overflow", focus: "standard", parentTurnId: 1 }),
-        ).resolves.toMatchObject({ checkpointId: "overflow" }),
-      );
-      expect(harness.runtime.reprime).toHaveBeenCalledTimes(1);
-      expect(harness.runtime.reprime).toHaveBeenCalledWith("current cursor", "compact");
-      expect(reset).toHaveBeenCalledOnce();
-    }),
-  );
-
-  it.effect("drops a repeated maximum-response batch and a later small checkpoint succeeds", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      let attempt = 0;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
-        (request: AdvisorCheckpointRequest) => {
-          attempt += 1;
-          if (attempt <= 2)
-            return Promise.reject(
-              new Error("Advisor checkpoint exceeds the maximum response size."),
-            );
-          return Promise.resolve(result(request));
-        },
-      );
-      const queue = yield* Effect.promise(() =>
-        makeQueue(harness.runtime, {
-          getReprimeState: () => ({ seed: "current cursor", stateSummary: "compact" }),
-        }),
-      );
-      queue.ingest(1, { type: "user", text: "oversized" });
-      const dropped = yield* Effect.promise(() =>
-        queue.checkpoint({ checkpointId: "drop", focus: "standard", parentTurnId: 1 }).then(
-          () => undefined,
-          (error) => error,
+      queue.ingest(1, { type: "user", text: "evidence" });
+      yield* queue.checkpointEffect({ checkpointId: "ordered", focus: "standard" }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            events.push("caller");
+          }),
         ),
       );
-      expect(dropped).toBeInstanceOf(AdvisorQueueBatchDroppedError);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      expect((dropped as AdvisorQueueBatchDroppedError)._tag).toBe("BatchDropped");
+      expect(events).toEqual(["start", "runtime", "settled", "caller"]);
+      expect(queue.processedThrough).toBe(1);
       expect(queue.backlog).toBe(0);
-      queue.ingest(2, { type: "user", text: "small" });
-      yield* Effect.promise(() =>
-        expect(
-          queue.checkpoint({ checkpointId: "small", focus: "standard", parentTurnId: 2 }),
-        ).resolves.toMatchObject({ checkpointId: "small" }),
-      );
-      expect(harness.runtime.reprime).toHaveBeenCalledTimes(2);
     }),
   );
 
-  it.effect("disposal prevents a rejected checkpoint from re-priming or retrying", () =>
+  it.effect("rearms the idle wake after each completed checkpoint", () =>
     Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const failure = deferred<AdvisorCheckpoint>();
-      const checkpointStarted = deferred<void>();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        checkpointStarted.resolve(undefined);
-        return failure.promise;
-      });
-      const queue = yield* Effect.promise(() =>
-        makeQueue(harness.runtime, {
-          getReprimeState: () => ({ seed: "obsolete cursor", stateSummary: "obsolete state" }),
+      const ids: string[] = [];
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: (request) =>
+            Effect.sync(() => {
+              ids.push(request.checkpointId);
+              return result(request);
+            }),
         }),
       );
-      queue.ingest(1, { type: "user", text: "old request" });
-      const checkpoint = queue.checkpoint({
-        checkpointId: "obsolete",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      const rejection = expect(checkpoint).rejects.toThrow(/disposed|stale/);
-      yield* Effect.promise(() => checkpointStarted.promise);
-
-      yield* Effect.promise(() => queue.dispose());
-      failure.reject(new Error("context overflow"));
-      yield* Effect.promise(() => rejection);
-
-      expect(harness.runtime.checkpoint).toHaveBeenCalledOnce();
-      expect(harness.runtime.abort).toHaveBeenCalledOnce();
-      expect(harness.runtime.reprime).not.toHaveBeenCalled();
+      queue.ingest(1, { type: "user", text: "first" });
+      yield* queue.checkpointEffect({ checkpointId: "first", focus: "standard" });
+      queue.ingest(2, { type: "user", text: "second" });
+      yield* queue.checkpointEffect({ checkpointId: "second", focus: "standard" });
+      expect(ids).toEqual(["first", "second"]);
     }),
   );
 
-  it.effect("drop-oldest admission fails the evicted Deferred with BatchDropped", () =>
+  it.effect("cancels a middle queued checkpoint without disturbing survivor FIFO", () =>
     Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "active" });
-      const active = queue
-        .checkpoint({ checkpointId: "active", focus: "standard", parentTurnId: 1 })
-        .catch((error) => error);
-      yield* Effect.promise(() => tick());
+      const firstGate = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const ids: string[] = [];
+      const runtime = makeRuntime({
+        checkpoint: (request) => {
+          ids.push(request.checkpointId);
+          return request.checkpointId === "active"
+            ? firstGate.call(request)
+            : Effect.succeed(result(request));
+        },
+      });
+      const queue = yield* makeAdvisorReviewQueue(runtime);
+      queue.ingest(1, { type: "user", text: "evidence" });
+      const active = yield* forkCheckpoint(queue, { checkpointId: "active", focus: "standard" });
+      yield* firstGate.awaitCall(0);
+      const first = yield* forkCheckpoint(queue, { checkpointId: "first", focus: "standard" });
+      const middle = yield* forkCheckpoint(queue, { checkpointId: "middle", focus: "standard" });
+      const last = yield* forkCheckpoint(queue, { checkpointId: "last", focus: "standard" });
+      yield* Effect.yieldNow;
+      yield* queue.cancelCheckpointEffect("middle");
+      const middleExit = yield* Fiber.await(middle);
+      expect(queueError(middleExit)).toBeInstanceOf(AdvisorQueueCancelledError);
+      yield* firstGate.succeed(0, result(firstGate.calls[0]!));
+      yield* Fiber.join(active);
+      yield* Fiber.join(first);
+      yield* Fiber.join(last);
+      expect(ids).toEqual(["active", "first", "last"]);
+    }),
+  );
 
-      const queued = Array.from({ length: MAX_PENDING_CHECKPOINTS + 1 }, (_, index) =>
-        queue
-          .checkpoint({
+  it.effect("overflow drops only the oldest queued entry and keeps survivor FIFO", () =>
+    Effect.gen(function* () {
+      const activeGate = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const ids: string[] = [];
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: (request) => {
+            ids.push(request.checkpointId);
+            return request.checkpointId === "active"
+              ? activeGate.call(request)
+              : Effect.succeed(result(request));
+          },
+        }),
+      );
+      queue.ingest(1, { type: "user", text: "bounded" });
+      const active = yield* forkCheckpoint(queue, { checkpointId: "active", focus: "standard" });
+      yield* activeGate.awaitCall(0);
+      const queued: Array<Fiber.Fiber<AdvisorCheckpoint, AdvisorReviewQueueError>> = [];
+      for (let index = 0; index <= MAX_PENDING_CHECKPOINTS; index += 1) {
+        queued.push(
+          yield* forkCheckpoint(queue, {
             checkpointId: `queued-${index}`,
             focus: "standard",
-            parentTurnId: 1,
-          })
-          .catch((error) => error),
-      );
-      yield* Effect.promise(() => tick());
-
-      const evicted = yield* Effect.promise(() => queued[0]!);
-      expect(evicted).toBeInstanceOf(AdvisorQueueBatchDroppedError);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      expect((evicted as AdvisorQueueBatchDroppedError)._tag).toBe("BatchDropped");
-      expect(queue.pendingCheckpoints).toBe(MAX_PENDING_CHECKPOINTS + 1);
-
-      yield* Effect.promise(() => queue.dispose());
-      yield* Effect.promise(() => Promise.allSettled([active, ...queued]));
-    }),
-  );
-
-  it.effect("compacts cancelled queued tombstones so live admission capacity is reusable", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "active" });
-      const active = queue
-        .checkpoint({ checkpointId: "active", focus: "standard", parentTurnId: 1 })
-        .catch((error) => error);
-      yield* Effect.promise(() => tick());
-
-      for (let index = 0; index < MAX_PENDING_CHECKPOINTS + 1; index += 1) {
-        const checkpointId = `cancelled-${index}`;
-        const cancelled = queue
-          .checkpoint({ checkpointId, focus: "standard", parentTurnId: 1 })
-          .catch((error) => error);
-        yield* Effect.promise(() => tick());
-        yield* queue.cancelCheckpointEffect(checkpointId);
-        expect(yield* Effect.promise(() => cancelled)).toBeInstanceOf(AdvisorQueueCancelledError);
-      }
-      expect(queue.pendingCheckpoints).toBe(1);
-
-      const admitted = queue.checkpoint({
-        checkpointId: "admitted-after-compaction",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-      expect(queue.pendingCheckpoints).toBe(2);
-      harness.pending[0]?.resolve(result(harness.requests[0]!));
-      yield* invoke(active);
-      yield* Effect.promise(() => tick());
-      expect(harness.requests[1]?.checkpointId).toBe("admitted-after-compaction");
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* Effect.promise(() =>
-        expect(admitted).resolves.toMatchObject({ checkpointId: "admitted-after-compaction" }),
-      );
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect(
-    "dispose shuts down and awaits the queue-owned steering ingress across replacements",
-    () =>
-      Effect.gen(function* () {
-        for (let replacement = 0; replacement < 3; replacement += 1) {
-          const queue = yield* Effect.promise(() => makeQueue(runtimeHarness().runtime));
-          const ingressDescriptor = Object.getOwnPropertyDescriptor(queue, "steeringIngress");
-          const ingress: { readonly awaitShutdown: Effect.Effect<void> } | undefined =
-            ingressDescriptor && "value" in ingressDescriptor ? ingressDescriptor.value : undefined;
-          expect(ingress).toBeDefined();
-          yield* queue.disposeEffect();
-          yield* ingress!.awaitShutdown;
-          yield* Effect.promise(() => queue.dispose());
-        }
-      }),
-  );
-
-  it.effect("active cancellation waits for abort settlement before starting replacement work", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const abortRelease = deferred<void>();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
-        () => abortRelease.promise,
-      );
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "first" });
-      const first = queue
-        .checkpoint({ checkpointId: "first", focus: "standard", parentTurnId: 1 })
-        .catch((error) => error);
-      yield* Effect.promise(() => tick());
-      const second = queue.checkpoint({
-        checkpointId: "second",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-
-      const cancellation = yield* Effect.forkChild(queue.cancelCheckpointEffect("first"), {
-        startImmediately: true,
-      });
-      yield* Effect.promise(() => tick());
-      expect(harness.runtime.abort).toHaveBeenCalledOnce();
-      expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first"]);
-      yield* Effect.promise(() => tick());
-      expect(cancellation.pollUnsafe()).toBeUndefined();
-
-      abortRelease.resolve();
-      yield* Fiber.join(cancellation);
-      expect(yield* Effect.promise(() => first)).toBeInstanceOf(AdvisorQueueCancelledError);
-      yield* Effect.promise(() => tick());
-      expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first", "second"]);
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(second);
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect("interrupting active cancellation during abort still restores a reusable queue", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const abortRelease = deferred<void>();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
-        () => abortRelease.promise,
-      );
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "first" });
-      const first = queue
-        .checkpoint({ checkpointId: "first", focus: "standard", parentTurnId: 1 })
-        .catch((error) => error);
-      yield* Effect.promise(() => tick());
-      const second = queue.checkpoint({
-        checkpointId: "second",
-        focus: "standard",
-        parentTurnId: 1,
-      });
-      yield* Effect.promise(() => tick());
-
-      const cancellation = yield* Effect.forkChild(queue.cancelCheckpointEffect("first"), {
-        startImmediately: true,
-      });
-      yield* Effect.promise(() => tick());
-      expect(harness.runtime.abort).toHaveBeenCalledOnce();
-      const interrupting = yield* Effect.forkChild(Fiber.interrupt(cancellation), {
-        startImmediately: true,
-      });
-      yield* Effect.promise(() => tick());
-      expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first"]);
-
-      abortRelease.resolve();
-      yield* Fiber.join(interrupting);
-      expect(yield* Effect.promise(() => first)).toBeInstanceOf(AdvisorQueueCancelledError);
-      expect(queue.pendingCheckpoints).toBe(1);
-      yield* Effect.promise(() => tick());
-      expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first", "second"]);
-      expect(queue.hasActiveCheckpoint).toBe(true);
-      harness.pending[1]?.resolve(result(harness.requests[1]!));
-      yield* invoke(second);
-      expect(queue.pendingCheckpoints).toBe(0);
-      yield* Effect.promise(() => queue.dispose());
-    }),
-  );
-
-  it.effect("dispose awaits active abort finalizers before settling", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const abortRelease = deferred<void>();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
-        () => abortRelease.promise,
-      );
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "dispose" });
-      const checkpoint = queue
-        .checkpoint({ checkpointId: "dispose", focus: "standard", parentTurnId: 1 })
-        .catch((error) => error);
-      yield* Effect.promise(() => tick());
-
-      const settlement = queue.dispose();
-      let settled = false;
-      void settlement.then(() => {
-        settled = true;
-      });
-      yield* Effect.promise(() => tick());
-      expect(harness.runtime.abort).toHaveBeenCalledOnce();
-      expect(settled).toBe(false);
-
-      abortRelease.resolve();
-      yield* invoke(settlement);
-      yield* invoke(checkpoint);
-    }),
-  );
-
-  it.effect("active cancellation fails with Cancelled and interrupts the runtime", () =>
-    Effect.gen(function* () {
-      const harness = runtimeHarness();
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "cancel" });
-      const checkpoint = queue
-        .checkpoint({ checkpointId: "cancel-me", focus: "standard", parentTurnId: 1 })
-        .then(
-          () => undefined,
-          (error) => error,
+          }),
         );
-      yield* Effect.promise(() => tick());
-      yield* queue.cancelCheckpointEffect("cancel-me");
-      const cancelled = yield* Effect.promise(() => checkpoint);
-      expect(cancelled).toBeInstanceOf(AdvisorQueueCancelledError);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      expect((cancelled as AdvisorQueueCancelledError)._tag).toBe("Cancelled");
-      expect(harness.runtime.abort).toHaveBeenCalledOnce();
-      yield* Effect.promise(() => queue.dispose());
+        yield* Effect.yieldNow;
+      }
+      expect(queue.pendingCheckpoints).toBe(MAX_PENDING_CHECKPOINTS + 1);
+      const evicted = yield* Fiber.await(queued[0]!);
+      expect(queueError(evicted)).toBeInstanceOf(AdvisorQueueBatchDroppedError);
+      yield* activeGate.succeed(0, result(activeGate.calls[0]!));
+      yield* Fiber.join(active);
+      for (const survivor of queued.slice(1)) yield* Fiber.join(survivor);
+      expect(ids).toEqual([
+        "active",
+        ...Array.from({ length: MAX_PENDING_CHECKPOINTS }, (_, index) => `queued-${index + 1}`),
+      ]);
     }),
   );
 
-  it.effect("reports ResetRequired when recovery has no current re-prime state", () =>
+  it.effect("active cancellation stays pending until runtime abort cleanup settles", () =>
     Effect.gen(function* () {
-      const harness = runtimeHarness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-        new Error("context overflow"),
+      const abortStarted = yield* Deferred.make<void>();
+      const abortRelease = yield* Deferred.make<void>();
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: checkpoints.call,
+          abort: () =>
+            Deferred.succeed(abortStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(abortRelease)),
+              Effect.asVoid,
+            ),
+        }),
       );
-      const queue = yield* Effect.promise(() => makeQueue(harness.runtime));
-      queue.ingest(1, { type: "user", text: "overflow" });
-      const failure = yield* Effect.promise(() =>
-        queue.checkpoint({ checkpointId: "reset", focus: "standard", parentTurnId: 1 }).then(
-          () => undefined,
-          (error) => error,
-        ),
-      );
-      expect(failure).toBeInstanceOf(AdvisorQueueResetRequiredError);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      expect((failure as AdvisorQueueResetRequiredError)._tag).toBe("ResetRequired");
-      yield* Effect.promise(() => queue.dispose());
+      queue.ingest(1, { type: "user", text: "cancel" });
+      const requestDone = yield* Deferred.make<void>();
+      const request = yield* queue
+        .checkpointEffect({ checkpointId: "cancel", focus: "standard" })
+        .pipe(
+          Effect.ensuring(Deferred.succeed(requestDone, undefined)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* checkpoints.awaitCall(0);
+      const cancellationDone = yield* Deferred.make<void>();
+      const cancellation = yield* queue
+        .cancelCheckpointEffect("cancel")
+        .pipe(
+          Effect.ensuring(Deferred.succeed(cancellationDone, undefined)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* Deferred.await(abortStarted);
+      expect(yield* Deferred.isDone(cancellationDone)).toBe(false);
+      expect(yield* Deferred.isDone(requestDone)).toBe(false);
+      yield* Deferred.succeed(abortRelease, undefined);
+      yield* Fiber.join(cancellation);
+      const requestExit = yield* Fiber.await(request);
+      expect(queueError(requestExit)).toBeInstanceOf(AdvisorQueueCancelledError);
     }),
   );
 
-  it.effect("maps post-disposal synchronous ingestion to the Disposed queue tag", () =>
+  it.effect("dispose stays pending through abort cleanup and completes requests last", () =>
     Effect.gen(function* () {
-      const queue = yield* Effect.promise(() => makeQueue(runtimeHarness().runtime));
-      yield* Effect.promise(() => queue.dispose());
-      const error = ingestAfterDisposalOutcome(queue);
-      expect(error).toBeInstanceOf(AdvisorQueueDisposedError);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      expect((error as AdvisorQueueDisposedError)._tag).toBe("Disposed");
+      const events: string[] = [];
+      const abortStarted = yield* Deferred.make<void>();
+      const abortRelease = yield* Deferred.make<void>();
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: checkpoints.call,
+          abort: () =>
+            Effect.sync(() => events.push("abort-start")).pipe(
+              Effect.andThen(Deferred.succeed(abortStarted, undefined)),
+              Effect.andThen(Deferred.await(abortRelease)),
+              Effect.andThen(Effect.sync(() => events.push("abort-end"))),
+            ),
+          dispose: () => Effect.sync(() => events.push("runtime-dispose")),
+        }),
+        { onCheckpointSettled: () => events.push("settled") },
+      );
+      queue.ingest(1, { type: "user", text: "dispose" });
+      const requestDone = yield* Deferred.make<void>();
+      const request = yield* queue
+        .checkpointEffect({ checkpointId: "dispose", focus: "standard" })
+        .pipe(
+          Effect.exit,
+          Effect.tap(() => Effect.sync(() => events.push("request-complete"))),
+          Effect.ensuring(Deferred.succeed(requestDone, undefined)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* checkpoints.awaitCall(0);
+      const disposalDone = yield* Deferred.make<void>();
+      const disposal = yield* queue.disposeEffect().pipe(
+        Effect.tap(() => Effect.sync(() => events.push("dispose-complete"))),
+        Effect.ensuring(Deferred.succeed(disposalDone, undefined)),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(abortStarted);
+      expect(yield* Deferred.isDone(disposalDone)).toBe(false);
+      expect(yield* Deferred.isDone(requestDone)).toBe(false);
+      yield* Deferred.succeed(abortRelease, undefined);
+      yield* Fiber.join(disposal);
+      const requestExit = yield* Fiber.join(request);
+      expect(queueError(requestExit)).toBeInstanceOf(AdvisorQueueDisposedError);
+      expect(events).toEqual([
+        "abort-start",
+        "abort-end",
+        "runtime-dispose",
+        "settled",
+        "request-complete",
+        "dispose-complete",
+      ]);
+    }),
+  );
+
+  it.effect("cancel versus dispose has one active settlement owner", () =>
+    Effect.gen(function* () {
+      let settlements = 0;
+      let disposals = 0;
+      const abortStarted = yield* Deferred.make<void>();
+      const abortRelease = yield* Deferred.make<void>();
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: checkpoints.call,
+          abort: () =>
+            Deferred.succeed(abortStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(abortRelease)),
+              Effect.asVoid,
+            ),
+          dispose: () =>
+            Effect.sync(() => {
+              disposals += 1;
+            }),
+        }),
+        {
+          onCheckpointSettled: () => {
+            settlements += 1;
+          },
+        },
+      );
+      queue.ingest(1, { type: "user", text: "race" });
+      const request = yield* forkCheckpoint(queue, { checkpointId: "race", focus: "standard" });
+      yield* checkpoints.awaitCall(0);
+      const cancellation = yield* queue
+        .cancelCheckpointEffect("race")
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(abortStarted);
+      const disposal = yield* queue
+        .disposeEffect()
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(abortRelease, undefined);
+      yield* Fiber.join(cancellation);
+      yield* Fiber.join(disposal);
+      const requestExit = yield* Fiber.await(request);
+      expect(queueError(requestExit)).toBeInstanceOf(AdvisorQueueDisposedError);
+      expect(settlements).toBe(1);
+      expect(disposals).toBe(1);
+    }),
+  );
+
+  it.effect("dispose-first cancellation waits for the disposal owner to finish abort cleanup", () =>
+    Effect.gen(function* () {
+      const abortStarted = yield* Deferred.make<void>();
+      const abortRelease = yield* Deferred.make<void>();
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: checkpoints.call,
+          abort: () =>
+            Deferred.succeed(abortStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(abortRelease)),
+              Effect.asVoid,
+            ),
+        }),
+      );
+      queue.ingest(1, { type: "user", text: "dispose-first" });
+      const request = yield* forkCheckpoint(queue, {
+        checkpointId: "dispose-first",
+        focus: "standard",
+      });
+      yield* checkpoints.awaitCall(0);
+      const disposal = yield* queue
+        .disposeEffect()
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(abortStarted);
+      const cancellationDone = yield* Deferred.make<void>();
+      const cancellation = yield* queue
+        .cancelCheckpointEffect("dispose-first")
+        .pipe(
+          Effect.ensuring(Deferred.succeed(cancellationDone, undefined)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* Effect.yieldNow;
+      expect(yield* Deferred.isDone(cancellationDone)).toBe(false);
+      yield* Deferred.succeed(abortRelease, undefined);
+      yield* Fiber.join(disposal);
+      yield* Fiber.join(cancellation);
+      expect(queueError(yield* Fiber.await(request))).toBeInstanceOf(AdvisorQueueDisposedError);
+    }),
+  );
+
+  it.effect("caller interruption cancels its internal token, not a repeated external ID", () =>
+    Effect.gen(function* () {
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const queue = yield* makeAdvisorReviewQueue(makeRuntime({ checkpoint: checkpoints.call }));
+      queue.ingest(1, { type: "user", text: "same-id" });
+      const first = yield* forkCheckpoint(queue, { checkpointId: "same", focus: "standard" });
+      yield* checkpoints.awaitCall(0);
+      const second = yield* forkCheckpoint(queue, { checkpointId: "same", focus: "standard" });
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(first);
+      yield* checkpoints.awaitCall(1);
+      expect(checkpoints.calls).toHaveLength(2);
+      yield* checkpoints.succeed(1, result(checkpoints.calls[1]!));
+      yield* Fiber.join(second);
+    }),
+  );
+
+  it.effect("a stale repeated-ID steer cannot advance its replacement", () =>
+    Effect.gen(function* () {
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const steers = makeCallGate<string, boolean, AdvisorModelError>();
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({ checkpoint: checkpoints.call, steer: steers.call }),
+      );
+      queue.ingest(1, { type: "user", text: "initial" });
+      const first = yield* forkCheckpoint(queue, { checkpointId: "same", focus: "standard" });
+      yield* checkpoints.awaitCall(0);
+      queue.ingest(1, { type: "assistant_text_delta", text: "stale-live" });
+      yield* steers.awaitCall(0);
+      const replacement = yield* forkCheckpoint(queue, {
+        checkpointId: "same",
+        focus: "standard",
+      });
+      yield* Effect.yieldNow;
+      const cancellation = yield* queue
+        .cancelCheckpointEffect("same")
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Fiber.join(cancellation);
+      expect(queueError(yield* Fiber.await(first))).toBeInstanceOf(AdvisorQueueCancelledError);
+      yield* checkpoints.awaitCall(1);
+      queue.ingest(1, { type: "assistant_text_delta", text: "replacement-live" });
+      yield* steers.succeed(0, true);
+      const replacementSteer = yield* steers.awaitCall(1);
+      expect(replacementSteer).toContain("replacement-live");
+      expect(replacementSteer).not.toContain("stale-live");
+      yield* steers.succeed(1, true);
+      yield* checkpoints.succeed(1, result(checkpoints.calls[1]!));
+      yield* Fiber.join(replacement);
+    }),
+  );
+
+  it.effect("accepted steering never commits evidence", () =>
+    Effect.gen(function* () {
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const steers: string[] = [];
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: checkpoints.call,
+          steer: (observations) =>
+            Effect.sync(() => {
+              steers.push(observations);
+              return true;
+            }),
+        }),
+      );
+      queue.ingest(1, { type: "user", text: "initial" });
+      const first = yield* forkCheckpoint(queue, { checkpointId: "first", focus: "standard" });
+      yield* checkpoints.awaitCall(0);
+      queue.ingest(1, { type: "assistant_text_delta", text: "live-must-survive" });
+      yield* Effect.yieldNow;
+      expect(steers[0]).toContain("live-must-survive");
+      yield* checkpoints.succeed(0, result(checkpoints.calls[0]!));
+      yield* Fiber.join(first);
+      const second = yield* forkCheckpoint(queue, { checkpointId: "second", focus: "standard" });
+      const secondRequest = yield* checkpoints.awaitCall(1);
+      expect(secondRequest.observations).toContain("live-must-survive");
+      yield* checkpoints.succeed(1, result(secondRequest));
+      yield* Fiber.join(second);
+    }),
+  );
+
+  it.effect("captures the admission cursor and ignores a supplied legacy cursor", () =>
+    Effect.gen(function* () {
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const queue = yield* makeAdvisorReviewQueue(makeRuntime({ checkpoint: checkpoints.call }));
+      queue.ingest(1, { type: "user", text: "first" });
+      queue.ingest(1, { type: "assistant_text_delta", text: "second" });
+      // SAFETY: This test intentionally sends one removed legacy field through structural typing.
+      const forged = {
+        checkpointId: "captured",
+        focus: "standard",
+        targetSequence: 1,
+      } as ReviewQueueCheckpointRequest & { readonly targetSequence: number };
+      const checkpoint = yield* forkCheckpoint(queue, forged);
+      const request = yield* checkpoints.awaitCall(0);
+      expect(request.processedThrough).toBe(2);
+      expect(request.observations).toContain("second");
+      yield* checkpoints.succeed(0, result(request));
+      yield* Fiber.join(checkpoint);
+    }),
+  );
+
+  it.effect("retains a shared admission barrier when one queued checkpoint is cancelled", () =>
+    Effect.gen(function* () {
+      const checkpoints = makeCallGate<
+        AdvisorCheckpointRequest,
+        AdvisorCheckpoint,
+        AdvisorModelError
+      >();
+      const queue = yield* makeAdvisorReviewQueue(makeRuntime({ checkpoint: checkpoints.call }));
+      queue.ingest(1, { type: "user", text: "seq1" });
+      const active = yield* forkCheckpoint(queue, { checkpointId: "active", focus: "standard" });
+      yield* checkpoints.awaitCall(0);
+      queue.ingest(1, { type: "assistant_text_delta", text: "frozen-seq2" });
+      const cancelled = yield* forkCheckpoint(queue, {
+        checkpointId: "cancel-shared",
+        focus: "standard",
+      });
+      const survivor = yield* forkCheckpoint(queue, {
+        checkpointId: "survive-shared",
+        focus: "standard",
+      });
+      yield* Effect.yieldNow;
+      queue.ingest(1, { type: "assistant_text_delta", text: "later-seq3" });
+      yield* queue.cancelCheckpointEffect("cancel-shared");
+      expect(queueError(yield* Fiber.await(cancelled))).toBeInstanceOf(AdvisorQueueCancelledError);
+      yield* checkpoints.succeed(0, result(checkpoints.calls[0]!));
+      yield* Fiber.join(active);
+      const survivorRequest = yield* checkpoints.awaitCall(1);
+      expect(survivorRequest.processedThrough).toBe(2);
+      expect(survivorRequest.observations).toContain("frozen-seq2");
+      expect(survivorRequest.observations).not.toContain("later-seq3");
+      yield* checkpoints.succeed(1, result(survivorRequest));
+      yield* Fiber.join(survivor);
+    }),
+  );
+
+  it.effect("retains evidence after provider failure and rejects correlation mismatches", () =>
+    Effect.gen(function* () {
+      let attempt = 0;
+      const requests: AdvisorCheckpointRequest[] = [];
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: (request) => {
+            requests.push(request);
+            attempt += 1;
+            if (attempt === 1)
+              return Effect.fail(
+                new AdvisorModelError({ message: "provider unavailable", kind: "authentication" }),
+              );
+            if (attempt === 2) return Effect.succeed({ ...result(request), checkpointId: "wrong" });
+            return Effect.succeed(result(request));
+          },
+        }),
+      );
+      queue.ingest(1, { type: "user", text: "must survive" });
+      const failed = yield* queue
+        .checkpointEffect({ checkpointId: "provider", focus: "standard" })
+        .pipe(Effect.exit);
+      expect(queueError(failed)?.message).toBe("provider unavailable");
+      const mismatch = yield* queue
+        .checkpointEffect({ checkpointId: "expected", focus: "standard" })
+        .pipe(Effect.exit);
+      expect(queueError(mismatch)).toBeInstanceOf(AdvisorQueueCorrelationMismatchError);
+      yield* queue.checkpointEffect({ checkpointId: "retry", focus: "standard" });
+      expect(requests[2]?.observations).toContain("must survive");
+    }),
+  );
+
+  it.effect("re-primes once and retries the exact correlated request", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const requests: AdvisorCheckpointRequest[] = [];
+      const reprimes: Array<readonly [string, string | undefined]> = [];
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: (request) => {
+            requests.push(request);
+            attempts += 1;
+            return attempts === 1 ? Effect.fail(resetRequired()) : Effect.succeed(result(request));
+          },
+          reprime: (seed, summary) =>
+            Effect.sync(() => {
+              reprimes.push([seed, summary]);
+            }),
+        }),
+        { getReprimeState: () => ({ seed: "current cursor", stateSummary: "compact" }) },
+      );
+      queue.ingest(1, { type: "user", text: "bounded batch" });
+      yield* queue.checkpointEffect({ checkpointId: "reset", focus: "standard" });
+      expect(reprimes).toEqual([["current cursor", "compact"]]);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toEqual(requests[0]);
+    }),
+  );
+
+  it.effect("second reset re-primes, drops the poison batch, and lets later evidence run", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      let reprimes = 0;
+      const requests: AdvisorCheckpointRequest[] = [];
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: (request) => {
+            requests.push(request);
+            attempts += 1;
+            return attempts <= 2 ? Effect.fail(resetRequired()) : Effect.succeed(result(request));
+          },
+          reprime: () =>
+            Effect.sync(() => {
+              reprimes += 1;
+            }),
+        }),
+        { getReprimeState: () => ({ seed: "current" }) },
+      );
+      queue.ingest(1, { type: "user", text: "poison" });
+      const dropped = yield* queue
+        .checkpointEffect({ checkpointId: "drop", focus: "standard" })
+        .pipe(Effect.exit);
+      expect(queueError(dropped)).toBeInstanceOf(AdvisorQueueBatchDroppedError);
+      expect(reprimes).toBe(2);
+      expect(queue.processedThrough).toBe(1);
+      queue.ingest(2, { type: "user", text: "small" });
+      yield* queue.checkpointEffect({ checkpointId: "small", focus: "standard" });
+      expect(requests[2]?.observations).toContain("small");
+      expect(requests[2]?.observations).not.toContain("poison");
+    }),
+  );
+
+  it.effect("returns ResetRequired when recovery has no current re-prime state", () =>
+    Effect.gen(function* () {
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({ checkpoint: () => Effect.fail(resetRequired()) }),
+      );
+      queue.ingest(1, { type: "user", text: "reset" });
+      const exit = yield* queue
+        .checkpointEffect({ checkpointId: "reset", focus: "standard" })
+        .pipe(Effect.exit);
+      expect(queueError(exit)).toBeInstanceOf(AdvisorQueueResetRequiredError);
+    }),
+  );
+
+  it.effect("cancelling a reset failure prevents any stale re-prime", () =>
+    Effect.gen(function* () {
+      let reprimes = 0;
+      const checkpointStarted = yield* Deferred.make<void>();
+      const checkpointRelease = yield* Deferred.make<void>();
+      const abortStarted = yield* Deferred.make<void>();
+      const abortRelease = yield* Deferred.make<void>();
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: () =>
+            Deferred.succeed(checkpointStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(checkpointRelease)),
+              Effect.andThen(Effect.fail(resetRequired())),
+            ),
+          reprime: () =>
+            Effect.sync(() => {
+              reprimes += 1;
+            }),
+          abort: () =>
+            Deferred.succeed(abortStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(abortRelease)),
+              Effect.asVoid,
+            ),
+        }),
+        { getReprimeState: () => ({ seed: "stale" }) },
+      );
+      queue.ingest(1, { type: "user", text: "reset" });
+      const request = yield* forkCheckpoint(queue, { checkpointId: "cancel", focus: "standard" });
+      yield* Deferred.await(checkpointStarted);
+      const cancellation = yield* queue
+        .cancelCheckpointEffect("cancel")
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(abortStarted);
+      yield* Deferred.succeed(checkpointRelease, undefined);
+      yield* Deferred.succeed(abortRelease, undefined);
+      yield* Fiber.join(cancellation);
+      expect(queueError(yield* Fiber.await(request))).toBeInstanceOf(AdvisorQueueCancelledError);
+      expect(reprimes).toBe(0);
+    }),
+  );
+
+  it.effect("disposal of a reset failure prevents any stale re-prime", () =>
+    Effect.gen(function* () {
+      let reprimes = 0;
+      const checkpointStarted = yield* Deferred.make<void>();
+      const checkpointRelease = yield* Deferred.make<void>();
+      const abortStarted = yield* Deferred.make<void>();
+      const abortRelease = yield* Deferred.make<void>();
+      const queue = yield* makeAdvisorReviewQueue(
+        makeRuntime({
+          checkpoint: () =>
+            Deferred.succeed(checkpointStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(checkpointRelease)),
+              Effect.andThen(Effect.fail(resetRequired())),
+            ),
+          reprime: () =>
+            Effect.sync(() => {
+              reprimes += 1;
+            }),
+          abort: () =>
+            Deferred.succeed(abortStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(abortRelease)),
+              Effect.asVoid,
+            ),
+        }),
+        { getReprimeState: () => ({ seed: "stale" }) },
+      );
+      queue.ingest(1, { type: "user", text: "reset" });
+      const request = yield* forkCheckpoint(queue, { checkpointId: "dispose", focus: "standard" });
+      yield* Deferred.await(checkpointStarted);
+      const disposal = yield* queue
+        .disposeEffect()
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(abortStarted);
+      yield* Deferred.succeed(checkpointRelease, undefined);
+      yield* Deferred.succeed(abortRelease, undefined);
+      yield* Fiber.join(disposal);
+      expect(queueError(yield* Fiber.await(request))).toBeInstanceOf(AdvisorQueueDisposedError);
+      expect(reprimes).toBe(0);
+    }),
+  );
+
+  it.effect("post-disposal ingestion throws the typed Disposed error", () =>
+    Effect.gen(function* () {
+      const queue = yield* makeAdvisorReviewQueue(makeRuntime());
+      yield* queue.disposeEffect();
+      expect(() => queue.ingest(1, { type: "user", text: "late" })).toThrow(
+        AdvisorQueueDisposedError,
+      );
+    }),
+  );
+
+  it.effect("isolates lifecycle callbacks while preserving settlement", () =>
+    Effect.gen(function* () {
+      const settled = vi.fn(() => {
+        throw new Error("hostile callback");
+      });
+      const queue = yield* makeAdvisorReviewQueue(makeRuntime(), {
+        onCheckpointStart: () => {
+          throw new Error("hostile callback");
+        },
+        onCheckpointSettled: settled,
+      });
+      queue.ingest(1, { type: "user", text: "safe" });
+      yield* queue.checkpointEffect({ checkpointId: "safe", focus: "standard" });
+      expect(settled).toHaveBeenCalledOnce();
     }),
   );
 });

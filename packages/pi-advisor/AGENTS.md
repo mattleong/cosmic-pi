@@ -3,8 +3,9 @@
 ## Project layout
 
 - `index.ts` exposes the extension; `src/extension.ts` is a thin public entrypoint.
-- `src/application/register.ts` registers Pi lifecycle, commands, and events; `src/application/lifecycle/` owns session lifecycle (see `ARCHITECTURE.md`); `src/application/controller.ts` is the unconfigured controller stub only (types live in `controller-types.ts`).
-- `src/layer.ts` composes the session application. `src/domain/` holds plain contracts; `src/boundary/` is foreign APIs and all `host-*` adapters; `src/status/` owns Effect status resources. See root `AGENTS.md` and `ARCHITECTURE.md`.
+- `src/application/register.ts` registers Pi lifecycle, commands, and events. It is the only live application Effect-to-Promise crossing. Pure command completion stays synchronous.
+- `src/application/controller.ts` owns the narrow application service contract and durable lifecycle types. `src/application/lifecycle/` owns the implementation and its internal Effect event dispatcher. There is no fallback controller Layer.
+- `src/layer.ts` composes the session application. `src/domain/` holds plain contracts; `src/boundary/` contains foreign APIs and `host-*` adapters; `src/status/` owns Effect status resources. See root `AGENTS.md` and `ARCHITECTURE.md`.
 - `tests/**/*.test.ts` contains Vitest coverage. Prefer targeted tests near the changed behavior.
 - `.pi/` is local runtime state and is ignored by git.
 
@@ -24,7 +25,7 @@ pnpm validate
 ## Coding conventions
 
 - Use TypeScript ESM imports with `.ts` extensions, matching the workspace's source-distributed extensions.
-- Keep Pi registration in `src/application/register.ts` and the public extension entrypoint thin; put pure domain logic in `src/domain/` and test it directly.
+- Keep Pi registration and the application Promise crossing in `src/application/register.ts`. Internal lifecycle and command workflows return Effect. Keep the public extension entrypoint thin, put pure domain logic in `src/domain/`, and test it directly.
 - Preserve unknown root JSON fields whenever settings update the global config.
 - The advisor must fail open: model, auth, timeout, abort, parsing, and provider failures cannot block or discard the candidate response.
 - Enforce at most one advisor-triggered revision for each genuine user request; advisor messages must never reset or recursively trigger the cycle.

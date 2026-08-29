@@ -1,17 +1,15 @@
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 
 const QueueErrorFields = { message: Schema.String } as const;
 const isQueueErrorTag = <Tag>(tag: Tag): boolean => {
   switch (tag) {
     case "AdvisorQueueError":
     case "Disposed":
-    case "BacklogExceeded":
     case "ResetRequired":
     case "BatchDropped":
     case "CorrelationMismatch":
     case "Cancelled":
-    case "StaleEpoch":
       return true;
     default:
       return false;
@@ -25,10 +23,6 @@ export class AdvisorQueueError extends Schema.TaggedError<AdvisorQueueError>()(
 
 export class AdvisorQueueDisposedError extends Schema.TaggedError<AdvisorQueueDisposedError>()(
   "Disposed",
-  QueueErrorFields,
-) {}
-export class AdvisorQueueBacklogExceededError extends Schema.TaggedError<AdvisorQueueBacklogExceededError>()(
-  "BacklogExceeded",
   QueueErrorFields,
 ) {}
 export class AdvisorQueueResetRequiredError extends Schema.TaggedError<AdvisorQueueResetRequiredError>()(
@@ -47,25 +41,16 @@ export class AdvisorQueueCancelledError extends Schema.TaggedError<AdvisorQueueC
   "Cancelled",
   QueueErrorFields,
 ) {}
-export class AdvisorQueueStaleEpochError extends Schema.TaggedError<AdvisorQueueStaleEpochError>()(
-  "StaleEpoch",
-  QueueErrorFields,
-) {}
 
 export type AdvisorReviewQueueError =
   | AdvisorQueueError
   | AdvisorQueueDisposedError
-  | AdvisorQueueBacklogExceededError
   | AdvisorQueueResetRequiredError
   | AdvisorQueueBatchDroppedError
   | AdvisorQueueCorrelationMismatchError
-  | AdvisorQueueCancelledError
-  | AdvisorQueueStaleEpochError;
+  | AdvisorQueueCancelledError;
 
 export const isAdvisorReviewQueueError = <ErrorInput>(
   error: ErrorInput,
-): error is ErrorInput & AdvisorReviewQueueError => {
-  return (
-    hasObjectRuntimeType(error) && error !== null && "_tag" in error && isQueueErrorTag(error._tag)
-  );
-};
+): error is ErrorInput & AdvisorReviewQueueError =>
+  hasObjectRuntimeType(error) && error !== null && "_tag" in error && isQueueErrorTag(error._tag);

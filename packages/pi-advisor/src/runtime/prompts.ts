@@ -1,5 +1,5 @@
 import { stringifyJson } from "../boundary/json.ts";
-import { ADVISOR_SYSTEM_PROMPT, type AdvisorReviewFocus } from "../review/index.ts";
+import { ADVISOR_SYSTEM_PROMPT, type AdvisorReviewFocus } from "../review/schema.ts";
 import { MAX_ADVISOR_STATE_SUMMARY_CHARS, type AdvisorCheckpointRequest } from "./types.ts";
 
 export function buildTrustedSystemPrompt(instructions?: string): string {

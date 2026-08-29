@@ -11,7 +11,7 @@ import {
   type AdvisorFindingStatus,
   type AdvisorSeverity,
 } from "./schema.ts";
-import { canonicalAdvisorFindingFingerprint } from "./parse.ts";
+import { canonicalAdvisorFindingFingerprint } from "./schema.ts";
 import { isOneOf, isRecord } from "../shared/utils.ts";
 
 export const MAX_FINDING_LIFECYCLE_RECORDS = 64;

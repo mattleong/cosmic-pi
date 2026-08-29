@@ -1,6 +1,6 @@
-import * as Predicate from "effect/Predicate";
-
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
+import { stringifyJson } from "../boundary/json.ts";
 
 export const ADVISOR_VERDICTS = ["pass", "suggest", "revise"] as const;
 export const ADVISOR_SEVERITIES = ["concern", "blocker"] as const;
@@ -51,68 +51,145 @@ export const MAX_ADVISOR_RECOMMENDATION_CHARS = 2_000;
 export const MAX_ADVISOR_SUGGESTION_CHARS = 2_000;
 export const MAX_ADVISOR_RATIONALE_CHARS = 2_000;
 
-const boundedNonEmpty = (maximum: number) =>
-  Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maximum));
-const FingerprintWireSchema = boundedNonEmpty(MAX_ADVISOR_FINGERPRINT_CHARS);
-export const AdvisorSuggestionWireSchema = Schema.Struct({
-  fingerprint: FingerprintWireSchema,
+export const ADVISOR_REVIEW_SIZE_FILTER_IDENTIFIER = "pi-advisor/review/embedded-size";
+export const ADVISOR_REVIEW_LANE_FILTER_IDENTIFIER = "pi-advisor/review/verdict-lane";
+export const ADVISOR_REVIEW_FINGERPRINT_FILTER_IDENTIFIER =
+  "pi-advisor/review/canonical-fingerprints";
+
+const boundedTrimmedNonEmpty = (maximum: number) =>
+  Schema.String.check(Schema.isMaxLength(maximum))
+    .pipe(Schema.decode(SchemaTransformation.trim()))
+    .check(Schema.isNonEmpty());
+
+const FingerprintSchema = boundedTrimmedNonEmpty(MAX_ADVISOR_FINGERPRINT_CHARS);
+export const AdvisorSuggestionSchema = Schema.Struct({
+  fingerprint: FingerprintSchema,
   kind: Schema.Literals(ADVISOR_SUGGESTION_KINDS),
-  suggestion: boundedNonEmpty(MAX_ADVISOR_SUGGESTION_CHARS),
-  rationale: boundedNonEmpty(MAX_ADVISOR_RATIONALE_CHARS),
+  suggestion: boundedTrimmedNonEmpty(MAX_ADVISOR_SUGGESTION_CHARS),
+  rationale: boundedTrimmedNonEmpty(MAX_ADVISOR_RATIONALE_CHARS),
   relevance: Schema.Literals(ADVISOR_SUGGESTION_RELEVANCES),
 });
-export const AdvisorFindingWireSchema = Schema.Struct({
-  fingerprint: FingerprintWireSchema,
+export const AdvisorFindingSchema = Schema.Struct({
+  fingerprint: FingerprintSchema,
   category: Schema.Literals(ADVISOR_FINDING_CATEGORIES),
   severity: Schema.Literals(ADVISOR_SEVERITIES),
   confidence: Schema.Literals(ADVISOR_CONFIDENCES),
   evidenceBasis: Schema.Literals(ADVISOR_EVIDENCE_BASES),
-  issue: boundedNonEmpty(MAX_ADVISOR_ISSUE_CHARS),
-  evidence: boundedNonEmpty(MAX_ADVISOR_EVIDENCE_CHARS),
-  recommendation: boundedNonEmpty(MAX_ADVISOR_RECOMMENDATION_CHARS),
+  issue: boundedTrimmedNonEmpty(MAX_ADVISOR_ISSUE_CHARS),
+  evidence: boundedTrimmedNonEmpty(MAX_ADVISOR_EVIDENCE_CHARS),
+  recommendation: boundedTrimmedNonEmpty(MAX_ADVISOR_RECOMMENDATION_CHARS),
 });
-export const AdvisorReviewWireSchema = Schema.Struct({
+export const AdvisorReviewFieldsSchema = Schema.Struct({
   verdict: Schema.Literals(ADVISOR_VERDICTS),
-  summary: boundedNonEmpty(MAX_ADVISOR_SUMMARY_CHARS),
-  suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(
+  summary: boundedTrimmedNonEmpty(MAX_ADVISOR_SUMMARY_CHARS),
+  suggestions: Schema.Array(AdvisorSuggestionSchema).check(
     Schema.isMaxLength(MAX_ADVISOR_SUGGESTIONS),
   ),
-  findings: Schema.Array(AdvisorFindingWireSchema).check(Schema.isMaxLength(MAX_ADVISOR_FINDINGS)),
+  findings: Schema.Array(AdvisorFindingSchema).check(Schema.isMaxLength(MAX_ADVISOR_FINDINGS)),
 });
+
+type AdvisorReviewFilterInput = {
+  readonly verdict: AdvisorVerdict;
+  readonly summary: string;
+  readonly suggestions: ReadonlyArray<{ readonly fingerprint: string }>;
+  readonly findings: ReadonlyArray<{ readonly fingerprint: string }>;
+};
+
+export const makeAdvisorReviewSizeFilter = <Review extends AdvisorReviewFilterInput>() =>
+  Schema.makeFilter<Review>(
+    (review) =>
+      stringifyJson({
+        verdict: review.verdict,
+        summary: review.summary,
+        suggestions: review.suggestions,
+        findings: review.findings,
+      }).length <= MAX_ADVISOR_REVIEW_CHARS,
+    { identifier: ADVISOR_REVIEW_SIZE_FILTER_IDENTIFIER },
+  );
+
+export const makeAdvisorReviewLaneFilter = <Review extends AdvisorReviewFilterInput>() =>
+  Schema.makeFilter<Review>(
+    (review) => {
+      const suggestions = review.suggestions.length;
+      const findings = review.findings.length;
+      switch (review.verdict) {
+        case "pass":
+          return suggestions === 0 && findings === 0;
+        case "suggest":
+          return suggestions > 0 && findings === 0;
+        case "revise":
+          return suggestions === 0 && findings > 0;
+      }
+    },
+    { identifier: ADVISOR_REVIEW_LANE_FILTER_IDENTIFIER },
+  );
+
+export const makeAdvisorReviewFingerprintFilter = <Review extends AdvisorReviewFilterInput>() =>
+  Schema.makeFilter<Review>(
+    (review) => {
+      const fingerprints = new Set<string>();
+      for (const item of [...review.suggestions, ...review.findings]) {
+        const fingerprint = canonicalAdvisorFindingFingerprint(item.fingerprint);
+        if (!fingerprint || fingerprints.has(fingerprint)) return false;
+        fingerprints.add(fingerprint);
+      }
+      return true;
+    },
+    { identifier: ADVISOR_REVIEW_FINGERPRINT_FILTER_IDENTIFIER },
+  );
+
+const AdvisorReviewEncodedInputSchema = Schema.toEncoded(AdvisorReviewFieldsSchema);
+const AdvisorReviewBoundedEncodedSchema = AdvisorReviewEncodedInputSchema.check(
+  makeAdvisorReviewSizeFilter<Schema.Schema.Type<typeof AdvisorReviewEncodedInputSchema>>(),
+);
+const AdvisorReviewNormalizedSchema = AdvisorReviewBoundedEncodedSchema.pipe(
+  Schema.decodeTo(AdvisorReviewFieldsSchema),
+);
+type StrictAdvisorReview = Schema.Schema.Type<typeof AdvisorReviewNormalizedSchema>;
+export const AdvisorReviewSchema = AdvisorReviewNormalizedSchema.check(
+  makeAdvisorReviewLaneFilter<StrictAdvisorReview>(),
+  makeAdvisorReviewFingerprintFilter<StrictAdvisorReview>(),
+);
+export type ParsedAdvisorSuggestion = Schema.Schema.Type<typeof AdvisorSuggestionSchema>;
+export type ParsedAdvisorFinding = Schema.Schema.Type<typeof AdvisorFindingSchema>;
+export type ParsedAdvisorReview = Schema.Schema.Type<typeof AdvisorReviewSchema>;
+
 export interface AdvisorSuggestion {
-  fingerprint?: string;
-  kind: AdvisorSuggestionKind;
-  suggestion: string;
-  rationale: string;
-  relevance: AdvisorSuggestionRelevance;
+  readonly fingerprint?: string;
+  readonly kind: AdvisorSuggestionKind;
+  readonly suggestion: string;
+  readonly rationale: string;
+  readonly relevance: AdvisorSuggestionRelevance;
 }
 
+/** Broader lifecycle shape. Strict model output uses ParsedAdvisorFinding. */
 export interface AdvisorFinding {
-  category: AdvisorFindingCategory;
-  severity: AdvisorSeverity;
-  confidence?: AdvisorConfidence | undefined;
-  evidenceBasis?: AdvisorEvidenceBasis | undefined;
-  fingerprint?: string;
-  id?: string;
-  status?: AdvisorFindingStatus;
-  issue: string;
-  evidence: string;
-  recommendation: string;
+  readonly category: AdvisorFindingCategory;
+  readonly severity: AdvisorSeverity;
+  readonly confidence?: AdvisorConfidence | undefined;
+  readonly evidenceBasis?: AdvisorEvidenceBasis | undefined;
+  readonly fingerprint?: string;
+  readonly id?: string;
+  readonly status?: AdvisorFindingStatus;
+  readonly issue: string;
+  readonly evidence: string;
+  readonly recommendation: string;
 }
 
 export interface AdvisorReview {
-  verdict: AdvisorVerdict;
-  summary: string;
-  suggestions: AdvisorSuggestion[];
-  findings: AdvisorFinding[];
+  readonly verdict: AdvisorVerdict;
+  readonly summary: string;
+  readonly suggestions: ReadonlyArray<AdvisorSuggestion>;
+  readonly findings: ReadonlyArray<AdvisorFinding>;
 }
 
-export class AdvisorReviewParseError extends Schema.TaggedError<AdvisorReviewParseError>()(
-  "AdvisorReviewParseError",
-  { message: Schema.String },
-) {}
-export const reviewError = (value: string | { readonly message: string }) =>
-  new AdvisorReviewParseError(Predicate.isString(value) ? { message: value } : value);
+export function canonicalAdvisorFindingFingerprint(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
 
 export const ADVISOR_SYSTEM_PROMPT = `You are an independent advisor supervising an assistant's active work and completed responses against the user's actual request and the supplied conversation evidence.
 

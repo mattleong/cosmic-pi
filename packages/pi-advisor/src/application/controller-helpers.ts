@@ -13,11 +13,10 @@ import {
   type AdvisorReviewCardPublishResult,
 } from "../boundary/host-review-cards.ts";
 import {
-  AdvisorReviewParseError,
   canonicalAdvisorFindingFingerprint,
   type AdvisorFinding,
   type AdvisorReview,
-} from "../review/index.ts";
+} from "../review/schema.ts";
 import { readAdvisorContextEntriesAtHostBoundary } from "../boundary/host-context.ts";
 
 export interface CancellationLatch {
@@ -80,19 +79,6 @@ export function verificationFingerprints(findings: readonly AdvisorFinding[]): S
   );
 }
 
-export function reviewWithAcknowledgedFindings(
-  review: AdvisorReview,
-  findingIds: readonly string[],
-): AdvisorReview {
-  const acknowledged = new Set(findingIds);
-  return {
-    ...review,
-    findings: review.findings.map((finding) =>
-      finding.id && acknowledged.has(finding.id) ? { ...finding, status: "acknowledged" } : finding,
-    ),
-  };
-}
-
 export function incrementBounded(value: number | undefined): number {
   return Math.min(Number.MAX_SAFE_INTEGER, (value ?? 0) + 1);
 }
@@ -108,11 +94,11 @@ const MODEL_ERROR_KIND_CLASSIFICATION = {
   timeout: "timeout",
   unavailable: "model",
   aborted: "cancelled",
+  "response-format": "response-format",
   unknown: "provider",
 } satisfies Record<AdvisorModelErrorKind, string>;
 
 export function classifyFailure<ErrorInput>(error: ErrorInput): string {
-  if (error instanceof AdvisorReviewParseError) return "response-format";
   if (error instanceof AdvisorModelError && error.kind)
     return MODEL_ERROR_KIND_CLASSIFICATION[error.kind];
   // Message heuristics remain only as a fallback for errors produced outside this extension.

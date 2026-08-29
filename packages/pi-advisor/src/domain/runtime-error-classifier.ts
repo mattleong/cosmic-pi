@@ -1,5 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
+import { AdvisorModelError } from "../runtime/client.ts";
 import { AdvisorRuntimeResetRequiredError } from "../runtime/runtime.ts";
 
 /**
@@ -17,6 +18,7 @@ export const classifyAdvisorRuntimeFailure = <ErrorInput>(
       error._tag === "ResetRequired")
   )
     return "reset-required";
+  if (error instanceof AdvisorModelError) return "other";
   const message =
     hasObjectRuntimeType(error) &&
     error !== null &&

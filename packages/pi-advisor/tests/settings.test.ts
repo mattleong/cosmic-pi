@@ -1,7 +1,7 @@
-// Pi command handlers are Promise-shaped test boundaries.
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import { vi } from "vitest";
 import {
   normalizeAdvisorConfig,
@@ -9,61 +9,78 @@ import {
   type AdvisorConfigPatch,
   type ResolvedAdvisorConfig,
 } from "../src/config/options.ts";
-import { registerAdvisorCommands } from "../src/settings/controller.ts";
-import type { AdvisorCommandActions, AdvisorConfigState } from "../src/settings/types.ts";
+import type { AdvisorSessionMetrics } from "../src/domain/metrics.ts";
+import {
+  completeAdvisorCommandArguments,
+  handleAdvisorCommand,
+} from "../src/settings/controller.ts";
+import type {
+  AdvisorActivity,
+  AdvisorCommandActions,
+  AdvisorCommandState,
+} from "../src/settings/types.ts";
+import { deferred } from "./support/async.ts";
+
+const sessionMetrics = (overrides: Partial<AdvisorSessionMetrics> = {}): AdvisorSessionMetrics => ({
+  cards: 0,
+  corrections: 0,
+  cost: 0,
+  modelResponses: 0,
+  settledReviews: 0,
+  totalDurationMs: 0,
+  totalTokens: 0,
+  ...overrides,
+});
 
 function harness(
   initial: ResolvedAdvisorConfig = normalizeAdvisorConfig(
     { enabled: true, provider: "p", model: "m", setupDismissed: true },
     "/config",
   ),
+  snapshot: {
+    readonly activity?: AdvisorActivity;
+    readonly hasLastCandidate?: boolean;
+    readonly metrics?: AdvisorSessionMetrics;
+  } = {},
 ) {
   let config = initial;
-  const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
-  const persist = vi.fn((patch: AdvisorConfigPatch) => {
-    const base = { enabled: config.enabled, setupDismissed: config.setupDismissed };
-    const withProvider = config.provider ? { ...base, provider: config.provider } : base;
-    const patched = config.model ? { ...withProvider, model: config.model } : withProvider;
-    const raw = patchAdvisorConfig(patched, patch);
-    config = normalizeAdvisorConfig(raw, config.configPath);
-    return Promise.resolve(config);
-  });
-  const state: AdvisorConfigState = {
-    get: () => config,
-    getMetrics: () => ({
-      attempted: 0,
-      pass: 0,
-      revise: 0,
-      failure: 0,
-      discarded: 0,
-      outcomes: {
-        pass: 0,
-        findings: 0,
-        perspective: 0,
-        advice: 0,
-        guidance: 0,
-        revision: 0,
-        recovery: 0,
-        suppressed: 0,
-        discarded: 0,
-        failures: 0,
-      },
+  const persist = vi.fn((patch: AdvisorConfigPatch) =>
+    Effect.sync(() => {
+      const base = { enabled: config.enabled, setupDismissed: config.setupDismissed };
+      const withProvider = config.provider ? { ...base, provider: config.provider } : base;
+      const patched = config.model ? { ...withProvider, model: config.model } : withProvider;
+      const raw = patchAdvisorConfig(patched, patch);
+      config = normalizeAdvisorConfig(raw, config.configPath);
+      return config;
     }),
-    persist,
-  };
+  );
   const actions: AdvisorCommandActions = {
-    cancel: vi.fn(() => false),
+    cancel: vi.fn(() => Effect.succeed(false)),
     fixLast: vi.fn(() => "unavailable" as const),
     dismissLast: vi.fn(() => "unavailable" as const),
-    reviewLast: vi.fn(() => "started" as const),
+    reviewLast: vi.fn(() => Effect.succeed("started" as const)),
   };
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  registerAdvisorCommands(
-    { registerCommand: (name, definition) => commands.set(name, definition as never) },
-    state,
+  const handler = (args: string, ctx: ExtensionCommandContext) => {
+    const state: AdvisorCommandState = {
+      snapshot: {
+        config,
+        metrics: snapshot.metrics ?? sessionMetrics(),
+        activity: snapshot.activity ?? "idle",
+        hasLastCandidate: snapshot.hasLastCandidate ?? false,
+      },
+      persist,
+    };
+    return handleAdvisorCommand(args, ctx, state, actions);
+  };
+  return {
+    handler,
     actions,
-  );
-  return { commands, actions, persist, getConfig: () => config };
+    persist,
+    getConfig: () => config,
+    setConfig: (next: ResolvedAdvisorConfig) => {
+      config = next;
+    },
+  };
 }
 
 function context(
@@ -92,21 +109,73 @@ function context(
   return fixture as typeof fixture & ExtensionCommandContext;
 }
 
-const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
-  Effect.promise(() => Promise.resolve(value).then(() => undefined));
-
 describe("Advisor commands", () => {
+  it("keeps pure argument completion descriptions", () => {
+    expect(completeAdvisorCommandArguments("rev")).toEqual([
+      {
+        value: "review",
+        label: "review",
+        description: "Review the last completed response",
+      },
+    ]);
+  });
+
   it.effect("dashboard shows only contextual core actions", () =>
     Effect.gen(function* () {
       const value = harness();
       const ctx = context();
-      yield* invoke(value.commands.get("advisor")?.handler("", ctx));
+      yield* value.handler("", ctx);
       expect(ctx.ui.select).toHaveBeenCalledWith(expect.stringContaining("Advisor · ready"), [
         "Change model",
         "Turn off",
         "Usage",
         "Done",
       ]);
+    }),
+  );
+
+  it.effect("dashboard uses the fixed command activity and candidate snapshot", () =>
+    Effect.gen(function* () {
+      const value = harness(undefined, {
+        activity: "reviewing",
+        hasLastCandidate: true,
+      });
+      const ctx = context();
+      yield* value.handler("", ctx);
+      expect(ctx.ui.select).toHaveBeenCalledWith(expect.any(String), [
+        "Change model",
+        "Review last",
+        "Cancel review",
+        "Turn off",
+        "Usage",
+        "Done",
+      ]);
+    }),
+  );
+
+  it.effect("retains the command snapshot after the dashboard modal yields", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      const ctx = context();
+      const modalReached = deferred<void>();
+      const selection = deferred<string>();
+      ctx.ui.select.mockImplementationOnce(() => {
+        modalReached.resolve(undefined);
+        return selection.promise;
+      });
+      const command = yield* value
+        .handler("", ctx)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.promise(() => modalReached.promise);
+      value.setConfig(
+        normalizeAdvisorConfig(
+          { enabled: true, provider: "other", model: "new", setupDismissed: true },
+          "/changed",
+        ),
+      );
+      selection.resolve("Turn off");
+      yield* Fiber.join(command);
+      expect(value.persist).toHaveBeenCalledWith({ enabled: false }, "/config");
     }),
   );
 
@@ -119,7 +188,7 @@ describe("Advisor commands", () => {
         ),
       );
       const ctx = context();
-      yield* invoke(value.commands.get("advisor")?.handler("review", ctx));
+      yield* value.handler("review", ctx);
       expect(value.actions.reviewLast).toHaveBeenCalledWith(ctx);
     }),
   );
@@ -141,7 +210,7 @@ describe("Advisor commands", () => {
         "review-last",
         "verify-last",
       ]) {
-        yield* invoke(value.commands.get("advisor")?.handler(removed, ctx));
+        yield* value.handler(removed, ctx);
       }
       expect(ctx.ui.notify).toHaveBeenCalledTimes(11);
       expect(value.actions.reviewLast).not.toHaveBeenCalled();
@@ -152,10 +221,10 @@ describe("Advisor commands", () => {
     Effect.gen(function* () {
       const value = harness();
       const ctx = context();
-      yield* invoke(value.commands.get("advisor")?.handler("off", ctx));
+      yield* value.handler("off", ctx);
       expect(value.getConfig().enabled).toBe(false);
       expect(ctx.ui.notify).toHaveBeenCalledWith("Advisor is off.", "info");
-      yield* invoke(value.commands.get("advisor")?.handler("on", ctx));
+      yield* value.handler("on", ctx);
       expect(value.getConfig().enabled).toBe(true);
       expect(ctx.ui.notify).toHaveBeenCalledWith("Advisor is on.", "info");
     }),
@@ -168,7 +237,7 @@ describe("Advisor commands", () => {
         selections: ["provider/model"],
         models: [{ provider: "provider", id: "model" }],
       });
-      yield* invoke(value.commands.get("advisor")?.handler("setup", ctx));
+      yield* value.handler("setup", ctx);
       expect(value.persist).toHaveBeenCalledOnce();
       expect(value.persist.mock.calls[0]?.[0]).toEqual({
         provider: "provider",
@@ -188,9 +257,7 @@ describe("Advisor commands", () => {
   it.effect("Not now persists only setup dismissal", () =>
     Effect.gen(function* () {
       const value = harness(normalizeAdvisorConfig({}, "/config"));
-      yield* invoke(
-        value.commands.get("advisor")?.handler("setup", context({ selections: ["Not now"] })),
-      );
+      yield* value.handler("setup", context({ selections: ["Not now"] }));
       expect(value.persist).toHaveBeenCalledWith({ setupDismissed: true }, "/config");
       expect(value.getConfig()).toMatchObject({
         enabled: false,
@@ -200,13 +267,30 @@ describe("Advisor commands", () => {
     }),
   );
 
-  it.effect("usage remains a concise detailed report", () =>
+  it.effect("usage renders only visible session metrics", () =>
     Effect.gen(function* () {
-      const value = harness();
+      const value = harness(undefined, {
+        metrics: sessionMetrics({
+          cards: 3,
+          corrections: 2,
+          cost: 0.125,
+          latestDurationMs: 250,
+          modelResponses: 4,
+          settledReviews: 3,
+          totalDurationMs: 1_500,
+          totalTokens: 12_345,
+        }),
+      });
       const ctx = context();
-      yield* invoke(value.commands.get("advisor")?.handler("usage", ctx));
+      yield* value.handler("usage", ctx);
       expect(ctx.ui.notify).toHaveBeenCalledWith(
-        expect.stringContaining("Responses/reviews/cards:"),
+        [
+          "Advisor usage · this session",
+          "Responses/reviews/cards: 4 / 3 / 3",
+          "Corrections: 2",
+          "Tokens: 12,345 · cost $0.125000",
+          "Timing: 1.5s total · 250ms latest",
+        ].join("\n"),
         "info",
       );
     }),

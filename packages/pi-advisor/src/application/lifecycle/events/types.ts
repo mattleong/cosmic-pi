@@ -1,55 +1,50 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
-import type { AdvisorEffectExecutor, AdvisorPlatform } from "../../../boundary/executor.ts";
-import type { AdvisorHostBindings } from "../../../boundary/host-bindings.ts";
+import type * as Scope from "effect/Scope";
 import type { CheckpointOrchestratorContract } from "../../../checkpoint/orchestrator.ts";
 import type { ResolvedAdvisorConfig } from "../../../config/options.ts";
 import type { ConfigStoreContract } from "../../../config/store.ts";
-import type { AdvisorReviewQueue } from "../../../queue/service.ts";
-import type { AdvisorReviewFocus } from "../../../review/index.ts";
+import type { AdvisorReviewQueue } from "../../../queue/review-queue.ts";
+import type { AdvisorReviewFocus } from "../../../review/schema.ts";
 import type {
   AdvisorCheckpointHandle,
-  AdvisorSkipReason,
   ParentAnchor,
   ReviewPhase,
   ReviewSource,
-} from "../../controller-types.ts";
+} from "../../controller.ts";
 import type { AdvisorActiveTrajectoryState, AdvisorApplicationState } from "../../state.ts";
 import type { SessionRefs } from "../session-refs.ts";
 
 export interface EventsDeps {
   readonly refs: SessionRefs;
   readonly pi: ExtensionAPI;
-  readonly hostBindings: AdvisorHostBindings;
+  readonly applicationScope: Scope.Scope;
   readonly getState: () => AdvisorApplicationState;
   readonly updateApplicationState: (
     update: (state: AdvisorApplicationState) => AdvisorApplicationState,
   ) => void;
-  readonly mutateMetrics: (mutate: (next: AdvisorApplicationState["metrics"]) => void) => void;
+  readonly updateMetrics: (
+    update: (metrics: AdvisorApplicationState["metrics"]) => AdvisorApplicationState["metrics"],
+  ) => void;
   readonly currentConfig: () => ResolvedAdvisorConfig;
-  readonly advanceDomainCounter: (
-    key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
-  ) => number;
-  readonly setDomainCounter: (
-    key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
-    value: number,
-  ) => number;
+  readonly advanceDomainCounter: (key: "epoch" | "parentTurnId") => number;
   readonly clearPersistentTrajectory: () => void;
+  readonly clearPersistentTrajectoryResources: () => void;
   readonly clearPendingRecovery: () => void;
   readonly clearPendingReceipt: () => void;
-  readonly latchCancellation: () => void;
-  readonly resetRequestDomain: (resetLifecycle?: boolean) => void;
+  readonly initializeSession: (config: ResolvedAdvisorConfig) => void;
+  readonly beginUserRequest: () => void;
+  readonly cancelRequest: () => void;
+  readonly resetSessionTreeDomain: () => void;
   readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
   readonly persistLedger: (anchor: ParentAnchor) => void;
   readonly ingest: (input: Parameters<AdvisorReviewQueue["ingest"]>[1]) => void;
   readonly recordReceipt: (ids: readonly string[]) => void;
-  readonly recordSkip: (reason: AdvisorSkipReason) => void;
   readonly mutateTrajectory: (
     id: number,
     mutate: (next: AdvisorActiveTrajectoryState) => AdvisorActiveTrajectoryState,
   ) => AdvisorActiveTrajectoryState | undefined;
-  readonly runSessionEffect: <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) => Promise<A>;
-  readonly parentExecutor: AdvisorEffectExecutor;
+  readonly scheduleDelay: (milliseconds: number, task: () => void) => () => void;
   readonly notifyBestEffort: (
     ctx: Pick<ExtensionContext, "ui">,
     message: string,
@@ -79,9 +74,11 @@ export interface EventsDeps {
     handle: AdvisorCheckpointHandle,
     ctx: ExtensionContext,
   ) => Effect.Effect<void>;
-  readonly awaitCatchUp: (handle: AdvisorCheckpointHandle, ctx: ExtensionContext) => Promise<void>;
   readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
-  readonly publishControllerSnapshot: () => Effect.Effect<void>;
   readonly checkpointOrchestrator: CheckpointOrchestratorContract;
   readonly configStore: ConfigStoreContract;
+  readonly persistCommandConfig: (
+    patch: Parameters<ConfigStoreContract["patch"]>[0],
+    path: string,
+  ) => ReturnType<ConfigStoreContract["patch"]>;
 }

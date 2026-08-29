@@ -1,13 +1,25 @@
 // Test harness boundary: Pi callbacks and fake child sessions are Promise-shaped fixtures.
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import { hasObjectRuntimeType, type JsonObject } from "pi-cosmic-core";
+import { yieldUntil } from "pi-cosmic-core/testing";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import { test, vi } from "vitest";
-import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
-import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
+import type {
+  AdvisorCheckpoint,
+  AdvisorCheckpointRequest,
+  AdvisorRuntimeStartOptions,
+} from "../src/runtime/runtime.ts";
+import { AdvisorModelError } from "../src/runtime/client.ts";
+import {
+  normalizeAdvisorConfig,
+  patchAdvisorConfig,
+  type ResolvedAdvisorConfig,
+} from "../src/config/options.ts";
+import { AdvisorConfigStoreError, ConfigStore } from "../src/config/store.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 import { deferred, tick } from "./support/async.ts";
 import { finalTurn, passCheckpoint as pass } from "./support/checkpoints.ts";
@@ -83,6 +95,8 @@ function harness(
     runtimeStartPromises?: Array<Promise<void> | undefined>;
     runtimeDisposePromises?: Array<Promise<void> | undefined>;
     branch?: AdvisorHostEntry[];
+    memoryConfig?: boolean;
+    configPatchError?: boolean;
     withoutSessionId?: boolean;
   } = {},
 ) {
@@ -118,8 +132,41 @@ function harness(
     withoutSessionId: options.withoutSessionId,
   });
   const logFailure = vi.fn();
+  const initialConfig = resolvedAdvisorConfig(overrides);
+  const baseConfigDocument: JsonObject = {
+    enabled: initialConfig.enabled,
+    setupDismissed: initialConfig.setupDismissed,
+  };
+  const providerConfigDocument: JsonObject = initialConfig.provider
+    ? { ...baseConfigDocument, provider: initialConfig.provider }
+    : baseConfigDocument;
+  let configDocument: JsonObject = initialConfig.model
+    ? { ...providerConfigDocument, model: initialConfig.model }
+    : providerConfigDocument;
+  const memoryConfigStore = Layer.succeed(
+    ConfigStore,
+    ConfigStore.of({
+      load: (path = initialConfig.configPath) =>
+        Effect.succeed(normalizeAdvisorConfig(configDocument, path)),
+      patch: (patch, path = initialConfig.configPath, afterCommit) => {
+        if (options.configPatchError)
+          return Effect.fail(
+            new AdvisorConfigStoreError({
+              operation: "update",
+              message: "Advisor configuration update failed.",
+            }),
+          );
+        configDocument = patchAdvisorConfig(configDocument, patch);
+        const next = normalizeAdvisorConfig(configDocument, path);
+        return (afterCommit ? afterCommit(next) : Effect.void).pipe(Effect.as(next));
+      },
+    }),
+  );
   createAdvisorExtension({
-    configStore: configStoreLayerFromLoad(() => resolvedAdvisorConfig(overrides)),
+    configStore:
+      options.memoryConfig || options.configPatchError
+        ? memoryConfigStore
+        : configStoreLayerFromLoad(() => initialConfig),
     runtimeService: runtimeService.layer,
     failureLogger: failureLoggerLayerFromLog(logFailure),
   })(pi);
@@ -196,6 +243,23 @@ const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
 /** Serialized snapshot for content-leak assertions at this Promise-shaped test boundary. */
 const serializedSnapshot = <ValueInput>(value: ValueInput): string => JSON.stringify(value);
 
+const runtimeDiagnostic = (
+  runtime: ReturnType<typeof harness>["runtimes"][number],
+): NonNullable<AdvisorRuntimeStartOptions["onDiagnostic"]> => {
+  // SAFETY: controllableRuntimeService records the typed AdvisorRuntimeStartOptions passed to start.
+  const options = runtime.driver.start.mock.calls[0]?.[0] as AdvisorRuntimeStartOptions | undefined;
+  if (!options?.onDiagnostic) throw new Error("missing runtime diagnostic callback");
+  return options.onDiagnostic;
+};
+
+const usageSnapshot = (value: ReturnType<typeof harness>): Effect.Effect<string> =>
+  Effect.gen(function* () {
+    // SAFETY: This locally constructed command fixture satisfies the Pi command context contract.
+    yield* invoke(value.commands.get("advisor")!.handler("usage", value.ctx as never));
+    const calls = vi.mocked(value.ctx.ui.notify).mock.calls;
+    return String(calls.at(-1)?.[0] ?? "");
+  });
+
 const resolveVerifiedBlocker = (
   runtime: ReturnType<typeof harness>["runtimes"][number],
   initialIndex: number,
@@ -239,6 +303,27 @@ describe("persistent extension cutover", () => {
     }),
   );
 
+  it.effect("shutdown interrupts the direct final catch-up wait", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      let settled = false;
+      const turn = value.emitAwait("turn_end", finalTurn("interrupted by shutdown"));
+      void turn.then(() => {
+        settled = true;
+      });
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes[0]!.requests).toHaveLength(1);
+      expect(settled).toBe(false);
+
+      yield* invoke(value.emit("session_shutdown", { type: "session_shutdown" }));
+      yield* invoke(turn);
+
+      expect(settled).toBe(true);
+      expect(value.runtimes[0]!.driver.dispose).toHaveBeenCalledOnce();
+    }),
+  );
+
   it.effect(
     "cursor rewrite restart and checkpoint both remain inside the same catch-up barrier",
     () =>
@@ -269,6 +354,80 @@ describe("persistent extension cutover", () => {
         yield* invoke(turn);
         expect(settled).toBe(true);
       }),
+  );
+
+  it.effect("shows and cancels a delayed cursor restart without late delivery", () =>
+    Effect.gen(function* () {
+      const restart = deferred<void>();
+      const value = harness({}, { runtimeStartPromises: [undefined, restart.promise] });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "replacement",
+          type: "message",
+          parentId: null,
+          timestamp: "now",
+          message: { role: "user", content: "replacement branch" },
+        },
+      ]);
+      const turn = value.emitAwait("turn_end", finalTurn("cancel during restart"));
+      yield* yieldUntil(() => value.runtimes.length === 2);
+
+      // SAFETY: This locally constructed command fixture satisfies the Pi command context contract.
+      yield* invoke(value.commands.get("advisor")!.handler("", value.ctx as never));
+      expect(value.ctx.ui.select).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.arrayContaining(["Cancel review"]),
+      );
+      // SAFETY: This locally constructed command fixture satisfies the Pi command context contract.
+      yield* invoke(value.commands.get("advisor")!.handler("cancel", value.ctx as never));
+      yield* invoke(turn);
+      restart.resolve();
+      yield* Effect.promise(() => tick());
+      // SAFETY: This locally constructed command fixture satisfies the Pi command context contract.
+      yield* invoke(value.commands.get("advisor")!.handler("cancel", value.ctx as never));
+
+      expect(value.runtimes[1]!.requests).toHaveLength(0);
+      expect(value.runtimes[1]!.driver.dispose).toHaveBeenCalledOnce();
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(yield* usageSnapshot(value)).toContain("Responses/reviews/cards: 0 / 1 / 0");
+    }),
+  );
+
+  it.effect("does not adopt newer user work while a cursor restart is yielding", () =>
+    Effect.gen(function* () {
+      const restart = deferred<void>();
+      const value = harness({}, { runtimeStartPromises: [undefined, restart.promise] });
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "replacement",
+          type: "message",
+          parentId: null,
+          timestamp: "now",
+          message: { role: "user", content: "replacement branch" },
+        },
+      ]);
+      const turn = value.emitAwait("turn_end", finalTurn("old request"));
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes).toHaveLength(2);
+
+      yield* invoke(
+        value.emit("message_end", {
+          type: "message_end",
+          message: { role: "user", content: "new request during restart" },
+        }),
+      );
+      restart.resolve();
+      yield* invoke(turn);
+      yield* Effect.promise(() => tick());
+
+      expect(value.runtimes[1]!.requests).toHaveLength(0);
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(yield* usageSnapshot(value)).toContain("Responses/reviews/cards: 0 / 1 / 0");
+    }),
   );
 
   it.effect("provider failure, runtime reset, and parent cancellation release catch-up early", () =>
@@ -470,6 +629,65 @@ describe("persistent extension cutover", () => {
     }),
   );
 
+  it.effect("Layer replacement invalidates active checkpoint failure effects before cleanup", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const oldTurn = value.emitAwait("turn_end", finalTurn("active during replacement"));
+      yield* Effect.promise(() => tick());
+      expect(value.runtimes[0]!.requests).toHaveLength(1);
+      vi.mocked(value.ctx.ui.notify).mockClear();
+      vi.mocked(value.ctx.ui.setStatus).mockClear();
+
+      yield* invoke(value.emitWithContext("session_start", { type: "session_start" }, value.ctx));
+      yield* invoke(oldTurn);
+      value.runtimes[0]!.pending[0]!.reject(
+        new AdvisorModelError({ message: "authentication failed", kind: "authentication" }),
+      );
+      yield* Effect.promise(() => tick());
+
+      expect(value.logFailure).not.toHaveBeenCalled();
+      expect(
+        vi
+          .mocked(value.ctx.ui.notify)
+          .mock.calls.some((call) => String(call[0]).includes("failure")),
+      ).toBe(false);
+      expect(
+        vi
+          .mocked(value.ctx.ui.setStatus)
+          .mock.calls.some((call) => String(call[1]).includes("unavailable")),
+      ).toBe(false);
+      expect(value.runtimes[1]!.driver.dispose).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("ignores diagnostics from stale runtimes and replaced application Layers", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const firstDiagnostic = runtimeDiagnostic(value.runtimes[0]!);
+      firstDiagnostic("current diagnostic");
+      firstDiagnostic("current diagnostic");
+      expect(value.ctx.ui.notify).toHaveBeenCalledTimes(1);
+
+      yield* invoke(value.emit("session_tree", { type: "session_tree" }));
+      const secondDiagnostic = runtimeDiagnostic(value.runtimes[1]!);
+      vi.mocked(value.ctx.ui.notify).mockClear();
+      firstDiagnostic("stale runtime diagnostic");
+      expect(value.ctx.ui.notify).not.toHaveBeenCalled();
+      secondDiagnostic("current replacement diagnostic");
+      expect(value.ctx.ui.notify).toHaveBeenCalledWith("current replacement diagnostic", "warning");
+
+      yield* invoke(value.emitWithContext("session_start", { type: "session_start" }, value.ctx));
+      const thirdDiagnostic = runtimeDiagnostic(value.runtimes[2]!);
+      vi.mocked(value.ctx.ui.notify).mockClear();
+      secondDiagnostic("replaced Layer diagnostic");
+      expect(value.ctx.ui.notify).not.toHaveBeenCalled();
+      thirdDiagnostic("new Layer diagnostic");
+      expect(value.ctx.ui.notify).toHaveBeenCalledWith("new Layer diagnostic", "warning");
+    }),
+  );
+
   it.effect("throwing status UI cannot skip child shutdown disposal", () =>
     Effect.gen(function* () {
       const value = harness();
@@ -626,6 +844,132 @@ describe("persistent extension cutover", () => {
       yield* Effect.promise(() => tick());
       expect(value.sendMessage).not.toHaveBeenCalled();
       expect(value.ctx.abort).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("stale provider success settles discarded exactly once", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const turn = value.emitAwait("turn_end", finalTurn("stale success"));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+
+      yield* invoke(
+        value.emit("message_end", {
+          type: "message_end",
+          message: { role: "user", content: "newer request" },
+        }),
+      );
+      current.pending[0]!.resolve(revise(current.requests[0]!));
+      yield* invoke(turn);
+      yield* Effect.promise(() => tick());
+
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(value.ctx.abort).not.toHaveBeenCalled();
+      expect(yield* usageSnapshot(value)).toContain("Responses/reviews/cards: 0 / 1 / 0");
+    }),
+  );
+
+  it.effect(
+    "stale authentication rejection has no failure side effects while current rejection stops",
+    () =>
+      Effect.gen(function* () {
+        const stale = harness();
+        yield* invoke(stale.emit("session_start", { type: "session_start" }));
+        const staleTurn = stale.emitAwait("turn_end", finalTurn("stale authentication"));
+        yield* Effect.promise(() => tick());
+        yield* invoke(
+          stale.emit("message_end", {
+            type: "message_end",
+            message: { role: "user", content: "new request" },
+          }),
+        );
+        stale.runtimes[0]!.pending[0]!.reject(
+          new AdvisorModelError({ message: "authentication failed", kind: "authentication" }),
+        );
+        yield* invoke(staleTurn);
+        yield* Effect.promise(() => tick());
+
+        expect(stale.logFailure).not.toHaveBeenCalled();
+        expect(stale.runtimes[0]!.driver.dispose).not.toHaveBeenCalled();
+        expect(
+          vi
+            .mocked(stale.ctx.ui.setStatus)
+            .mock.calls.some((call) => String(call[1]).includes("unavailable")),
+        ).toBe(false);
+        expect(
+          vi
+            .mocked(stale.ctx.ui.notify)
+            .mock.calls.some((call) => String(call[0]).includes("failure")),
+        ).toBe(false);
+        expect(yield* usageSnapshot(stale)).toContain("Responses/reviews/cards: 0 / 1 / 0");
+
+        const current = harness();
+        yield* invoke(current.emit("session_start", { type: "session_start" }));
+        const currentTurn = current.emitAwait("turn_end", finalTurn("current authentication"));
+        yield* Effect.promise(() => tick());
+        current.runtimes[0]!.pending[0]!.reject(
+          new AdvisorModelError({ message: "authentication failed", kind: "authentication" }),
+        );
+        yield* invoke(currentTurn);
+        yield* yieldUntil(
+          () =>
+            current.runtimes[0]!.driver.dispose.mock.calls.length === 1 &&
+            current.logFailure.mock.calls.length === 1,
+        );
+
+        expect(current.logFailure).toHaveBeenCalledOnce();
+        expect(current.runtimes[0]!.driver.dispose).toHaveBeenCalledOnce();
+        expect(
+          vi
+            .mocked(current.ctx.ui.setStatus)
+            .mock.calls.some((call) => String(call[1]).includes("unavailable")),
+        ).toBe(true);
+        expect(yield* usageSnapshot(current)).toContain("Responses/reviews/cards: 0 / 1 / 0");
+      }),
+  );
+
+  it.effect(
+    "a committed config invalidates an admitted checkpoint without a revision counter",
+    () =>
+      Effect.gen(function* () {
+        const value = harness({}, { memoryConfig: true });
+        yield* invoke(value.emit("session_start", { type: "session_start" }));
+        const turn = value.emitAwait("turn_end", finalTurn("old config"));
+        yield* Effect.promise(() => tick());
+        const current = value.runtimes[0]!;
+
+        // SAFETY: This locally constructed command fixture satisfies the Pi command context contract.
+        yield* invoke(value.commands.get("advisor")!.handler("off", value.ctx as never));
+        current.pending[0]!.resolve(revise(current.requests[0]!));
+        yield* invoke(turn);
+        yield* Effect.promise(() => tick());
+
+        expect(value.sendMessage).not.toHaveBeenCalled();
+        expect(value.ctx.abort).not.toHaveBeenCalled();
+        expect(yield* usageSnapshot(value)).toContain("Responses/reviews/cards: 0 / 1 / 0");
+      }),
+  );
+
+  it.effect("cancellation and late completion record one review settlement", () =>
+    Effect.gen(function* () {
+      const value = harness();
+      yield* invoke(value.emit("session_start", { type: "session_start" }));
+      const turn = value.emitAwait("turn_end", finalTurn("cancel once"));
+      yield* Effect.promise(() => tick());
+      const current = value.runtimes[0]!;
+
+      // SAFETY: This locally constructed command fixture satisfies the Pi command context contract.
+      yield* invoke(value.commands.get("advisor")!.handler("cancel", value.ctx as never));
+      yield* invoke(turn);
+      current.pending[0]!.resolve(revise(current.requests[0]!));
+      yield* Effect.promise(() => tick());
+      // SAFETY: This locally constructed command fixture satisfies the Pi command context contract.
+      yield* invoke(value.commands.get("advisor")!.handler("cancel", value.ctx as never));
+
+      expect(value.sendMessage).not.toHaveBeenCalled();
+      expect(yield* usageSnapshot(value)).toContain("Responses/reviews/cards: 0 / 1 / 0");
     }),
   );
 

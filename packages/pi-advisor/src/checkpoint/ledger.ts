@@ -15,7 +15,7 @@ import {
   sanitizeInterventionBudgetSnapshot,
   type AdvisorInterventionBudgetSnapshot,
 } from "../review/intervention-budget.ts";
-import type { AdvisorFindingCategory, AdvisorReview, AdvisorSeverity } from "../review/index.ts";
+import type { AdvisorFindingCategory, AdvisorReview, AdvisorSeverity } from "../review/schema.ts";
 import { isRecord } from "../shared/utils.ts";
 
 export const ADVISOR_CHECKPOINT_ENTRY_TYPE = "pi-advisor-checkpoint";

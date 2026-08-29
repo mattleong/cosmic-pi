@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { stringifyRedactedObservation } from "../src/domain/redaction.ts";
+import { redactSensitiveText, stringifyRedactedObservation } from "../src/domain/redaction.ts";
 import {
   AdvisorObservationBuffer,
   MAX_OBSERVATION_CHANNEL_CHARS,
@@ -172,6 +172,39 @@ describe("observation protocol", () => {
     const rendered = takeThrough(buffer)?.rendered ?? "";
     expect(rendered).not.toMatch(/abc\.def|sk-abcdefghijklmnop|secret-value|hunter2/);
     expect(rendered).toContain("REDACTED");
+  });
+
+  test("redacts prefixed credential keys without redacting similarly named metadata", () => {
+    const structured = stringifyRedactedObservation({
+      openaiApiKey: "structured-api-secret",
+      nested: {
+        openaiClientSecret: "structured-client-secret",
+        authToken: "structured-auth-secret",
+        databasePassword: "structured-password-secret",
+      },
+      tokenCount: 42,
+      passwordPolicy: "rotate-often",
+    });
+    const text = redactSensitiveText(
+      `openaiApiKey=text-api-secret "openaiClientSecret": "text client secret" ` +
+        `authToken='text-auth-secret' databasePassword: text-password-secret ` +
+        `tokenCount=42 passwordPolicy=rotate-often`,
+    );
+
+    expect(structured).not.toMatch(
+      /structured-api-secret|structured-client-secret|structured-auth-secret|structured-password-secret/,
+    );
+    expect(structured).toContain('"tokenCount":42');
+    expect(structured).toContain('"passwordPolicy":"rotate-often"');
+    expect(text).toContain("openaiApiKey=[REDACTED]");
+    expect(text).toContain('"openaiClientSecret": "[REDACTED]"');
+    expect(text).toContain("authToken='[REDACTED]'");
+    expect(text).toContain("databasePassword: [REDACTED]");
+    expect(text).toContain("tokenCount=42");
+    expect(text).toContain("passwordPolicy=rotate-often");
+    expect(text).not.toMatch(
+      /text-api-secret|text client secret|text-auth-secret|text-password-secret/,
+    );
   });
 
   test("keeps assistant_final causally before turn_complete", () => {

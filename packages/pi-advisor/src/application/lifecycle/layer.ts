@@ -1,11 +1,9 @@
-// The Context key intentionally retains its pre-move public identity.
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { advisorNow } from "../../boundary/clock.ts";
-import { type AdvisorEffectExecutor, type AdvisorPlatform } from "../../boundary/executor.ts";
-import type { AdvisorHostCommandDefinition } from "../../boundary/host-bindings.ts";
-import { fromHostCommandPromise } from "../../boundary/host-commands.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Scope from "effect/Scope";
+import { advisorDelay, advisorNow } from "../../boundary/clock.ts";
+import type { AdvisorPlatform } from "../../boundary/executor.ts";
 import { createLedgerFingerprint } from "../../checkpoint/ledger.ts";
 import { makeCheckpointOrchestrator } from "../../checkpoint/orchestrator.ts";
 import {
@@ -16,39 +14,29 @@ import {
 } from "../../config/options.ts";
 import { ConfigStore } from "../../config/store.ts";
 import { FailureLogger } from "../../logging/logger.ts";
-import { AdvisorReviewQueueService, type AdvisorReviewQueue } from "../../queue/service.ts";
-import { rollbackAdvisorFindingDedupe } from "../../review/dedupe.ts";
+import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import { buildAdvisorContext } from "../../review/context.ts";
-import { rollbackAdvisorEmission } from "../../review/emission-guard.ts";
-import { sanitizeInterventionBudgetSnapshot } from "../../review/intervention-budget.ts";
 import { AdvisorRuntimeService } from "../../runtime/runtime.ts";
 import { makeAdvisorResourceState } from "../../runtime/resource-state.ts";
-import { registerAdvisorCommands } from "../../settings/controller.ts";
+import { handleAdvisorCommand } from "../../settings/controller.ts";
 import { makeAdvisorStatusService } from "../../status/service.ts";
 import { notifyAtHostBoundary } from "pi-cosmic-core";
-import { makeAdvisorProjection, type AdvisorControllerSnapshot } from "../../ui/projection.ts";
-import { activeContextMessages, incrementBounded } from "../controller-helpers.ts";
+import { activeContextMessages } from "../controller-helpers.ts";
 import {
   ADVISOR_CATCH_UP_TIMEOUT_MS,
   AdvisorController,
-  AdvisorExtensionError,
   extensionError,
   type AdvisorControllerApplicationOptions,
-  type AdvisorSkipReason,
-} from "../controller-types.ts";
-import {
-  emptyAdvisorSessionMetrics,
-  initialAdvisorApplicationState,
-  makeAdvisorApplicationStateStore,
-} from "../state.ts";
+} from "../controller.ts";
+import { initialAdvisorApplicationState, makeAdvisorApplicationStateStore } from "../state.ts";
 import { makeLifecycleApplicationState } from "./application-state.ts";
 import { makeCommandWorkflows } from "./commands.ts";
 import { makeCheckpointControls } from "./checkpoint.ts";
 import { makeDeliver } from "./delivery.ts";
-import { registerLifecycleEvents } from "./events.ts";
+import { makeLifecycleEvents } from "./events.ts";
 import { makeLedgerPersistence } from "./ledger.ts";
 import { branchContainsAnchor, readLifecycleScope, readParentAnchor } from "./parent-session.ts";
-import { cloneSessionMetrics, recordReviewDurationMetrics, recordUsageMetrics } from "./metrics.ts";
+import { recordReviewDurationMetrics, recordUsageMetrics } from "./metrics.ts";
 import { makeRuntimeControls } from "./runtime.ts";
 import { createSessionRefs } from "./session-refs.ts";
 import { makeLifecycleStatusControls } from "./status.ts";
@@ -59,76 +47,54 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
     Effect.gen(function* () {
       const { pi } = options;
       const productionRuntimeService = yield* AdvisorRuntimeService;
-      const productionQueueService = yield* AdvisorReviewQueueService;
       const configStore = yield* ConfigStore;
       const failureLogger = yield* FailureLogger;
       const applicationScope = yield* Effect.scope;
+      const applicationResourceScope = yield* Scope.fork(applicationScope);
       const platformContext = yield* Effect.context<AdvisorPlatform>();
       const resources = yield* makeAdvisorResourceState();
-      const checkpointOrchestrator = yield* makeCheckpointOrchestrator(options.executor);
+      const executor = options.executor;
+      const checkpointOrchestrator = yield* makeCheckpointOrchestrator(executor);
       const statusService = yield* makeAdvisorStatusService();
-      const projection = yield* makeAdvisorProjection({
-        config: normalizeAdvisorConfig({}, ""),
-        metrics: emptyAdvisorSessionMetrics(),
-        started: false,
-      });
       const productionController = {
-        publish: (next: AdvisorControllerSnapshot) => projection.replace(next).pipe(Effect.orDie),
-        publishNow: projection.replaceNow,
         replaceChild: resources.replaceChild,
         stopChild: () => resources.stopChild,
       };
-      const hostBindings = options.hostBindings;
-      const commandRegistrar = {
-        registerCommand: (name: string, definition: AdvisorHostCommandDefinition) =>
-          hostBindings.registerCommand(name, definition),
-      };
-      const parentExecutor: AdvisorEffectExecutor = options.executor;
       const refs = createSessionRefs();
       const applicationStateStore = makeAdvisorApplicationStateStore(
         initialAdvisorApplicationState(normalizeAdvisorConfig({}, "")),
       );
 
       const {
-        publishControllerSnapshotNow,
-        publishControllerSnapshot,
+        captureCommandSnapshot,
         updateApplicationState,
-        mutateMetrics,
+        updateMetrics,
         currentConfig,
-        isStarted,
         mutateTrajectory,
-        setDomainCounter,
         advanceDomainCounter,
         recordReceipt,
         clearPendingReceipt,
-        latchCancellation,
-        resetRequestDomain,
+        clearPendingRecovery,
+        initializeSession,
+        beginUserRequest,
+        cancelRequest,
+        commitConfig,
+        resetSessionTreeDomain,
       } = makeLifecycleApplicationState({
         store: applicationStateStore,
         refs,
-        publish: productionController.publish,
-        publishNow: productionController.publishNow,
+        activeCheckpointCount: checkpointOrchestrator.activeCount,
       });
-      const runSessionEffect = <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>): Promise<A> =>
-        parentExecutor.run(effect);
-
       const notifyBestEffort = notifyAtHostBoundary;
 
       const { stopStatusSpinner, setAdvisorStatus, startStatusSpinner, settleStatusSpinner } =
         makeLifecycleStatusControls({ statusService, currentConfig });
 
-      const recordSkip = (reason: AdvisorSkipReason): void => {
-        mutateMetrics((next) => {
-          const skipped = next.skippedReviews ?? {};
-          next.skippedReviews = { ...skipped, [reason]: incrementBounded(skipped[reason]) };
-        });
-      };
-
       const recordUsage = recordUsageMetrics;
       const recordReviewDuration = (
         target: Parameters<typeof recordReviewDurationMetrics>[0],
         startedAt: number,
-      ) => recordReviewDurationMetrics(target, startedAt, advisorNow(parentExecutor));
+      ) => recordReviewDurationMetrics(target, startedAt, advisorNow(executor));
 
       const seedFromMessages = (messages: readonly unknown[]): string =>
         buildAdvisorContext({
@@ -153,73 +119,37 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const lifecycleScope = readLifecycleScope;
       const branchContains = branchContainsAnchor;
 
-      const clearPersistentTrajectory = (): void => {
+      const clearPersistentTrajectoryResources = (): void => {
         refs.activeTrajectoryResource?.cancelTimer?.();
         refs.activeTrajectoryResource = undefined;
         refs.activeToolCalls.clear();
-        updateApplicationState((state) => ({ ...state, activeTrajectory: undefined }));
       };
-
-      const clearPendingRecovery = (): void => {
-        updateApplicationState((state) => {
-          const pending = state.pendingPersistentRecovery;
-          if (pending) {
-            const nextMetrics = cloneSessionMetrics(state.metrics);
-            nextMetrics.outcomes.suppressed += 1;
-            return {
-              ...state,
-              metrics: nextMetrics,
-              pendingPersistentRecovery: undefined,
-              abortInProgress: undefined,
-              emissionGuard: rollbackAdvisorEmission(
-                state.emissionGuard,
-                pending.emission.rollback,
-              ),
-              findingDedupe: rollbackAdvisorFindingDedupe(
-                state.findingDedupe,
-                pending.dedupeRollback,
-              ),
-              interventionBudget: sanitizeInterventionBudgetSnapshot({
-                ...pending.budgetBefore,
-                correctionUsed: true,
-              }),
-            };
-          }
-          return {
-            ...state,
-            pendingPersistentRecovery: undefined,
-            abortInProgress: undefined,
-          };
-        });
+      const clearPersistentTrajectory = (): void => {
+        clearPersistentTrajectoryResources();
+        updateApplicationState((state) => ({ ...state, activeTrajectory: undefined }));
       };
 
       const {
         stopRuntimeUnlockedEffect,
         stopRuntimeEffect,
-        stopRuntime,
         startRuntimeEffect,
         runWithExplicitRuntimeEffect,
       } = makeRuntimeControls({
         refs,
         getState: () => applicationStateStore.get(),
         updateApplicationState,
-        mutateMetrics,
+        updateMetrics,
         currentConfig,
-        isStarted,
         advanceDomainCounter,
         clearPersistentTrajectory,
         clearPendingRecovery,
         stopStatusSpinner,
         setAdvisorStatus,
-        publishControllerSnapshot,
-        publishControllerSnapshotNow,
         startStatusSpinner,
         settleStatusSpinner,
-        runSessionEffect,
-        parentExecutor,
         productionController,
         productionRuntimeService,
-        productionQueueService,
+        queueScope: applicationResourceScope,
         notifyBestEffort,
         seedFromMessages,
         activeSeed,
@@ -248,35 +178,29 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         pi,
         getState: () => applicationStateStore.get(),
         updateApplicationState,
-        mutateMetrics,
+        updateMetrics,
         ingest,
         recordReceipt,
         notifyBestEffort,
-        getConfigRevision: () => refs.configRevision,
       });
 
-      const { requestCheckpoint, awaitCatchUpEffectOwned, awaitCatchUp } = makeCheckpointControls({
+      const { requestCheckpoint, awaitCatchUpEffectOwned } = makeCheckpointControls({
         refs,
         getState: () => applicationStateStore.get(),
         updateApplicationState,
-        mutateMetrics,
+        updateMetrics,
         currentConfig,
-        isStarted,
-        advanceDomainCounter,
-        latchCancellation,
-        clearPendingRecovery,
-        clearPendingReceipt,
+        cancelRequest,
         persistCurrentLedger,
         persistLedger,
         notifyBestEffort,
         setAdvisorStatus,
         failureLogger,
-        applicationScope,
+        applicationScope: applicationResourceScope,
         checkpointOrchestrator,
-        parentExecutor,
-        runSessionEffect,
+        now: () => advisorNow(executor),
         startRuntimeEffect,
-        stopRuntime,
+        stopRuntimeEffect,
         deliver,
         fingerprint,
         parentAnchor,
@@ -290,113 +214,81 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         pi,
         refs,
         getState: () => applicationStateStore.get(),
-        updateApplicationState,
-        currentConfig,
-        clearPendingRecovery,
-        clearPendingReceipt,
-        latchCancellation,
-        resetRequestDomain,
-        advanceDomainCounter,
+        updateMetrics,
+        cancelRequest,
+        commitConfig,
         persistCurrentLedger,
+        applicationScope: applicationResourceScope,
         checkpointOrchestrator,
         startRuntimeEffect,
-        runSessionEffect,
         runWithExplicitRuntimeEffect,
         requestCheckpoint,
-        parentExecutor,
+      });
+      const persistCommandConfig = (patch: Parameters<typeof configStore.patch>[0], path: string) =>
+        configStore.patch(patch, path, applyCommittedConfigEffect);
+
+      const {
+        sessionInitializeEffect,
+        sessionShutdownEffect,
+        compactEffect,
+        treeEffect,
+        dispatchEvent,
+      } = makeLifecycleEvents({
+        refs,
+        pi,
+        applicationScope: applicationResourceScope,
+        getState: () => applicationStateStore.get(),
+        updateApplicationState,
+        updateMetrics,
+        currentConfig,
+        advanceDomainCounter,
+        clearPersistentTrajectory,
+        clearPersistentTrajectoryResources,
+        clearPendingRecovery,
+        clearPendingReceipt,
+        initializeSession,
+        beginUserRequest,
+        cancelRequest,
+        resetSessionTreeDomain,
+        persistCurrentLedger,
+        persistLedger,
+        ingest,
+        recordReceipt,
+        mutateTrajectory,
+        scheduleDelay: (milliseconds, task) => advisorDelay(executor, milliseconds, task),
+        notifyBestEffort,
+        startRuntimeEffect,
+        stopRuntimeEffect,
+        stopRuntimeUnlockedEffect,
+        runWithExplicitRuntimeEffect,
+        requestCheckpoint,
+        awaitCatchUpEffectOwned,
+        parentAnchor,
+        checkpointOrchestrator,
+        configStore,
+        persistCommandConfig,
       });
 
-      registerAdvisorCommands(
-        commandRegistrar,
-        {
-          get: () => projection.getSnapshot().config,
-          getMetrics: () => projection.getSnapshot().metrics,
-          persist: (patch, path) =>
-            parentExecutor.run(configStore.patch(patch, path, applyCommittedConfigEffect)),
-        },
-        commandActions,
-      );
-
-      const { sessionInitializeEffect, sessionShutdownEffect, compactEffect, treeEffect } =
-        registerLifecycleEvents({
-          refs,
-          pi,
-          hostBindings,
-          getState: () => applicationStateStore.get(),
-          updateApplicationState,
-          mutateMetrics,
-          currentConfig,
-          advanceDomainCounter,
-          setDomainCounter,
-          clearPersistentTrajectory,
-          clearPendingRecovery,
-          clearPendingReceipt,
-          latchCancellation,
-          resetRequestDomain,
-          persistCurrentLedger,
-          persistLedger,
-          ingest,
-          recordReceipt,
-          recordSkip,
-          mutateTrajectory,
-          runSessionEffect,
-          parentExecutor,
-          notifyBestEffort,
-          startRuntimeEffect,
-          stopRuntimeEffect,
-          stopRuntimeUnlockedEffect,
-          runWithExplicitRuntimeEffect,
-          requestCheckpoint,
-          awaitCatchUpEffectOwned,
-          awaitCatchUp,
-          parentAnchor,
-          publishControllerSnapshot,
-          checkpointOrchestrator,
-          configStore,
-        });
-
-      const invokeEvent = (
-        name: string,
-        event: never,
-        ctx: ExtensionContext,
-      ): Effect.Effect<unknown, AdvisorExtensionError> =>
-        Effect.suspend(() => {
-          const handler = hostBindings.eventHandler(name);
-          if (!handler) return Effect.void;
-          return Effect.tryPromise({
-            try: () => Promise.resolve(handler(event, ctx)),
-            catch: extensionError(name),
-          }).pipe(Effect.ensuring(publishControllerSnapshot()));
-        });
-      const invokeCommand = (
-        name: string,
-        args: string,
-        ctx: Parameters<NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>>[1],
-      ): Effect.Effect<unknown, AdvisorExtensionError> =>
-        Effect.suspend(() => {
-          const handler = hostBindings.commandHandler(name);
-          if (!handler) return Effect.void;
-          return publishControllerSnapshot().pipe(
-            Effect.andThen(fromHostCommandPromise(() => Promise.resolve(handler(args, ctx)))),
-            Effect.mapError(extensionError(`command ${name}`)),
-            Effect.ensuring(publishControllerSnapshot()),
-          );
-        });
       const service = AdvisorController.of({
-        getSnapshot: projection.getSnapshot,
-        publish: productionController.publish,
-        replaceChild: productionController.replaceChild,
-        stopChild: productionController.stopChild,
-        sessionInitialize: (_event, input) =>
+        sessionInitialize: (input) =>
           sessionInitializeEffect(input).pipe(Effect.provide(platformContext)),
-        sessionShutdown: () => sessionShutdownEffect(),
-        event: invokeEvent,
-        compact: (_event, ctx) => compactEffect(ctx),
-        tree: (_event, ctx) => treeEffect(ctx),
-        command: invokeCommand,
+        sessionShutdown: sessionShutdownEffect,
+        event: dispatchEvent,
+        compact: compactEffect,
+        tree: treeEffect,
+        command: (args, ctx) =>
+          Effect.suspend(() =>
+            handleAdvisorCommand(
+              args,
+              ctx,
+              { snapshot: captureCommandSnapshot(), persist: persistCommandConfig },
+              commandActions,
+            ),
+          ).pipe(Effect.mapError(extensionError("command advisor"))),
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
+          advanceDomainCounter("epoch");
           refs.removeHostCancellation?.();
           refs.removeHostCancellation = undefined;
           refs.activeContext = undefined;

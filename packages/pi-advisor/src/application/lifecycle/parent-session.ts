@@ -13,7 +13,7 @@ import {
 } from "../../boundary/host-context.ts";
 import { ADVISOR_CHECKPOINT_ENTRY_TYPE } from "../../checkpoint/ledger.ts";
 import { ADVISOR_REVIEW_ACTION_TYPE, ADVISOR_REVIEW_CARD_TYPE } from "../../ui/review-card.ts";
-import { UNREADABLE_PARENT_ANCHOR, type ParentAnchor } from "../controller-types.ts";
+import { UNREADABLE_PARENT_ANCHOR, type ParentAnchor } from "../controller.ts";
 
 export const readParentAnchor = (ctx: ExtensionContext): ParentAnchor => {
   const branchResult = readAdvisorSessionBranchAtHostBoundary(ctx);

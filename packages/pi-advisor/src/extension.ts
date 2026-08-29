@@ -1,14 +1,10 @@
 /** Thin public entrypoint for the Advisor application. */
 export { advisorExtension, createAdvisorExtension } from "./application/register.ts";
-export { advisorControllerLayer } from "./application/controller.ts";
 export {
   ADVISOR_CATCH_UP_TIMEOUT_MS,
-  AdvisorController,
   AdvisorExtensionError,
   awaitAdvisorCatchUpEffect,
   type AdvisorCatchUpOutcome,
   type AdvisorControllerApplicationOptions,
   type AdvisorExtensionDependencies,
-  type AdvisorSkipReason,
-} from "./application/controller-types.ts";
-export { advisorControllerApplicationLayer } from "./application/lifecycle.ts";
+} from "./application/controller.ts";
