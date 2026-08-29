@@ -25,12 +25,13 @@ import {
   draftKindLabel,
   effectiveProfileSummary,
   PROFILE_WORKSPACE_SHORTCUTS,
+  profileRouteOptionLabel,
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
 import type { SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 export interface ProfileWorkspaceConfirmation {
-  readonly key: string;
+  readonly key?: string | undefined;
   readonly title: string;
   readonly detail: string;
   readonly preview?: ReadonlyArray<string> | undefined;
@@ -76,13 +77,27 @@ const padToWidth = (text: string, width: number): string => {
 const selectedProfile = (state: ProfileWorkspaceRenderState) =>
   PROFILE_IDS[state.profileIndex] ?? PROFILE_IDS[0];
 
+const scopeNumber = (scope: ProfileSettingsScope): number =>
+  scope === "session" ? 1 : scope === "project" ? 2 : 3;
+
+const scopeName = (scope: ProfileSettingsScope): string =>
+  scope === "session" ? "Session" : scope === "project" ? "Project" : "Global";
+
+const scopeSelectorLines = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+): ReadonlyArray<string> => [
+  "Scope    1 Session · 2 Project · 3 Global",
+  `Current  ${theme.fg("accent", theme.bold(`${scopeNumber(state.scope)} ${scopeName(state.scope)}`))} · ${profileWorkspaceTargetLabel(state.target)} · s Sets${state.projectTrusted ? "" : " · Project unavailable (trust required)"}`,
+];
+
 const scopeLine = (state: ProfileWorkspaceRenderState, theme: Theme): string => {
   const effect =
     state.scope === "session"
-      ? "temporary · applies now"
+      ? "temporary override · applies now"
       : state.scope === "global"
-        ? "missing routes inherit built-ins · applies after reload"
-        : "missing routes inherit the global default · applies after reload";
+        ? "omitted Global profiles use Built-in · applies after reload"
+        : "Project declarations override profile by profile; omitted profiles inherit Global · applies after reload";
   return `Editing  ${theme.fg("accent", theme.bold(profileWorkspaceTargetLabel(state.target)))} · ${effect}`;
 };
 
@@ -119,11 +134,19 @@ const projectOverrideActive = (state: ProfileWorkspaceRenderState): boolean => {
   );
 };
 
+const routeOptionWording = (value: string, candidateIndex: number): string =>
+  value
+    .replace(
+      /Remove candidate \d+/gi,
+      `Remove route option · ${profileRouteOptionLabel(candidateIndex)}`,
+    )
+    .replace(/\bcandidates\b/gi, "route options")
+    .replace(/\bcandidate\b/gi, "route option");
+
 const commonNotices = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
-  cancelKey = "Esc",
 ): ReadonlyArray<string> => {
   const lines: string[] = [];
   if (state.scope !== "session" && persistentRouteDiffersFromActiveBase(state)) {
@@ -155,7 +178,7 @@ const commonNotices = (
       ...wrapped(
         theme.fg(
           "warning",
-          `! Project override active for ${selectedProfile(state)}; global edits are saved but remain shadowed. Return to the set picker to edit the project set.`,
+          `! Project declarations override Global profile by profile. Omitted Project profiles inherit Global. This Global edit is shadowed only for ${selectedProfile(state)}; use s Sets to edit the Project declaration.`,
         ),
         width,
       ),
@@ -165,20 +188,25 @@ const commonNotices = (
   if (state.pendingConfirmation) {
     lines.push(
       ...wrapped(
-        theme.fg("warning", theme.bold(`Confirm · ${state.pendingConfirmation.title}`)),
+        theme.fg(
+          "warning",
+          theme.bold(
+            `Confirm · ${routeOptionWording(state.pendingConfirmation.title, state.candidateIndex)}`,
+          ),
+        ),
         width,
-      ),
-      ...wrapped(theme.fg("warning", state.pendingConfirmation.detail), width),
-      ...(state.pendingConfirmation.preview ?? []).flatMap((line) =>
-        wrapped(theme.fg("toolOutput", line), width),
       ),
       ...wrapped(
         theme.fg(
           "warning",
-          `Press ${state.pendingConfirmation.key} again to confirm · ${cancelKey} cancels`,
+          routeOptionWording(state.pendingConfirmation.detail, state.candidateIndex),
         ),
         width,
       ),
+      ...(state.pendingConfirmation.preview ?? []).flatMap((line) =>
+        wrapped(theme.fg("toolOutput", routeOptionWording(line, state.candidateIndex)), width),
+      ),
+      ...wrapped(theme.fg("warning", "Enter confirms · Esc cancels"), width),
       "",
     );
   } else if (state.message) {
@@ -192,7 +220,10 @@ const commonNotices = (
             : "muted";
     lines.push(
       ...wrapped(
-        theme.fg(color, `${managerNoticeGlyph(state.message.kind)} ${state.message.text}`),
+        theme.fg(
+          color,
+          `${managerNoticeGlyph(state.message.kind)} ${routeOptionWording(state.message.text, state.candidateIndex)}`,
+        ),
         width,
       ),
       "",
@@ -232,8 +263,8 @@ const candidateSummary = (
   parentEffort: SubagentEffort,
   parentModel?: string | undefined,
 ): string => {
-  const priority = index === 0 ? "Primary" : "Fallback";
-  const prefix = `${String(index + 1).padStart(2, "0")} ${priority} · ${candidate.host}/${candidate.runtime} · `;
+  const optionLabel = profileRouteOptionLabel(index);
+  const prefix = `${optionLabel.padEnd(10)} · ${candidate.host}/${candidate.runtime} · `;
   const lifecycle = candidate.closeOnReport ? "close" : "retain";
   const effort = candidateEffortLabel(profile, candidate, parentEffort);
   const fast = candidateFastModeApplied(candidate, parentModel) ? " ⚡" : "";
@@ -271,12 +302,11 @@ const profilesPage = (
   availableHeight: number,
   width: number,
   confirmKey: string,
-  cancelKey: string,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const actions = routeActions(state);
-  const notices = commonNotices(state, theme, width, cancelKey);
-  const visibleCount = Math.max(1, availableHeight - 10 - notices.length);
+  const notices = commonNotices(state, theme, width);
+  const visibleCount = Math.max(1, availableHeight - 11 - notices.length);
   const start = windowStart(PROFILE_IDS.length, state.profileIndex, visibleCount);
   const visibleProfiles = PROFILE_IDS.slice(start, start + visibleCount);
   return [
@@ -284,9 +314,9 @@ const profilesPage = (
       "accent",
       theme.bold(`Profiles${windowLabel(start, visibleProfiles.length, PROFILE_IDS.length)}`),
     ),
-    "Choose a profile to inspect its effective route or edit its declaration. Profile omitted → generalist.",
-    "Sources  [S] Session > [P] Project > [G] Global > [B] Built-in",
-    scopeLine(state, theme),
+    "Choose a profile to view or edit. Omitting a profile uses generalist.",
+    "Effective source  [S] Session > [P] Project > [G] Global > [B] Built-in",
+    ...scopeSelectorLines(state, theme),
     "",
     ...notices,
     ...visibleProfiles.map((entry, offset) => {
@@ -297,8 +327,9 @@ const profilesPage = (
     }),
     "",
     theme.fg("muted", "Actions"),
-    `  ${confirmKey.padEnd(6)} Open ${profile} route`,
+    `  ${confirmKey.padEnd(6)} Edit ${profile}`,
     "  /      Search profiles",
+    "  s      Sets",
     ...(actions.reset
       ? [
           `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : state.scope === "project" ? "to inherit global" : "to active config"}`,
@@ -316,12 +347,11 @@ const routePage = (
   availableHeight: number,
   width: number,
   confirmKey: string,
-  cancelKey: string,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const effective = state.inspection.session.effectiveConfig.profiles[profile];
   const candidates = state.draft.candidates;
-  const notices = commonNotices(state, theme, width, cancelKey);
+  const notices = commonNotices(state, theme, width);
   const hasPreview =
     !projectOverrideActive(state) && !sameProfileCandidates(effective.candidates, candidates);
   const reserved = 16 + (hasPreview ? 1 : 0) + notices.length;
@@ -333,7 +363,7 @@ const routePage = (
       ? [
           state.draft.kind === "invalid"
             ? `  ${managerNoticeGlyph("error")} Invalid declaration · route fails closed`
-            : "  — No candidates · route is disabled",
+            : "  — No route options · route is disabled",
         ]
       : visible.map((candidate, offset) => {
           const index = start + offset;
@@ -341,28 +371,28 @@ const routePage = (
         });
   const actions = routeActions(state);
   return [
-    theme.fg("accent", theme.bold(`${profile} route`)),
-    PROFILE_DEFINITIONS[profile].description,
+    theme.fg("accent", theme.bold("Routing order")),
+    `${profile} · ${PROFILE_DEFINITIONS[profile].description}`,
     scopeLine(state, theme),
     `Effective  ${effectiveProfileSummary(state.inspection, profile, state.parentEffort, state.parentModel)}`,
     `Editing    ${state.scope} · ${draftKindLabel(state.draft, state.scope)}`,
     ...(hasPreview
       ? [
-          `Preview    ${candidates.length} candidate${candidates.length === 1 ? "" : "s"} after this scope`,
+          `Preview    ${candidates.length} route option${candidates.length === 1 ? "" : "s"} after this scope`,
         ]
       : []),
     "",
     ...notices,
-    theme.fg("muted", `Ordered candidates${windowLabel(start, visible.length, candidates.length)}`),
+    theme.fg("muted", `Route options${windowLabel(start, visible.length, candidates.length)}`),
     ...rows,
     "",
     theme.fg("muted", "Actions"),
-    ...(candidates.length > 0 ? [`  ${confirmKey.padEnd(6)} Edit selected candidate`] : []),
-    ...(actions.add ? ["  a      Add candidate"] : []),
-    ...(actions.clone ? ["  c      Clone selected candidate"] : []),
+    ...(candidates.length > 0 ? [`  ${confirmKey.padEnd(6)} Configure selected option`] : []),
+    ...(actions.add ? ["  a      Add fallback"] : []),
+    ...(actions.clone ? ["  c      Clone fallback"] : []),
     ...(actions.moveDown ? ["  J      Move selected down"] : []),
     ...(actions.moveUp ? ["  K      Move selected up"] : []),
-    ...(actions.remove ? ["  x      Remove selected candidate"] : []),
+    ...(actions.remove ? ["  x      Remove route option"] : []),
     ...(actions.disable ? ["  d      Disable route"] : []),
     ...(actions.reset
       ? [
@@ -382,7 +412,8 @@ const candidatePage = (
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
-  const notices = commonNotices(state, theme, width, cancelKey);
+  const optionLabel = profileRouteOptionLabel(state.candidateIndex);
+  const notices = commonNotices(state, theme, width);
   const fields = candidate
     ? candidateFieldRows(candidate, profile, state.parentEffort, state.parentModel)
     : [];
@@ -403,22 +434,22 @@ const candidatePage = (
         const value = boundedMiddle(row.value, valueWidth);
         return `${marker} ${row.label.padEnd(labelWidth)} ${value.padEnd(valueWidth)} · ${actionLabel}`;
       })
-    : ["No candidate exists. Return to the route and add one."];
+    : ["No route option exists. Return to the routing order and add one."];
   return [
-    theme.fg("accent", theme.bold(`${profile} › candidate ${state.candidateIndex + 1}`)),
+    theme.fg("accent", theme.bold(`${profile} › ${optionLabel}`)),
     PROFILE_DEFINITIONS[profile].description,
     scopeLine(state, theme),
     "",
     ...notices,
     theme.fg(
       "muted",
-      `Candidate fields${windowLabel(start, Math.min(visibleCount, fields.length), fields.length)}`,
+      `Option settings${windowLabel(start, Math.min(visibleCount, fields.length), fields.length)}`,
     ),
     ...rows,
     "",
     theme.fg("muted", "Actions"),
     `  ${confirmKey.padEnd(6)} Choose value for selected field`,
-    `  ${cancelKey.padEnd(6)} Back to ordered route`,
+    `  ${cancelKey.padEnd(6)} Back to routing order`,
   ];
 };
 
@@ -440,9 +471,7 @@ const helpText = (
   const enter = key("tui.select.confirm", "Enter");
   const escape = key("tui.select.cancel", "Esc");
   if (state.pendingConfirmation)
-    return renderResponsiveManagerFooter(Math.max(0, width), [
-      [`${state.pendingConfirmation.key} Confirm`, `${escape} Cancel`],
-    ]);
+    return renderResponsiveManagerFooter(Math.max(0, width), [["Enter confirms", "Esc cancels"]]);
   if (state.busy)
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
@@ -465,51 +494,50 @@ const helpText = (
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
         `${navigation} Select · C-u/d · gg/G`,
-        `${enter}/l Route · / Search`,
-        `${canReset ? "i Reset · " : ""}Tab Next · ? Help`,
-        state.reloadRequired ? `r Reload · ${escape} Close` : `${escape} Close`,
+        `${enter}/l Edit · / Search`,
+        "1 Session · 2 Project · 3 Global · s Sets",
+        `${canReset ? "i Reset · " : ""}${state.reloadRequired ? "r Reload · " : ""}${escape} Close`,
       ],
       [
-        `${navigation} · C-u/d · gg/G · ${enter}/l · / Search`,
-        `${canReset ? "i Reset · " : ""}Tab`,
-        state.reloadRequired ? `r Reload · ${escape}` : `${escape} Close`,
+        `${navigation} · ${enter}/l · / Search`,
+        `s Sets · 1/2/3 Scope${canReset ? " · i Reset" : ""}`,
+        `${state.reloadRequired ? "r Reload · " : ""}${escape} Close`,
       ],
     ]);
   }
   if (state.pane === "candidates") {
     const actions = routeActions(state);
     const actionLabels = [
-      actions.add ? "a Add" : undefined,
-      actions.clone ? "c Clone" : undefined,
+      actions.add ? "a Add fallback" : undefined,
+      actions.clone ? "c Clone fallback" : undefined,
       actions.moveDown ? "J Down" : undefined,
       actions.moveUp ? "K Up" : undefined,
-      actions.remove ? "x Remove" : undefined,
+      actions.remove ? "x Remove route option" : undefined,
       actions.disable ? "d Disable" : undefined,
       actions.reset ? "i Reset" : undefined,
     ].filter((label): label is string => label !== undefined);
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
-        `${navigation} Select · C-u/d · gg/G · ${enter}/l Candidate`,
+        `${navigation} Select · C-u/d · gg/G · ${enter}/l Configure`,
         actionLabels.join(" · ") || "No route changes available",
         `${escape} Profiles · Tab/⇧Tab Pages · ? Help`,
         state.reloadRequired ? "r Reload" : "",
       ],
       [
-        `${navigation} · C-u/d · gg/G · ${enter}/l`,
+        `${navigation} · ${enter}/l · ${escape}`,
         actionLabels.join(" · ") || "No changes",
-        `${escape} · Tab/⇧Tab${state.reloadRequired ? " · r Reload" : ""}`,
+        state.reloadRequired ? "r Reload" : "",
       ],
     ]);
   }
   return renderResponsiveManagerFooter(Math.max(0, width), [
     [
       `${navigation} Field · C-u/d · gg/G · ${enter}/l Choose`,
-      `h/${escape} Route · ⇧Tab Back · ? Help`,
+      `h/${escape} Routing order · ⇧Tab Back · ? Help`,
       state.reloadRequired ? "r Reload" : "",
     ],
     [
-      `${navigation} Field · C-u/d · gg/G · ${enter}/l Choose`,
-      `h/${escape} Route · ⇧Tab Back`,
+      `${navigation} Field · ${enter}/l Choose · ${escape} Back`,
       state.reloadRequired ? "r Reload" : "",
     ],
   ]);
@@ -525,6 +553,7 @@ const compactWorkspacePage = (
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
+  const optionLabel = profileRouteOptionLabel(state.candidateIndex);
   const field = candidate
     ? candidateFieldRows(candidate, profile, state.parentEffort, state.parentModel)[
         state.fieldIndex
@@ -534,8 +563,8 @@ const compactWorkspacePage = (
     state.pane === "profiles"
       ? `Profiles · ${state.profileIndex + 1}/${PROFILE_IDS.length}`
       : state.pane === "candidates"
-        ? `${profile} route · ${state.draft.candidates.length === 0 ? 0 : state.candidateIndex + 1}/${state.draft.candidates.length}`
-        : `${profile} · candidate ${state.candidateIndex + 1}`;
+        ? `Routing order · ${profile} · ${state.draft.candidates.length === 0 ? 0 : state.candidateIndex + 1}/${state.draft.candidates.length}`
+        : `${profile} · ${optionLabel}`;
   const selected =
     state.pane === "profiles"
       ? `${profile}${profile === "generalist" ? " · when omitted" : ""} · ${effectiveProfileSummary(state.inspection, profile, state.parentEffort, state.parentModel)}`
@@ -551,28 +580,32 @@ const compactWorkspacePage = (
             )
           : state.draft.kind === "invalid"
             ? `${managerNoticeGlyph("error")} Invalid declaration · route fails closed`
-            : "— No candidates · route disabled"
+            : "— No route options · route disabled"
         : field
           ? `${field.label}: ${boundedMiddle(field.value, Math.max(1, width - field.label.length - 12))} · ${field.fixed ? "fixed" : "edit"}`
-          : "No candidate · return to route";
-  const actions =
-    state.pane === "profiles"
-      ? `${confirmKey}/l route · / search${routeActions(state).reset ? " · i reset" : ""}`
+          : "No route option · return to routing order";
+  const actions = state.pendingConfirmation
+    ? "Enter confirms · Esc cancels"
+    : state.pane === "profiles"
+      ? `${confirmKey} edit · ${cancelKey} close · / search`
       : state.pane === "candidates"
         ? state.draft.candidates.length > 0
-          ? `${confirmKey} edit · a add · x remove · ${cancelKey} profiles`
-          : `a add · d disable · ${cancelKey} profiles`
+          ? `${confirmKey} configure · ${cancelKey} profiles · a Add fallback · x Remove route option`
+          : `${cancelKey} profiles · a Add fallback`
         : field?.fixed
-          ? `Fixed by policy · ${cancelKey} route`
-          : `${confirmKey} choose · ${cancelKey} route`;
+          ? `Fixed by policy · ${cancelKey} routing order`
+          : `${confirmKey} choose · ${cancelKey} routing order`;
+  const controls =
+    state.pane === "profiles"
+      ? `s Sets · 1 Session · 2 Project${state.projectTrusted ? "" : " unavailable"} · 3 Global${state.reloadRequired ? " · r Reload" : ""}`
+      : `Editing ${scopeName(state.scope)}${state.reloadRequired ? " · r Reload" : ""}`;
   const status: string[] = [];
   if (state.pendingConfirmation) {
     status.push(
       theme.fg(
         "warning",
-        `Confirm ${state.pendingConfirmation.key}: ${state.pendingConfirmation.title}`,
+        `Confirm · ${routeOptionWording(state.pendingConfirmation.title, state.candidateIndex)} · ${routeOptionWording(state.pendingConfirmation.detail, state.candidateIndex)}`,
       ),
-      theme.fg("warning", state.pendingConfirmation.detail),
     );
   } else if (state.message) {
     const color =
@@ -584,38 +617,49 @@ const compactWorkspacePage = (
             ? "success"
             : "muted";
     const shadow = sessionOverrideActive(state)
-      ? " · Session override active; use the Session editor to edit/reset"
+      ? " · Session override active; use the Session editor to edit or clear it"
       : projectOverrideActive(state)
-        ? " · Project override active; return to the set picker to edit/reset"
+        ? ` · Global edit shadowed only for ${profile}; omitted Project profiles inherit Global`
         : "";
-    status.push(theme.fg(color, `${state.message.text}${shadow}`));
+    status.push(
+      theme.fg(color, `${routeOptionWording(state.message.text, state.candidateIndex)}${shadow}`),
+    );
   } else if (sessionOverrideActive(state)) {
     status.push(theme.fg("warning", "Session override active · use the Session editor"));
   } else if (projectOverrideActive(state)) {
-    status.push(theme.fg("warning", "Project override active · return to the set picker"));
+    status.push(
+      theme.fg(
+        "warning",
+        `Global edit shadowed only for ${profile} · omitted Project profiles inherit Global`,
+      ),
+    );
   }
   if (height <= 1) return [theme.fg("accent", selected)];
   if (height === 2) return [theme.fg("accent", selected), theme.fg("dim", actions)];
-  const availableStatus = Math.max(0, height - 3);
-  const middle =
-    status.length > 0
-      ? status.slice(0, availableStatus)
-      : availableStatus > 0
-        ? [scopeLine(state, theme)]
-        : [];
+  const context = [
+    ...status,
+    theme.fg("muted", controls),
+    ...(status.length === 0 ? [theme.fg("accent", theme.bold(heading))] : []),
+  ];
   return [
-    theme.fg("accent", theme.bold(heading)),
-    ...middle,
+    ...context.slice(0, Math.max(0, height - 2)),
     theme.fg("accent", selected),
     theme.fg("dim", actions),
-  ].slice(0, height);
+  ];
 };
 
 const breadcrumb = (state: ProfileWorkspaceRenderState): string => {
   if (state.pane === "profiles") return "/subagents profiles";
   const profile = selectedProfile(state);
   if (state.pane === "candidates") return `/subagents profiles › ${profile}`;
-  return `/subagents profiles › ${profile} › candidate ${state.candidateIndex + 1}`;
+  return `/subagents profiles › ${profile} › ${profileRouteOptionLabel(state.candidateIndex)}`;
+};
+
+const compactBreadcrumb = (state: ProfileWorkspaceRenderState): string => {
+  if (state.pane === "profiles") return "/profiles";
+  const profile = selectedProfile(state);
+  if (state.pane === "candidates") return `/profiles › ${profile}`;
+  return `${profile} › ${profileRouteOptionLabel(state.candidateIndex)}`;
 };
 
 export const renderProfileWorkspace = (
@@ -630,20 +674,24 @@ export const renderProfileWorkspace = (
   const inner = width - 2;
   const sessionOverrides = Object.keys(state.inspection.session.overrides).length;
   const pending = startingSpinnerFrame(0);
-  const status = state.busy
-    ? theme.fg(
-        "warning",
-        state.cancellableBusy ? `${pending} loading catalog` : `${pending} saving/reloading`,
-      )
+  const statusText = state.busy
+    ? state.cancellableBusy
+      ? `${pending} loading catalog`
+      : `${pending} saving/reloading`
     : state.reloadRequired
-      ? theme.fg("warning", `${pending} saved changes pending reload · r Reload`)
+      ? `${pending} reload required · r Reload`
       : sessionOverrides > 0
-        ? theme.fg(
-            "accent",
-            `${sessionOverrides} session override${sessionOverrides === 1 ? "" : "s"} · applies now`,
-          )
-        : theme.fg("muted", "ready");
-  const titleRaw = ` ${breadcrumb(state)} · ${status} `;
+        ? `${sessionOverrides} session override${sessionOverrides === 1 ? "" : "s"} · applies now`
+        : "ready";
+  const status = theme.fg(
+    state.busy || state.reloadRequired ? "warning" : sessionOverrides > 0 ? "accent" : "muted",
+    statusText,
+  );
+  const breadcrumbWidth = Math.max(1, inner - visibleWidth(status) - 5);
+  const fullBreadcrumb = breadcrumb(state);
+  const titleBreadcrumb =
+    visibleWidth(fullBreadcrumb) <= breadcrumbWidth ? fullBreadcrumb : compactBreadcrumb(state);
+  const titleRaw = ` ${boundedMiddle(titleBreadcrumb, breadcrumbWidth)} · ${status} `;
   const title = truncateToWidth(titleRaw, inner, "");
   const top = `${theme.fg("borderAccent", "╭")}${title}${theme.fg(
     "borderAccent",
@@ -660,10 +708,10 @@ export const renderProfileWorkspace = (
     "─".repeat(Math.max(0, inner - visibleWidth(footer))),
   )}${footer}${theme.fg("borderAccent", "╯")}`;
   const bodyHeight = Math.max(0, height - 2);
-  const noticeRows = commonNotices(state, theme, inner, cancelKey).length;
+  const noticeRows = commonNotices(state, theme, inner).length;
   const minimumSelectedRow =
     state.pane === "profiles"
-      ? 5 + noticeRows
+      ? 7 + noticeRows
       : state.pane === "candidates"
         ? 8 + noticeRows
         : 6 + noticeRows;
@@ -671,9 +719,9 @@ export const renderProfileWorkspace = (
     bodyHeight <= 6 || bodyHeight < minimumSelectedRow
       ? compactWorkspacePage(state, theme, bodyHeight, inner, confirmKey, cancelKey)
       : state.pane === "profiles"
-        ? profilesPage(state, theme, bodyHeight, inner, confirmKey, cancelKey)
+        ? profilesPage(state, theme, bodyHeight, inner, confirmKey)
         : state.pane === "candidates"
-          ? routePage(state, theme, bodyHeight, inner, confirmKey, cancelKey)
+          ? routePage(state, theme, bodyHeight, inner, confirmKey)
           : candidatePage(state, theme, bodyHeight, inner, confirmKey, cancelKey);
   const body = rows
     .slice(0, bodyHeight)

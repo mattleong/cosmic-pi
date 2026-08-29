@@ -70,8 +70,124 @@ const settleContinuations = (): Promise<void> =>
 const submitDisable = (component: ProfileWorkspaceComponent): void => {
   component.handleInput("\r");
   component.handleInput("d");
-  component.handleInput("d");
+  component.handleInput("\r");
 };
+
+describe("profile workspace navigation", () => {
+  it("preserves the initial profile and reload state in a scope request", () => {
+    const close = vi.fn();
+    const component = new ProfileWorkspaceComponent(
+      baseOptions({
+        target: { kind: "session" },
+        initialProfile: "researcher",
+        initialReloadRequired: true,
+        close,
+      }),
+    );
+
+    component.handleInput("3");
+
+    expect(close).toHaveBeenCalledWith({
+      action: "scope",
+      scope: "global",
+      profile: "researcher",
+      reloadRequired: true,
+    });
+  });
+
+  it("opens Sets from the Profiles page with the current dashboard state", () => {
+    const close = vi.fn();
+    const component = new ProfileWorkspaceComponent(
+      baseOptions({
+        target: { kind: "profile-set", set: { scope: "project", name: "project-default" } },
+        initialProfile: "planner",
+        initialReloadRequired: true,
+        close,
+      }),
+    );
+
+    component.handleInput("s");
+
+    expect(close).toHaveBeenCalledWith({
+      action: "sets",
+      profile: "planner",
+      reloadRequired: true,
+      preferredScope: "project",
+    });
+  });
+
+  it("maps numeric shortcuts to Session, Project, and Global scopes", () => {
+    const requests: unknown[] = [];
+    const persistentTarget = {
+      kind: "profile-set" as const,
+      set: { scope: "global" as const, name: "default" },
+    };
+    for (const [key, target] of [
+      ["1", persistentTarget],
+      ["2", persistentTarget],
+      ["3", { kind: "session" as const }],
+    ] as const) {
+      const component = new ProfileWorkspaceComponent(
+        baseOptions({ target, close: (result) => requests.push(result) }),
+      );
+      component.handleInput(key);
+    }
+
+    expect(requests).toEqual(
+      ["session", "project", "global"].map((scope) => ({
+        action: "scope",
+        scope,
+        profile: "generalist",
+        reloadRequired: false,
+      })),
+    );
+  });
+
+  it("rejects Project navigation when the project is untrusted", () => {
+    const close = vi.fn();
+    const requestRender = vi.fn();
+    const component = new ProfileWorkspaceComponent(
+      baseOptions({
+        target: { kind: "session" },
+        projectTrusted: false,
+        close,
+        requestRender,
+      }),
+    );
+
+    component.handleInput("2");
+
+    expect(close).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalled();
+  });
+});
+
+describe("profile workspace confirmation", () => {
+  it("keeps destructive confirmation armed until configured confirm executes it", () => {
+    const saveDraft = vi.fn(() => Promise.resolve({ inspection: makeInspection() }));
+    const component = new ProfileWorkspaceComponent(baseOptions({ saveDraft }));
+
+    component.handleInput("\r");
+    component.handleInput("d");
+    component.handleInput("z");
+    component.handleInput("\r");
+
+    expect(saveDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels destructive confirmation with Escape", () => {
+    const saveDraft = vi.fn(() => Promise.resolve({ inspection: makeInspection() }));
+    const component = new ProfileWorkspaceComponent(baseOptions({ saveDraft }));
+
+    component.handleInput("\r");
+    component.handleInput("d");
+    component.handleInput("\u001b");
+    component.handleInput("d");
+    component.handleInput("\r");
+
+    expect(saveDraft).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("profile workspace disposal", () => {
   it("lets submitted persistence settle but discards every late UI continuation", () => {
@@ -128,7 +244,6 @@ describe("profile workspace disposal", () => {
 
     component.handleInput("\r");
     component.handleInput("\r");
-    component.handleInput("j");
     component.handleInput("j");
     component.handleInput("\r");
     expect(capturedSignal).toBeDefined();
@@ -216,7 +331,7 @@ describe("profile workspace disposal", () => {
     );
 
     component.handleInput("X");
-    component.handleInput("X");
+    component.handleInput("\r");
     expect(clearSessionOverrides).toHaveBeenCalledTimes(1);
     component.dispose();
     const rendersAtDispose = requestRender.mock.calls.length;

@@ -1,0 +1,1915 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subagent profile UI prototype</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --page: #0b0d0c;
+        --panel: #121513;
+        --panel-raised: #181c19;
+        --terminal: #0d100e;
+        --line: #2a302c;
+        --line-strong: #3b463f;
+        --text: #eef3ef;
+        --muted: #97a199;
+        --dim: #839087;
+        --accent: #91e6b8;
+        --accent-soft: #193b2a;
+        --accent-strong: #c7f8dc;
+        --warning: #f2c879;
+        --warning-soft: #382d17;
+        --danger: #f0a19a;
+        --danger-soft: #3b211f;
+        --success: #8fe0a9;
+        --focus: #b4f2ce;
+        --shadow: 0 28px 80px rgb(0 0 0 / 42%);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 72% 4%, rgb(53 112 79 / 18%), transparent 30rem),
+          linear-gradient(145deg, #0a0c0b 0%, #101511 48%, #090b0a 100%);
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      button:focus-visible,
+      input:focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 2px;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 270px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 28px 20px;
+        overflow-y: auto;
+        border-right: 1px solid var(--line);
+        background: rgb(11 14 12 / 86%);
+        backdrop-filter: blur(18px);
+      }
+
+      .brand {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 30px;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        border: 1px solid #4d6658;
+        border-radius: 11px;
+        color: var(--accent-strong);
+        background: linear-gradient(145deg, #1e4a32, #142a1d);
+        box-shadow: inset 0 1px rgb(255 255 255 / 8%);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-weight: 700;
+      }
+
+      .brand-copy strong,
+      .brand-copy span {
+        display: block;
+      }
+
+      .brand-copy strong {
+        font-size: 14px;
+      }
+
+      .brand-copy span {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .nav-label {
+        margin: 0 10px 9px;
+        color: var(--dim);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .flow-nav {
+        display: grid;
+        gap: 5px;
+      }
+
+      .flow-button {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 10px;
+        width: 100%;
+        padding: 10px;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        color: var(--muted);
+        text-align: left;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .flow-button:hover {
+        color: var(--text);
+        background: var(--panel-raised);
+      }
+
+      .flow-button.is-active {
+        border-color: #365542;
+        color: var(--accent-strong);
+        background: var(--accent-soft);
+      }
+
+      .flow-number {
+        display: grid;
+        width: 25px;
+        height: 25px;
+        place-items: center;
+        border: 1px solid currentColor;
+        border-radius: 50%;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 11px;
+      }
+
+      .flow-name {
+        padding-top: 3px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .sidebar-rule {
+        height: 1px;
+        margin: 25px 10px;
+        background: var(--line);
+      }
+
+      .principles {
+        display: grid;
+        gap: 12px;
+        margin: 0;
+        padding: 0 10px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+        list-style: none;
+      }
+
+      .principles li {
+        position: relative;
+        padding-left: 14px;
+      }
+
+      .principles li::before {
+        position: absolute;
+        top: 0.63em;
+        left: 0;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--accent);
+        content: "";
+      }
+
+      .main {
+        min-width: 0;
+        padding: 38px clamp(24px, 4vw, 64px) 64px;
+      }
+
+      .page-header {
+        display: flex;
+        gap: 28px;
+        align-items: flex-start;
+        justify-content: space-between;
+        max-width: 1260px;
+        margin: 0 auto 26px;
+      }
+
+      .page-header-copy {
+        max-width: 720px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(26px, 4vw, 42px);
+        letter-spacing: -0.035em;
+        line-height: 1.08;
+      }
+
+      .subtitle {
+        max-width: 660px;
+        margin: 13px 0 0;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.65;
+      }
+
+      .view-switcher,
+      .size-switcher {
+        display: inline-flex;
+        gap: 3px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+      }
+
+      .view-switcher button,
+      .size-switcher button {
+        padding: 7px 10px;
+        border: 0;
+        border-radius: 7px;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .view-switcher button:hover,
+      .size-switcher button:hover {
+        color: var(--text);
+      }
+
+      .view-switcher button.is-active,
+      .size-switcher button.is-active {
+        color: #0b160f;
+        background: var(--accent);
+      }
+
+      .prototype-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 20px;
+        max-width: 1260px;
+        margin: 0 auto;
+      }
+
+      .stage,
+      .notes-card,
+      .comparison-card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgb(18 21 19 / 88%);
+        box-shadow: var(--shadow);
+      }
+
+      .stage {
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .stage-toolbar {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 58px;
+        padding: 10px 14px 10px 18px;
+        border-bottom: 1px solid var(--line);
+        background: #151916;
+      }
+
+      .step-summary {
+        min-width: 0;
+      }
+
+      .step-kicker {
+        color: var(--dim);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .step-title {
+        margin-top: 3px;
+        overflow: hidden;
+        font-size: 14px;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .terminal-stage {
+        display: grid;
+        min-height: 620px;
+        padding: clamp(16px, 3vw, 34px);
+        place-items: start center;
+        overflow: auto;
+        background:
+          linear-gradient(rgb(255 255 255 / 1.5%) 1px, transparent 1px),
+          linear-gradient(90deg, rgb(255 255 255 / 1.5%) 1px, transparent 1px), #101310;
+        background-size: 24px 24px;
+      }
+
+      .terminal {
+        width: 100%;
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid #3a443d;
+        border-radius: 12px;
+        background: var(--terminal);
+        box-shadow: 0 22px 55px rgb(0 0 0 / 48%);
+        transition: max-width 180ms ease;
+      }
+
+      .terminal[data-size="wide"] {
+        max-width: 980px;
+      }
+
+      .terminal[data-size="standard"] {
+        max-width: 760px;
+      }
+
+      .terminal[data-size="compact"] {
+        max-width: 470px;
+      }
+
+      .terminal-chrome {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        height: 36px;
+        padding: 0 13px;
+        border-bottom: 1px solid #303832;
+        background: #171b18;
+      }
+
+      .terminal-dots {
+        display: flex;
+        gap: 6px;
+      }
+
+      .terminal-dots span {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #4f5a53;
+      }
+
+      .terminal-name {
+        flex: 1;
+        color: var(--dim);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 11px;
+        text-align: center;
+      }
+
+      .terminal-body {
+        min-height: 470px;
+        padding: 18px 20px 14px;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .terminal[data-size="compact"] .terminal-body {
+        min-height: 390px;
+        padding: 14px;
+        font-size: 12px;
+      }
+
+      .terminal-header {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        justify-content: space-between;
+        margin: -18px -20px 18px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #334038;
+        color: var(--accent-strong);
+        background: #132019;
+      }
+
+      .terminal[data-size="compact"] .terminal-header {
+        align-items: flex-start;
+        margin: -14px -14px 14px;
+      }
+
+      .terminal-path {
+        min-width: 0;
+        overflow: hidden;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .terminal-status {
+        flex: none;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .screen-title {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .screen-description {
+        margin: 5px 0 16px;
+        color: var(--muted);
+      }
+
+      .scope-tabs {
+        display: flex;
+        gap: 5px;
+        margin-bottom: 18px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #293029;
+      }
+
+      .scope-tab {
+        padding: 5px 10px;
+        border: 1px solid #343d36;
+        border-radius: 6px;
+        color: var(--muted);
+        background: #121612;
+        cursor: pointer;
+      }
+
+      .scope-tab:hover:not(:disabled) {
+        border-color: #5e7767;
+        color: var(--text);
+      }
+
+      .scope-tab:disabled {
+        cursor: default;
+        opacity: 1;
+      }
+
+      .scope-tab.is-active {
+        border-color: var(--accent);
+        color: var(--accent-strong);
+        background: var(--accent-soft);
+      }
+
+      .terminal-list {
+        display: grid;
+        gap: 4px;
+      }
+
+      .terminal-row {
+        display: grid;
+        grid-template-columns: 18px minmax(105px, 0.8fr) minmax(0, 1.5fr);
+        gap: 8px;
+        width: 100%;
+        min-height: 40px;
+        padding: 8px 9px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        color: var(--text);
+        text-align: left;
+        background: transparent;
+      }
+
+      button.terminal-row {
+        cursor: pointer;
+      }
+
+      button.terminal-row:hover,
+      button.terminal-row:focus-visible,
+      .terminal-row.is-selected {
+        border-color: #4f6f5a;
+        background: #17251c;
+      }
+
+      .row-marker {
+        color: var(--accent);
+        font-weight: 800;
+      }
+
+      .row-label {
+        overflow: hidden;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .row-detail {
+        min-width: 0;
+        color: var(--muted);
+      }
+
+      .row-detail strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .terminal[data-size="compact"] .terminal-row {
+        grid-template-columns: 15px minmax(0, 1fr);
+        gap: 3px 5px;
+        padding-inline: 6px;
+      }
+
+      .terminal[data-size="compact"] .row-detail {
+        grid-column: 2;
+        white-space: normal;
+      }
+
+      .notice {
+        margin: 0 0 16px;
+        padding: 11px 12px;
+        border: 1px solid #3b5143;
+        border-radius: 7px;
+        color: var(--muted);
+        background: #131a15;
+      }
+
+      .notice strong {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--text);
+      }
+
+      .notice.warning {
+        border-color: #67552c;
+        color: #d8c99e;
+        background: var(--warning-soft);
+      }
+
+      .notice.warning strong {
+        color: var(--warning);
+      }
+
+      .notice.success {
+        border-color: #356044;
+        color: #b7dbc2;
+        background: #14261a;
+      }
+
+      .notice.success strong {
+        color: var(--success);
+      }
+
+      .action-stack {
+        display: grid;
+        gap: 7px;
+        margin-top: 15px;
+      }
+
+      .terminal-action {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        width: 100%;
+        padding: 9px 11px;
+        border: 1px solid #354039;
+        border-radius: 7px;
+        color: var(--text);
+        text-align: left;
+        background: #141915;
+        cursor: pointer;
+      }
+
+      .terminal-action:hover,
+      .terminal-action.is-primary {
+        border-color: #5d8b6b;
+        background: #193020;
+      }
+
+      .terminal-action.is-danger {
+        border-color: #66403d;
+        color: var(--danger);
+        background: var(--danger-soft);
+      }
+
+      .action-key {
+        min-width: 46px;
+        color: var(--accent);
+        font-weight: 800;
+      }
+
+      .terminal-footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px 18px;
+        margin: 18px -20px -14px;
+        padding: 10px 14px;
+        border-top: 1px solid #303832;
+        color: var(--dim);
+        background: #111411;
+        font-size: 11px;
+      }
+
+      .terminal[data-size="compact"] .terminal-footer {
+        margin: 16px -14px -14px;
+      }
+
+      .terminal-footer button {
+        padding: 0;
+        border: 0;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .terminal-footer button:hover {
+        color: var(--accent);
+      }
+
+      .search-box {
+        display: flex;
+        gap: 9px;
+        align-items: center;
+        margin-bottom: 12px;
+        padding: 8px 10px;
+        border: 1px solid #4d6757;
+        border-radius: 7px;
+        background: #121a14;
+      }
+
+      .search-box span {
+        color: var(--accent);
+      }
+
+      .search-box input {
+        width: 100%;
+        padding: 0;
+        border: 0;
+        outline: 0;
+        color: var(--text);
+        background: transparent;
+        font-family: inherit;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: minmax(90px, 150px) minmax(0, 1fr);
+        gap: 8px 14px;
+        margin: 15px 0;
+        padding: 13px;
+        border: 1px solid #303a33;
+        border-radius: 8px;
+        background: #121612;
+      }
+
+      .summary-grid dt {
+        color: var(--dim);
+      }
+
+      .summary-grid dd {
+        margin: 0;
+      }
+
+      .diff-line {
+        display: grid;
+        grid-template-columns: minmax(90px, 0.5fr) minmax(0, 1fr);
+        gap: 12px;
+        padding: 7px 0;
+        border-bottom: 1px solid #292f2b;
+      }
+
+      .diff-line:last-child {
+        border-bottom: 0;
+      }
+
+      .diff-before {
+        color: var(--danger);
+        text-decoration: line-through;
+      }
+
+      .diff-after {
+        color: var(--success);
+      }
+
+      .notes-card {
+        align-self: start;
+        padding: 19px;
+        box-shadow: none;
+      }
+
+      .notes-card h2,
+      .comparison-card h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .notes-card p {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .step-dots {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 20px;
+      }
+
+      .step-dot {
+        width: 28px;
+        height: 28px;
+        border: 1px solid var(--line-strong);
+        border-radius: 50%;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .step-dot.is-active {
+        border-color: var(--accent);
+        color: #0d1811;
+        background: var(--accent);
+      }
+
+      .step-dot.is-complete {
+        color: var(--accent);
+        border-color: #4f7c5d;
+      }
+
+      .notes-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 20px;
+      }
+
+      .notes-actions button {
+        padding: 7px 10px;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        background: var(--panel-raised);
+        cursor: pointer;
+      }
+
+      .notes-actions button:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+
+      .notes-actions button:disabled {
+        color: var(--dim);
+        cursor: not-allowed;
+      }
+
+      .keyboard-note {
+        margin-top: 20px;
+        padding-top: 15px;
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.6;
+      }
+
+      .comparison-view {
+        display: none;
+        max-width: 1260px;
+        margin: 0 auto;
+      }
+
+      .comparison-view.is-visible {
+        display: block;
+      }
+
+      .prototype-view.is-hidden {
+        display: none;
+      }
+
+      .comparison-intro {
+        max-width: 720px;
+        margin: 0 0 20px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .comparison-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .comparison-card {
+        overflow: hidden;
+        box-shadow: none;
+      }
+
+      .comparison-card h2 {
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .comparison-card.current h2 {
+        color: var(--danger);
+        background: var(--danger-soft);
+      }
+
+      .comparison-card.proposed h2 {
+        color: var(--accent-strong);
+        background: var(--accent-soft);
+      }
+
+      .comparison-body {
+        padding: 18px;
+      }
+
+      .comparison-body pre {
+        min-height: 270px;
+        margin: 0;
+        overflow: auto;
+        color: var(--muted);
+        font:
+          12px/1.65 "SFMono-Regular",
+          Consolas,
+          monospace;
+        white-space: pre-wrap;
+      }
+
+      .comparison-points {
+        display: grid;
+        gap: 8px;
+        margin: 15px 0 0;
+        padding: 15px 0 0;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .comparison-points div::before {
+        margin-right: 8px;
+        color: var(--accent);
+        content: "•";
+      }
+
+      @media (max-width: 1050px) {
+        .prototype-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .notes-card {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 10px 28px;
+        }
+
+        .step-dots,
+        .notes-actions {
+          grid-column: 2;
+        }
+
+        .keyboard-note {
+          grid-column: 1 / -1;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .shell {
+          display: block;
+        }
+
+        .sidebar {
+          position: static;
+          width: 100%;
+          height: auto;
+          padding: 18px;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .brand {
+          margin-bottom: 16px;
+        }
+
+        .flow-nav {
+          display: flex;
+          padding-bottom: 4px;
+          overflow-x: auto;
+        }
+
+        .flow-button {
+          flex: 0 0 170px;
+        }
+
+        .sidebar-rule,
+        .principles,
+        .nav-label:last-of-type {
+          display: none;
+        }
+
+        .main {
+          padding: 24px 14px 40px;
+        }
+
+        .page-header {
+          display: grid;
+        }
+
+        .view-switcher {
+          justify-self: start;
+        }
+
+        .stage-toolbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .terminal-stage {
+          min-height: 540px;
+          padding: 12px;
+          place-items: start;
+        }
+
+        .terminal {
+          min-width: 0;
+        }
+
+        .notes-card {
+          display: block;
+        }
+
+        .comparison-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">pi</div>
+          <div class="brand-copy">
+            <strong>Profile UI plan</strong>
+            <span>Design exploration</span>
+          </div>
+        </div>
+
+        <p class="nav-label">User flows</p>
+        <nav class="flow-nav" id="flow-nav" aria-label="Prototype flows"></nav>
+
+        <div class="sidebar-rule"></div>
+        <p class="nav-label">Interaction rules</p>
+        <ul class="principles">
+          <li>Each screen asks one question.</li>
+          <li>Enter opens or edits. Esc goes back.</li>
+          <li>Scope and activation state stay visible.</li>
+          <li>Persistent changes explain when reload is needed.</li>
+        </ul>
+      </aside>
+
+      <main class="main">
+        <header class="page-header">
+          <div class="page-header-copy">
+            <p class="eyebrow">Design exploration</p>
+            <h1>Subagent profile settings</h1>
+            <p class="subtitle">
+              The production TUI now includes the dashboard-first entry, scope controls, secondary
+              Sets workspace, Primary/Fallback routing, and Enter/Esc confirmations explored here.
+              Guided fallback setup, More menus, grouped Advanced fields, and route-diff previews
+              remain follow-up ideas rather than shipped behavior.
+            </p>
+          </div>
+          <div class="view-switcher" aria-label="Prototype view">
+            <button type="button" class="is-active" data-view="prototype" aria-pressed="true">
+              Prototype
+            </button>
+            <button type="button" data-view="comparison" aria-pressed="false">
+              Before / after
+            </button>
+          </div>
+        </header>
+
+        <section
+          class="prototype-view"
+          id="prototype-view"
+          aria-label="Interactive design exploration"
+        >
+          <div class="prototype-grid">
+            <div class="stage">
+              <div class="stage-toolbar">
+                <div class="step-summary">
+                  <div class="step-kicker" id="step-kicker"></div>
+                  <div class="step-title" id="step-title"></div>
+                </div>
+                <div class="size-switcher" aria-label="Simulated terminal width">
+                  <button type="button" data-size="wide" aria-pressed="false">Wide</button>
+                  <button type="button" class="is-active" data-size="standard" aria-pressed="true">
+                    80 cols
+                  </button>
+                  <button type="button" data-size="compact" aria-pressed="false">Compact</button>
+                </div>
+              </div>
+              <div class="terminal-stage">
+                <div class="terminal" id="terminal" data-size="standard">
+                  <div class="terminal-chrome">
+                    <div class="terminal-dots" aria-hidden="true">
+                      <span></span><span></span><span></span>
+                    </div>
+                    <div class="terminal-name">pi · /subagents profiles</div>
+                  </div>
+                  <div class="terminal-body" id="terminal-body" aria-live="polite"></div>
+                </div>
+              </div>
+            </div>
+
+            <aside class="notes-card">
+              <div>
+                <p class="eyebrow">Why this step exists</p>
+                <h2 id="note-title"></h2>
+                <p id="note-copy"></p>
+              </div>
+              <div class="step-dots" id="step-dots" aria-label="Flow steps"></div>
+              <div class="notes-actions">
+                <button type="button" id="previous-step">Back</button>
+                <button type="button" id="next-step">Next</button>
+              </div>
+              <div class="keyboard-note">
+                Keyboard in prototype<br />
+                ↑/↓ move focus · Enter activate<br />
+                Esc previous screen
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section
+          class="comparison-view"
+          id="comparison-view"
+          aria-label="Before and after comparison"
+        >
+          <p class="comparison-intro">
+            The current UI is capable, but it starts with storage structure and exposes many
+            commands at once. The proposal starts with the profile a user wants to change and keeps
+            advanced profile-set operations nearby without making them the front door.
+          </p>
+          <div class="comparison-grid">
+            <article class="comparison-card current">
+              <h2>Current entry flow</h2>
+              <div class="comparison-body">
+                <pre>
+/subagents profiles
+
+Profile sets
+Current  [G] default
+
+Project
+  [P] Inherit global
+Global
+&gt; [G] default current
+
+Enter Use · e Edit
+n New · c Copy · R Rename
+x Delete · / Search
+
+             ↓ e
+
+Profiles → Route → Candidate
+
+j/k · C-u/d · gg/G · Enter/l
+J Down · K Up · x Remove
+d Disable · i Reset · Tab</pre
+                >
+                <div class="comparison-points">
+                  <div>Enter changes the active set while e edits it.</div>
+                  <div>Storage scope appears before the profile task.</div>
+                  <div>Primary and advanced commands compete for attention.</div>
+                </div>
+              </div>
+            </article>
+
+            <article class="comparison-card proposed">
+              <h2>Proposed entry flow</h2>
+              <div class="comparison-body">
+                <pre>
+/subagents profiles
+
+Profiles  [Session] Project Global
+
+  generalist  Default profile
+&gt; worker      Implements changes
+  reviewer    Reviews changes
+
+Enter Edit · / Search · s Sets
+
+             ↓ Enter
+
+worker / Routing order
+
+&gt; Primary      Local Pi
+  Fallback 1   Local Codex
+
+Enter Edit · a Add fallback
+m More · Esc Profiles</pre
+                >
+                <div class="comparison-points">
+                  <div>Enter always drills into the selected item.</div>
+                  <div>The profile task comes before storage details.</div>
+                  <div>Common actions stay visible while rare actions move under More.</div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const row = (label, detail, options = {}) => {
+        const marker = options.selected ? ">" : "";
+        const classes = `terminal-row terminal-control${options.selected ? " is-selected" : ""}`;
+        const attrs = options.next
+          ? "data-next"
+          : options.step !== undefined
+            ? `data-step="${options.step}"`
+            : "";
+        return `<button type="button" class="${classes}" ${attrs} ${options.selected ? 'aria-current="true"' : ""}>
+          <span class="row-marker">${marker}</span>
+          <span class="row-label">${label}</span>
+          <span class="row-detail">${detail}</span>
+        </button>`;
+      };
+
+      const staticRow = (
+        label,
+        detail,
+        options = {},
+      ) => `<div class="terminal-row${options.selected ? " is-selected" : ""}" ${options.selected ? 'aria-current="true"' : ""}>
+        <span class="row-marker">${options.selected ? ">" : ""}</span>
+        <span class="row-label">${label}</span>
+        <span class="row-detail">${detail}</span>
+      </div>`;
+
+      const action = (key, label, options = {}) => {
+        const classes = `terminal-action terminal-control${options.primary ? " is-primary" : ""}${options.danger ? " is-danger" : ""}`;
+        const attrs = options.next
+          ? "data-next"
+          : options.step !== undefined
+            ? `data-step="${options.step}"`
+            : options.flow !== undefined
+              ? `data-flow="${options.flow}"`
+              : "";
+        return `<button type="button" class="${classes}" ${attrs}><span class="action-key">${key}</span><span>${label}</span></button>`;
+      };
+
+      const tabs = (
+        active,
+        destinations = {},
+      ) => `<div class="scope-tabs" role="group" aria-label="Settings scope">
+        ${["Session", "Project", "Global"]
+          .map((scope) => {
+            const destination = destinations[scope];
+            const available = destination !== undefined;
+            return `<button type="button" class="scope-tab${available ? " terminal-control" : ""}${scope === active ? " is-active" : ""}" aria-pressed="${scope === active}" ${available ? `data-step="${destination}"` : "disabled"}>${scope}</button>`;
+          })
+          .join("")}
+      </div>`;
+
+      const footer = (...items) =>
+        `<div class="terminal-footer">${items
+          .map((item) =>
+            item.step !== undefined
+              ? `<button type="button" class="terminal-control" data-step="${item.step}">${item.label}</button>`
+              : item.action === "back"
+                ? `<button type="button" class="terminal-control" data-back>${item.label}</button>`
+                : item.action === "next"
+                  ? `<button type="button" class="terminal-control" data-next>${item.label}</button>`
+                  : `<span>${item.label}</span>`,
+          )
+          .join("")}</div>`;
+
+      const screen = ({ path, status, title, description, body, footerItems = [] }) => `
+        <div class="terminal-header">
+          <span class="terminal-path">${path}</span>
+          <span class="terminal-status">${status}</span>
+        </div>
+        <h3 class="screen-title" tabindex="-1">${title}</h3>
+        ${description ? `<p class="screen-description">${description}</p>` : ""}
+        ${body}
+        ${footer(...footerItems)}
+      `;
+
+      const flows = [
+        {
+          name: "Change a session model",
+          summary: "Temporarily change the worker profile without touching files or reloading.",
+          steps: [
+            {
+              title: "Choose the profile",
+              note: "The common task is choosing a profile, so profiles replace profile sets as the entry screen.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles",
+                  status: "active now",
+                  title: "Profiles",
+                  description: "Choose the kind of subagent you want to configure.",
+                  body: `${tabs("Session")}<div class="terminal-list">
+                    ${staticRow("generalist", "Default when no profile is specified · openai/gpt-5.4")}
+                    ${row("worker", "Implements changes · openai/gpt-5.4 · high", { selected: true, next: true })}
+                    ${staticRow("reviewer", "Reviews changes · anthropic/claude-sonnet-4-6 · high")}
+                    ${staticRow("scout", "Maps the codebase · openai/gpt-5.4-mini · medium")}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Edit", action: "next" },
+                    { label: "/ Search" },
+                    { label: "s Sets" },
+                    { label: "Esc Close" },
+                  ],
+                }),
+            },
+            {
+              title: "Choose where it runs",
+              note: "Routing order describes the behavior directly. Primary and fallback replace numbered candidates.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › worker",
+                  status: "session override",
+                  title: "worker / Routing order",
+                  description: "Try the primary route first, then each fallback in order.",
+                  body: `<div class="terminal-list">
+                    ${row("Primary", "Local Pi · openai/gpt-5.4 · high · writer", { selected: true, next: true })}
+                    ${staticRow("Fallback 1", "Local Codex · gpt-5.3-codex · high · writer")}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Edit", action: "next" },
+                    { label: "a Add fallback" },
+                    { label: "m More" },
+                    { label: "Esc Profiles", step: 0 },
+                  ],
+                }),
+            },
+            {
+              title: "Choose the setting",
+              note: "Common settings appear first. Host, context, fast mode, and retention stay under Advanced.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › worker › Primary",
+                  status: "active now",
+                  title: "worker / Primary",
+                  description: "Changes in Session apply to new subagents immediately.",
+                  body: `<div class="terminal-list">
+                    ${staticRow("Runtime", "Pi")}
+                    ${row("Model", "openai/gpt-5.4", { selected: true, next: true })}
+                    ${staticRow("Effort", "high")}
+                    ${staticRow("File access", "writer")}
+                    ${staticRow("Advanced", "Local host · fresh context · close after report")}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Change", action: "next" },
+                    { label: "Esc Routing order", step: 1 },
+                  ],
+                }),
+            },
+            {
+              title: "Search models",
+              note: "Provider and model identifiers lead each result. Friendly names stay in the description.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › worker › Model",
+                  status: "3 matches",
+                  title: "Choose model",
+                  description: "Models available to the selected Pi runtime.",
+                  body: `<label class="search-box"><span>/</span><input value="gpt-5.3" aria-label="Search models" /></label>
+                    <div class="terminal-list">
+                      ${row("openai-codex/gpt-5.3-codex", "Codex subscription · high effort", { selected: true, next: true })}
+                      ${staticRow("openai/gpt-5.3", "OpenAI API · high effort")}
+                      ${staticRow("openai-codex/gpt-5.3-codex-spark", "Codex subscription · fast")}
+                    </div>`,
+                  footerItems: [
+                    { label: "Enter Select", action: "next" },
+                    { label: "Esc Cancel", step: 2 },
+                  ],
+                }),
+            },
+            {
+              title: "Confirm the result",
+              note: "Session changes report that they are already active. There is no reload prompt.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › worker › Primary",
+                  status: "active now",
+                  title: "worker / Primary",
+                  description: "",
+                  body: `<div class="notice success"><strong>Applied to this session</strong>New worker launches will use openai-codex/gpt-5.3-codex.</div>
+                    <div class="terminal-list">
+                      ${staticRow("Runtime", "Pi")}
+                      ${staticRow("Model", "openai-codex/gpt-5.3-codex", { selected: true })}
+                      ${staticRow("Effort", "high")}
+                      ${staticRow("File access", "writer")}
+                    </div>`,
+                  footerItems: [{ label: "Enter Change" }, { label: "Esc Routing order", step: 1 }],
+                }),
+            },
+          ],
+        },
+        {
+          name: "Add a fallback",
+          summary: "Add a Claude fallback to the reviewer route with a short guided flow.",
+          steps: [
+            {
+              title: "Start from routing order",
+              note: "The add action names the thing it creates. Users do not need to know the candidate data model.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › reviewer",
+                  status: "active now",
+                  title: "reviewer / Routing order",
+                  description: "Try the primary route first, then each fallback in order.",
+                  body: `<div class="terminal-list">${staticRow("Primary", "Local Pi · anthropic/claude-sonnet-4-6 · high · read-only", { selected: true })}</div>
+                    <div class="action-stack">${action("a", "Add fallback", { primary: true, next: true })}</div>`,
+                  footerItems: [
+                    { label: "a Add fallback", action: "next" },
+                    { label: "Esc Close" },
+                  ],
+                }),
+            },
+            {
+              title: "Choose a runtime",
+              note: "The flow asks only for decisions required to create a valid route. Defaults fill the rest.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › reviewer › Add fallback",
+                  status: "step 1 of 3",
+                  title: "How should this fallback run?",
+                  description: "You can change host and advanced settings after adding it.",
+                  body: `<div class="terminal-list">
+                    ${staticRow("Pi", "Authenticated Pi model and tools")}
+                    ${row("Claude Code", "Claude native runtime", { selected: true, next: true })}
+                    ${staticRow("Codex", "Codex app-server runtime")}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Continue", action: "next" },
+                    { label: "Esc Cancel", step: 0 },
+                  ],
+                }),
+            },
+            {
+              title: "Choose a model",
+              note: "The selected runtime filters the model list. Invalid runtime and model combinations never appear.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › reviewer › Add fallback",
+                  status: "step 2 of 3",
+                  title: "Choose a Claude model",
+                  description: "Available from the local Claude installation.",
+                  body: `<div class="terminal-list">
+                    ${row("claude-sonnet-4-6", "Balanced speed and review quality", { selected: true, next: true })}
+                    ${staticRow("claude-opus-4-6", "Highest review quality")}
+                    ${staticRow("claude-haiku-4-5", "Fast, lower-cost review")}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Continue", action: "next" },
+                    { label: "Esc Runtime", step: 1 },
+                  ],
+                }),
+            },
+            {
+              title: "Review before adding",
+              note: "A compact review catches permission mistakes before the route becomes active.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › reviewer › Add fallback",
+                  status: "step 3 of 3",
+                  title: "Review fallback",
+                  description: "These defaults match the reviewer profile.",
+                  body: `<dl class="summary-grid">
+                    <dt>Runtime</dt><dd>Claude Code</dd>
+                    <dt>Model</dt><dd>claude-sonnet-4-6</dd>
+                    <dt>Effort</dt><dd>high</dd>
+                    <dt>File access</dt><dd>read-only</dd>
+                    <dt>Report policy</dt><dd>close after report</dd>
+                  </dl>
+                  <div class="action-stack">${action("Enter", "Add fallback", { primary: true, next: true })}</div>`,
+                  footerItems: [
+                    { label: "Enter Add fallback", action: "next" },
+                    { label: "Esc Model", step: 2 },
+                  ],
+                }),
+            },
+            {
+              title: "Return to the route",
+              note: "The result appears in context, with its exact place in the fallback order.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › reviewer",
+                  status: "active now",
+                  title: "reviewer / Routing order",
+                  description: "",
+                  body: `<div class="notice success"><strong>Fallback added</strong>New reviewer launches can fall back to Claude Code.</div>
+                    <div class="terminal-list">
+                      ${staticRow("Primary", "Local Pi · anthropic/claude-sonnet-4-6 · high · read-only")}
+                      ${staticRow("Fallback 1", "Claude Code · claude-sonnet-4-6 · high · read-only", { selected: true })}
+                    </div>`,
+                  footerItems: [
+                    { label: "Enter Edit" },
+                    { label: "a Add fallback" },
+                    { label: "m More" },
+                    { label: "Esc Routing order", step: 0 },
+                  ],
+                }),
+            },
+          ],
+        },
+        {
+          name: "Handle a shadowed scope",
+          summary:
+            "Explain how Project declarations can override or inherit Global profile routes.",
+          steps: [
+            {
+              next: 1,
+              title: "Explain the conflict",
+              note: "The warning appears before editing. It names the active scope and offers a direct path to it.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles",
+                  status: "partly overridden",
+                  title: "Profiles / Global",
+                  description: "Global routes still apply where Project settings inherit them.",
+                  body: `${tabs("Global", { Project: 1 })}
+                    <div class="notice warning"><strong>This project declares Project settings</strong>Project routes override Global routes profile by profile. Profiles omitted by Project still inherit Global changes.</div>
+                    <div class="action-stack">
+                      ${action("Enter", "Open active Project settings", { primary: true, step: 1 })}
+                      ${action("e", "Edit Global settings anyway", { step: 2 })}
+                    </div>`,
+                  footerItems: [{ label: "Esc Close" }],
+                }),
+            },
+            {
+              previous: 0,
+              next: null,
+              title: "Switch to the active scope",
+              note: "The recommended action shows the Project declarations that take precedence profile by profile.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles",
+                  status: "active now",
+                  title: "Profiles / Project",
+                  description: "These settings control new subagents in this project.",
+                  body: `${tabs("Project", { Global: 0 })}<div class="terminal-list">
+                    ${staticRow("generalist", "Default profile · openai/gpt-5.4")}
+                    ${row("worker", "Implements changes · openai-codex/gpt-5.3-codex", { selected: true })}
+                    ${staticRow("reviewer", "Reviews changes · anthropic/claude-sonnet-4-6")}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Edit" },
+                    { label: "/ Search" },
+                    { label: "s Sets" },
+                    { label: "Esc Scope choice", step: 0 },
+                  ],
+                }),
+            },
+            {
+              previous: 0,
+              next: null,
+              title: "Allow deliberate global edits",
+              note: "Users can still prepare Global settings. The warning explains which profiles may inherit those changes.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles",
+                  status: "partly overridden",
+                  title: "Profiles / Global",
+                  description: "Saved changes apply wherever a Project profile route is omitted.",
+                  body: `${tabs("Global", { Project: 1 })}
+                    <div class="notice warning"><strong>Editing Global settings anyway</strong>Project-declared routes stay unchanged. Inherited routes may change after reload.</div>
+                    <div class="terminal-list">
+                      ${staticRow("generalist", "Default profile · openai/gpt-5.4")}
+                      ${row("worker", "Implements changes · openai/gpt-5.4", { selected: true })}
+                      ${staticRow("reviewer", "Reviews changes · anthropic/claude-sonnet-4-6")}
+                    </div>`,
+                  footerItems: [
+                    { label: "Enter Edit" },
+                    { label: "p Open Project", step: 1 },
+                    { label: "Esc Scope choice", step: 0 },
+                  ],
+                }),
+            },
+          ],
+        },
+        {
+          name: "Save and reload",
+          summary: "Make the boundary between saved settings and active settings explicit.",
+          steps: [
+            {
+              title: "Edit persistent settings",
+              note: "Project scope is visible before the change. The user knows this is persistent, not temporary.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles",
+                  status: "active now",
+                  title: "Profiles / Project",
+                  description: "Project changes are saved to configuration and require reload.",
+                  body: `${tabs("Project")}<div class="terminal-list">
+                    ${staticRow("generalist", "Default profile · openai/gpt-5.4")}
+                    ${row("worker", "Implements changes · openai/gpt-5.4 · high", { selected: true, next: true })}
+                    ${staticRow("reviewer", "Reviews changes · anthropic/claude-sonnet-4-6")}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Edit", action: "next" },
+                    { label: "/ Search" },
+                    { label: "Esc Close" },
+                  ],
+                }),
+            },
+            {
+              title: "Choose a new model",
+              note: "This shortened prototype jumps to the field choice. The full route path remains visible in the breadcrumb.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › worker › Primary › Model",
+                  status: "Project",
+                  title: "Choose model",
+                  description: "The saved route will use this model after reload.",
+                  body: `<div class="terminal-list">
+                    ${staticRow("openai/gpt-5.4", "Current selection")}
+                    ${row("openai-codex/gpt-5.3-codex", "Codex subscription · high effort", { selected: true, next: true })}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Select", action: "next" },
+                    { label: "Esc Cancel", step: 0 },
+                  ],
+                }),
+            },
+            {
+              title: "Show the pending state",
+              note: "Saving and activation are reported separately. Reload is a primary action, not a small status hint.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › worker › Primary",
+                  status: "reload required",
+                  title: "Saved to Project settings",
+                  description: "The active session still uses openai/gpt-5.4.",
+                  body: `<div class="notice warning"><strong>Saved, not active yet</strong>Reload before new subagents use openai-codex/gpt-5.3-codex.</div>
+                    <div class="action-stack">
+                      ${action("r", "Reload now", { primary: true, next: true })}
+                      ${action("Esc", "Continue editing", { step: 0 })}
+                    </div>`,
+                  footerItems: [
+                    { label: "r Reload", action: "next" },
+                    { label: "Esc Continue", step: 0 },
+                  ],
+                }),
+            },
+            {
+              title: "Confirm the consequence",
+              note: "The confirmation talks about active runs only when they exist. Enter confirms and Esc cancels.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › Reload",
+                  status: "confirmation",
+                  title: "Reload profile settings now?",
+                  description: "Two active subagent runs will be stopped before reload.",
+                  body: `<div class="notice warning"><strong>Active work will stop</strong>Saved profile settings are safe if you cancel.</div>
+                    <div class="action-stack">
+                      ${action("Enter", "Reload and stop active runs", { primary: true, next: true })}
+                      ${action("Esc", "Cancel", { step: 2 })}
+                    </div>`,
+                  footerItems: [
+                    { label: "Enter Reload", action: "next" },
+                    { label: "Esc Cancel", step: 2 },
+                  ],
+                }),
+            },
+            {
+              title: "Return with active settings",
+              note: "After reload, the profile dashboard confirms which route is active. No stale pending marker remains.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles",
+                  status: "active now",
+                  title: "Profiles / Project",
+                  description: "Project settings loaded successfully.",
+                  body: `${tabs("Project")}
+                    <div class="notice success"><strong>Profile settings reloaded</strong>New worker launches use openai-codex/gpt-5.3-codex.</div>
+                    <div class="terminal-list">
+                      ${staticRow("generalist", "Default profile · openai/gpt-5.4")}
+                      ${staticRow("worker", "Implements changes · openai-codex/gpt-5.3-codex", { selected: true })}
+                      ${staticRow("reviewer", "Reviews changes · anthropic/claude-sonnet-4-6")}
+                    </div>`,
+                  footerItems: [{ label: "Enter Edit" }, { label: "Esc Close" }],
+                }),
+            },
+          ],
+        },
+        {
+          name: "Manage profile sets",
+          summary: "Keep set activation available without making sets the default editing path.",
+          steps: [
+            {
+              title: "Open sets from profiles",
+              note: "Sets become a secondary workspace. The main screen still exposes the shortcut for experienced users.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles",
+                  status: "active now",
+                  title: "Profiles / Project",
+                  description: "Choose the kind of subagent you want to configure.",
+                  body: `${tabs("Project")}<div class="terminal-list">
+                    ${staticRow("generalist", "Default profile · openai/gpt-5.4")}
+                    ${staticRow("worker", "Implements changes · openai/gpt-5.4")}
+                    ${staticRow("reviewer", "Reviews changes · anthropic/claude-sonnet-4-6")}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Edit" },
+                    { label: "s Sets", action: "next" },
+                    { label: "Esc Close" },
+                  ],
+                }),
+            },
+            {
+              title: "Separate Edit from Use",
+              note: "Enter edits the selected set. Use is an explicit action, so the primary key keeps one meaning throughout the UI.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › Sets",
+                  status: "Team default active",
+                  title: "Profile sets",
+                  description: "A set is a named collection of profile routes.",
+                  body: `<div class="terminal-list">
+                    ${staticRow("Project", "")}
+                    ${staticRow("Team default", "Active · 7 configured profiles")}
+                    ${staticRow("Experimental", "5 configured profiles · modified yesterday", { selected: true })}
+                    ${staticRow("Global", "")}
+                    ${staticRow("Built-in routes", "No saved overrides")}
+                    ${staticRow("Personal default", "4 configured profiles")}
+                  </div>
+                  <div class="action-stack">
+                    ${action("u", "Use Experimental", { primary: true, next: true })}
+                  </div>`,
+                  footerItems: [
+                    { label: "Enter Edit" },
+                    { label: "u Use", action: "next" },
+                    { label: "n New" },
+                    { label: "m More" },
+                    { label: "Esc Profiles", step: 0 },
+                  ],
+                }),
+            },
+            {
+              title: "Preview activation",
+              note: "The preview describes impact in profile terms. Users do not have to compare configuration documents.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › Sets › Experimental",
+                  status: "preview",
+                  title: "Use Experimental?",
+                  description: "Three active profile routes will change after reload.",
+                  body: `<div class="diff-line"><strong>worker</strong><span><span class="diff-before">openai/gpt-5.4</span> <span class="diff-after">openai-codex/gpt-5.3-codex</span></span></div>
+                    <div class="diff-line"><strong>reviewer</strong><span><span class="diff-before">claude-sonnet-4-6</span> <span class="diff-after">claude-opus-4-6</span></span></div>
+                    <div class="diff-line"><strong>researcher</strong><span><span class="diff-before">openai/gpt-5.4</span> <span class="diff-after">perplexity/sonar-pro</span></span></div>
+                    <div class="action-stack">
+                      ${action("Enter", "Use this set", { primary: true, next: true })}
+                      ${action("Esc", "Cancel", { step: 1 })}
+                    </div>`,
+                  footerItems: [
+                    { label: "Enter Use set", action: "next" },
+                    { label: "Esc Cancel", step: 1 },
+                  ],
+                }),
+            },
+            {
+              title: "Explain what happens next",
+              note: "Set selection is saved, then the same reload pattern used by route edits takes over.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › Sets",
+                  status: "reload required",
+                  title: "Profile sets",
+                  description: "",
+                  body: `<div class="notice success"><strong>Experimental selected</strong>The selection is saved to Project settings.</div>
+                    <div class="notice warning"><strong>Reload required</strong>New subagent launches still use Team default until reload.</div>
+                    <div class="action-stack">
+                      ${action("r", "Reload now", { primary: true, next: true })}
+                      ${action("Esc", "Continue managing sets", { step: 1 })}
+                    </div>`,
+                  footerItems: [
+                    { label: "r Reload", action: "next" },
+                    { label: "Esc Sets", step: 1 },
+                  ],
+                }),
+            },
+            {
+              title: "Confirm the active set",
+              note: "The flow ends by naming the set that new launches will use.",
+              render: () =>
+                screen({
+                  path: "/subagents profiles › Sets",
+                  status: "Experimental active",
+                  title: "Profile sets",
+                  description: "Project settings loaded successfully.",
+                  body: `<div class="notice success"><strong>Experimental is active</strong>New subagent launches now use the selected profile routes.</div>
+                    <div class="terminal-list">
+                      ${staticRow("Team default", "7 configured profiles")}
+                      ${staticRow("Experimental", "Active · 5 configured profiles", { selected: true })}
+                    </div>`,
+                  footerItems: [{ label: "Enter Edit" }, { label: "Esc Profiles", step: 0 }],
+                }),
+            },
+          ],
+        },
+      ];
+
+      const state = {
+        flow: 0,
+        step: 0,
+        size: "standard",
+        view: "prototype",
+      };
+
+      const flowNav = document.querySelector("#flow-nav");
+      const terminal = document.querySelector("#terminal");
+      const terminalBody = document.querySelector("#terminal-body");
+      const stepKicker = document.querySelector("#step-kicker");
+      const stepTitle = document.querySelector("#step-title");
+      const noteTitle = document.querySelector("#note-title");
+      const noteCopy = document.querySelector("#note-copy");
+      const stepDots = document.querySelector("#step-dots");
+      const previousButton = document.querySelector("#previous-step");
+      const nextButton = document.querySelector("#next-step");
+
+      const renderFlowNav = () => {
+        flowNav.innerHTML = flows
+          .map(
+            (
+              flow,
+              index,
+            ) => `<button type="button" class="flow-button${index === state.flow ? " is-active" : ""}" data-flow="${index}" ${index === state.flow ? 'aria-current="step"' : ""}>
+              <span class="flow-number">${index + 1}</span>
+              <span class="flow-name">${flow.name}</span>
+            </button>`,
+          )
+          .join("");
+      };
+
+      const renderStepDots = () => {
+        const flow = flows[state.flow];
+        stepDots.innerHTML = flow.steps
+          .map(
+            (_step, index) =>
+              `<button type="button" class="step-dot${index === state.step ? " is-active" : index < state.step ? " is-complete" : ""}" data-step="${index}" aria-label="Step ${index + 1}" ${index === state.step ? 'aria-current="step"' : ""}>${index + 1}</button>`,
+          )
+          .join("");
+      };
+
+      const stepDestination = (direction) => {
+        const flow = flows[state.flow];
+        const step = flow.steps[state.step];
+        const configured = step[direction];
+        if (configured === null) return undefined;
+        if (configured !== undefined) return configured;
+        const fallback = state.step + (direction === "next" ? 1 : -1);
+        return fallback >= 0 && fallback < flow.steps.length ? fallback : undefined;
+      };
+
+      const goPrevious = () => {
+        const destination = stepDestination("previous");
+        if (destination !== undefined) setStep(destination);
+      };
+
+      const goNext = () => {
+        const destination = stepDestination("next");
+        if (destination !== undefined) setStep(destination);
+      };
+
+      const renderPrototype = () => {
+        const flow = flows[state.flow];
+        const step = flow.steps[state.step];
+        terminal.dataset.size = state.size;
+        terminalBody.innerHTML = step.render();
+        stepKicker.textContent = `Flow ${state.flow + 1} · Step ${state.step + 1} of ${flow.steps.length}`;
+        stepTitle.textContent = flow.name;
+        noteTitle.textContent = step.title;
+        noteCopy.textContent = step.note;
+        previousButton.disabled = stepDestination("previous") === undefined;
+        nextButton.disabled = stepDestination("next") === undefined;
+        renderFlowNav();
+        renderStepDots();
+        requestAnimationFrame(() => {
+          const target = terminalBody.querySelector(
+            ".terminal-control.is-selected, .terminal-control:not([disabled]), .screen-title",
+          );
+          target?.focus();
+        });
+      };
+
+      const setFlow = (flowIndex) => {
+        state.flow = Math.max(0, Math.min(flows.length - 1, flowIndex));
+        state.step = 0;
+        renderPrototype();
+      };
+
+      const setStep = (stepIndex) => {
+        const last = flows[state.flow].steps.length - 1;
+        state.step = Math.max(0, Math.min(last, stepIndex));
+        renderPrototype();
+      };
+
+      const focusRelativeControl = (direction) => {
+        const controls = [...terminalBody.querySelectorAll(".terminal-control:not([disabled])")];
+        if (controls.length === 0) return;
+        const current = controls.indexOf(document.activeElement);
+        const next = current < 0 ? 0 : (current + direction + controls.length) % controls.length;
+        controls[next].focus();
+      };
+
+      document.addEventListener("click", (event) => {
+        const target = event.target.closest("button");
+        if (!target) return;
+        if (target.dataset.flow !== undefined) {
+          setFlow(Number(target.dataset.flow));
+          return;
+        }
+        if (target.dataset.step !== undefined) {
+          setStep(Number(target.dataset.step));
+          return;
+        }
+        if (target.hasAttribute("data-next")) {
+          goNext();
+          return;
+        }
+        if (target.hasAttribute("data-back")) {
+          goPrevious();
+          return;
+        }
+        if (target.dataset.size) {
+          state.size = target.dataset.size;
+          document.querySelectorAll("button[data-size]").forEach((button) => {
+            const selected = button.dataset.size === state.size;
+            button.classList.toggle("is-active", selected);
+            button.setAttribute("aria-pressed", String(selected));
+          });
+          terminal.dataset.size = state.size;
+          return;
+        }
+        if (target.dataset.view) {
+          state.view = target.dataset.view;
+          document.querySelectorAll("[data-view]").forEach((button) => {
+            const selected = button.dataset.view === state.view;
+            button.classList.toggle("is-active", selected);
+            button.setAttribute("aria-pressed", String(selected));
+          });
+          document
+            .querySelector("#prototype-view")
+            .classList.toggle("is-hidden", state.view !== "prototype");
+          document
+            .querySelector("#comparison-view")
+            .classList.toggle("is-visible", state.view === "comparison");
+        }
+      });
+
+      previousButton.addEventListener("click", goPrevious);
+      nextButton.addEventListener("click", goNext);
+
+      document.addEventListener("keydown", (event) => {
+        if (state.view !== "prototype") return;
+        if (event.key === "Escape" && stepDestination("previous") !== undefined) {
+          event.preventDefault();
+          goPrevious();
+        } else if (event.key === "ArrowDown" && terminalBody.contains(document.activeElement)) {
+          event.preventDefault();
+          focusRelativeControl(1);
+        } else if (event.key === "ArrowUp" && terminalBody.contains(document.activeElement)) {
+          event.preventDefault();
+          focusRelativeControl(-1);
+        }
+      });
+
+      renderPrototype();
+    </script>
+  </body>
+</html>

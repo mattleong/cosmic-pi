@@ -6,11 +6,13 @@ import {
   pageSteps,
 } from "pi-cosmic-ui/manager/keymap";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
+import type { ResolvedProfileSetSelection } from "../config/options.ts";
 import type { SubagentConfigScope } from "../config/store.ts";
 import type { PersistentProfileSetRef } from "./profile-route-editor.ts";
 import {
   initialProfileSetPickerIndex,
   profileSetPickerEntries,
+  profileSetSelectionLabel,
   qualifiedProfileSetLabel,
   type ProfileSetPickerEntry,
 } from "./ui/profile-set-picker-model.ts";
@@ -21,6 +23,14 @@ type UsableProfileSetPickerEntry = Exclude<
   ProfileSetPickerEntry,
   { readonly kind: "invalid-default" }
 >;
+
+type PendingProfileSetPickerConfirmation =
+  | {
+      readonly kind: "use";
+      readonly entry: UsableProfileSetPickerEntry;
+      readonly reloadRequired: boolean;
+    }
+  | { readonly kind: "delete"; readonly target: PersistentProfileSetRef };
 
 export type ProfileSetPickerAction =
   | { readonly action: "use"; readonly entry: UsableProfileSetPickerEntry }
@@ -52,7 +62,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   private selectedIndex: number;
   private query = "";
   private searching = false;
-  private pendingDelete: PersistentProfileSetRef | undefined;
+  private pendingConfirmation: PendingProfileSetPickerConfirmation | undefined;
   private message:
     | { readonly kind: "info" | "warning" | "error"; readonly text: string }
     | undefined;
@@ -105,7 +115,29 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     this.message = undefined;
   }
 
-  private useSelected(): void {
+  private entryMatchesSelection(
+    entry: UsableProfileSetPickerEntry,
+    selection: ResolvedProfileSetSelection,
+  ): boolean {
+    if (entry.kind === "builtin") return selection.scope === "builtin";
+    if (entry.kind === "inherit-project") return selection.scope !== "project";
+    return (
+      selection.scope === entry.scope && !selection.invalid && selection.name === entry.ref.name
+    );
+  }
+
+  private activationRequiresReload(entry: UsableProfileSetPickerEntry): boolean {
+    return (
+      this.options.reloadRequired ||
+      !this.entryMatchesSelection(
+        entry,
+        this.options.inspection.session.baseConfig.currentProfileSet,
+      ) ||
+      !this.entryMatchesSelection(entry, this.options.inspection.config.currentProfileSet)
+    );
+  }
+
+  private beginUse(): void {
     const entry = this.selected();
     if (!entry) return;
     if (entry.kind === "invalid-default") {
@@ -119,13 +151,31 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       this.setMessage("warning", "This invalid set cannot become the default.");
       return;
     }
-    this.options.close({ action: "use", entry });
+    this.message = undefined;
+    this.pendingConfirmation = {
+      kind: "use",
+      entry,
+      reloadRequired: this.activationRequiresReload(entry),
+    };
+    this.renderSoon();
   }
 
   private editSelected(): void {
     const entry = this.selected();
-    if (entry?.kind !== "set") {
-      this.setMessage("info", "Select a named profile set to edit it.");
+    if (!entry) return;
+    if (entry.kind === "invalid-default") {
+      this.setMessage(
+        "warning",
+        "This default reference is malformed. Choose a valid entry with u or repair the settings file.",
+      );
+      return;
+    }
+    if (entry.kind === "builtin") {
+      this.setMessage("info", "Built-in routes have no editable set. Press u to use them.");
+      return;
+    }
+    if (entry.kind === "inherit-project") {
+      this.setMessage("info", "Inherit global has no editable set. Press u to use it.");
       return;
     }
     if (entry.invalid) {
@@ -151,20 +201,32 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       this.setMessage("warning", "Choose another default set or inherit before deleting this set.");
       return;
     }
-    this.pendingDelete = entry.ref;
+    this.message = undefined;
+    this.pendingConfirmation = { kind: "delete", target: entry.ref };
     this.renderSoon();
   }
 
   handleInput(data: string): void {
     if (this.disposed) return;
     const printable = decodeFullScreenPrintable(data);
-    if (this.pendingDelete) {
-      if (printable === "x") {
-        this.options.close({ action: "delete", target: this.pendingDelete });
+    if (this.pendingConfirmation) {
+      const pending = this.pendingConfirmation;
+      const resolution = this.keymap.resolve(data, {
+        mode: "confirmation",
+        matchesKeybinding: this.options.matchesKeybinding,
+      });
+      if (resolution?._tag === "Action" && resolution.action === "confirm") {
+        if (pending.kind === "use") this.options.close({ action: "use", entry: pending.entry });
+        else this.options.close({ action: "delete", target: pending.target });
         return;
       }
-      this.pendingDelete = undefined;
-      this.setMessage("info", "Delete canceled.");
+      if (resolution?._tag === "Action" && resolution.action === "cancel") {
+        this.pendingConfirmation = undefined;
+        this.setMessage(
+          "info",
+          pending.kind === "use" ? "Activation canceled." : "Delete canceled.",
+        );
+      }
       return;
     }
     if (this.searching) {
@@ -207,7 +269,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
         this.searching = true;
         this.query = "";
         this.selectedIndex = 0;
-      } else if (shortcut === "u") this.useSelected();
+      } else if (shortcut === "u") this.beginUse();
       else if (shortcut === "e") this.editSelected();
       else if (shortcut === "n")
         this.options.close({ action: "create", scope: this.scopeForNew() });
@@ -229,7 +291,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
         return;
       case "confirm":
       case "forward":
-        this.useSelected();
+        this.editSelected();
         return;
       case "up":
         this.move(-1);
@@ -282,10 +344,29 @@ export class ProfileSetPickerComponent implements Component, Focusable {
         searching: this.searching,
         reloadRequired: this.options.reloadRequired,
         sessionOverrideCount: Object.keys(this.options.inspection.session.overrides).length,
+        activeSelectionLabel: profileSetSelectionLabel(
+          this.options.inspection.session.baseConfig.currentProfileSet,
+        ),
+        savedSelectionLabel: profileSetSelectionLabel(
+          this.options.inspection.config.currentProfileSet,
+        ),
         ...(this.message !== undefined && { message: this.message }),
-        ...(this.pendingDelete !== undefined && {
-          pendingDelete: qualifiedProfileSetLabel(this.pendingDelete),
-        }),
+        ...(this.pendingConfirmation?.kind === "use"
+          ? {
+              pendingConfirmation: {
+                kind: "use" as const,
+                label: this.pendingConfirmation.entry.label,
+                reloadRequired: this.pendingConfirmation.reloadRequired,
+              },
+            }
+          : this.pendingConfirmation?.kind === "delete"
+            ? {
+                pendingConfirmation: {
+                  kind: "delete" as const,
+                  label: qualifiedProfileSetLabel(this.pendingConfirmation.target),
+                },
+              }
+            : {}),
       },
       {
         theme: this.options.theme,
@@ -299,6 +380,6 @@ export class ProfileSetPickerComponent implements Component, Focusable {
 
   dispose(): void {
     this.disposed = true;
-    this.pendingDelete = undefined;
+    this.pendingConfirmation = undefined;
   }
 }

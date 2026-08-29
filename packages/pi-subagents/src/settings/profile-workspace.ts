@@ -1,11 +1,7 @@
 // Profile settings are a Promise-shaped Pi host UI boundary.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
-import {
-  decodeFullScreenPrintable,
-  FullScreenKeymap,
-  pageSteps,
-} from "pi-cosmic-ui/manager/keymap";
+import { FullScreenKeymap, pageSteps } from "pi-cosmic-ui/manager/keymap";
 import { MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
 import {
   PROFILE_IDS,
@@ -20,6 +16,7 @@ import {
   inheritSessionDraft,
   loadProfileRouteDraft,
   profileWorkspaceScope,
+  profileWorkspaceTargetLabel,
   replaceRouteCandidate,
   resetGlobalDraft,
   type CandidateUpdate,
@@ -65,13 +62,29 @@ export type ProfileWorkspaceSaveResult =
     }
   | { readonly refreshError: string };
 
-export type ProfileWorkspaceCloseResult = boolean | "reloaded";
+export type ProfileWorkspaceCloseResult =
+  | boolean
+  | "reloaded"
+  | {
+      readonly action: "sets";
+      readonly profile: ProfileId;
+      readonly reloadRequired: boolean;
+      readonly preferredScope: "global" | "project";
+    }
+  | {
+      readonly action: "scope";
+      readonly scope: ProfileSettingsScope;
+      readonly profile: ProfileId;
+      readonly reloadRequired: boolean;
+    };
 
 export interface ProfileWorkspaceOptions {
   readonly theme: Theme;
   readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
   readonly target: ProfileWorkspaceTarget;
+  readonly initialProfile?: ProfileId | undefined;
+  readonly initialReloadRequired?: boolean | undefined;
   /** Resolved from the latest catalog snapshot when a controlling field action runs. */
   readonly preferredPiModel: () => string | undefined;
   readonly parentModel?: string | undefined;
@@ -112,8 +125,13 @@ type WorkspaceMessage = {
 };
 
 const paneOrder: ReadonlyArray<ProfileWorkspacePane> = ["profiles", "candidates", "fields"];
-const confirmationKey = (action: PendingAction): string =>
-  action === "remove" ? "x" : action === "disable" ? "d" : action === "reset" ? "i" : "X";
+const dashboardShortcuts: ReadonlySet<string> = new Set([
+  ...PROFILE_WORKSPACE_SHORTCUTS,
+  "s",
+  "1",
+  "2",
+  "3",
+]);
 const saveScopeLabel = (scope: ProfileSettingsScope): string =>
   scope === "session" ? "to this session" : scope === "global" ? "globally" : "to project";
 
@@ -145,7 +163,8 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.options = options;
     this.inspection = options.inspection;
     this.scope = profileWorkspaceScope(options.target);
-    this.profileIndex = PROFILE_IDS.indexOf("generalist");
+    this.profileIndex = PROFILE_IDS.indexOf(options.initialProfile ?? "generalist");
+    this.reloadRequired = options.initialReloadRequired ?? false;
     this.reconcile();
   }
 
@@ -195,6 +214,14 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
 
   private clearMessage(): void {
     this.message = undefined;
+  }
+
+  private preferredSetScope(): "global" | "project" {
+    return this.scope === "project" ||
+      (this.scope === "global" && this.projectOverrideActive()) ||
+      (this.scope === "session" && this.inspection.config.currentProfileSet.scope === "project")
+      ? "project"
+      : "global";
   }
 
   private projectOverrideActive(profile = this.profile()): boolean {
@@ -427,6 +454,8 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           candidate,
           field,
           fieldIndex: this.fieldIndex,
+          target: this.options.target,
+          reloadRequired: this.reloadRequired,
           piModel: this.options.preferredPiModel(),
           parentModel: this.options.parentModel,
           parentEffort: this.options.parentEffort,
@@ -584,6 +613,8 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
                 ? (picker.defaultSelector ?? picker.current)
                 : picker.current,
               context: picker.context,
+              targetLabel: profileWorkspaceTargetLabel(this.options.target),
+              reloadRequired: this.reloadRequired,
               getHeight: this.options.getHeight,
               requestRender: this.options.requestRender,
               matchesKeybinding: this.options.matchesKeybinding,
@@ -638,6 +669,8 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           current: this.profile(),
           parentEffort: this.options.parentEffort,
           parentModel: this.options.parentModel,
+          target: this.options.target,
+          scope: this.scope,
         };
         const withInitialQuery = initialQuery ? { ...baseResult, initialQuery } : baseResult;
         const withGetHeightAndAdditionalFields = {
@@ -719,6 +752,26 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     else if (this.pendingAction) this.performDraftAction(this.pendingAction);
   }
 
+  private requestScope(scope: ProfileSettingsScope): void {
+    if (scope === this.scope) {
+      const label = scope === "session" ? "Session" : scope === "project" ? "Project" : "Global";
+      this.setMessage("info", `Already editing ${label} profile routes.`);
+      this.renderSoon();
+      return;
+    }
+    if (scope === "project" && !this.options.projectTrusted) {
+      this.setMessage("warning", "Project profile settings require a trusted project.");
+      this.renderSoon();
+      return;
+    }
+    this.options.close({
+      action: "scope",
+      scope,
+      profile: this.profile(),
+      reloadRequired: this.reloadRequired,
+    });
+  }
+
   private requestReload(): void {
     if (this.busy || !this.reloadRequired) return;
     this.busy = true;
@@ -782,29 +835,18 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     }
 
     const matchesKeybinding = this.options.matchesKeybinding;
-    const printable = decodeFullScreenPrintable(data);
 
     if (this.pendingAction) {
       const resolution = this.keymap.resolve(data, {
         mode: "confirmation",
         matchesKeybinding,
-        reservedKeys: new Set([confirmationKey(this.pendingAction)]),
       });
       if (resolution?._tag === "Action" && resolution.action === "cancel") {
         this.pendingAction = undefined;
         this.setMessage("info", "Confirmation canceled.");
         this.renderSoon();
-      } else if (
-        resolution?._tag === "Shortcut" &&
-        resolution.key === confirmationKey(this.pendingAction) &&
-        printable === confirmationKey(this.pendingAction)
-      )
+      } else if (resolution?._tag === "Action" && resolution.action === "confirm")
         this.confirmPending();
-      else {
-        this.pendingAction = undefined;
-        this.setMessage("info", "Confirmation canceled.");
-        this.renderSoon();
-      }
       return;
     }
 
@@ -822,11 +864,32 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding,
-      reservedKeys: PROFILE_WORKSPACE_SHORTCUTS,
+      reservedKeys: dashboardShortcuts,
     });
     if (!resolution) return;
     if (resolution._tag === "Shortcut") {
       const shortcut = resolution.key;
+      if (shortcut === "s" && this.pane === "profiles") {
+        this.options.close({
+          action: "sets",
+          profile: this.profile(),
+          reloadRequired: this.reloadRequired,
+          preferredScope: this.preferredSetScope(),
+        });
+        return;
+      }
+      if (shortcut === "1" && this.pane === "profiles") {
+        this.requestScope("session");
+        return;
+      }
+      if (shortcut === "2" && this.pane === "profiles") {
+        this.requestScope("project");
+        return;
+      }
+      if (shortcut === "3" && this.pane === "profiles") {
+        this.requestScope("global");
+        return;
+      }
       if (shortcut === "/" && this.pane === "profiles") this.openProfileSearch();
       else if (
         shortcut === "a" &&

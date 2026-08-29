@@ -1,3 +1,4 @@
+import type { ResolvedProfileSetSelection } from "../../config/options.ts";
 import type { SubagentConfigScope } from "../../config/store.ts";
 import type {
   ProfileSettingsInspection,
@@ -166,3 +167,11 @@ export const initialProfileSetPickerIndex = (
 
 export const qualifiedProfileSetLabel = (ref: PersistentProfileSetRef): string =>
   `[${ref.scope === "project" ? "P" : "G"}] ${ref.name}`;
+
+export const profileSetSelectionLabel = (selection: ResolvedProfileSetSelection): string => {
+  if (selection.scope === "builtin") return "[G] Built-in routes";
+  const badge = selection.scope === "project" ? "[P]" : "[G]";
+  return selection.invalid || !selection.name
+    ? `${badge} Invalid default`
+    : `${badge} ${selection.name}`;
+};

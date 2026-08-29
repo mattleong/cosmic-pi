@@ -10,8 +10,13 @@ export interface ProfileSetPickerRenderState {
   readonly searching: boolean;
   readonly reloadRequired: boolean;
   readonly sessionOverrideCount: number;
+  readonly activeSelectionLabel?: string | undefined;
+  readonly savedSelectionLabel?: string | undefined;
   readonly message?: { readonly kind: "info" | "warning" | "error"; readonly text: string };
-  readonly pendingDelete?: string | undefined;
+  readonly pendingConfirmation?:
+    | { readonly kind: "use"; readonly label: string; readonly reloadRequired: boolean }
+    | { readonly kind: "delete"; readonly label: string }
+    | undefined;
 }
 
 const pad = (value: string, width: number): string => {
@@ -29,8 +34,9 @@ export const renderProfileSetPicker = (
   const width = Math.max(0, Math.floor(options.width));
   const height = Math.max(0, Math.floor(options.height));
   if (width === 0 || height === 0) return [];
+  if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
   const theme = options.theme;
-  const inner = Math.max(1, width - 2);
+  const inner = width - 2;
   const status = state.reloadRequired
     ? theme.fg("warning", "saved changes pending reload")
     : state.sessionOverrideCount > 0
@@ -45,41 +51,74 @@ export const renderProfileSetPicker = (
     `${"─".repeat(Math.max(0, inner - visibleWidth(title)))}╮`,
   )}`;
   if (height === 1) return [truncateToWidth(top, width, "")];
-  const current = state.entries.find((entry) => entry.current);
+  const savedEntry = state.entries.find((entry) => entry.current);
+  const activeSelectionLabel = state.activeSelectionLabel ?? savedEntry?.label ?? "Built-in routes";
+  const savedSelectionLabel = state.savedSelectionLabel ?? savedEntry?.label ?? "Built-in routes";
+  const selectionPending = state.reloadRequired || activeSelectionLabel !== savedSelectionLabel;
+  const confirmation = state.pendingConfirmation;
+  const confirmationRows =
+    confirmation?.kind === "use"
+      ? [
+          theme.fg("warning", theme.bold(`Confirm · Use ${confirmation.label}?`)),
+          theme.fg("toolOutput", `  Set     ${confirmation.label}`),
+          theme.fg(
+            "toolOutput",
+            `  Reload  ${confirmation.reloadRequired ? "Required after activation" : "Not required; this default is already active"}`,
+          ),
+        ]
+      : confirmation?.kind === "delete"
+        ? [
+            theme.fg("warning", theme.bold(`Confirm · Delete ${confirmation.label}?`)),
+            theme.fg("toolOutput", `  Set     ${confirmation.label}`),
+            theme.fg("toolOutput", "  Change  Remove this set from saved profile settings"),
+          ]
+        : [];
   const header = [
     theme.fg("accent", theme.bold("Profile sets")),
-    `Current  ${current?.label ?? "Built-in routes"}`,
+    `Active now       ${activeSelectionLabel}`,
+    ...(selectionPending ? [`Saved selection  ${savedSelectionLabel} · reload required`] : []),
     ...(state.sessionOverrideCount > 0
       ? [
           `Session  ${state.sessionOverrideCount} temporary profile override${state.sessionOverrideCount === 1 ? "" : "s"}`,
         ]
       : []),
     ...(state.searching ? [`Search   /${state.query}`] : []),
-    ...(state.message
-      ? [
-          theme.fg(
-            state.message.kind === "error"
-              ? "error"
-              : state.message.kind === "warning"
-                ? "warning"
-                : "muted",
-            state.message.text,
-          ),
-        ]
-      : []),
-    ...(state.pendingDelete
-      ? [theme.fg("warning", `Press x again to delete ${state.pendingDelete}; Esc cancels.`)]
-      : []),
+    ...(confirmationRows.length > 0
+      ? confirmationRows
+      : state.message
+        ? [
+            theme.fg(
+              state.message.kind === "error"
+                ? "error"
+                : state.message.kind === "warning"
+                  ? "warning"
+                  : "muted",
+              state.message.text,
+            ),
+          ]
+        : []),
     "",
   ];
-  const footer = renderResponsiveManagerFooter(inner, [
-    [
-      "↑/↓ Select · Enter Use · e Edit",
-      "n New · c Copy · R Rename · x Delete · / Search",
-      state.reloadRequired ? "r Reload · Esc Close" : "Esc Close",
-    ],
-    ["↑/↓ · Enter Use · e Edit", "n · c · R · x · /", state.reloadRequired ? "r · Esc" : "Esc"],
-  ]);
+  const selected = state.entries[state.selectedIndex];
+  const contextualActions =
+    selected?.kind === "set"
+      ? "e Edit · n New · c Copy · R Rename · x Delete · / Search"
+      : "n New · / Search";
+  const compactContextualActions = selected?.kind === "set" ? "e · n · c · R · x · /" : "n · /";
+  const footer = confirmation
+    ? renderResponsiveManagerFooter(inner, [["Enter Confirm · Esc Cancel"]])
+    : renderResponsiveManagerFooter(inner, [
+        [
+          "↑/↓ Select · Enter Edit · u Use",
+          contextualActions,
+          state.reloadRequired ? "r Reload · Esc Close" : "Esc Close",
+        ],
+        [
+          "↑/↓ · Enter Edit · u Use",
+          compactContextualActions,
+          state.reloadRequired ? "r · Esc" : "Esc",
+        ],
+      ]);
   const bodyHeight = Math.max(0, height - 2);
   const listHeight = Math.max(1, bodyHeight - header.length - 1);
   const logicalRows: ReadonlyArray<{ readonly text: string; readonly entryIndex?: number }> =
@@ -96,11 +135,11 @@ export const renderProfileSetPicker = (
           priorScope = entry.scope;
         }
         const marker = index === state.selectedIndex ? ">" : " ";
-        const currentMarker = entry.current ? " current" : "";
+        const savedMarker = entry.current ? " saved" : "";
         rows.push({
           entryIndex: index,
           text: truncateToWidth(
-            `${marker} ${entry.label}${currentMarker.padEnd(10)} · ${entry.description}`,
+            `${marker} ${entry.label}${savedMarker.padEnd(10)} · ${entry.description}`,
             inner,
           ),
         });

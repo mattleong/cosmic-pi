@@ -2,11 +2,18 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
-import type { CandidateUpdate, ProfileSettingsInspection } from "../profile-route-editor.ts";
+import {
+  profileWorkspaceTargetLabel,
+  type CandidateUpdate,
+  type ProfileSettingsInspection,
+  type ProfileSettingsScope,
+  type ProfileWorkspaceTarget,
+} from "../profile-route-editor.ts";
 import {
   candidateFieldChoices,
   candidateFieldRows,
   effectiveProfileSummary,
+  profileRouteOptionLabel,
   selectCandidateField,
   type ProfileWorkspaceField,
 } from "./profile-workspace-model.ts";
@@ -30,6 +37,8 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly candidate: ProfileCandidate;
   readonly field: Exclude<ProfileWorkspaceField, "model">;
   readonly fieldIndex: number;
+  readonly target?: ProfileWorkspaceTarget | undefined;
+  readonly reloadRequired?: boolean | undefined;
   readonly piModel?: string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
@@ -56,8 +65,12 @@ export const makeCandidateFieldSelector = (
     options.profile,
     options.parentEffort,
     options.parentModel,
-  )[options.fieldIndex];
+  ).find((entry) => entry.field === options.field);
   const label = row?.label ?? options.field;
+  const optionLabel = profileRouteOptionLabel(options.candidateIndex);
+  const targetLabel = options.target
+    ? profileWorkspaceTargetLabel(options.target)
+    : "current target";
   const current = currentFieldValue(options.candidate, options.field);
   const changeOptions = {
     piModel: options.piModel,
@@ -70,9 +83,9 @@ export const makeCandidateFieldSelector = (
     (() => {
       const baseResult = {
         theme: options.theme,
-        breadcrumb: `/subagents profiles › ${options.profile} › candidate ${options.candidateIndex + 1} › ${label}`,
+        breadcrumb: `/subagents profiles › ${options.profile} › ${optionLabel} › ${label}`,
         title: `Choose ${label.toLowerCase()}`,
-        subtitle: `${options.profile} · candidate ${options.candidateIndex + 1} · current: ${row?.value ?? current}`,
+        subtitle: `${targetLabel} · ${options.profile} · ${optionLabel} · current: ${row?.value ?? current}${options.reloadRequired ? " · reload pending" : ""}`,
       };
       const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
       const withChoicesAndAdditionalFields = {
@@ -114,6 +127,8 @@ export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
   readonly parentEffort: SubagentEffort;
   readonly parentModel?: string | undefined;
   readonly initialQuery?: string | undefined;
+  readonly target?: ProfileWorkspaceTarget | undefined;
+  readonly scope?: ProfileSettingsScope | undefined;
   readonly select: (profile: ProfileId) => void;
   readonly cancel: () => void;
 }
@@ -123,11 +138,16 @@ export const makeProfileSearchSelector = (
 ): SearchableSelectPage<string> =>
   new SearchableSelectPage<string>(
     (() => {
+      const targetLabel = options.target
+        ? profileWorkspaceTargetLabel(options.target)
+        : options.scope
+          ? `${options.scope[0]?.toUpperCase()}${options.scope.slice(1)} scope`
+          : "the current target";
       const baseResult = {
         theme: options.theme,
         breadcrumb: "/subagents profiles › search",
         title: "Search profiles",
-        subtitle: "Choose a profile to open its effective ordered route",
+        subtitle: `Choose a profile to edit at ${targetLabel}. Effective routing is shown for reference.`,
         choices: PROFILE_IDS.map((profile) => ({
           value: profile,
           item: {

@@ -414,11 +414,11 @@ describe("subagent Pi registration", () => {
       });
 
       yield* settle(() => handlers.get("session_start")?.({ reason: "startup" }, ctx));
-      const first = command?.("profiles session", ctx) ?? Promise.resolve();
+      const first = command?.("profiles", ctx) ?? Promise.resolve();
       yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
       component?.handleInput?.("\r");
       component?.handleInput?.("d");
-      component?.handleInput?.("d");
+      component?.handleInput?.("\r");
       yield* step(() =>
         vi.waitFor(() =>
           expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),

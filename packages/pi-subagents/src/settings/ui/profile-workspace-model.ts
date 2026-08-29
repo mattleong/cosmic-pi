@@ -30,12 +30,12 @@ export type ProfileWorkspaceField =
   | "closeOnReport";
 
 export const PROFILE_WORKSPACE_FIELDS: ReadonlyArray<ProfileWorkspaceField> = [
-  "host",
   "runtime",
   "model",
   "effort",
-  "context",
   "writeIntent",
+  "host",
+  "context",
   "openaiFastMode",
   "closeOnReport",
 ];
@@ -75,6 +75,12 @@ export interface CandidateFieldChoice {
   readonly label: string;
   readonly description: string;
 }
+
+export const profileRouteOptionLabel = (index: number): string =>
+  index <= 0 ? "Primary" : `Fallback ${index}`;
+
+const routeOptionCountLabel = (count: number): string =>
+  count === 1 ? "Primary only" : `Primary + ${count - 1} fallback${count === 2 ? "" : "s"}`;
 
 export const profileSourceLabel = (source: ProfileRouteSource): string => {
   switch (source) {
@@ -155,7 +161,7 @@ export const effectiveProfileSummary = (
   const count = route.candidates.length;
   const effort = candidateEffortLabel(profile, first, parentEffort);
   const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
-  return `${source} · ${count} candidate${count === 1 ? "" : "s"} · ${first.host}/${first.runtime} · ${first.model}:${effort}${fast}`;
+  return `${source} · ${routeOptionCountLabel(count)} · ${first.model} · ${first.host}/${first.runtime} · ${effort}${fast}`;
 };
 
 export const profileRouteDraftSummary = (
@@ -170,7 +176,7 @@ export const profileRouteDraftSummary = (
   const count = draft.candidates.length;
   const effort = candidateEffortLabel(profile, first, parentEffort);
   const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
-  return `${count} candidate${count === 1 ? "" : "s"} · ${first.host}/${first.runtime} · ${first.model}:${effort}${fast}`;
+  return `${routeOptionCountLabel(count)} · ${first.model} · ${first.host}/${first.runtime} · ${effort}${fast}`;
 };
 
 export const candidateFieldRows = (
@@ -192,7 +198,6 @@ export const candidateFieldRows = (
         ? "no active parent model is available"
         : "the selected model does not support OpenAI fast mode";
   return [
-    { field: "host", label: "Host", value: candidate.host, fixed: false },
     { field: "runtime", label: "Runtime", value: candidate.runtime, fixed: false },
     { field: "model", label: "Model", value: candidate.model, fixed: false },
     {
@@ -201,6 +206,13 @@ export const candidateFieldRows = (
       value: profile ? candidateEffortLabel(profile, candidate, parentEffort) : candidate.effort,
       fixed: false,
     },
+    {
+      field: "writeIntent",
+      label: "File access",
+      value: candidate.writeIntent,
+      fixed: false,
+    },
+    { field: "host", label: "Host", value: candidate.host, fixed: false },
     (() => {
       const baseResult = {
         field: "context" as const,
@@ -213,12 +225,6 @@ export const candidateFieldRows = (
         : baseResult;
       return withFixedReason;
     })(),
-    {
-      field: "writeIntent",
-      label: "Write intent",
-      value: candidate.writeIntent,
-      fixed: false,
-    },
     (() => {
       const baseResult = {
         field: "openaiFastMode" as const,
@@ -252,7 +258,7 @@ export const candidateFieldRows = (
       const withFixedReason = !retainedAllowed
         ? {
             ...baseResult,
-            fixedReason: "Retention is available only to Herdr read-only candidates.",
+            fixedReason: "Retention is available only to Herdr read-only route options.",
           }
         : baseResult;
       return withFixedReason;
@@ -331,7 +337,7 @@ export const candidateFieldChoices = (
             {
               value: "true",
               label: "On · Fast",
-              description: "Request OpenAI priority service for this candidate",
+              description: "Request OpenAI priority service for this route option",
             },
           ]
         : []),

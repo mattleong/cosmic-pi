@@ -10,6 +10,7 @@ import {
 } from "../../profiles/model.ts";
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
+import { profileRouteOptionLabel } from "./profile-workspace-model.ts";
 import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 export type ProfileModelChoice =
@@ -54,12 +55,12 @@ export function createProfileModelChoices(input: {
           item: {
             value: "parent",
             label: sanitizeTerminalLine(
-              `Parent model${input.currentSelector === "parent" ? " (current)" : ""}`,
+              `parent → ${canonical ? boundedMiddle(sanitizeTerminalLine(canonical), 72) : "active model at launch"}${input.currentSelector === "parent" ? " (current)" : ""}`,
             ),
             description: sanitizeTerminalLine(
               canonical
-                ? `${boundedMiddle(sanitizeTerminalLine(canonical), 72)} · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
-                : "Uses the active parent model at launch",
+                ? `${input.parentModel?.name ? `${boundedMiddle(sanitizeTerminalLine(input.parentModel.name), 48)} · ` : ""}Resolved parent model · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
+                : "The parent selector resolves to the active model when this route launches",
             ),
           },
           searchText: sanitizeTerminalLine(
@@ -115,10 +116,10 @@ export const createNativeModelChoices = (
       item: {
         value: model.selector,
         label: sanitizeTerminalLine(
-          `${boundedMiddle(sanitizeTerminalLine(model.label || model.selector), 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
+          `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
         ),
         description: sanitizeTerminalLine(
-          `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${model.description ? ` · ${boundedMiddle(sanitizeTerminalLine(model.description), 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
+          `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
         ),
       },
       searchText: sanitizeTerminalLine(
@@ -140,6 +141,8 @@ export interface ProfileModelPickerPageOptions {
   readonly choices: ReadonlyArray<ProfileModelPickerChoice>;
   readonly current?: string | undefined;
   readonly context: ProfileModelPickerContext;
+  readonly targetLabel?: string | undefined;
+  readonly reloadRequired?: boolean | undefined;
   readonly notice?: string | undefined;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
@@ -164,11 +167,12 @@ export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOption
     context.runtime === "pi"
       ? `authenticated canonical models${context.host === "local" ? " · parent allowed" : ""}`
       : "native advertised models";
+  const optionLabel = profileRouteOptionLabel(context.candidateIndex);
   const baseResult = {
     theme: options.theme,
-    breadcrumb: `/subagents profiles › ${context.profile} › candidate ${context.candidateIndex + 1} › Model`,
-    title: `Choose model · ${context.profile} · candidate ${context.candidateIndex + 1}`,
-    subtitle: `${host} ${runtimeLabel(context.runtime)} · ${source}`,
+    breadcrumb: `/subagents profiles › ${context.profile} › ${optionLabel} › Model`,
+    title: `Choose model · ${context.profile} · ${optionLabel}`,
+    subtitle: `${options.targetLabel ? `${options.targetLabel} · ` : ""}${host} ${runtimeLabel(context.runtime)} · ${source}${options.reloadRequired ? " · reload pending" : ""}`,
     choices: options.choices.map((choice) => ({
       value: choiceValue(choice.choice),
       item: choice.item,
