@@ -156,15 +156,3 @@ export const readValidatedCodexAuth = (
   safeCodexSourceHome(sourceEnvironment).then((sourceHome) =>
     sourceHome ? readValidatedCodexAuthFromHome(sourceHome) : undefined,
   );
-
-export const harnessCleanupUnconfirmed = (
-  cause: unknown,
-): Error & { readonly cleanupUnconfirmed: true } =>
-  Object.assign(new Error("Partial private harness cleanup could not be confirmed.", { cause }), {
-    cleanupUnconfirmed: true as const,
-  });
-
-export const isHarnessCleanupUnconfirmed = <ErrorInput>(
-  error: ErrorInput,
-): error is ErrorInput & Error & { readonly cleanupUnconfirmed: true } =>
-  error instanceof Error && "cleanupUnconfirmed" in error && error.cleanupUnconfirmed === true;

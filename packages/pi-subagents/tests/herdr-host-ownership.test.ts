@@ -1,5 +1,6 @@
 // Test entry point composes the subject Layer once.
 import { describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -77,7 +78,16 @@ describe("Herdr launch ownership hardening", () => {
       expect(fake.cleanupAuthorizations()).toBe(0);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
     return Effect.gen(function* () {
-      expect(Exit.isFailure(yield* scenario.pipe(Effect.exit))).toBe(true);
+      const exit = yield* scenario.pipe(Effect.exit);
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(exit.cause.reasons.every(Cause.isDieReason)).toBe(true);
+        expect(
+          exit.cause.reasons.some(
+            (reason) => Cause.isDieReason(reason) && Cause.isCause(reason.defect),
+          ),
+        ).toBe(false);
+      }
       expect(fake.closedPanes).toHaveLength(1);
       expect(fake.callerPaneLive()).toBe(true);
     });
@@ -278,7 +288,8 @@ describe("Herdr launch ownership hardening", () => {
           expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(
             true,
           );
-          expect(fake.cleanupAuthorizations()).toBe(1);
+          expect(fake.cleanupAuthorizations()).toBe(0);
+          expect(fake.harnessCleanups()).toBe(1);
         }).pipe(Effect.scoped, provideBuiltLayer(layer));
       }
     }),

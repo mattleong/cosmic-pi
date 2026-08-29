@@ -1,7 +1,9 @@
 // Private harness files are intentional boundary-test IO.
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Redacted from "effect/Redacted";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
@@ -503,6 +505,7 @@ describe("Herdr native harness security", () => {
             expect(settings.hooks.SessionStart[0].hooks[0].command).toContain(
               "claude-integration.sh",
             );
+            expect(settings.hooks.SessionStart[0].hooks[0].command).toMatch(/ session$/u);
             prepared.authorizeCleanup();
           }),
         ),
@@ -622,6 +625,136 @@ describe("Herdr native harness security", () => {
         ),
       );
     }));
+
+  effectTest(
+    "leaves a pre-owned blocking parent unchanged and reports prepare failure",
+    function* () {
+      const test = yield* step(setup);
+      const blocker = join(test.agentDirectory, "subagents");
+      yield* step(() => fs.writeFile(blocker, "foreign-owner", { mode: 0o600 }));
+      const exit = yield* Effect.scoped(
+        test.harness.prepare("pi", launch("pi"), test.supervisor),
+      ).pipe(Effect.exit);
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        const first = exit.cause.reasons[0];
+        expect(first && Cause.isFailReason(first) ? first.error.code : undefined).toBe(
+          "herdr_harness_prepare_failed",
+        );
+      }
+      expect(yield* step(() => fs.readFile(blocker, "utf8"))).toBe("foreign-owner");
+    },
+  );
+
+  effectTest("removes an owned partial harness after a build failure", function* () {
+    const test = yield* step(setup);
+    const harness = makeHerdrHarness({
+      agentDirectory: test.agentDirectory,
+      environment: test.environment,
+      integrationPaths: test.integrations,
+      harnessFault: "after-claude-settings",
+    });
+    const exit = yield* Effect.scoped(
+      harness.prepare("claude", launch("claude"), test.supervisor),
+    ).pipe(Effect.exit);
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(
+      yield* step(() => fs.readdir(join(test.agentDirectory, "subagents", "herdr-host-v1"))),
+    ).toEqual([]);
+  });
+
+  effectTest("keeps final-release cleanup failures as top-level Cause reasons", function* () {
+    const test = yield* step(setup);
+    const harness = makeHerdrHarness({
+      agentDirectory: test.agentDirectory,
+      environment: test.environment,
+      integrationPaths: test.integrations,
+      harnessCleanupFault: true,
+    });
+    const exit = yield* Effect.scoped(harness.prepare("pi", launch("pi"), test.supervisor)).pipe(
+      Effect.exit,
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(exit.cause.reasons.every(Cause.isDieReason)).toBe(true);
+      expect(Cause.squash(exit.cause)).toMatchObject({
+        code: "herdr_harness_cleanup_unconfirmed",
+      });
+      expect(
+        exit.cause.reasons.some(
+          (reason) => Cause.isDieReason(reason) && Cause.isCause(reason.defect),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  effectTest(
+    "keeps partial cleanup failure primary while preserving every preparation failure",
+    function* () {
+      const test = yield* step(setup);
+      const harness = makeHerdrHarness({
+        agentDirectory: test.agentDirectory,
+        environment: test.environment,
+        integrationPaths: test.integrations,
+        harnessFault: "after-claude-settings",
+        harnessCleanupFault: true,
+      });
+      const exit = yield* Effect.scoped(
+        harness.prepare("claude", launch("claude"), test.supervisor),
+      ).pipe(Effect.exit);
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        const codes = exit.cause.reasons.flatMap((reason) =>
+          Cause.isFailReason(reason) ? [reason.error.code] : [],
+        );
+        expect(codes[0]).toBe("herdr_harness_cleanup_unconfirmed");
+        expect(codes.slice(1)).toEqual([
+          "herdr_harness_prepare_failed",
+          "herdr_harness_prepare_failed",
+        ]);
+      }
+    },
+  );
+
+  effectTest("quarantines Codex state when hook-process cleanup is unconfirmed", function* () {
+    const test = yield* step(setup);
+    const harness = makeHerdrHarness({
+      agentDirectory: test.agentDirectory,
+      environment: test.environment,
+      integrationPaths: test.integrations,
+      codexHooks: {
+        establishTrust: () =>
+          Effect.failCause(
+            Cause.fromReasons([
+              ...Cause.fail(
+                new HerdrCodexHooksError({ code: "codex_herdr_hook_cleanup_unconfirmed" }),
+              ).reasons,
+              ...Cause.fail(new HerdrCodexHooksError({ code: "codex_herdr_hook_unavailable" }))
+                .reasons,
+            ]),
+          ),
+      },
+    });
+    const exit = yield* Effect.scoped(
+      harness.prepare("codex", launch("codex"), test.supervisor),
+    ).pipe(Effect.exit);
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const codes = exit.cause.reasons.flatMap((reason) =>
+        Cause.isFailReason(reason) ? [reason.error.code] : [],
+      );
+      expect(codes).toEqual([
+        "codex_herdr_hook_cleanup_unconfirmed",
+        "codex_herdr_hook_unavailable",
+      ]);
+    }
+    const root = join(test.agentDirectory, "subagents", "herdr-host-v1");
+    const entries = yield* step(() => fs.readdir(root));
+    expect(entries).toHaveLength(1);
+    expect((yield* step(() => fs.lstat(join(root, entries[0]!, "codex-home")))).isDirectory()).toBe(
+      true,
+    );
+  });
 
   effectTest(
     "surfaces partial preparation cleanup uncertainty and preserves private state",

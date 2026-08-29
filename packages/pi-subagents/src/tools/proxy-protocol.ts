@@ -1,5 +1,9 @@
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { Check } from "typebox/value";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import {
   AwaitParameters,
@@ -69,6 +73,25 @@ export const encodeSubagentProxyPayload = <ValueInput>(value: ValueInput): strin
   } catch {
     return undefined;
   }
+};
+
+const ProxyResultSchema = Schema.Struct({
+  content: Schema.Array(
+    Schema.Struct({
+      type: Schema.Literal("text"),
+      text: Schema.String.check(Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS)),
+    }),
+  ).check(Schema.isMaxLength(64)),
+  details: Schema.optional(Schema.Unknown),
+});
+
+/** Strict client-side decode for private root coordinator proxy responses. */
+export const decodeSubagentProxyResult = (source: string): AgentToolResult<unknown> | undefined => {
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyResultSchema), {
+    onExcessProperty: "error",
+  })(source);
+  if (Option.isNone(decoded)) return undefined;
+  return { content: [...decoded.value.content], details: decoded.value.details ?? {} };
 };
 
 const invalid = (message: string) =>

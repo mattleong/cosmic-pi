@@ -7,7 +7,6 @@ import {
   hasSubagentActivityPanelContent,
   projectSubagentActivityPanel,
   renderProjectedSubagentActivityPanel,
-  renderSubagentActivityPanel,
   subagentActivityPanelCadence,
   type SubagentActivityPresentationSnapshot,
 } from "../src/ui/activity-panel.ts";
@@ -43,7 +42,13 @@ const render = (
   runs: ReadonlyArray<SubagentRunView>,
   live = emptyActivityPresentation(),
   width = 120,
-) => renderSubagentActivityPanel(projection(runs), live, width, theme, 10_001);
+) =>
+  renderProjectedSubagentActivityPanel(
+    projectSubagentActivityPanel(projection(runs), live),
+    width,
+    theme,
+    10_001,
+  );
 
 describe("persistent subagent activity panel", () => {
   it("shows work and attention states with the ancestors needed for one hierarchy", () => {
@@ -289,9 +294,8 @@ describe("persistent subagent activity panel", () => {
       awaits: [{ runIds: [target.id, waitingTarget.id], until: "all_finished" }],
     });
 
-    renderSubagentActivityPanel(
-      projection([target, waitingTarget, parent]),
-      live,
+    renderProjectedSubagentActivityPanel(
+      projectSubagentActivityPanel(projection([target, waitingTarget, parent]), live),
       120,
       recordingTheme,
       10_001,

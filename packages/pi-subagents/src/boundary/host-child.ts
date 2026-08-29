@@ -4,20 +4,26 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-
 import { Type } from "typebox";
-import { loadCodePreviewSettings } from "pi-code-previews";
-import { isProjectTrusted } from "pi-cosmic-core";
-import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
-import type { SubagentToolInput } from "../tools/schema.ts";
-import { encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
-import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
-import { registerSubagentTools } from "../tools/subagent.ts";
-import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
+import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
+import {
+  bestEffortHostBootstrap,
+  captureSessionHost,
+  isProjectTrusted,
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+} from "pi-cosmic-core";
 import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
+import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
+import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
+import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
+import type { SubagentToolInput } from "../tools/schema.ts";
+import { registerSubagentTools } from "../tools/subagent.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
 import {
@@ -25,31 +31,19 @@ import {
   ParentContactError,
   type LocalPiChildIpcChannel,
 } from "./local-pi-ipc.ts";
+
 const PARENT_REPLY_PREFIX = "Parent replied: ";
 const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
+const CHILD_PROXY_TOOL_NAMES = [...SUBAGENT_TOOL_NAMES, "contact_parent"];
+const CHILD_PROXY_TOOL_NAME_SET: ReadonlySet<string> = new Set(CHILD_PROXY_TOOL_NAMES);
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
 
-const ProxyResultSchema = Schema.Struct({
-  content: Schema.Array(
-    Schema.Struct({
-      type: Schema.Literal("text"),
-      text: Schema.String.check(Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS)),
-    }),
-  ).check(Schema.isMaxLength(64)),
-  details: Schema.optional(Schema.Unknown),
-});
 const ProxyFailureSchema = Schema.Struct({
   message: Schema.String.check(Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS)),
 });
-
-const decodeProxyResult = (source: string): AgentToolResult<unknown> | undefined => {
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyResultSchema))(source);
-  if (Option.isNone(decoded)) return undefined;
-  return { content: [...decoded.value.content], details: decoded.value.details ?? {} };
-};
 
 const proxyFailure = (source: string): ParentContactError => {
   const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyFailureSchema))(source);
@@ -61,7 +55,6 @@ const proxyFailure = (source: string): ParentContactError => {
 };
 
 type ContactParentEnvelope = Extract<LocalPiContact, { readonly type: "contact_parent" }>;
-type ContactCancelEnvelope = Extract<LocalPiContact, { readonly type: "contact_cancel" }>;
 
 const ContactParentParameters = Type.Object(
   {
@@ -75,8 +68,30 @@ const ContactParentParameters = Type.Object(
   { additionalProperties: false },
 );
 
-export default function subagentChildBridge(pi: ExtensionAPI): void {
-  if (!isSubagentChildProcess()) return;
+export interface SubagentChildBridgeBoundaries {
+  readonly loadSettings: (
+    cwd: string,
+    projectTrusted: boolean,
+    signal: AbortSignal,
+  ) => PromiseLike<CodePreviewSettings | void>;
+  readonly openIpc: () => LocalPiChildIpcChannel;
+}
+
+const LIVE_CHILD_BRIDGE_BOUNDARIES: SubagentChildBridgeBoundaries = {
+  loadSettings: loadCodePreviewSettings,
+  openIpc: openLocalPiChildIpc,
+};
+
+interface ChildSessionInput {
+  readonly cwd: string;
+  readonly projectTrusted: boolean;
+  token: number | undefined;
+}
+
+export function registerSubagentChildBridge(
+  pi: ExtensionAPI,
+  boundaries: SubagentChildBridgeBoundaries = LIVE_CHILD_BRIDGE_BOUNDARIES,
+): void {
   pi.registerFlag("pi-subagents-fast-mode", {
     description: "Private OpenAI fast-mode request for this subagent",
     type: "boolean",
@@ -86,21 +101,90 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
   const runtimeApi = consumeRuntimeApiCredentials(process.env);
   if (runtimeApi.apiKey && runtimeApi.provider)
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
-  const pending = new Map<string, Deferred.Deferred<string, ParentContactError>>();
-  const pendingProxy = new Map<
-    string,
-    Deferred.Deferred<AgentToolResult<unknown>, ParentContactError>
-  >();
-  let proxyToolsRegistered = false;
-  const ipc: LocalPiChildIpcChannel = openLocalPiChildIpc();
-  let detachIpc: (() => void) | undefined;
 
-  const onControl = (message: LocalPiParentControl) => {
+  const ipc = boundaries.openIpc();
+  type Correlations<A> = Map<string, Deferred.Deferred<A, ParentContactError>>;
+  const pending: Correlations<string> = new Map();
+  const pendingProxy: Correlations<AgentToolResult<unknown>> = new Map();
+  let currentSession: ChildSessionInput | undefined;
+
+  const removeProxyNames = (): void => {
+    try {
+      pi.setActiveTools(pi.getActiveTools().filter((name) => !CHILD_PROXY_TOOL_NAME_SET.has(name)));
+    } catch {
+      // A stale host cannot turn lifecycle cleanup into an unhandled callback error.
+    }
+  };
+
+  const rejectAll = <A>(waiters: Correlations<A>, message: string): void => {
+    for (const waiter of waiters.values())
+      Deferred.doneUnsafe(waiter, Effect.fail(new ParentContactError({ message })));
+    waiters.clear();
+  };
+  const rejectPending = (): void => {
+    rejectAll(pending, "The parent subagent supervisor disconnected.");
+    rejectAll(pendingProxy, "The root subagent coordinator disconnected.");
+  };
+  const deleteExact = <A>(
+    waiters: Correlations<A>,
+    requestId: string,
+    waiter: Deferred.Deferred<A, ParentContactError>,
+  ): boolean => {
+    if (waiters.get(requestId) !== waiter) return false;
+    waiters.delete(requestId);
+    return true;
+  };
+  const correlate = <A>(
+    waiters: Correlations<A>,
+    requestId: string,
+    send: Effect.Effect<void, ParentContactError>,
+    cancel: () => void,
+    cancelDefiniteUnsent = true,
+  ) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const waiter = Deferred.makeUnsafe<A, ParentContactError>();
+        waiters.set(requestId, waiter);
+        return waiter;
+      }),
+      (waiter) =>
+        send.pipe(
+          Effect.catch((error) =>
+            !cancelDefiniteUnsent && error.code === "transport_not_sent"
+              ? Effect.sync(() => deleteExact(waiters, requestId, waiter)).pipe(
+                  Effect.andThen(Effect.fail(error)),
+                )
+              : Effect.fail(error),
+          ),
+          Effect.andThen(Deferred.await(waiter)),
+        ),
+      (waiter, exit) =>
+        Effect.sync(() => {
+          if (deleteExact(waiters, requestId, waiter) && Exit.isFailure(exit)) cancel();
+        }),
+    );
+
+  const deactivate = (input: ChildSessionInput | undefined): void => {
+    if (input) input.token = undefined;
+    if (currentSession === input) currentSession = undefined;
+    removeProxyNames();
+    rejectPending();
+  };
+  const isSessionCurrent = (input: ChildSessionInput): boolean => currentSession === input;
+  let slot!: ReturnType<typeof makePiSessionRuntimeSlot<ChildSessionInput, never, never, never>>;
+  const isActivationCurrent = (input: ChildSessionInput, token: number): boolean =>
+    isSessionCurrent(input) && input.token === token && slot.isCurrent(token);
+  const forkContact = (input: ChildSessionInput, contact: LocalPiContact): void => {
+    if (isSessionCurrent(input)) slot.fork(ipc.sendContact(contact).pipe(Effect.ignore));
+  };
+
+  const onControl = (input: ChildSessionInput, message: LocalPiParentControl): void => {
+    if (!isSessionCurrent(input)) return;
     if (message.type === "proxy_response") {
       const waiter = pendingProxy.get(message.requestId);
       if (!waiter) return;
-      pendingProxy.delete(message.requestId);
-      const result = message.ok ? decodeProxyResult(message.payloadJson) : undefined;
+      deleteExact(pendingProxy, message.requestId, waiter);
+      const result = message.ok ? decodeSubagentProxyResult(message.payloadJson) : undefined;
       Deferred.doneUnsafe(
         waiter,
         result
@@ -123,52 +207,39 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
       } catch {
         ok = false;
       }
-      void Effect.runPromise(
-        ipc
-          .sendContact({
-            channel: "pi-subagents",
-            type: "proxy_notification_ack",
-            requestId: message.requestId,
-            ok,
-          })
-          .pipe(Effect.ignore),
-      );
+      forkContact(input, {
+        channel: "pi-subagents",
+        type: "proxy_notification_ack",
+        requestId: message.requestId,
+        ok,
+      });
       return;
     }
     if (message.type === "turn_input_barrier") {
-      void Effect.runPromise(
-        ipc
-          .sendContact({
-            channel: "pi-subagents",
-            type: "turn_input_barrier_ack",
-            requestId: message.requestId,
-          })
-          .pipe(Effect.ignore),
-      );
+      forkContact(input, {
+        channel: "pi-subagents",
+        type: "turn_input_barrier_ack",
+        requestId: message.requestId,
+      });
       return;
     }
     if (message.type === "parent_reply") {
       const waiter = pending.get(message.requestId);
       if (waiter) {
-        pending.delete(message.requestId);
+        deleteExact(pending, message.requestId, waiter);
         Deferred.doneUnsafe(waiter, Effect.succeed(message.message));
       }
-      void Effect.runPromise(
-        ipc
-          .sendContact({
-            channel: "pi-subagents",
-            type: "parent_reply_ack",
-            requestId: message.ackId,
-            ok: waiter !== undefined,
-          })
-          .pipe(Effect.ignore),
-      );
+      forkContact(input, {
+        channel: "pi-subagents",
+        type: "parent_reply_ack",
+        requestId: message.ackId,
+        ok: waiter !== undefined,
+      });
       return;
     }
     if (message.type === "peer_notice") {
       try {
-        // Dynamic fleet changes should inform a later parent prompt without steering the
-        // current turn; steering an active child causes repeated final responses.
+        // Do not steer the active child; that can repeat its final response.
         pi.sendMessage(
           {
             customType: "pi-subagents-peer-notice",
@@ -183,173 +254,194 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
     }
   };
 
-  const rejectPending = () => {
-    for (const waiter of pending.values())
-      Deferred.doneUnsafe(
-        waiter,
-        Effect.fail(
-          new ParentContactError({
-            message: "The parent subagent supervisor disconnected.",
-          }),
-        ),
-      );
-    pending.clear();
-    for (const waiter of pendingProxy.values())
-      Deferred.doneUnsafe(
-        waiter,
-        Effect.fail(
-          new ParentContactError({ message: "The root subagent coordinator disconnected." }),
-        ),
-      );
-    pendingProxy.clear();
-  };
-
   const proxyCall = (
-    input: SubagentToolInput,
+    input: ChildSessionInput,
+    token: number,
+    toolInput: SubagentToolInput,
     signal: AbortSignal | undefined,
   ): Promise<AgentToolResult<unknown>> => {
+    if (!isActivationCurrent(input, token))
+      return Promise.reject(new Error("Subagent proxy is unavailable for this session."));
     const requestId = `proxy-${process.pid}-${nextRequest++}`;
-    const encoded = encodeSubagentProxyInput(input);
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const waiter = Deferred.makeUnsafe<AgentToolResult<unknown>, ParentContactError>();
-        pendingProxy.set(requestId, waiter);
-        yield* ipc.sendContact({
-          channel: "pi-subagents",
-          type: "proxy_request",
+    const encoded = encodeSubagentProxyInput(toolInput);
+    return slot
+      .run(
+        correlate(
+          pendingProxy,
           requestId,
-          tool: encoded.tool,
-          argumentsJson: encoded.argumentsJson,
-        });
-        return yield* Deferred.await(waiter);
-      }).pipe(
-        Effect.onExit((exit) =>
-          Exit.isSuccess(exit)
-            ? Effect.void
-            : Effect.sync(() => {
-                if (!pendingProxy.delete(requestId)) return;
-                void Effect.runPromise(
-                  ipc
-                    .sendContact({
-                      channel: "pi-subagents",
-                      type: "proxy_cancel",
-                      requestId,
-                    })
-                    .pipe(Effect.ignore),
-                );
+          ipc.sendContact({
+            channel: "pi-subagents",
+            type: "proxy_request",
+            requestId,
+            tool: encoded.tool,
+            argumentsJson: encoded.argumentsJson,
+          }),
+          () => {
+            if (isActivationCurrent(input, token))
+              slot.fork(
+                ipc
+                  .sendContact({ channel: "pi-subagents", type: "proxy_cancel", requestId })
+                  .pipe(Effect.ignore),
+              );
+          },
+        ),
+        signal,
+      )
+      .then((result) => {
+        if (!isActivationCurrent(input, token))
+          throw new Error("Subagent proxy is unavailable for this session.");
+        return result;
+      });
+  };
+
+  const registerContactParent = (input: ChildSessionInput, token: number): void => {
+    pi.registerTool({
+      name: "contact_parent",
+      label: "Contact Parent",
+      description:
+        "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report; use a question instead when a risk could invalidate work the parent is doing now.",
+      parameters: ContactParentParameters,
+      executionMode: "sequential",
+      execute(_toolCallId, params, signal) {
+        if (!isActivationCurrent(input, token))
+          return Promise.reject(new Error("Parent contact is unavailable for this session."));
+        const requestId = `contact-${process.pid}-${nextRequest++}`;
+        const envelope: ContactParentEnvelope = {
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId,
+          kind: params.kind,
+          message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),
+        };
+        if (params.kind !== "question")
+          return slot.run(ipc.sendContact(envelope), signal).then(() => {
+            if (!isActivationCurrent(input, token))
+              throw new Error("Parent contact is unavailable for this session.");
+            return {
+              content: [{ type: "text" as const, text: `Parent received ${params.kind}.` }],
+              details: {},
+            };
+          });
+
+        return slot
+          .run(
+            correlate(
+              pending,
+              requestId,
+              ipc.sendContact(envelope),
+              () => {
+                if (isActivationCurrent(input, token))
+                  slot.fork(
+                    ipc
+                      .sendContact({ channel: "pi-subagents", type: "contact_cancel", requestId })
+                      .pipe(Effect.ignore),
+                  );
+              },
+              false,
+            ).pipe(
+              Effect.timeout(QUESTION_TIMEOUT_MILLIS),
+              Effect.mapError((error) =>
+                error instanceof ParentContactError
+                  ? error
+                  : new ParentContactError({
+                      message: "Parent question timed out without a reply.",
+                    }),
+              ),
+            ),
+            signal,
+          )
+          .then(
+            (reply) => {
+              if (!isActivationCurrent(input, token))
+                throw new Error("Parent contact is unavailable for this session.");
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`,
+                  },
+                ],
+                details: {},
+              };
+            },
+            (error) => {
+              if (signal?.aborted) throw new Error("Parent question was cancelled.");
+              throw error instanceof ParentContactError ? new Error(error.message) : error;
+            },
+          );
+      },
+    });
+  };
+
+  slot = makePiSessionRuntimeSlot<ChildSessionInput, never, never, never>({
+    makeRuntime: (input) =>
+      makePiManagedRuntime(
+        pi,
+        Layer.effectDiscard(
+          Effect.acquireRelease(
+            Effect.sync(() =>
+              ipc.listen({
+                onControl: (message) => onControl(input, message),
+                onDisconnect: () => {
+                  if (isSessionCurrent(input)) rejectPending();
+                },
               }),
+            ),
+            (detach) => Effect.sync(detach).pipe(Effect.ensuring(Effect.sync(rejectPending))),
+          ).pipe(Effect.asVoid),
         ),
       ),
-      { signal },
-    );
-  };
+    startup: (input) =>
+      bestEffortHostBootstrap("pi-subagents.child-preview-settings", (signal) =>
+        boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
+      ),
+    onActivated: (input, token) => {
+      if (!isSessionCurrent(input) || !slot.isCurrent(token)) return;
+      input.token = token;
+      const call = (toolInput: SubagentToolInput, signal?: AbortSignal) =>
+        proxyCall(input, token, toolInput, signal);
+      try {
+        registerSubagentTools(pi, {
+          environment: { cwd: input.cwd, projectTrusted: input.projectTrusted },
+          proxyCall: (toolInput, signal) => call(toolInput, signal),
+          run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
+        });
+        registerContactParent(input, token);
+        const runId = subagentChildRunId();
+        if (runId) registerSubagentProxyManagerCommand(pi, runId, call);
+        if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");
+        pi.setActiveTools([...new Set([...pi.getActiveTools(), ...CHILD_PROXY_TOOL_NAMES])]);
+      } catch {
+        deactivate(input);
+        if (slot.isCurrent(token)) void slot.shutdown();
+      }
+    },
+    onDeactivated: deactivate,
+    onStartFailure: deactivate,
+  });
 
   registerChildPiFastModeHook(pi, openaiFastMode);
 
   pi.on("session_start", (_event, ctx) => {
-    if (!detachIpc) detachIpc = ipc.listen({ onControl, onDisconnect: rejectPending });
-    if (proxyToolsRegistered) return;
-    return Promise.resolve(loadCodePreviewSettings(ctx.cwd, isProjectTrusted(ctx)))
-      .catch(() => undefined)
-      .then(() => {
-        if (proxyToolsRegistered) return;
-        registerSubagentTools(pi, {
-          environment: { cwd: ctx.cwd, projectTrusted: isProjectTrusted(ctx) },
-          proxyCall: (input, signal) => proxyCall(input, signal),
-          run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
-        });
-        pi.setActiveTools([...new Set([...pi.getActiveTools(), ...SUBAGENT_TOOL_NAMES])]);
-        const runId = subagentChildRunId();
-        if (runId) registerSubagentProxyManagerCommand(pi, runId, proxyCall);
-        proxyToolsRegistered = true;
-      });
+    deactivate(currentSession);
+    const captured = captureSessionHost(ctx);
+    if (captured._tag === "Unavailable") return slot.shutdown();
+    const input: ChildSessionInput = {
+      cwd: captured.cwd,
+      projectTrusted: isProjectTrusted(ctx),
+      token: undefined,
+    };
+    currentSession = input;
+    return slot.start(input, captured.signal).then(() => undefined);
   });
 
   pi.on("session_shutdown", () => {
-    detachIpc?.();
-    detachIpc = undefined;
-    rejectPending();
+    deactivate(currentSession);
+    return slot.shutdown();
   });
+}
 
-  pi.registerTool({
-    name: "contact_parent",
-    label: "Contact Parent",
-    description:
-      "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report; use a question instead when a risk could invalidate work the parent is doing now.",
-    parameters: ContactParentParameters,
-    executionMode: "sequential",
-    execute(_toolCallId, params, signal) {
-      const requestId = `contact-${process.pid}-${nextRequest++}`;
-      const envelope: ContactParentEnvelope = {
-        channel: "pi-subagents",
-        type: "contact_parent",
-        requestId,
-        kind: params.kind,
-        message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),
-      };
-      if (params.kind !== "question") {
-        return Effect.runPromise(ipc.sendContact(envelope)).then(() => ({
-          content: [{ type: "text" as const, text: `Parent received ${params.kind}.` }],
-          details: {},
-        }));
-      }
-
-      return Effect.runPromise(
-        Effect.gen(function* () {
-          const waiter = Deferred.makeUnsafe<string, ParentContactError>();
-          pending.set(requestId, waiter);
-          yield* ipc.sendContact(envelope).pipe(
-            Effect.catch((error) =>
-              error.code === "transport_not_sent"
-                ? Effect.sync(() => {
-                    if (pending.get(requestId) === waiter) pending.delete(requestId);
-                  }).pipe(Effect.andThen(Effect.fail(error)))
-                : Effect.fail(error),
-            ),
-          );
-          return yield* Deferred.await(waiter);
-        }).pipe(
-          // A parent that never replies must not block this child forever.
-          Effect.timeout(QUESTION_TIMEOUT_MILLIS),
-          Effect.mapError((error) =>
-            error instanceof ParentContactError
-              ? error
-              : new ParentContactError({
-                  message: "Parent question timed out without a reply.",
-                }),
-          ),
-          // Cancellation (tool abort or timeout) tells the parent to stop waiting too;
-          // the supervisor view already understands the cancelled-question event.
-          Effect.onExit((exit) =>
-            Exit.isSuccess(exit)
-              ? Effect.void
-              : Effect.sync(() => {
-                  if (!pending.delete(requestId)) return;
-                  const cancel: ContactCancelEnvelope = {
-                    channel: "pi-subagents",
-                    type: "contact_cancel",
-                    requestId,
-                  };
-                  void Effect.runPromise(ipc.sendContact(cancel).pipe(Effect.ignore));
-                }),
-          ),
-        ),
-        { signal },
-      ).then(
-        (reply) => ({
-          content: [
-            {
-              type: "text" as const,
-              text: `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`,
-            },
-          ],
-          details: {},
-        }),
-        (error) => {
-          if (signal?.aborted) throw new Error("Parent question was cancelled.");
-          throw error instanceof ParentContactError ? new Error(error.message) : error;
-        },
-      );
-    },
-  });
+export default function subagentChildBridge(pi: ExtensionAPI): void {
+  if (!isSubagentChildProcess()) return;
+  registerSubagentChildBridge(pi);
 }

@@ -3,15 +3,8 @@ import * as Context from "effect/Context";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
-import {
-  defineTool,
-  type AgentEndEvent,
-  type AgentToolResult,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { defineTool, type AgentEndEvent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
 import { herdrAssignmentEpoch } from "../backend/herdr-assignment.ts";
 import {
@@ -29,10 +22,9 @@ import {
   type SupervisorMcpToolArgumentsByName,
 } from "../supervisor/mcp-contract.ts";
 import { Type } from "typebox";
-import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
-import { encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
+import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import {
   openPiSupervisorBridge,
@@ -81,25 +73,6 @@ interface AssignmentReportState {
   fallbackStarted: boolean;
   settledSuccessfully: boolean;
 }
-
-const ProxyResultSchema = Schema.Struct({
-  content: Schema.Array(
-    Schema.Struct({
-      type: Schema.Literal("text"),
-      text: Schema.String.check(Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS)),
-    }),
-  ).check(Schema.isMaxLength(64)),
-  details: Schema.optional(Schema.Unknown),
-});
-
-const decodeProxyResult = (source: string): AgentToolResult<unknown> | undefined => {
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyResultSchema))(source);
-  if (Option.isNone(decoded)) return undefined;
-  return {
-    content: [...decoded.value.content],
-    details: decoded.value.details ?? {},
-  };
-};
 
 const sameReportInput = (left: ReportInput, right: ReportInput): boolean =>
   left.delivery_id === right.delivery_id && left.report === right.report;
@@ -327,7 +300,7 @@ export default function registerPiSubagentSupervisorBridge(
               { tool: encoded.tool, arguments_json: encoded.argumentsJson },
               signal,
             ).then((source) => {
-              const result = decodeProxyResult(source);
+              const result = decodeSubagentProxyResult(source);
               if (!result) throw new Error("Root coordinator returned an invalid response.");
               return result;
             });

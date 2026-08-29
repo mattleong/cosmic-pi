@@ -112,9 +112,7 @@ const makeNdjsonRpcSession = <Reply>(
     const pending = new Map<string, PendingEntry<Reply>>();
     const frames = yield* Queue.bounded<OutboundFrame>(options.writeQueueCapacity);
     const sessionFailed = Deferred.makeUnsafe<RpcSessionTransportError>();
-    const cleanupDone = Deferred.makeUnsafe<void, RpcSessionTransportError>();
     const outstandingNotifyAcks = new Set<Deferred.Deferred<void, RpcSessionError>>();
-    let cleanupStarted = false;
     let child: NodeChildProcess | undefined;
     let detachParser: (() => void) | undefined;
 
@@ -203,31 +201,16 @@ const makeNdjsonRpcSession = <Reply>(
         if (!(yield* closeConfirmation)) return yield* cleanupUnconfirmed();
       });
 
-    const closeOwnedProcess = (process_: NodeChildProcess) =>
-      Effect.uninterruptible(
-        Effect.suspend(() => {
-          if (cleanupStarted) return Deferred.await(cleanupDone);
-          cleanupStarted = true;
-          return Effect.gen(function* () {
-            failSessionSync(transportClosed());
-            const discarded = yield* Queue.clear(frames).pipe(
-              Effect.catchCause(() => Effect.succeed<Array<OutboundFrame>>([])),
-            );
-            for (const frame of discarded) settleFrameAck(frame, Effect.fail(transportClosed()));
-            yield* Queue.shutdown(frames);
-            yield* terminateAndConfirm(process_);
-          }).pipe(Effect.onExit((exit) => Deferred.done(cleanupDone, exit).pipe(Effect.asVoid)));
-        }),
-      );
-
-    const teardown = (process_: NodeChildProcess) =>
-      Effect.uninterruptible(
-        closeOwnedProcess(process_).pipe(
-          Effect.catchCause(() =>
-            Effect.logWarning("Helper process tree termination was not confirmed."),
-          ),
-        ),
-      );
+    const cleanupOwnedProcess = (process_: NodeChildProcess) =>
+      Effect.gen(function* () {
+        failSessionSync(transportClosed());
+        const discarded = yield* Queue.clear(frames).pipe(
+          Effect.catchCause(() => Effect.succeed<Array<OutboundFrame>>([])),
+        );
+        for (const frame of discarded) settleFrameAck(frame, Effect.fail(transportClosed()));
+        yield* Queue.shutdown(frames);
+        yield* terminateAndConfirm(process_);
+      });
 
     const acquireChild = Effect.callback<NodeChildProcess, RpcSessionTransportError>((resume) => {
       let settled = !options.waitForSpawnEvent;
@@ -284,11 +267,25 @@ const makeNdjsonRpcSession = <Reply>(
       });
     });
 
-    child = yield* Effect.acquireRelease(acquireChild, teardown);
-    const process_ = child;
+    const owned = yield* Effect.acquireRelease(
+      Effect.gen(function* () {
+        const process = yield* acquireChild;
+        const close = yield* Effect.cached(Effect.uninterruptible(cleanupOwnedProcess(process)));
+        return { process, close };
+      }),
+      ({ close }) =>
+        close.pipe(
+          Effect.catchCause(() =>
+            Effect.logWarning("Helper process tree termination was not confirmed."),
+          ),
+        ),
+    );
+    child = owned.process;
+    const process_ = owned.process;
+    const closeOwnedProcess = owned.close;
 
     yield* Deferred.await(sessionFailed).pipe(
-      Effect.andThen(closeOwnedProcess(process_)),
+      Effect.andThen(closeOwnedProcess),
       Effect.catchCause(() =>
         Effect.logWarning("Failed helper session cleanup could not be confirmed."),
       ),
@@ -496,7 +493,7 @@ const makeNdjsonRpcSession = <Reply>(
           );
         }),
 
-      close: () => closeOwnedProcess(process_),
+      close: () => closeOwnedProcess,
     };
 
     return session;

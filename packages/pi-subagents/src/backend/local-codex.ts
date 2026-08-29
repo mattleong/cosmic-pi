@@ -38,7 +38,12 @@ import {
   turnSteerRequest,
   type CodexRequest,
 } from "./local-codex-protocol.ts";
-import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
+import {
+  toBackendExit,
+  type BackendDriver,
+  type BackendEvent,
+  type BackendLaunchRequest,
+} from "./model.ts";
 import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
 
@@ -566,16 +571,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   return {
     pid: child.pid,
     events,
-    awaitExit: child.awaitExit.pipe(
-      Effect.map((event) =>
-        (() => {
-          const baseResult = { type: "exit" as const, exitCode: event.exitCode };
-          const withSignal = event.signal ? { ...baseResult, signal: event.signal } : baseResult;
-          const withDiagnostic = { ...withSignal, diagnostic: event.stderr };
-          return withDiagnostic;
-        })(),
-      ),
-    ),
+    awaitExit: child.awaitExit.pipe(Effect.map(toBackendExit)),
     controls: {
       initialize,
       start: (message: string, epoch: number) =>

@@ -1,5 +1,5 @@
-// Herdr-safe agent names use a bounded digest of parent/run ownership identity.
 import { createHash } from "node:crypto";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -71,15 +71,11 @@ export interface HerdrHostContract {
   ) => Effect.Effect<HerdrHostedAgent, SubagentProcessError, Scope.Scope>;
 }
 
-interface LaunchCleanupOwnership {
-  mutationStarted: boolean;
-  cleanupConfirmed: boolean;
-}
+type LaunchCleanupGuard = { quarantined: boolean };
 
 interface ProvisionalLaunchEvidence {
   readonly pane: HerdrPane;
   readonly agentName: string;
-  readonly runtime: SubagentRuntime;
   ownershipInvalidated: boolean;
   startedIdentity?: AgentOwnershipEvidence | undefined;
   agentStartUncertain?: boolean | undefined;
@@ -88,7 +84,6 @@ interface ProvisionalLaunchEvidence {
 interface OwnedRun {
   readonly runId: string;
   readonly runtime: SubagentRuntime;
-  readonly cwd: string;
   readonly agentName: string;
   readonly workspaceId: string;
   readonly tabId: string;
@@ -96,7 +91,7 @@ interface OwnedRun {
   readonly terminalId: string;
   readonly nativeSession: string;
   readonly identity: AgentOwnershipEvidence;
-  readonly launchCleanup: LaunchCleanupOwnership;
+  readonly launchCleanup: LaunchCleanupGuard;
   readonly harness: HerdrPreparedHarness;
   closed: boolean;
   quarantined: boolean;
@@ -104,6 +99,10 @@ interface OwnedRun {
 
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
+const defectReason = <Error>(reason: Cause.Reason<Error>): Cause.Reason<never> =>
+  Cause.isFailReason(reason) ? Cause.makeDieReason(reason.error) : reason;
+const defectCause = <Error>(cause: Cause.Cause<Error>): Cause.Cause<never> =>
+  Cause.fromReasons(cause.reasons.map(defectReason));
 
 const ownedAgentName = (request: BackendLaunchRequest, runtime: SubagentRuntime): string => {
   const prefix = `psa-${runtime}-`;
@@ -199,9 +198,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
     );
   };
 
-  const quarantineRun = (run: OwnedRun): void => {
-    run.quarantined = true;
-  };
+  const quarantineRun = (run: OwnedRun): void => void (run.quarantined = true);
   const quarantinedRunError = (operation: string) =>
     ownershipMismatch(
       operation,
@@ -300,15 +297,18 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             "The owned subagent pane is the last visible pane in its user-owned tab; closure was refused to avoid collapsing the tab or workspace.",
           );
         }
-        // Close mutation, confirmation snapshot, and ownership-state publication are one
-        // interruption-safe commit. Cancellation is observed only after `closed` or quarantine.
         yield* Effect.gen(function* () {
-          yield* cli
-            .closePane(run.paneId)
-            .pipe(Effect.tapError(() => Effect.sync(() => quarantineRun(run))));
-          const after = yield* cli.snapshot.pipe(
-            Effect.tapError(() => Effect.sync(() => quarantineRun(run))),
-          );
+          const quarantineOnCause = <Value>(
+            effect: Effect.Effect<Value, SubagentProcessError>,
+          ): Effect.Effect<Value, SubagentProcessError> =>
+            effect.pipe(
+              Effect.catchCause((cause) => {
+                quarantineRun(run);
+                return Effect.failCause(cause);
+              }),
+            );
+          yield* quarantineOnCause(cli.closePane(run.paneId));
+          const after = yield* quarantineOnCause(cli.snapshot);
           if (!runSelectorsAbsent(after, run)) {
             quarantineRun(run);
             return yield* processError(
@@ -319,7 +319,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           }
           records.delete(run.runId);
           run.closed = true;
-          run.launchCleanup.cleanupConfirmed = true;
+          run.launchCleanup.quarantined = false;
           run.harness.authorizeCleanup();
         }).pipe(Effect.uninterruptible);
       }),
@@ -327,7 +327,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
 
   const rollbackProvisional = (
     evidence: ProvisionalLaunchEvidence,
-    harness: HerdrPreparedHarness,
+    confirmCleanup: () => void,
   ): Effect.Effect<void, SubagentProcessError> =>
     Effect.gen(function* () {
       const snapshot = yield* cli.snapshot;
@@ -364,7 +364,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           "herdr_cleanup_unconfirmed",
           "Provisional pane cleanup left an owned pane/terminal/agent-name/session selector visible.",
         );
-      harness.authorizeCleanup();
+      confirmCleanup();
     });
 
   const acquire = (
@@ -394,45 +394,44 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             "A private Herdr secret bootstrap command must be non-empty when present.",
           );
         }
-        const before = yield* cli.snapshot.pipe(
-          Effect.tapError(() => Effect.sync(() => harness.authorizeCleanup())),
-        );
-        const launchCleanup: LaunchCleanupOwnership = {
-          mutationStarted: false,
-          cleanupConfirmed: false,
+        const before = yield* cli.snapshot;
+        const launchCleanup: LaunchCleanupGuard = { quarantined: false };
+        let committed: OwnedRun | undefined;
+        const confirmCleanup = () => {
+          launchCleanup.quarantined = false;
+          if (committed) records.delete(committed.runId);
+          if (committed) committed.closed = true;
+          harness.authorizeCleanup();
         };
-        // This guard is installed before the first topology mutation. Unlike acquireRelease's
-        // hosted finalizer, it also owns failed acquisitions. Any uncertain mutation or refused
-        // rollback therefore makes scope close fail and keeps the outer process/lease slots
-        // quarantined.
-        yield* Effect.addFinalizer(() => {
-          if (!launchCleanup.mutationStarted) {
-            harness.authorizeCleanup();
-            return Effect.void;
-          }
-          return !launchCleanup.cleanupConfirmed
-            ? Effect.fail(
+        yield* Effect.addFinalizer(() =>
+          launchCleanup.quarantined
+            ? Effect.die(
                 processError(
                   "finalize Herdr launch",
                   "herdr_launch_cleanup_unconfirmed",
                   "Herdr launch topology or process cleanup remains uncertain.",
                 ),
-              ).pipe(Effect.orDie)
-            : Effect.void;
-        });
-        const markDefiniteNonApplication = (error: SubagentProcessError) =>
-          Effect.sync(() => {
-            if (!isOutcomeUncertain(error) && !isCleanupUnconfirmed(error)) {
-              launchCleanup.cleanupConfirmed = true;
-              harness.authorizeCleanup();
-            }
-          });
+              )
+            : Effect.void,
+        );
         const callerPane = yield* resolveCallingPane(before);
         const anchor = newestOwnedAnchor(callerPane, before);
-        launchCleanup.mutationStarted = true;
-        const pane = yield* cli
-          .splitPane(anchor.paneId, request.cwd)
-          .pipe(Effect.tapError(markDefiniteNonApplication));
+        harness.withholdCleanup();
+        launchCleanup.quarantined = true;
+        const pane = yield* cli.splitPane(anchor.paneId, request.cwd).pipe(
+          Effect.catchCause((cause) => {
+            if (
+              cause.reasons.every(
+                (reason) =>
+                  Cause.isFailReason(reason) &&
+                  !isOutcomeUncertain(reason.error) &&
+                  !isCleanupUnconfirmed(reason.error),
+              )
+            )
+              confirmCleanup();
+            return Effect.failCause(cause);
+          }),
+        );
         const ownershipInvalidated =
           pane.paneId === anchor.paneId ||
           pane.workspaceId !== callerPane.workspaceId ||
@@ -444,15 +443,8 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           before.agents.some(
             (agent) => agent.paneId === pane.paneId || agent.terminalId === pane.terminalId,
           );
-        const provisional: ProvisionalLaunchEvidence = {
-          pane,
-          agentName,
-          runtime,
-          ownershipInvalidated,
-        };
-        const invalidateProvisional = () => {
-          provisional.ownershipInvalidated = true;
-        };
+        const provisional: ProvisionalLaunchEvidence = { pane, agentName, ownershipInvalidated };
+        const invalidateProvisional = () => void (provisional.ownershipInvalidated = true);
         const launch = Effect.gen(function* () {
           if (provisional.ownershipInvalidated) {
             invalidateProvisional();
@@ -463,16 +455,8 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           }
           yield* inspectProvisionalPane(pane, "rename pane", invalidateProvisional);
           yield* cli.renamePane(pane.paneId, paneLabel(request, runtime));
-          // A restored server can transiently start a stale native agent in a newly created pane.
-          // Do not spend either bounded activation probe inside that TUI; wait until the exact pane
-          // first reaches an available, unoccupied shell, then causally activate input.
           yield* waitForAvailableShell(pane, invalidateProvisional);
-          // The harmless activation receipt may be retried once after a receipt timeout because
-          // neither attempt mutates state beyond its unique private receipt.
           yield* activatePaneInput(pane, harness, invalidateProvisional);
-          // Herdr process detection can briefly publish a stale agent classification after shell
-          // startup/activation even while process-info proves the exact foreground owner is still
-          // the pane shell. Wait without sending input until both bounded evidence sources agree.
           yield* waitForAvailableShell(pane, invalidateProvisional);
           yield* requireAvailableProvisionalPane(
             pane,
@@ -490,12 +474,9 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           );
           yield* harness.startupAttestation.environmentReadyReceipt.observe;
           yield* inspectProvisionalPane(pane, "confirm pane environment", invalidateProvisional);
-          // The environment-ready receipt precedes the final exec. Re-prove the exact foreground
-          // shell, then require a second receipt from input executed by that replacement shell.
           yield* waitForAvailableShell(pane, invalidateProvisional);
           yield* confirmShellInput(pane, harness, "environment", invalidateProvisional);
           if (harness.secretCommand) {
-            // Re-prove foreground-shell ownership before sending credential bootstrap into the pane.
             yield* waitForAvailableShell(pane, invalidateProvisional);
             yield* requireAvailableProvisionalPane(
               pane,
@@ -505,13 +486,9 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             yield* cli.runPaneCommand(pane.paneId, harness.secretCommand, "load pane secrets");
             yield* harness.startupAttestation.secretReadyReceipt.observe;
             yield* inspectProvisionalPane(pane, "confirm pane secrets", invalidateProvisional);
-            // Re-prove the foreground shell, then prove it accepted another command after the
-            // secret bootstrap completed.
             yield* waitForAvailableShell(pane, invalidateProvisional);
             yield* confirmShellInput(pane, harness, "secrets", invalidateProvisional);
           }
-          // Private receipts prove causal command execution without depending on observable PTY
-          // output. Agent start still requires the exact replacement shell to own the foreground.
           yield* waitForAvailableShell(pane, invalidateProvisional);
           yield* requireAvailableProvisionalPane(
             pane,
@@ -544,7 +521,6 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           const run: OwnedRun = {
             runId: request.runId,
             runtime,
-            cwd: request.cwd,
             agentName,
             workspaceId: pane.workspaceId,
             tabId: pane.tabId,
@@ -568,6 +544,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             );
           };
           yield* cli.snapshot.pipe(Effect.flatMap(validateStartedOwnership));
+          committed = run;
           records.set(run.runId, run);
           const hosted: HerdrHostedAgent = {
             runId: run.runId,
@@ -601,45 +578,57 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           };
           return hosted;
         });
-        return yield* launch.pipe(
-          Effect.catch((error) => {
-            if (provisional.ownershipInvalidated)
-              return Effect.fail(
+        return yield* Effect.uninterruptibleMask((restore) =>
+          restore(launch).pipe(
+            Effect.catchCause((original) => {
+              const originalFailure = original.reasons.find(Cause.isFailReason)?.error;
+              const cleanupUnconfirmed = () =>
                 processError(
                   "rollback Herdr launch",
                   "herdr_cleanup_unconfirmed",
-                  `${error.message} The observed ownership mismatch is sticky; provisional topology was quarantined without a cleanup mutation.`,
-                ),
-              );
-            if (
-              error.operation === "start agent" &&
-              (isOutcomeUncertain(error) || isCleanupUnconfirmed(error))
-            )
-              provisional.agentStartUncertain = true;
-            return rollbackProvisional(provisional, harness).pipe(
-              Effect.matchEffect({
-                onFailure: (cleanup) =>
-                  Effect.fail(
-                    processError(
-                      "rollback Herdr launch",
-                      "herdr_cleanup_unconfirmed",
-                      `${error.message} Provisional topology cleanup was refused or unconfirmed: ${cleanup.message}`,
-                    ),
+                  `${originalFailure ? `${originalFailure.message} ` : ""}Provisional Herdr topology cleanup was refused or unconfirmed.`,
+                );
+              if (provisional.ownershipInvalidated)
+                return Effect.failCause(
+                  Cause.fromReasons([
+                    ...Cause.fail(cleanupUnconfirmed()).reasons,
+                    ...original.reasons,
+                  ]),
+                );
+              if (
+                original.reasons.some(
+                  (reason) =>
+                    Cause.isFailReason(reason) &&
+                    reason.error.operation === "start agent" &&
+                    (isOutcomeUncertain(reason.error) || isCleanupUnconfirmed(reason.error)),
+                )
+              )
+                provisional.agentStartUncertain = true;
+              return rollbackProvisional(provisional, confirmCleanup).pipe(
+                Effect.uninterruptible,
+                Effect.catchCause((cleanup) =>
+                  Effect.failCause(
+                    Cause.fromReasons([
+                      ...Cause.fail(cleanupUnconfirmed()).reasons,
+                      ...cleanup.reasons,
+                      ...original.reasons,
+                    ]),
                   ),
-                onSuccess: () =>
-                  Effect.sync(() => {
-                    launchCleanup.cleanupConfirmed = true;
-                  }).pipe(Effect.andThen(Effect.fail(error))),
-              }),
-            );
-          }),
+                ),
+                Effect.andThen(Effect.failCause(original)),
+              );
+            }),
+          ),
         );
       }),
     );
 
   const launch: HerdrHostContract["launch"] = (runtime, request, supervisor) =>
-    Effect.acquireRelease(acquire(runtime, request, supervisor), (hosted) =>
-      hosted.close.pipe(Effect.orDie),
+    Effect.acquireRelease(
+      acquire(runtime, request, supervisor),
+      (hosted) =>
+        hosted.close.pipe(Effect.catchCause((cause) => Effect.failCause(defectCause(cause)))),
+      { interruptible: true },
     );
 
   const preflight: HerdrHostContract["preflight"] = (input) =>
@@ -671,10 +660,8 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
       closed = true;
-      // Each close revalidates exact ownership. A mismatch deliberately defects the dependent
-      // run scope so writer leases and process capacity remain quarantined.
       for (const run of [...records.values()].reverse()) yield* closeOwned(run);
-    }).pipe(Effect.orDie),
+    }).pipe(Effect.catchCause((cause) => Effect.failCause(defectCause(cause)))),
   );
 
   return HerdrHost.of({ preflight, launch });

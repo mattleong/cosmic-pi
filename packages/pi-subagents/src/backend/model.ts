@@ -141,6 +141,15 @@ export type BackendEvent =
 
 export type BackendExit = Extract<BackendEvent, { readonly type: "exit" }>;
 
+export const toBackendExit = (exit: {
+  readonly exitCode: number | null;
+  readonly signal?: string | null | undefined;
+  readonly stderr: string;
+}): BackendExit => {
+  const base = { type: "exit" as const, exitCode: exit.exitCode, diagnostic: exit.stderr };
+  return exit.signal == null ? base : { ...base, signal: exit.signal };
+};
+
 /** Runtime-independent controls advertised by a backend driver's capabilities. */
 export interface BackendControls {
   readonly initialize: Effect.Effect<BackendStartupState, SubagentError>;

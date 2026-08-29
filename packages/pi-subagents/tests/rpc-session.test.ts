@@ -127,6 +127,22 @@ describe("NDJSON RPC session", () => {
         });
     }));
 
+  it("shares successful cleanup across concurrent and repeated closes", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* makeNdjsonRpcSession<string>(options("echo"));
+          expect(yield* session.call("ready", replyFrame("ready", "ready"), 1_000)).toBe("ready");
+          const exits = yield* Effect.all(
+            [session.close().pipe(Effect.exit), session.close().pipe(Effect.exit)],
+            { concurrency: "unbounded" },
+          );
+          expect(exits.every(Exit.isSuccess)).toBe(true);
+          yield* session.close();
+        }),
+      ),
+    ));
+
   it("settles queued notification acknowledgements when closing", () =>
     Effect.runPromise(
       Effect.scoped(

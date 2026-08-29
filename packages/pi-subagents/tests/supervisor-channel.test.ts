@@ -529,6 +529,46 @@ describe("private supervisor channel", () => {
     yield* step(() => Effect.runPromise(Scope.close(scope, Exit.void)));
   });
 
+  effectTest("shares successful cleanup across concurrent close and scope release", function* () {
+    const opened = yield* step(() => openChannel("agent-supervisor-concurrent-close"));
+    yield* step(() =>
+      Effect.runPromise(
+        Effect.all([opened.handle.close, opened.handle.close], { concurrency: "unbounded" }),
+      ),
+    );
+    yield* step(() =>
+      expect(stat(opened.handle.metadata.stateDirectory)).rejects.toMatchObject({ code: "ENOENT" }),
+    );
+    yield* step(() => Effect.runPromise(Scope.close(opened.scope, Exit.void)));
+  });
+
+  effectTest(
+    "does not retry a cached cleanup failure after its obstruction is removed",
+    function* () {
+      const opened = yield* step(() => openChannel("agent-supervisor-cached-close-failure"));
+      const obstruction = join(opened.handle.metadata.stateDirectory, "unexpected-entry");
+      yield* step(() => writeFile(obstruction, "retain cleanup failure\n", "utf8"));
+
+      yield* step(() =>
+        expect(Effect.runPromise(opened.handle.close)).rejects.toMatchObject({
+          operation: "cleanup",
+          code: "cleanup_failed",
+        }),
+      );
+      yield* step(() => rm(obstruction));
+      yield* step(() =>
+        expect(Effect.runPromise(opened.handle.close)).rejects.toMatchObject({
+          operation: "cleanup",
+          code: "cleanup_failed",
+        }),
+      );
+      yield* step(() =>
+        expect(Effect.runPromise(Scope.close(opened.scope, Exit.void))).rejects.toBeDefined(),
+      );
+      yield* step(() => expect(stat(opened.handle.metadata.stateDirectory)).resolves.toBeDefined());
+    },
+  );
+
   effectTest("closes an unauthenticated peer at the scoped authentication deadline", function* () {
     const opened = yield* step(() =>
       openChannel("agent-supervisor-auth-deadline", {

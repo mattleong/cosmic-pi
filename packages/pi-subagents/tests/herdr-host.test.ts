@@ -1,7 +1,9 @@
 // Test entry point composes the subject Layer once.
 import { describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
@@ -81,7 +83,67 @@ describe("session-owned Herdr topology", () => {
       expect(fake.closedPanes).toEqual([]);
       expect(fake.callerPaneLive()).toBe(true);
       expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
+      expect(fake.cleanupAuthorizations()).toBe(0);
+      expect(fake.harnessCleanups()).toBe(1);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.live("interrupts pre-topology acquisition and removes the still-authorized harness", () => {
+    const fake = fakeTopology();
+    fake.blockSnapshotBeforeSplit();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const runScope = yield* Scope.make();
+      const launching = yield* host
+        .launch("pi", launch("agent-interrupted-before-split"), {
+          ...supervisor,
+          runId: "agent-interrupted-before-split",
+        })
+        .pipe(Effect.provideService(Scope.Scope, runScope), Effect.forkScoped);
+      yield* fake.awaitBlockedPreSplitSnapshot();
+      yield* Fiber.interrupt(launching);
+      const interrupted = yield* Fiber.join(launching).pipe(Effect.exit);
+      expect(Exit.isFailure(interrupted)).toBe(true);
+      expect(fake.splitCalls()).toBe(0);
+      expect(fake.cleanupWithholds()).toBe(0);
+      expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
+      expect(fake.harnessCleanups()).toBe(1);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.live("interrupts after split, rolls back, and reauthorizes harness cleanup", () => {
+    const fake = fakeTopology();
+    fake.blockSnapshotAfterSplit();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const runScope = yield* Scope.make();
+      const launching = yield* host
+        .launch("pi", launch("agent-interrupted-after-split"), {
+          ...supervisor,
+          runId: "agent-interrupted-after-split",
+        })
+        .pipe(Effect.provideService(Scope.Scope, runScope), Effect.forkScoped);
+      yield* fake.awaitBlockedPostSplitSnapshot();
+      yield* Fiber.interrupt(launching);
+      const interrupted = yield* Fiber.join(launching).pipe(Effect.exit);
+      expect(Exit.isFailure(interrupted)).toBe(true);
+      if (Exit.isFailure(interrupted)) expect(Cause.hasInterrupts(interrupted.cause)).toBe(true);
+      expect(fake.splitCalls()).toBe(1);
+      expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.cleanupWithholds()).toBe(1);
       expect(fake.cleanupAuthorizations()).toBe(1);
+      expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
+      expect(fake.harnessCleanups()).toBe(1);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
@@ -285,6 +347,7 @@ describe("session-owned Herdr topology", () => {
         "prepare pane environment",
       ]);
       expect(fake.closedPanes).toEqual(["user:p1"]);
+      expect(fake.cleanupWithholds()).toBe(1);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.callerPaneLive()).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
@@ -429,7 +492,9 @@ describe("session-owned Herdr topology", () => {
       });
       const closed = yield* Scope.close(runScope, Exit.void).pipe(Effect.exit);
       expect(Exit.isFailure(closed)).toBe(true);
+      expect(fake.cleanupWithholds()).toBe(1);
       expect(fake.cleanupAuthorizations()).toBe(0);
+      expect(fake.harnessCleanups()).toBe(0);
       expect(fake.closedPanes).toEqual([]);
       expect(fake.callerPaneLive()).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
@@ -485,7 +550,9 @@ describe("session-owned Herdr topology", () => {
         expect(Exit.isFailure(launched)).toBe(true);
         const closed = yield* Scope.close(runScope, Exit.void).pipe(Effect.exit);
         expect(Exit.isFailure(closed)).toBe(true);
+        expect(fake.cleanupWithholds()).toBe(1);
         expect(fake.cleanupAuthorizations()).toBe(0);
+        expect(fake.harnessCleanups()).toBe(0);
         expect(fake.closedPanes).toEqual([]);
         expect(fake.callerPaneLive()).toBe(true);
       }).pipe(Effect.scoped, provideBuiltLayer(layer));

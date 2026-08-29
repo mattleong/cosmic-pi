@@ -22,7 +22,12 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
-import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
+import {
+  toBackendExit,
+  type BackendDriver,
+  type BackendEvent,
+  type BackendLaunchRequest,
+} from "./model.ts";
 import {
   addUsageComponents,
   componentwiseMax,
@@ -974,16 +979,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   return {
     pid: child.pid,
     events,
-    awaitExit: child.awaitExit.pipe(
-      Effect.map((event) =>
-        (() => {
-          const baseResult = { type: "exit" as const, exitCode: event.exitCode };
-          const withSignal = event.signal ? { ...baseResult, signal: event.signal } : baseResult;
-          const withDiagnostic = { ...withSignal, diagnostic: event.stderr };
-          return withDiagnostic;
-        })(),
-      ),
-    ),
+    awaitExit: child.awaitExit.pipe(Effect.map(toBackendExit)),
     controls: {
       initialize,
       start: (message: string, epoch: number) =>

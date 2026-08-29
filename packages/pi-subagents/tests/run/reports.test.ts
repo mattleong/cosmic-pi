@@ -115,6 +115,190 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect(
+    "replays a buffered close-on-report report when run_started precedes uncertain resume failure",
+    () => {
+      const report = "Completed before resume transport failure surfaced.";
+      const backend = fakeRetainedBackendLayer({
+        capabilities: ["steer", "interrupt", "resume", "rename-display"],
+      });
+      const projections: SubagentProjection[] = [];
+      const layer = retainedServiceLayer(backend, {
+        publish: (projection) => void projections.push(projection),
+      });
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({
+            host: "herdr",
+            runtime: "claude",
+            model: "claude-retained",
+            effortWasExplicit: false,
+          }),
+        );
+        expect((yield* service.interrupt(run.id)).state).toBe("paused");
+
+        const resumeGate = yield* Deferred.make<void>();
+        backend.controls[0]?.gateNextStart(resumeGate);
+        backend.controls[0]?.failNextStart("transport_outcome_uncertain");
+        const resuming = yield* service
+          .resume(run.id, "Resume through an uncertain transport.")
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 2);
+        backend.controls[0]?.offer({ type: "run_started", assignmentEpoch: 2 });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: 2,
+          runId: run.id,
+          sequence: 1,
+          deliveryId: "started-before-failure",
+          text: report,
+        });
+        backend.controls[0]?.offer({
+          type: "assistant_message",
+          assignmentEpoch: 2,
+          text: "Buffered report barrier.",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: 0,
+          },
+        });
+        yield* yieldUntil(() =>
+          Boolean(
+            projections
+              .at(-1)
+              ?.runs[0]?.sessionEvents.some(
+                (event) => event.type === "assistant" && event.text === "Buffered report barrier.",
+              ),
+          ),
+        );
+        yield* Deferred.succeed(resumeGate, undefined);
+
+        expect(yield* Fiber.join(resuming).pipe(Effect.flip)).toMatchObject({
+          code: "resume_outcome_uncertain",
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        expect(projections.at(-1)?.runs[0]).toMatchObject({
+          state: "completed",
+          reportGeneration: 1,
+          finalText: report,
+          warning: expect.stringContaining("may already have applied"),
+        });
+
+        const delivered = yield* service.withAwaitTerminalObservations(
+          [run.id],
+          "all_finished",
+          undefined,
+          (observations) =>
+            service
+              .consumeCompletions(
+                observations.flatMap((observation) =>
+                  observation.completionReceipt ? [observation.completionReceipt] : [],
+                ),
+              )
+              .pipe(Effect.as(observations)),
+        );
+        expect(delivered[0]).toMatchObject({
+          run: { finalText: report, warning: expect.stringContaining("may already have applied") },
+          completionReceipt: { id: run.id, generation: 1 },
+        });
+
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: 2,
+          runId: run.id,
+          sequence: 1,
+          deliveryId: "started-before-failure",
+          text: report,
+        });
+        yield* Effect.yieldNow;
+        const afterDuplicate = yield* service.withStatusObservations([run.id], ({ observations }) =>
+          Effect.succeed(observations[0]),
+        );
+        expect(afterDuplicate?.completionReceipt).toBeUndefined();
+        expect(afterDuplicate?.run.reportGeneration).toBe(1);
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
+
+  it.effect(
+    "gives a buffered close-on-report report precedence after uncertain resume failure",
+    () => {
+      const report = "Buffered report won over settlement.";
+      const backend = fakeRetainedBackendLayer({
+        capabilities: ["steer", "interrupt", "resume", "rename-display"],
+      });
+      const projections: SubagentProjection[] = [];
+      const layer = retainedServiceLayer(backend, {
+        publish: (projection) => void projections.push(projection),
+      });
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({
+            host: "herdr",
+            runtime: "claude",
+            model: "claude-retained",
+            effortWasExplicit: false,
+          }),
+        );
+        expect((yield* service.interrupt(run.id)).state).toBe("paused");
+
+        const resumeGate = yield* Deferred.make<void>();
+        backend.controls[0]?.gateNextStart(resumeGate);
+        backend.controls[0]?.failNextStart("transport_outcome_uncertain");
+        const resuming = yield* service
+          .resume(run.id, "Resume before start evidence arrives.")
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 2);
+        yield* Deferred.succeed(resumeGate, undefined);
+        expect(yield* Fiber.join(resuming).pipe(Effect.flip)).toMatchObject({
+          code: "resume_outcome_uncertain",
+        });
+        expect(projections.at(-1)?.runs[0]).toMatchObject({
+          state: "starting",
+          warning: expect.stringContaining("may already have applied"),
+        });
+
+        const bufferedReport = {
+          type: "report" as const,
+          assignmentEpoch: 2,
+          runId: run.id,
+          sequence: 1,
+          deliveryId: "failure-before-started",
+          text: report,
+        };
+        backend.controls[0]?.offer(bufferedReport);
+        backend.controls[0]?.offer(bufferedReport);
+        backend.controls[0]?.offer({ type: "run_settled", assignmentEpoch: 2 });
+        backend.controls[0]?.offer({ type: "run_started", assignmentEpoch: 2 });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        expect(projections.at(-1)?.runs[0]).toMatchObject({
+          reportGeneration: 1,
+          finalText: report,
+          warning: expect.stringContaining("may already have applied"),
+        });
+
+        const delivered = yield* service.withAwaitTerminalObservations(
+          [run.id],
+          "all_finished",
+          undefined,
+          (observations) => Effect.succeed(observations),
+        );
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({
+          run: { finalText: report, reportGeneration: 1 },
+          completionReceipt: { id: run.id, generation: 1 },
+        });
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
+
   it.effect("starts retained follow-ups without advertising unconfirmable active steering", () => {
     const backend = fakeRetainedBackendLayer({ capabilities: ["rename-display"] });
     const projections: SubagentProjection[] = [];

@@ -21,13 +21,13 @@ import {
 } from "./state.ts";
 import { foldRunWarnings, setRunWarning } from "./warnings.ts";
 
-export type RetainedReportTransition = {
-  readonly transitioned: true;
-  readonly view: SubagentRunView;
-};
+export type AssignmentActivationReplay =
+  | { readonly kind: "running"; readonly view: SubagentRunView }
+  | { readonly kind: "retained-report"; readonly view: SubagentRunView }
+  | { readonly kind: "close-report"; readonly report: BackendReport }
+  | { readonly kind: "settlement" };
 
 export interface RunReportLifecycleDependencies {
-  /** The shared service lock guarding every RunRecord mutation. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly publish: Effect.Effect<void>;
   readonly delivery: RunNotificationDelivery;
@@ -41,16 +41,10 @@ export interface RunReportLifecycleDependencies {
     now: number,
     assignmentEpoch: number,
   ) => Effect.Effect<SubagentRunView | undefined>;
-  /** Late-bound process-lifecycle peer notifier; resolved at call time. */
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
 }
 
-/**
- * Owns the backend report lifecycle: sequence/deliveryId watermark validation,
- * pending report buffering during `issuing`, retained-report commits, and the
- * `run_started`/`run_settled` backend transitions. `commitRetainedReportLocked`
- * inserts and wakes the sole completion outbox while the caller holds the lock.
- */
+/** Owns report validation, buffering, activation replay, and backend report transitions. */
 export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependencies) {
   const { withLock, publish, delivery, settle, pauseFromEvent, sendPeerNotices } = dependencies;
 
@@ -68,10 +62,14 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     return snapshotView(record.view);
   };
 
-  const reportPairStatus = (
-    record: RunRecord,
-    report: BackendReport,
-  ): "new" | "exact-retry" | "invalid" => {
+  const rejectReportAndPublishLocked = (record: RunRecord, reason: string, now: number) =>
+    Effect.gen(function* () {
+      const view = rejectReportLocked(record, reason, now);
+      yield* publish;
+      return { kind: "unchanged" as const, view };
+    });
+
+  const reportPairStatus = (record: RunRecord, report: BackendReport) => {
     const watermark = record.lastBackendReport;
     if (!watermark) return "new";
     if (
@@ -87,7 +85,7 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     record: RunRecord,
     report: BackendReport,
     now: number,
-  ): RetainedReportTransition => {
+  ): SubagentRunView => {
     const pauseOutcome = record.pauseOutcome;
     record.pauseOutcome = undefined;
     record.pauseRequested = false;
@@ -132,38 +130,14 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     };
     const view = snapshotView(record.view);
     if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
-    return { transitioned: true, view };
+    return view;
   };
 
-  const finishRetainedReport = (record: RunRecord, result: RetainedReportTransition) =>
-    sendPeerNotices(record.view.id).pipe(Effect.as(result.view));
+  const finishRetainedReport = (record: RunRecord, view: SubagentRunView) =>
+    sendPeerNotices(record.view.id).pipe(Effect.as(view));
 
-  const acceptBackendReport = (record: RunRecord, rawReport: BackendReport) =>
+  const acceptValidatedBackendReport = (record: RunRecord, report: BackendReport) =>
     Effect.gen(function* () {
-      if (
-        rawReport.runId !== record.view.id ||
-        !Number.isSafeInteger(rawReport.assignmentEpoch) ||
-        rawReport.assignmentEpoch <= 0 ||
-        !Number.isSafeInteger(rawReport.sequence) ||
-        rawReport.sequence <= 0 ||
-        !rawReport.deliveryId.trim() ||
-        rawReport.deliveryId.length > MAX_BACKEND_REPORT_ID_CHARS ||
-        (rawReport.evidence !== undefined &&
-          rawReport.evidence.length > MAX_BACKEND_REPORT_EVIDENCE_CHARS) ||
-        (rawReport.text !== undefined && rawReport.text.length > MAX_BACKEND_REPORT_TEXT_CHARS)
-      )
-        return yield* new SubagentProcessError({
-          operation: "accept report from",
-          code: "backend_report_invalid",
-          message: `Subagent ${record.view.id} emitted an invalid bounded report event.`,
-        });
-      const report: BackendReport = {
-        ...rawReport,
-        deliveryId: rawReport.deliveryId.trim(),
-        ...(rawReport.text
-          ? { text: sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS) }
-          : { text: undefined }),
-      };
       const now = yield* Clock.currentTimeMillis;
       const decision = yield* withLock(
         Effect.gen(function* () {
@@ -172,41 +146,32 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
           const pair = reportPairStatus(record, report);
           if (pair === "exact-retry")
             return { kind: "unchanged" as const, view: snapshotView(record.view) };
-          if (pair === "invalid") {
-            const view = rejectReportLocked(
+          if (pair === "invalid")
+            return yield* rejectReportAndPublishLocked(
               record,
               `sequence ${report.sequence} reused delivery identity ${report.deliveryId}.`,
               now,
             );
-            yield* publish;
-            return { kind: "unchanged" as const, view };
-          }
           if (record.assignment.phase === "issuing") {
             const pending = record.assignment.pendingReport;
             if (
               pending &&
               (pending.sequence !== report.sequence || pending.deliveryId !== report.deliveryId)
-            ) {
-              const view = rejectReportLocked(
+            )
+              return yield* rejectReportAndPublishLocked(
                 record,
                 `assignment ${report.assignmentEpoch} produced more than one in-flight report.`,
                 now,
               );
-              yield* publish;
-              return { kind: "unchanged" as const, view };
-            }
             if (!pending) record.assignment.pendingReport = report;
             return { kind: "buffered" as const, view: snapshotView(record.view) };
           }
-          if (record.assignment.phase !== "running") {
-            const view = rejectReportLocked(
+          if (record.assignment.phase !== "running")
+            return yield* rejectReportAndPublishLocked(
               record,
               `sequence ${report.sequence} arrived while assignment ${report.assignmentEpoch} was ${record.assignment.phase}.`,
               now,
             );
-            yield* publish;
-            return { kind: "unchanged" as const, view };
-          }
           if (record.view.closeOnReport !== false) return { kind: "close" as const, report };
           const result = commitRetainedReportLocked(record, report, now);
           yield* publish;
@@ -243,10 +208,81 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
       return completed;
     });
 
+  const activateAssignmentLocked = (
+    record: RunRecord,
+    now: number,
+    runningView: SubagentRunView,
+  ): Effect.Effect<AssignmentActivationReplay> =>
+    Effect.gen(function* () {
+      const pendingReport = record.assignment.pendingReport;
+      const pendingRunSettled = record.assignment.pendingRunSettled;
+      record.assignment.phase = "running";
+      record.assignment.pendingReport = undefined;
+      record.assignment.pendingRunSettled = false;
+      const replay: AssignmentActivationReplay =
+        pendingReport && record.view.closeOnReport === false
+          ? {
+              kind: "retained-report",
+              view: commitRetainedReportLocked(record, pendingReport, now),
+            }
+          : (() => {
+              record.view = runningView;
+              if (pendingReport) return { kind: "close-report" as const, report: pendingReport };
+              if (pendingRunSettled) return { kind: "settlement" as const };
+              return { kind: "running" as const, view: snapshotView(record.view) };
+            })();
+      yield* publish;
+      return replay;
+    });
+
+  const replayAssignmentActivation = (
+    record: RunRecord,
+    replay: AssignmentActivationReplay,
+  ): Effect.Effect<SubagentRunView> => {
+    switch (replay.kind) {
+      case "retained-report":
+        return finishRetainedReport(record, replay.view);
+      case "close-report":
+        return acceptValidatedBackendReport(record, replay.report);
+      case "settlement":
+        return settle(record, "completed");
+      case "running":
+        return Effect.succeed(replay.view);
+    }
+  };
+
+  const acceptBackendReport = (record: RunRecord, rawReport: BackendReport) =>
+    Effect.gen(function* () {
+      if (
+        rawReport.runId !== record.view.id ||
+        !Number.isSafeInteger(rawReport.assignmentEpoch) ||
+        rawReport.assignmentEpoch <= 0 ||
+        !Number.isSafeInteger(rawReport.sequence) ||
+        rawReport.sequence <= 0 ||
+        !rawReport.deliveryId.trim() ||
+        rawReport.deliveryId.length > MAX_BACKEND_REPORT_ID_CHARS ||
+        (rawReport.evidence !== undefined &&
+          rawReport.evidence.length > MAX_BACKEND_REPORT_EVIDENCE_CHARS) ||
+        (rawReport.text !== undefined && rawReport.text.length > MAX_BACKEND_REPORT_TEXT_CHARS)
+      )
+        return yield* new SubagentProcessError({
+          operation: "accept report from",
+          code: "backend_report_invalid",
+          message: `Subagent ${record.view.id} emitted an invalid bounded report event.`,
+        });
+      return yield* acceptValidatedBackendReport(record, {
+        ...rawReport,
+        deliveryId: rawReport.deliveryId.trim(),
+        ...(rawReport.text
+          ? { text: sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS) }
+          : { text: undefined }),
+      });
+    });
+
   const runStartedFromBackend = (record: RunRecord, assignmentEpoch: number) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      const result = yield* withLock(
+      const replay = yield* withLock(
         Effect.gen(function* () {
           if (
             record.assignment.epoch !== assignmentEpoch ||
@@ -254,7 +290,7 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
             record.assignment.phase === "reported" ||
             isInactiveRunRecord(record)
           )
-            return { kind: "unchanged" as const };
+            return undefined;
           record.assignment.startedObserved = true;
           if (record.assignment.phase === "issuing" && !record.assignment.outcomeUncertain) {
             record.pausedAssignmentEpoch = undefined;
@@ -266,35 +302,19 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
               lastActivityAt: now,
             };
             yield* publish;
-            return { kind: "unchanged" as const };
-          }
-          const pendingReport = record.assignment.pendingReport;
-          const pendingRunSettled = record.assignment.pendingRunSettled;
-          record.assignment.phase = "running";
-          record.assignment.pendingReport = undefined;
-          record.assignment.pendingRunSettled = false;
-          if (pendingReport && record.view.closeOnReport === false) {
-            const report = commitRetainedReportLocked(record, pendingReport, now);
-            yield* publish;
-            return { kind: "report" as const, report };
+            return undefined;
           }
           record.pausedAssignmentEpoch = undefined;
-          record.view = {
+          return yield* activateAssignmentLocked(record, now, {
             ...record.view,
             state: "running",
             endedAt: undefined,
             error: undefined,
             lastActivityAt: now,
-          };
-          yield* publish;
-          return { kind: "running" as const, pendingRunSettled };
+          });
         }),
       );
-      if (result.kind === "report") {
-        yield* finishRetainedReport(record, result.report);
-        return;
-      }
-      if (result.kind === "running" && result.pendingRunSettled) yield* settle(record, "completed");
+      if (replay) yield* replayAssignmentActivation(record, replay);
     });
 
   const runSettledFromBackend = (record: RunRecord, assignmentEpoch: number) =>
@@ -327,11 +347,8 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
     });
 
   return {
-    /** Caller must hold the service lock; commits one retained report generation. */
-    commitRetainedReportLocked,
-    /** Post-commit peer notice and retained view return. */
-    finishRetainedReport,
-    /** Serialized watermark-checked report acceptance, buffering, and completion. */
+    activateAssignmentLocked,
+    replayAssignmentActivation,
     acceptBackendReport,
     runStartedFromBackend,
     runSettledFromBackend,

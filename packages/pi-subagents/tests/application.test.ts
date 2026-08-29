@@ -28,12 +28,13 @@ const deferred = <A>() => {
 
 describe("subagent Pi registration", () => {
   effectTest(
-    "makes out-of-order session preparation latest-wins and captures cwd/trust once",
+    "aborts superseded preview loading and never registers the stale activation",
     function* () {
       const handlers = new Map<string, Handler>();
       const first = deferred<void>();
       const second = deferred<void>();
       const loads: Array<readonly [string, boolean]> = [];
+      const signals: AbortSignal[] = [];
       const tools: string[] = [];
       // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
       const pi = extensionApiFixture({
@@ -48,8 +49,9 @@ describe("subagent Pi registration", () => {
       });
       registerSubagentApplication(pi, {
         getAgentDirectory: testAgentDirectory,
-        loadSettings: (cwd, trust) => {
+        loadSettings: (cwd, trust, signal) => {
           loads.push([cwd, trust]);
+          if (signal) signals.push(signal);
           return loads.length === 1 ? first.promise : second.promise;
         },
       });
@@ -80,14 +82,22 @@ describe("subagent Pi registration", () => {
       });
 
       const firstStart = Promise.resolve(handlers.get("session_start")?.({}, firstContext));
+      yield* step(() => vi.waitFor(() => expect(signals).toHaveLength(1)));
       const secondStart = Promise.resolve(handlers.get("session_tree")?.({}, secondContext));
+      yield* step(() =>
+        vi.waitFor(() => {
+          expect(signals[0]?.aborted).toBe(true);
+          expect(signals).toHaveLength(2);
+        }),
+      );
       second.resolve();
       yield* step(() => secondStart);
       expect(tools).toEqual(expect.arrayContaining(["subagent_start", "subagent_await"]));
       const winningRegistrationCount = tools.length;
+      yield* step(() => firstStart);
 
       first.resolve();
-      yield* step(() => firstStart);
+      yield* step(() => first.promise);
       expect(tools).toHaveLength(winningRegistrationCount);
       expect(loads).toEqual([
         [`${process.cwd()}/first`, true],
@@ -99,9 +109,10 @@ describe("subagent Pi registration", () => {
     },
   );
 
-  effectTest("invalidates pending preparation on shutdown before tools can register", function* () {
+  effectTest("aborts preview loading on shutdown before tools can register", function* () {
     const handlers = new Map<string, Handler>();
     const settings = deferred<void>();
+    let loaderSignal: AbortSignal | undefined;
     const registerTool = vi.fn();
     // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
     const pi = extensionApiFixture({
@@ -116,7 +127,10 @@ describe("subagent Pi registration", () => {
     });
     registerSubagentApplication(pi, {
       getAgentDirectory: testAgentDirectory,
-      loadSettings: () => settings.promise,
+      loadSettings: (_cwd, _trusted, signal) => {
+        loaderSignal = signal;
+        return settings.promise;
+      },
     });
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const ctx = extensionContextFixture({
@@ -128,11 +142,63 @@ describe("subagent Pi registration", () => {
     });
 
     const starting = Promise.resolve(handlers.get("session_start")?.({}, ctx));
+    yield* step(() => vi.waitFor(() => expect(loaderSignal).toBeDefined()));
     yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
-    settings.resolve();
+    expect(loaderSignal?.aborted).toBe(true);
     yield* step(() => starting);
     expect(registerTool).not.toHaveBeenCalled();
+
+    settings.resolve();
+    yield* step(() => settings.promise);
+    expect(registerTool).not.toHaveBeenCalled();
   });
+
+  for (const failure of [
+    {
+      label: "rejected",
+      load: () => Promise.reject(new Error("preview settings rejected")),
+    },
+    {
+      label: "synchronously throwing",
+      load: () => {
+        throw new Error("preview settings threw");
+      },
+    },
+  ]) {
+    effectTest(`activates after ${failure.label} preview loading`, function* () {
+      const handlers = new Map<string, Handler>();
+      const registerTool = vi.fn();
+      // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+      const pi = extensionApiFixture({
+        registerTool,
+        registerCommand: vi.fn(),
+        on: vi.fn((name: string, handler: Handler) => {
+          handlers.set(name, handler);
+        }),
+        getActiveTools: vi.fn(() => ["read"]),
+        setActiveTools: vi.fn(),
+        sendMessage: vi.fn(),
+      });
+      registerSubagentApplication(pi, {
+        getAgentDirectory: testAgentDirectory,
+        loadSettings: failure.load,
+      });
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      const ctx = extensionContextFixture({
+        cwd: process.cwd(),
+        signal: undefined,
+        isProjectTrusted: () => true,
+        hasUI: false,
+        mode: "rpc",
+      });
+
+      yield* settle(() => handlers.get("session_start")?.({}, ctx));
+      expect(registerTool).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "subagent_start" }),
+      );
+      yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
+    });
+  }
 
   effectTest(
     "accumulates partially disabled tool names across failures and clears after success",

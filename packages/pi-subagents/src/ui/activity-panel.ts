@@ -363,17 +363,3 @@ export const renderProjectedSubagentActivityPanel = (
     ),
   ];
 };
-
-export const renderSubagentActivityPanel = (
-  projection: SubagentProjection,
-  presentation: SubagentActivityPresentationSnapshot,
-  width: number,
-  theme: Theme,
-  now: number,
-): string[] =>
-  renderProjectedSubagentActivityPanel(
-    projectSubagentActivityPanel(projection, presentation),
-    width,
-    theme,
-    now,
-  );

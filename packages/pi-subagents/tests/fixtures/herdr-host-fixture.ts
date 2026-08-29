@@ -121,10 +121,18 @@ export const fakeTopology = () => {
   let failPaneCloseAfterApply = false;
   let replaceOriginalTabIdentity = false;
   let blockPostCloseSnapshot = false;
+  let blockPreSplitSnapshot = false;
+  let blockPostSplitSnapshot = false;
   let currentPaneMismatch = false;
   let postCloseSnapshotReached = false;
+  let preSplitSnapshotReached = false;
+  let postSplitSnapshotReached = false;
   let notifyPostCloseSnapshotReached: (() => void) | undefined;
+  let notifyPreSplitSnapshotReached: (() => void) | undefined;
+  let notifyPostSplitSnapshotReached: (() => void) | undefined;
   let releasePostCloseSnapshot: (() => void) | undefined;
+  let releasePreSplitSnapshot: (() => void) | undefined;
+  let releasePostSplitSnapshot: (() => void) | undefined;
 
   const observeReceipt = (
     phase: HerdrStartupReceiptPhase,
@@ -350,6 +358,22 @@ export const fakeTopology = () => {
     callingPaneId: "user:p0",
     preflight: () => Effect.void,
     snapshot: Effect.suspend(() => {
+      if (blockPreSplitSnapshot && splitCalls === 0) {
+        blockPreSplitSnapshot = false;
+        return Effect.callback<HerdrSnapshot>((resume) => {
+          preSplitSnapshotReached = true;
+          notifyPreSplitSnapshotReached?.();
+          releasePreSplitSnapshot = () => resume(Effect.succeed(snapshot()));
+        });
+      }
+      if (blockPostSplitSnapshot && splitCalls > 0 && closedPanes.length === 0) {
+        blockPostSplitSnapshot = false;
+        return Effect.callback<HerdrSnapshot>((resume) => {
+          postSplitSnapshotReached = true;
+          notifyPostSplitSnapshotReached?.();
+          releasePostSplitSnapshot = () => resume(Effect.succeed(snapshot()));
+        });
+      }
       if (blockPostCloseSnapshot && closedPanes.length > 0) {
         blockPostCloseSnapshot = false;
         return Effect.callback<HerdrSnapshot>((resume) => {
@@ -550,27 +574,42 @@ export const fakeTopology = () => {
       }),
   };
   let cleanupAuthorizations = 0;
+  let cleanupWithholds = 0;
+  let harnessCleanups = 0;
   const harness: HerdrHarnessContract = {
     preflight: () => Effect.void,
     prepare: (runtime, request) =>
-      Effect.sync(() => {
-        plannedAgentName = request.name;
-        return {
-          directory: `/private/${runtime}`,
-          runtime,
-          argv: [],
-          environmentCommand: () => "fixed-env",
-          startupAttestation,
-          ...(invalidSecretAttestation
-            ? { secretCommand: "" }
-            : validSecretBootstrap
-              ? { secretCommand: "load-secret" }
-              : {}),
-          authorizeCleanup: () => {
-            cleanupAuthorizations += 1;
-          },
-        };
-      }),
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          let cleanupAllowed = true;
+          plannedAgentName = request.name;
+          const prepared = {
+            directory: `/private/${runtime}`,
+            runtime,
+            argv: [],
+            environmentCommand: () => "fixed-env",
+            startupAttestation,
+            ...(invalidSecretAttestation
+              ? { secretCommand: "" }
+              : validSecretBootstrap
+                ? { secretCommand: "load-secret" }
+                : {}),
+            withholdCleanup: () => {
+              cleanupAllowed = false;
+              cleanupWithholds += 1;
+            },
+            authorizeCleanup: () => {
+              cleanupAllowed = true;
+              cleanupAuthorizations += 1;
+            },
+          };
+          return { prepared, cleanupAllowed: () => cleanupAllowed };
+        }),
+        (owned) =>
+          Effect.sync(() => {
+            if (owned.cleanupAllowed()) harnessCleanups += 1;
+          }),
+      ).pipe(Effect.map((owned) => owned.prepared)),
   };
   return {
     cli,
@@ -586,6 +625,8 @@ export const fakeTopology = () => {
     splitCalls: () => splitCalls,
     splitTargets: () => [...splitTargets],
     cleanupAuthorizations: () => cleanupAuthorizations,
+    cleanupWithholds: () => cleanupWithholds,
+    harnessCleanups: () => harnessCleanups,
     focusedTopology: () => ({
       workspaceId: focusedWorkspaceId,
       tabId: focusedTabId,
@@ -649,6 +690,32 @@ export const fakeTopology = () => {
     },
     failPaneCloseAfterApplying: () => {
       failPaneCloseAfterApply = true;
+    },
+    blockSnapshotBeforeSplit: () => {
+      blockPreSplitSnapshot = true;
+      preSplitSnapshotReached = false;
+      notifyPreSplitSnapshotReached = undefined;
+    },
+    awaitBlockedPreSplitSnapshot: () =>
+      Effect.callback<void>((resume) => {
+        if (preSplitSnapshotReached) resume(Effect.void);
+        else notifyPreSplitSnapshotReached = () => resume(Effect.void);
+      }),
+    releaseBlockedPreSplitSnapshot: () => {
+      releasePreSplitSnapshot?.();
+    },
+    blockSnapshotAfterSplit: () => {
+      blockPostSplitSnapshot = true;
+      postSplitSnapshotReached = false;
+      notifyPostSplitSnapshotReached = undefined;
+    },
+    awaitBlockedPostSplitSnapshot: () =>
+      Effect.callback<void>((resume) => {
+        if (postSplitSnapshotReached) resume(Effect.void);
+        else notifyPostSplitSnapshotReached = () => resume(Effect.void);
+      }),
+    releaseBlockedPostSplitSnapshot: () => {
+      releasePostSplitSnapshot?.();
     },
     blockSnapshotAfterPaneClose: () => {
       blockPostCloseSnapshot = true;

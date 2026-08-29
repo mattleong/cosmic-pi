@@ -497,8 +497,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     });
 
   const {
-    commitRetainedReportLocked,
-    finishRetainedReport,
+    activateAssignmentLocked,
+    replayAssignmentActivation,
     acceptBackendReport,
     runStartedFromBackend,
     runSettledFromBackend,
@@ -642,10 +642,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     publish,
     startPrompt: (record, message, assignmentEpoch) =>
       startPrompt(record, message, assignmentEpoch),
-    settle,
-    commitRetainedReportLocked,
-    finishRetainedReport,
-    acceptBackendReport,
+    activateAssignmentLocked,
+    replayAssignmentActivation,
   });
 
   const { start, startSessionOwned } = makeRunLaunch({

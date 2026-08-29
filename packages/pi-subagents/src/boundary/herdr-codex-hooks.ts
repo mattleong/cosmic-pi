@@ -1,7 +1,5 @@
-// Codex hook discovery/trust and its bounded app-server process live at this boundary.
 import { nodeFsPromises as fs } from "./node-builtins.ts";
 import * as Cause from "effect/Cause";
-import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -18,23 +16,11 @@ const MAX_LINE_BYTES = 512 * 1024;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 32 * 1024;
 const HASH_PATTERN = /^sha256:[a-f0-9]{64}$/u;
-const SAFE_ENVIRONMENT_KEYS = new Set([
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "PATH",
-  "SHELL",
-  "TMPDIR",
-  "TMP",
-  "TEMP",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "XDG_CONFIG_HOME",
-  "XDG_STATE_HOME",
-]);
+const SAFE_ENVIRONMENT_KEYS = new Set(
+  "HOME USER LOGNAME PATH SHELL TMPDIR TMP TEMP LANG LC_ALL LC_CTYPE SSL_CERT_FILE SSL_CERT_DIR XDG_CONFIG_HOME XDG_STATE_HOME".split(
+    " ",
+  ),
+);
 
 const BoundedText = Schema.String.check(Schema.isMaxLength(4_096));
 const BoundedNonEmptyText = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4_096));
@@ -110,11 +96,8 @@ export interface HerdrCodexHooksContract {
 }
 
 export interface HerdrCodexHooksOptions {
-  /** Test seam only. Production always uses the fixed `codex` executable. */
   readonly executable?: string | undefined;
-  /** Captured parent environment. CODEX_HOME is always replaced with private harness state. */
   readonly environment?: NodeJS.ProcessEnv | undefined;
-  /** Test seam only. */
   readonly timeoutMillis?: number | undefined;
 }
 
@@ -141,22 +124,24 @@ const classifyRpcLine = (line: string): InboundClassification<RpcResponse> => {
   if (Option.isSome(failure)) {
     return { kind: "rejection", id: failure.value.id, detail: failure.value.error.message };
   }
-  // Notifications and unrelated frames are ignored; only replies correlate to pending calls.
   return { kind: "ignore" };
 };
 
 const makeUnavailable = () => new HerdrCodexHooksError({ code: "codex_herdr_hook_unavailable" });
 
-// SAFETY: Trust steps only fail with HerdrCodexHooksError; any other cause degrades to unavailable.
-const toHooksFailure = (cause: Cause.Cause<HerdrCodexHooksError>): HerdrCodexHooksError => {
-  const failure = Cause.squash(cause);
-  return failure instanceof HerdrCodexHooksError ? failure : makeUnavailable();
-};
-
 const makeCleanupUnconfirmed = () =>
   new HerdrCodexHooksError({ code: "codex_herdr_hook_cleanup_unconfirmed" });
 
 const toUnavailable = (_error: RpcSessionError): HerdrCodexHooksError => makeUnavailable();
+const translateRpcCause = <Value, Requirements>(
+  effect: Effect.Effect<Value, RpcSessionError, Requirements>,
+): Effect.Effect<Value, HerdrCodexHooksError, Requirements> =>
+  effect.pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, toUnavailable))));
+const cleanupCause = (cause: Cause.Cause<RpcSessionError>): Cause.Cause<HerdrCodexHooksError> =>
+  Cause.fromReasons([
+    ...Cause.fail(makeCleanupUnconfirmed()).reasons,
+    ...Cause.map(cause, toUnavailable).reasons,
+  ]);
 
 const canonicalPath = (path: string): Effect.Effect<string, HerdrCodexHooksError> =>
   Effect.tryPromise({
@@ -197,7 +182,6 @@ const selectOwnedHook = (
     return hook;
   });
 
-// Locally constructed hook JSON-RPC request frames are serialized by this pure dialect encoder.
 const requestFrame = (id: string, method: string, params: Schema.MutableJson): string =>
   `${JSON.stringify({ id, method, params })}\n`;
 
@@ -209,9 +193,9 @@ const callJson = (
   timeoutMillis: number,
 ): Effect.Effect<Schema.MutableJson, HerdrCodexHooksError> =>
   Effect.gen(function* () {
-    const response = yield* session
-      .call(id, requestFrame(id, method, params), timeoutMillis)
-      .pipe(Effect.mapError(toUnavailable));
+    const response = yield* translateRpcCause(
+      session.call(id, requestFrame(id, method, params), timeoutMillis),
+    );
     if (!("result" in response) || response.id !== id) return yield* makeUnavailable();
     return response.result;
   });
@@ -221,7 +205,7 @@ const notify = (
   method: string,
   params: Schema.MutableJson,
 ): Effect.Effect<void, HerdrCodexHooksError> =>
-  session.notify(`${JSON.stringify({ method, params })}\n`).pipe(Effect.mapError(toUnavailable));
+  translateRpcCause(session.notify(`${JSON.stringify({ method, params })}\n`));
 
 const runTrustSteps = (
   session: NdjsonRpcSession<RpcResponse>,
@@ -300,35 +284,44 @@ export const makeHerdrCodexHooks = (
   return {
     establishTrust: (input) =>
       Effect.scoped(
-        Effect.gen(function* () {
-          const environment = { ...fixedEnvironment, CODEX_HOME: input.codexHome };
-          const opened = yield* Effect.exit(
-            makeNdjsonRpcSession<RpcResponse>({
-              command: executable,
-              args: ["app-server", "--stdio", "--strict-config"],
-              cwd: input.cwd,
-              environment,
-              diagnosticMaxBytes: MAX_DIAGNOSTIC_BYTES,
-              waitForSpawnEvent: true,
-              maxLineBytes: MAX_LINE_BYTES,
-              maxQueuedOutputBytes: MAX_OUTPUT_BYTES,
-              maxTotalOutputBytes: MAX_OUTPUT_BYTES,
-              maxPendingCalls: 64,
-              writeQueueCapacity: 32,
-              classifyInbound: classifyRpcLine,
-              unknownReplyPolicy: "fail-session",
-            }),
-          );
-          if (Exit.isFailure(opened)) return yield* makeUnavailable();
-          const session = opened.value;
-          const steps = yield* Effect.exit(runTrustSteps(session, input, timeoutMillis));
-          const failure = Exit.isFailure(steps) ? toHooksFailure(steps.cause) : undefined;
-          // Cleanup confirmation stays observable: an unconfirmed kill must fail closed even
-          // when the trust steps themselves succeeded.
-          const closed = yield* Effect.exit(session.close());
-          if (Exit.isFailure(closed)) return yield* makeCleanupUnconfirmed();
-          if (failure) return yield* failure;
-        }),
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const environment = { ...fixedEnvironment, CODEX_HOME: input.codexHome };
+            const session = yield* restore(
+              translateRpcCause(
+                makeNdjsonRpcSession<RpcResponse>({
+                  command: executable,
+                  args: ["app-server", "--stdio", "--strict-config"],
+                  cwd: input.cwd,
+                  environment,
+                  diagnosticMaxBytes: MAX_DIAGNOSTIC_BYTES,
+                  waitForSpawnEvent: true,
+                  maxLineBytes: MAX_LINE_BYTES,
+                  maxQueuedOutputBytes: MAX_OUTPUT_BYTES,
+                  maxTotalOutputBytes: MAX_OUTPUT_BYTES,
+                  maxPendingCalls: 64,
+                  writeQueueCapacity: 32,
+                  classifyInbound: classifyRpcLine,
+                  unknownReplyPolicy: "fail-session",
+                }),
+              ),
+            );
+            const close = session
+              .close()
+              .pipe(Effect.catchCause((cause) => Effect.failCause(cleanupCause(cause))));
+            return yield* restore(runTrustSteps(session, input, timeoutMillis)).pipe(
+              Effect.catchCause((original) =>
+                close.pipe(
+                  Effect.catchCause((cleanup) =>
+                    Effect.failCause(Cause.fromReasons([...cleanup.reasons, ...original.reasons])),
+                  ),
+                  Effect.andThen(Effect.failCause(original)),
+                ),
+              ),
+              Effect.andThen(close),
+            );
+          }),
+        ),
       ),
   };
 };

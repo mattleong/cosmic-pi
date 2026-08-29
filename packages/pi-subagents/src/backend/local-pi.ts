@@ -34,11 +34,12 @@ import {
   type RpcResponse,
 } from "./local-pi-protocol.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "../run/state.ts";
-import type {
-  BackendDriver,
-  BackendEvent,
-  BackendLaunchRequest,
-  BackendResumeToken,
+import {
+  toBackendExit,
+  type BackendDriver,
+  type BackendEvent,
+  type BackendLaunchRequest,
+  type BackendResumeToken,
 } from "./model.ts";
 
 const RPC_TIMEOUT = "10 seconds";
@@ -649,14 +650,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     pid: child.pid,
     events,
     awaitExit: child.awaitExit.pipe(
-      Effect.map((event) =>
-        (() => {
-          const baseResult = { type: "exit" as const, exitCode: event.exitCode };
-          const withSignal = event.signal ? { ...baseResult, signal: event.signal } : baseResult;
-          const withDiagnostic = { ...withSignal, diagnostic: event.stderr };
-          return withDiagnostic;
-        })(),
-      ),
+      Effect.map(toBackendExit),
       Effect.tapError((error) => Effect.sync(() => cancelPending(error))),
     ),
     controls,

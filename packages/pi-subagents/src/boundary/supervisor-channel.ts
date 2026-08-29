@@ -224,8 +224,7 @@ interface NodeChannelState {
   currentAssignmentEpoch: number;
   nextReportSequence: number;
   pendingQuestion: PendingQuestion | undefined;
-  cleanupStarted: boolean;
-  readonly cleanupDone: Deferred.Deferred<void, SupervisorChannelError>;
+  close: Effect.Effect<void, SupervisorChannelError>;
   closed: boolean;
 }
 
@@ -880,60 +879,56 @@ const makeRpcHandlers = (state: NodeChannelState) =>
     }),
   );
 
-const closeNodeChannelEffect = (state: NodeChannelState) =>
-  Effect.uninterruptibleMask((restore) =>
-    Effect.suspend(() => {
-      if (state.cleanupStarted) return restore(Deferred.await(state.cleanupDone));
-      state.cleanupStarted = true;
-      return Effect.gen(function* () {
-        state.closed = true;
-        Latch.openUnsafe(state.readiness);
-        failPendingQuestion(
-          state,
-          "channel_closed",
-          "Supervisor channel closed before the pending question settled.",
-          false,
-        );
-        for (const acknowledgement of state.epochAcknowledgements.values())
-          Deferred.doneUnsafe(
-            acknowledgement.firstAcknowledgement,
-            Effect.fail(
-              channelError(
-                "set assignment epoch",
-                "channel_closed",
-                "Supervisor channel closed before epoch acknowledgement.",
-              ),
-            ),
-          );
-        state.epochAcknowledgements.clear();
-        for (const pending of state.notificationAcknowledgements.values())
-          Deferred.doneUnsafe(
-            pending.acknowledgement,
-            Effect.fail(
-              channelError(
-                "deliver notification",
-                "channel_closed",
-                "Supervisor channel closed before notification acknowledgement.",
-              ),
-            ),
-          );
-        state.notificationAcknowledgements.clear();
-        for (const peer of state.peers.values()) Queue.endUnsafe(peer.assignments);
-        state.peers.clear();
-        yield* Queue.shutdown(state.events);
-        yield* Scope.close(state.scope, Exit.void);
-        yield* removePrivateState(state.stateDirectory, state.connectionConfigPath).pipe(
-          Effect.mapError(() =>
-            channelError(
-              "cleanup",
-              "cleanup_failed",
-              "Supervisor private state cleanup could not be confirmed.",
-            ),
+const cleanupNodeChannelEffect = (state: NodeChannelState) =>
+  Effect.gen(function* () {
+    state.closed = true;
+    Latch.openUnsafe(state.readiness);
+    failPendingQuestion(
+      state,
+      "channel_closed",
+      "Supervisor channel closed before the pending question settled.",
+      false,
+    );
+    for (const acknowledgement of state.epochAcknowledgements.values())
+      Deferred.doneUnsafe(
+        acknowledgement.firstAcknowledgement,
+        Effect.fail(
+          channelError(
+            "set assignment epoch",
+            "channel_closed",
+            "Supervisor channel closed before epoch acknowledgement.",
           ),
-        );
-      }).pipe(Effect.onExit((exit) => Deferred.done(state.cleanupDone, exit).pipe(Effect.asVoid)));
-    }),
-  );
+        ),
+      );
+    state.epochAcknowledgements.clear();
+    for (const pending of state.notificationAcknowledgements.values())
+      Deferred.doneUnsafe(
+        pending.acknowledgement,
+        Effect.fail(
+          channelError(
+            "deliver notification",
+            "channel_closed",
+            "Supervisor channel closed before notification acknowledgement.",
+          ),
+        ),
+      );
+    state.notificationAcknowledgements.clear();
+    for (const peer of state.peers.values()) Queue.endUnsafe(peer.assignments);
+    state.peers.clear();
+    yield* Queue.shutdown(state.events);
+    yield* Scope.close(state.scope, Exit.void);
+    yield* removePrivateState(state.stateDirectory, state.connectionConfigPath).pipe(
+      Effect.mapError(() =>
+        channelError(
+          "cleanup",
+          "cleanup_failed",
+          "Supervisor private state cleanup could not be confirmed.",
+        ),
+      ),
+    );
+  });
+
+const closeNodeChannelEffect = (state: NodeChannelState) => state.close;
 
 const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
@@ -1017,7 +1012,7 @@ const acquireNodeChannelEffect = (
           SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")),
         );
         const readiness = yield* Latch.make();
-        state = {
+        const acquiredState: NodeChannelState = {
           runId,
           scope: internalScope,
           peers: new Map(),
@@ -1037,10 +1032,13 @@ const acquireNodeChannelEffect = (
           currentAssignmentEpoch: 0,
           nextReportSequence: 1,
           pendingQuestion: undefined,
-          cleanupStarted: false,
-          cleanupDone: Deferred.makeUnsafe<void, SupervisorChannelError>(),
+          close: Effect.die("Supervisor close cache is not initialized."),
           closed: false,
         };
+        acquiredState.close = yield* Effect.cached(
+          Effect.uninterruptible(cleanupNodeChannelEffect(acquiredState)),
+        );
+        state = acquiredState;
         const serialization = RpcSerialization.makeNdjson({
           maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
         });

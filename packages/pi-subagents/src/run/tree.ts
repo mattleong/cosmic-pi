@@ -1,10 +1,5 @@
 import type { RunRecord } from "./internal.ts";
-import {
-  isActiveRunState,
-  SUBAGENT_ROOT_RUN_ID,
-  type SubagentRunView,
-  type SubagentTreeRootView,
-} from "./model.ts";
+import { SUBAGENT_ROOT_RUN_ID, type SubagentRunView, type SubagentTreeRootView } from "./model.ts";
 
 const parentIdOf = (view: SubagentRunView): string => view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
 
@@ -29,14 +24,6 @@ export const isRunInSubtree = (
   }
   return false;
 };
-
-export const directActiveChildCount = (
-  records: ReadonlyMap<string, RunRecord>,
-  parentRunId: string,
-): number =>
-  [...records.values()].filter(
-    (record) => parentIdOf(record.view) === parentRunId && isActiveRunState(record.view.state),
-  ).length;
 
 export const descendantRunIds = (
   records: ReadonlyMap<string, RunRecord>,
