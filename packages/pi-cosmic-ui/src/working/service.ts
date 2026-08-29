@@ -7,14 +7,17 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { WorkingMessageHost } from "../boundary/host-working-message.ts";
 
 const UPDATE_INTERVAL_MS = 1_000;
+const WAITING_MESSAGE = "Waiting for user";
 
 interface WorkingTimerState {
   readonly generation: number;
-  readonly startedAt: number;
+  readonly activeWorkStartedAt: number | undefined;
+  readonly elapsedMilliseconds: number;
   readonly outputActiveStartedAt: number | undefined;
   readonly outputMilliseconds: number;
   readonly outputCharacters: number;
   readonly active: boolean;
+  readonly waiting: boolean;
 }
 
 export function formatWorkingElapsed(milliseconds: number): string {
@@ -53,8 +56,21 @@ export interface WorkingTimerServiceContract {
   readonly start: Effect.Effect<void>;
   readonly noteOutputCharacters: (characters: number) => void;
   readonly pauseOutput: Effect.Effect<void>;
+  readonly waitForUser: Effect.Effect<void>;
+  readonly resumeFromUser: Effect.Effect<void>;
   readonly stop: Effect.Effect<void>;
 }
+
+const elapsedAt = (state: WorkingTimerState, now: number): number =>
+  state.elapsedMilliseconds +
+  (state.activeWorkStartedAt === undefined ? 0 : now - state.activeWorkStartedAt);
+
+const outputElapsedAt = (state: WorkingTimerState, now: number): number =>
+  state.outputMilliseconds +
+  (state.outputActiveStartedAt === undefined ? 0 : now - state.outputActiveStartedAt);
+
+const workingMessageAt = (state: WorkingTimerState, now: number): string =>
+  formatWorkingMessage(elapsedAt(state, now), state.outputCharacters, outputElapsedAt(state, now));
 
 /** Owns the elapsed-time ticker for Pi's live working row. */
 export class WorkingTimerService extends Context.Service<
@@ -69,53 +85,47 @@ export class WorkingTimerService extends Context.Service<
       const scope = yield* Effect.scope;
       const state = yield* SynchronizedRef.make<WorkingTimerState>({
         generation: 0,
-        startedAt: 0,
+        activeWorkStartedAt: undefined,
+        elapsedMilliseconds: 0,
         outputActiveStartedAt: undefined,
         outputMilliseconds: 0,
         outputCharacters: 0,
         active: false,
+        waiting: false,
       });
 
       let pendingOutputCharacters = 0;
       let pendingOutputFirstAt = 0;
+      let promptWaiting = false;
 
-      const applyOutputCharacters = (increment: number, now: number) =>
-        SynchronizedRef.update(state, (current) =>
-          current.active
-            ? {
-                ...current,
-                outputActiveStartedAt: current.outputActiveStartedAt ?? now,
-                outputCharacters: current.outputCharacters + increment,
-              }
-            : current,
-        );
+      const setHostMessage = (message?: string): Effect.Effect<boolean> =>
+        host.set(message).pipe(Effect.catchCause(() => Effect.succeed(false)));
 
       const drainOutputCharacters = Effect.suspend(() => {
         if (pendingOutputCharacters === 0) return Effect.void;
         const increment = pendingOutputCharacters;
         const firstAt = pendingOutputFirstAt;
         pendingOutputCharacters = 0;
-        return applyOutputCharacters(increment, firstAt);
+        return SynchronizedRef.update(state, (current) =>
+          current.active && !current.waiting
+            ? {
+                ...current,
+                outputActiveStartedAt: current.outputActiveStartedAt ?? firstAt,
+                outputCharacters: current.outputCharacters + increment,
+              }
+            : current,
+        );
       });
 
       const tick = (generation: number): Effect.Effect<boolean> =>
         SynchronizedRef.modifyEffect(state, (current) => {
           if (!current.active || current.generation !== generation)
             return Effect.succeed([false, current] as const);
+          if (current.waiting)
+            return setHostMessage(WAITING_MESSAGE).pipe(Effect.as([true, current] as const));
           return Clock.currentTimeMillis.pipe(
-            Effect.flatMap((now) =>
-              host.set(
-                formatWorkingMessage(
-                  now - current.startedAt,
-                  current.outputCharacters,
-                  current.outputMilliseconds +
-                    (current.outputActiveStartedAt === undefined
-                      ? 0
-                      : now - current.outputActiveStartedAt),
-                ),
-              ),
-            ),
-            Effect.map((available) => [available, { ...current, active: available }] as const),
+            Effect.flatMap((now) => setHostMessage(workingMessageAt(current, now))),
+            Effect.as([true, current] as const),
           );
         });
 
@@ -126,30 +136,32 @@ export class WorkingTimerService extends Context.Service<
           Effect.flatMap((active) => (active ? ticker(generation) : Effect.void)),
         );
 
-      const start = SynchronizedRef.modifyEffect(state, (current) =>
-        Clock.currentTimeMillis.pipe(
-          Effect.flatMap((startedAt) =>
-            host
-              .set(formatWorkingMessage(0))
-              .pipe(Effect.map((available) => ({ available, startedAt }))),
+      const start = Effect.sync(() => {
+        pendingOutputCharacters = 0;
+      }).pipe(
+        Effect.andThen(
+          SynchronizedRef.modifyEffect(state, (current) =>
+            Clock.currentTimeMillis.pipe(
+              Effect.flatMap((startedAt) =>
+                setHostMessage(current.waiting ? WAITING_MESSAGE : formatWorkingMessage(0)).pipe(
+                  Effect.map((available) => ({ available, startedAt })),
+                ),
+              ),
+              Effect.map(({ available, startedAt }) => {
+                const next: WorkingTimerState = {
+                  generation: current.generation + 1,
+                  activeWorkStartedAt: available && !current.waiting ? startedAt : undefined,
+                  elapsedMilliseconds: 0,
+                  outputActiveStartedAt: undefined,
+                  outputMilliseconds: 0,
+                  outputCharacters: 0,
+                  active: available,
+                  waiting: current.waiting,
+                };
+                return [next.generation, next] as const;
+              }),
+            ),
           ),
-          Effect.map(({ available, startedAt }) => {
-            const next = {
-              generation: current.generation + 1,
-              startedAt,
-              outputActiveStartedAt: undefined,
-              outputMilliseconds: 0,
-              outputCharacters: 0,
-              active: available,
-            } as const;
-            return [next.generation, next] as const;
-          }),
-        ),
-      ).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            pendingOutputCharacters = 0;
-          }),
         ),
         Effect.flatMap((generation) => Effect.forkIn(ticker(generation), scope)),
         Effect.asVoid,
@@ -157,36 +169,122 @@ export class WorkingTimerService extends Context.Service<
 
       const noteOutputCharacters = (characters: number): void => {
         const increment = Math.max(0, Math.floor(characters));
-        if (increment === 0) return;
+        if (increment === 0 || promptWaiting) return;
         if (pendingOutputCharacters === 0) pendingOutputFirstAt = clock.currentTimeMillisUnsafe();
         pendingOutputCharacters += increment;
       };
 
       const pauseOutput = drainOutputCharacters.pipe(
-        Effect.andThen(Clock.currentTimeMillis),
-        Effect.flatMap((now) =>
-          SynchronizedRef.update(state, (current) =>
-            current.active && current.outputActiveStartedAt !== undefined
-              ? {
-                  ...current,
-                  outputActiveStartedAt: undefined,
-                  outputMilliseconds:
-                    current.outputMilliseconds + (now - current.outputActiveStartedAt),
-                }
-              : current,
-          ),
+        Effect.andThen(
+          SynchronizedRef.modifyEffect(state, (current) => {
+            if (!current.active || current.waiting || current.outputActiveStartedAt === undefined)
+              return Effect.succeed([undefined, current] as const);
+            const outputActiveStartedAt = current.outputActiveStartedAt;
+            return Clock.currentTimeMillis.pipe(
+              Effect.map(
+                (now) =>
+                  [
+                    undefined,
+                    {
+                      ...current,
+                      outputActiveStartedAt: undefined,
+                      outputMilliseconds:
+                        current.outputMilliseconds + (now - outputActiveStartedAt),
+                    },
+                  ] as const,
+              ),
+            );
+          }),
         ),
       );
 
-      const stop = SynchronizedRef.modifyEffect(state, (current) =>
-        host
-          .set()
-          .pipe(
-            Effect.as([
-              undefined,
-              { ...current, generation: current.generation + 1, active: false },
-            ] as const),
+      const waitForUser = Effect.sync(() => {
+        promptWaiting = true;
+      }).pipe(
+        Effect.andThen(drainOutputCharacters),
+        Effect.andThen(
+          SynchronizedRef.modifyEffect(state, (current) => {
+            if (current.waiting) return Effect.succeed([undefined, current] as const);
+            return Clock.currentTimeMillis.pipe(
+              Effect.flatMap((now) =>
+                setHostMessage(WAITING_MESSAGE).pipe(
+                  Effect.map((available) => ({ available, now })),
+                ),
+              ),
+              Effect.map(
+                ({ available, now }) =>
+                  [
+                    undefined,
+                    {
+                      ...current,
+                      activeWorkStartedAt: undefined,
+                      elapsedMilliseconds: current.active
+                        ? elapsedAt(current, now)
+                        : current.elapsedMilliseconds,
+                      outputActiveStartedAt: undefined,
+                      outputMilliseconds: current.active
+                        ? outputElapsedAt(current, now)
+                        : current.outputMilliseconds,
+                      active: current.active || available,
+                      waiting: true,
+                    },
+                  ] as const,
+              ),
+            );
+          }),
+        ),
+      );
+
+      const resumeFromUser = SynchronizedRef.modifyEffect(state, (current) => {
+        if (!current.waiting) return Effect.succeed([undefined, current] as const);
+        return Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            setHostMessage(workingMessageAt(current, now)).pipe(
+              Effect.map((available) => ({ available, now })),
+            ),
           ),
+          Effect.map(({ available, now }) => {
+            const active = current.active || available;
+            return [
+              undefined,
+              {
+                ...current,
+                activeWorkStartedAt: active ? now : undefined,
+                active,
+                waiting: false,
+              },
+            ] as const;
+          }),
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            promptWaiting = false;
+          }),
+        ),
+      );
+
+      const stop = Effect.sync(() => {
+        pendingOutputCharacters = 0;
+        promptWaiting = false;
+      }).pipe(
+        Effect.andThen(
+          SynchronizedRef.modifyEffect(state, (current) =>
+            setHostMessage().pipe(
+              Effect.as([
+                undefined,
+                {
+                  ...current,
+                  generation: current.generation + 1,
+                  activeWorkStartedAt: undefined,
+                  outputActiveStartedAt: undefined,
+                  active: false,
+                  waiting: false,
+                },
+              ] as const),
+            ),
+          ),
+        ),
       );
 
       yield* Effect.addFinalizer(() => stop);
@@ -194,6 +292,8 @@ export class WorkingTimerService extends Context.Service<
         start,
         noteOutputCharacters,
         pauseOutput,
+        waitForUser,
+        resumeFromUser,
         stop,
       });
     }),

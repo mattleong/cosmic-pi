@@ -110,6 +110,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
       return;
     }
     if (message.type === "proxy_notification") {
+      let ok = true;
       try {
         pi.sendMessage(
           {
@@ -120,15 +121,48 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
           { deliverAs: "steer", triggerTurn: true },
         );
       } catch {
-        // The delegated Pi may already be shutting down.
+        ok = false;
       }
+      void Effect.runPromise(
+        ipc
+          .sendContact({
+            channel: "pi-subagents",
+            type: "proxy_notification_ack",
+            requestId: message.requestId,
+            ok,
+          })
+          .pipe(Effect.ignore),
+      );
+      return;
+    }
+    if (message.type === "turn_input_barrier") {
+      void Effect.runPromise(
+        ipc
+          .sendContact({
+            channel: "pi-subagents",
+            type: "turn_input_barrier_ack",
+            requestId: message.requestId,
+          })
+          .pipe(Effect.ignore),
+      );
       return;
     }
     if (message.type === "parent_reply") {
       const waiter = pending.get(message.requestId);
-      if (!waiter) return;
-      pending.delete(message.requestId);
-      Deferred.doneUnsafe(waiter, Effect.succeed(message.message));
+      if (waiter) {
+        pending.delete(message.requestId);
+        Deferred.doneUnsafe(waiter, Effect.succeed(message.message));
+      }
+      void Effect.runPromise(
+        ipc
+          .sendContact({
+            channel: "pi-subagents",
+            type: "parent_reply_ack",
+            requestId: message.ackId,
+            ok: waiter !== undefined,
+          })
+          .pipe(Effect.ignore),
+      );
       return;
     }
     if (message.type === "peer_notice") {

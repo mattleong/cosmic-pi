@@ -130,8 +130,27 @@ export function cosmicUiWithDependencies(
     );
     return read === undefined ? lastCompleteTotals : rememberTotals(read);
   };
+  interface WorkingTimerActivation {
+    readonly token: number;
+    readonly timer: WorkingTimerServiceContract;
+  }
+  interface WorkingRunOwner {
+    readonly token: number;
+    readonly generation: number;
+  }
+  const sameWorkingOwner = (
+    left: WorkingRunOwner | undefined,
+    right: WorkingRunOwner | undefined,
+  ): boolean =>
+    left !== undefined &&
+    right !== undefined &&
+    left.token === right.token &&
+    left.generation === right.generation;
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
-  let workingTimer: WorkingTimerServiceContract | undefined;
+  let workingTimer: WorkingTimerActivation | undefined;
+  let workingRunGeneration = 0;
+  let activeAgentOwner: WorkingRunOwner | undefined;
+  let promptOwner: WorkingRunOwner | undefined;
   let subscriptions: Array<() => void> = [];
 
   const config = (): ResolvedCosmicUiConfig =>
@@ -167,19 +186,24 @@ export function cosmicUiWithDependencies(
         yield* FooterRegistryService;
         return yield* WorkingTimerService;
       }),
-    onActivated: ({ ctx, context, signal }, _token, activeWorkingTimer) => {
+    onActivated: ({ ctx, context, signal }, token, activeWorkingTimer) => {
       currentContext = context;
-      workingTimer = activeWorkingTimer;
+      workingTimer = { token, timer: activeWorkingTimer };
       footerInstallation.update(ctx);
       slot.fork(
         CosmicUiService.use((service) => service.refreshAll(true)),
         signal,
       );
     },
-    onDeactivated: ({ context, releaseSignal }) => {
+    onDeactivated: ({ context, releaseSignal }, token) => {
       releaseSignal();
       if (currentContext === context) currentContext = undefined;
-      workingTimer = undefined;
+      if (workingTimer?.token === token) workingTimer = undefined;
+      if (activeAgentOwner?.token === token || promptOwner?.token === token) {
+        workingRunGeneration += 1;
+        activeAgentOwner = undefined;
+        promptOwner = undefined;
+      }
       footerInstallation.uninstall();
     },
     onStartFailure: ({ ctx, releaseSignal }) => {
@@ -198,7 +222,7 @@ export function cosmicUiWithDependencies(
     return abort ? result.finally(abort.release) : result;
   };
   const forkFrom = <A, E>(
-    effect: Effect.Effect<A, E, CosmicUiService | FooterRegistryService | WorkingTimerService>,
+    effect: Effect.Effect<A, E, CosmicUiService | FooterRegistryService>,
     ctx: ExtensionContext,
   ) => {
     const abort = snapshotHostAbortSignal(callbacks, () => ctx.signal);
@@ -206,6 +230,26 @@ export function cosmicUiWithDependencies(
     const fiber = slot.fork(guarded, abort?.signal);
     if (!fiber) abort?.release();
     return fiber;
+  };
+  const admitWorkingTimer = (
+    operation: (timer: WorkingTimerServiceContract) => Effect.Effect<void>,
+    expectedToken?: number,
+  ): number | undefined => {
+    const activation = workingTimer;
+    if (
+      activation === undefined ||
+      (expectedToken !== undefined && activation.token !== expectedToken) ||
+      !slot.isCurrent(activation.token)
+    )
+      return undefined;
+    const fiber = slot.fork(
+      Effect.suspend(() =>
+        workingTimer === activation && slot.isCurrent(activation.token)
+          ? operation(activation.timer)
+          : Effect.void,
+      ),
+    );
+    return fiber === undefined ? undefined : activation.token;
   };
 
   footerInstallation = createFooterInstallation({
@@ -398,9 +442,14 @@ export function cosmicUiWithDependencies(
   pi.on("model_select", invalidateContextUsage);
   pi.on("tool_execution_start", (_event, ctx) => {
     updateContext(ctx);
-    forkFrom(
-      WorkingTimerService.use((timer) => timer.pauseOutput),
-      ctx,
+    const owner = activeAgentOwner;
+    if (!owner) return;
+    admitWorkingTimer(
+      (timer) =>
+        Effect.suspend(() =>
+          sameWorkingOwner(activeAgentOwner, owner) ? timer.pauseOutput : Effect.void,
+        ),
+      owner.token,
     );
   });
   pi.on("tool_execution_end", (event, ctx) => {
@@ -419,16 +468,65 @@ export function cosmicUiWithDependencies(
   pi.on("session_info_changed", renderUpdatedContext);
   pi.on("agent_start", (event, ctx) => {
     invalidateContextUsage(event, ctx);
-    forkFrom(
-      WorkingTimerService.use((timer) => timer.start),
-      ctx,
+    const activation = workingTimer;
+    if (!activation || !slot.isCurrent(activation.token)) return;
+    if (activeAgentOwner?.token === activation.token) return;
+    const owner = { token: activation.token, generation: ++workingRunGeneration };
+    activeAgentOwner = owner;
+    promptOwner = undefined;
+    admitWorkingTimer(
+      (timer) =>
+        Effect.suspend(() =>
+          sameWorkingOwner(activeAgentOwner, owner) ? timer.start : Effect.void,
+        ),
+      owner.token,
     );
   });
   pi.on("agent_end", (_event, ctx) => {
     updateContext(ctx);
-    forkFrom(
-      WorkingTimerService.use((timer) => timer.stop),
-      ctx,
+    const owner = activeAgentOwner;
+    if (!owner) return;
+    activeAgentOwner = undefined;
+    if (sameWorkingOwner(promptOwner, owner)) promptOwner = undefined;
+    const settledGeneration = ++workingRunGeneration;
+    admitWorkingTimer(
+      (timer) =>
+        Effect.suspend(() =>
+          activeAgentOwner === undefined && workingRunGeneration === settledGeneration
+            ? timer.stop
+            : Effect.void,
+        ),
+      owner.token,
+    );
+  });
+  pi.on("ui_prompt_start", (_event, ctx) => {
+    const owner = activeAgentOwner;
+    if (!owner || promptOwner !== undefined) return;
+    updateContext(ctx);
+    promptOwner = owner;
+    admitWorkingTimer(
+      (timer) =>
+        Effect.suspend(() =>
+          sameWorkingOwner(activeAgentOwner, owner) && sameWorkingOwner(promptOwner, owner)
+            ? timer.waitForUser
+            : Effect.void,
+        ),
+      owner.token,
+    );
+  });
+  pi.on("ui_prompt_end", (_event, ctx) => {
+    const owner = promptOwner;
+    promptOwner = undefined;
+    if (!owner || !sameWorkingOwner(activeAgentOwner, owner)) return;
+    updateContext(ctx);
+    admitWorkingTimer(
+      (timer) =>
+        Effect.suspend(() =>
+          sameWorkingOwner(activeAgentOwner, owner) && promptOwner === undefined
+            ? timer.resumeFromUser
+            : Effect.void,
+        ),
+      owner.token,
     );
   });
   pi.on("message_start", invalidateContextUsage);
@@ -442,16 +540,32 @@ export function cosmicUiWithDependencies(
         update.type !== "toolcall_delta")
     )
       return;
-    workingTimer?.noteOutputCharacters(update.delta.length);
+    const activation = workingTimer;
+    if (
+      activation === undefined ||
+      activation.token !== activeAgentOwner?.token ||
+      sameWorkingOwner(promptOwner, activeAgentOwner) ||
+      !slot.isCurrent(activation.token)
+    )
+      return;
+    activation.timer.noteOutputCharacters(update.delta.length);
   });
   pi.on("message_end", (event, ctx) => {
     invalidateContextUsage(event, ctx);
-    forkFrom(
-      WorkingTimerService.use((timer) => timer.pauseOutput),
-      ctx,
+    const owner = activeAgentOwner;
+    if (!owner) return;
+    admitWorkingTimer(
+      (timer) =>
+        Effect.suspend(() =>
+          sameWorkingOwner(activeAgentOwner, owner) ? timer.pauseOutput : Effect.void,
+        ),
+      owner.token,
     );
   });
   pi.on("session_shutdown", () => {
+    workingRunGeneration += 1;
+    activeAgentOwner = undefined;
+    promptOwner = undefined;
     disposeSubscriptions();
     footerInstallation.uninstall();
     return Promise.all([slot.shutdown(), shutdownTickers()]).then(() => {

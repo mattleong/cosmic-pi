@@ -99,11 +99,29 @@ const ProxyCancelSchema = Schema.Struct({
   type: Schema.Literal("proxy_cancel"),
   requestId: ProtocolIdSchema,
 });
+const ProxyNotificationAckSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("proxy_notification_ack"),
+  requestId: ProtocolIdSchema,
+  ok: Schema.Boolean,
+});
+const TurnInputBarrierAckSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("turn_input_barrier_ack"),
+  requestId: ProtocolIdSchema,
+});
 const ParentReplySchema = Schema.Struct({
   channel: Schema.Literal("pi-subagents"),
   type: Schema.Literal("parent_reply"),
   requestId: ProtocolIdSchema,
+  ackId: ProtocolIdSchema,
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
+});
+const ParentReplyAckSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("parent_reply_ack"),
+  requestId: ProtocolIdSchema,
+  ok: Schema.Boolean,
 });
 const PeerNoticeSchema = Schema.Struct({
   channel: Schema.Literal("pi-subagents"),
@@ -120,19 +138,29 @@ const ProxyResponseSchema = Schema.Struct({
 const ProxyNotificationSchema = Schema.Struct({
   channel: Schema.Literal("pi-subagents"),
   type: Schema.Literal("proxy_notification"),
+  requestId: ProtocolIdSchema,
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
+});
+const TurnInputBarrierSchema = Schema.Struct({
+  channel: Schema.Literal("pi-subagents"),
+  type: Schema.Literal("turn_input_barrier"),
+  requestId: ProtocolIdSchema,
 });
 export const LocalPiContactSchema = Schema.Union([
   ContactParentSchema,
   ContactCancelSchema,
+  ParentReplyAckSchema,
   ProxyRequestSchema,
   ProxyCancelSchema,
+  ProxyNotificationAckSchema,
+  TurnInputBarrierAckSchema,
 ]);
 export const LocalPiParentControlSchema = Schema.Union([
   ParentReplySchema,
   PeerNoticeSchema,
   ProxyResponseSchema,
   ProxyNotificationSchema,
+  TurnInputBarrierSchema,
 ]);
 export type LocalPiContact = Schema.Schema.Type<typeof LocalPiContactSchema>;
 export type LocalPiParentControl = Schema.Schema.Type<typeof LocalPiParentControlSchema>;
@@ -280,6 +308,7 @@ type CorrelatedRpcCommand =
   | { readonly type: "get_state"; readonly id?: string | undefined }
   | { readonly type: "prompt"; readonly id?: string | undefined; readonly message: string }
   | { readonly type: "steer"; readonly id?: string | undefined; readonly message: string }
+  | { readonly type: "clear_queue"; readonly id?: string | undefined }
   | { readonly type: "abort"; readonly id?: string | undefined }
   | { readonly type: "set_session_name"; readonly id?: string | undefined; readonly name: string };
 

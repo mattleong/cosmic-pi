@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
   type ChildLaunchRequest,
@@ -63,6 +64,8 @@ const rpcOutcomeCode = (command: string): string => {
   switch (command) {
     case "steer":
       return "guidance_outcome_uncertain";
+    case "clear_queue":
+      return "clear_queue_outcome_uncertain";
     case "abort":
       return "interrupt_outcome_uncertain";
     case "set_session_name":
@@ -77,7 +80,10 @@ const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): Sub
     ? new SubagentProcessError({
         operation: `execute ${command.type} in`,
         code: rpcOutcomeCode(command.type),
-        message: `${error.message} Inspect subagent status before retrying ${command.type}.`,
+        message:
+          command.type === "clear_queue"
+            ? `${error.message} Queue clearing could not be confirmed; abort was not sent. Inspect subagent status before retrying interrupt.`
+            : `${error.message} Inspect subagent status before retrying ${command.type}.`,
       })
     : error;
 
@@ -184,13 +190,21 @@ interface PendingRpcResponse {
   readonly deferred: Deferred.Deferred<RpcResponse, SubagentError>;
 }
 
+interface PendingIpcAck {
+  readonly deferred: Deferred.Deferred<void, SubagentError>;
+}
+
 const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   child: ChildProcessHandle,
 ) {
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
+  const turnControl = yield* Semaphore.make(1);
+  const withTurnControl = turnControl.withPermits(1);
   const responses = new Map<string, PendingRpcResponse>();
+  const ipcAcks = new Map<string, PendingIpcAck>();
   const rawEventOwners = new Map<BackendEvent, ChildWireEvent>();
   let nextRpcId = 1;
+  let nextIpcAckId = 1;
   let assignmentEpoch = 0;
 
   const acknowledgeRaw = (event: ChildWireEvent) => child.acknowledge?.(event);
@@ -216,6 +230,9 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     for (const response of responses.values())
       Deferred.doneUnsafe(response.deferred, Effect.fail(error));
     responses.clear();
+    for (const pending of ipcAcks.values())
+      Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
+    ipcAcks.clear();
   };
 
   const rpc = <A extends RpcCommand>(command: A): Effect.Effect<RpcResponse, SubagentError> =>
@@ -242,7 +259,10 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
                   new SubagentProcessError({
                     operation: "await RPC response from",
                     code: rpcOutcomeCode(command.type),
-                    message: `Subagent did not answer ${command.type}; the command may already have applied. Inspect subagent status before retrying.`,
+                    message:
+                      command.type === "clear_queue"
+                        ? "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent. Inspect subagent status before retrying interrupt."
+                        : `Subagent did not answer ${command.type}; the command may already have applied. Inspect subagent status before retrying.`,
                   }),
                 ),
           ),
@@ -253,7 +273,9 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
                   new SubagentProcessError({
                     operation: `execute ${command.type} in`,
                     message: sanitizeDiagnosticText(
-                      response.error ?? `Subagent RPC command ${command.type} failed.`,
+                      command.type === "clear_queue"
+                        ? `${response.error ?? "Subagent RPC command clear_queue failed."} Abort was not sent.`
+                        : (response.error ?? `Subagent RPC command ${command.type} failed.`),
                       MAX_ERROR_CHARS,
                     ),
                   }),
@@ -289,6 +311,38 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       return offerEvent(event, { type: "protocol_error", message: event.message });
     if (event.type === "parent_contact") {
       const contact = event.value;
+      if (
+        contact.type === "parent_reply_ack" ||
+        contact.type === "proxy_notification_ack" ||
+        contact.type === "turn_input_barrier_ack"
+      ) {
+        const pending = ipcAcks.get(contact.requestId);
+        if (pending)
+          Deferred.doneUnsafe(
+            pending.deferred,
+            contact.type === "turn_input_barrier_ack" || contact.ok
+              ? Effect.void
+              : Effect.fail(
+                  new SubagentProcessError(
+                    contact.type === "parent_reply_ack"
+                      ? {
+                          operation: "deliver parent reply to",
+                          code: "question_ownership_mismatch",
+                          message:
+                            "Subagent no longer owns the parent question, so the reply was not applied.",
+                        }
+                      : {
+                          operation: "deliver descendant notification to",
+                          code: "transport_not_sent",
+                          message:
+                            "Subagent rejected a descendant notification before queueing it.",
+                        },
+                  ),
+                ),
+          );
+        acknowledgeRaw(event);
+        return Effect.void;
+      }
       const normalized: BackendEvent = (() => {
         switch (contact.type) {
           case "contact_parent":
@@ -443,24 +497,152 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
           Effect.asVoid,
         );
       }),
-    steer: (message: string) => rpc({ type: "steer", message }).pipe(Effect.asVoid),
-    interrupt: rpc({ type: "abort" }).pipe(Effect.asVoid),
+    steer: (message: string) =>
+      withTurnControl(rpc({ type: "steer", message }).pipe(Effect.asVoid)),
+    interrupt: withTurnControl(
+      Effect.gen(function* () {
+        yield* Effect.acquireUseRelease(
+          Effect.sync(() => {
+            const requestId = `turn-input-barrier-${nextIpcAckId++}`;
+            const deferred = Deferred.makeUnsafe<void, SubagentError>();
+            ipcAcks.set(requestId, { deferred });
+            return { requestId, deferred };
+          }),
+          ({ requestId, deferred }) =>
+            Effect.raceFirst(
+              child
+                .sendContactControl({
+                  channel: "pi-subagents",
+                  type: "turn_input_barrier",
+                  requestId,
+                })
+                .pipe(
+                  Effect.catch((error) =>
+                    isOutcomeUncertain(error) ? Effect.void : Effect.fail(error),
+                  ),
+                  Effect.andThen(Deferred.await(deferred)),
+                ),
+              Deferred.await(deferred),
+            ).pipe(
+              Effect.timeoutOption(RPC_TIMEOUT),
+              Effect.flatMap((outcome) =>
+                Option.isSome(outcome)
+                  ? Effect.void
+                  : Effect.fail(
+                      new SubagentProcessError({
+                        operation: "await turn-input barrier acknowledgment from",
+                        code: "turn_input_barrier_unconfirmed",
+                        message:
+                          "Subagent did not acknowledge the turn-input barrier; queue clearing and abort were not sent.",
+                      }),
+                    ),
+              ),
+            ),
+          ({ requestId }) =>
+            Effect.sync(() => {
+              ipcAcks.delete(requestId);
+            }),
+        );
+        yield* rpc({ type: "clear_queue" });
+        yield* rpc({ type: "abort" });
+      }),
+    ),
     renameDisplay: (name: string) => rpc({ type: "set_session_name", name }).pipe(Effect.asVoid),
     reply: (requestId: string, message: string) =>
-      child.sendContactControl({
-        channel: "pi-subagents",
-        type: "parent_reply",
-        requestId,
-        message,
-      }),
+      withTurnControl(
+        Effect.acquireUseRelease(
+          Effect.sync(() => {
+            const ackId = `parent-reply-${nextIpcAckId++}`;
+            const deferred = Deferred.makeUnsafe<void, SubagentError>();
+            ipcAcks.set(ackId, { deferred });
+            return { ackId, deferred };
+          }),
+          ({ ackId, deferred }) =>
+            Effect.raceFirst(
+              child
+                .sendContactControl({
+                  channel: "pi-subagents",
+                  type: "parent_reply",
+                  requestId,
+                  ackId,
+                  message,
+                })
+                .pipe(
+                  Effect.catch((error) =>
+                    isOutcomeUncertain(error) ? Effect.void : Effect.fail(error),
+                  ),
+                  Effect.andThen(Deferred.await(deferred)),
+                ),
+              Deferred.await(deferred),
+            ).pipe(
+              Effect.timeoutOption(RPC_TIMEOUT),
+              Effect.flatMap((outcome) =>
+                Option.isSome(outcome)
+                  ? Effect.void
+                  : Effect.fail(
+                      new SubagentProcessError({
+                        operation: "await parent reply acknowledgment from",
+                        code: "reply_outcome_uncertain",
+                        message:
+                          "Subagent did not acknowledge the parent reply; it may already have applied.",
+                      }),
+                    ),
+              ),
+            ),
+          ({ ackId }) =>
+            Effect.sync(() => {
+              ipcAcks.delete(ackId);
+            }),
+        ),
+      ),
     notifyPeers: (message: string) =>
       child.sendContactControl({ channel: "pi-subagents", type: "peer_notice", message }),
     deliverNotification: (message: string) =>
-      child.sendContactControl({
-        channel: "pi-subagents",
-        type: "proxy_notification",
-        message,
-      }),
+      withTurnControl(
+        Effect.acquireUseRelease(
+          Effect.sync(() => {
+            const requestId = `notification-${nextIpcAckId++}`;
+            const deferred = Deferred.makeUnsafe<void, SubagentError>();
+            ipcAcks.set(requestId, { deferred });
+            return { requestId, deferred };
+          }),
+          ({ requestId, deferred }) =>
+            Effect.raceFirst(
+              child
+                .sendContactControl({
+                  channel: "pi-subagents",
+                  type: "proxy_notification",
+                  requestId,
+                  message,
+                })
+                .pipe(
+                  Effect.catch((error) =>
+                    isOutcomeUncertain(error) ? Effect.void : Effect.fail(error),
+                  ),
+                  Effect.andThen(Deferred.await(deferred)),
+                ),
+              Deferred.await(deferred),
+            ).pipe(
+              Effect.timeoutOption(RPC_TIMEOUT),
+              Effect.flatMap((outcome) =>
+                Option.isSome(outcome)
+                  ? Effect.void
+                  : Effect.fail(
+                      new SubagentProcessError({
+                        operation: "await descendant notification acknowledgment from",
+                        code: "transport_outcome_uncertain",
+                        message:
+                          "Subagent did not acknowledge the descendant notification; it may already be queued.",
+                      }),
+                    ),
+              ),
+            ),
+          ({ requestId }) =>
+            Effect.sync(() => {
+              ipcAcks.delete(requestId);
+            }),
+        ),
+      ),
   };
 
   return {

@@ -47,9 +47,14 @@ export interface FakeChildControl {
   readonly failNext: (type: RpcCommand["type"], error: string) => void;
   readonly failTransportNext: (type: RpcCommand["type"], code: string) => void;
   readonly failNextIpc: (code: string) => void;
+  readonly rejectNextParentReply: () => void;
   readonly dropNext: (type: RpcCommand["type"]) => void;
   readonly gateNextSend: (type: RpcCommand["type"], gate: Deferred.Deferred<void, never>) => void;
   readonly gateNextIpc: (gate: Deferred.Deferred<void, never>) => void;
+  readonly gateNextIpcType: (
+    type: LocalPiParentControl["type"],
+    gate: Deferred.Deferred<void, never>,
+  ) => void;
   readonly gateRelease: (gate: Deferred.Deferred<void, never>) => void;
   readonly beforeNextResponse: (type: RpcCommand["type"], value: RpcWireValue) => void;
   readonly offer: (value: RpcWireValue) => void;
@@ -130,6 +135,7 @@ export function fakeChildLayer(
             .filter((failure) => failure.spawnIndex === spawnIndex)
             .map(({ type, code }) => ({ type, code }));
           const ipcFailures: string[] = [];
+          let rejectedParentReplies = 0;
           if (remainingInitialStateDrops > 0) remainingInitialStateDrops -= 1;
           const sendGates: Array<{
             readonly type: RpcCommand["type"];
@@ -137,7 +143,10 @@ export function fakeChildLayer(
           }> = (options.initialSendGates ?? [])
             .filter((candidate) => candidate.spawnIndex === spawnIndex)
             .map(({ type, gate }) => ({ type, gate }));
-          const ipcGates: Array<Deferred.Deferred<void, never>> = [];
+          const ipcGates: Array<{
+            readonly type: LocalPiParentControl["type"] | undefined;
+            readonly gate: Deferred.Deferred<void, never>;
+          }> = [];
           const beforeResponses: Array<{
             readonly type: RpcCommand["type"];
             readonly value: unknown;
@@ -151,6 +160,9 @@ export function fakeChildLayer(
           const failNextIpc = (code: string) => {
             ipcFailures.push(code);
           };
+          const rejectNextParentReply = () => {
+            rejectedParentReplies += 1;
+          };
           const dropNext = (type: RpcCommand["type"]) => {
             dropped.push(type);
           };
@@ -158,7 +170,13 @@ export function fakeChildLayer(
             sendGates.push({ type, gate });
           };
           const gateNextIpc = (gate: Deferred.Deferred<void, never>) => {
-            ipcGates.push(gate);
+            ipcGates.push({ type: undefined, gate });
+          };
+          const gateNextIpcType = (
+            type: LocalPiParentControl["type"],
+            gate: Deferred.Deferred<void, never>,
+          ) => {
+            ipcGates.push({ type, gate });
           };
           const gateRelease = (gate: Deferred.Deferred<void, never>) => {
             releaseGate = gate;
@@ -280,8 +298,34 @@ export function fakeChildLayer(
                     code: ipcFailure,
                     message: "Fixture IPC outcome.",
                   });
-                const gate = ipcGates.shift();
+                const gateIndex = ipcGates.findIndex(
+                  (candidate) => candidate.type === undefined || candidate.type === message.type,
+                );
+                const gate = gateIndex >= 0 ? ipcGates.splice(gateIndex, 1)[0]?.gate : undefined;
                 if (gate) yield* Deferred.await(gate);
+                if (message.type === "parent_reply") {
+                  const ok = rejectedParentReplies === 0;
+                  if (!ok) rejectedParentReplies -= 1;
+                  offerIpc({
+                    channel: "pi-subagents",
+                    type: "parent_reply_ack",
+                    requestId: message.ackId,
+                    ok,
+                  });
+                }
+                if (message.type === "proxy_notification")
+                  offerIpc({
+                    channel: "pi-subagents",
+                    type: "proxy_notification_ack",
+                    requestId: message.requestId,
+                    ok: true,
+                  });
+                if (message.type === "turn_input_barrier")
+                  offerIpc({
+                    channel: "pi-subagents",
+                    type: "turn_input_barrier_ack",
+                    requestId: message.requestId,
+                  });
               }),
             terminate: (mode) => Effect.sync(() => void terminations.push(mode)),
           };
@@ -294,9 +338,11 @@ export function fakeChildLayer(
             failNext,
             failTransportNext,
             failNextIpc,
+            rejectNextParentReply,
             dropNext,
             gateNextSend,
             gateNextIpc,
+            gateNextIpcType,
             gateRelease,
             beforeNextResponse,
             offer,

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core";
@@ -168,6 +170,123 @@ describe("root-owned subagent run tree", () => {
       }),
     ).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
+
+  it.effect("does not duplicate an outcome after notification acknowledgment uncertainty", () => {
+    const notifications: import("../../src/boundary/host-notifier.ts").SubagentNotification[] = [];
+    const fake = fakeChildLayer();
+    const layer = serviceLayer({
+      notify: (notification) => {
+        notifications.push(notification);
+        return notification.type === "completed"
+          ? {
+              deliveredCompletionKeys: notification.runs.map(
+                (run) => `${run.id}:${run.generation}`,
+              ),
+            }
+          : { actionAccepted: true };
+      },
+    }).pipe(Layer.provide(fake.layer));
+    return SubagentService.use((service) =>
+      Effect.gen(function* () {
+        const parent = yield* service.start(request({ name: "uncertain-parent" }));
+        const child = yield* service.startSessionOwnedFrom(
+          parent.id,
+          request({ name: "uncertain-child" }),
+        );
+        const deliveryGate = yield* Deferred.make<void>();
+        fake.controls[0]?.gateNextIpcType("proxy_notification", deliveryGate);
+        fake.controls[1]?.offer({ type: "agent_settled" });
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(
+          () =>
+            fake.controls[0]?.ipc.some(
+              (message) =>
+                message.type === "proxy_notification" && message.message.includes(child.id),
+            ) === true,
+        );
+
+        yield* TestClock.adjust("10 seconds");
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("30 seconds");
+        expect(notifications).toEqual([]);
+        expect(
+          fake.controls[0]?.ipc.filter((message) => message.type === "proxy_notification"),
+        ).toHaveLength(1);
+      }),
+    ).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect(
+    "drains admitted descendant notifications before pausing and skips paused ancestors",
+    () => {
+      const notifications: import("../../src/boundary/host-notifier.ts").SubagentNotification[] =
+        [];
+      const fake = fakeChildLayer();
+      const layer = serviceLayer({
+        notify: (notification) => {
+          notifications.push(notification);
+          return notification.type === "completed"
+            ? {
+                deliveredCompletionKeys: notification.runs.map(
+                  (run) => `${run.id}:${run.generation}`,
+                ),
+              }
+            : { actionAccepted: true };
+        },
+      }).pipe(Layer.provide(fake.layer));
+      return SubagentService.use((service) =>
+        Effect.gen(function* () {
+          const parent = yield* service.start(request({ name: "pausing-parent" }));
+          const first = yield* service.startSessionOwnedFrom(
+            parent.id,
+            request({ name: "first-child" }),
+          );
+          const second = yield* service.startSessionOwnedFrom(
+            parent.id,
+            request({ name: "second-child" }),
+          );
+          const deliveryGate = yield* Deferred.make<void>();
+          fake.controls[0]?.gateNextIpcType("proxy_notification", deliveryGate);
+          fake.controls[1]?.offer({ type: "agent_settled" });
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(
+            () =>
+              fake.controls[0]?.ipc.some(
+                (message) =>
+                  message.type === "proxy_notification" && message.message.includes(first.id),
+              ) === true,
+          );
+
+          const interrupting = yield* service
+            .interrupt(parent.id)
+            .pipe(Effect.forkScoped({ startImmediately: true }));
+          yield* Effect.yieldNow;
+          expect(fake.controls[0]?.commands.map((command) => command.type)).not.toContain(
+            "clear_queue",
+          );
+
+          yield* Deferred.succeed(deliveryGate, undefined);
+          expect((yield* Fiber.join(interrupting)).state).toBe("paused");
+          expect(fake.controls[0]?.commands.map((command) => command.type)).toContain(
+            "clear_queue",
+          );
+
+          fake.controls[2]?.offer({ type: "agent_settled" });
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(() =>
+            notifications.some(
+              (notification) =>
+                notification.type === "completed" &&
+                notification.runs.some((run) => run.id === second.id),
+            ),
+          );
+          expect(
+            fake.controls[0]?.ipc.filter((message) => message.type === "proxy_notification"),
+          ).toHaveLength(1);
+        }),
+      ).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
 
   it.effect("stops an explicit subtree leaf-first", () => {
     const releaseOrder: number[] = [];

@@ -45,6 +45,11 @@ export interface RunControlDependencies {
     warning: string,
   ) => Effect.Effect<void>;
   readonly interruptBackend: (record: RunRecord) => Effect.Effect<void, SubagentError>;
+  /** Called only while the service state lock is held. */
+  readonly admitTurnInput: (record: RunRecord) => void;
+  readonly releaseTurnInput: (record: RunRecord) => Effect.Effect<void>;
+  /** Called only while the service state lock is held. */
+  readonly claimTurnInputDrain: (record: RunRecord, drained: Deferred.Deferred<void>) => void;
   readonly renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
   readonly publish: Effect.Effect<void>;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
@@ -68,6 +73,9 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     allocateAssignmentAttemptToken,
     retainUncertainAssignment,
     interruptBackend,
+    admitTurnInput,
+    releaseTurnInput,
+    claimTurnInputDrain,
     renameBackend,
     publish,
     sendPeerNotices,
@@ -221,6 +229,11 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   code: "run_not_running",
                   message: `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
                 });
+              if (selected.pauseRequested)
+                return yield* new InvalidSubagentRequestError({
+                  code: "interrupt_in_flight",
+                  message: `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
+                });
               return { record: selected, retained: false as const };
             }),
           );
@@ -262,14 +275,35 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       if (selected.retained) return yield* Fiber.join(selected.commitFiber);
 
       const record = selected.record;
-      yield* steerBackend(record, normalized).pipe(
-        Effect.tapError((error) =>
-          error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
-            ? retainControlWarning(record, error.message)
-            : Effect.void,
+      return yield* Effect.acquireUseRelease(
+        withLock(
+          Effect.gen(function* () {
+            const current = yield* requireRecord(id);
+            if (current !== record || current.view.state !== "running")
+              return yield* new InvalidSubagentRequestError({
+                code: "run_not_running",
+                message: `Subagent ${id} is ${current.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
+              });
+            if (current.pauseRequested)
+              return yield* new InvalidSubagentRequestError({
+                code: "interrupt_in_flight",
+                message: `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
+              });
+            admitTurnInput(current);
+            return current;
+          }),
         ),
+        (admitted) =>
+          steerBackend(admitted, normalized).pipe(
+            Effect.tapError((error) =>
+              error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
+                ? retainControlWarning(admitted, error.message)
+                : Effect.void,
+            ),
+            Effect.andThen(finalizeGuidance(admitted, normalized, false)),
+          ),
+        releaseTurnInput,
       );
-      return yield* finalizeGuidance(record, normalized, false);
     });
 
   const reply = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
@@ -291,12 +325,18 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                 code: "reply_in_flight",
                 message: `Subagent ${id} already has a reply in flight.`,
               });
+            if (record.pauseRequested)
+              return yield* new InvalidSubagentRequestError({
+                code: "interrupt_in_flight",
+                message: `Subagent ${id} already has an interrupt pending and cannot receive a parent reply.`,
+              });
             const process = record.process;
             if (!process)
               return yield* new SubagentProcessError({
                 operation: "reply to",
                 message: `Subagent ${id} has no active process.`,
               });
+            admitTurnInput(record);
             record.replyPendingRequestId = question.requestId;
             record.view = { ...record.view, state: "running", question: undefined };
             yield* publish;
@@ -347,16 +387,9 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           // Roll back only when the transport itself reports a definite failure.
           Effect.tapError((error) => {
             if (error._tag === "SubagentProcessError" && error.code === "reply_outcome_uncertain")
-              return retainControlWarning(claimed.record, error.message).pipe(
-                Effect.andThen(
-                  withLock(
-                    Effect.sync(() => {
-                      if (claimed.record.replyPendingRequestId === claimed.question.requestId)
-                        claimed.record.replyPendingRequestId = undefined;
-                    }),
-                  ),
-                ),
-              );
+              // Keep the exact request claim until a distinct question or lifecycle event resolves
+              // the ambiguity, so a duplicate contact cannot invite a second reply.
+              return retainControlWarning(claimed.record, error.message);
             if (
               error._tag === "SubagentProcessError" &&
               (error.code === "question_transport_closed" ||
@@ -386,6 +419,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               }),
             );
           }),
+          Effect.ensuring(releaseTurnInput(claimed.record)),
         );
         const commitFiber = yield* commit.pipe(
           Effect.forkIn(ownerScope, { startImmediately: true }),
@@ -398,6 +432,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const pauseOutcome = yield* Deferred.make<SubagentRunView, SubagentError>();
+        const turnInputsDrained = yield* Deferred.make<void>();
         const record = yield* withLock(
           Effect.gen(function* () {
             const selected = yield* requireRecord(id);
@@ -414,10 +449,12 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               });
             selected.pauseRequested = true;
             selected.pauseOutcome = pauseOutcome;
+            claimTurnInputDrain(selected, turnInputsDrained);
             return selected;
           }),
         );
         const commit = Effect.gen(function* () {
+          yield* Deferred.await(turnInputsDrained);
           yield* Effect.raceFirst(
             interruptBackend(record),
             Deferred.await(pauseOutcome).pipe(Effect.asVoid),

@@ -953,6 +953,97 @@ describe("Cosmic UI extension", () => {
     }),
   );
 
+  it.effect("treats duplicate agent starts as idempotent while a prompt is open", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      yield* emit(h, "agent_start");
+      yield* emit(h, "ui_prompt_start");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for user");
+
+      yield* emit(h, "agent_start");
+      yield* emit(h, "ui_prompt_end");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
+      yield* emit(h, "agent_end");
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("a prompt end admitted by a replaced session cannot resume the new timer", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      yield* emit(h, "agent_start");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
+      yield* emit(h, "ui_prompt_start");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for user");
+
+      // SAFETY: This locally constructed test fixture satisfies the event context used here.
+      const replacement = {
+        ...h.ctx,
+        sessionManager: {
+          ...h.ctx.sessionManager,
+          getEntries: vi.fn(() => []),
+          getCwd: vi.fn(() => "/tmp/replacement"),
+          getSessionName: vi.fn(() => "replacement"),
+          getLeafId: vi.fn(() => "replacement-leaf"),
+        },
+      } as ExtensionContext;
+      yield* emit(h, "session_start", {}, replacement);
+      yield* emit(h, "agent_start", {}, replacement);
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
+
+      const writesBeforeStaleEnd = h.setWorkingMessage.mock.calls.length;
+      yield* emit(h, "ui_prompt_end", {}, replacement);
+      yield* Effect.yieldNow;
+      expect(h.setWorkingMessage).toHaveBeenCalledTimes(writesBeforeStaleEnd);
+
+      yield* emit(h, "ui_prompt_start", {}, replacement);
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for user");
+      yield* emit(h, "ui_prompt_end", {}, replacement);
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("agent settlement clears prompt ownership before the next run", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      yield* emit(h, "agent_start");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
+      yield* emit(h, "ui_prompt_start");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for user");
+
+      yield* emit(h, "agent_end");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === undefined);
+      yield* emit(h, "agent_start");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
+
+      const writesBeforeStaleEnd = h.setWorkingMessage.mock.calls.length;
+      yield* emit(h, "ui_prompt_end");
+      yield* Effect.yieldNow;
+      expect(h.setWorkingMessage).toHaveBeenCalledTimes(writesBeforeStaleEnd);
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("a prompt followed immediately by agent settlement leaves the host cleared", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      yield* emit(h, "agent_start");
+      yield* emit(h, "ui_prompt_start");
+      yield* emit(h, "agent_end");
+
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === undefined);
+      const writesAfterSettlement = h.setWorkingMessage.mock.calls.length;
+      yield* Effect.yieldNow;
+      expect(h.setWorkingMessage).toHaveBeenCalledTimes(writesAfterSettlement);
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
   it.effect("session abort interrupts startup probes without waiting for them", () =>
     Effect.gen(function* () {
       const h = harness();

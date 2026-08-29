@@ -79,6 +79,7 @@ const parentReply = (message = "Proceed."): LocalPiParentControl => ({
   channel: "pi-subagents",
   type: "parent_reply",
   requestId: "question-1",
+  ackId: "reply-ack-1",
   message,
 });
 
@@ -105,17 +106,53 @@ describe("Local Pi IPC boundary", () => {
     });
 
     fake.emitMessage(progressContact());
+    fake.emitMessage({
+      channel: "pi-subagents",
+      type: "proxy_notification_ack",
+      requestId: "notification-1",
+      ok: true,
+    });
+    fake.emitMessage({
+      channel: "pi-subagents",
+      type: "turn_input_barrier_ack",
+      requestId: "barrier-1",
+    });
+    fake.emitMessage({
+      channel: "pi-subagents",
+      type: "parent_reply_ack",
+      requestId: "reply-1",
+      ok: true,
+    });
     fake.emitMessage({ type: "agent_settled" });
     fake.disconnect();
 
-    expect(contacts).toEqual([progressContact()]);
+    expect(contacts).toEqual([
+      progressContact(),
+      {
+        channel: "pi-subagents",
+        type: "proxy_notification_ack",
+        requestId: "notification-1",
+        ok: true,
+      },
+      {
+        channel: "pi-subagents",
+        type: "turn_input_barrier_ack",
+        requestId: "barrier-1",
+      },
+      {
+        channel: "pi-subagents",
+        type: "parent_reply_ack",
+        requestId: "reply-1",
+        ok: true,
+      },
+    ]);
     expect(protocolErrors).toEqual(["Subagent emitted an invalid parent-contact event."]);
     expect(disconnects).toBe(1);
 
     channel.detach();
     fake.emitMessage(progressContact("late"));
     fake.disconnect();
-    expect(contacts).toHaveLength(1);
+    expect(contacts).toHaveLength(4);
     expect(disconnects).toBe(1);
   });
 
@@ -245,6 +282,7 @@ describe("Local Pi IPC boundary", () => {
         channel: "pi-subagents",
         type: "parent_reply",
         requestId: question.requestId,
+        ackId: "reply-live-ack",
         message: "reply-live",
       });
 

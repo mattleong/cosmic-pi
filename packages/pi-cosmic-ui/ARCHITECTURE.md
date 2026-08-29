@@ -7,13 +7,13 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 ## Host surface
 
 - Settings command registered by `src/settings/controller.ts`.
-- Events: session lifecycle, turns, model/thinking/session changes, messages, and file-mutating tool completion.
+- Events: session lifecycle, turns, model/thinking/session changes, messages, blocking UI prompt spans, and file-mutating tool completion.
 - Cross-extension events: host query plus footer upsert/remove/invalidate.
 
 ## Source map
 
 - `src/extension.ts` is the thin Pi package entrypoint.
-- `src/application.ts` owns Pi registration, protocol subscriptions, and session orchestration. Startup hands the working-timer service to the current activation through the runtime slot; failed or superseded startup cannot publish it.
+- `src/application.ts` owns Pi registration, protocol subscriptions, and session orchestration. Startup hands the working-timer service and runtime token to the current activation through the runtime slot. Effectful timer and prompt transitions check that token and the current agent generation when admitted and again when they run; duplicate starts for one active generation are idempotent. Synchronous output ingress checks the current token before updating the timer's bounded accumulator. Failed, superseded, or stale admitted work cannot update a replacement timer.
 - `src/layer.ts` composes config, repository probe, footer registry, protocol host, and host-callback Layers.
 - `src/footer/installation.ts` owns the synchronous footer installation generation and disposal state machine.
 - `src/footer/component.ts` assembles synchronous footer lines and surfaces from detached projections.
@@ -29,7 +29,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/manager/settings-surface.ts` exports the pure shared `ctx.ui.custom` settings-surface composition `createSettingsListSurface` (`pi-cosmic-ui/manager/settings-surface`): caller header chrome + `SettingsList` + `VimSettingsAdapter` (shared hint renderer) + `settingsSurfaceBridge`, returning the composed focusable surface plus the list for optimistic value updates. Host-boundary safety remains injected and caller-owned (guarded `requestRender`, `bridge.invoke`, change/cancel callbacks); the module absorbs no `safeHostUi`/`recoverHostUi`/`hostQuery` ownership.
 - `src/config/store.ts` is the single configuration persistence door (`CosmicUiConfigStore` Context service plus the resolve/update helpers). It builds on pi-cosmic-core's `makeScopedConfigStore` instantiated without a default document, so resolution never seeds or writes a config file; only explicit footer updates create documents. `src/config/schema.ts` owns the persisted shape, defaults, and fresh resolved fallback factory.
 - `src/probe/`, `src/settings/`, and `src/working/` are vertical application features. Repository probe policy stays under `src/probe/`.
-- `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
+- `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row. One `SynchronizedRef` serializes work time, output time, and prompt waiting. The outer prompt span publishes `Waiting for user`, freezes both clocks, drops output deltas, and restores the prior elapsed value when Pi reports the prompt end. The ticker retries transient host-write defects without advancing either clock during a prompt. Duplicate prompt starts and ends do nothing.
 - `src/boundary/` isolates Pi I/O and hostile synchronous host callbacks, including working-message updates. `host-status.ts` publishes sanitized compact status through TUI and RPC hosts while keeping Cosmic footer declaration and placement TUI-only. `host-exec.ts` is the sole Git/`gh` process boundary; it disables optional locks for every background Git probe while leaving `gh` arguments unchanged.
   `host-ui-ticker-pool.ts` multiplexes equal-cadence animation consumers onto one Effect fiber per
   cadence. One pool-level Effect `Scope` owns those fibers, so synchronous unsubscribe can interrupt
@@ -45,12 +45,15 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 
 `CosmicUiService` publishes frozen config, totals, git, and pull-request projections. `FooterRegistryService` owns contribution lifetimes. The footer renderer reads projections synchronously and does not run Effect.
 
+During an active agent run, the application records the runtime token that accepted `ui_prompt_start`. The matching outer `ui_prompt_end` resumes only that timer. Agent settlement, runtime deactivation, and shutdown clear the owner, so a late end cannot resume a replacement timer. Pi's prompt events carry neither a prompt ID nor a session ID. If a delayed stale start first reaches Cosmic UI after session replacement while its agent is active, the application cannot distinguish it from a replacement-session prompt and attributes it to the current runtime.
+
 ## Lifecycle
 
 ```text
 protocol events -> bounded buffer -> scoped protocol host -> registry snapshot
 session_start -> application -> layer -> services -> footer installation
 agent_start + streaming deltas -> working timer/rate estimate -> Pi working message -> agent_end reset
+ui_prompt_start -> freeze timer/rate + Waiting for user -> ui_prompt_end -> resume prior elapsed
 Pi changes -> service refresh -> frozen projection -> render request
 session_shutdown -> subscriptions/footer/runtime disposed -> shared ticker pool rotated and awaited
 ```

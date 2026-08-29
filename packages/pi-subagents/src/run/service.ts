@@ -23,6 +23,7 @@ import type {
 import { WriterLeaseService } from "../boundary/writer-lease.ts";
 import {
   type InvalidSubagentRequestError,
+  isOutcomeUncertain,
   type SubagentError,
   SubagentNotFoundError,
   SubagentRuntimeClosedError,
@@ -246,6 +247,32 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const withLock = lock.withPermits(1);
   const withCompletionGate = completionGate.withPermits(1);
+  interface TurnInputAdmission {
+    count: number;
+    drained: Deferred.Deferred<void> | undefined;
+  }
+  const turnInputs = new WeakMap<RunRecord, TurnInputAdmission>();
+  const admitTurnInput = (record: RunRecord): void => {
+    const admission = turnInputs.get(record);
+    if (admission) admission.count += 1;
+    else turnInputs.set(record, { count: 1, drained: undefined });
+  };
+  const releaseTurnInput = (record: RunRecord): Effect.Effect<void> =>
+    withLock(
+      Effect.sync(() => {
+        const admission = turnInputs.get(record);
+        if (!admission) return;
+        admission.count -= 1;
+        if (admission.count > 0) return;
+        turnInputs.delete(record);
+        if (admission.drained) Deferred.doneUnsafe(admission.drained, Effect.void);
+      }),
+    );
+  const claimTurnInputDrain = (record: RunRecord, drained: Deferred.Deferred<void>): void => {
+    const admission = turnInputs.get(record);
+    if (admission && admission.count > 0) admission.drained = drained;
+    else Deferred.doneUnsafe(drained, Effect.void);
+  };
   const allocateClaimToken = (): string => `completion-${runtimeNamespace}-${nextClaimOrdinal++}`;
   const allocateRetryClaimToken = (): string =>
     `retry-${runtimeNamespace}-${nextRetryClaimOrdinal++}`;
@@ -329,6 +356,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         if (
           parent.view.runtime === "pi" &&
           isActiveRunState(parent.view.state) &&
+          parent.view.state !== "paused" &&
+          !parent.pauseRequested &&
           parent.process?.controls.deliverNotification
         )
           candidates.push(parent);
@@ -336,10 +365,36 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       }
       const attempt = (index: number): Effect.Effect<boolean> => {
         const candidate = candidates[index];
-        if (!candidate?.process?.controls.deliverNotification) return Effect.succeed(false);
-        return candidate.process.controls.deliverNotification(message).pipe(
-          Effect.as(true),
-          Effect.catch(() => attempt(index + 1)),
+        if (!candidate) return Effect.succeed(false);
+        return Effect.acquireUseRelease(
+          withLock(
+            Effect.sync(() => {
+              const current = records.get(candidate.view.id);
+              const deliverNotification = current?.process?.controls.deliverNotification;
+              if (
+                current !== candidate ||
+                !deliverNotification ||
+                !isActiveRunState(current.view.state) ||
+                current.view.state === "paused" ||
+                current.pauseRequested
+              )
+                return undefined;
+              admitTurnInput(current);
+              return { record: current, deliverNotification };
+            }),
+          ),
+          (admission) =>
+            admission
+              ? admission.deliverNotification(message).pipe(Effect.as(true))
+              : Effect.succeed(false),
+          (admission) => (admission ? releaseTurnInput(admission.record) : Effect.void),
+        ).pipe(
+          Effect.flatMap((delivered) => (delivered ? Effect.succeed(true) : attempt(index + 1))),
+          Effect.catch((error) =>
+            error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
+              ? Effect.succeed(true)
+              : attempt(index + 1),
+          ),
         );
       };
       return attempt(0);
@@ -705,6 +760,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateAssignmentAttemptToken,
     retainUncertainAssignment,
     interruptBackend,
+    admitTurnInput,
+    releaseTurnInput,
+    claimTurnInputDrain,
     renameBackend,
     publish,
     sendPeerNotices,

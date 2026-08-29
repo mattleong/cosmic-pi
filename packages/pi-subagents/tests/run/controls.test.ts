@@ -103,6 +103,7 @@ describe("SubagentService", () => {
         channel: "pi-subagents",
         type: "parent_reply",
         requestId: "question-1",
+        ackId: expect.any(String),
         message: "Use the public API.",
       });
 
@@ -112,6 +113,177 @@ describe("SubagentService", () => {
           (message) => message.type === "peer_notice" && message.message.includes("reader-two"),
         ),
       ).toBe(true);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect(
+    "finishes admitted guidance before queue clearing and rejects guidance admitted after interrupt",
+    () => {
+      const fake = fakeChildLayer();
+      const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ name: "steer-before-interrupt" }));
+        const steerGate = yield* Deferred.make<void>();
+        const clearGate = yield* Deferred.make<void>();
+        fake.controls[0]?.gateNextSend("steer", steerGate);
+        fake.controls[0]?.gateNextSend("clear_queue", clearGate);
+
+        const sending = yield* service
+          .send(run.id, "Finish this guidance.")
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* yieldUntil(
+          () => fake.controls[0]?.commands.some((command) => command.type === "steer") ?? false,
+        );
+        const sendingSecond = yield* service
+          .send(run.id, "Finish the other admitted guidance too.")
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Effect.yieldNow;
+        const interrupting = yield* service
+          .interrupt(run.id)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+
+        const rejected = yield* service.send(run.id, "Too late.").pipe(Effect.flip);
+        expect(rejected).toMatchObject({
+          _tag: "InvalidSubagentRequestError",
+          code: "interrupt_in_flight",
+        });
+        expect(fake.controls[0]?.commands.map((command) => command.type)).not.toContain(
+          "clear_queue",
+        );
+
+        yield* Deferred.succeed(steerGate, undefined);
+        expect((yield* Fiber.join(sending)).state).toBe("running");
+        expect((yield* Fiber.join(sendingSecond)).state).toBe("running");
+        yield* yieldUntil(
+          () =>
+            fake.controls[0]?.commands.some((command) => command.type === "clear_queue") ?? false,
+        );
+        expect(
+          fake.controls[0]?.commands.flatMap((command) =>
+            command.type === "steer" || command.type === "clear_queue" || command.type === "abort"
+              ? [command.type]
+              : [],
+          ),
+        ).toEqual(["steer", "steer", "clear_queue"]);
+
+        yield* Deferred.succeed(clearGate, undefined);
+        expect((yield* Fiber.join(interrupting)).state).toBe("paused");
+        expect(
+          fake.controls[0]?.commands.flatMap((command) =>
+            command.type === "steer" || command.type === "clear_queue" || command.type === "abort"
+              ? [command.type]
+              : [],
+          ),
+        ).toEqual(["steer", "steer", "clear_queue", "abort"]);
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
+
+  it.effect(
+    "suppresses queue clearing when the child cannot confirm its turn-input barrier",
+    () => {
+      const fake = fakeChildLayer();
+      const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ name: "barrier-timeout" }));
+        const barrierGate = yield* Deferred.make<void>();
+        fake.controls[0]?.gateNextIpcType("turn_input_barrier", barrierGate);
+
+        const interrupting = yield* service
+          .interrupt(run.id)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* yieldUntil(
+          () =>
+            fake.controls[0]?.ipc.some((message) => message.type === "turn_input_barrier") ?? false,
+        );
+        yield* TestClock.adjust("10 seconds");
+        const failure = yield* Fiber.join(interrupting).pipe(Effect.flip);
+
+        expect(failure).toMatchObject({
+          _tag: "SubagentProcessError",
+          code: "turn_input_barrier_unconfirmed",
+          operation: "await turn-input barrier acknowledgment from",
+        });
+        expect(fake.controls[0]?.commands.map((command) => command.type)).not.toContain(
+          "clear_queue",
+        );
+        expect((yield* service.status(run.id)).state).toBe("running");
+        expect((yield* service.send(run.id, "Continue after barrier uncertainty.")).state).toBe(
+          "running",
+        );
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
+
+  it.effect("suppresses abort when queue clearing fails", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "clear-failure" }));
+      fake.controls[0]?.failNext("clear_queue", "Fixture clear failure.");
+
+      const failure = yield* service.interrupt(run.id).pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "SubagentProcessError",
+        operation: "execute clear_queue in",
+      });
+      expect(failure.message).toContain("Abort was not sent");
+      expect(fake.controls[0]?.commands.map((command) => command.type)).not.toContain("abort");
+      expect((yield* service.status(run.id)).state).toBe("running");
+      expect((yield* service.send(run.id, "Continue after the failed interrupt.")).state).toBe(
+        "running",
+      );
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("maps uncertain queue clearing distinctly and suppresses abort", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const transportRun = yield* service.start(request({ name: "clear-transport-uncertain" }));
+      fake.controls[0]?.failTransportNext("clear_queue", "transport_outcome_uncertain");
+
+      const transportFailure = yield* service.interrupt(transportRun.id).pipe(Effect.flip);
+      expect(transportFailure).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "clear_queue_outcome_uncertain",
+        operation: "execute clear_queue in",
+      });
+      expect(transportFailure.message).toContain("abort was not sent");
+      expect(fake.controls[0]?.commands.map((command) => command.type)).not.toContain("abort");
+      expect((yield* service.status(transportRun.id)).state).toBe("running");
+      expect(
+        (yield* service.send(transportRun.id, "Continue after uncertain clearing.")).state,
+      ).toBe("running");
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      expect((yield* service.status(transportRun.id)).state).toBe("completed");
+
+      const timeoutRun = yield* service.start(request({ name: "clear-timeout-uncertain" }));
+      fake.controls[1]?.dropNext("clear_queue");
+      const timingOut = yield* service
+        .interrupt(timeoutRun.id)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(
+        () => fake.controls[1]?.commands.some((command) => command.type === "clear_queue") ?? false,
+      );
+      yield* TestClock.adjust("10 seconds");
+      const timeoutFailure = yield* Fiber.join(timingOut).pipe(Effect.flip);
+      expect(timeoutFailure).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "clear_queue_outcome_uncertain",
+        operation: "await RPC response from",
+      });
+      expect(timeoutFailure.message).toContain("abort was not sent");
+      expect(fake.controls[1]?.commands.map((command) => command.type)).not.toContain("abort");
+      expect((yield* service.status(timeoutRun.id)).state).toBe("running");
+      expect((yield* service.send(timeoutRun.id, "Continue after the timeout.")).state).toBe(
+        "running",
+      );
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
@@ -125,10 +297,10 @@ describe("SubagentService", () => {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "cancelled-interrupt-request" }));
       const gate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextSend("abort", gate);
+      fake.controls[0]?.gateNextSend("clear_queue", gate);
       const interrupting = yield* service.interrupt(run.id).pipe(Effect.forkScoped);
       yield* yieldUntil(
-        () => fake.controls[0]?.commands.some((command) => command.type === "abort") ?? false,
+        () => fake.controls[0]?.commands.some((command) => command.type === "clear_queue") ?? false,
       );
       yield* Fiber.interrupt(interrupting);
       yield* Deferred.succeed(gate, undefined);
@@ -220,7 +392,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
-  it.effect("keeps a timed-out interrupt pending until child settlement", () => {
+  it.effect("keeps a timed-out abort pending after confirmed queue clearing", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
     const layer = serviceLayer({
@@ -234,6 +406,11 @@ describe("SubagentService", () => {
       yield* yieldUntil(
         () => fake.controls[0]?.commands.some((command) => command.type === "abort") ?? false,
       );
+      expect(
+        fake.controls[0]?.commands.flatMap((command) =>
+          command.type === "clear_queue" || command.type === "abort" ? [command.type] : [],
+        ),
+      ).toEqual(["clear_queue", "abort"]);
       yield* TestClock.adjust("10 seconds");
       const error = yield* Fiber.join(interrupting).pipe(Effect.flip);
       expect(error).toMatchObject({
@@ -348,6 +525,45 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect("rejects a parent reply after interruption claims the waiting run", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "pause-before-reply" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "question-before-pause",
+        kind: "question",
+        message: "Should I continue?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      const barrierGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextIpcType("turn_input_barrier", barrierGate);
+      const interrupting = yield* service
+        .interrupt(run.id)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(
+        () =>
+          fake.controls[0]?.ipc.some((message) => message.type === "turn_input_barrier") ?? false,
+      );
+
+      const rejected = yield* service.reply(run.id, "Continue.").pipe(Effect.flip);
+      expect(rejected).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "interrupt_in_flight",
+      });
+
+      yield* Deferred.succeed(barrierGate, undefined);
+      expect((yield* Fiber.join(interrupting)).state).toBe("paused");
+      expect(fake.controls[0]?.ipc.some((message) => message.type === "parent_reply")).toBe(false);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("claims a parent question before sending its reply", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
@@ -378,6 +594,7 @@ describe("SubagentService", () => {
           channel: "pi-subagents",
           type: "parent_reply",
           requestId: "question-1",
+          ackId: expect.any(String),
           message: "First",
         },
       ]);
@@ -509,7 +726,12 @@ describe("SubagentService", () => {
         });
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
         fake.controls[0]?.failNextIpc("transport_outcome_uncertain");
-        const replyFailure = yield* service.reply(run.id, "Yes.").pipe(Effect.flip);
+        const replying = yield* service.reply(run.id, "Yes.").pipe(Effect.forkScoped);
+        yield* yieldUntil(
+          () => fake.controls[0]?.ipc.some((message) => message.type === "parent_reply") ?? false,
+        );
+        yield* TestClock.adjust("10 seconds");
+        const replyFailure = yield* Fiber.join(replying).pipe(Effect.flip);
         expect(replyFailure).toMatchObject({ code: "reply_outcome_uncertain" });
         expect((yield* service.status(run.id)).state).toBe("running");
         expect(
@@ -522,7 +744,7 @@ describe("SubagentService", () => {
           kind: "question",
           message: "Duplicate request ID",
         });
-        yield* Effect.yieldNow;
+        for (let index = 0; index < 5; index += 1) yield* Effect.yieldNow;
         expect((yield* service.status(run.id)).state).toBe("running");
 
         fake.controls[0]?.offerIpc({
@@ -532,14 +754,10 @@ describe("SubagentService", () => {
           kind: "question",
           message: "A distinct next request?",
         });
-        yield* yieldUntil(() =>
-          Boolean(
-            projections
-              .at(-1)
-              ?.runs.some(
-                (candidate) => candidate.id === run.id && candidate.state === "waiting_for_parent",
-              ),
-          ),
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.question
+              ?.requestId === "authoritative-new-question",
         );
         expect((yield* service.reply(run.id, "Resolved.")).state).toBe("running");
 
@@ -599,15 +817,51 @@ describe("SubagentService", () => {
           channel: "pi-subagents",
           type: "parent_reply",
           requestId: "unsent-question",
+          ackId: expect.any(String),
           message: "Proceed.",
         },
         {
           channel: "pi-subagents",
           type: "parent_reply",
           requestId: "unsent-question",
+          ackId: expect.any(String),
           message: "Proceed.",
         },
       ]);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("does not record success when the child no longer owns the parent question", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "expired-reply" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "expired-question",
+        kind: "question",
+        message: "Is this question still active?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      fake.controls[0]?.rejectNextParentReply();
+
+      const failure = yield* service.reply(run.id, "Too late.").pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "question_ownership_mismatch",
+      });
+      const status = yield* service.status(run.id);
+      expect(status.state).toBe("running");
+      expect(
+        status.sessionEvents.some(
+          (event) => event.type === "notice" && event.text.includes("Reply: Too late."),
+        ),
+      ).toBe(false);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
@@ -629,7 +883,12 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
       fake.controls[0]?.failNextIpc("transport_outcome_uncertain");
-      expect(yield* service.reply(run.id, "Finish.").pipe(Effect.flip)).toMatchObject({
+      const replying = yield* service.reply(run.id, "Finish.").pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.ipc.some((message) => message.type === "parent_reply") ?? false,
+      );
+      yield* TestClock.adjust("10 seconds");
+      expect(yield* Fiber.join(replying).pipe(Effect.flip)).toMatchObject({
         code: "reply_outcome_uncertain",
       });
       fake.controls[0]?.offer({
