@@ -146,7 +146,7 @@ export interface SubagentRunView {
   readonly writeClaims?: ReadonlyArray<string> | undefined;
   readonly writeAudit?: SubagentWriteAudit | undefined;
   readonly writeAdmissionPaused?: boolean | undefined;
-  readonly fastMode: boolean;
+  readonly openaiFastMode: boolean;
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly closeOnReport: boolean;
@@ -235,7 +235,7 @@ export interface StartSubagentRequest {
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly fastMode: boolean;
+  readonly openaiFastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;

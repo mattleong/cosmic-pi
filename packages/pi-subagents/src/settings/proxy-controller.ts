@@ -23,7 +23,7 @@ const cardView = (card: SubagentRunCard): SubagentRunView => {
     state: card.state,
     context: card.context,
     writeIntent: card.writeIntent,
-    fastMode: card.fastMode,
+    openaiFastMode: card.openaiFastMode,
     host: card.host,
     runtime: card.runtime,
     closeOnReport: card.closeOnReport,

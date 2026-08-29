@@ -59,7 +59,7 @@ export const launch = (id: string): BackendLaunchRequest => ({
   cwd: "/project",
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   model: "openai-codex/gpt-5.6-sol",
   effort: "xhigh",
   activeTools: [],

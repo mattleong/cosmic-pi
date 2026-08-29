@@ -165,7 +165,8 @@ export function makeInMemoryDocuments(
           current === undefined ? ({} as JsonObject) : yield* cloneDocument("read", path, current);
         const atomicCurrent = beforeNextUpdate ? beforeNextUpdate(isolated) : isolated;
         beforeNextUpdate = undefined;
-        const { value, document, afterCommit } = yield* modify(atomicCurrent);
+        const { value, document, write, afterCommit } = yield* modify(atomicCurrent);
+        if (write === false) return value;
         const stored = yield* cloneDocument("update", path, document);
         const gate = nextUpdateGate;
         nextUpdateGate = undefined;

@@ -42,12 +42,12 @@ const runProfile = (run: SubagentRunCard): string =>
   sanitizeTerminalLine(run.profile ?? "generalist");
 
 const runRoute = (run: SubagentRunCard): string =>
-  `${runProfile(run)} → ${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.fastMode ? " ⚡" : ""}`;
+  `${runProfile(run)} → ${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.openaiFastMode ? " ⚡" : ""}`;
 
 const themedRunRoute = (run: SubagentRunCard, theme: Theme): string =>
   `${theme.fg("muted", runProfile(run))} ${theme.fg("dim", "→")} ${theme.fg(
     "toolOutput",
-    `${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.fastMode ? " ⚡" : ""}`,
+    `${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.openaiFastMode ? " ⚡" : ""}`,
   )}`;
 
 const renderRouteRail = (run: SubagentRunCard, width: number, theme: Theme): string[] => {

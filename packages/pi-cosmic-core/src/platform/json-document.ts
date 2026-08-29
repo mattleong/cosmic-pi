@@ -26,6 +26,8 @@ export const isJsonObject = <Value>(value: Value): value is Value & JsonObject =
 export interface JsonDocumentModification<A, AfterCommitR = never> {
   readonly value: A;
   readonly document: JsonObject;
+  /** False returns from the locked transaction without writing or running `afterCommit`. */
+  readonly write?: boolean | undefined;
   /** Runs exactly once after the document rename, inside the same uninterruptible commit region. */
   readonly afterCommit?: Effect.Effect<void, never, AfterCommitR>;
 }
@@ -199,7 +201,8 @@ export class JsonDocumentStore extends Context.Service<
           Effect.gen(function* () {
             const current = (yield* readObjectUnlocked(path)) ?? {};
             const modification = yield* modify(current);
-            yield* writeObjectUnlocked(path, modification.document, modification.afterCommit);
+            if (modification.write !== false)
+              yield* writeObjectUnlocked(path, modification.document, modification.afterCommit);
             return modification.value;
           }),
         );

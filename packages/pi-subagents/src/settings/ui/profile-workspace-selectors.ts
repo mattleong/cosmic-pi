@@ -44,7 +44,9 @@ const currentFieldValue = (
   candidate: ProfileCandidate,
   field: Exclude<ProfileWorkspaceField, "model">,
 ): string =>
-  field === "closeOnReport" || field === "fastMode" ? String(candidate[field]) : candidate[field];
+  field === "closeOnReport" || field === "openaiFastMode"
+    ? String(candidate[field])
+    : candidate[field];
 
 export const makeCandidateFieldSelector = (
   options: CandidateFieldSelectorOptions,

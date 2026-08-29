@@ -41,8 +41,8 @@ const fixture = () =>
       }));
   });
 
-describe("SubagentConfigStore v5", () => {
-  effectTest("loads v4 routes with v5 nesting defaults and project inheritance", function* () {
+describe("SubagentConfigStore v6", () => {
+  effectTest("loads v4 routes with v6 nesting defaults and project inheritance", function* () {
     const paths = yield* step(fixture);
     yield* step(() =>
       writeFile(
@@ -76,7 +76,6 @@ describe("SubagentConfigStore v5", () => {
           effort: "high",
           context: "fresh",
           writeIntent: "writer",
-          fastMode: false,
           closeOnReport: true,
         },
       ],
@@ -120,6 +119,30 @@ describe("SubagentConfigStore v5", () => {
       withStore((store) => store.load(paths.cwd, paths.agentDirectory, false)),
     );
     expect(config.projectConfigExists).toBe(false);
+  });
+
+  effectTest("keeps invalid defaults loadable for fail-closed settings repair", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({
+          version: 6,
+          defaultProfileSet: "missing",
+          profileSets: { valid: { profiles: {} } },
+        }),
+      ),
+    );
+    const config = yield* step(() =>
+      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+    );
+    expect(config.currentProfileSet).toEqual({
+      scope: "global",
+      name: "missing",
+      invalid: true,
+    });
+    expect(config.profileSources.generalist).toBe("global-invalid");
+    expect(config.diagnostics).toContain("global.defaultProfileSet");
   });
 
   effectTest("fails closed on invalid JSON", function* () {
@@ -179,6 +202,7 @@ describe("SubagentConfigStore v5", () => {
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {
           scope: "global",
+          profileSet: "default",
           profile: "scout",
           route: {
             host: "local",
@@ -187,7 +211,7 @@ describe("SubagentConfigStore v5", () => {
             effort: "low",
             context: "fresh",
             writeIntent: "read-only",
-            fastMode: true,
+            openaiFastMode: true,
             closeOnReport: true,
           },
           expectedExists: true,
@@ -197,28 +221,28 @@ describe("SubagentConfigStore v5", () => {
       ),
     );
     const saved = JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")));
-    expect(saved.profiles.reviewer).toEqual(initial.profiles.reviewer);
-    expect(saved.profiles.scout).toEqual({
+    expect(saved).toMatchObject({ version: 6, defaultProfileSet: "default" });
+    expect(saved.profileSets.default.profiles.reviewer).toEqual(initial.profiles.reviewer);
+    expect(saved.profileSets.default.profiles.scout).toEqual({
       host: "local",
       runtime: "pi",
       model: "openai-codex/gpt-5.6-sol",
       effort: "low",
       context: "fresh",
       writeIntent: "read-only",
-      fastMode: true,
+      openaiFastMode: true,
       closeOnReport: true,
     });
     const refreshed = yield* step(() =>
       withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
     );
-    expect(refreshed.config.profiles.scout.candidates[0]?.fastMode).toBe(true);
+    expect(refreshed.config.profiles.scout.candidates[0]?.openaiFastMode).toBe(true);
   });
 
-  effectTest("rejects unknown profile aliases and configuration fields", function* () {
+  effectTest("rejects unknown root fields and fails unknown profile aliases closed", function* () {
     const paths = yield* step(fixture);
     for (const document of [
       { version: 4, defaultProfile: "generalist" },
-      { version: 4, profiles: { delegate: "disabled" } },
       { version: 4, customFutureField: true },
       { version: 4, nesting: { maxDirectChildren: 32, maxDepth: 8 } },
     ]) {
@@ -229,6 +253,17 @@ describe("SubagentConfigStore v5", () => {
         ).rejects.toMatchObject({ operation: "activate", path: paths.globalPath }),
       );
     }
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({ version: 4, profiles: { delegate: "disabled" } }),
+      ),
+    );
+    const config = yield* step(() =>
+      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+    );
+    expect(config.profileSources.generalist).toBe("builtin");
+    expect(config.diagnostics).toContain("global.profiles.<unknown>");
   });
 
   effectTest("removes inherited routes and rejects untrusted project writes", function* () {
@@ -257,6 +292,7 @@ describe("SubagentConfigStore v5", () => {
         withStore((store) =>
           store.patchProfile(paths.cwd, paths.agentDirectory, {
             scope: "project",
+            profileSet: "default",
             profile: "worker",
             expectedExists: true,
             expectedDocument: inspection.projectDocument,
@@ -269,6 +305,7 @@ describe("SubagentConfigStore v5", () => {
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {
           scope: "project",
+          profileSet: "default",
           profile: "worker",
           expectedExists: true,
           expectedDocument: inspection.projectDocument,
@@ -277,8 +314,8 @@ describe("SubagentConfigStore v5", () => {
       ),
     );
     const saved = JSON.parse(yield* step(() => readFile(paths.projectPath, "utf8")));
-    expect(saved.profiles.worker).toBeUndefined();
-    expect(saved.profiles.reviewer).toBe("disabled");
+    expect(saved.profileSets.default.profiles.worker).toBeUndefined();
+    expect(saved.profileSets.default.profiles.reviewer).toBe("disabled");
   });
 
   effectTest("treats removal patches with no backing file or key as true no-ops", function* () {
@@ -287,6 +324,7 @@ describe("SubagentConfigStore v5", () => {
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {
           scope: "project",
+          profileSet: "default",
           profile: "worker",
           expectedExists: false,
           projectTrusted: true,
@@ -309,6 +347,7 @@ describe("SubagentConfigStore v5", () => {
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {
           scope: "global",
+          profileSet: "default",
           profile: "worker",
           expectedExists: false,
           projectTrusted: true,
@@ -327,6 +366,29 @@ describe("SubagentConfigStore v5", () => {
     yield* step(() =>
       expect(readFile(paths.globalPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" }),
     );
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({
+          version: 6,
+          defaultProfileSet: "default",
+          profileSets: { default: { profiles: { worker: "disabled" } } },
+        }),
+      ),
+    );
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.patchProfile(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profileSet: "default",
+            profile: "worker",
+            expectedExists: false,
+            projectTrusted: true,
+          }),
+        ),
+      ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+    );
   });
 
   effectTest(
@@ -342,6 +404,7 @@ describe("SubagentConfigStore v5", () => {
         withStore((store) =>
           store.patchProfile(paths.cwd, paths.agentDirectory, {
             scope: "global",
+            profileSet: "default",
             profile: "worker",
             expectedExists: true,
             expectedDocument: inspection.globalDocument,
@@ -350,7 +413,7 @@ describe("SubagentConfigStore v5", () => {
         ),
       );
       expect(JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")))).toEqual({
-        version: 5,
+        version: 6,
       });
     },
   );
@@ -422,9 +485,262 @@ describe("SubagentConfigStore v5", () => {
         ),
       );
       expect(JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")))).toEqual({
-        version: 5,
+        version: 6,
         nesting: { maxDirectChildren: 7, maxDepth: 5 },
       });
+    },
+  );
+
+  effectTest("migrates valid legacy routes and refuses malformed legacy data", function* () {
+    const paths = yield* step(fixture);
+    const legacy = {
+      version: 5,
+      profiles: {
+        generalist: {
+          host: "local",
+          runtime: "pi",
+          model: "openai-codex/gpt-5.6-sol",
+          effort: "high",
+          context: "fresh",
+          writeIntent: "read-only",
+          fastMode: true,
+          closeOnReport: true,
+        },
+      },
+      nesting: { maxDirectChildren: 10, maxDepth: 4 },
+    };
+    yield* step(() => writeFile(paths.globalPath, JSON.stringify(legacy)));
+    let inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+    );
+    yield* step(() =>
+      withStore((store) =>
+        store.patchNesting(paths.cwd, paths.agentDirectory, {
+          scope: "global",
+          nesting: legacy.nesting,
+          expectedExists: true,
+          expectedDocument: inspection.globalDocument,
+          projectTrusted: true,
+        }),
+      ),
+    );
+    const migrated = JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")));
+    expect(migrated).toMatchObject({
+      version: 6,
+      defaultProfileSet: "default",
+      nesting: legacy.nesting,
+      profileSets: {
+        default: {
+          profiles: { generalist: { openaiFastMode: true } },
+        },
+      },
+    });
+    expect(JSON.stringify(migrated)).not.toContain("fastMode");
+
+    for (const invalid of [
+      { version: 4, profiles: [] },
+      {
+        version: 4,
+        profiles: {
+          scout: {
+            host: "local",
+            runtime: "pi",
+            model: "bare",
+            effort: "high",
+            context: "fresh",
+            writeIntent: "read-only",
+          },
+        },
+      },
+    ]) {
+      yield* step(() => writeFile(paths.globalPath, JSON.stringify(invalid)));
+      inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      yield* step(() =>
+        expect(
+          withStore((store) =>
+            store.patchProfile(paths.cwd, paths.agentDirectory, {
+              scope: "global",
+              profileSet: "default",
+              profile: "worker",
+              route: "disabled",
+              expectedExists: true,
+              expectedDocument: inspection.globalDocument,
+              projectTrusted: true,
+            }),
+          ),
+        ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+      );
+      expect(JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")))).toEqual(invalid);
+    }
+  });
+
+  effectTest("keeps structurally invalid sets repairable but refuses to select them", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({
+          version: 6,
+          profileSets: {
+            broken: { profiles: {}, extra: true },
+            valid: { profiles: {} },
+          },
+        }),
+      ),
+    );
+    let inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+    );
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.patchDefaultProfileSet(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            defaultProfileSet: "broken",
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+    );
+    yield* step(() =>
+      withStore((store) =>
+        store.deleteProfileSet(paths.cwd, paths.agentDirectory, {
+          scope: "global",
+          profileSet: "broken",
+          expectedExists: true,
+          expectedDocument: inspection.globalDocument,
+          projectTrusted: true,
+        }),
+      ),
+    );
+    inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+    );
+    expect(inspection.global.invalidProfileSets).toEqual([]);
+    expect(inspection.global.file.profileSets).toHaveProperty("valid");
+  });
+
+  effectTest(
+    "creates, copies, renames, selects, and safely deletes scope-local sets",
+    function* () {
+      const paths = yield* step(fixture);
+      yield* step(() =>
+        withStore((store) =>
+          store.createProfileSet(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profileSet: "alpha",
+            expectedExists: false,
+            projectTrusted: true,
+          }),
+        ),
+      );
+      let inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      yield* step(() =>
+        withStore((store) =>
+          store.patchProfile(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profileSet: "alpha",
+            profile: "generalist",
+            route: {
+              host: "local",
+              runtime: "pi",
+              model: "openai-codex/gpt-5.6-sol",
+              effort: "high",
+              context: "fresh",
+              writeIntent: "read-only",
+              openaiFastMode: true,
+            },
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      );
+      inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      yield* step(() =>
+        withStore((store) =>
+          store.copyProfileSet(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            sourceProfileSet: "alpha",
+            profileSet: "copy",
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      );
+      inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      yield* step(() =>
+        withStore((store) =>
+          store.patchDefaultProfileSet(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            defaultProfileSet: "alpha",
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      );
+      inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      yield* step(() =>
+        withStore((store) =>
+          store.renameProfileSet(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profileSet: "alpha",
+            nextProfileSet: "main",
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      );
+      inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      yield* step(() =>
+        expect(
+          withStore((store) =>
+            store.deleteProfileSet(paths.cwd, paths.agentDirectory, {
+              scope: "global",
+              profileSet: "main",
+              expectedExists: true,
+              expectedDocument: inspection.globalDocument,
+              projectTrusted: true,
+            }),
+          ),
+        ).rejects.toMatchObject({ operation: "update" }),
+      );
+      yield* step(() =>
+        withStore((store) =>
+          store.deleteProfileSet(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profileSet: "copy",
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      );
+      const saved = JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")));
+      expect(saved.defaultProfileSet).toBe("main");
+      expect(saved.profileSets.alpha).toBeUndefined();
+      expect(saved.profileSets.copy).toBeUndefined();
+      expect(saved.profileSets.main.profiles.generalist).toMatchObject({
+        openaiFastMode: true,
+      });
+      expect(JSON.stringify(saved)).not.toContain("fastMode");
     },
   );
 
@@ -474,6 +790,7 @@ describe("SubagentConfigStore v5", () => {
         withStore((store) =>
           store.patchProfile(paths.cwd, paths.agentDirectory, {
             scope: "global",
+            profileSet: "default",
             profile: "worker",
             route: "disabled",
             expectedExists: true,
@@ -489,6 +806,20 @@ describe("SubagentConfigStore v5", () => {
           store.patchNesting(paths.cwd, paths.agentDirectory, {
             scope: "global",
             nesting: { maxDirectChildren: 8, maxDepth: 4 },
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+    );
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.patchProfile(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profileSet: "default",
+            profile: "worker",
             expectedExists: true,
             expectedDocument: inspection.globalDocument,
             projectTrusted: true,

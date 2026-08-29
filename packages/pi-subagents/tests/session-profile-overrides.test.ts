@@ -18,7 +18,7 @@ const candidate = (model: string): ProfileCandidate => ({
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   closeOnReport: true,
 });
 
@@ -27,17 +27,19 @@ const route = (model: string): ProfileRoute => ({ candidates: [candidate(model)]
 const baseConfig = () => {
   const global = decodeSubagentConfig(
     {
-      version: 5,
+      version: 6,
+      defaultProfileSet: "default",
+      profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
       nesting: { maxDirectChildren: 20, maxDepth: 6 },
-      profiles: { reviewer: candidate("openai/global") },
     },
     "global",
   );
   const project = decodeSubagentConfig(
     {
-      version: 5,
+      version: 6,
+      defaultProfileSet: "default",
+      profileSets: { default: { profiles: { reviewer: candidate("openai/project") } } },
       nesting: { maxDirectChildren: 4, maxDepth: 2 },
-      profiles: { reviewer: candidate("openai/project") },
     },
     "project",
   );
@@ -200,7 +202,7 @@ describe("session profile overrides", () => {
         { ...original, effort: "off" },
         { ...original, context: "fork" },
         { ...original, writeIntent: "writer" },
-        { ...original, fastMode: true },
+        { ...original, openaiFastMode: true },
         { ...original, closeOnReport: false },
       ];
 

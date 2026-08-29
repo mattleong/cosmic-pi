@@ -28,7 +28,7 @@ describe("subagent tool", () => {
         state: "completed",
         endedAt: 2,
         profile: "reviewer",
-        fastMode: true,
+        openaiFastMode: true,
         selection: {
           source: "profile-candidate",
           candidateIndex: 1,
@@ -832,7 +832,7 @@ describe("subagent tool", () => {
           effort: "medium",
           context: "fresh",
           writeIntent: "read-only",
-          fastMode: false,
+          openaiFastMode: false,
           closeOnReport: true,
         },
         {
@@ -842,7 +842,7 @@ describe("subagent tool", () => {
           effort: "xhigh",
           context: "fresh",
           writeIntent: "read-only",
-          fastMode: true,
+          openaiFastMode: true,
           closeOnReport: true,
         },
       ],
@@ -884,7 +884,7 @@ describe("subagent tool", () => {
       task: failed.task,
       profile: "reviewer",
       model: "openai-codex/gpt-5.6-sol",
-      fastMode: true,
+      openaiFastMode: true,
       supersedes: { runId: "agent-1", claimToken: "retry-1" },
       routeContinuation: { selectedCandidateIndex: 1 },
       selection: {

@@ -22,7 +22,7 @@ Each run records immutable `parentRunId` and `depth`. The root can inspect the c
 
 ### Nesting policy
 
-Configuration version 5 adds:
+Configuration version 5 introduced the nesting policy:
 
 ```json
 {
@@ -34,7 +34,7 @@ Configuration version 5 adds:
 }
 ```
 
-Direct-child bounds are 1 through 32. Depth bounds are 0 through 8. Version 4 remains readable with the defaults above. Any store write upgrades the document to version 5. Present invalid values fail strict decoding; values are never clamped.
+Direct-child bounds are 1 through 32. Depth bounds are 0 through 8. Configuration version 6 retains this document-level policy while moving routes into named profile sets. Versions 4 and 5 remain readable; a successful current store write migrates either legacy version to version 6. Present invalid values fail strict decoding; values are never clamped.
 
 Precedence is Session, trusted Project, Global, then Built-in. A start batch captures one profile and policy revision. Admission counts active direct children and in-flight reservations for the selected parent. There is no tree-wide active-run budget. Lowering a policy changes later admission only.
 

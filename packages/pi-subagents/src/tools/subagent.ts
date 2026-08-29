@@ -68,7 +68,7 @@ export interface SubagentStartResolvedRoute {
   readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effort: SubagentEffort;
-  readonly fastMode: boolean;
+  readonly openaiFastMode: boolean;
   readonly candidateIndex?: number | undefined;
   readonly warning?: string | undefined;
 }
@@ -174,7 +174,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: SUBAGENT_TOOL_NAMES[0],
     label: "Inspect Profile Routes",
     description:
-      "Static preflight of complete version 5 profile candidates in declared order, including host, runtime, model, effort, context, write intent, fast mode, closeOnReport, and implementation eligibility. All local and Herdr Pi/Claude/Codex adapters are implemented; runtime authentication, native integration, and private-harness readiness are checked at launch.",
+      "Static preflight of complete version 6 profile-set candidates in declared order, including host, runtime, model, effort, context, write intent, OpenAI fast mode, closeOnReport, and implementation eligibility. All local and Herdr Pi/Claude/Codex adapters are implemented; runtime authentication, native integration, and private-harness readiness are checked at launch.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "models" }, signal, onUpdate, ctx),
@@ -193,7 +193,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     promptGuidelines: [
       "Before substantial work, check for independent workstreams. When two or more exist, use subagent_start early to launch one to three read-only subagents in one batch; skip subagent_start only for trivial or tightly serial tasks.",
       "Use subagent_start for bounded slices rather than the whole assignment: give each scout one narrow reconnaissance question and a concrete deliverable while allowing it to follow relevant evidence as deeply as needed; use researcher for sourced external research, planner for implementation planning, reviewer for independent verification, oracle for inherited-decision analysis, and generalist for other read-only work.",
-      "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. The selected version 5 profile supplies runtime, model, effort, context, write intent, fast mode, and normal host/close behavior; writes only narrows a writer to exact cooperative file claims. If Herdr reports an unsupported protocol before ownership, subagent_start visibly falls back to the same runtime on the local host and forces closeOnReport=true.",
+      "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. The selected version 6 profile-set route supplies runtime, model, effort, context, write intent, OpenAI fast mode, and normal host/close behavior; writes only narrows a writer to exact cooperative file claims. If Herdr reports an unsupported protocol before ownership, subagent_start visibly falls back to the same runtime on the local host and forces closeOnReport=true.",
       "After subagent_start, continue independent work instead of waiting idle. Use subagent_await only when progress or final synthesis depends on a report; unclaimed completion reports are delivered automatically.",
       "Use profile=worker only for explicit implementation handoffs. While any writer pool is active, the parent coordinates and reviews but does not edit. Launch multiple shared-cwd writers only with pairwise-disjoint exact writes claims; native tools and Bash are cooperative rather than per-file sandboxed.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",

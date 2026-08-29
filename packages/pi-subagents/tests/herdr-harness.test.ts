@@ -167,7 +167,7 @@ const launch = (
   cwd: process.cwd(),
   context: "fresh",
   writeIntent,
-  fastMode: false,
+  openaiFastMode: false,
   model: runtime === "pi" ? "openai-codex/gpt-5.6-sol" : `${runtime}-model`,
   effort: "xhigh",
   runtimeApiKey:
@@ -516,14 +516,14 @@ describe("Herdr native harness security", () => {
           Effect.gen(function* () {
             const pi = yield* test.harness.prepare(
               "pi",
-              { ...launch("pi"), fastMode: true },
+              { ...launch("pi"), openaiFastMode: true },
               test.supervisor,
             );
             expect(pi.argv).toContain("--pi-subagents-fast-mode");
 
             const codex = yield* test.harness.prepare(
               "codex",
-              { ...launch("codex"), fastMode: true },
+              { ...launch("codex"), openaiFastMode: true },
               test.supervisor,
             );
             const config = yield* Effect.promise(() =>

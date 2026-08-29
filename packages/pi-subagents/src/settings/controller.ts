@@ -23,7 +23,16 @@ import {
   MIN_SUBAGENT_DEPTH,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
-import type { SubagentNestingPatch, SubagentProfilePatch } from "../config/store.ts";
+import type {
+  SubagentCopyProfileSetPatch,
+  SubagentCreateProfileSetPatch,
+  SubagentDefaultProfileSetPatch,
+  SubagentDeleteProfileSetPatch,
+  SubagentNestingPatch,
+  SubagentProfilePatch,
+  SubagentRenameProfileSetPatch,
+} from "../config/store.ts";
+import { normalizeProfileSetName } from "../config/schema.ts";
 import {
   normalizeDeclaredProfileRoute,
   supportsSubagentFastMode,
@@ -43,7 +52,7 @@ import {
   declaredRouteForDraft,
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
-  type ProfileSettingsScope,
+  type ProfileWorkspaceTarget,
 } from "./profile-route-editor.ts";
 import {
   loadCandidateModelPicker,
@@ -54,9 +63,11 @@ import {
 import { createProfileModelChoices } from "./ui/model-picker.ts";
 import {
   ProfileWorkspaceComponent,
+  type ProfileWorkspaceCloseResult,
   type ProfileWorkspaceOptions,
   type ProfileWorkspaceSaveResult,
 } from "./profile-workspace.ts";
+import { ProfileSetPickerComponent, type ProfileSetPickerAction } from "./profile-set-picker.ts";
 
 export interface FleetManagerActions {
   readonly isAvailable: () => boolean;
@@ -68,6 +79,11 @@ export interface FleetManagerActions {
   readonly rename: (id: string, name: string) => Promise<void>;
   readonly inspectProfiles: (projectTrusted: boolean) => Promise<ProfileSettingsInspection>;
   readonly patchProfile: (patch: SubagentProfilePatch) => Promise<void>;
+  readonly patchDefaultProfileSet: (patch: SubagentDefaultProfileSetPatch) => Promise<void>;
+  readonly createProfileSet: (patch: SubagentCreateProfileSetPatch) => Promise<void>;
+  readonly copyProfileSet: (patch: SubagentCopyProfileSetPatch) => Promise<void>;
+  readonly renameProfileSet: (patch: SubagentRenameProfileSetPatch) => Promise<void>;
+  readonly deleteProfileSet: (patch: SubagentDeleteProfileSetPatch) => Promise<void>;
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<void>;
   readonly patchSessionNesting: (patch: SessionNestingPatch) => Promise<void>;
@@ -205,34 +221,29 @@ function requestProfileReload(
     });
 }
 
-function openProfileSettings(
+function openProfileEditor(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
-  initialScope: ProfileSettingsScope = "global",
-): Promise<void> {
+  target: ProfileWorkspaceTarget,
+): Promise<ProfileWorkspaceCloseResult> {
   if (ctx.mode !== "tui" || !ctx.hasUI || !Predicate.isFunction(ctx.ui.custom)) {
     if (ctx.hasUI)
       ctx.ui.notify(
         "/subagents profiles requires interactive TUI mode; edit pi-subagents.json and run /reload.",
         "warning",
       );
-    return Promise.resolve();
+    return Promise.resolve(false);
   }
-
   const projectTrusted = isProjectTrusted(ctx);
-  const selectedInitialScope =
-    initialScope === "project" && !projectTrusted ? "global" : initialScope;
-  if (selectedInitialScope !== initialScope)
-    ctx.ui.notify(
-      "Project profile settings require a trusted project; opened Global scope.",
-      "warning",
-    );
+  if (target.kind === "profile-set" && target.set.scope === "project" && !projectTrusted) {
+    ctx.ui.notify("Project profile settings require a trusted project.", "warning");
+    return Promise.resolve(false);
+  }
   return actions.inspectProfiles(projectTrusted).then(
     (initialInspection) => {
       let inspection: ProfileSettingsInspection = initialInspection;
-
       const modelCatalog = new ProfileModelCatalog(ctx.modelRegistry);
       let requestWorkspaceRender: (() => void) | undefined;
       let modelRefreshNotified = false;
@@ -250,202 +261,387 @@ function openProfileSettings(
         else if (result === "updated" && !modelRefreshController.signal.aborted)
           requestWorkspaceRender?.();
       });
-      // Catalog I/O never delays the overlay. Every action captures one immutable catalog generation.
-      return Promise.resolve().then(() => {
-        let parentEffort: SubagentEffort = "high";
-        if (ctx.model) {
-          try {
-            parentEffort = decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
-          } catch {
-            // Host callback failures use the same conservative fallback as launch resolution.
-          }
+      let parentEffort: SubagentEffort = "high";
+      if (ctx.model) {
+        try {
+          parentEffort = decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
+        } catch {
+          // Host callback failures use the same conservative fallback as launch resolution.
         }
-        const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-        const refreshInspection = (conflictMessage?: string): Promise<ProfileWorkspaceSaveResult> =>
-          Promise.resolve()
-            .then(() => actions.inspectProfiles(isProjectTrusted(ctx)))
-            .then(
-              (nextInspection): ProfileWorkspaceSaveResult => {
-                inspection = nextInspection;
-                const baseResult = { inspection };
-                const withConflictMessage = conflictMessage
-                  ? { ...baseResult, conflictMessage }
-                  : baseResult;
-                return withConflictMessage;
-              },
-              (): ProfileWorkspaceSaveResult => ({
-                refreshError:
-                  "Profile settings changed, but the workspace could not refresh. Reopen /subagents profiles before editing again.",
-              }),
-            );
-        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-        const isSessionProfileConflict = <ErrorInput>(error: ErrorInput): boolean =>
-          error instanceof SessionProfileConflictError ||
-          (hasObjectRuntimeType(error) &&
-            error !== null &&
-            (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError");
-        const saveDraft = (
-          scope: ProfileSettingsScope,
-          profile: ProfileId,
-          draft: ProfileRouteDraft,
-        ): Promise<ProfileWorkspaceSaveResult> => {
-          const declaration = declaredRouteForDraft(draft);
-          if (!declaration.valid) return Promise.reject(new Error(declaration.error));
-          if (scope === "session") {
-            return actions
-              .patchSessionProfile(
-                (() => {
-                  const baseResult = { profile };
-                  const withRoute =
-                    declaration.route === undefined
-                      ? baseResult
-                      : { ...baseResult, route: normalizeDeclaredProfileRoute(declaration.route) };
-                  const withExpectedRevision = {
-                    ...withRoute,
-                    expectedRevision: inspection.session.revision,
-                  };
-                  return withExpectedRevision;
-                })(),
-              )
-              .then(
-                () => refreshInspection(),
-                (error) => {
-                  if (isSessionProfileConflict(error))
-                    return refreshInspection(
-                      "Session profile settings changed concurrently; refreshed the active routes. Retry your edit.",
-                    );
-                  throw error;
-                },
-              );
-          }
-          const expectedDocument =
-            scope === "global" ? inspection.globalDocument : inspection.projectDocument;
+      }
+      const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const refreshInspection = (conflictMessage?: string): Promise<ProfileWorkspaceSaveResult> =>
+        actions.inspectProfiles(isProjectTrusted(ctx)).then(
+          (nextInspection): ProfileWorkspaceSaveResult => {
+            inspection = nextInspection;
+            return conflictMessage ? { inspection, conflictMessage } : { inspection };
+          },
+          (): ProfileWorkspaceSaveResult => ({
+            refreshError:
+              "Profile settings changed, but the workspace could not refresh. Reopen /subagents profiles before editing again.",
+          }),
+        );
+      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+      const isSessionProfileConflict = <ErrorInput>(error: ErrorInput): boolean =>
+        error instanceof SessionProfileConflictError ||
+        (hasObjectRuntimeType(error) &&
+          error !== null &&
+          (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError");
+      const saveDraft = (
+        editorTarget: ProfileWorkspaceTarget,
+        profile: ProfileId,
+        draft: ProfileRouteDraft,
+      ): Promise<ProfileWorkspaceSaveResult> => {
+        const declaration = declaredRouteForDraft(draft);
+        if (!declaration.valid) return Promise.reject(new Error(declaration.error));
+        if (editorTarget.kind === "session") {
           return actions
-            .patchProfile(
-              (() => {
-                const baseResult = { scope, profile };
-                const withRoute =
-                  declaration.route === undefined
-                    ? baseResult
-                    : { ...baseResult, route: declaration.route };
-                const withExpectedExists = {
-                  ...withRoute,
-                  expectedExists: expectedDocument !== undefined,
+            .patchSessionProfile({
+              profile,
+              ...(declaration.route !== undefined && {
+                route: normalizeDeclaredProfileRoute(declaration.route),
+              }),
+              expectedRevision: inspection.session.revision,
+            })
+            .then(
+              () => refreshInspection(),
+              (error) => {
+                if (isSessionProfileConflict(error))
+                  return refreshInspection(
+                    "Session profile settings changed concurrently; refreshed the active routes. Retry your edit.",
+                  );
+                throw error;
+              },
+            );
+        }
+        const scope = editorTarget.set.scope;
+        const expectedDocument =
+          scope === "global" ? inspection.globalDocument : inspection.projectDocument;
+        return actions
+          .patchProfile({
+            scope,
+            profileSet: editorTarget.set.name,
+            profile,
+            ...(declaration.route !== undefined && { route: declaration.route }),
+            expectedExists: expectedDocument !== undefined,
+            ...(expectedDocument !== undefined && { expectedDocument }),
+            projectTrusted: isProjectTrusted(ctx),
+          })
+          .then(() => refreshInspection());
+      };
+      const clearSessionOverrides = (): Promise<ProfileWorkspaceSaveResult> =>
+        actions.clearSessionProfiles(inspection.session.revision).then(
+          () => refreshInspection(),
+          (error) => {
+            if (isSessionProfileConflict(error))
+              return refreshInspection(
+                "Session profile settings changed concurrently; refreshed the active routes. Retry clearing them.",
+              );
+            throw error;
+          },
+        );
+      return ctx.ui
+        .custom<ProfileWorkspaceCloseResult>(
+          (tui, theme, keybindings, done) => {
+            requestWorkspaceRender = () => tui.requestRender();
+            const baseOptions: ProfileWorkspaceOptions = {
+              theme,
+              inspection,
+              projectTrusted,
+              target,
+              parentEffort,
+              preferredPiModel: () => preferredHerdrPiSelector(modelCatalog.capture(), parentModel),
+              getHeight: () => tui.terminal.rows,
+              requestRender: () => tui.requestRender(),
+              matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
+                keybindings.matches(data, id),
+              keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
+                fullScreenKeybindingLabel(
+                  id,
+                  fallback,
+                  Predicate.isFunction(keybindings.getKeys)
+                    ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+                    : undefined,
+                ),
+              close: done,
+              saveDraft,
+              clearSessionOverrides,
+              loadModelPicker: (
+                profile: ProfileId,
+                candidateIndex: number,
+                candidate: ProfileCandidate,
+                signal?: AbortSignal,
+              ) => {
+                const baseInput = {
+                  profile,
+                  candidateIndex,
+                  candidate,
+                  listNativeModels: actions.listNativeModels,
+                  piCatalog: modelCatalog.capture(),
                 };
-                const withExpectedDocument =
-                  expectedDocument === undefined
-                    ? withExpectedExists
-                    : { ...withExpectedExists, expectedDocument };
-                const withProjectTrusted = {
-                  ...withExpectedDocument,
-                  projectTrusted: isProjectTrusted(ctx),
-                };
-                return withProjectTrusted;
-              })(),
-            )
-            .then(() => refreshInspection());
-        };
-        const clearSessionOverrides = (): Promise<ProfileWorkspaceSaveResult> =>
-          actions.clearSessionProfiles(inspection.session.revision).then(
-            () => refreshInspection(),
-            (error) => {
-              if (isSessionProfileConflict(error))
-                return refreshInspection(
-                  "Session profile settings changed concurrently; refreshed the active routes. Retry clearing them.",
-                );
-              throw error;
-            },
+                const withParent = parentModel
+                  ? { ...baseInput, parentSelector: parentModel }
+                  : baseInput;
+                return loadCandidateModelPicker(signal ? { ...withParent, signal } : withParent);
+              },
+              supportedPiEfforts: (candidate: ProfileCandidate) =>
+                supportedPiEfforts(candidate, modelCatalog.capture(), parentModel),
+              fastModeAvailable: (candidate: ProfileCandidate) =>
+                fastModeAvailable(candidate, parentModel),
+              reload: () => requestProfileReload(ctx, bridge),
+              onDispose: () => {
+                requestWorkspaceRender = undefined;
+                modelRefreshController.abort();
+              },
+            };
+            return new ProfileWorkspaceComponent(
+              parentModel ? { ...baseOptions, parentModel } : baseOptions,
+            );
+          },
+          {
+            overlay: true,
+            overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+          },
+        )
+        .catch(() => {
+          ctx.ui.notify(
+            "Could not open Subagents profile settings. Run /reload and try again; inspect the Pi logs if the problem continues.",
+            "error",
           );
+          return false;
+        })
+        .finally(() => {
+          requestWorkspaceRender = undefined;
+          modelRefreshController.abort();
+        });
+    },
+    (error) => {
+      ctx.ui.notify(
+        error instanceof Error ? error.message : "Could not inspect profile settings.",
+        "error",
+      );
+      return false;
+    },
+  );
+}
 
-        return Promise.resolve()
-          .then(() =>
-            ctx.ui.custom<boolean>(
-              (tui, theme, keybindings, done) => {
-                requestWorkspaceRender = () => tui.requestRender();
-                const baseOptions: ProfileWorkspaceOptions = {
-                  theme,
-                  inspection,
-                  projectTrusted,
-                  initialScope: selectedInitialScope,
-                  parentEffort,
-                  preferredPiModel: () =>
-                    preferredHerdrPiSelector(modelCatalog.capture(), parentModel),
-                  getHeight: () => tui.terminal.rows,
-                  requestRender: () => tui.requestRender(),
-                  matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
-                    keybindings.matches(data, id),
-                  keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
-                    fullScreenKeybindingLabel(
-                      id,
-                      fallback,
-                      Predicate.isFunction(keybindings.getKeys)
-                        ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
-                        : undefined,
-                    ),
-                  close: done,
-                  saveDraft,
-                  clearSessionOverrides,
-                  loadModelPicker: (
-                    profile: ProfileId,
-                    candidateIndex: number,
-                    candidate: ProfileCandidate,
-                    signal?: AbortSignal,
-                  ) => {
-                    const baseInput = {
-                      profile,
-                      candidateIndex,
-                      candidate,
-                      listNativeModels: actions.listNativeModels,
-                      piCatalog: modelCatalog.capture(),
-                    };
-                    const withParent = parentModel
-                      ? { ...baseInput, parentSelector: parentModel }
-                      : baseInput;
-                    return loadCandidateModelPicker(
-                      signal ? { ...withParent, signal } : withParent,
-                    );
-                  },
-                  supportedPiEfforts: (candidate: ProfileCandidate) => {
-                    const snapshot = modelCatalog.capture();
-                    return supportedPiEfforts(candidate, snapshot, parentModel);
-                  },
-                  fastModeAvailable: (candidate: ProfileCandidate) =>
-                    fastModeAvailable(candidate, parentModel),
-                  reload: () => requestProfileReload(ctx, bridge),
-                  onDispose: () => {
-                    requestWorkspaceRender = undefined;
-                    modelRefreshController.abort();
-                  },
-                };
-                return new ProfileWorkspaceComponent(
-                  parentModel ? { ...baseOptions, parentModel } : baseOptions,
-                );
-              },
-              {
-                overlay: true,
-                overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
-              },
-            ),
+const profileSetPatchBase = (
+  inspection: ProfileSettingsInspection,
+  scope: "global" | "project",
+  projectTrusted: boolean,
+) => {
+  const expectedDocument =
+    scope === "global" ? inspection.globalDocument : inspection.projectDocument;
+  return {
+    scope,
+    expectedExists: expectedDocument !== undefined,
+    ...(expectedDocument !== undefined && { expectedDocument }),
+    projectTrusted,
+  };
+};
+
+function openPersistentProfileSettings(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  bridge: SubagentProjectionBridge,
+  actions: FleetManagerActions,
+  preferredScope: "global" | "project" = "global",
+): Promise<void> {
+  if (ctx.mode !== "tui" || !ctx.hasUI || !Predicate.isFunction(ctx.ui.custom)) {
+    if (ctx.hasUI)
+      ctx.ui.notify(
+        "/subagents profiles requires interactive TUI mode; edit pi-subagents.json and run /reload.",
+        "warning",
+      );
+    return Promise.resolve();
+  }
+  let projectTrusted = isProjectTrusted(ctx);
+  const initialScope = preferredScope === "project" && !projectTrusted ? "global" : preferredScope;
+  if (initialScope !== preferredScope)
+    ctx.ui.notify(
+      "Project profile settings require a trusted project; opened Global sets.",
+      "warning",
+    );
+
+  return actions.inspectProfiles(projectTrusted).then(
+    (initialInspection) => {
+      let inspection = initialInspection;
+      let reloadRequired = false;
+      const refresh = (): Promise<void> => {
+        const trusted = isProjectTrusted(ctx);
+        return actions.inspectProfiles(trusted).then((nextInspection) => {
+          projectTrusted = trusted;
+          inspection = nextInspection;
+        });
+      };
+      const patchDefault = (
+        scope: "global" | "project",
+        defaultProfileSet?: string,
+      ): Promise<void> =>
+        actions
+          .patchDefaultProfileSet({
+            ...profileSetPatchBase(inspection, scope, isProjectTrusted(ctx)),
+            ...(defaultProfileSet !== undefined && { defaultProfileSet }),
+          })
+          .then(() => {
+            reloadRequired = true;
+            return refresh();
+          });
+      const promptName = (title: string, initial = ""): Promise<string | undefined> =>
+        ctx.ui.input(title, initial).then((value) => {
+          if (value === undefined) return undefined;
+          const normalized = normalizeProfileSetName(value);
+          if (normalized) return normalized;
+          ctx.ui.notify(
+            "Profile-set names must be 1-64 characters, start and end with a letter or number, and use only letters, numbers, spaces, dot, underscore, or hyphen.",
+            "error",
+          );
+          return undefined;
+        });
+      const showPicker = (): Promise<ProfileSetPickerAction | undefined> =>
+        ctx.ui.custom<ProfileSetPickerAction | undefined>(
+          (tui, theme, keybindings, done) =>
+            new ProfileSetPickerComponent({
+              theme,
+              inspection,
+              projectTrusted,
+              initialScope,
+              reloadRequired,
+              getHeight: () => tui.terminal.rows,
+              requestRender: () => tui.requestRender(),
+              matchesKeybinding: (data, id) => keybindings.matches(data, id),
+              close: done,
+            }),
+          {
+            overlay: true,
+            overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+          },
+        );
+      const afterMutation = (operation: Promise<void>): Promise<void> =>
+        operation.then(() => {
+          reloadRequired = true;
+          return refresh();
+        });
+      const useEntry = (
+        entry: Extract<ProfileSetPickerAction, { readonly action: "use" }>["entry"],
+      ): Promise<void> => {
+        if (entry.kind === "inherit-project") return patchDefault("project");
+        if (entry.kind === "set" && entry.scope === "project")
+          return patchDefault("project", entry.ref.name);
+        const globalDefault = entry.kind === "set" ? entry.ref.name : undefined;
+        const project = inspection.project;
+        const projectDefaultConfigured = Boolean(
+          project &&
+          (project.file.defaultProfileSet !== undefined || project.invalidDefaultProfileSet),
+        );
+        const selectGlobal = (): Promise<void> =>
+          inspection.global.file.defaultProfileSet === globalDefault &&
+          !inspection.global.invalidDefaultProfileSet
+            ? Promise.resolve()
+            : patchDefault("global", globalDefault);
+        if (!projectDefaultConfigured) return selectGlobal();
+        const projectLabel = project?.file.defaultProfileSet
+          ? `[P] ${project.file.defaultProfileSet}`
+          : "the invalid project default";
+        return ctx.ui
+          .confirm(
+            "Use a global profile set?",
+            `This project will stop using ${projectLabel} and inherit the selected global default. Other inheriting projects also use the global default after reload.`,
           )
-          .then(
-            (reloadRequired) => {
-              if (reloadRequired)
-                ctx.ui.notify(
-                  "Profile changes are saved. Run /reload to apply them to new subagents.",
-                  "info",
-                );
-            },
-            () => {
+          .then((confirmed) => {
+            if (!confirmed) return undefined;
+            return patchDefault("project").then(selectGlobal);
+          });
+      };
+      const handleAction = (action: ProfileSetPickerAction): Promise<"continue" | "done"> => {
+        if (action.action === "reload")
+          return requestProfileReload(ctx, bridge).then((reloaded) =>
+            reloaded ? "done" : "continue",
+          );
+        if (action.action === "edit")
+          return openProfileEditor(pi, ctx, bridge, actions, {
+            kind: "profile-set",
+            set: action.target,
+          }).then((editorResult) => {
+            if (editorResult === "reloaded") return "done" as const;
+            reloadRequired = editorResult || reloadRequired;
+            return refresh().then(() => "continue" as const);
+          });
+        if (action.action === "create")
+          return promptName(`New ${action.scope} profile-set name`).then((name) => {
+            if (!name) return "continue" as const;
+            return afterMutation(
+              actions.createProfileSet({
+                ...profileSetPatchBase(inspection, action.scope, isProjectTrusted(ctx)),
+                profileSet: name,
+              }),
+            )
+              .then(() =>
+                openProfileEditor(pi, ctx, bridge, actions, {
+                  kind: "profile-set",
+                  set: { scope: action.scope, name },
+                }),
+              )
+              .then((editorResult) => {
+                if (editorResult === "reloaded") return "done" as const;
+                reloadRequired = editorResult || reloadRequired;
+                return refresh().then(() => "continue" as const);
+              });
+          });
+        if (action.action === "copy")
+          return promptName(
+            `Copy ${action.source.scope} profile set as`,
+            `${action.source.name} copy`,
+          ).then((name) => {
+            if (!name) return "continue" as const;
+            return afterMutation(
+              actions.copyProfileSet({
+                ...profileSetPatchBase(inspection, action.source.scope, isProjectTrusted(ctx)),
+                sourceProfileSet: action.source.name,
+                profileSet: name,
+              }),
+            ).then(() => "continue" as const);
+          });
+        if (action.action === "rename")
+          return promptName("Rename profile set", action.target.name).then((name) => {
+            if (!name) return "continue" as const;
+            return afterMutation(
+              actions.renameProfileSet({
+                ...profileSetPatchBase(inspection, action.target.scope, isProjectTrusted(ctx)),
+                profileSet: action.target.name,
+                nextProfileSet: name,
+              }),
+            ).then(() => "continue" as const);
+          });
+        if (action.action === "delete")
+          return afterMutation(
+            actions.deleteProfileSet({
+              ...profileSetPatchBase(inspection, action.target.scope, isProjectTrusted(ctx)),
+              profileSet: action.target.name,
+            }),
+          ).then(() => "continue" as const);
+        return useEntry(action.entry).then(() => "continue" as const);
+      };
+      const loop = (): Promise<void> =>
+        showPicker().then((action) => {
+          if (!action) return undefined;
+          return handleAction(action).then(
+            (result) => (result === "done" ? undefined : loop()),
+            (error) => {
               ctx.ui.notify(
-                "Could not open Subagents profile settings. Run /reload and try again; inspect the Pi logs if the problem continues.",
+                error instanceof Error ? error.message : "Could not update profile sets.",
                 "error",
               );
+              return refresh().then(loop, () => undefined);
             },
-          )
-          .finally(() => {
-            requestWorkspaceRender = undefined;
-            modelRefreshController.abort();
-          });
+          );
+        });
+      return loop().then(() => {
+        if (reloadRequired)
+          ctx.ui.notify(
+            "Profile changes are saved. Run /reload to apply them to new subagents.",
+            "info",
+          );
       });
     },
     (error) => {
@@ -608,13 +804,15 @@ export function registerSubagentManagerCommand(
       const command = args.trim().toLowerCase();
       if (!command) return openFleetManager(ctx, bridge, actions);
       if (command === "settings") return openNestingSettings(ctx, actions);
-      if (command === "profiles") return openProfileSettings(pi, ctx, bridge, actions);
+      if (command === "profiles") return openPersistentProfileSettings(pi, ctx, bridge, actions);
       if (command === "profiles session")
-        return openProfileSettings(pi, ctx, bridge, actions, "session");
+        return openProfileEditor(pi, ctx, bridge, actions, { kind: "session" }).then(
+          () => undefined,
+        );
       if (command === "profiles global")
-        return openProfileSettings(pi, ctx, bridge, actions, "global");
+        return openPersistentProfileSettings(pi, ctx, bridge, actions, "global");
       if (command === "profiles project")
-        return openProfileSettings(pi, ctx, bridge, actions, "project");
+        return openPersistentProfileSettings(pi, ctx, bridge, actions, "project");
       ctx.ui.notify(
         "Usage: /subagents [settings | profiles [session|global|project]]; omit arguments for the fleet inspector.",
         "error",

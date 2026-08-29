@@ -239,6 +239,56 @@ export function registerSubagentApplication(
         ),
       );
     },
+    patchDefaultProfileSet: (patch) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(SubagentConfigStore, (store) =>
+          store.patchDefaultProfileSet(activation.cwd, activation.agentDirectory, patch),
+        ),
+      );
+    },
+    createProfileSet: (patch) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(SubagentConfigStore, (store) =>
+          store.createProfileSet(activation.cwd, activation.agentDirectory, patch),
+        ),
+      );
+    },
+    copyProfileSet: (patch) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(SubagentConfigStore, (store) =>
+          store.copyProfileSet(activation.cwd, activation.agentDirectory, patch),
+        ),
+      );
+    },
+    renameProfileSet: (patch) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(SubagentConfigStore, (store) =>
+          store.renameProfileSet(activation.cwd, activation.agentDirectory, patch),
+        ),
+      );
+    },
+    deleteProfileSet: (patch) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(SubagentConfigStore, (store) =>
+          store.deleteProfileSet(activation.cwd, activation.agentDirectory, patch),
+        ),
+      );
+    },
     patchNesting: (patch) => {
       const activation = currentActivation;
       if (!activation)

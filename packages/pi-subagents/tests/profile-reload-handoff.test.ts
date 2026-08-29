@@ -30,7 +30,7 @@ describe("profile reload handoff", () => {
               effort: "high" as const,
               context: "fresh" as const,
               writeIntent: "read-only" as const,
-              fastMode: false,
+              openaiFastMode: false,
               closeOnReport: true,
             },
           ],

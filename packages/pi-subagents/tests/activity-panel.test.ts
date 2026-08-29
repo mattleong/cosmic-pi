@@ -330,7 +330,7 @@ describe("persistent subagent activity panel", () => {
       name: "Responsive run",
       profile: "scout",
       currentTool: "read",
-      fastMode: true,
+      openaiFastMode: true,
     });
     const waiting = view({
       id: "waiting",

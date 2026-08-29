@@ -63,6 +63,29 @@ it.effect("reads and atomically writes JSON object documents", () => {
   }).pipe(provideBuiltLayer(harness.layer));
 });
 
+it.effect("supports locked read-only modifications without rewriting documents", () => {
+  const harness = documentLayer({ "/config.json": '{"known":true}' });
+  return Effect.gen(function* () {
+    let afterCommits = 0;
+    const existingResult = yield* JsonDocumentStore.use((store) => {
+      const modifyObject = store.modifyObject;
+      return modifyObject === undefined
+        ? Effect.die("atomic document modification unavailable")
+        : modifyObject("/config.json", () =>
+            Effect.succeed({
+              value: "unchanged",
+              document: { known: false },
+              write: false,
+              afterCommit: Effect.sync(() => void afterCommits++),
+            }),
+          );
+    });
+    expect(existingResult).toBe("unchanged");
+    expect(harness.files.get("/config.json")).toBe('{"known":true}');
+    expect(afterCommits).toBe(0);
+  }).pipe(provideBuiltLayer(harness.layer));
+});
+
 it.effect("serializes read-modify-write updates across independently provided Layers", () => {
   const harness = documentLayer({ "/auth.json": '{"alpha":1}' });
   const update = (field: string, value: number) =>

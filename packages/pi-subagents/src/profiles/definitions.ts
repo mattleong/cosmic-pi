@@ -77,7 +77,6 @@ const builtinRoute = (id: ProfileId): ProfileRoute => {
         effort: "default",
         context: definition.defaultContext,
         writeIntent: definition.defaultWriteIntent,
-        fastMode: false,
         closeOnReport: true,
       },
     ],

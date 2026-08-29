@@ -26,7 +26,7 @@ export type ProfileWorkspaceField =
   | "effort"
   | "context"
   | "writeIntent"
-  | "fastMode"
+  | "openaiFastMode"
   | "closeOnReport";
 
 export const PROFILE_WORKSPACE_FIELDS: ReadonlyArray<ProfileWorkspaceField> = [
@@ -36,7 +36,7 @@ export const PROFILE_WORKSPACE_FIELDS: ReadonlyArray<ProfileWorkspaceField> = [
   "effort",
   "context",
   "writeIntent",
-  "fastMode",
+  "openaiFastMode",
   "closeOnReport",
 ];
 
@@ -51,7 +51,6 @@ export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set([
   "d",
   "i",
   "r",
-  "s",
   "x",
 ]);
 
@@ -134,7 +133,7 @@ export const candidateFastModeApplied = (
   candidate: ProfileCandidate,
   parentModel?: string | undefined,
 ): boolean => {
-  if (!candidate.fastMode) return false;
+  if (!candidate.openaiFastMode) return false;
   const model =
     candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
   return model !== undefined && supportsSubagentFastMode(candidate.runtime, model);
@@ -222,19 +221,19 @@ export const candidateFieldRows = (
     },
     (() => {
       const baseResult = {
-        field: "fastMode" as const,
+        field: "openaiFastMode" as const,
         label: "OpenAI fast mode",
         value: fastAvailable
           ? candidateFastModeApplied(candidate, parentModel)
             ? "on · priority"
             : "off · standard"
-          : candidate.fastMode
+          : candidate.openaiFastMode
             ? `configured on · unavailable: ${fastUnavailableReason} · turn off`
             : `unavailable · ${fastUnavailableReason}`,
-        fixed: !fastAvailable && !candidate.fastMode,
+        fixed: !fastAvailable && !candidate.openaiFastMode,
       };
       const withFixedReason =
-        !fastAvailable && !candidate.fastMode
+        !fastAvailable && !candidate.openaiFastMode
           ? { ...baseResult, fixedReason: `${fastUnavailableReason}.` }
           : baseResult;
       return withFixedReason;
@@ -320,7 +319,7 @@ export const candidateFieldChoices = (
       },
       { value: "writer", label: "Writer", description: "May modify files under writer policy" },
     ];
-  if (field === "fastMode") {
+  if (field === "openaiFastMode") {
     const available =
       options.fastModeAvailable ??
       (candidate.model !== "parent" &&
@@ -388,8 +387,8 @@ export function selectCandidateField(
     return { candidate: { ...candidate, context: value }, notices: [] };
   if (field === "writeIntent" && (value === "read-only" || value === "writer"))
     return updateCandidateControls(candidate, { writeIntent: value }, { piModel: options.piModel });
-  if (field === "fastMode" && (value === "true" || value === "false"))
-    return { candidate: { ...candidate, fastMode: value === "true" }, notices: [] };
+  if (field === "openaiFastMode" && (value === "true" || value === "false"))
+    return { candidate: { ...candidate, openaiFastMode: value === "true" }, notices: [] };
   if (field === "closeOnReport" && (value === "true" || value === "false"))
     return { candidate: { ...candidate, closeOnReport: value === "true" }, notices: [] };
   return { error: `Invalid ${field} selection.`, notices: [] };

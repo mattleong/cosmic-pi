@@ -31,7 +31,7 @@ const run = (id: string, overrides: Partial<SubagentRunView> = {}): SubagentRunV
   state: "running",
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   host: "herdr",
   runtime: "claude",
   closeOnReport: false,

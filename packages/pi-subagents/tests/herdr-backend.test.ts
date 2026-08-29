@@ -31,7 +31,7 @@ const request = (writeIntent: "read-only" | "writer" = "read-only"): BackendLaun
   cwd: "/project",
   context: "fresh",
   writeIntent,
-  fastMode: false,
+  openaiFastMode: false,
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   activeTools: ["subagent_start", "code_mode"],

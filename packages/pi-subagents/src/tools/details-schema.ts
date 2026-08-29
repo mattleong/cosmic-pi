@@ -154,7 +154,7 @@ export const SubagentRunCardSchema = Schema.Struct({
   ),
   model: boundedString(MAX_CARD_MODEL_CHARS, 1),
   effort: EffortSchema,
-  fastMode: Schema.Boolean,
+  openaiFastMode: Schema.Boolean,
   context: ContextSchema,
   writeIntent: WriteIntentSchema,
   writeClaims: Schema.optionalKey(
@@ -198,7 +198,7 @@ const SelectedStartEntryFields = {
   runtime: RuntimeSchema,
   model: boundedString(MAX_CARD_MODEL_CHARS, 1),
   effort: EffortSchema,
-  fastMode: Schema.Boolean,
+  openaiFastMode: Schema.Boolean,
   candidateIndex: Schema.optionalKey(nonNegativeInteger),
   warning: Schema.optionalKey(boundedString(MAX_CARD_PROVENANCE_CHARS, 1)),
 };
@@ -258,7 +258,7 @@ const ProfileCandidateCardSchema = Schema.Struct({
   effort: CandidateEffortSchema,
   context: ContextSchema,
   writeIntent: WriteIntentSchema,
-  fastMode: Schema.Boolean,
+  openaiFastMode: Schema.Boolean,
   closeOnReport: Schema.Boolean,
   status: Schema.Literals(["eligible", "skipped"] as const),
   reason: boundedString(MAX_PROFILE_CANDIDATE_REASON_CHARS, 1),

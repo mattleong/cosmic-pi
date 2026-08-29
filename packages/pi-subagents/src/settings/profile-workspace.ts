@@ -19,12 +19,14 @@ import {
   inheritProjectDraft,
   inheritSessionDraft,
   loadProfileRouteDraft,
+  profileWorkspaceScope,
   replaceRouteCandidate,
   resetGlobalDraft,
   type CandidateUpdate,
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
   type ProfileSettingsScope,
+  type ProfileWorkspaceTarget,
 } from "./profile-route-editor.ts";
 import {
   updateCandidateFromModelChoice,
@@ -63,11 +65,13 @@ export type ProfileWorkspaceSaveResult =
     }
   | { readonly refreshError: string };
 
+export type ProfileWorkspaceCloseResult = boolean | "reloaded";
+
 export interface ProfileWorkspaceOptions {
   readonly theme: Theme;
   readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
-  readonly initialScope?: ProfileSettingsScope | undefined;
+  readonly target: ProfileWorkspaceTarget;
   /** Resolved from the latest catalog snapshot when a controlling field action runs. */
   readonly preferredPiModel: () => string | undefined;
   readonly parentModel?: string | undefined;
@@ -80,9 +84,9 @@ export interface ProfileWorkspaceOptions {
   readonly keybindingLabel?:
     | ((id: SettingsSelectKeybindingId, fallback: string) => string)
     | undefined;
-  readonly close: (reloadRequired: boolean) => void;
+  readonly close: (result: ProfileWorkspaceCloseResult) => void;
   readonly saveDraft: (
-    scope: ProfileSettingsScope,
+    target: ProfileWorkspaceTarget,
     profile: ProfileId,
     draft: ProfileRouteDraft,
   ) => Promise<ProfileWorkspaceSaveResult>;
@@ -115,7 +119,7 @@ const saveScopeLabel = (scope: ProfileSettingsScope): string =>
 
 export class ProfileWorkspaceComponent implements Component, Focusable {
   private inspection: ProfileSettingsInspection;
-  private scope: ProfileSettingsScope;
+  private readonly scope: ProfileSettingsScope;
   private pane: ProfileWorkspacePane = "profiles";
   private profileIndex: number;
   private candidateIndex = 0;
@@ -140,7 +144,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   constructor(options: ProfileWorkspaceOptions) {
     this.options = options;
     this.inspection = options.inspection;
-    this.scope = options.initialScope ?? "global";
+    this.scope = profileWorkspaceScope(options.target);
     this.profileIndex = PROFILE_IDS.indexOf("generalist");
     this.reconcile();
   }
@@ -166,7 +170,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.optimisticProfile === profile &&
       this.optimisticScope === this.scope
       ? this.optimisticDraft
-      : loadProfileRouteDraft(this.inspection, this.scope, profile);
+      : loadProfileRouteDraft(this.inspection, this.options.target, profile);
   }
 
   private reconcile(): void {
@@ -195,10 +199,13 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
 
   private projectOverrideActive(profile = this.profile()): boolean {
     const project = this.inspection.project;
+    const setName = project?.file.defaultProfileSet;
+    if (!project || !setName) return project?.invalidDefaultProfileSet ?? false;
+    const profileSet = project.file.profileSets?.[setName];
     return Boolean(
-      project &&
-      (project.invalidProfileRoutes.includes(profile) ||
-        Object.prototype.hasOwnProperty.call(project.file.profiles ?? {}, profile)),
+      project.invalidDefaultProfileSet ||
+      project.invalidProfileSetRoutes[setName]?.includes(profile) ||
+      Object.prototype.hasOwnProperty.call(profileSet?.profiles ?? {}, profile),
     );
   }
 
@@ -240,35 +247,6 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.clearMessage();
   }
 
-  private changeScope(scope: ProfileSettingsScope): void {
-    if (scope === "project" && !this.options.projectTrusted) {
-      this.setMessage("warning", "Project profile settings require a trusted project.");
-      return;
-    }
-    this.scope = scope;
-    this.candidateIndex = 0;
-    this.fieldIndex = 0;
-    this.pendingAction = undefined;
-    this.keymap.resetChord();
-    if (this.pane === "fields" && this.draft().candidates.length === 0) this.pane = "candidates";
-    this.setMessage(
-      "info",
-      scope === "session"
-        ? "Session scope is temporary, applies immediately, and writes no files."
-        : scope === "global"
-          ? "Global scope overrides built-in profile defaults after reload."
-          : "Project scope overrides global profile settings after reload.",
-    );
-  }
-
-  private cycleScope(): void {
-    const scopes: ReadonlyArray<ProfileSettingsScope> = this.options.projectTrusted
-      ? ["session", "global", "project"]
-      : ["session", "global"];
-    const current = scopes.indexOf(this.scope);
-    this.changeScope(scopes[(current + 1 + scopes.length) % scopes.length] ?? "session");
-  }
-
   private persist(
     next: ProfileRouteDraft,
     description: string,
@@ -303,7 +281,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     );
     this.renderSoon();
     void this.options
-      .saveDraft(scope, profile, next)
+      .saveDraft(this.options.target, profile, next)
       .then((result) => {
         if (this.disposed) return;
         this.busy = false;
@@ -421,7 +399,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.openNativeEffortPicker(candidate);
       return;
     }
-    if (field === "fastMode") {
+    if (field === "openaiFastMode") {
       this.openFastModePicker(candidate);
       return;
     }
@@ -535,7 +513,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         this.candidateIndex = candidateIndex;
         this.showFieldPicker(
           candidate,
-          "fastMode",
+          "openaiFastMode",
           undefined,
           current?.fastModeAvailable ?? this.options.fastModeAvailable(candidate),
           picker.warning,
@@ -753,7 +731,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         this.busy = false;
         if (reloaded) {
           this.reloadRequired = false;
-          this.options.close(false);
+          this.options.close("reloaded");
           return;
         }
         this.setMessage("info", "Reload canceled; saved changes remain pending.");
@@ -850,7 +828,6 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     if (resolution._tag === "Shortcut") {
       const shortcut = resolution.key;
       if (shortcut === "/" && this.pane === "profiles") this.openProfileSearch();
-      else if (shortcut === "s") this.cycleScope();
       else if (
         shortcut === "a" &&
         this.pane === "candidates" &&
@@ -972,6 +949,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     return renderProfileWorkspace(
       {
         inspection: this.inspection,
+        target: this.options.target,
         scope: this.scope,
         projectTrusted: this.options.projectTrusted,
         parentEffort: this.options.parentEffort,

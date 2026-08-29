@@ -23,6 +23,23 @@ import {
 
 export type ProfileSettingsScope = "session" | SubagentConfigScope;
 
+export interface PersistentProfileSetRef {
+  readonly scope: SubagentConfigScope;
+  readonly name: string;
+}
+
+export type ProfileWorkspaceTarget =
+  | { readonly kind: "session" }
+  | { readonly kind: "profile-set"; readonly set: PersistentProfileSetRef };
+
+export const profileWorkspaceScope = (target: ProfileWorkspaceTarget): ProfileSettingsScope =>
+  target.kind === "session" ? "session" : target.set.scope;
+
+export const profileWorkspaceTargetLabel = (target: ProfileWorkspaceTarget): string =>
+  target.kind === "session"
+    ? "Session"
+    : `[${target.set.scope === "project" ? "P" : "G"}] ${target.set.name}`;
+
 export interface ProfileSettingsInspection extends SubagentConfigInspection {
   readonly session: SessionProfileSnapshot;
 }
@@ -66,30 +83,47 @@ const candidatesFromDeclaration = (
       ? cloneCandidates(declared)
       : [cloneCandidate(declared as DeclaredProfileCandidate)];
 
+const decodedAt = (inspection: ProfileSettingsInspection, scope: SubagentConfigScope) =>
+  scope === "global" ? inspection.global : inspection.project;
+
+const profileSetAt = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) => {
+  const decoded = decodedAt(inspection, set.scope);
+  const profileSets = decoded?.file.profileSets;
+  return profileSets && Object.prototype.hasOwnProperty.call(profileSets, set.name)
+    ? profileSets[set.name]
+    : undefined;
+};
+
 const declaredAt = (
   inspection: ProfileSettingsInspection,
-  scope: Exclude<ProfileSettingsScope, "session">,
+  set: PersistentProfileSetRef,
   profile: ProfileId,
-): DeclaredProfileRoute | undefined =>
-  scope === "global"
-    ? inspection.global.file.profiles?.[profile]
-    : inspection.project?.file.profiles?.[profile];
+): DeclaredProfileRoute | undefined => profileSetAt(inspection, set)?.profiles[profile];
 
 const scopeRouteInvalid = (
   inspection: ProfileSettingsInspection,
-  scope: Exclude<ProfileSettingsScope, "session">,
+  set: PersistentProfileSetRef,
   profile: ProfileId,
-): boolean =>
-  (scope === "global" ? inspection.global : inspection.project)?.invalidProfileRoutes.includes(
-    profile,
-  ) ?? false;
+): boolean => {
+  const decoded = decodedAt(inspection, set.scope);
+  return (
+    !decoded ||
+    decoded.invalidProfileSets.includes(set.name) ||
+    !profileSetAt(inspection, set) ||
+    (decoded.invalidProfileSetRoutes[set.name]?.includes(profile) ?? false)
+  );
+};
 
 const globalReferenceCandidates = (
   inspection: ProfileSettingsInspection,
   profile: ProfileId,
 ): ReadonlyArray<ProfileCandidate> => {
-  if (inspection.global.invalidProfileRoutes.includes(profile)) return [];
-  const declared = inspection.global.file.profiles?.[profile];
+  const name = inspection.global.file.defaultProfileSet;
+  if (inspection.global.invalidDefaultProfileSet) return [];
+  if (name === undefined) return cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates);
+  const set: PersistentProfileSetRef = { scope: "global", name };
+  if (scopeRouteInvalid(inspection, set, profile)) return [];
+  const declared = declaredAt(inspection, set, profile);
   return declared === undefined
     ? cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates)
     : candidatesFromDeclaration(declared);
@@ -98,10 +132,10 @@ const globalReferenceCandidates = (
 /** Loads the exact declaration state without collapsing or reordering ordered candidates. */
 export function loadProfileRouteDraft(
   inspection: ProfileSettingsInspection,
-  scope: ProfileSettingsScope,
+  target: ProfileWorkspaceTarget,
   profile: ProfileId,
 ): ProfileRouteDraft {
-  if (scope === "session") {
+  if (target.kind === "session") {
     const declared = inspection.session.overrides[profile];
     if (declared)
       return declared.candidates.length === 0
@@ -112,10 +146,11 @@ export function loadProfileRouteDraft(
       candidates: cloneCandidates(inspection.session.baseConfig.profiles[profile].candidates),
     };
   }
-  if (scopeRouteInvalid(inspection, scope, profile)) return { kind: "invalid", candidates: [] };
-  const declared = declaredAt(inspection, scope, profile);
+  const set = target.set;
+  if (scopeRouteInvalid(inspection, set, profile)) return { kind: "invalid", candidates: [] };
+  const declared = declaredAt(inspection, set, profile);
   if (declared === undefined)
-    return scope === "global"
+    return set.scope === "global"
       ? { kind: "reset", candidates: cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates) }
       : { kind: "inherit", candidates: globalReferenceCandidates(inspection, profile) };
   if (declared === "disabled") return { kind: "disabled", candidates: [] };
@@ -297,7 +332,7 @@ export function updateCandidateControls(
         notices.push("Only Herdr read-only runs may be retained; close-on-report reset to true.");
         break;
       case "fast_mode_unsupported":
-        next = { ...next, fastMode: false };
+        next = { ...next, openaiFastMode: false };
         notices.push("Fast mode is unavailable for the selected runtime/model; reset to off.");
         break;
       case "effort_unsupported":
@@ -324,8 +359,8 @@ export function updateCandidateModel(
     next = { ...next, effort: "default" };
     notices.push(`Effort ${candidate.effort} is unavailable for ${model}; reset to default.`);
   }
-  if (next.fastMode && !fastModeAvailable) {
-    next = { ...next, fastMode: false };
+  if (next.openaiFastMode && !fastModeAvailable) {
+    next = { ...next, openaiFastMode: false };
     notices.push(`Fast mode is unavailable for ${model}; reset to off.`);
   }
   const error = candidateValidationError(next);

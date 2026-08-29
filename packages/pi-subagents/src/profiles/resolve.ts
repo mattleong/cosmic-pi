@@ -43,7 +43,7 @@ export interface ProfileCandidateAttempt {
   readonly model: string;
   readonly effectiveContext: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly fastMode: boolean;
+  readonly openaiFastMode: boolean;
   readonly closeOnReport: boolean;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
@@ -129,7 +129,7 @@ const baseAttempt = (
   model,
   effectiveContext: candidate.context,
   writeIntent: candidate.writeIntent,
-  fastMode: candidate.fastMode,
+  openaiFastMode: candidate.openaiFastMode ?? false,
   closeOnReport: candidate.closeOnReport,
   effort,
   effortWasExplicit,
@@ -203,7 +203,7 @@ const resolveCandidate = (
     );
     if (effortSkip) return { skipped: effortSkip };
     const resolvedModel = `${resolved.provider}/${resolved.id}`;
-    if (candidate.fastMode && !supportsSubagentFastMode("pi", resolvedModel))
+    if (candidate.openaiFastMode && !supportsSubagentFastMode("pi", resolvedModel))
       return {
         skipped: skip(
           label,
@@ -246,7 +246,7 @@ const resolveCandidate = (
   );
   if (effortSkip) return { skipped: effortSkip };
   const resolvedModel = `${resolved.provider}/${resolved.id}`;
-  if (candidate.fastMode && !supportsSubagentFastMode("pi", resolvedModel))
+  if (candidate.openaiFastMode && !supportsSubagentFastMode("pi", resolvedModel))
     return {
       skipped: skip(
         label,

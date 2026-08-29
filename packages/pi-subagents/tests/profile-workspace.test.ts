@@ -15,7 +15,10 @@ import {
 } from "../src/settings/profile-workspace.ts";
 
 const makeInspection = (seed?: SessionProfileOverrideSeed) => {
-  const global = decodeSubagentConfig({ version: 4 }, "global");
+  const global = decodeSubagentConfig(
+    { version: 6, defaultProfileSet: "default", profileSets: { default: { profiles: {} } } },
+    "global",
+  );
   const config = resolveSubagentConfig({
     globalConfigPath: "/agent/pi-subagents.json",
     projectConfigPath: "/repo/.pi/pi-subagents.json",
@@ -36,6 +39,7 @@ const baseOptions = (
   theme,
   inspection: makeInspection(),
   projectTrusted: true,
+  target: { kind: "profile-set", set: { scope: "global", name: "default" } },
   parentEffort: "high",
   preferredPiModel: () => "openai-codex/gpt-5.6-sol",
   getHeight: () => 40,
@@ -150,6 +154,22 @@ describe("profile workspace disposal", () => {
     });
   });
 
+  it("reports a terminal reloaded outcome after applying persistent changes", () => {
+    const close = vi.fn();
+    const reload = vi.fn(() => Promise.resolve(true));
+    const component = new ProfileWorkspaceComponent(baseOptions({ close, reload }));
+    submitDisable(component);
+    return settleContinuations()
+      .then(() => {
+        component.handleInput("r");
+        return settleContinuations();
+      })
+      .then(() => {
+        expect(reload).toHaveBeenCalledTimes(1);
+        expect(close).toHaveBeenCalledWith("reloaded");
+      });
+  });
+
   it("does not close or render when reload settles after disposal", () => {
     const reloadCell = Deferred.makeUnsafe<boolean>();
     const reload = Effect.runPromise(Deferred.await(reloadCell));
@@ -188,7 +208,7 @@ describe("profile workspace disposal", () => {
     const component = new ProfileWorkspaceComponent(
       baseOptions({
         inspection,
-        initialScope: "session",
+        target: { kind: "session" },
         requestRender,
         close,
         clearSessionOverrides,

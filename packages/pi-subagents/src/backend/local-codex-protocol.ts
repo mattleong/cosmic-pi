@@ -506,7 +506,7 @@ export const threadStartRequest = (
     readonly model: string;
     readonly systemPrompt: string;
     readonly writeIntent: "read-only" | "writer";
-    readonly fastMode: boolean;
+    readonly openaiFastMode: boolean;
   },
 ): CodexThreadStartRequest => {
   const base: CodexThreadStartRequest["params"] = {
@@ -522,7 +522,7 @@ export const threadStartRequest = (
     multiAgentMode: "explicitRequestOnly",
     sandbox: request.writeIntent === "writer" ? "workspace-write" : "read-only",
   };
-  const params: CodexThreadStartRequest["params"] = request.fastMode
+  const params: CodexThreadStartRequest["params"] = request.openaiFastMode
     ? { ...base, serviceTier: FAST_SERVICE_TIER }
     : base;
   return { id, method: "thread/start", params };
@@ -539,7 +539,7 @@ export const turnStartRequest = (
   model: string,
   effort: string,
   writeIntent: "read-only" | "writer",
-  fastMode: boolean,
+  openaiFastMode: boolean,
 ): CodexTurnStartRequest => {
   const base: CodexTurnStartRequest["params"] = {
     threadId,
@@ -555,7 +555,7 @@ export const turnStartRequest = (
         ? { type: "workspaceWrite", writableRoots: [], networkAccess: false }
         : { type: "readOnly", networkAccess: false },
   };
-  const params: CodexTurnStartRequest["params"] = fastMode
+  const params: CodexTurnStartRequest["params"] = openaiFastMode
     ? { ...base, serviceTier: FAST_SERVICE_TIER }
     : base;
   return { id, method: "turn/start", params };

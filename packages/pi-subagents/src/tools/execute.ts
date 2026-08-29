@@ -466,7 +466,7 @@ export const executeSubagentActionEffect = (
             runtime: request.runtime,
             model: request.model,
             effort: request.effort,
-            fastMode: request.fastMode,
+            openaiFastMode: request.openaiFastMode,
             ...(candidateIndex !== undefined && { candidateIndex }),
             ...(warning !== undefined && warning.length > 0 && { warning }),
           };
@@ -492,7 +492,7 @@ export const executeSubagentActionEffect = (
                 runtime: outcome.run.runtime,
                 model: outcome.run.model,
                 effort: outcome.run.effort,
-                fastMode: outcome.run.fastMode,
+                openaiFastMode: outcome.run.openaiFastMode,
                 ...(outcome.run.selection.candidateIndex !== undefined && {
                   candidateIndex: outcome.run.selection.candidateIndex,
                 }),

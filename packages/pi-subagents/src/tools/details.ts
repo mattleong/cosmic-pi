@@ -322,7 +322,7 @@ export const projectSubagentRunCard = (
     reportGeneration: nonNegativeInteger(run.reportGeneration),
     model: requiredText(run.model, limits.model, "unknown-model"),
     effort: SUBAGENT_EFFORTS.includes(run.effort) ? run.effort : ("off" as const),
-    fastMode: run.fastMode,
+    openaiFastMode: run.openaiFastMode,
     context: run.context,
     writeIntent: run.writeIntent,
     capabilities: [...run.capabilities],
@@ -422,7 +422,7 @@ const projectStartEntry = (
     runtime: entry.runtime,
     model: requiredText(entry.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
     effort: entry.effort,
-    fastMode: entry.fastMode,
+    openaiFastMode: entry.openaiFastMode,
     ...(entry.candidateIndex !== undefined && {
       candidateIndex: nonNegativeInteger(entry.candidateIndex),
     }),
@@ -490,7 +490,7 @@ export const projectSubagentProfileRoutes = (
         effort: candidate.effort,
         context: candidate.context,
         writeIntent: candidate.writeIntent,
-        fastMode: candidate.fastMode,
+        openaiFastMode: candidate.openaiFastMode ?? false,
         closeOnReport: candidate.closeOnReport,
         status: candidate.status,
         reason:

@@ -63,7 +63,7 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
   );
 };
 
-/** A v4 route candidate. Profile choices apply except for the protocol-only Herdr-to-local fallback. */
+/** A normalized route candidate. Profile choices apply except for the protocol-only Herdr-to-local fallback. */
 export interface ProfileCandidate {
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -71,8 +71,8 @@ export interface ProfileCandidate {
   readonly effort: ProfileCandidateEffort;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  /** Requests OpenAI priority service for supported Pi/Codex models. Defaults to false. */
-  readonly fastMode: boolean;
+  /** Requests OpenAI priority service for supported Pi/Codex models. Omission means false. */
+  readonly openaiFastMode?: boolean | undefined;
   /** Omitted configuration values normalize to true. */
   readonly closeOnReport: boolean;
 }
@@ -82,8 +82,7 @@ export interface ProfileRoute {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
 
-export type DeclaredProfileCandidate = Omit<ProfileCandidate, "closeOnReport" | "fastMode"> & {
-  readonly fastMode?: boolean | undefined;
+export type DeclaredProfileCandidate = Omit<ProfileCandidate, "closeOnReport"> & {
   readonly closeOnReport?: boolean | undefined;
 };
 export type DeclaredProfileRoute =
@@ -95,7 +94,6 @@ export const normalizeProfileCandidate = (
   candidate: DeclaredProfileCandidate,
 ): ProfileCandidate => ({
   ...candidate,
-  fastMode: candidate.fastMode ?? false,
   closeOnReport: candidate.closeOnReport ?? true,
 });
 
@@ -171,7 +169,10 @@ export const profileCandidateValidationIssues = (
     issues.push({ code: "fork_requires_local_pi" });
   if (!candidate.closeOnReport && !isRetainableProfileCandidate(candidate))
     issues.push({ code: "retention_requires_herdr_read_only" });
-  if (candidate.fastMode && !supportsSubagentFastMode(candidate.runtime, candidate.model))
+  if (
+    candidate.openaiFastMode === true &&
+    !supportsSubagentFastMode(candidate.runtime, candidate.model)
+  )
     issues.push({ code: "fast_mode_unsupported" });
   if (
     candidate.effort !== "default" &&
@@ -182,7 +183,7 @@ export const profileCandidateValidationIssues = (
 };
 
 export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
-  `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:fastMode=${candidate.fastMode}:closeOnReport=${candidate.closeOnReport}`;
+  `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:openaiFastMode=${candidate.openaiFastMode ?? false}:closeOnReport=${candidate.closeOnReport}`;
 
 const candidateEquivalences = {
   host: Equivalence.strictEqual<SubagentHost>(),
@@ -191,13 +192,15 @@ const candidateEquivalences = {
   effort: Equivalence.strictEqual<ProfileCandidateEffort>(),
   context: Equivalence.strictEqual<SubagentContextMode>(),
   writeIntent: Equivalence.strictEqual<SubagentWriteIntent>(),
-  fastMode: Equivalence.strictEqual<boolean>(),
   closeOnReport: Equivalence.strictEqual<boolean>(),
-} satisfies {
-  readonly [Key in keyof ProfileCandidate]: Equivalence.Equivalence<ProfileCandidate[Key]>;
 };
+const sameRequiredProfileCandidate = Equivalence.Struct(candidateEquivalences);
 
-export const sameProfileCandidate = Equivalence.Struct(candidateEquivalences);
+export const sameProfileCandidate = Equivalence.make<ProfileCandidate>(
+  (left, right) =>
+    sameRequiredProfileCandidate(left, right) &&
+    (left.openaiFastMode ?? false) === (right.openaiFastMode ?? false),
+);
 export const sameProfileCandidates = Equivalence.Array(sameProfileCandidate);
 export const sameProfileRoute = Equivalence.mapInput(
   sameProfileCandidates,

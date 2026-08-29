@@ -72,7 +72,7 @@ const launch = (): BackendLaunchRequest => ({
   cwd: process.cwd(),
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   model: "claude-fixture",
   effort: "high",
   activeTools: [],

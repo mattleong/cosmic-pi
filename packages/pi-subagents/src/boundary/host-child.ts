@@ -82,7 +82,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
     type: "boolean",
     default: false,
   });
-  const fastMode = pi.getFlag("pi-subagents-fast-mode") === true;
+  const openaiFastMode = pi.getFlag("pi-subagents-fast-mode") === true;
   const runtimeApi = consumeRuntimeApiCredentials(process.env);
   if (runtimeApi.apiKey && runtimeApi.provider)
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
@@ -244,7 +244,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
     );
   };
 
-  registerChildPiFastModeHook(pi, fastMode);
+  registerChildPiFastModeHook(pi, openaiFastMode);
 
   pi.on("session_start", (_event, ctx) => {
     if (!detachIpc) detachIpc = ipc.listen({ onControl, onDisconnect: rejectPending });

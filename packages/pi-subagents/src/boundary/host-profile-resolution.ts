@@ -141,7 +141,7 @@ interface ResolvedConcreteModel {
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly closeOnReport: boolean;
-  readonly fastMode: boolean;
+  readonly openaiFastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
@@ -201,7 +201,7 @@ const resolveConcreteModel = (
             ctx,
           )
         : { model: attempt.model };
-    if (attempt.fastMode && !supportsSubagentFastMode(attempt.runtime, resolved.model))
+    if (attempt.openaiFastMode && !supportsSubagentFastMode(attempt.runtime, resolved.model))
       return yield* new InvalidSubagentRequestError({
         code: "fast_mode_unsupported",
         message: `Fast mode is unavailable for ${attempt.runtime}/${resolved.model}.`,
@@ -225,7 +225,7 @@ const resolveConcreteModel = (
       host: attempt.host,
       runtime: attempt.runtime,
       closeOnReport: attempt.closeOnReport,
-      fastMode: attempt.fastMode,
+      openaiFastMode: attempt.openaiFastMode,
       ...resolved,
       effort: attempt.effort,
       effortWasExplicit: attempt.effortWasExplicit,
@@ -466,7 +466,7 @@ const resolvePlannedStart = (
       host: concrete.host,
       runtime: concrete.runtime,
       closeOnReport: concrete.closeOnReport,
-      fastMode: concrete.fastMode,
+      openaiFastMode: concrete.openaiFastMode,
       task,
       profile: input.definition.id,
       profileGuidance: input.definition.guidance,

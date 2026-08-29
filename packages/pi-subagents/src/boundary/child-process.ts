@@ -62,7 +62,7 @@ export interface ChildLaunchRequest {
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: import("../domain/routing.ts").SubagentWriteIntent;
-  readonly fastMode: boolean;
+  readonly openaiFastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly runtimeApiKey?: RuntimeApiKey | undefined;
@@ -338,7 +338,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     request.model,
     "--thinking",
     request.effort,
-    ...(request.fastMode ? ["--pi-subagents-fast-mode"] : []),
+    ...(request.openaiFastMode ? ["--pi-subagents-fast-mode"] : []),
     "--tools",
     toolPolicy.enabled.join(","),
     "--exclude-tools",

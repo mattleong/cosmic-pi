@@ -649,7 +649,7 @@ export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSub
   cwd: "/project",
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   effortWasExplicit: true,

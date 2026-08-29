@@ -101,7 +101,7 @@ const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): strin
     candidate.runtime,
     candidate.model,
     candidate.effort,
-    candidate.fastMode && candidate.status === "eligible",
+    candidate.openaiFastMode && candidate.status === "eligible",
   )} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.closeOnReport ? "close after report" : "retain after report"}`;
 
 const profileSource = (source: SubagentProfileRouteCard["source"]): string => {

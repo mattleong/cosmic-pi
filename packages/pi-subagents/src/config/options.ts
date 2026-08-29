@@ -14,6 +14,14 @@ import {
   type SubagentNestingPolicy,
 } from "./schema.ts";
 
+export type ResolvedProfileSetSelection =
+  | {
+      readonly scope: "global" | "project";
+      readonly name?: string | undefined;
+      readonly invalid: boolean;
+    }
+  | { readonly scope: "builtin"; readonly invalid: false };
+
 export interface ResolvedSubagentConfig {
   readonly globalConfigPath: string;
   readonly projectConfigPath: string;
@@ -21,6 +29,7 @@ export interface ResolvedSubagentConfig {
   readonly globalConfigExists: boolean;
   readonly projectConfigExists: boolean;
   readonly fallbackProfile: ProfileId;
+  readonly currentProfileSet: ResolvedProfileSetSelection;
   readonly nesting: SubagentNestingPolicy;
   readonly nestingSource: "builtin" | "global" | "project" | "session";
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
@@ -38,31 +47,103 @@ export interface ResolveSubagentConfigInput {
   readonly project?: DecodedSubagentConfig | undefined;
 }
 
-/** Project routes replace global routes atomically; missing declarations inherit. */
-export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
-  const project = input.projectTrusted ? input.project : undefined;
-  // SAFETY: Configuration decoding validates the persisted value before this typed access.
+interface ResolvedProfileLayer {
+  readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
+  readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
+}
+
+const builtInProfileLayer = (): ResolvedProfileLayer => {
+  // SAFETY: Every fixed profile ID is declared by BUILTIN_PROFILE_ROUTES.
   const profiles = {} as Record<ProfileId, ProfileRoute>;
-  // SAFETY: Configuration decoding validates the persisted value before this typed access.
+  // SAFETY: Every fixed profile ID receives one source in the same loop.
   const profileSources = {} as Record<ProfileId, ProfileRouteSource>;
   for (const id of PROFILE_IDS) {
-    if (project?.invalidProfileRoutes.includes(id)) {
+    profiles[id] = cloneProfileRoute(BUILTIN_PROFILE_ROUTES[id]);
+    profileSources[id] = "builtin";
+  }
+  return { profiles, profileSources };
+};
+
+const invalidProfileLayer = (
+  source: "global-invalid" | "project-invalid",
+): ResolvedProfileLayer => {
+  // SAFETY: Every fixed profile ID receives one route and source in the same loop.
+  const profiles = {} as Record<ProfileId, ProfileRoute>;
+  // SAFETY: Every fixed profile ID receives one route and source in the same loop.
+  const profileSources = {} as Record<ProfileId, ProfileRouteSource>;
+  for (const id of PROFILE_IDS) {
+    profiles[id] = { candidates: [] };
+    profileSources[id] = source;
+  }
+  return { profiles, profileSources };
+};
+
+const resolveProfileSetLayer = (
+  decoded: DecodedSubagentConfig,
+  scope: "global" | "project",
+  lower: ResolvedProfileLayer,
+): ResolvedProfileLayer => {
+  const defaultName = decoded.file.defaultProfileSet;
+  if (decoded.invalidDefaultProfileSet)
+    return invalidProfileLayer(scope === "project" ? "project-invalid" : "global-invalid");
+  if (defaultName === undefined) return lower;
+  const profileSets = decoded.file.profileSets;
+  const profileSet =
+    profileSets && Object.prototype.hasOwnProperty.call(profileSets, defaultName)
+      ? profileSets[defaultName]
+      : undefined;
+  if (!profileSet)
+    return invalidProfileLayer(scope === "project" ? "project-invalid" : "global-invalid");
+  const invalidRoutes = decoded.invalidProfileSetRoutes[defaultName] ?? [];
+  // SAFETY: Every fixed profile ID receives one route and source in the same loop.
+  const profiles = {} as Record<ProfileId, ProfileRoute>;
+  // SAFETY: Every fixed profile ID receives one route and source in the same loop.
+  const profileSources = {} as Record<ProfileId, ProfileRouteSource>;
+  for (const id of PROFILE_IDS) {
+    if (invalidRoutes.includes(id)) {
       profiles[id] = { candidates: [] };
-      profileSources[id] = "project-invalid";
-    } else if (project?.file.profiles?.[id] !== undefined) {
-      profiles[id] = normalizeDeclaredProfileRoute(project.file.profiles[id]);
-      profileSources[id] = "project";
-    } else if (input.global.invalidProfileRoutes.includes(id)) {
-      profiles[id] = { candidates: [] };
-      profileSources[id] = "global-invalid";
-    } else if (input.global.file.profiles?.[id] !== undefined) {
-      profiles[id] = normalizeDeclaredProfileRoute(input.global.file.profiles[id]);
-      profileSources[id] = "global";
+      profileSources[id] = scope === "project" ? "project-invalid" : "global-invalid";
+      continue;
+    }
+    const declaration = profileSet.profiles?.[id];
+    if (declaration === undefined) {
+      profiles[id] = cloneProfileRoute(lower.profiles[id]);
+      profileSources[id] = lower.profileSources[id];
     } else {
-      profiles[id] = cloneProfileRoute(BUILTIN_PROFILE_ROUTES[id]);
-      profileSources[id] = "builtin";
+      profiles[id] = normalizeDeclaredProfileRoute(declaration);
+      profileSources[id] = scope;
     }
   }
+  return { profiles, profileSources };
+};
+
+const selectedSet = (
+  global: DecodedSubagentConfig,
+  project: DecodedSubagentConfig | undefined,
+): ResolvedProfileSetSelection => {
+  if (project && (project.file.defaultProfileSet !== undefined || project.invalidDefaultProfileSet))
+    return {
+      scope: "project",
+      ...(project.file.defaultProfileSet !== undefined && {
+        name: project.file.defaultProfileSet,
+      }),
+      invalid: project.invalidDefaultProfileSet,
+    };
+  if (global.file.defaultProfileSet !== undefined || global.invalidDefaultProfileSet)
+    return {
+      scope: "global",
+      ...(global.file.defaultProfileSet !== undefined && { name: global.file.defaultProfileSet }),
+      invalid: global.invalidDefaultProfileSet,
+    };
+  return { scope: "builtin", invalid: false };
+};
+
+/** Project routes in its selected set replace the selected global-set route; missing routes inherit. */
+export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
+  const project = input.projectTrusted ? input.project : undefined;
+  const builtin = builtInProfileLayer();
+  const global = resolveProfileSetLayer(input.global, "global", builtin);
+  const effective = project ? resolveProfileSetLayer(project, "project", global) : global;
   const nesting =
     project?.file.nesting ?? input.global.file.nesting ?? DEFAULT_SUBAGENT_NESTING_POLICY;
   const nestingSource = project?.file.nesting
@@ -77,10 +158,11 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     globalConfigExists: input.globalConfigExists,
     projectConfigExists: input.projectTrusted && input.projectConfigExists,
     fallbackProfile: "generalist",
+    currentProfileSet: selectedSet(input.global, project),
     nesting: { ...nesting },
     nestingSource,
-    profiles,
-    profileSources,
+    profiles: effective.profiles,
+    profileSources: effective.profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],
   });
 }

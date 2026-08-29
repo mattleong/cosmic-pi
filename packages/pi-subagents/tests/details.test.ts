@@ -41,7 +41,7 @@ const run = (index = 1, cost?: number): SubagentRunView => {
     state: "reported",
     context: "fresh",
     writeIntent: "read-only",
-    fastMode: false,
+    openaiFastMode: false,
     host: "herdr",
     runtime: "claude",
     closeOnReport: false,
@@ -68,7 +68,7 @@ const profileCandidate = (overrides: Partial<ProfileCandidateDetailsInput> = {})
   effort: "default" as const,
   context: "fresh" as const,
   writeIntent: "read-only" as const,
-  fastMode: false,
+  openaiFastMode: false,
   closeOnReport: true,
   status: "eligible" as const,
   reason: "Ready.",
@@ -88,7 +88,7 @@ const startedEntry = (
   runtime: "pi",
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
-  fastMode: false,
+  openaiFastMode: false,
   candidateIndex: 1,
   runId: `agent-r2-${index + 1}`,
 });
@@ -526,7 +526,7 @@ describe("persisted subagent details version 2", () => {
       runtime: "pi",
       model: "m".repeat(512),
       effort: "high",
-      fastMode: false,
+      openaiFastMode: false,
       candidateIndex: index,
       warning: "w".repeat(1_024),
     }));
@@ -569,7 +569,7 @@ describe("persisted subagent details version 2", () => {
       runtime: "pi",
       model: "openai-codex/gpt-5.6-sol",
       effort: "high",
-      fastMode: false,
+      openaiFastMode: false,
       candidateIndex: index,
     });
     const details = makeStartDetails({
@@ -803,7 +803,7 @@ describe("persisted subagent details version 2", () => {
       effort: "default",
       context: "fresh",
       writeIntent: "read-only",
-      fastMode: false,
+      openaiFastMode: false,
       closeOnReport: true,
       status: "eligible",
     });

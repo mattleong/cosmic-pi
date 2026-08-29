@@ -30,17 +30,17 @@ export const boundToolOutput = (text: string): string =>
     "\n… [tool output truncated; narrow the request or query individual run IDs for the omitted content]",
   );
 
-export const formatToolModel = (model: string, effort: string, fastMode?: boolean): string =>
-  `${sanitizeTerminalLine(model)}:${sanitizeTerminalLine(effort)}${fastMode ? " ⚡" : ""}`;
+export const formatToolModel = (model: string, effort: string, openaiFastMode?: boolean): string =>
+  `${sanitizeTerminalLine(model)}:${sanitizeTerminalLine(effort)}${openaiFastMode ? " ⚡" : ""}`;
 
 export const formatToolRoute = (
   host: string,
   runtime: string,
   model: string,
   effort: string,
-  fastMode?: boolean,
+  openaiFastMode?: boolean,
 ): string =>
-  `${sanitizeTerminalLine(host)}/${sanitizeTerminalLine(runtime)} · ${formatToolModel(model, effort, fastMode)}`;
+  `${sanitizeTerminalLine(host)}/${sanitizeTerminalLine(runtime)} · ${formatToolModel(model, effort, openaiFastMode)}`;
 
 export const joinBoundedToolText = (parts: ReadonlyArray<string>): string =>
   boundToolOutput(parts.filter(Boolean).join("\n\n"));
@@ -73,7 +73,7 @@ const boundedLine = (value: string, maximum: number): string =>
 
 export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
-  const route = formatToolRoute(run.host, run.runtime, run.model, run.effort, run.fastMode);
+  const route = formatToolRoute(run.host, run.runtime, run.model, run.effort, run.openaiFastMode);
   const tree = run.depth
     ? ` · depth=${run.depth} · children=${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
     : "";

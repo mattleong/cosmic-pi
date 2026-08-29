@@ -19,7 +19,7 @@ Session-scoped, profile-routed background subagents for Pi.
 - Seven built-in profiles: `scout`, `researcher`, `planner`, `worker`, `reviewer`, `oracle`, and `generalist`.
 - `subagent_start` accepts one required `agents` array (1–32 items), subject to the caller's effective direct-child capacity. Each item contains `task`, optional `profile`, optional `name`, and optional `writes` with exact workspace-relative file claims. Omitted claims keep a writer exclusive; disjoint claimed writers may share one checkout cooperatively.
 - Start is always background and nonblocking. Launch independent workstreams early and continue working; unclaimed successful reports and terminal failures are delivered automatically through one coalesced outcome channel. Use `subagent_await` with `all_finished` or `any_finished` only when progress or final synthesis depends on selected reports.
-- Version-5 configuration preserves the version-4 profile-route contract: routes own runtime, model, effort, context, write intent, OpenAI fast mode, and normal host/report-close behavior. Native selectors use one fail-closed 256-character grammar across config, settings, and all six adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, including Pi registry context variants such as `cursor/gpt-5.5@1m`, plus Claude's optional exact long-context suffix such as `[1m]`. An unsupported Herdr protocol is the sole host exception: launch visibly retries the same candidate locally and forces `closeOnReport:true`.
+- Version-6 configuration groups routes into named profile sets. Global and trusted-project documents use the same shape, select a scope-local `defaultProfileSet`, and layer missing routes over the selected lower-precedence set. Routes own runtime, model, effort, context, write intent, optional OpenAI fast mode, and normal host/report-close behavior. Native selectors use one fail-closed 256-character grammar across config, settings, and all six adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, including Pi registry context variants such as `cursor/gpt-5.5@1m`, plus Claude's optional exact long-context suffix such as `[1m]`. An unsupported Herdr protocol is the sole host exception: launch visibly retries the same candidate locally and forces `closeOnReport:true`.
 - Ordered candidates receive bounded readiness preflight before run, lease, supervisor, or process ownership. Unavailable executables, unauthenticated CLIs, unsupported fresh/context/effort/write-policy combinations, and missing private-harness prerequisites become typed skips, allowing fallback to a later candidate. Herdr protocol 20 is required. Any older or newer version, or a CLI/server protocol mismatch, produces an explicit diagnostic and first retries the same runtime/model candidate on the local host. Local preflight still applies, and local execution always closes after reporting.
 - Once `SubagentService.start` begins, routing never falls through implicitly to another candidate. After a failed run has confirmed cleanup, explicit `subagent_lifecycle` action `retry` creates a linked successor strictly after the selected candidate in the frozen launch-time route. It refuses uncertain execution/cleanup and marks exhaustion before any generalist replacement.
 - A single shared backend registry implements all six `local|herdr` × `pi|claude|codex` adapters. Herdr 0.8 selection is pinned to Pi's inherited `HERDR_SOCKET_PATH`; a missing live inherited socket fails readiness before private harness or topology ownership.
@@ -53,79 +53,83 @@ Each built-in uses one explicit `local` + `pi` + `parent` candidate with `closeO
 
 Omitting `profile` always selects `generalist`; specialized profiles must be explicit. Configuration and tool inputs accept only the seven profile IDs listed above.
 
-## Configuration version 5
+## Configuration version 6
 
-Global configuration is `<agent-dir>/pi-subagents.json`. Trusted projects may override it at `<cwd>/<CONFIG_DIR_NAME>/pi-subagents.json` (normally `.pi/pi-subagents.json`). Untrusted project configuration is not read.
+Global configuration is `<agent-dir>/pi-subagents.json`. Trusted projects may override it at `<cwd>/<CONFIG_DIR_NAME>/pi-subagents.json` (normally `.pi/pi-subagents.json`). Both scopes use the same document shape; untrusted project configuration is not read.
 
 ```json
 {
-  "version": 5,
+  "version": 6,
+  "defaultProfileSet": "review",
+  "profileSets": {
+    "review": {
+      "profiles": {
+        "reviewer": [
+          {
+            "host": "herdr",
+            "runtime": "claude",
+            "model": "claude-opus-5",
+            "effort": "high",
+            "context": "fresh",
+            "writeIntent": "read-only",
+            "closeOnReport": false
+          },
+          {
+            "host": "local",
+            "runtime": "pi",
+            "model": "openai-codex/gpt-5.6-sol",
+            "effort": "high",
+            "context": "fresh",
+            "writeIntent": "read-only",
+            "openaiFastMode": true,
+            "closeOnReport": true
+          }
+        ],
+        "scout": "disabled"
+      }
+    },
+    "writers": {
+      "profiles": {
+        "worker": {
+          "host": "local",
+          "runtime": "pi",
+          "model": "parent",
+          "effort": "default",
+          "context": "fresh",
+          "writeIntent": "writer"
+        }
+      }
+    }
+  },
   "nesting": {
     "maxDirectChildren": 12,
     "maxDepth": 3
-  },
-  "profiles": {
-    "reviewer": [
-      {
-        "host": "herdr",
-        "runtime": "claude",
-        "model": "claude-opus-5",
-        "effort": "high",
-        "context": "fresh",
-        "writeIntent": "read-only",
-        "closeOnReport": false
-      },
-      {
-        "host": "local",
-        "runtime": "pi",
-        "model": "openai-codex/gpt-5.6-sol",
-        "effort": "high",
-        "context": "fresh",
-        "writeIntent": "read-only",
-        "fastMode": true,
-        "closeOnReport": true
-      }
-    ],
-    "worker": {
-      "host": "local",
-      "runtime": "pi",
-      "model": "parent",
-      "effort": "default",
-      "context": "fresh",
-      "writeIntent": "writer"
-    },
-    "scout": "disabled"
   }
 }
 ```
+
+Each document may contain at most 32 scope-local sets. Names are 1–64 characters, start and end with a letter or number, and may otherwise contain letters, numbers, spaces, `.`, `_`, or `-`. A set always contains `profiles`, which may be empty. Global and project sets with the same name are independent.
+
+`defaultProfileSet` is optional. A project without one inherits the selected global set; a global document without one inherits built-ins. Sets may be partial: each missing project route inherits the selected global route, and each missing global route inherits its built-in. An invalid declared default fails all routes in that scope closed but does not prevent the settings picker from opening for repair. Session overrides remain complete route overlays above the selected project/global layers.
 
 A route is exactly `"disabled"`, one candidate, or a non-empty ordered candidate array (maximum 32). Candidate fields are:
 
 - `host`: `local` or `herdr`;
 - `runtime`: `pi`, `claude`, or `codex`;
 - `model`: a bounded native runtime selector; Pi uses `parent` or canonical `provider/model`, including registry-owned `@` context variants;
-- `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `default` means the profile's soft default (shown as `<effective> (default)` in settings), while `generalist` inherits the current parent effort and falls back to `high`;
+- `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `default` means the profile's soft default, while `generalist` inherits the current parent effort and falls back to `high`;
 - `context`: `fresh` or `fork`;
 - `writeIntent`: `read-only` or `writer`;
-- optional `fastMode`, defaulting to false; when true, eligible Pi or Codex candidates request OpenAI's `priority` service tier;
+- optional `openaiFastMode`, defaulting to false; when true, eligible Pi or Codex candidates request OpenAI's `priority` service tier;
 - optional `closeOnReport`, defaulting to true.
 
-Cross-field rules are strict:
+Cross-field rules remain strict: `fork` and `parent` require local Pi; retained reports require a Herdr read-only candidate; and `openaiFastMode: true` requires an eligible Pi/OpenAI or Codex priority route. Unknown root keys fail document activation. Invalid present routes fail only that route closed. Diagnostics redact profile-set names.
 
-- `fork` is valid only for `local` + `pi`;
-- `parent` is valid only for `local` + `pi`;
-- `fastMode: true` is valid only for Pi candidates using a supported OpenAI model (including a supported active `parent`) or Codex candidates whose native catalog advertises the `priority` tier;
-- `closeOnReport: false` is valid only for Herdr-hosted read-only candidates.
-
-At launch, an unsupported Herdr protocol is the sole derived-route exception. The extension reports the rejected protocol, retries the same runtime/model candidate locally, and forces `closeOnReport:true`; it never silently claims retained semantics for the local run.
-
-Unknown root or candidate keys invalidate the document or complete present route and fail closed. Persistent precedence is trusted project over global over built-in. A temporary session override, when present, replaces that profile's complete loaded route above every persistent layer. Removed policy fields (`denied` and `discouraged`) and execution/lifetime fields are not part of v4 and produce unknown-key diagnostics.
-
-Versions 4 and 5 are accepted. Version 4 receives the default nesting policy and upgrades to version 5 on the next store write. Present invalid nesting values fail strict decoding and are never clamped. Nesting precedence is Session over trusted Project over Global over Built-in. `/subagents settings` edits Session, Global, or trusted Project policy. Lowering a limit does not stop current runs; later batches use the newly captured revision.
+Versions 4 and 5 remain read-compatible. Their root `profiles` field and candidate `fastMode` field migrate on the next successful store write to `profileSets.default.profiles`, `defaultProfileSet: "default"`, and `openaiFastMode`. Migration refuses malformed legacy containers, invalid sibling routes, and unknown legacy fields rather than discarding them. Version 6 accepts only `openaiFastMode` and writes no legacy `fastMode` key. Present invalid nesting values fail strict decoding and are never clamped. Nesting precedence is Session over trusted Project over Global over Built-in. `/subagents settings` edits Session, Global, or trusted Project policy. Lowering a limit does not stop current runs; later batches use the newly captured revision.
 
 ### Temporary session overrides
 
-`/subagents profiles session` opens the same ordered route editor in an in-memory Session scope. Press `s` to cycle Session → Global → Project; untrusted projects cycle only Session ↔ Global. Editing an inherited session route copies the complete currently active route before applying the selected change, so changing only one candidate model preserves fallback order and every safety field. Session changes apply immediately to new launches and `subagent_models`; active runs keep their admitted route. `i` clears the selected profile override and `X` clears every session override after confirmation.
+`/subagents profiles session` opens the ordered route editor against an immutable in-memory Session target. Persistent editors likewise remain bound to the selected `[P]` or `[G]` set; scope switching happens only by returning to the separate profile-set picker. Editing an inherited session route copies the complete currently active route before applying the selected change, so changing only one candidate model preserves fallback order and every safety field. Session changes apply immediately to new launches and `subagent_models`; active runs keep their admitted route. `i` clears the selected profile override and `X` clears every session override after confirmation.
 
 Session overrides write no project, global, or Pi session-history data. They survive `/tree` navigation and `/reload`; reload refreshes the persistent base configuration and then reapplies the complete session routes. They clear on `/new`, `/resume`, `/fork`, quit, or process restart. Clearing an override reveals the persistent configuration loaded by the latest activation. Precedence is Session > trusted Project > Global > Built-in.
 
@@ -180,7 +184,7 @@ Use `subagent_models` to inspect complete configured candidates and static eligi
 ## Commands and tools
 
 - `/subagents` opens the responsive hierarchy inspector. It renders the complete authenticated subtree in parent-before-child order with branches expanded initially. `j/k` or Up/Down move across visible nodes, `h/l` or Left/Right collapse and expand the selected subtree, Enter inspects the selected run, `Ctrl-U` / `Ctrl-D` scroll, `gg/G` jump to endpoints, and `q` closes; configured Pi selection bindings remain available. A nested Pi manager renders only descendants of its authenticated visibility root. Run actions are `m` guide/reply/new task, `i` interrupt, `r` resume, `n` rename, `x` stop subtree, and `t` technical details; unavailable actions explain the capability or state constraint. Guidance, parent replies, next assignments, resume messages, and renames use visible text-input mode, where printable Vim keys remain ordinary text. Action errors remain visible while browsing until another action replaces them; stop confirmation is modal. Narrow lists move by half a viewport with `Ctrl-U` / `Ctrl-D` and show their visible range, while duplicate display names include run IDs.
-- `/subagents settings` edits strict nesting limits for Session, Global, or trusted Project scope. `/subagents profiles` opens the full ordered version-5 route editor in Global scope; `/subagents profiles session|global|project` opens a specific scope. It uses the same `j/k`, `h/l`, `Ctrl-U` / `Ctrl-D`, `gg/G`, and `q` navigation; `s` cycles Session → Global → trusted Project scope, while `/` enters an explicit search mode that keeps printable Vim keys typeable. It opens immediately from one immutable root-registry Pi model snapshot while a cancelable refresh runs in the background; a successful refresh atomically replaces the snapshot, and failure or abort retains the prior generation with a bounded warning. It can inspect, add (up to 32), edit, clone, move, remove, disable, or reset complete ordered routes. Session edits use revision-checked in-memory state and apply immediately; global/project edits retain optimistic document concurrency and require `/reload`. Candidate editing covers all six host/runtime combinations plus native model, effort, context, write intent, OpenAI fast mode, and report retention. Destructive actions require repeated-key confirmation, invalid intermediates are never committed, and source/shadow notices distinguish active session routes from saved persistent settings.
+- `/subagents settings` edits strict nesting limits for Session, Global, or trusted Project scope. `/subagents profiles` opens the combined named-set picker; trusted projects show `[P]` and `[G]` sets together plus `[P] Inherit global`. The picker can Use, create, same-scope copy, rename, delete, search, or edit a set. `/subagents profiles global|project` opens that picker focused on a scope, while `/subagents profiles session` opens the separate temporary route editor. A route editor stays bound to its immutable Session or named-set target and uses the same `j/k`, `h/l`, `Ctrl-U` / `Ctrl-D`, `gg/G`, and `q` navigation. It opens immediately from one immutable root-registry Pi model snapshot while a cancelable refresh runs in the background; a successful refresh atomically replaces the snapshot, and failure or abort retains the prior generation with a bounded warning. It can inspect, add (up to 32), edit, clone, move, remove, disable, reset, or inherit complete ordered routes. Session edits use revision-checked in-memory state and apply immediately; global/project edits retain optimistic exact-document concurrency and require `/reload`. Candidate editing covers all six host/runtime combinations plus native model, effort, context, write intent, OpenAI fast mode, and report retention. Destructive actions require repeated-key confirmation, invalid intermediates are never committed, and source/shadow notices distinguish active session routes from saved persistent settings.
 - Agent tools: `subagent_models`, `subagent_start`, `subagent_list`, `subagent_status`, `subagent_await`, `subagent_send`, `subagent_reply`, `subagent_lifecycle`, `subagent_rename`, and parent-only `subagent_claims`. `subagent_list` renders its bounded cards as a parent-before-child hierarchy. During a root TUI await, the persistent widget marks completion-controlling targets with `◎`; descendant state changes refresh that hierarchy but never change the requested wait condition or claim descendant reports. The claims tool lists, grants, and revokes exact cooperative ownership while a worker waits on a parent claim question with no other active tool, and resumes writer admission after the parent reviews a detected violation. Lifecycle action `retry` continues failed runs through their remaining frozen profile route with exact predecessor/successor lineage; it is not same-candidate rerun or automatic failover. Start calls keep names/profiles compact and reveal bounded tasks only when expanded; final start cards are immutable launch receipts, not live run cards. Other collapsed cards prioritize the requested action, outcome, route/safety identity, and next step. Partial start and await cards omit duplicate hierarchy when the widget is available, while non-TUI, nested, and widget-failure paths keep the bounded card renderer. Narrow layouts preserve the tree and state glyph first, then truncate lower-priority details. Expanded list and status cards add full IDs, wrapped provenance/capabilities, and profile-candidate reasons. Expanded await cards render preserved reports/errors before the static settled hierarchy, showing only exceptional fallback, warning, retained-backend, writer, or failure diagnostics; finished assignments never retain stale progress lines. `subagent_models` renders effective route source and static eligibility separately from launch-time checks.
 
 Every local or Herdr Pi launch snapshots the **root** Pi's current active tool names. `writeIntent` does not filter that snapshot: Pi read-only is a prompt and writer-lease coordination contract, not capability confinement or a filesystem sandbox. Only competing coordinator/orchestrator implementations are denied; package-owned `subagent_*` names resolve to authenticated proxies. Active names are activation requests, not code transfer, so the child must discover an implementation. The snapshot is fixed for that launch; nested starts snapshot root state again, and child-local tool toggles do not define a grandchild's inventory.

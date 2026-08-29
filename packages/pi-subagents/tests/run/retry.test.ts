@@ -18,7 +18,7 @@ const candidate = (model: string): ProfileCandidate => ({
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   closeOnReport: true,
 });
 

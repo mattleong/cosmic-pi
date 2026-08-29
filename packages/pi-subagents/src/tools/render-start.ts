@@ -110,7 +110,7 @@ const routeLabel = (entry: SubagentStartEntry): string => {
       entry.runtime ?? "pi",
       entry.model ?? "unknown model",
       entry.effort ?? "off",
-      entry.fastMode,
+      entry.openaiFastMode,
     );
   return entry.status === "pending" ? "resolving route/model" : "no eligible route/model";
 };
@@ -163,7 +163,7 @@ const receiptRow = (
                   entry.runtime ?? "pi",
                   entry.model ?? "unknown model",
                   entry.effort ?? "off",
-                  entry.fastMode,
+                  entry.openaiFastMode,
                 ),
               )}`
             : `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", route)}`;

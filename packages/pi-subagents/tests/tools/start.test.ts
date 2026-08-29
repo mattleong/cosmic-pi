@@ -302,7 +302,7 @@ describe("subagent tool", () => {
               effort: "low",
               context: "fresh",
               writeIntent: "read-only",
-              fastMode: false,
+              openaiFastMode: false,
               closeOnReport: true,
             },
           ],
@@ -513,10 +513,10 @@ describe("subagent tool", () => {
         {
           runtime: "pi",
           model: "openai-codex/gpt-5.6-sol",
-          fastMode: true,
+          openaiFastMode: true,
         },
-        { runtime: "claude", model: "claude-opus-5", fastMode: false },
-        { runtime: "codex", model: "gpt-5.6-codex", fastMode: false },
+        { runtime: "claude", model: "claude-opus-5", openaiFastMode: false },
+        { runtime: "codex", model: "gpt-5.6-codex", openaiFastMode: false },
       ] as const;
 
       for (const runtimeCase of runtimeCases) {
@@ -530,7 +530,7 @@ describe("subagent tool", () => {
               effort: "high",
               context: "fresh",
               writeIntent: "read-only",
-              fastMode: runtimeCase.fastMode,
+              openaiFastMode: runtimeCase.openaiFastMode,
               closeOnReport: false,
             },
           },
@@ -1098,7 +1098,7 @@ describe("subagent tool", () => {
             readonly runtime?: string;
             readonly model?: string;
             readonly effort?: string;
-            readonly fastMode?: boolean;
+            readonly openaiFastMode?: boolean;
             readonly runId?: string;
           }>;
           readonly startFailures?: ReadonlyArray<{
@@ -1125,7 +1125,7 @@ describe("subagent tool", () => {
       runtime: "pi",
       model: "openai-codex/gpt-5.6-sol",
       effort: "high",
-      fastMode: false,
+      openaiFastMode: false,
       runId: "agent-1",
     });
     const failedEntry = details?.startEntries?.[failureIndex];

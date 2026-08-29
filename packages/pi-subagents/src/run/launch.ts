@@ -388,7 +388,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                     };
               return {
                 ...withWriteClaims,
-                fastMode: request.fastMode,
+                openaiFastMode: request.openaiFastMode,
                 host: request.host,
                 runtime: request.runtime,
                 closeOnReport: request.closeOnReport,
@@ -410,7 +410,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 cwd: canonicalWriterCwd?.path ?? request.cwd,
                 context: request.context,
                 writeIntent: request.writeIntent,
-                fastMode: request.fastMode,
+                openaiFastMode: request.openaiFastMode,
                 model: request.model,
                 effort: request.effort,
               };

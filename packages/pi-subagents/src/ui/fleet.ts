@@ -551,7 +551,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const shortId = run.id.length <= 14 ? run.id : `…${run.id.slice(-13)}`;
     const identity = duplicateName ? `[${shortId}] ${run.name}` : run.name;
     const label = sanitizeTerminalLine(
-      `${identity} · ${state} · ${run.writeIntent}${run.fastMode ? " · ⚡ fast" : ""}`,
+      `${identity} · ${state} · ${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`,
     );
     return padListDetailRow(
       `${selection} ${branch}${disclosure} ${glyph} ${

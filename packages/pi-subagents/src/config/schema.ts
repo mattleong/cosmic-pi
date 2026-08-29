@@ -16,9 +16,14 @@ import {
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
+
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
-export const SUBAGENT_CONFIG_VERSION = 5;
+export const SUBAGENT_CONFIG_VERSION = 6;
+export const PREVIOUS_SUBAGENT_CONFIG_VERSION = 5;
 export const LEGACY_SUBAGENT_CONFIG_VERSION = 4;
+export const MIGRATED_PROFILE_SET_NAME = "default";
+export const MAX_PROFILE_SETS = 32;
+export const MAX_PROFILE_SET_NAME_CHARS = 64;
 
 export const DEFAULT_MAX_DIRECT_CHILDREN = 12;
 export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
@@ -26,6 +31,16 @@ export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
 export const MIN_SUBAGENT_DEPTH = 0;
 export const MAX_SUBAGENT_DEPTH = 8;
+
+const PROFILE_SET_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._ -]{0,62}[A-Za-z0-9])?$/u;
+
+export const isProfileSetName = (value: string): boolean =>
+  value.length <= MAX_PROFILE_SET_NAME_CHARS && PROFILE_SET_NAME_PATTERN.test(value);
+
+export const normalizeProfileSetName = (value: string): string | undefined => {
+  const normalized = value.trim();
+  return isProfileSetName(normalized) ? normalized : undefined;
+};
 
 export interface SubagentNestingPolicy {
   readonly maxDirectChildren: number;
@@ -37,16 +52,29 @@ export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.fre
   maxDepth: DEFAULT_MAX_SUBAGENT_DEPTH,
 });
 
+export interface SubagentProfileSet {
+  readonly profiles: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>>;
+}
+
 export interface SubagentConfigFile {
   readonly version?: number | undefined;
-  readonly profiles?: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>> | undefined;
+  readonly defaultProfileSet?: string | undefined;
+  readonly profileSets?: Readonly<Record<string, SubagentProfileSet>> | undefined;
   readonly nesting?: SubagentNestingPolicy | undefined;
 }
 
 export interface DecodedSubagentConfig {
+  /** Scope-normalized view. Versions 4 and 5 expose their legacy `profiles` as set `default`. */
   readonly file: SubagentConfigFile;
-  /** Redacted structural paths only; values and parser details are never retained. */
+  /** Redacted structural paths only; values and set names are never retained. */
   readonly diagnostics: ReadonlyArray<string>;
+  /** Invalid routes keyed by a validated, bounded profile-set name. */
+  readonly invalidProfileSetRoutes: Readonly<Record<string, ReadonlyArray<ProfileId>>>;
+  /** Structurally invalid sets whose validated names may still be repaired or deleted by the UI. */
+  readonly invalidProfileSets: ReadonlyArray<string>;
+  /** The declared default is malformed, missing, or points at an invalid set. */
+  readonly invalidDefaultProfileSet: boolean;
+  /** Compatibility projection for the declared default set. */
   readonly invalidProfileRoutes: ReadonlyArray<ProfileId>;
   readonly unsupportedVersion: boolean;
 }
@@ -87,17 +115,15 @@ export const decodeSubagentNesting = <ValueInput>(
   }
 };
 
-const CANDIDATE_KEYS = [
+const CANDIDATE_BASE_KEYS = [
   "host",
   "runtime",
   "model",
   "effort",
   "context",
   "writeIntent",
-  "fastMode",
   "closeOnReport",
 ] as const;
-const CANDIDATE_KEYS_SET = new Set<string>(CANDIDATE_KEYS);
 const CandidateContractSchema = Schema.Struct({
   host: ProfileHostSchema,
   runtime: ProfileRuntimeSchema,
@@ -105,16 +131,21 @@ const CandidateContractSchema = Schema.Struct({
   effort: ProfileEffortSchema,
   context: ProfileContextSchema,
   writeIntent: ProfileWriteIntentSchema,
-  fastMode: Schema.optional(Schema.Boolean),
+  openaiFastMode: Schema.optional(Schema.Boolean),
   closeOnReport: Schema.optional(Schema.Boolean),
 });
 
-const ownKeysAre = (record: Readonly<JsonObject>, allowed: ReadonlySet<string>): boolean => {
+const safeOwnKeys = (record: Readonly<JsonObject>): ReadonlyArray<string> | undefined => {
   try {
-    return Object.keys(record).every((key) => allowed.has(key));
+    return Object.keys(record);
   } catch {
-    return false;
+    return undefined;
   }
+};
+
+const ownKeysAre = (record: Readonly<JsonObject>, allowed: ReadonlySet<string>): boolean => {
+  const keys = safeOwnKeys(record);
+  return keys !== undefined && keys.every((key) => allowed.has(key));
 };
 
 const decodedRecord = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
@@ -135,15 +166,15 @@ const readField = (
   diagnostics: string[],
 ) => {
   try {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) return { present: false };
-    return { present: true, value: record[key] };
+    if (!Object.prototype.hasOwnProperty.call(record, key)) return { present: false as const };
+    return { present: true as const, value: record[key] };
   } catch {
     diagnostics.push(path);
-    return { present: true };
+    return { present: true as const };
   }
 };
 
-const readCandidateField = (record: Readonly<JsonObject>, key: (typeof CANDIDATE_KEYS)[number]) => {
+const readCandidateField = (record: Readonly<JsonObject>, key: string) => {
   try {
     if (!Object.prototype.hasOwnProperty.call(record, key))
       return { readable: true as const, present: false as const };
@@ -153,18 +184,24 @@ const readCandidateField = (record: Readonly<JsonObject>, key: (typeof CANDIDATE
   }
 };
 
+const isLegacyConfigVersion = (version: number | undefined): version is 4 | 5 =>
+  version === LEGACY_SUBAGENT_CONFIG_VERSION || version === PREVIOUS_SUBAGENT_CONFIG_VERSION;
+
 export const decodeProfileCandidate = <ValueInput>(
   value: ValueInput,
+  version = SUBAGENT_CONFIG_VERSION,
 ): ProfileCandidate | undefined => {
   const record = decodedRecord(value);
-  if (!record || !ownKeysAre(record, CANDIDATE_KEYS_SET)) return undefined;
+  const priorityKey = isLegacyConfigVersion(version) ? "fastMode" : "openaiFastMode";
+  const allowedKeys = new Set<string>([...CANDIDATE_BASE_KEYS, priorityKey]);
+  if (!record || !ownKeysAre(record, allowedKeys)) return undefined;
   const host = readCandidateField(record, "host");
   const runtime = readCandidateField(record, "runtime");
   const model = readCandidateField(record, "model");
   const effort = readCandidateField(record, "effort");
   const context = readCandidateField(record, "context");
   const writeIntent = readCandidateField(record, "writeIntent");
-  const fastMode = readCandidateField(record, "fastMode");
+  const openaiFastMode = readCandidateField(record, priorityKey);
   const closeOnReport = readCandidateField(record, "closeOnReport");
   if (
     !host.readable ||
@@ -179,7 +216,7 @@ export const decodeProfileCandidate = <ValueInput>(
     !context.present ||
     !writeIntent.readable ||
     !writeIntent.present ||
-    !fastMode.readable ||
+    !openaiFastMode.readable ||
     !closeOnReport.readable
   )
     return undefined;
@@ -191,10 +228,12 @@ export const decodeProfileCandidate = <ValueInput>(
     context: context.value,
     writeIntent: writeIntent.value,
   };
-  const withFastMode = fastMode.present ? { ...base, fastMode: fastMode.value } : base;
+  const withOpenaiFastMode = openaiFastMode.present
+    ? { ...base, openaiFastMode: openaiFastMode.value }
+    : base;
   const plain = closeOnReport.present
-    ? { ...withFastMode, closeOnReport: closeOnReport.value }
-    : withFastMode;
+    ? { ...withOpenaiFastMode, closeOnReport: closeOnReport.value }
+    : withOpenaiFastMode;
   try {
     const decoded = Schema.decodeUnknownOption(CandidateContractSchema)(plain);
     if (Option.isNone(decoded)) return undefined;
@@ -207,6 +246,7 @@ export const decodeProfileCandidate = <ValueInput>(
 
 const decodeRoute = <ValueInput>(
   value: ValueInput,
+  version: number,
   path: string,
   diagnostics: string[],
 ): DeclaredProfileRoute | undefined => {
@@ -219,7 +259,7 @@ const decodeRoute = <ValueInput>(
     return undefined;
   }
   if (!isArray) {
-    const candidate = decodeProfileCandidate(value);
+    const candidate = decodeProfileCandidate(value, version);
     if (!candidate) diagnostics.push(path);
     return candidate;
   }
@@ -249,7 +289,7 @@ const decodeRoute = <ValueInput>(
       invalid = true;
       continue;
     }
-    const candidate = decodeProfileCandidate(item);
+    const candidate = decodeProfileCandidate(item, version);
     if (!candidate) {
       diagnostics.push(`${path}[${index}]`);
       invalid = true;
@@ -258,7 +298,124 @@ const decodeRoute = <ValueInput>(
   return invalid ? undefined : candidates;
 };
 
-/** Strict version-4 unknown-boundary decode for one global or project document. */
+interface DecodedProfiles {
+  readonly profiles: Partial<Record<ProfileId, DeclaredProfileRoute>>;
+  readonly invalidRoutes: ReadonlyArray<ProfileId>;
+}
+
+const decodeProfiles = <ValueInput>(
+  value: ValueInput,
+  version: number,
+  path: string,
+  diagnostics: string[],
+): DecodedProfiles | undefined => {
+  const decodedProfiles = decodedRecord(value);
+  if (!decodedProfiles) {
+    diagnostics.push(path);
+    return undefined;
+  }
+  const profiles: Partial<Record<ProfileId, DeclaredProfileRoute>> = {};
+  const invalidRoutes: ProfileId[] = [];
+  for (const id of PROFILE_IDS) {
+    const routePath = `${path}.${id}`;
+    const field = readField(decodedProfiles, id, routePath, diagnostics);
+    if (!field.present) continue;
+    const route = decodeRoute(field.value, version, routePath, diagnostics);
+    if (route === undefined) invalidRoutes.push(id);
+    else profiles[id] = route;
+  }
+  if (!ownKeysAre(decodedProfiles, new Set<string>(PROFILE_IDS)))
+    diagnostics.push(`${path}.<unknown>`);
+  return { profiles, invalidRoutes };
+};
+
+const SET_KEYS = new Set(["profiles"]);
+
+const decodeProfileSets = <ValueInput>(
+  value: ValueInput,
+  version: number,
+  path: string,
+  diagnostics: string[],
+):
+  | {
+      readonly sets: Record<string, SubagentProfileSet>;
+      readonly invalidRoutes: Record<string, ReadonlyArray<ProfileId>>;
+      readonly invalidSets: ReadonlyArray<string>;
+    }
+  | undefined => {
+  const record = decodedRecord(value);
+  if (!record) {
+    diagnostics.push(path);
+    return undefined;
+  }
+  const names = safeOwnKeys(record);
+  if (!names) {
+    diagnostics.push(path);
+    return undefined;
+  }
+  if (names.length > MAX_PROFILE_SETS) {
+    diagnostics.push(`${path}[${MAX_PROFILE_SETS}+]`);
+    return undefined;
+  }
+  // SAFETY: These null-prototype maps are populated only with validated set names below.
+  const sets = Object.create(null) as Record<string, SubagentProfileSet>;
+  // SAFETY: This null-prototype map is populated only with validated set names below.
+  const invalidRoutes = Object.create(null) as Record<string, ReadonlyArray<ProfileId>>;
+  const invalidSets: string[] = [];
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index]!;
+    const setPath = `${path}[${index}]`;
+    if (!isProfileSetName(name)) {
+      diagnostics.push(`${setPath}.name`);
+      continue;
+    }
+    const field = readField(record, name, setPath, diagnostics);
+    const setRecord = field.present ? decodedRecord(field.value) : undefined;
+    if (!setRecord || !ownKeysAre(setRecord, SET_KEYS)) {
+      diagnostics.push(setPath);
+      invalidSets.push(name);
+      continue;
+    }
+    const profilesField = readField(setRecord, "profiles", `${setPath}.profiles`, diagnostics);
+    if (!profilesField.present) {
+      diagnostics.push(`${setPath}.profiles`);
+      invalidSets.push(name);
+      continue;
+    }
+    const decoded = decodeProfiles(
+      profilesField.value,
+      version,
+      `${setPath}.profiles`,
+      diagnostics,
+    );
+    if (!decoded) {
+      invalidSets.push(name);
+      continue;
+    }
+    sets[name] = { profiles: decoded.profiles };
+    if (decoded.invalidRoutes.length > 0) invalidRoutes[name] = decoded.invalidRoutes;
+  }
+  return { sets, invalidRoutes, invalidSets };
+};
+
+const ConfigVersionSchema = Schema.Literals([
+  LEGACY_SUBAGENT_CONFIG_VERSION,
+  PREVIOUS_SUBAGENT_CONFIG_VERSION,
+  SUBAGENT_CONFIG_VERSION,
+]);
+
+const decodeConfigVersion = <ValueInput>(value: ValueInput): 4 | 5 | 6 | undefined => {
+  const decoded = Schema.decodeUnknownOption(ConfigVersionSchema)(value);
+  return Option.isSome(decoded) ? decoded.value : undefined;
+};
+
+const decodeProfileSetName = <ValueInput>(value: ValueInput): string | undefined => {
+  const decoded = Schema.decodeUnknownOption(Schema.String)(value);
+  if (Option.isNone(decoded) || !isProfileSetName(decoded.value)) return undefined;
+  return decoded.value;
+};
+
+/** Strict version-4/5/6 unknown-boundary decode for one global or project document. */
 export function decodeSubagentConfig<InputInput>(
   input: InputInput,
   scope = "config",
@@ -268,50 +425,108 @@ export function decodeSubagentConfig<InputInput>(
   const rawRoot = decodedRoot ?? {};
   if (!decodedRoot) diagnostics.push(scope);
   const versionField = readField(rawRoot, "version", `${scope}.version`, diagnostics);
-  const version = versionField.value;
-  const acceptedVersion =
-    version === SUBAGENT_CONFIG_VERSION || version === LEGACY_SUBAGENT_CONFIG_VERSION;
+  const version = decodeConfigVersion(versionField.value);
+  const supported = version !== undefined;
   const allowedRootKeys =
     version === LEGACY_SUBAGENT_CONFIG_VERSION
       ? new Set(["version", "profiles"])
-      : new Set(["version", "profiles", "nesting"]);
+      : version === PREVIOUS_SUBAGENT_CONFIG_VERSION
+        ? new Set(["version", "profiles", "nesting"])
+        : new Set(["version", "defaultProfileSet", "profileSets", "nesting"]);
   if (!ownKeysAre(rawRoot, allowedRootKeys)) diagnostics.push(`${scope}.<unknown>`);
 
-  const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
-  const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
-  const decodedProfiles = decodedRecord(profilesField.value);
-  if (profilesField.present && !decodedProfiles) diagnostics.push(`${scope}.profiles`);
-  const profileRecord = decodedProfiles ?? {};
-  const profiles: Partial<Record<ProfileId, DeclaredProfileRoute>> = {};
-  const invalidProfileRoutes: ProfileId[] = [];
-  for (const id of PROFILE_IDS) {
-    const path = `${scope}.profiles.${id}`;
-    const field = readField(profileRecord, id, path, diagnostics);
-    if (!field.present) continue;
-    const route = decodeRoute(field.value, path, diagnostics);
-    if (route === undefined) invalidProfileRoutes.push(id);
-    else profiles[id] = route;
-  }
-  if (!ownKeysAre(profileRecord, new Set<string>(PROFILE_IDS)))
-    diagnostics.push(`${scope}.profiles.<unknown>`);
+  let file: SubagentConfigFile = supported ? { version } : {};
+  // SAFETY: This null-prototype map is populated only by bounded profile decoders.
+  const invalidProfileSetRoutes = Object.create(null) as Record<string, ReadonlyArray<ProfileId>>;
+  let invalidProfileSets: ReadonlyArray<string> = [];
+  let invalidDefaultProfileSet = false;
 
+  if (isLegacyConfigVersion(version)) {
+    const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
+    if (profilesField.present) {
+      const decoded = decodeProfiles(
+        profilesField.value,
+        version,
+        `${scope}.profiles`,
+        diagnostics,
+      );
+      if (decoded) {
+        const profileSet: SubagentProfileSet = { profiles: decoded.profiles };
+        file = {
+          ...file,
+          defaultProfileSet: MIGRATED_PROFILE_SET_NAME,
+          profileSets: { [MIGRATED_PROFILE_SET_NAME]: profileSet },
+        };
+        if (decoded.invalidRoutes.length > 0)
+          invalidProfileSetRoutes[MIGRATED_PROFILE_SET_NAME] = decoded.invalidRoutes;
+      }
+    }
+  } else if (version === SUBAGENT_CONFIG_VERSION) {
+    const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
+    if (setsField.present) {
+      const decoded = decodeProfileSets(
+        setsField.value,
+        version,
+        `${scope}.profileSets`,
+        diagnostics,
+      );
+      if (decoded) {
+        if (Object.keys(decoded.sets).length > 0) file = { ...file, profileSets: decoded.sets };
+        Object.assign(invalidProfileSetRoutes, decoded.invalidRoutes);
+        invalidProfileSets = decoded.invalidSets;
+      }
+    }
+    const defaultField = readField(
+      rawRoot,
+      "defaultProfileSet",
+      `${scope}.defaultProfileSet`,
+      diagnostics,
+    );
+    if (defaultField.present) {
+      const defaultName = decodeProfileSetName(defaultField.value);
+      if (defaultName === undefined) {
+        diagnostics.push(`${scope}.defaultProfileSet`);
+        invalidDefaultProfileSet = true;
+      } else {
+        file = { ...file, defaultProfileSet: defaultName };
+      }
+    }
+  }
+
+  const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
   const nesting =
-    version === SUBAGENT_CONFIG_VERSION && nestingField.present
+    (version === PREVIOUS_SUBAGENT_CONFIG_VERSION || version === SUBAGENT_CONFIG_VERSION) &&
+    nestingField.present
       ? decodeSubagentNesting(nestingField.value)
       : undefined;
-  if (version === SUBAGENT_CONFIG_VERSION && nestingField.present && nesting === undefined)
+  if (
+    (version === PREVIOUS_SUBAGENT_CONFIG_VERSION || version === SUBAGENT_CONFIG_VERSION) &&
+    nestingField.present &&
+    nesting === undefined
+  )
     diagnostics.push(`${scope}.nesting`);
+  if (nesting !== undefined) file = { ...file, nesting };
 
-  const unsupportedVersion = !acceptedVersion;
+  const defaultName = file.defaultProfileSet;
+  if (
+    defaultName !== undefined &&
+    (!file.profileSets ||
+      !Object.prototype.hasOwnProperty.call(file.profileSets, defaultName) ||
+      invalidProfileSets.includes(defaultName))
+  ) {
+    invalidDefaultProfileSet = true;
+    diagnostics.push(`${scope}.defaultProfileSet`);
+  }
+  const invalidProfileRoutes = defaultName ? (invalidProfileSetRoutes[defaultName] ?? []) : [];
+  const unsupportedVersion = !supported;
   if (unsupportedVersion) diagnostics.push(`${scope}.version`);
 
-  let file: SubagentConfigFile = {};
-  if (acceptedVersion) file = { version };
-  if (Object.keys(profiles).length > 0) file = { ...file, profiles };
-  if (nesting !== undefined) file = { ...file, nesting };
   return {
     file,
     diagnostics: [...new Set(diagnostics)],
+    invalidProfileSetRoutes,
+    invalidProfileSets,
+    invalidDefaultProfileSet,
     invalidProfileRoutes,
     unsupportedVersion,
   };

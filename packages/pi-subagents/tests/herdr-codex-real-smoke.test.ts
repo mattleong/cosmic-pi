@@ -69,7 +69,7 @@ describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
           cwd: process.cwd(),
           context: "fresh",
           writeIntent: "read-only",
-          fastMode: false,
+          openaiFastMode: false,
           model,
           effort: "low",
           activeTools: [],

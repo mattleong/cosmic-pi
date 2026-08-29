@@ -28,7 +28,7 @@ const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate 
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   closeOnReport: true,
   ...overrides,
 });

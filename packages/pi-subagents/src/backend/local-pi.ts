@@ -692,7 +692,7 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessContract): 
           cwd: request.cwd,
           context: request.context,
           writeIntent: request.writeIntent,
-          fastMode: request.fastMode,
+          openaiFastMode: request.openaiFastMode,
           model: request.model,
           effort: request.effort,
         };

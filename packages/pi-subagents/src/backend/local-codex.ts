@@ -518,7 +518,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         model: request.model,
         systemPrompt: request.systemPrompt,
         writeIntent: request.writeIntent,
-        fastMode: request.fastMode,
+        openaiFastMode: request.openaiFastMode,
       }),
     ).pipe(
       Effect.flatMap((value) =>
@@ -531,7 +531,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       return yield* protocolError(
         `Codex selected model ${started.model} instead of required model ${request.model}.`,
       );
-    if (request.fastMode && started.serviceTier !== FAST_SERVICE_TIER)
+    if (request.openaiFastMode && started.serviceTier !== FAST_SERVICE_TIER)
       return yield* protocolError(
         `Codex selected service tier ${started.serviceTier ?? "default"} instead of required ${FAST_SERVICE_TIER} fast mode.`,
       );
@@ -599,7 +599,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                   request.model,
                   request.effort,
                   request.writeIntent,
-                  request.fastMode,
+                  request.openaiFastMode,
                 ),
               ).pipe(
                 Effect.flatMap((value) =>

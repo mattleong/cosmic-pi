@@ -238,7 +238,7 @@ const renderRunRoute = (
   const modelName =
     providerSeparator < 0 ? providerModel : providerModel.slice(providerSeparator + 1);
   const effort = sanitizeTerminalLine(run.effort);
-  const fast = run.fastMode ? " ⚡" : "";
+  const fast = run.openaiFastMode ? " ⚡" : "";
   const model = `${providerModel}:${effort}${fast}`;
   const narrowModel = `${modelName}:${effort}${fast}`;
   const plain =

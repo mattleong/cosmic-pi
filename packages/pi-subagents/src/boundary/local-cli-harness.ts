@@ -143,7 +143,7 @@ export const sanitizeLocalCliEnvironment = (
 
 export const codexArgv = (): ReadonlyArray<string> => ["app-server", "--stdio", "--strict-config"];
 
-const codexBaseConfig = (fastMode = false): ReadonlyArray<string> => [
+const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
   'approval_policy = "never"',
   'web_search = "disabled"',
   "[analytics]",
@@ -158,7 +158,7 @@ const codexBaseConfig = (fastMode = false): ReadonlyArray<string> => [
   "auth_elicitation = false",
   "browser_use = false",
   "computer_use = false",
-  `fast_mode = ${fastMode}`,
+  `fast_mode = ${openaiFastMode}`,
   "goals = false",
   "guardian_approval = false",
   "hooks = false",
@@ -174,8 +174,8 @@ const codexBaseConfig = (fastMode = false): ReadonlyArray<string> => [
   "workspace_dependencies = false",
 ];
 
-const codexConfig = (supervisor: SupervisorConnectionMetadata, fastMode: boolean): string =>
-  [...codexBaseConfig(fastMode), supervisor.codexMcp.tomlFragment, ""].join("\n");
+const codexConfig = (supervisor: SupervisorConnectionMetadata, openaiFastMode: boolean): string =>
+  [...codexBaseConfig(openaiFastMode), supervisor.codexMcp.tomlFragment, ""].join("\n");
 
 const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
 
@@ -243,7 +243,7 @@ export const prepareLocalCliHarness = (
             .then(() =>
               writeExclusive(
                 join(codexHome, "config.toml"),
-                codexConfig(request.supervisor, request.launch.fastMode),
+                codexConfig(request.supervisor, request.launch.openaiFastMode),
               ),
             )
             .then(() => readValidatedCodexAuth(sourceEnvironment))

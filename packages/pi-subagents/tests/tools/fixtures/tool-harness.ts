@@ -16,6 +16,7 @@ import {
   makeSubagentProfileService,
   SubagentProfileService,
 } from "../../../src/profiles/service.ts";
+import type { DeclaredProfileRoute, ProfileId } from "../../../src/profiles/model.ts";
 import type { SessionProfileOverrideSeed } from "../../../src/profiles/session-overrides.ts";
 import { InvalidSubagentRequestError } from "../../../src/run/errors.ts";
 import { type StartSubagentRequest, type SubagentRunView } from "../../../src/run/model.ts";
@@ -69,7 +70,7 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   state: "running",
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   host: "local",
   runtime: "pi",
   closeOnReport: true,
@@ -92,6 +93,22 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   ...overrides,
 });
 
+const profileDocument = <Input extends object>(input: Input | undefined) => {
+  // SAFETY: This harness accepts only JSON-shaped profile fixtures and immediately decodes them.
+  const value = (input ?? {}) as Input & {
+    readonly profiles?: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>>;
+  };
+  const { profiles, ...rest } = value;
+  return {
+    version: 6,
+    ...rest,
+    ...(profiles !== undefined && {
+      defaultProfileSet: "default",
+      profileSets: { default: { profiles } },
+    }),
+  };
+};
+
 export const profileServiceFor = <Global extends object = never, Project extends object = never>(
   global: Global | undefined,
   project?: Project,
@@ -107,12 +124,12 @@ export const profileServiceFor = <Global extends object = never, Project extends
             projectTrusted: true,
             globalConfigExists: global !== undefined,
             projectConfigExists: project !== undefined,
-            global: decodeSubagentConfig({ version: 4, ...global }),
+            global: decodeSubagentConfig(profileDocument(global)),
           };
           const withProject =
             project === undefined
               ? baseResult
-              : { ...baseResult, project: decodeSubagentConfig({ version: 4, ...project }) };
+              : { ...baseResult, project: decodeSubagentConfig(profileDocument(project)) };
           return withProject;
         })(),
       ),
@@ -293,7 +310,7 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
               host: input.host,
               runtime: input.runtime,
               closeOnReport: input.closeOnReport,
-              fastMode: input.fastMode,
+              openaiFastMode: input.openaiFastMode,
               context: input.context,
               writeIntent: input.writeIntent,
               model: input.model,

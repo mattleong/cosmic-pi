@@ -31,18 +31,37 @@ const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): Pr
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
-  fastMode: false,
+  openaiFastMode: false,
   closeOnReport: true,
   ...overrides,
 });
 
-const inspection = <Global = undefined, Project = undefined>(
-  global?: Global,
-  project?: Project,
+interface InspectionDocumentSeed {
+  readonly version: number;
+  readonly profiles?: Readonly<
+    Record<string, ProfileCandidate | ReadonlyArray<ProfileCandidate> | "disabled">
+  >;
+}
+
+const inspection = (
+  global: InspectionDocumentSeed = { version: 4 },
+  project?: InspectionDocumentSeed,
 ): ProfileSettingsInspection => {
   const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
-  const globalDocument = Schema.decodeUnknownSync(JsonObjectSchema)(global ?? { version: 4 });
-  const projectDocument = project ? Schema.decodeUnknownSync(JsonObjectSchema)(project) : undefined;
+  const currentDocument = (input: InspectionDocumentSeed): Schema.MutableJsonObject =>
+    Schema.decodeUnknownSync(JsonObjectSchema)(
+      input.version === 4
+        ? {
+            version: 6,
+            defaultProfileSet: "default",
+            profileSets: { default: { profiles: input.profiles ?? {} } },
+          }
+        : input,
+    );
+  const globalDocument = Schema.decodeUnknownSync(JsonObjectSchema)(currentDocument(global));
+  const projectDocument = project
+    ? Schema.decodeUnknownSync(JsonObjectSchema)(currentDocument(project))
+    : undefined;
   const decodedGlobal = decodeSubagentConfig(globalDocument, "global");
   const decodedProject = projectDocument
     ? decodeSubagentConfig(projectDocument, "project")
@@ -83,7 +102,11 @@ const threeRoute = [
 describe("ordered profile-route editor state", () => {
   it("loads and declares a three-candidate route without collapse or reorder", () => {
     const value = inspection({ version: 4, profiles: { worker: threeRoute } });
-    const draft = loadProfileRouteDraft(value, "global", "worker");
+    const draft = loadProfileRouteDraft(
+      value,
+      { kind: "profile-set", set: { scope: "global", name: "default" } },
+      "worker",
+    );
     expect(draft).toEqual({ kind: "explicit", candidates: threeRoute });
     expect(draft.candidates).not.toBe(threeRoute);
     expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: threeRoute });
@@ -101,12 +124,12 @@ describe("ordered profile-route editor state", () => {
         overrides: { reviewer: { candidates: [candidate("openai/session")] } },
       }),
     };
-    expect(loadProfileRouteDraft(value, "session", "reviewer")).toEqual({
+    expect(loadProfileRouteDraft(value, { kind: "session" }, "reviewer")).toEqual({
       kind: "explicit",
       candidates: [candidate("openai/session")],
     });
     const inherited = { ...value, session: makeSessionProfileSnapshot(base.config) };
-    expect(loadProfileRouteDraft(inherited, "session", "reviewer")).toEqual({
+    expect(loadProfileRouteDraft(inherited, { kind: "session" }, "reviewer")).toEqual({
       kind: "inherit",
       candidates: [candidate("openai/project")],
     });
@@ -124,20 +147,52 @@ describe("ordered profile-route editor state", () => {
       },
       { version: 4 },
     );
-    expect(loadProfileRouteDraft(value, "global", "scout")).toEqual({
+    expect(
+      loadProfileRouteDraft(
+        value,
+        { kind: "profile-set", set: { scope: "global", name: "default" } },
+        "scout",
+      ),
+    ).toEqual({
       kind: "disabled",
       candidates: [],
     });
-    expect(loadProfileRouteDraft(value, "project", "reviewer")).toEqual({
+    expect(
+      loadProfileRouteDraft(
+        value,
+        { kind: "profile-set", set: { scope: "project", name: "default" } },
+        "reviewer",
+      ),
+    ).toEqual({
       kind: "inherit",
       candidates: threeRoute,
     });
-    expect(loadProfileRouteDraft(value, "global", "planner").kind).toBe("reset");
-    expect(loadProfileRouteDraft(value, "global", "worker")).toEqual({
+    expect(
+      loadProfileRouteDraft(
+        value,
+        { kind: "profile-set", set: { scope: "global", name: "default" } },
+        "planner",
+      ).kind,
+    ).toBe("reset");
+    expect(
+      loadProfileRouteDraft(
+        value,
+        { kind: "profile-set", set: { scope: "global", name: "default" } },
+        "worker",
+      ),
+    ).toEqual({
       kind: "invalid",
       candidates: [],
     });
-    expect(declaredRouteForDraft(loadProfileRouteDraft(value, "global", "worker"))).toMatchObject({
+    expect(
+      declaredRouteForDraft(
+        loadProfileRouteDraft(
+          value,
+          { kind: "profile-set", set: { scope: "global", name: "default" } },
+          "worker",
+        ),
+      ),
+    ).toMatchObject({
       valid: false,
     });
     expect(declaredRouteForDraft(disableRouteDraft())).toEqual({
@@ -256,7 +311,7 @@ describe("profile candidate normalization and validation", () => {
     expect(local.notices.join(" ")).toContain("close-on-report reset");
 
     const claude = updateCandidateControls(
-      candidate("parent", { context: "fork", effort: "minimal", fastMode: true }),
+      candidate("parent", { context: "fork", effort: "minimal", openaiFastMode: true }),
       { runtime: "claude" },
       { piModel: "openai-codex/gpt-5.6-sol" },
     );
@@ -265,7 +320,7 @@ describe("profile candidate normalization and validation", () => {
       model: "claude-opus-5",
       context: "fresh",
       effort: "default",
-      fastMode: false,
+      openaiFastMode: false,
     });
     expect(claude.notices).toHaveLength(4);
     expect(claude.notices.join(" ")).toContain("Fast mode");
@@ -311,15 +366,19 @@ describe("profile candidate normalization and validation", () => {
   });
 
   it("uses exact runtime capabilities and resets effort or fast mode when a model cannot use them", () => {
-    expect(candidateValidationError(candidate("parent", { fastMode: true }))).toBeUndefined();
+    expect(candidateValidationError(candidate("parent", { openaiFastMode: true }))).toBeUndefined();
     expect(
-      candidateValidationError(candidate("other-provider/plain", { fastMode: true })),
+      candidateValidationError(candidate("other-provider/plain", { openaiFastMode: true })),
     ).toContain("Fast mode");
     expect(
-      candidateValidationError(candidate("future-codex", { runtime: "codex", fastMode: true })),
+      candidateValidationError(
+        candidate("future-codex", { runtime: "codex", openaiFastMode: true }),
+      ),
     ).toBeUndefined();
     expect(
-      candidateValidationError(candidate("claude-opus-5", { runtime: "claude", fastMode: true })),
+      candidateValidationError(
+        candidate("claude-opus-5", { runtime: "claude", openaiFastMode: true }),
+      ),
     ).toContain("Fast mode");
     expect(runtimeEfforts("claude")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(runtimeEfforts("codex")).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -338,7 +397,7 @@ describe("profile candidate normalization and validation", () => {
       }).invalidProfileRoutes,
     ).toContain("reviewer");
     const update = updateCandidateModel(
-      candidate("openai-codex/gpt-5.6-sol", { effort: "xhigh", fastMode: true }),
+      candidate("openai-codex/gpt-5.6-sol", { effort: "xhigh", openaiFastMode: true }),
       "zai/plain",
       ["off"],
       false,
@@ -346,7 +405,7 @@ describe("profile candidate normalization and validation", () => {
     expect(update.candidate).toMatchObject({
       model: "zai/plain",
       effort: "default",
-      fastMode: false,
+      openaiFastMode: false,
     });
     expect(update.notices.join(" ")).toContain("reset to default");
     expect(update.notices.join(" ")).toContain("Fast mode is unavailable");
@@ -359,8 +418,11 @@ describe("profile candidate normalization and validation", () => {
     expect(
       decodeSubagentConfig(
         {
-          version: 4,
-          profiles: { reviewer: candidate("cursor/gpt-5.5@1m") },
+          version: 6,
+          defaultProfileSet: "default",
+          profileSets: {
+            default: { profiles: { reviewer: candidate("cursor/gpt-5.5@1m") } },
+          },
         },
         "global",
       ).invalidProfileRoutes,
@@ -395,7 +457,6 @@ describe("profile candidate normalization and validation", () => {
       effort: "default",
       context: "fork",
       writeIntent: "read-only",
-      fastMode: false,
       closeOnReport: true,
     });
   });
