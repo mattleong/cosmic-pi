@@ -31,6 +31,17 @@ describe("write claims", () => {
     expect(normalizeWriteClaims([path])).toMatchObject({ ok: false });
   });
 
+  it.each(["<outside workspace>", "<OUTSIDE WORKSPACE>", "  <Outside Workspace>  "])(
+    "rejects the reserved outside-workspace marker %s",
+    (path) => {
+      expect(normalizeWriteClaims([path])).toMatchObject({
+        ok: false,
+        code: "write_claim_outside_workspace",
+      });
+      expect(writeClaimContains([path], "<outside workspace>")).toBe(false);
+    },
+  );
+
   it("treats omitted claims as exclusive and exact claims as case-insensitively overlapping", () => {
     expect(firstWriteClaimConflict(undefined, ["a.ts"])).toEqual({
       left: "<exclusive>",

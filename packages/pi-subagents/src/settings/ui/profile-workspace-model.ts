@@ -1,13 +1,11 @@
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
-  cloneProfileCandidates,
   isLocalPiProfileCandidate,
   isRetainableProfileCandidate,
   supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileId,
-  type ProfileRouteSource,
 } from "../../profiles/model.ts";
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
 import {
@@ -33,21 +31,6 @@ export type ProfileWorkspaceField =
   | "openaiFastMode"
   | "closeOnReport"
   | "actions";
-
-export const PROFILE_WORKSPACE_FIELDS: ReadonlyArray<ProfileWorkspaceField> = [
-  "model",
-  "effort",
-  "writeIntent",
-  "runWith",
-  "advanced",
-  "context",
-  "openaiFastMode",
-  "closeOnReport",
-  "actions",
-];
-
-/** Screen-owned shortcuts. Profile editing deliberately keeps only the saved-set door. */
-export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set(["/", "p"]);
 
 export interface ProfileWorkspaceFieldRow {
   readonly field: ProfileWorkspaceField;
@@ -76,23 +59,6 @@ export const profileRouteOptionLabel = (index: number): string =>
 
 const routeOptionCountLabel = (count: number): string =>
   count === 1 ? "Primary only" : `Primary + ${count - 1} fallback${count === 2 ? "" : "s"}`;
-
-export const profileSourceLabel = (source: ProfileRouteSource): string => {
-  switch (source) {
-    case "session":
-      return "Current Session";
-    case "project":
-      return "Project default";
-    case "global":
-      return "Global default";
-    case "builtin":
-      return "Built-in default";
-    case "project-invalid":
-      return "Project default has an error";
-    case "global-invalid":
-      return "Global default has an error";
-  }
-};
 
 export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsScope): string => {
   switch (draft.kind) {
@@ -149,56 +115,11 @@ export const runWithLabel = (candidate: ProfileCandidate): string => {
   return `${candidate.host === "local" ? "Local" : "Herdr"} ${runtime}`;
 };
 
-export const sessionBaselineProfileDraft = (
-  inspection: ProfileSettingsInspection,
-  profile: ProfileId,
-): ProfileRouteDraft => ({
-  kind: inspection.session.baseline.profileSources[profile].endsWith("-invalid")
-    ? "invalid"
-    : "inherit",
-  candidates: cloneProfileCandidates(inspection.session.baseline.profiles[profile].candidates),
-});
-
 export const targetProfileRouteDraft = (
   inspection: ProfileSettingsInspection,
   target: ProfileWorkspaceTarget,
   profile: ProfileId,
-): ProfileRouteDraft =>
-  target.kind === "session" && inspection.session.overrides[profile] === undefined
-    ? sessionBaselineProfileDraft(inspection, profile)
-    : loadProfileRouteDraft(inspection, target, profile);
-
-export const effectiveProfilePrimarySummary = (
-  inspection: ProfileSettingsInspection,
-  profile: ProfileId,
-): string => {
-  const route = inspection.session.effectiveConfig.profiles[profile];
-  const source = profileSourceLabel(inspection.session.effectiveConfig.profileSources[profile]);
-  const primary = route.candidates[0];
-  if (!primary)
-    return inspection.session.effectiveConfig.profileSources[profile].endsWith("-invalid")
-      ? `${source} · ${managerNoticeGlyph("error")} won't run until fixed`
-      : `${source} · disabled`;
-  return `${source} · ${primary.model}`;
-};
-
-export const effectiveProfileSummary = (
-  inspection: ProfileSettingsInspection,
-  profile: ProfileId,
-  parentEffort: SubagentEffort = "high",
-  parentModel?: string | undefined,
-): string => {
-  const route = inspection.session.effectiveConfig.profiles[profile];
-  const source = profileSourceLabel(inspection.session.effectiveConfig.profileSources[profile]);
-  const first = route.candidates[0];
-  if (!first)
-    return inspection.session.effectiveConfig.profileSources[profile].endsWith("-invalid")
-      ? `${source} · ${managerNoticeGlyph("error")} won't run until fixed`
-      : `${source} · disabled`;
-  const effort = candidateEffortLabel(profile, first, parentEffort);
-  const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
-  return `${source} · ${routeOptionCountLabel(route.candidates.length)} · ${first.model} · ${runWithLabel(first)} · ${effort}${fast}`;
-};
+): ProfileRouteDraft => loadProfileRouteDraft(inspection, target, profile);
 
 export const profileRouteDraftSummary = (
   profile: ProfileId,

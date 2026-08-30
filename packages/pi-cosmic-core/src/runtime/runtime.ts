@@ -172,26 +172,14 @@ export function makePiManagedRuntime<R, E>(
   return {
     run: (effect, signal) => {
       const owned = signal ? ownAbortSignal(signal) : undefined;
-      try {
-        const result = Promise.resolve(
-          runtime.runPromise(effect, owned ? { signal: owned.signal } : undefined),
-        );
-        return owned ? result.finally(owned.release) : result;
-      } catch (error) {
-        owned?.release();
-        return Promise.reject(error);
-      }
+      const result = runtime.runPromise(effect, owned ? { signal: owned.signal } : undefined);
+      return owned ? result.finally(owned.release) : result;
     },
     fork: (effect, signal) => {
       const owned = signal ? ownAbortSignal(signal) : undefined;
-      try {
-        const fiber = runtime.runFork(effect, owned ? { signal: owned.signal } : undefined);
-        if (owned) fiber.addObserver(owned.release);
-        return fiber;
-      } catch (error) {
-        owned?.release();
-        throw error;
-      }
+      const fiber = runtime.runFork(effect, owned ? { signal: owned.signal } : undefined);
+      if (owned) fiber.addObserver(owned.release);
+      return fiber;
     },
     runSync: (effect) => runtime.runSync(effect),
     dispose: () => {

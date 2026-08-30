@@ -28,7 +28,18 @@ export interface SearchableSelectPageChoice<A> {
 
 export type SettingsSelectKeybindingId = FullScreenSelectionKeybindingId;
 
-export interface SearchableSelectPageOptions<A> {
+export interface SearchableSelectHostOptions {
+  readonly getHeight: () => number;
+  readonly requestRender: () => void;
+  readonly matchesKeybinding?:
+    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
+    | undefined;
+  readonly keybindingLabel?:
+    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
+    | undefined;
+}
+
+export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOptions {
   readonly theme: Theme;
   readonly breadcrumb: string;
   readonly title: string;
@@ -39,14 +50,6 @@ export interface SearchableSelectPageOptions<A> {
   readonly emptyText?: string | undefined;
   readonly initialQuery?: string | undefined;
   readonly initialSearchMode?: boolean | undefined;
-  readonly getHeight: () => number;
-  readonly requestRender: () => void;
-  readonly matchesKeybinding?:
-    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
-    | undefined;
-  readonly keybindingLabel?:
-    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
-    | undefined;
   readonly select: (value: A) => void;
   readonly cancel: () => void;
 }

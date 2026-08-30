@@ -169,7 +169,7 @@ describe("hierarchical tool result rendering", () => {
   it.each([
     [{ cancelled: true }, "Await canceled"],
     [{ timedOut: true }, "Await timed out"],
-    [{ attentionRequired: true }, "Parent reply required"],
+    [{ attentionRequired: true }, "Parent action required"],
   ] as const)("keeps the %s outcome in the one-line summary", (outcome, expected) => {
     const summary = formatAwaitSummary([target], "all_finished", "12k tok", outcome);
 

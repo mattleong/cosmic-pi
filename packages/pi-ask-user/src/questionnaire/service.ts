@@ -17,15 +17,12 @@ interface AskUserServiceContract {
 const makeService = Effect.fn("AskUserService.make")(function* () {
   const host = yield* HostDialogs;
   const lock = yield* Semaphore.make(1);
-  const ask: AskUserServiceContract["ask"] = (request) =>
-    lock.withPermit(
-      Effect.suspend(
-        (): Effect.Effect<AskUserOutcome, AskUserValidationError | AskUserHostError> => {
-          const normalized = normalizeAskUserRequest(request);
-          return validateAskUserRequest(normalized) ?? host.ask(normalized);
-        },
-      ),
-    );
+  const ask = Effect.fn("AskUserService.ask")(function* (request: AskUserRequest) {
+    const normalized = normalizeAskUserRequest(request);
+    const validationError = validateAskUserRequest(normalized);
+    if (validationError) return yield* validationError;
+    return yield* lock.withPermit(host.ask(normalized));
+  });
   return { ask } satisfies AskUserServiceContract;
 });
 

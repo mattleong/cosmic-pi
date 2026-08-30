@@ -10,7 +10,7 @@ import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, makeFrozenProjection, makeSubscriptionRefresh } from "pi-cosmic-core";
 import { HostCallbackBoundary } from "../boundary/host-callback.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
-import { CosmicUiConfigError, CosmicUiConfigStore } from "../config/store.ts";
+import { type CosmicUiConfigError, CosmicUiConfigStore } from "../config/store.ts";
 import type { FooterTotals } from "../footer/component.ts";
 import type { FooterGitStatus } from "../footer/git.ts";
 import { RepositoryProbe } from "../probe/repository-probe.ts";
@@ -31,6 +31,9 @@ export interface CosmicUiProjection {
   readonly pullRequestCheckedAt: number;
   readonly probeRevision: number;
   readonly homeDirectory: string | undefined;
+}
+interface CosmicUiLiveState extends CosmicUiProjection {
+  readonly config: ResolvedCosmicUiConfig;
 }
 const initialProjection = (totals = emptyTotals()): CosmicUiProjection => ({
   config: undefined,
@@ -93,7 +96,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
         const home = yield* Config.option(Config.string("HOME"));
         const projectTrusted = options.projectTrusted === true;
         const config = yield* configStore.resolve(options.cwd, projectTrusted);
-        const state = yield* makeFrozenProjection<CosmicUiProjection, CosmicUiProjection>(
+        const state = yield* makeFrozenProjection<CosmicUiLiveState, CosmicUiProjection>(
           {
             ...initialProjection(),
             totals: options.initialTotals ?? MutableRef.get(options.projection).totals,
@@ -103,11 +106,11 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           (current) => current,
           (published) => MutableRef.set(options.projection, published),
         );
-        const updateState = (f: (current: CosmicUiProjection) => CosmicUiProjection) =>
+        const updateState = (f: (current: CosmicUiLiveState) => CosmicUiLiveState) =>
           state
             .transition((current) => {
               const next = f(current);
-              return Effect.succeed([next, next] as const);
+              return Effect.succeed([undefined, next] as const);
             })
             .pipe(Effect.orDie);
         const notifyChanged = Effect.try(options.onChange).pipe(Effect.ignore);
@@ -217,50 +220,20 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           Effect.andThen(gitRefresh.invalidate),
           Effect.andThen(pullRefresh.invalidate),
           Effect.andThen(notifyChanged),
-          Effect.asVoid,
         );
         const setTotals = (totals: FooterTotals) =>
-          updateState((current) => ({ ...current, totals })).pipe(
-            Effect.andThen(notifyChanged),
-            Effect.asVoid,
-          );
-        const requireConfig = state.getState.pipe(
-          Effect.flatMap((current) =>
-            current.config
-              ? Effect.succeed(current.config)
-              : Effect.fail(
-                  new CosmicUiConfigError({
-                    operation: "update",
-                    path: "unknown",
-                    message: "Cosmic UI session has not started.",
-                  }),
-                ),
-          ),
-        );
+          updateState((current) => ({ ...current, totals })).pipe(Effect.andThen(notifyChanged));
         const installConfig = (next: ResolvedCosmicUiConfig) =>
           updateState((current) => ({ ...current, config: next })).pipe(
             Effect.andThen(notifyChanged),
-            Effect.as(next),
-          );
-        const persistConfig = (
-          persist: (
-            afterCommit: (next: ResolvedCosmicUiConfig) => Effect.Effect<void>,
-          ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>,
-        ) =>
-          settingsLock.withPermits(1)(
-            requireConfig.pipe(
-              Effect.andThen(
-                Effect.suspend(() => persist((next) => installConfig(next).pipe(Effect.asVoid))),
-              ),
-            ),
           );
         const updateFooter = (patch: Partial<ResolvedCosmicUiConfig["footer"]>) =>
-          persistConfig((afterCommit) =>
-            configStore.updateFooter(options.cwd, patch, projectTrusted, afterCommit),
+          settingsLock.withPermits(1)(
+            configStore.updateFooter(options.cwd, patch, projectTrusted, installConfig),
           );
         const setVisibility = (id: string, visible: boolean) =>
-          persistConfig((afterCommit) =>
-            configStore.setVisibility(options.cwd, id, visible, projectTrusted, afterCommit),
+          settingsLock.withPermits(1)(
+            configStore.setVisibility(options.cwd, id, visible, projectTrusted, installConfig),
           );
         if (options.startPolling !== false) {
           yield* gitRefresh.startPolling({}).pipe(Effect.forkScoped);

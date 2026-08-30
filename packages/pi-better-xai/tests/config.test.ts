@@ -4,18 +4,22 @@ import type { JsonObject } from "pi-cosmic-core";
 import { InvalidSettingError, decodeSettingUpdate } from "../src/config/options.ts";
 
 describe("xAI setting updates", () => {
-  it.effect("parses each descriptor value from its persisted string form", () =>
+  it.effect("patches the exact dotted path for every setting id", () =>
     Effect.gen(function* () {
-      const cases: ReadonlyArray<readonly [string, string]> = [
-        ["usage.enabled", "false"],
-        ["usage.refreshIntervalMs", "60000"],
-        ["usage.showOnlyOnSubscriptionModels", "true"],
-        ["usage.showResetTimes", "false"],
-        ["footer.mode", "status"],
+      const cases: ReadonlyArray<readonly [string, string, JsonObject]> = [
+        ["usage.enabled", "false", { usage: { enabled: false } }],
+        ["usage.refreshIntervalMs", "60000", { usage: { refreshIntervalMs: 60_000 } }],
+        [
+          "usage.showOnlyOnSubscriptionModels",
+          "true",
+          { usage: { showOnlyOnSubscriptionModels: true } },
+        ],
+        ["usage.showResetTimes", "false", { usage: { showResetTimes: false } }],
+        ["footer.mode", "status", { footer: { mode: "status" } }],
       ];
-      for (const [id, raw] of cases) {
+      for (const [id, raw, expected] of cases) {
         const update = yield* decodeSettingUpdate(id, raw);
-        expect(update({})).not.toEqual({});
+        expect(update({})).toEqual(expected);
       }
     }),
   );

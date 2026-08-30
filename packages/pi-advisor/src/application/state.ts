@@ -1,5 +1,5 @@
 import { normalizeAdvisorConfig, type ResolvedAdvisorConfig } from "../config/options.ts";
-import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
+import { emptyAdvisorSessionMetrics, type AdvisorSessionMetrics } from "../domain/metrics.ts";
 import {
   emptyAdvisorFindingDedupe,
   rollbackAdvisorFindingDedupe,
@@ -92,16 +92,6 @@ export interface AdvisorApplicationState {
   readonly reportedFailures: readonly string[];
   readonly reportedDiagnostics: readonly string[];
 }
-
-export const emptyAdvisorSessionMetrics = (): AdvisorSessionMetrics => ({
-  cards: 0,
-  corrections: 0,
-  cost: 0,
-  modelResponses: 0,
-  settledReviews: 0,
-  totalDurationMs: 0,
-  totalTokens: 0,
-});
 
 /**
  * Synchronous atomic domain boundary required by Pi's immediate callbacks. Transitions replace one

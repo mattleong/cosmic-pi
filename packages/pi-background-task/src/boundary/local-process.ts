@@ -173,8 +173,7 @@ export const terminateWindowsTree = (
   );
 
 const terminateLingeringGroup = (pid: number): Effect.Effect<void> => {
-  if (process.platform === "win32")
-    return terminateWindowsTree(pid).pipe(Effect.catch(() => Effect.void));
+  if (process.platform === "win32") return terminateWindowsTree(pid).pipe(Effect.ignore);
   return Effect.sync(() => {
     try {
       process.kill(-pid, "SIGKILL");

@@ -1,7 +1,7 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { AgentDirectory, nodePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import {
   HostCallbackBoundary,
   type HostCallbackBoundaryContract,
@@ -42,7 +42,7 @@ export const makeCosmicUiApplicationLayer = (
 ) => {
   const callbackBoundary = HostCallbackBoundary.layer(options.callbacks);
   const platform = Layer.merge(
-    nodePlatformLayer,
+    nodeFilePlatformLayer,
     AgentDirectory.layerFromHost(() => getAgentDir()),
   );
   const configStore = CosmicUiConfigStore.layer.pipe(Layer.provide(platform));

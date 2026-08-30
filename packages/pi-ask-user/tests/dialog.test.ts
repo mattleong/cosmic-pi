@@ -1,7 +1,5 @@
 import { initTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { type KeyId, matchesKey, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import * as Deferred from "effect/Deferred";
-import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -14,15 +12,18 @@ const ESCAPE = "\x1b";
 const DOWN = "\x1b[B";
 const EXTERNAL_EDITOR = "\x07";
 
-const controllable = <A>() => {
-  const handle = Deferred.makeUnsafe<A>();
-  return {
-    promise: Effect.runPromise(Deferred.await(handle)),
-    resolve: (value: A) => {
-      Effect.runSync(Deferred.succeed(handle, value));
-    },
-  };
-};
+interface PromiseGate<A> {
+  readonly promise: Promise<A>;
+  readonly resolve: (value: A | PromiseLike<A>) => void;
+}
+
+const controllable = <A>() =>
+  // SAFETY: Every supported Node version implements Promise.withResolvers; ES2023 libs omit it.
+  (
+    Promise as PromiseConstructor & {
+      withResolvers<Value>(): PromiseGate<Value>;
+    }
+  ).withResolvers<A>();
 
 const request = (mode: "single" | "multiple" = "single"): AskUserRequest => ({
   questions: [

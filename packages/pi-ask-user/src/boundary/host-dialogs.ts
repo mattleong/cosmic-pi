@@ -3,7 +3,11 @@ import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-co
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { stripTerminalControls } from "pi-cosmic-core";
+import {
+  notifyAtHostBoundary,
+  stripTerminalControls,
+  type HostNotificationLevel,
+} from "pi-cosmic-core";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserAnswer, AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
@@ -26,8 +30,8 @@ const hostError = (operation: string) =>
 const notifyBestEffort = (
   ui: ExtensionUIContext,
   message: string,
-  level: Parameters<ExtensionUIContext["notify"]>[1],
-): Effect.Effect<void> => Effect.try(() => ui.notify(message, level)).pipe(Effect.ignore);
+  level: HostNotificationLevel,
+): Effect.Effect<void> => Effect.sync(() => notifyAtHostBoundary({ ui }, message, level));
 
 /** Adapts one Promise-shaped Pi dialog call; interruption aborts the forwarded signal. */
 const dialogCall = <A>(

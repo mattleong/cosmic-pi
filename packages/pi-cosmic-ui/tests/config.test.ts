@@ -7,7 +7,7 @@ import * as Path from "effect/Path";
 import {
   JsonDocumentError,
   JsonDocumentStore,
-  nodePlatformLayer,
+  nodeFilePlatformLayer,
   provideBuiltLayer,
   type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
@@ -35,7 +35,7 @@ const withTempConfig = <A, E>(
     const agent = path.join(root, "agent");
     yield* fs.makeDirectory(cwd, { recursive: true });
     return yield* run({ root, cwd, agent });
-  }).pipe(Effect.scoped, provideBuiltLayer(nodePlatformLayer));
+  }).pipe(Effect.scoped, provideBuiltLayer(nodeFilePlatformLayer));
 
 describe("Cosmic UI config", () => {
   it.effect("does not seed defaults and marks the first footer update as global", () =>

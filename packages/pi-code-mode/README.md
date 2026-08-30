@@ -34,30 +34,18 @@ See the runtime `PROVENANCE.md` (deviation 8) for the exact rules.
 
 ## TUI presentation
 
-In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>` — the optional
-`intent` tool parameter (a short human-readable purpose the model is asked to provide),
-falling back to a neutral phrase. Execution publishes an immediate `Starting…` state. New
-nested rows and their enriched running labels bypass extension-side scheduling so they can join
-Pi's already-pending next render; status-only churn is coalesced to Pi's 16 ms host-render
-cadence by one `Effect.runCallback` interruptor, and settlement always flushes the latest state. This avoids stacking two frame delays
-or slowing the program merely to preserve transient animation; a sub-frame call may still first
-paint as completed. While the program runs, nested calls appear as bounded activity rows
-derived from their inputs,
-reusing the standalone built-in tool emojis alongside status (`◌` queued, an animated Braille
-spinner while running, `✓` succeeded, `✗` failed, `⊘` cancelled), with settled durations and an
-exact lifecycle footer. Beyond 32 rows, the visible slots prioritize active, failed, cancelled,
-and recent calls under a `+N earlier` marker; the bound can still hide rows. Exact counts include
-all hidden calls, including cancellation before a queued call starts. Expanding the call
-shows the full program source; expanding the result shows the complete model-visible output
-or error. Successful object results containing only top-level string fields, including at least
-one multiline value, are projected as labeled sections instead of escaped JSON, using
-extension-only result metadata so a string that merely
-contains JSON is never reinterpreted. The tool definition captures, sanitizes, and bounds the
-configured `app.tools.expand` keys once; collapsed hints reuse that snapshot
-(`▸ output · ctrl+o expand`). All displayed text is
-sanitized against terminal control injection, and result-projection failures retain a fail-soft
-custom result instead of surrendering to Pi's raw generic fallback.
-Presentation never changes the model-visible result, details, or any execution limit.
+In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>`. The optional
+`intent` parameter is a short human-readable purpose, with a neutral fallback. Execution starts
+with `Starting…`, then shows bounded activity rows derived from nested inputs. Rows reuse built-in
+tool icons and show queued, running, succeeded, failed, or cancelled status plus settled duration.
+
+Beyond 32 rows, visible slots prioritize active, failed, cancelled, and recent calls under a
+`+N earlier` marker. Exact counts still include hidden calls. Expanding the call shows the program
+source, while expanding the result shows the model-visible output or error. Successful objects
+with top-level string fields and at least one multiline value render as labeled sections rather
+than escaped JSON. Collapsed hints use the configured `app.tools.expand` keys. All displayed text
+is sanitized against terminal control injection. Presentation does not change model-visible
+results or execution limits.
 
 ## Supplied tool authority and direct nested dispatch
 
@@ -93,13 +81,8 @@ Code Mode is trusted-project-only. Availability is `projectTrusted && enabled`:
   settings document is neither read, stat'd, nor written — and a global `enabled: true`
   never grants availability.
 - The `code_mode` tool registers at session start only when available. Disabling Code Mode
-  mid-session stops executions immediately; enabling it takes effect at the next session
-  start (`/reload`). Each slot input owns a publication flag that is revoked before deactivation,
-  so a replaced session cannot publish from a late uninterruptible commit. Slot startup uses the
-  shared interruptible best-effort host bootstrap for preview settings and returns no state
-  snapshot. A preview host Promise that ignores cancellation detaches on interruption and cannot
-  delay replacement. `onActivated` requires the current owner and token, rereads the live guarded
-  state, then builds, wraps, registers, and activates the tool with repeated currency checks.
+  mid-session stops executions immediately; enabling it takes effect at the next session start
+  (`/reload`).
 - Deactivating the `code_mode` tool from Pi's tool list is respected: the extension
   re-registers the tool each session but does not re-activate it against a deliberate
   deactivation. That intent also survives Pi recreating the extension on
@@ -136,22 +119,10 @@ same cumulative budget.
 
 ## `/code-mode-settings`
 
-- `/code-mode-settings` — interactive editor in TUI mode (choose the scope, then edit values).
-  Integer rows cycle their presets and offer a `custom…` entry that prompts for any integer
-  inside the documented bounds. Pi has one editor slot, so choosing `custom…` returns a tagged
-  `PromptInteger` result and closes the list before input opens. Scope selection, list settlement,
-  custom input, application, and the fresh-snapshot reopen loop run as one outer session Effect
-  submitted once. Cancelled, unavailable, and rejected custom input all reopen the list unless the
-  session was interrupted, state disappeared, or the custom surface failed. Preset and `inherit`
-  writes remain live against the current list's callback signal and roll back that row on failure.
-  Each list iteration joins those nonrejecting write Promises after the list settles and before it
-  handles close or custom input, reads fresh state, or reopens. The join stays interruptible.
-  Every signal check uses one guarded getter that treats a throw as aborted, with no UI, store, or
-  notification work. The custom boundary uses `Effect.ensuring` to abort callback authority and invoke Pi's available
-  `done(Closed)` once; a normal `PromptInteger` result wins, and late factories get an inert
-  component. Outside the interactive TUI the bare command never prompts:
-  RPC hosts receive the help text as notifications, and in print/JSON modes (where
-  notifications are not rendered) it resolves as a non-blocking no-op.
+- `/code-mode-settings` opens the interactive TUI editor. Choose a scope, then edit values.
+  Integer rows cycle through presets and include a `custom…` prompt for any value inside the
+  documented bounds. Outside the interactive TUI, the bare command never prompts. RPC hosts
+  receive help through notifications; print and JSON modes resolve without blocking.
 - `/code-mode-settings status` — effective values with per-field provenance
   (`default`/`global`/`project`) and the current availability.
 - `/code-mode-settings [global|project] <id> <value>` — set one field. Integer fields accept

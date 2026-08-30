@@ -1,9 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { AgentDirectory, nodePlatformLayer, provideBuiltLayer, SafeFile } from "pi-cosmic-core";
 import {
   makeInMemoryDocuments,
@@ -12,7 +15,7 @@ import {
   type StreamingHttpTestRequest,
 } from "pi-cosmic-core/testing";
 import { SharpAdapter } from "../src/boundary/sharp.ts";
-import { DEFAULT_IMAGE_CONFIG } from "../src/config/schema.ts";
+import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
 import { initialProjection } from "../src/usage/projection.ts";
 import { makeResolvedConfig } from "./helpers.ts";
@@ -29,11 +32,43 @@ const responseBody = Stream.make(
   ),
 );
 
+function imageServiceLayer(options: {
+  readonly context: ExtensionContext;
+  readonly config: ResolvedConfig;
+  readonly body: Parameters<typeof streamingHttpResponse>[1];
+  readonly requests?: StreamingHttpTestRequest[];
+  readonly decodedFormats?: readonly string[];
+}) {
+  let decodeIndex = 0;
+  const documents = makeInMemoryDocuments();
+  const http = streamingHttpTestLayer((request) => {
+    options.requests?.push(request);
+    return Effect.succeed(streamingHttpResponse(200, options.body));
+  });
+  const sharp = Layer.succeed(
+    SharpAdapter,
+    SharpAdapter.of({
+      decode: () =>
+        Effect.succeed({
+          format: options.decodedFormats?.[decodeIndex++] ?? "png",
+        }),
+    }),
+  );
+  return OpenAIImageService.layer({
+    context: MutableRef.make(options.context),
+    projection: MutableRef.make({ ...initialProjection(), config: options.config }),
+    agentDir: "/agent",
+  }).pipe(
+    Layer.provide(Layer.merge(sharp, SafeFile.layer)),
+    Layer.provide(
+      Layer.mergeAll(nodePlatformLayer, documents.layer, http, AgentDirectory.layer("/agent")),
+    ),
+  );
+}
+
 describe("OpenAIImageService", () => {
   it.effect("uses one captured context/config snapshot for defaults and overrides", () => {
     const requests: StreamingHttpTestRequest[] = [];
-    const decodedFormats = ["png", "webp"];
-    let decodeIndex = 0;
     let modelReads = 0;
     const contextFixture = {
       cwd: "/project",
@@ -59,28 +94,13 @@ describe("OpenAIImageService", () => {
         timeoutMs: 10_000,
       },
     });
-    const projection = MutableRef.make({ ...initialProjection(), config });
-    const documents = makeInMemoryDocuments();
-    const http = streamingHttpTestLayer((request) => {
-      requests.push(request);
-      return Effect.succeed(streamingHttpResponse(200, responseBody));
+    const serviceLayer = imageServiceLayer({
+      context,
+      config,
+      body: responseBody,
+      requests,
+      decodedFormats: ["png", "webp"],
     });
-    const sharp = Layer.succeed(
-      SharpAdapter,
-      SharpAdapter.of({
-        decode: () => Effect.succeed({ format: decodedFormats[decodeIndex++] ?? "png" }),
-      }),
-    );
-    const serviceLayer = OpenAIImageService.layer({
-      context: MutableRef.make(context),
-      projection,
-      agentDir: "/agent",
-    }).pipe(
-      Layer.provide(Layer.merge(sharp, SafeFile.layer)),
-      Layer.provide(
-        Layer.mergeAll(nodePlatformLayer, documents.layer, http, AgentDirectory.layer("/agent")),
-      ),
-    );
 
     return Effect.gen(function* () {
       const service = yield* OpenAIImageService;
@@ -116,4 +136,57 @@ describe("OpenAIImageService", () => {
       expect(modelReads).toBe(1);
     }).pipe(provideBuiltLayer(serviceLayer));
   });
+
+  it.effect("returns a typed timeout and finalizes the interrupted response stream", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      let finalized = 0;
+      const body = Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+        Stream.drain,
+        Stream.concat(Stream.never),
+        Stream.ensuring(
+          Effect.sync(() => {
+            finalized++;
+          }),
+        ),
+      );
+      const contextFixture = {
+        cwd: "/project",
+        hasUI: true as const,
+        model: { provider: "anthropic", id: "unrelated-model" },
+        modelRegistry: {
+          isUsingOAuth: () => true,
+          getApiKeyForProvider: () =>
+            Promise.resolve(JSON.stringify({ access: "test-token", accountId: "acct_test" })),
+        },
+        ui: { notify() {} },
+      };
+      // SAFETY: The image service uses only the context fields implemented by this fixture.
+      const context = contextFixture as typeof contextFixture & ExtensionContext;
+      const config = makeResolvedConfig({
+        image: {
+          ...DEFAULT_IMAGE_CONFIG,
+          defaultSave: "none",
+          timeoutMs: 30_000,
+        },
+      });
+      const failure = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "timed request" }),
+      ).pipe(
+        provideBuiltLayer(imageServiceLayer({ context, config, body })),
+        Effect.flip,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("30 seconds");
+
+      expect(yield* Fiber.join(failure)).toMatchObject({
+        _tag: "OpenAIImageError",
+        operation: "timeout",
+        message: "OpenAI image request timed out.",
+      });
+      expect(finalized).toBe(1);
+    }),
+  );
 });

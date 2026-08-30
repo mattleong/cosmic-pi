@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { afterEach, test } from "vitest";
 import { effectTest, step } from "../support/effect-test";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../../src/application/capability";
 import { makeSettingsAdmission, withSettingsCoordinator } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
+import { nestedCodePreviewSettings } from "../../src/config/document-store";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { loadCodePreviewSettings } from "../../index";
 import {
@@ -86,6 +88,29 @@ test("getSettingsPath uses Pi's agent directory resolution", () => {
 
   assert.equal(getSettingsPath(), join(homedir(), ".config", "pi", "code-previews.json"));
 });
+
+const nestedSettingsCases: ReadonlyArray<readonly [string, JsonValue, JsonObject]> = [
+  [
+    "object",
+    { readCollapsedLines: 21, futureSetting: { enabled: true } },
+    {
+      readCollapsedLines: 21,
+      futureSetting: { enabled: true },
+    },
+  ],
+  ["null", null, {}],
+  ["array", [{ readCollapsedLines: 21 }], {}],
+  ["string", "21", {}],
+  ["number", 21, {}],
+  ["boolean", true, {}],
+];
+
+test.each(nestedSettingsCases)(
+  "settings.json accepts only a nested JSON object: %s",
+  (_label, nested, expected) => {
+    assert.deepEqual(nestedCodePreviewSettings({ codePreview: nested }), expected);
+  },
+);
 
 effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_DIR", function* () {
   const configDir = yield* makeTempDirectory("pi-code-previews-settings-");

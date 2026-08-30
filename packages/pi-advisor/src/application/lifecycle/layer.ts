@@ -2,8 +2,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Scope from "effect/Scope";
-import { advisorDelay, advisorNow } from "../../boundary/clock.ts";
+import { advisorDelay } from "../../boundary/clock.ts";
 import type { AdvisorPlatform } from "../../boundary/executor.ts";
+import { activeContextMessages } from "../../boundary/host-context.ts";
 import { createLedgerFingerprint } from "../../checkpoint/ledger.ts";
 import { makeCheckpointOrchestrator } from "../../checkpoint/orchestrator.ts";
 import {
@@ -13,6 +14,7 @@ import {
   normalizeAdvisorConfig,
 } from "../../config/options.ts";
 import { ConfigStore } from "../../config/store.ts";
+import { recordReviewDurationMetrics, recordUsageMetrics } from "../../domain/metrics.ts";
 import { FailureLogger } from "../../logging/logger.ts";
 import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import { buildAdvisorContext } from "../../review/context.ts";
@@ -21,7 +23,6 @@ import { makeAdvisorResourceState } from "../../runtime/resource-state.ts";
 import { handleAdvisorCommand } from "../../settings/controller.ts";
 import { makeAdvisorStatusService } from "../../status/service.ts";
 import { notifyAtHostBoundary } from "pi-cosmic-core";
-import { activeContextMessages } from "../controller-helpers.ts";
 import {
   ADVISOR_CATCH_UP_TIMEOUT_MS,
   AdvisorController,
@@ -36,7 +37,6 @@ import { makeDeliver } from "./delivery.ts";
 import { makeLifecycleEvents } from "./events.ts";
 import { makeLedgerPersistence } from "./ledger.ts";
 import { branchContainsAnchor, readLifecycleScope, readParentAnchor } from "./parent-session.ts";
-import { recordReviewDurationMetrics, recordUsageMetrics } from "./metrics.ts";
 import { makeRuntimeControls } from "./runtime.ts";
 import { createSessionRefs } from "./session-refs.ts";
 import { makeLifecycleStatusControls } from "./status.ts";
@@ -94,7 +94,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const recordReviewDuration = (
         target: Parameters<typeof recordReviewDurationMetrics>[0],
         startedAt: number,
-      ) => recordReviewDurationMetrics(target, startedAt, advisorNow(executor));
+      ) => recordReviewDurationMetrics(target, startedAt, executor.now());
 
       const seedFromMessages = (messages: readonly unknown[]): string =>
         buildAdvisorContext({
@@ -198,7 +198,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         failureLogger,
         applicationScope: applicationResourceScope,
         checkpointOrchestrator,
-        now: () => advisorNow(executor),
+        now: () => executor.now(),
         startRuntimeEffect,
         stopRuntimeEffect,
         deliver,

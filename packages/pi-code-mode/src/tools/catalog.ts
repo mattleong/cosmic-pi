@@ -6,7 +6,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { BackgroundTaskToolInput } from "pi-background-task/code-mode";
-import { CodeMode, Tool, toolError } from "../boundary/codemode-runtime.ts";
+import { CodeMode, Tool, toolError, type ToolError } from "../boundary/codemode-runtime.ts";
 import {
   BackgroundTaskCodeModeOutputSchema,
   type BackgroundTaskDispatch,
@@ -56,11 +56,7 @@ const LsInput = Schema.Struct({
   limit: Schema.optionalKey(Schema.Number),
 });
 const PositiveFinite = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0.001));
-const NonNegativeInteger = Schema.Number.check(
-  Schema.isFinite(),
-  Schema.isInt(),
-  Schema.isGreaterThanOrEqualTo(0),
-);
+const NonNegativeInteger = Schema.Natural;
 const BackgroundTaskInput = Schema.Struct({
   action: Schema.Literals(["start", "list", "status", "logs", "wait", "stop", "stop_all", "clear"]),
   command: Schema.optionalKey(Schema.String),
@@ -73,11 +69,7 @@ const BackgroundTaskInput = Schema.Struct({
   contains: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
   afterCursor: Schema.optionalKey(NonNegativeInteger),
   tailLines: Schema.optionalKey(
-    Schema.Number.check(
-      Schema.isFinite(),
-      Schema.isInt(),
-      Schema.isBetween({ minimum: 1, maximum: 2_000 }),
-    ),
+    Schema.Natural.check(Schema.isBetween({ minimum: 1, maximum: 2_000 })),
   ),
   waitSeconds: Schema.optionalKey(
     Schema.Number.check(Schema.isFinite(), Schema.isBetween({ minimum: 0, maximum: 120 })),
@@ -182,35 +174,29 @@ export const makeExecutionGuestTools = (
   dispatchBackgroundTask: BackgroundTaskDispatch,
   budget: CumulativeOutputBudget,
   options: CodeModeCatalogOptions,
-) =>
-  makeCodeModeGuestTools(
-    (name, input) =>
-      dispatchPi(name, input).pipe(
-        Effect.catchTag("ToolError", (error) =>
-          Effect.fail(toolError(budget.admitFailure(error.message))),
-        ),
-        Effect.flatMap((guestData) => {
-          const admission = budget.admit(guestData);
-          return admission.admitted
-            ? Effect.succeed(guestData)
-            : Effect.fail(toolError(budget.admitFailure(admission.message)));
-        }),
+) => {
+  const admitOutput = <Value>(
+    effect: Effect.Effect<Value, ToolError>,
+    serialize: (value: Value) => string,
+  ): Effect.Effect<Value, ToolError> =>
+    effect.pipe(
+      Effect.catchTag("ToolError", (error) =>
+        Effect.fail(toolError(budget.admitFailure(error.message))),
       ),
-    (input) =>
-      dispatchBackgroundTask(input).pipe(
-        Effect.catchTag("ToolError", (error) =>
-          Effect.fail(toolError(budget.admitFailure(error.message))),
-        ),
-        Effect.flatMap((guestData) => {
-          const serialized = JSON.stringify(guestData) ?? "";
-          const admission = budget.admit(serialized);
-          return admission.admitted
-            ? Effect.succeed(guestData)
-            : Effect.fail(toolError(budget.admitFailure(admission.message)));
-        }),
-      ),
+      Effect.flatMap((value) => {
+        const admission = budget.admit(serialize(value));
+        return admission.admitted
+          ? Effect.succeed(value)
+          : Effect.fail(toolError(budget.admitFailure(admission.message)));
+      }),
+    );
+
+  return makeCodeModeGuestTools(
+    (name, input) => admitOutput(dispatchPi(name, input), (value) => value),
+    (input) => admitOutput(dispatchBackgroundTask(input), (value) => JSON.stringify(value) ?? ""),
     options,
   );
+};
 
 /** Model-facing catalog instructions rendered over the same shapes the program will see. */
 export const describeCodeModeCatalog = (

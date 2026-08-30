@@ -1,10 +1,8 @@
 // The stream-input correlation UUID is plain-crypto identity, not an Effect resource.
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { randomUUID } from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -22,6 +20,7 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
+import { classifyLocalCliInterruptOwnership } from "./local-cli-interruption.ts";
 import {
   toBackendExit,
   type BackendDriver,
@@ -948,21 +947,8 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         // An uncertain or cancelled interrupt retains exact lifecycle ownership:
         // a late correlated marker+result pair then pauses through run_settled.
         // Definite success or definite rejection releases ownership immediately.
-        const retainOwnership =
-          Exit.isFailure(exit) &&
-          (exit.cause.reasons.every(Cause.isInterruptReason) ||
-            (() => {
-              const error = Cause.squash(exit.cause);
-              // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-              return (
-                hasObjectRuntimeType(error) &&
-                error !== null &&
-                "_tag" in error &&
-                error._tag === "SubagentProcessError" &&
-                (error as SubagentProcessError).code === "interrupt_outcome_uncertain"
-              );
-            })());
-        if (!retainOwnership) {
+        const ownership = classifyLocalCliInterruptOwnership(exit);
+        if (ownership === "release") {
           pendingInterrupt = undefined;
           return Effect.void;
         }

@@ -5,7 +5,7 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import type { CodePreviewSettingsService } from "../config/service";
 import type { CodePreviewSyntaxService } from "../syntax/service";
 import type { CodePreviewWriteService } from "../write/service";
-import { publishCodePreviewSchedulerProjection } from "./projection";
+import type { CodePreviewSchedulerServiceContract } from "./scheduler";
 
 type SessionRequirements =
   | CodePreviewSettingsService
@@ -18,13 +18,11 @@ export class CodePreviewSessionUnavailable extends Schema.TaggedError<CodePrevie
   { operation: Schema.String, message: Schema.String },
 ) {}
 
-export interface CodePreviewSessionCapability {
+export interface CodePreviewSessionCapability extends CodePreviewSchedulerServiceContract {
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SessionRequirements>,
     signal?: AbortSignal,
   ) => Promise<A>;
-  readonly defer: (task: () => void) => () => void;
-  readonly schedule: (interval: number, task: () => void) => () => void;
 }
 
 let activeCapability: CodePreviewSessionCapability | undefined;
@@ -33,18 +31,24 @@ export function installCodePreviewSessionCapability(
   capability: CodePreviewSessionCapability | undefined,
 ): void {
   activeCapability = capability;
-  publishCodePreviewSchedulerProjection(
-    capability ? { defer: capability.defer, schedule: capability.schedule } : undefined,
-  );
 }
 
 export function clearCodePreviewSessionCapability(): void {
   activeCapability = undefined;
-  publishCodePreviewSchedulerProjection(undefined);
 }
 
 export function hasCodePreviewSessionCapability(): boolean {
   return activeCapability !== undefined;
+}
+
+const inactiveCancellation = (): void => undefined;
+
+export function deferCodePreview(task: () => void): () => void {
+  return activeCapability?.defer(task) ?? inactiveCancellation;
+}
+
+export function scheduleCodePreview(interval: number, task: () => void): () => void {
+  return activeCapability?.schedule(interval, task) ?? inactiveCancellation;
 }
 
 export function runCodePreviewSessionEffect<A, E>(

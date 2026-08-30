@@ -11,13 +11,14 @@ import {
   type JsonObject,
 } from "pi-cosmic-core";
 import type { AdvisorPlatform } from "../boundary/executor.ts";
-import { getAdvisorConfigPath, normalizeAdvisorConfig } from "./options.ts";
 import {
   AdvisorConfigError,
+  getAdvisorConfigPath,
+  normalizeAdvisorConfig,
   patchAdvisorConfig,
   type AdvisorConfigPatch,
   type ResolvedAdvisorConfig,
-} from "./schema.ts";
+} from "./options.ts";
 
 const mapConfigError = makeConfigDocumentErrorFactory(AdvisorConfigError, "Advisor");
 

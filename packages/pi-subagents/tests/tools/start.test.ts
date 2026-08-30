@@ -28,11 +28,7 @@ import {
   testBackendRegistry,
   view,
 } from "./fixtures/tool-harness.ts";
-import {
-  extensionContextFixture,
-  subagentServiceFixture,
-  extensionApiFixture,
-} from "../fixtures/pi-host.ts";
+import { extensionApiFixture, extensionContextFixture } from "../fixtures/pi-host.ts";
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -43,16 +39,6 @@ describe("subagent tool", () => {
       let request: StartSubagentRequest | undefined;
       const service = subagentServiceDouble({
         start: (input) => Effect.sync(() => ((request = input), view())),
-        awaitTerminal: () => Effect.succeed([view()]),
-        list: Effect.succeed([]),
-        status: () => Effect.succeed(view()),
-        send: () => Effect.succeed(view()),
-        reply: () => Effect.succeed(view()),
-        interrupt: () => Effect.succeed(view()),
-        resume: () => Effect.succeed(view()),
-        rename: () => Effect.succeed(view()),
-        stop: () => Effect.succeed(view()),
-        projection: Effect.succeed({ revision: 0, runs: [] }),
       });
       const tool = captureSubagentTools(service, [
         "read",
@@ -1060,16 +1046,6 @@ describe("subagent tool", () => {
                 ),
           ),
         ),
-      awaitTerminal: () => Effect.succeed([]),
-      list: Effect.succeed([]),
-      status: () => Effect.succeed(view()),
-      send: () => Effect.succeed(view()),
-      reply: () => Effect.succeed(view()),
-      interrupt: () => Effect.succeed(view()),
-      resume: () => Effect.succeed(view()),
-      rename: () => Effect.succeed(view()),
-      stop: () => Effect.succeed(view()),
-      projection: Effect.succeed({ revision: 0, runs: [] }),
     });
     const tool = captureSubagentTools(service, ["read", "grep"]).get("subagent_start");
 
@@ -1204,8 +1180,7 @@ describe("subagent tool", () => {
 
   effectTest("launches through the cancellation-safe session owner", function* () {
     let sessionOwnedStarts = 0;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const service = subagentServiceFixture({
+    const service = subagentServiceDouble({
       start: () => Effect.die("interruptible start must not be used by the public tool"),
       startSessionOwned: (input: StartSubagentRequest) =>
         Effect.sync(() => {

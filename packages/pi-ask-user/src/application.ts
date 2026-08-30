@@ -6,6 +6,7 @@ import {
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
+  notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import { makeAskUserDialogBridge } from "./boundary/host-ui.ts";
 import {
@@ -70,13 +71,7 @@ export function askUserWithDependencies(
   pi.registerCommand("ask-user", {
     description: "Resume the active hidden questionnaire",
     handler: (_args, ctx) => {
-      if (!bridge.resume()) {
-        try {
-          ctx.ui.notify("No hidden questionnaire is active.", "info");
-        } catch {
-          // Notifications are best effort at this host boundary.
-        }
-      }
+      if (!bridge.resume()) notifyAtHostBoundary(ctx, "No hidden questionnaire is active.", "info");
       return Promise.resolve();
     },
   });

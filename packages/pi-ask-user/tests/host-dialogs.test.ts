@@ -3,12 +3,13 @@ import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-work
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import { describe, expect, it, vi } from "vitest";
 import { HostDialogs } from "../src/boundary/host-dialogs.ts";
 import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
+
+const provideLayer = Effect.provide;
 
 const request: AskUserRequest = {
   questions: [
@@ -36,16 +37,10 @@ const run = (
   options?: { readonly bridge?: AskUserDialogBridge; readonly signal?: AbortSignal },
 ) =>
   Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const context = yield* Layer.build(
-          HostDialogs.layer(ctx, options?.bridge ?? makeAskUserDialogBridge()),
-        );
-        return yield* Effect.provide(
-          Effect.flatMap(HostDialogs, (host) => host.ask(selectedRequest)),
-          context,
-        );
-      }),
+    provideLayer(
+      Effect.flatMap(HostDialogs, (host) => host.ask(selectedRequest)),
+      HostDialogs.layer(ctx, options?.bridge ?? makeAskUserDialogBridge()),
+      { local: true },
     ),
     options?.signal ? { signal: options.signal } : undefined,
   );

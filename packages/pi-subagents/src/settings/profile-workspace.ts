@@ -13,6 +13,7 @@ import {
   declaredRouteForDraft,
   hasOwnProfileRouteDeclaration,
   inheritProjectDraft,
+  inheritSessionDraft,
   profileWorkspaceScope,
   replaceRouteCandidate,
   resetGlobalDraft,
@@ -37,7 +38,6 @@ import {
 } from "./ui/profile-workspace-model.ts";
 import {
   applyProfileWorkspaceDraftAction,
-  currentSessionBaselineDraft,
   profileWorkspaceConfirmation,
   type ProfileWorkspaceDraftAction,
 } from "./ui/profile-workspace-actions.ts";
@@ -49,7 +49,7 @@ import {
 } from "./ui/profile-workspace-selectors.ts";
 import {
   SearchableSelectPage,
-  type SettingsSelectKeybindingId,
+  type SearchableSelectHostOptions,
 } from "./ui/searchable-select-page.ts";
 
 export type ProfileWorkspaceSaveResult =
@@ -63,7 +63,7 @@ export type ProfileWorkspaceCloseResult =
   | false
   | { readonly action: "sets"; readonly profile: ProfileId };
 
-export interface ProfileWorkspaceOptions {
+export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
   readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
@@ -72,14 +72,6 @@ export interface ProfileWorkspaceOptions {
   readonly preferredPiModel: () => string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
-  readonly getHeight: () => number;
-  readonly requestRender: () => void;
-  readonly matchesKeybinding?:
-    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
-    | undefined;
-  readonly keybindingLabel?:
-    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
-    | undefined;
   readonly close: (result: ProfileWorkspaceCloseResult) => void;
   readonly saveDraft: (
     target: ProfileWorkspaceTarget,
@@ -805,7 +797,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         ? resetGlobalDraft(profile)
         : this.scope === "project"
           ? inheritProjectDraft(this.inspection, profile)
-          : currentSessionBaselineDraft(this.inspection, profile);
+          : inheritSessionDraft(this.inspection, profile);
     const resetCurrent = `${draftKindLabel(draft, this.scope)} · ${profileRouteDraftSummary(profile, draft, this.options.parentEffort, this.options.parentModel)}`;
     const resetSummary = profileRouteDraftSummary(
       profile,

@@ -105,6 +105,25 @@ describe("progress containment", () => {
     expect(text.length).toBeLessThan(2_000);
   });
 
+  it("reports hidden rows from exact counts when the supplied rows were already retained", () => {
+    const retained: CodeModeCallEntry[] = Array.from(
+      { length: MAX_PROGRESS_ENTRIES },
+      () => ({ tool: "pi.read", status: "completed" }) as const,
+    );
+    const partial = progressResult(retained, {
+      total: 100,
+      queued: 0,
+      running: 0,
+      succeeded: 100,
+      failed: 0,
+      cancelled: 0,
+    });
+    const text = partial.content[0]?.type === "text" ? partial.content[0].text : "";
+    expect(text).toContain("100 nested tool calls (100 settled, 0 running, 0 queued)");
+    expect(text).toContain("+68 earlier");
+    expect(partial.details.totalToolCalls).toBe(100);
+  });
+
   it("keeps problem and active rows plus recent successes beyond the display bound", () => {
     const calls: CodeModeCallEntry[] = [
       ...Array.from({ length: 40 }, (_, index) => ({

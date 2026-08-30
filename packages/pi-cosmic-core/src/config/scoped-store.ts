@@ -21,18 +21,16 @@ export interface ScopedDocumentPathOptions {
 }
 
 /** Resolves the common project/global extension document locations. */
-export const scopedDocumentPaths = Effect.fn("ScopedStore.paths")(function* (
-  cwd: string,
-  agentDirectory: string,
-  options: ScopedDocumentPathOptions,
-) {
-  const path = yield* Path.Path;
-  const extensions = options.extensionsDirectory ?? "extensions";
-  return {
-    project: path.join(cwd, options.projectConfigDirectory, extensions, options.basename),
-    global: path.join(agentDirectory, extensions, options.basename),
-  } satisfies ScopedDocumentPaths;
-});
+export const scopedDocumentPaths = Effect.fn("ScopedStore.paths")(
+  (cwd: string, agentDirectory: string, options: ScopedDocumentPathOptions) =>
+    Path.Path.useSync((path) => {
+      const extensions = options.extensionsDirectory ?? "extensions";
+      return {
+        project: path.join(cwd, options.projectConfigDirectory, extensions, options.basename),
+        global: path.join(agentDirectory, extensions, options.basename),
+      } satisfies ScopedDocumentPaths;
+    }),
+);
 
 export interface ScopedDocumentSelectionOptions {
   /**

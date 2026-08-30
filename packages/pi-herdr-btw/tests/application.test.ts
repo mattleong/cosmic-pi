@@ -3,38 +3,28 @@ import type {
   ExtensionContext,
   ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
-import { describe, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { expect, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { registerHerdrBtwApplication } from "../src/application.ts";
 
 type Handler = ExtensionHandler<any, any>;
-
-type HarnessContext = ExtensionContext & {
-  cwd: string;
-  signal?: AbortSignal;
-};
+type HarnessContext = ExtensionContext & { cwd: string; signal?: AbortSignal };
 
 const harness = () => {
   const handlers = new Map<string, Handler[]>();
   const notify = vi.fn();
   const piFixture = {
     on(name: string, handler: Handler) {
-      const list = handlers.get(name) ?? [];
-      list.push(handler);
-      handlers.set(name, list);
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     },
     registerCommand() {},
     registerFlag() {},
     getFlag: () => undefined,
     appendEntry() {},
   };
-  // SAFETY: The application uses only the ExtensionAPI members implemented by this fixture.
-  const pi = piFixture as typeof piFixture & ExtensionAPI;
   const contextFixture = {
     cwd: "/project",
-    // SAFETY: The fixture intentionally exposes the optional host signal slot mutated by tests.
-    signal: undefined as AbortSignal | undefined,
     mode: "tui" as const,
     hasUI: true,
     sessionManager: {
@@ -46,21 +36,23 @@ const harness = () => {
     },
     ui: { notify },
   };
-  // SAFETY: The application uses only the ExtensionContext members implemented by this fixture.
+  // SAFETY: The fixture implements every ExtensionAPI member used by the application.
+  const pi = piFixture as typeof piFixture & ExtensionAPI;
+  // SAFETY: The fixture implements every ExtensionContext member used by the application.
   const ctx = contextFixture as typeof contextFixture & HarnessContext;
   registerHerdrBtwApplication(pi);
   const invokeAll = <EventInput>(name: string, event: EventInput) =>
     Promise.all((handlers.get(name) ?? []).map((handler) => handler(event, ctx)));
-  const start = () => invokeAll("session_start", { type: "session_start" });
-  const shutdown = () => invokeAll("session_shutdown", { reason: "quit" });
-  return { ctx, notify, start, shutdown };
+  return {
+    ctx,
+    notify,
+    start: () => invokeAll("session_start", { type: "session_start" }),
+    shutdown: () => invokeAll("session_shutdown", { reason: "quit" }),
+  };
 };
 
-const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
-  Effect.promise(() => Promise.resolve(value).then(() => undefined));
-
 describe("herdr-btw session host capture", () => {
-  it.effect("materializes cwd and signal once and never rereads the raw host signal", () =>
+  it.effect("materializes cwd and signal once without rereading raw host values", () =>
     Effect.gen(function* () {
       const h = harness();
       const controller = new AbortController();
@@ -85,73 +77,52 @@ describe("herdr-btw session host capture", () => {
         },
       });
 
-      yield* invoke(h.start());
+      yield* Effect.promise(() => h.start());
 
       expect(cwdReads).toBe(1);
       expect(signalReads).toBe(1);
       expect(h.notify).not.toHaveBeenCalled();
-      yield* invoke(h.shutdown());
+      yield* Effect.promise(() => h.shutdown());
     }),
   );
 
-  it.effect("fails closed for a hostile signal getter", () =>
+  it.effect("fails closed when the host signal cannot be captured safely", () =>
     Effect.gen(function* () {
-      const h = harness();
-      Object.defineProperty(h.ctx, "signal", {
-        configurable: true,
-        get() {
-          throw new Error("host-signal-secret");
+      const setups: ReadonlyArray<(ctx: HarnessContext) => void> = [
+        (ctx) =>
+          void Object.defineProperty(ctx, "signal", {
+            configurable: true,
+            get() {
+              throw new Error("host-signal-secret");
+            },
+          }),
+        (ctx) => {
+          const controller = new AbortController();
+          controller.abort();
+          ctx.signal = controller.signal;
         },
-      });
+        (ctx) =>
+          void Object.defineProperty(ctx, "signal", {
+            configurable: true,
+            value: Object.defineProperty({}, "aborted", {
+              get() {
+                throw new Error("host-aborted-secret");
+              },
+            }),
+          }),
+      ];
 
-      let startup: unknown;
-      expect(() => {
-        startup = h.start();
-      }).not.toThrow();
-      yield* invoke(startup);
-
-      expect(h.notify).toHaveBeenCalledWith(
-        "The /herdr-btw command could not capture this Pi session.",
-        "error",
-      );
-    }),
-  );
-
-  it.effect("fails closed when the captured session is already aborted", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const controller = new AbortController();
-      controller.abort();
-      h.ctx.signal = controller.signal;
-
-      yield* invoke(h.start());
-
-      expect(h.notify).toHaveBeenCalledWith(
-        "The /herdr-btw command could not capture this Pi session.",
-        "error",
-      );
-    }),
-  );
-
-  it.effect("fails closed when reading captured aborted state throws", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const hostileSignal = Object.defineProperty({}, "aborted", {
-        get() {
-          throw new Error("host-aborted-secret");
-        },
-      });
-      Object.defineProperty(h.ctx, "signal", {
-        configurable: true,
-        value: hostileSignal,
-      });
-
-      yield* invoke(h.start());
-
-      expect(h.notify).toHaveBeenCalledWith(
-        "The /herdr-btw command could not capture this Pi session.",
-        "error",
-      );
+      for (const setup of setups) {
+        const h = harness();
+        setup(h.ctx);
+        let startup!: ReturnType<typeof h.start>;
+        expect(() => {
+          startup = h.start();
+        }).not.toThrow();
+        yield* Effect.promise(() => startup);
+        expect(h.notify).toHaveBeenCalledOnce();
+        expect(h.notify).toHaveBeenCalledWith(expect.any(String), "error");
+      }
     }),
   );
 });

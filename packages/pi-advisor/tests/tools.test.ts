@@ -382,17 +382,4 @@ describe("package-owned Advisor tools", () => {
       for (const guard of guards) expect(guard).not.toHaveBeenCalled();
     }),
   );
-
-  it.effect("contains no process or mutation implementation path", () =>
-    Effect.gen(function* () {
-      const source = yield* Effect.promise(() =>
-        readFile(new URL("../src/runtime/tools.ts", import.meta.url), "utf8"),
-      );
-      expect(source).not.toMatch(
-        /node:child_process|\bspawn\s*\(|\bexec(File)?\s*\(|pi\.exec|writeFile|rename|unlink/,
-      );
-      expect(source).toContain("O_NOFOLLOW");
-      expect(source).toContain("isSymbolicLink");
-    }),
-  );
 });

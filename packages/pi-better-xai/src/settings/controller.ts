@@ -21,7 +21,7 @@ import {
   recoverHostUi,
 } from "../boundary/host-ui.ts";
 import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config/index.ts";
-import { XaiUsageService } from "../usage/index.ts";
+import { XaiUsageService } from "../usage/controller.ts";
 
 export function registerSettingsController(
   pi: ExtensionAPI,
@@ -52,10 +52,7 @@ export function registerSettingsController(
     id: string,
     value: string,
     signal: AbortSignal | undefined,
-    view?: {
-      readonly applied: (currentValue: string) => void;
-      readonly reverted: (currentValue: string) => void;
-    },
+    updateDisplay?: (currentValue: string) => void,
   ): Promise<void> => {
     const descriptor = SETTINGS_OPTION_DESCRIPTORS.find((entry) => entry.id === id);
     /** Current persisted projection value; undefined when the projection is unavailable. */
@@ -69,10 +66,10 @@ export function registerSettingsController(
     };
     // Snapshot before the write so an optimistic display can still be rolled back when the
     // projection becomes unavailable while the update is in flight.
-    const before = view ? persistedValue() : undefined;
+    const before = updateDisplay ? persistedValue() : undefined;
     const revertOptimisticDisplay = () => {
       const current = persistedValue() ?? before;
-      if (view && current !== undefined) view.reverted(current);
+      if (updateDisplay && current !== undefined) updateDisplay(current);
     };
     return run(
       XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(
@@ -81,7 +78,7 @@ export function registerSettingsController(
             Effect.andThen(
               recoverHostUi("settings_success", () => {
                 const current = descriptor ? descriptor.currentValue(config(ctx)) : value;
-                if (view) view.applied(current);
+                if (updateDisplay) updateDisplay(current);
                 else ctx.ui.notify(`${id} = ${current}`, "info");
               }),
             ),
@@ -139,10 +136,7 @@ export function registerSettingsController(
                 tui.requestRender();
               }, undefined);
             };
-            void applySetting(ctx, id, value, capturedSignal.signal, {
-              applied: show,
-              reverted: show,
-            });
+            void applySetting(ctx, id, value, capturedSignal.signal, show);
           },
           onCancel: () => invokeHostCallback(() => done(undefined), undefined),
           matchesKeybinding: invokeHostCallback(

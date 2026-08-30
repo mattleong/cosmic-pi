@@ -57,17 +57,12 @@ export type CodexAuthResult =
     }
   | { readonly _tag: "Missing" }
   | {
-      readonly _tag: "Unavailable" | "Malformed";
+      readonly _tag: "Failure";
       readonly operation: string;
       readonly message: string;
     };
-const unavailable = (operation: string, message: string): CodexAuthResult => ({
-  _tag: "Unavailable",
-  operation,
-  message,
-});
-const malformed = (operation: string, message: string): CodexAuthResult => ({
-  _tag: "Malformed",
+const failure = (operation: string, message: string): CodexAuthResult => ({
+  _tag: "Failure",
   operation,
   message,
 });
@@ -111,23 +106,14 @@ export const readCodexAuthResult = Effect.fn("CodexAuth.readAuthResult")(functio
   );
   const rawEntry = document?.value["openai-codex"];
   if (rawEntry === undefined) return { _tag: "Missing" } as const;
-  const entry = yield* Schema.decodeUnknownEffect(CodexAuthEntrySchema)(rawEntry).pipe(
-    Effect.mapError(
-      () =>
-        new CodexAuthError({
-          operation: "decode",
-          message: "OpenAI credential fields are malformed.",
-        }),
-    ),
-    Effect.result,
-  );
-  if (entry._tag === "Failure") return malformed(entry.failure.operation, entry.failure.message);
+  const entry = Option.getOrUndefined(Schema.decodeUnknownOption(CodexAuthEntrySchema)(rawEntry));
+  if (!entry) return failure("decode", "OpenAI credential fields are malformed.");
   const now = yield* Clock.currentTimeMillis;
-  if (Predicate.isNumber(entry.success.expires) && now >= entry.success.expires)
+  if (Predicate.isNumber(entry.expires) && now >= entry.expires)
     return { _tag: "Missing" } as const;
-  const accessToken = entry.success.access;
-  const accountId = (entry.success.accountId ?? entry.success.account_id)?.trim();
-  if (!accountId) return malformed("decode", "OpenAI credential fields are malformed.");
+  const accessToken = entry.access;
+  const accountId = (entry.accountId ?? entry.account_id)?.trim();
+  if (!accountId) return failure("decode", "OpenAI credential fields are malformed.");
   return {
     _tag: "Found",
     credentials: {
@@ -145,7 +131,7 @@ export const getCodexCredentialsResult = Effect.fn("CodexAuth.getCredentialsResu
   const [file, registryRaw] = yield* Effect.all(
     [
       readCodexAuthResult(authPath).pipe(
-        Effect.catch((error) => Effect.succeed(unavailable(error.operation, error.message))),
+        Effect.orElseSucceed(() => failure("read", "Unable to read openai-codex credentials.")),
       ),
       Effect.tryPromise({
         try: () => ctx.modelRegistry.getApiKeyForProvider("openai-codex"),
@@ -172,11 +158,11 @@ export const getCodexCredentialsResult = Effect.fn("CodexAuth.getCredentialsResu
       } as const;
     if (file._tag === "Found") return file;
     if (registryRaw.success)
-      return malformed("registry-decode", "OpenAI registry credentials are malformed.");
+      return failure("registry-decode", "OpenAI registry credentials are malformed.");
   } else if (file._tag === "Found") return file;
   if (file._tag !== "Missing") return file;
   if (registryRaw._tag === "Failure")
-    return unavailable(registryRaw.failure.operation, registryRaw.failure.message);
+    return failure(registryRaw.failure.operation, registryRaw.failure.message);
   return { _tag: "Missing" } as const;
 });
 

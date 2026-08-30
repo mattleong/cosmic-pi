@@ -12,7 +12,7 @@ import {
   type AdvisorSeverity,
 } from "./schema.ts";
 import { canonicalAdvisorFindingFingerprint } from "./schema.ts";
-import { isOneOf, isRecord } from "../shared/utils.ts";
+import { isJsonObject } from "pi-cosmic-core";
 
 export const MAX_FINDING_LIFECYCLE_RECORDS = 64;
 export interface AdvisorFindingRecord {
@@ -143,7 +143,7 @@ function trimRecords(records: AdvisorFindingRecord[]): AdvisorFindingRecord[] {
 export function isValidAdvisorFindingRecord<ValueInput>(
   value: ValueInput,
 ): value is ValueInput & AdvisorFindingRecord {
-  if (!isRecord(value)) return false;
+  if (!isJsonObject(value)) return false;
   return (
     Predicate.isString(value.id) &&
     /^af_[a-f\d]{32}$/.test(value.id) &&
@@ -163,6 +163,12 @@ export function isValidAdvisorFindingRecord<ValueInput>(
     value.lastSeenTurn >= value.firstSeenTurn &&
     value.id === advisorFindingId(value.key, value.generation)
   );
+}
+function isOneOf<const Values extends readonly unknown[], ValueInput>(
+  value: ValueInput,
+  values: Values,
+): value is ValueInput & Values[number] {
+  return values.includes(value);
 }
 function isTerminal(record: AdvisorFindingRecord): boolean {
   return record.status === "resolved" || record.status === "superseded";

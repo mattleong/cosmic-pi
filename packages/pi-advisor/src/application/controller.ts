@@ -67,14 +67,14 @@ export interface LastCandidate {
 }
 
 export type AdvisorApplicationEvent =
-  | AgentSettledEvent
-  | MessageEndEvent
-  | MessageUpdateEvent
-  | ToolExecutionEndEvent
-  | ToolExecutionStartEvent
-  | ToolExecutionUpdateEvent
-  | TurnEndEvent
-  | TurnStartEvent;
+  | { readonly type: "agent_settled"; readonly event: AgentSettledEvent }
+  | { readonly type: "message_end"; readonly event: MessageEndEvent }
+  | { readonly type: "message_update"; readonly event: MessageUpdateEvent }
+  | { readonly type: "tool_execution_end"; readonly event: ToolExecutionEndEvent }
+  | { readonly type: "tool_execution_start"; readonly event: ToolExecutionStartEvent }
+  | { readonly type: "tool_execution_update"; readonly event: ToolExecutionUpdateEvent }
+  | { readonly type: "turn_end"; readonly event: TurnEndEvent }
+  | { readonly type: "turn_start"; readonly event: TurnStartEvent };
 
 export interface AdvisorControllerContract {
   readonly sessionInitialize: (
@@ -84,8 +84,7 @@ export interface AdvisorControllerContract {
   readonly compact: (ctx: ExtensionContext) => Effect.Effect<unknown, AdvisorExtensionError>;
   readonly tree: (ctx: ExtensionContext) => Effect.Effect<unknown, AdvisorExtensionError>;
   readonly event: (
-    name: string,
-    event: AdvisorApplicationEvent,
+    input: AdvisorApplicationEvent,
     ctx: ExtensionContext,
   ) => Effect.Effect<unknown, AdvisorExtensionError>;
   readonly command: (

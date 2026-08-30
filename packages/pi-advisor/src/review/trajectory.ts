@@ -1,6 +1,5 @@
 import * as Predicate from "effect/Predicate";
 import { isJsonObject } from "pi-cosmic-core";
-import { stringifyJson } from "../boundary/json.ts";
 import * as Schema from "effect/Schema";
 import { snapshotData } from "../domain/safe-data.ts";
 const MAX_PENDING_CHARS = 600;
@@ -260,7 +259,7 @@ function boundedStableValue<ValueInput>(value: ValueInput): string {
   try {
     const snapshot = snapshotData(value);
     if (snapshot === undefined) return "[unavailable]";
-    return stringifyJson(visit(snapshot, 0)).slice(0, MAX_TOOL_FINGERPRINT_INPUT_CHARS);
+    return JSON.stringify(visit(snapshot, 0)).slice(0, MAX_TOOL_FINGERPRINT_INPUT_CHARS);
   } catch {
     return "[unavailable]";
   }

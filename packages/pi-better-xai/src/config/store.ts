@@ -27,8 +27,8 @@ const mapDocumentError = makeConfigDocumentErrorFactory(XaiConfigError, "Better 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 
 type DecodedConfig = {
-  usage?: Partial<ResolvedConfig["usage"]>;
-  footer?: Partial<ResolvedConfig["footer"]>;
+  usage: Partial<ResolvedConfig["usage"]>;
+  footer: Partial<ResolvedConfig["footer"]>;
 };
 
 function decodeConfig<ValueInput>(value: ValueInput): DecodedConfig {
@@ -52,10 +52,7 @@ function decodeConfig<ValueInput>(value: ValueInput): DecodedConfig {
     { mode: FooterModeSchema },
     { path: "footer" },
   ).value;
-  const decoded: DecodedConfig = {};
-  if (Object.keys(usage).length > 0) decoded.usage = usage;
-  if (footer.mode !== undefined) decoded.footer = { mode: footer.mode };
-  return decoded;
+  return { usage, footer };
 }
 
 type ResolvedConfigValues = Pick<ResolvedConfig, "usage" | "footer">;
@@ -69,13 +66,14 @@ function overlayConfigValues(
   primary: DecodedConfig | void,
   fallback: ResolvedConfigValues,
 ): ResolvedConfigValues {
-  const usage = { ...fallback.usage, ...primary?.usage };
+  const values = primary ?? { usage: {}, footer: {} };
+  const usage = { ...fallback.usage, ...values.usage };
   return {
     usage: {
       ...usage,
       refreshIntervalMs: Math.max(5_000, usage.refreshIntervalMs),
     },
-    footer: { ...fallback.footer, ...primary?.footer },
+    footer: { ...fallback.footer, ...values.footer },
   };
 }
 

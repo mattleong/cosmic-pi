@@ -80,10 +80,10 @@ test("registration leaves active tool names untouched and never calls active-too
   assert.deepEqual(activeNames, ["read", "custom-tool"]);
 });
 
-test("definition construction failure occurs before the first registration mutation", () => {
+test("a later definition construction failure occurs before the first registration mutation", () => {
   enableOnly("bash", "read");
   let mutations = 0;
-  const toolOptions = Object.defineProperty({}, "bash", {
+  const toolOptions = Object.defineProperty({}, "read", {
     get() {
       throw new Error("prebuild failure");
     },

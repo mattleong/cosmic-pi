@@ -31,6 +31,46 @@ describe("ask-user validation", () => {
     expect(validateAskUserRequest(normalized)).toBeUndefined();
   });
 
+  it("rejects normalized blank required fields before duplicate checks", () => {
+    const blankKey = base();
+    blankKey.questions.push({
+      ...blankKey.questions[0]!,
+      choices: blankKey.questions[0]!.choices.map((choice) => ({ ...choice })),
+    });
+    blankKey.questions[0]!.key = " \t ";
+    blankKey.questions[1]!.key = " \t ";
+
+    const blankTitle = base();
+    blankTitle.questions[0]!.title = " \t ";
+
+    const blankPrompt = base();
+    blankPrompt.questions[0]!.prompt = " \t ";
+
+    const blankValue = base();
+    blankValue.questions[0]!.choices[0]!.value = " \t ";
+    blankValue.questions[0]!.choices[1]!.value = " \t ";
+
+    const blankLabel = base();
+    blankLabel.questions[0]!.choices[0]!.label = " \t ";
+    blankLabel.questions[0]!.choices[1]!.label = " \t ";
+
+    const blankDescription = base();
+    blankDescription.questions[0]!.choices[0]!.description = " \t ";
+
+    const cases = [
+      [blankKey, "Question 1 has an empty key."],
+      [blankTitle, "Question 1 has an empty title."],
+      [blankPrompt, "Question 1 has an empty prompt."],
+      [blankValue, "Question 1, choice 1 has an empty value."],
+      [blankLabel, "Question 1, choice 1 has an empty label."],
+      [blankDescription, "Question 1, choice 1 has an empty description."],
+    ] as const;
+
+    for (const [candidate, message] of cases) {
+      expect(validateAskUserRequest(normalizeAskUserRequest(candidate))?.message).toBe(message);
+    }
+  });
+
   it("rejects every semantic collision without exposing request content", () => {
     const duplicateKey = base();
     duplicateKey.questions[0]!.key = "private-question-key";

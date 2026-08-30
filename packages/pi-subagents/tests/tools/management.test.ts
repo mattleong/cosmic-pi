@@ -57,17 +57,8 @@ describe("subagent tool", () => {
         ],
       });
       const service = subagentServiceDouble({
-        start: () => Effect.succeed(completed),
-        awaitTerminal: () => Effect.succeed([completed]),
         list: Effect.succeed([completed]),
         status: () => Effect.succeed(completed),
-        send: () => Effect.succeed(completed),
-        reply: () => Effect.succeed(completed),
-        interrupt: () => Effect.succeed(completed),
-        resume: () => Effect.succeed(completed),
-        rename: () => Effect.succeed(completed),
-        stop: () => Effect.succeed(completed),
-        projection: Effect.succeed({ revision: 1, runs: [completed] }),
       });
       const tool = captureSubagentTools(service).get("subagent_status");
 
@@ -140,8 +131,6 @@ describe("subagent tool", () => {
       });
       const sent: string[] = [];
       const service = subagentServiceDouble({
-        start: () => Effect.succeed(view()),
-        awaitTerminal: () => Effect.succeed([completedOne, completedTwo]),
         withAwaitTerminalObservations: (_ids, _until, onUpdate, use) =>
           Effect.sync(() =>
             onUpdate?.(
@@ -149,15 +138,7 @@ describe("subagent tool", () => {
               [view(), descendant, view({ id: "agent-2", name: "test-review" })],
             ),
           ).pipe(Effect.andThen(use([{ run: completedOne }, { run: completedTwo }]))),
-        list: Effect.succeed([]),
-        status: (id) => Effect.succeed(id === "agent-1" ? completedOne : completedTwo),
         send: (id) => Effect.sync(() => (sent.push(id), id === "agent-1" ? view() : view({ id }))),
-        reply: () => Effect.succeed(view()),
-        interrupt: () => Effect.succeed(view()),
-        resume: () => Effect.succeed(view()),
-        rename: () => Effect.succeed(view()),
-        stop: () => Effect.succeed(view()),
-        projection: Effect.succeed({ revision: 0, runs: [] }),
       });
       const tools = captureSubagentTools(service);
       const awaitTool = tools.get("subagent_await");
@@ -346,10 +327,6 @@ describe("subagent tool", () => {
       const sent: string[] = [];
       const interrupted: string[] = [];
       const service = subagentServiceDouble({
-        start: () => Effect.succeed(view()),
-        awaitTerminal: () => Effect.succeed([]),
-        list: Effect.succeed([]),
-        status: () => Effect.succeed(view()),
         send: (id) =>
           id === "agent-2"
             ? Effect.fail(
@@ -359,7 +336,6 @@ describe("subagent tool", () => {
                 }),
               )
             : Effect.sync(() => (sent.push(id), view({ id }))),
-        reply: () => Effect.succeed(view()),
         interrupt: (id) =>
           id === "agent-2"
             ? Effect.fail(
@@ -369,10 +345,6 @@ describe("subagent tool", () => {
                 }),
               )
             : Effect.sync(() => (interrupted.push(id), view({ id, state: "paused" }))),
-        resume: () => Effect.succeed(view()),
-        rename: () => Effect.succeed(view()),
-        stop: () => Effect.succeed(view()),
-        projection: Effect.succeed({ revision: 0, runs: [] }),
       });
       const tools = captureSubagentTools(service);
 
@@ -599,11 +571,6 @@ describe("subagent tool", () => {
   effectTest("routes focused reply, lifecycle, and rename operations", function* () {
     const operations: string[] = [];
     const service = subagentServiceDouble({
-      start: () => Effect.succeed(view()),
-      awaitTerminal: () => Effect.succeed([]),
-      list: Effect.succeed([]),
-      status: () => Effect.succeed(view()),
-      send: () => Effect.succeed(view()),
       reply: (id, message) =>
         Effect.sync(() => (operations.push(`reply:${id}:${message}`), view({ id }))),
       interrupt: (id) =>
@@ -614,7 +581,6 @@ describe("subagent tool", () => {
         Effect.sync(() => (operations.push(`rename:${id}:${name}`), view({ id, name }))),
       stop: (id) =>
         Effect.sync(() => (operations.push(`stop:${id}`), view({ id, state: "stopped" }))),
-      projection: Effect.succeed({ revision: 0, runs: [] }),
     });
     const tools = captureSubagentTools(service);
 
@@ -731,6 +697,189 @@ describe("subagent tool", () => {
     });
   });
 
+  effectTest("returns ordered recovery for a contained paused writer", function* () {
+    const paused = view({
+      id: "agent-writer",
+      name: "paused-writer",
+      state: "paused",
+      writeIntent: "writer",
+      writeClaims: ["src/a.ts"],
+      writeAdmissionPaused: true,
+      writeViolationOffender: true,
+      writeAudit: {
+        observedFileWrites: ["src/b.ts"],
+        violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
+        bashWriteHints: 0,
+      },
+    });
+    const service = subagentServiceDouble({
+      ...startCapturingService([]),
+      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run: paused }]),
+    });
+    const tool = captureSubagentTools(service).get("subagent_await");
+
+    const result = yield* maybe(() =>
+      tool?.execute(
+        "call",
+        { runIds: [paused.id], until: "all_finished" },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+    const text = result?.content[0]?.text ?? "";
+    const review = text.indexOf("subagent_status");
+    const grant = text.indexOf('subagent_claims({ action: "grant"');
+    const admission = text.indexOf('subagent_claims({ action: "resume_admission"');
+    const resume = text.indexOf('subagent_lifecycle({ action: "resume"');
+    const awaitAgain = text.indexOf("subagent_await", resume);
+
+    expect([review, grant, admission, resume, awaitAgain].every((index) => index >= 0)).toBe(true);
+    expect(review).toBeLessThan(grant);
+    expect(grant).toBeLessThan(admission);
+    expect(admission).toBeLessThan(resume);
+    expect(resume).toBeLessThan(awaitAgain);
+    expect(text).not.toContain("subagent_reply");
+    expect(result?.details).toMatchObject({
+      action: "await",
+      attentionRequired: true,
+      cards: [
+        {
+          id: paused.id,
+          state: "paused",
+          writeAdmissionPaused: true,
+          writeViolationOffender: true,
+        },
+      ],
+    });
+  });
+
+  effectTest("branches after status while offender containment is still in progress", function* () {
+    const transitioning = view({
+      id: "agent-transitioning-writer",
+      name: "transitioning-writer",
+      state: "running",
+      writeIntent: "writer",
+      writeClaims: ["src/a.ts"],
+      writeAdmissionPaused: true,
+      writeViolationOffender: true,
+      writeAudit: {
+        observedFileWrites: ["src/b.ts"],
+        violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
+        bashWriteHints: 0,
+      },
+    });
+    const service = subagentServiceDouble({
+      ...startCapturingService([]),
+      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
+        use([{ run: transitioning }]),
+    });
+    const result = yield* maybe(() =>
+      captureSubagentTools(service)
+        .get("subagent_await")
+        ?.execute(
+          "call",
+          { runIds: [transitioning.id], until: "all_finished" },
+          undefined,
+          undefined,
+          context,
+        ),
+    );
+    const text = result?.content[0]?.text ?? "";
+
+    expect(text).toContain("Containment is in progress");
+    expect(text).toContain("If status is paused");
+    expect(text).toContain("If status is terminal");
+    expect(text).not.toContain("Stop the offender and wait for cleanup");
+    expect(result?.details).toMatchObject({ action: "await" });
+    expect(result?.details).not.toMatchObject({ attentionRequired: true });
+  });
+
+  effectTest("does not recommend granting an outside-workspace violation", function* () {
+    const stopped = view({
+      id: "agent-outside",
+      name: "outside-writer",
+      state: "stopped",
+      capabilities: ["interrupt"],
+      writeIntent: "writer",
+      writeClaims: ["src/a.ts"],
+      writeAdmissionPaused: true,
+      writeViolationOffender: true,
+      writeAudit: {
+        observedFileWrites: ["<outside workspace>"],
+        violations: [{ path: "<outside workspace>", toolName: "edit", observedAt: 2 }],
+        bashWriteHints: 0,
+      },
+    });
+    const service = subagentServiceDouble({
+      ...startCapturingService([]),
+      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run: stopped }]),
+    });
+    const tool = captureSubagentTools(service).get("subagent_await");
+
+    const result = yield* maybe(() =>
+      tool?.execute(
+        "call",
+        { runIds: [stopped.id], until: "all_finished" },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+    const text = result?.content[0]?.text ?? "";
+    const cleanup = text.indexOf("Confirm process and writer cleanup");
+    const admission = text.indexOf('subagent_claims({ action: "resume_admission"');
+    const replacement = text.indexOf("subagent_start");
+    const awaitReplacement = text.indexOf("subagent_await", replacement);
+
+    expect(text).toContain("<outside workspace>");
+    expect(text).not.toContain('action: "grant"');
+    expect([cleanup, admission, replacement, awaitReplacement].every((index) => index >= 0)).toBe(
+      true,
+    );
+    expect(cleanup).toBeLessThan(admission);
+    expect(admission).toBeLessThan(replacement);
+    expect(replacement).toBeLessThan(awaitReplacement);
+    expect(result?.details).toMatchObject({ action: "await", attentionRequired: true });
+  });
+
+  effectTest("does not treat a peer's historical audit as the current offender", function* () {
+    const peer = view({
+      id: "agent-repaired-peer",
+      name: "repaired-peer",
+      state: "running",
+      writeIntent: "writer",
+      writeClaims: ["src/a.ts", "src/old.ts"],
+      writeAdmissionPaused: true,
+      writeAudit: {
+        observedFileWrites: ["src/old.ts"],
+        violations: [{ path: "src/old.ts", toolName: "edit", observedAt: 1 }],
+        bashWriteHints: 0,
+      },
+    });
+    const service = subagentServiceDouble({
+      ...startCapturingService([]),
+      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run: peer }]),
+    });
+    const result = yield* maybe(() =>
+      captureSubagentTools(service)
+        .get("subagent_await")
+        ?.execute(
+          "call",
+          { runIds: [peer.id], until: "all_finished" },
+          undefined,
+          undefined,
+          context,
+        ),
+    );
+    const text = result?.content[0]?.text ?? "";
+
+    expect(text).toContain("Do not change this peer's claims");
+    expect(text).not.toContain('action: "grant"');
+    expect(text).not.toContain("Stop the offender and wait for cleanup");
+    expect(result?.details).toMatchObject({ action: "await", attentionRequired: true });
+  });
+
   effectTest(
     "enforces the combined target count and aggregate detailed-output budget",
     function* () {
@@ -744,9 +893,6 @@ describe("subagent tool", () => {
       );
       const consumed: Array<{ readonly id: string; readonly generation: number }> = [];
       const service = subagentServiceDouble({
-        start: () => Effect.succeed(runs[0]!),
-        awaitTerminal: (ids) => Effect.succeed(ids.map((id) => runs.find((run) => run.id === id)!)),
-        list: Effect.succeed(runs),
         status: (id) => Effect.succeed(runs.find((run) => run.id === id)!),
         observeStatus: (id) =>
           Effect.succeed({
@@ -757,13 +903,6 @@ describe("subagent tool", () => {
           Effect.sync(() => {
             consumed.push(...receipts);
           }),
-        send: () => Effect.succeed(runs[0]!),
-        reply: () => Effect.succeed(runs[0]!),
-        interrupt: () => Effect.succeed(runs[0]!),
-        resume: () => Effect.succeed(runs[0]!),
-        rename: () => Effect.succeed(runs[0]!),
-        stop: () => Effect.succeed(runs[0]!),
-        projection: Effect.succeed({ revision: 0, runs }),
       });
       const tool = captureSubagentTools(service).get("subagent_status");
 
@@ -909,14 +1048,31 @@ describe("subagent tool", () => {
         id: "agent-claims",
         writeIntent: "writer",
         writeClaims: ["src/a.ts", "src/b.ts"],
+        writeAdmissionPaused: true,
       });
       const service = subagentServiceDouble({
         ...startCapturingService([]),
+        withStatusObservations: (_ids, use) =>
+          use({ observations: [{ run: claimed }], missingIds: [] }),
         grantWriteClaims: (id, paths) =>
           Effect.sync(() => {
             grants.push({ id, paths });
             return claimed;
           }),
+        resumeWriterAdmission: () =>
+          Effect.succeed(
+            view({
+              ...claimed,
+              state: "stopped",
+              writeAdmissionPaused: undefined,
+              writeViolationOffender: undefined,
+              writeAudit: {
+                observedFileWrites: ["src/b.ts"],
+                violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
+                bashWriteHints: 0,
+              },
+            }),
+          ),
       });
       const tool = captureSubagentTools(service).get("subagent_claims");
       const result = yield* maybe(() =>
@@ -930,11 +1086,39 @@ describe("subagent tool", () => {
       );
       expect(grants).toEqual([{ id: "agent-claims", paths: ["src/b.ts"] }]);
       expect(result?.content[0]?.text).toContain("src/a.ts, src/b.ts");
+      expect(result?.content[0]?.text).toContain("Do not use subagent_reply for containment");
+      expect(result?.content[0]?.text).not.toContain("send the resulting authoritative claim set");
       expect(result?.details).toMatchObject({
         version: 2,
         action: "claims",
         cards: [{ id: "agent-claims", writeClaims: ["src/a.ts", "src/b.ts"] }],
       });
+
+      const listed = yield* maybe(() =>
+        tool?.execute(
+          "call",
+          { action: "list", runIds: ["agent-claims"] },
+          undefined,
+          undefined,
+          context,
+        ),
+      );
+      expect(listed?.content[0]?.text).toContain("Do not use subagent_reply for containment");
+      expect(listed?.content[0]?.text).not.toContain("send the resulting authoritative claim set");
+
+      const reopened = yield* maybe(() =>
+        tool?.execute(
+          "call",
+          { action: "resume_admission", runId: "agent-claims" },
+          undefined,
+          undefined,
+          context,
+        ),
+      );
+      expect(reopened?.content[0]?.text).toContain("stop and replace");
+      expect(reopened?.content[0]?.text).not.toContain(
+        "send the resulting authoritative claim set",
+      );
     },
   );
 

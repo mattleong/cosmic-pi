@@ -271,6 +271,73 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect("returns an await when a selected run is paused", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "awaiting-pause" }));
+      const awaiting = yield* service
+        .awaitTerminal([run.id], "all_finished")
+        .pipe(Effect.forkScoped);
+
+      yield* service.interrupt(run.id);
+      expect(yield* Fiber.join(awaiting)).toMatchObject([{ id: run.id, state: "paused" }]);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("waits for an offending writer to pause but returns an admission-paused peer", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const offender = yield* service.start(
+        request({ name: "pool-offender", writeIntent: "writer", writes: ["src/a.ts"] }),
+      );
+      const peer = yield* service.start(
+        request({ name: "awaited-pool-peer", writeIntent: "writer", writes: ["src/b.ts"] }),
+      );
+      const interruptGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextSend("abort", interruptGate);
+      const offenderAwait = yield* service
+        .awaitTerminal([offender.id], "all_finished")
+        .pipe(Effect.forkScoped);
+      const peerAwait = yield* service
+        .awaitTerminal([peer.id], "all_finished")
+        .pipe(Effect.forkScoped);
+
+      fake.controls[0]?.offer({
+        type: "tool_execution_start",
+        toolCallId: "pool-violation",
+        toolName: "edit",
+        args: { path: "src/c.ts", edits: [] },
+      });
+      yield* yieldUntil(
+        () =>
+          projections.at(-1)?.runs.find((candidate) => candidate.id === offender.id)
+            ?.writeViolationOffender === true,
+      );
+
+      expect(offenderAwait.pollUnsafe()).toBeUndefined();
+      expect(yield* Fiber.join(peerAwait)).toMatchObject([
+        { id: peer.id, state: "running", writeAdmissionPaused: true },
+      ]);
+
+      yield* Deferred.succeed(interruptGate, undefined);
+      expect(yield* Fiber.join(offenderAwait)).toMatchObject([
+        {
+          id: offender.id,
+          state: "paused",
+          writeAdmissionPaused: true,
+          writeViolationOffender: true,
+        },
+      ]);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("reports every missing await ID before waiting", () => {
     const fake = fakeChildLayer();
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));

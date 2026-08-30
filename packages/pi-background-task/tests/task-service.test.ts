@@ -28,6 +28,7 @@ import { BackgroundTaskService } from "../src/task/service.ts";
 interface FakeProcessControl {
   readonly handle: LocalProcessHandle;
   readonly modes: Array<"graceful" | "force">;
+  readonly awaitMode: (mode: "graceful" | "force") => Effect.Effect<void>;
   readonly offer: (stream: "stdout" | "stderr", text: string, droppedBytes?: number) => void;
   readonly complete: (exit?: LocalProcessExit) => void;
 }
@@ -63,6 +64,10 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
           >();
           const exited = yield* Deferred.make<LocalProcessExit>();
           const modes: Array<"graceful" | "force"> = [];
+          const modeRequested = {
+            graceful: yield* Deferred.make<void>(),
+            force: yield* Deferred.make<void>(),
+          };
           let completed = false;
           const complete = (exit: LocalProcessExit = { exitCode: 0 }) => {
             if (completed) return;
@@ -78,6 +83,7 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
             terminate: (mode) =>
               Effect.suspend(() => {
                 modes.push(mode);
+                Deferred.doneUnsafe(modeRequested[mode], Effect.void);
                 if (behavior.failTermination)
                   return Effect.fail(
                     new LocalProcessError({
@@ -100,6 +106,7 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
           controls.push({
             handle,
             modes,
+            awaitMode: (mode) => Deferred.await(modeRequested[mode]),
             offer: (stream, text, droppedBytes = 0) =>
               void Queue.offerUnsafe(output, { stream, text, droppedBytes }),
             complete,
@@ -470,6 +477,29 @@ describe("BackgroundTaskService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 
+  it.effect("settles concurrent graceful and force stops after one force escalation", () => {
+    const harness = serviceHarness({ stopGraceMs: 2_000 }, () => {}, { completeOnGraceful: false });
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const started = yield* service.start({ command: "server", cwd: "." });
+      const control = harness.controls[0];
+      if (!control) throw new Error("started process was not captured");
+
+      const gracefulStop = yield* service
+        .stop(started.id)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* control.awaitMode("graceful");
+      const forceStop = yield* service
+        .stop(started.id, true)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* control.awaitMode("force");
+
+      const settled = yield* Effect.all([Fiber.join(gracefulStop), Fiber.join(forceStop)]);
+      expect(settled.map((snapshot) => snapshot.state)).toEqual(["stopped", "stopped"]);
+      expect(control.modes).toEqual(["graceful", "force"]);
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
   it.effect("escalates graceful stop after the configured grace period", () => {
     const harness = serviceHarness({ stopGraceMs: 2_000 }, () => {}, { completeOnGraceful: false });
     return Effect.gen(function* () {
@@ -670,6 +700,40 @@ describe("BackgroundTaskService", () => {
       expect((yield* service.status("task-1")).state).toBe("stopped");
       expect(harness.controls[0]?.modes).toContain("force");
       yield* Fiber.await(starting);
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("retains completed tasks independently of active tasks", () => {
+    const harness = serviceHarness({ maxRunning: 2, maxRetained: 2 });
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const active = yield* service.start({ command: "active", cwd: "." });
+      const completed: string[] = [];
+
+      for (const command of ["first", "second", "third"]) {
+        yield* TestClock.adjust("1 millis");
+        const started = yield* service.start({ command, cwd: "." });
+        const control = harness.controls.at(-1);
+        if (!control) throw new Error("completed task process was not captured");
+        control.complete();
+        expect(yield* service.wait({ id: started.id, until: "exit" })).toMatchObject({
+          outcome: "completed",
+          snapshot: { state: "exited" },
+        });
+        completed.push(started.id);
+      }
+
+      expect((yield* service.list("active")).map((task) => task.id)).toEqual([active.id]);
+      expect((yield* service.list("completed")).map((task) => task.id)).toEqual([
+        completed[2],
+        completed[1],
+      ]);
+      expect((yield* service.list()).map((task) => task.id)).toEqual([
+        active.id,
+        completed[2],
+        completed[1],
+      ]);
+      yield* service.stop(active.id);
     }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 

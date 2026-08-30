@@ -27,12 +27,28 @@ export const normalizeAskUserRequest = (request: AskUserRequest): AskUserRequest
 });
 
 /**
- * Internal contract: validate only `normalizeAskUserRequest` output, whose keys,
- * values, and labels are already trimmed. Failures stay positional and content-free.
+ * Internal contract: validate only `normalizeAskUserRequest` output, whose required
+ * text fields are already trimmed. Failures stay positional and content-free.
  */
 export function validateAskUserRequest(
   request: AskUserRequest,
 ): AskUserValidationError | undefined {
+  for (let questionIndex = 0; questionIndex < request.questions.length; questionIndex++) {
+    const question = request.questions[questionIndex]!;
+    const questionPosition = `Question ${questionIndex + 1}`;
+    if (question.key.length === 0) return fail(questionPosition, "has an empty key.");
+    if (question.title.length === 0) return fail(questionPosition, "has an empty title.");
+    if (question.prompt.length === 0) return fail(questionPosition, "has an empty prompt.");
+
+    for (let choiceIndex = 0; choiceIndex < question.choices.length; choiceIndex++) {
+      const choice = question.choices[choiceIndex]!;
+      const choicePosition = `${questionPosition}, choice ${choiceIndex + 1}`;
+      if (choice.value.length === 0) return fail(choicePosition, "has an empty value.");
+      if (choice.label.length === 0) return fail(choicePosition, "has an empty label.");
+      if (choice.description.length === 0) return fail(choicePosition, "has an empty description.");
+    }
+  }
+
   const questionKeys = new Set<string>();
   for (let questionIndex = 0; questionIndex < request.questions.length; questionIndex++) {
     const question = request.questions[questionIndex]!;
@@ -47,7 +63,7 @@ export function validateAskUserRequest(
     for (let choiceIndex = 0; choiceIndex < question.choices.length; choiceIndex++) {
       const choice = question.choices[choiceIndex]!;
       const value = choice.value;
-      const label = choice.label.toLocaleLowerCase();
+      const label = choice.label.toLowerCase();
       const position = `Question ${questionIndex + 1}, choice ${choiceIndex + 1}`;
       if (values.has(value)) return fail(position, "has a duplicate value.");
       if (labels.has(label)) return fail(position, "has a duplicate label.");

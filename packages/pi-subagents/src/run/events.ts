@@ -13,7 +13,10 @@ import {
   observeFileWrite,
   workspaceRelativeObservedPath,
 } from "./claims-observation.ts";
-import { writeClaimContains } from "../domain/write-claims.ts";
+import {
+  OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
+  writeClaimContains,
+} from "../domain/write-claims.ts";
 import {
   appendAssistantSessionEvent,
   appendNoticeSessionEvent,
@@ -262,8 +265,8 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             const violationMessage =
               violatingPaths.length > 0
                 ? `Writer ${record.view.id} used ${event.toolName} outside its cooperative claims: ${violatingPaths
-                    .map(({ relative }) => relative ?? "<outside workspace>")
-                    .join(", ")}. The run is being interrupted and new writer admission is paused.`
+                    .map(({ relative }) => relative ?? OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER)
+                    .join(", ")}. Containment has started, and new writer admission is paused.`
                 : undefined;
             return mutateView(record, event.assignmentEpoch, (current) => {
               if (current.state === "paused") return undefined;
@@ -273,13 +276,15 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                     observedFileWrites: [
                       ...new Set([
                         ...current.writeAudit.observedFileWrites,
-                        ...observedPaths.map(({ relative }) => relative ?? "<outside workspace>"),
+                        ...observedPaths.map(
+                          ({ relative }) => relative ?? OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
+                        ),
                       ]),
                     ].slice(-MAX_OBSERVED_WRITE_PATHS),
                     violations: [
                       ...current.writeAudit.violations,
                       ...violatingPaths.map(({ relative }) => ({
-                        path: relative ?? "<outside workspace>",
+                        path: relative ?? OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
                         toolName: event.toolName,
                         observedAt: now,
                       })),

@@ -10,10 +10,12 @@ import {
   type AdvisorHostContextError,
 } from "../../boundary/host-context.ts";
 import { ADVISOR_OPERATION_TIMEOUT_MS, type ResolvedAdvisorConfig } from "../../config/options.ts";
+import { classifyFailure } from "../../domain/runtime-error-classifier.ts";
 import type { FailureLoggerContract } from "../../logging/logger.ts";
 import type { AdvisorReviewQueueError } from "../../queue/errors.ts";
 import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
+import { applyBlockerVerification, isVerificationCandidate } from "../../review/finding-gates.ts";
 import type { AdvisorReviewFocus } from "../../review/schema.ts";
 import {
   awaitAdvisorCatchUpEffect,
@@ -24,11 +26,6 @@ import {
   type ReviewPhase,
   type ReviewSource,
 } from "../controller.ts";
-import {
-  applyBlockerVerification,
-  isVerificationCandidate,
-  classifyFailure,
-} from "../controller-helpers.ts";
 import type { AdvisorApplicationState } from "../state.ts";
 import type { DeliverFn } from "./delivery.ts";
 import { parentHasPendingMessages, parentSignalAborted } from "./parent-session.ts";

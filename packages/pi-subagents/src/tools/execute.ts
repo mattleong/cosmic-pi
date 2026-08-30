@@ -7,11 +7,14 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import {
   hostProfileEnvironment,
   resolveProfileRetry,
   resolveProfileStart,
+  type SubagentSessionEnvironment,
 } from "../boundary/host-profile-resolution.ts";
+import type { SubagentBackendRegistry } from "../backend/service.ts";
 import {
   normalizeProfileId,
   profileCandidateLabel,
@@ -32,6 +35,7 @@ import {
 } from "../run/errors.ts";
 import {
   isAssignmentFinishedRunState,
+  isParentActionRequiredRun,
   type StartSubagentRequest,
   type SubagentRunView,
 } from "../run/model.ts";
@@ -61,7 +65,6 @@ import {
 } from "../run/launch-validation.ts";
 import { formatAwaitProgress } from "./render-await.ts";
 import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
-import type { SubagentModelsInput, SubagentStartSpec, SubagentToolInput } from "./schema.ts";
 import type {
   ProfileCandidateDiscovery,
   SubagentActionFailure,
@@ -69,8 +72,27 @@ import type {
   SubagentStartFailure,
   SubagentStartOutcome,
   SubagentStartResolvedRoute,
-  SubagentToolRuntime,
-} from "./subagent.ts";
+} from "./model.ts";
+import type { SubagentModelsInput, SubagentStartSpec, SubagentToolInput } from "./schema.ts";
+
+export interface SubagentToolRuntime {
+  readonly environment: SubagentSessionEnvironment;
+  /** Private nested-Pi transport. Public/root registrations leave this absent. */
+  readonly proxyCall?:
+    | ((
+        input: SubagentToolInput,
+        signal: AbortSignal | undefined,
+        onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+        ctx: ExtensionContext,
+      ) => Promise<AgentToolResult<unknown>>)
+    | undefined;
+  readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
+  readonly toolPresentation?: SubagentToolPresentation | undefined;
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E, SubagentService | SubagentProfileService | SubagentBackendRegistry>,
+    signal?: AbortSignal,
+  ) => Promise<A>;
+}
 
 const matchActionOutcome = (id: string) =>
   Effect.match({
@@ -247,6 +269,7 @@ const formatProfileDiscovery = (
 const managementAcknowledgement = (
   action: Exclude<SubagentToolInput["action"], "models" | "start">,
   runs: ReadonlyArray<SubagentRunView>,
+  claimsAction?: "list" | "grant" | "revoke" | "resume_admission",
 ): string => {
   const ids = runs.map((run) => run.id).join(", ");
   if (runs.length === 0) return "";
@@ -304,14 +327,20 @@ const managementAcknowledgement = (
           }
         })
         .join("\n");
-    case "claims":
+    case "claims": {
+      const contained =
+        claimsAction === "resume_admission" ||
+        runs.some((run) => run.writeAdmissionPaused === true);
       return [
         ...runs.map(
           (run) =>
             `${run.id}: ${run.writeClaims?.length ? run.writeClaims.join(", ") : run.writeIntent === "writer" ? "exclusive writer" : "read-only"}${run.writeAdmissionPaused ? " · admission paused" : ""}`,
         ),
-        "For a waiting worker, send the resulting authoritative claim set in subagent_reply before work continues.",
+        contained
+          ? "Claim-containment recovery uses resume_admission, then lifecycle resume with the authoritative claims, or stop and replace when resume is unavailable. Do not use subagent_reply for containment."
+          : "For a waiting worker, send the resulting authoritative claim set in subagent_reply before work continues.",
       ].join("\n");
+    }
     default:
       return runs.map((run) => formatRun(run, true)).join("\n\n");
   }
@@ -354,7 +383,7 @@ export const executeSubagentActionEffect = (
 ): Effect.Effect<
   AgentToolResult<unknown>,
   SubagentError,
-  SubagentService | SubagentProfileService | import("../backend/service.ts").SubagentBackendRegistry
+  SubagentService | SubagentProfileService | SubagentBackendRegistry
 > => {
   if (input.action === "models") {
     const discovery = Effect.gen(function* () {
@@ -402,11 +431,8 @@ export const executeSubagentActionEffect = (
     const finishObservations = (observations: ReadonlyArray<SubagentRunObservation>) =>
       Effect.gen(function* () {
         const runs = observations.map((observation) => observation.run);
-        const waiting = runs.filter(
-          (run) => run.state === "waiting_for_parent" && run.question !== undefined,
-        );
-        const attentionRequired = waiting.length > 0;
-        const attentionText = attentionRequired ? attentionRecoveryText(runs) : "";
+        const attentionRequired = runs.some(isParentActionRequiredRun);
+        const attentionText = attentionRecoveryText(runs);
         const hierarchy = formatAwaitProgress(
           runs,
           requestedAwaitUntil ?? "all_finished",
@@ -436,13 +462,14 @@ export const executeSubagentActionEffect = (
             return Effect.gen(function* () {
               const runs = observations.map((observation) => observation.run);
               const failureText = formatActionFailures(actionFailures);
+              const attentionRequired = runs.some(isParentActionRequiredRun);
               const attentionText = attentionRecoveryText(runs);
               const prefix = [failureText, attentionText].filter(Boolean).join("\n\n");
               const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
               yield* consumeCompletions(observations, formatted.fullyRenderedIds);
               return {
                 runs,
-                attentionRequired: attentionText.length > 0,
+                attentionRequired,
                 text: formatted.text,
                 actionFailures,
               };
@@ -844,7 +871,11 @@ export const executeSubagentActionEffect = (
               ? input.action === "status"
                 ? (formattedText ?? formatDetailedRuns(runs).text)
                 : joinBoundedToolText([
-                    managementAcknowledgement(input.action, runs),
+                    managementAcknowledgement(
+                      input.action,
+                      runs,
+                      input.action === "claims" ? input.operation.action : undefined,
+                    ),
                     formatActionFailures(actionFailures),
                   ])
               : runs.length === 0
@@ -857,7 +888,11 @@ export const executeSubagentActionEffect = (
                     ? (formattedText ?? formatDetailedRuns(runs).text)
                     : input.action === "await"
                       ? (formattedText ?? formatDetailedRuns(runs).text)
-                      : managementAcknowledgement(input.action, runs);
+                      : managementAcknowledgement(
+                          input.action,
+                          runs,
+                          input.action === "claims" ? input.operation.action : undefined,
+                        );
         return { content: [{ type: "text", text: boundToolOutput(text) }], details };
       },
     ),

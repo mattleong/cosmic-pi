@@ -4,7 +4,6 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import type { SubagentServiceContract } from "../../src/run/service.ts";
 
 export const extensionApiFixture = <Fixture extends object>(
   fixture: Fixture,
@@ -23,11 +22,4 @@ export const extensionContextFixture = <Fixture extends object>(
 export const modelFixture = <Fixture extends object>(fixture: Fixture): Fixture & Model<Api> => {
   // SAFETY: Each test invokes only the model members explicitly implemented by its fixture.
   return fixture as Fixture & Model<Api>;
-};
-
-export const subagentServiceFixture = <Fixture extends object>(
-  fixture: Fixture,
-): Fixture & SubagentServiceContract => {
-  // SAFETY: Each test invokes only the service members explicitly implemented by its fixture.
-  return fixture as Fixture & SubagentServiceContract;
 };

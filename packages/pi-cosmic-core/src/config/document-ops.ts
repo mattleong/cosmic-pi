@@ -26,13 +26,12 @@ export const readRawJsonObject = <E>(
   path: string,
   mapError: ConfigDocumentErrorFactory<E>,
 ): Effect.Effect<JsonObject, E, JsonDocumentStore> =>
-  Effect.gen(function* () {
-    const documents = yield* JsonDocumentStore;
-    return yield* documents.readObject(path).pipe(
+  JsonDocumentStore.use((documents) =>
+    documents.readObject(path).pipe(
       Effect.mapError(mapError("read", path)),
       Effect.map((value) => value ?? {}),
-    );
-  });
+    ),
+  );
 
 /** Read and decode a JSON object document, returning undefined when absent. */
 export const readOptionalJsonObject = <A, E>(
@@ -40,11 +39,12 @@ export const readOptionalJsonObject = <A, E>(
   decode: (value: JsonObject) => A,
   mapError: ConfigDocumentErrorFactory<E>,
 ): Effect.Effect<A | undefined, E, JsonDocumentStore> =>
-  Effect.gen(function* () {
-    const documents = yield* JsonDocumentStore;
-    const raw = yield* documents.readObject(path).pipe(Effect.mapError(mapError("read", path)));
-    return raw === undefined ? undefined : decode(raw);
-  });
+  JsonDocumentStore.use((documents) =>
+    documents.readObject(path).pipe(
+      Effect.mapError(mapError("read", path)),
+      Effect.map((raw) => (raw === undefined ? undefined : decode(raw))),
+    ),
+  );
 
 /** Overwrite a JSON object document. */
 export const writeJsonObject = <E>(
@@ -52,10 +52,9 @@ export const writeJsonObject = <E>(
   config: JsonObject,
   mapError: ConfigDocumentErrorFactory<E>,
 ): Effect.Effect<void, E, JsonDocumentStore> =>
-  Effect.gen(function* () {
-    const documents = yield* JsonDocumentStore;
-    yield* documents.writeObject(path, config).pipe(Effect.mapError(mapError("write", path)));
-  });
+  JsonDocumentStore.use((documents) =>
+    documents.writeObject(path, config).pipe(Effect.mapError(mapError("write", path))),
+  );
 
 /**
  * Atomically modify a JSON object through the document store's rename commit region.
@@ -66,13 +65,12 @@ export const modifyJsonObject = <A, AfterCommitR, E>(
   modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
   mapError: ConfigDocumentErrorFactory<E>,
 ): Effect.Effect<A, E, JsonDocumentStore | AfterCommitR> =>
-  Effect.gen(function* () {
-    const documents = yield* JsonDocumentStore;
+  JsonDocumentStore.use((documents) => {
     const modifyObject = documents.modifyObject;
     if (modifyObject === undefined) {
-      return yield* Effect.fail(mapError("write", path)());
+      return Effect.fail(mapError("write", path)());
     }
-    return yield* modifyObject(path, (document) =>
+    return modifyObject(path, (document) =>
       Effect.try({
         try: () => modify(document),
         catch: mapError("write", path),

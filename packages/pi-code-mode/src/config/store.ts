@@ -5,7 +5,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import {
@@ -111,7 +110,7 @@ const store = makeScopedConfigStore({
 /** Immutable, plain-data resolved configuration published after every persisted change. */
 export interface CodeModeState {
   readonly projectTrusted: boolean;
-  /** Availability for the future `code_mode` tool: trusted project AND `enabled`. */
+  /** Availability for `code_mode`: trusted project AND `enabled`. */
   readonly available: boolean;
   readonly config: CodeModeConfig;
   readonly provenance: CodeModeProvenance;
@@ -158,14 +157,14 @@ const toState = (resolved: ResolvedCodeModeDocuments, projectTrusted: boolean): 
 const requireDescriptor = (id: string) => {
   const descriptor = findCodeModeSettingDescriptor(id);
   return descriptor === undefined
-    ? Result.fail(
+    ? Effect.fail(
         new CodeModeConfigError({
           operation: "setting",
           path: id,
           message: `Unknown Code Mode setting: ${id}.`,
         }),
       )
-    : Result.succeed(descriptor);
+    : Effect.succeed(descriptor);
 };
 
 /** Pre-commit snapshot of the scope that is not being committed. */
@@ -321,7 +320,7 @@ export class CodeModeConfigStore extends Context.Service<
         const setSetting: CodeModeConfigStoreContract["setSetting"] = (scope, id, rawValue) =>
           Effect.gen(function* () {
             yield* guardScope(scope);
-            const descriptor = yield* Effect.fromResult(requireDescriptor(id));
+            const descriptor = yield* requireDescriptor(id);
             const value = yield* Effect.fromResult(descriptor.decode(rawValue));
             return yield* applyChange(scope, (document) => ({
               ...document,
@@ -332,7 +331,7 @@ export class CodeModeConfigStore extends Context.Service<
         const clearSetting: CodeModeConfigStoreContract["clearSetting"] = (scope, id) =>
           Effect.gen(function* () {
             yield* guardScope(scope);
-            const descriptor = yield* Effect.fromResult(requireDescriptor(id));
+            const descriptor = yield* requireDescriptor(id);
             return yield* applyChange(scope, (document) => {
               const next = { ...document };
               delete next[descriptor.id];

@@ -270,6 +270,31 @@ describe("background-task Pi lifecycle", () => {
     }),
   );
 
+  it.effect("interrupts a never-settling settings load on replacement", () =>
+    Effect.gen(function* () {
+      const firstCwd = `${process.cwd()}/first-pending`;
+      const secondCwd = `${process.cwd()}/second-ready`;
+      const entered = deferred<void>();
+      let firstSignal: AbortSignal | undefined;
+      const app = harness((cwd, _trusted, signal) => {
+        if (cwd !== firstCwd) return Promise.resolve();
+        firstSignal = signal;
+        entered.resolve();
+        return Promise.race([]);
+      });
+
+      const firstStart = app.emit("session_start", context(firstCwd));
+      yield* Effect.promise(() => entered.promise);
+      const secondContext = context(secondCwd);
+      const secondStart = app.emit("session_start", secondContext);
+      yield* Effect.promise(() => Promise.all([firstStart, secondStart]));
+
+      expect(firstSignal?.aborted).toBe(true);
+      expect(app.tools.map((tool) => tool.name)).toEqual(["background_task"]);
+      yield* Effect.promise(() => app.emit("session_shutdown", secondContext));
+    }),
+  );
+
   it.effect("reports the active generation's normalized config without rereading it", () =>
     Effect.gen(function* () {
       const fixture = yield* Effect.acquireRelease(
@@ -514,16 +539,23 @@ describe("background-task Pi lifecycle", () => {
     }),
   );
 
-  it.effect("invalidates pending settings preparation on shutdown", () =>
+  it.effect("interrupts a never-settling settings load on shutdown", () =>
     Effect.gen(function* () {
-      const settings = deferred<void>();
-      const app = harness(() => settings.promise);
+      const entered = deferred<void>();
+      let loaderSignal: AbortSignal | undefined;
+      const app = harness((_cwd, _trusted, signal) => {
+        loaderSignal = signal;
+        entered.resolve();
+        return Promise.race([]);
+      });
       const ctx = context(process.cwd());
 
       const starting = app.emit("session_start", ctx);
-      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
-      settings.resolve();
-      yield* Effect.promise(() => starting);
+      yield* Effect.promise(() => entered.promise);
+      const shutdown = app.emit("session_shutdown", ctx);
+      yield* Effect.promise(() => Promise.all([starting, shutdown]));
+
+      expect(loaderSignal?.aborted).toBe(true);
       expect(app.registerTool).not.toHaveBeenCalled();
     }),
   );

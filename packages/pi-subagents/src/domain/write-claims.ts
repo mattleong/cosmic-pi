@@ -1,5 +1,6 @@
 export const MAX_WRITE_CLAIMS = 64;
 export const MAX_WRITE_CLAIM_CHARS = 512;
+export const OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER = "<outside workspace>";
 
 export interface WriteClaimConflict {
   readonly left: string;
@@ -13,6 +14,7 @@ export type WriteClaimNormalizationResult =
 const windowsAbsolutePath = /^[a-zA-Z]:\//;
 
 const claimKey = (claim: string): string => claim.normalize("NFC").toLocaleLowerCase("en-US");
+const outsideWorkspaceMarkerKey = claimKey(OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER);
 
 export const normalizeWriteClaim = (input: string): WriteClaimNormalizationResult => {
   const value = input.trim().normalize("NFC");
@@ -46,6 +48,12 @@ export const normalizeWriteClaim = (input: string): WriteClaimNormalizationResul
       ok: false,
       code: "write_claim_absolute",
       message: `Write claim "${value}" must be relative to the workspace.`,
+    };
+  if (claimKey(value) === outsideWorkspaceMarkerKey)
+    return {
+      ok: false,
+      code: "write_claim_outside_workspace",
+      message: "The outside-workspace audit marker cannot become a file claim.",
     };
   const segments = value.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === ".."))

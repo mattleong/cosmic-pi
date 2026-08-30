@@ -153,12 +153,11 @@ export function registerSettingsCommand(
                 onChange: (id, value, list) => {
                   const change = decodeCosmicUiSettingChange(id, value);
                   if (!change) return;
-                  const update =
+                  const update = CosmicUiService.use((service) =>
                     change._tag === "SetVisibility"
-                      ? CosmicUiService.use((service) =>
-                          service.setFooterVisibility(change.id, change.visible),
-                        )
-                      : CosmicUiService.use((service) => service.updateFooterConfig(change.patch));
+                      ? service.setFooterVisibility(change.id, change.visible)
+                      : service.updateFooterConfig(change.patch),
+                  );
                   const pending = hostQuery<Promise<unknown> | undefined>(
                     () => options.run(update, signal),
                     undefined,

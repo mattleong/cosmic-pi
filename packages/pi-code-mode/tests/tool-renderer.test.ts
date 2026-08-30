@@ -1,6 +1,8 @@
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
+import { MAX_PROGRESS_ENTRIES } from "../src/tools/format.ts";
+import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
 import { opaqueHostFixture } from "./support/host.ts";
 
 const theme = {
@@ -28,6 +30,73 @@ const result = (status: "running" | "completed" = "completed") => ({
       cancelled: 0,
     },
   },
+});
+
+describe("code mode render detail normalization", () => {
+  it("repairs contradictory exact counts without understating valid visible rows", () => {
+    const details = decodeCodeModeRenderDetails({
+      toolCalls: [
+        { tool: "pi.read", status: "completed" },
+        { tool: "pi.grep", status: "running" },
+      ],
+      counts: {
+        total: 1,
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 3,
+        cancelled: 0,
+      },
+    });
+    expect(details.hasExactCounts).toBe(true);
+    expect(details.counts).toEqual({
+      total: 5,
+      queued: 0,
+      running: 1,
+      succeeded: 1,
+      failed: 3,
+      cancelled: 0,
+    });
+  });
+
+  it("ignores malformed rows and accepts only a valid explicit legacy total", () => {
+    const toolCalls = [
+      { tool: "pi.read", status: "completed" },
+      null,
+      { tool: "pi.write" },
+      { tool: "pi.grep", status: "unknown" },
+    ];
+    const malformedTotal = decodeCodeModeRenderDetails({ toolCalls, totalToolCalls: "4" });
+    expect(malformedTotal.toolCalls).toHaveLength(1);
+    expect(malformedTotal.totalToolCalls).toBe(1);
+    expect(malformedTotal.counts.succeeded).toBe(1);
+
+    const explicitTotal = decodeCodeModeRenderDetails({ toolCalls, totalToolCalls: 4 });
+    expect(explicitTotal.toolCalls).toHaveLength(1);
+    expect(explicitTotal.totalToolCalls).toBe(4);
+    expect(explicitTotal.counts.succeeded).toBe(4);
+  });
+
+  it("preserves the legacy array total beyond the visible row bound", () => {
+    const total = MAX_PROGRESS_ENTRIES + 8;
+    const details = decodeCodeModeRenderDetails({
+      toolCalls: Array.from({ length: total }, (_, index) => ({
+        tool: `pi.read-${index}`,
+        status: "completed",
+      })),
+    });
+
+    expect(details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
+    expect(details.totalToolCalls).toBe(total);
+    expect(details.counts).toEqual({
+      total,
+      queued: 0,
+      running: 0,
+      succeeded: total,
+      failed: 0,
+      cancelled: 0,
+    });
+  });
 });
 
 describe("registered code mode renderers", () => {

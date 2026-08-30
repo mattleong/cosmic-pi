@@ -17,16 +17,8 @@ const MAX_BACKGROUND_TASK_COMMAND_CHARS = 2_048;
 const MAX_BACKGROUND_TASK_PATH_CHARS = 1_024;
 const MAX_BACKGROUND_TASK_ERROR_CHARS = 2_048;
 const MAX_BACKGROUND_TASK_SNAPSHOTS = 600;
-const NonNegativeInteger = Schema.Number.check(
-  Schema.isFinite(),
-  Schema.isInt(),
-  Schema.isGreaterThanOrEqualTo(0),
-);
-const PositiveInteger = Schema.Number.check(
-  Schema.isFinite(),
-  Schema.isInt(),
-  Schema.isGreaterThan(0),
-);
+const NonNegativeInteger = Schema.Natural;
+const PositiveInteger = Schema.Natural.check(Schema.isGreaterThan(0));
 const BackgroundTaskStateSchema = Schema.Literals([
   "starting",
   "running",
@@ -45,9 +37,7 @@ const SnapshotSchema = Schema.Struct({
   pid: Schema.optionalKey(PositiveInteger),
   startedAt: NonNegativeInteger,
   endedAt: Schema.optionalKey(NonNegativeInteger),
-  exitCode: Schema.optionalKey(
-    Schema.NullOr(Schema.Number.check(Schema.isFinite(), Schema.isInt())),
-  ),
+  exitCode: Schema.optionalKey(Schema.NullOr(Schema.Int)),
   signal: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
   error: Schema.optionalKey(
     Schema.String.check(Schema.isMaxLength(MAX_BACKGROUND_TASK_ERROR_CHARS)),
@@ -137,7 +127,9 @@ export const makeBackgroundTaskDispatch = (
           ),
         );
       }
-      const candidates: Array<ReturnType<typeof normalizeBackgroundTaskCodeModeCapability>> = [];
+      const candidates: Array<
+        NonNullable<ReturnType<typeof normalizeBackgroundTaskCodeModeCapability>>
+      > = [];
       const emitted = invokeHostCallback(() => {
         options.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
           version: BACKGROUND_TASK_CODE_MODE_VERSION,
@@ -149,25 +141,21 @@ export const makeBackgroundTaskDispatch = (
         });
         return true;
       }, false);
-      const valid = candidates.filter((candidate) => candidate !== undefined);
-      if (!emitted || valid.length === 0) {
+      if (!emitted || candidates.length === 0) {
         return Effect.fail(
           toolError(
             "Nested tool 'session.backgroundTask' is unavailable. Load and activate pi-background-task for this session.",
           ),
         );
       }
-      if (valid.length !== 1) {
+      if (candidates.length !== 1) {
         return Effect.fail(
           toolError(
             "Nested tool 'session.backgroundTask' is unavailable because multiple background-task providers responded.",
           ),
         );
       }
-      const capability = valid[0];
-      if (capability === undefined) {
-        return Effect.fail(toolError("Nested tool 'session.backgroundTask' is unavailable."));
-      }
+      const capability = candidates[0]!;
       nestedCalls += 1;
       const callId = `${options.toolCallId}/session.backgroundTask/${nestedCalls}`;
       const maxOutputBytes = options.maxOutputBytes();

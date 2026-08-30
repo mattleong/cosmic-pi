@@ -1,11 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, Focusable } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import {
   decodeFullScreenPrintable,
   FullScreenKeymap,
   pageSteps,
 } from "pi-cosmic-ui/manager/keymap";
-import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import type { SubagentConfigScope } from "../config/store.ts";
 import type { PersistentProfileSetRef, ProfileSettingsInspection } from "./profile-route-editor.ts";
 import {
@@ -15,6 +14,7 @@ import {
   type ProfileSetPickerEntry,
 } from "./ui/profile-set-picker-model.ts";
 import { renderProfileSetPicker } from "./ui/profile-set-picker-render.ts";
+import type { SearchableSelectHostOptions } from "./ui/searchable-select-page.ts";
 
 export type ProfileSetPickerAction =
   | { readonly action: "use-current"; readonly target: PersistentProfileSetRef }
@@ -26,16 +26,14 @@ export type ProfileSetPickerAction =
   | { readonly action: "delete"; readonly target: PersistentProfileSetRef }
   | { readonly action: "save-session"; readonly preferredScope: SubagentConfigScope };
 
-export interface ProfileSetPickerOptions {
+export interface ProfileSetPickerOptions extends Pick<
+  SearchableSelectHostOptions,
+  "getHeight" | "requestRender" | "matchesKeybinding"
+> {
   readonly theme: Theme;
   readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
   readonly initialScope?: SubagentConfigScope | undefined;
-  readonly getHeight: () => number;
-  readonly requestRender: () => void;
-  readonly matchesKeybinding?:
-    | ((data: string, id: FullScreenSelectionKeybindingId) => boolean)
-    | undefined;
   readonly close: (action: ProfileSetPickerAction | undefined) => void;
 }
 
@@ -150,7 +148,7 @@ const actionChoices = (entry: ActionableProfileSetPickerEntry): ReadonlyArray<Sa
         },
       ];
 
-export class ProfileSetPickerComponent implements Component, Focusable {
+export class ProfileSetPickerComponent implements Component {
   private readonly allEntries: ReadonlyArray<ProfileSetPickerEntry>;
   private selectedIndex: number;
   private query = "";
@@ -163,20 +161,11 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   private readonly keymap = new FullScreenKeymap();
   private readonly options: ProfileSetPickerOptions;
   private disposed = false;
-  private _focused = false;
 
   constructor(options: ProfileSetPickerOptions) {
     this.options = options;
     this.allEntries = profileSetPickerEntries(options.inspection, options.projectTrusted);
     this.selectedIndex = initialProfileSetPickerIndex(this.allEntries, options.initialScope);
-  }
-
-  get focused(): boolean {
-    return this._focused;
-  }
-
-  set focused(value: boolean) {
-    if (!this.disposed) this._focused = value;
   }
 
   private entries(): ReadonlyArray<ProfileSetPickerEntry> {

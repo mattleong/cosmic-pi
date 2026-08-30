@@ -19,10 +19,7 @@ export interface CodeModeRenderDetails {
   readonly truncated: boolean;
 }
 
-const NonNegativeIntegerSchema = Schema.Number.check(
-  Schema.isInt(),
-  Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-);
+const NonNegativeIntegerSchema = Schema.Natural;
 const CallEntryInputSchema = Schema.Struct({
   status: Schema.Literals(["queued", "running", "completed", "error", "cancelled"]),
   tool: Schema.optional(Schema.Unknown),
@@ -71,14 +68,16 @@ const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => 
   return durationMs === undefined ? base : { ...base, durationMs };
 };
 
-/** Inspects at most the visible row bound while preserving larger exact or legacy totals. */
+/** Decodes at most the visible row bound while preserving valid exact or legacy totals. */
 export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeModeRenderDetails => {
   const record = decodeInput(RenderDetailsInputSchema, details) ?? {};
   const rawCalls = Array.isArray(record.toolCalls) ? record.toolCalls : [];
-  const toolCalls = rawCalls.slice(0, MAX_PROGRESS_ENTRIES).flatMap((entry) => {
+  const inspectedCalls = rawCalls.slice(0, MAX_PROGRESS_ENTRIES);
+  const toolCalls = inspectedCalls.flatMap((entry) => {
     const decoded = decodeCallEntry(entry);
     return decoded === undefined ? [] : [decoded];
   });
+  const legacyArrayTotal = toolCalls.length === inspectedCalls.length ? rawCalls.length : 0;
   const suppliedTotal = nonNegativeInteger(record.totalToolCalls) ?? 0;
   const rawCounts = decodeInput(CallCountsInputSchema, record.counts);
   const hasExactCounts = rawCounts !== undefined;
@@ -100,7 +99,7 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
       : Object.values(suppliedCounts).reduce((total, count) => total + count, 0);
   const total = Math.max(
     visibleTotal,
-    rawCalls.length,
+    legacyArrayTotal,
     suppliedTotal,
     rawCounts?.total ?? 0,
     suppliedCountTotal,

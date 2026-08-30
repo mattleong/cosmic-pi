@@ -10,14 +10,13 @@ import {
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { managerNoticeGlyph, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
+import { formatRunRoute, shortRunId } from "../ui/run-presentation.ts";
 import type { SubagentStartEntry } from "./details.ts";
-import { failedStartRecoveryAction, formatFailedStartRecovery, formatToolRoute } from "./format.ts";
+import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import { renderExpansionAffordance } from "./render-affordance.ts";
 import { failureRecovery } from "./render-management.ts";
+import type { SubagentStartFailure } from "./model.ts";
 import type { SubagentStartSpec } from "./schema.ts";
-import type { SubagentStartFailure } from "./subagent.ts";
-
-const shortRunId = (id: string): string => (id.length <= 14 ? id : `…${id.slice(-13)}`);
 
 const requestedName = (agent: SubagentStartSpec, index: number): string =>
   sanitizeTerminalLine(agent.name?.trim() || `launch ${index + 1}`);
@@ -105,7 +104,7 @@ const selectedRoute = (entry: SubagentStartEntry): entry is SelectedStartEntry =
 
 const routeLabel = (entry: SubagentStartEntry): string => {
   if (selectedRoute(entry))
-    return formatToolRoute(
+    return formatRunRoute(
       entry.host ?? "local",
       entry.runtime ?? "pi",
       entry.model ?? "unknown model",
@@ -158,7 +157,7 @@ const receiptRow = (
           const routeValue = selectedRoute(entry)
             ? `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg(
                 "toolOutput",
-                formatToolRoute(
+                formatRunRoute(
                   entry.host ?? "local",
                   entry.runtime ?? "pi",
                   entry.model ?? "unknown model",

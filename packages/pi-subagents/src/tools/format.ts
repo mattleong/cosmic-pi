@@ -3,15 +3,20 @@ import {
   stripTerminalControls as sanitizeTerminalText,
   synchronousNow,
 } from "pi-cosmic-core";
+import { normalizeWriteClaim, writeClaimContains } from "../domain/write-claims.ts";
 import type { SubagentSelectionProvenance } from "../profiles/model.ts";
-import type { SubagentRunView } from "../run/model.ts";
+import {
+  isParentActionRequiredRun,
+  isTerminalRunState,
+  type SubagentRunView,
+} from "../run/model.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentRunObservation } from "../run/service.ts";
 import { clipWithMarker } from "../run/state.ts";
-import { formatDuration, formatUsage } from "../ui/metrics.ts";
+import { formatUsage } from "../ui/metrics.ts";
+import { formatRunRoute, formatSessionAge } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import type { SubagentRunCard } from "./details.ts";
-import type { SubagentActionFailure, SubagentStartFailure } from "./subagent.ts";
+import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 
 export const selectionSourceLabel = (
   run: Pick<SubagentRunView, "selection"> | { readonly selection: SubagentSelectionProvenance },
@@ -30,34 +35,126 @@ export const boundToolOutput = (text: string): string =>
     "\n… [tool output truncated; narrow the request or query individual run IDs for the omitted content]",
   );
 
-export const formatToolModel = (model: string, effort: string, openaiFastMode?: boolean): string =>
-  `${sanitizeTerminalLine(model)}:${sanitizeTerminalLine(effort)}${openaiFastMode ? " ⚡" : ""}`;
-
-export const formatToolRoute = (
-  host: string,
-  runtime: string,
-  model: string,
-  effort: string,
-  openaiFastMode?: boolean,
-): string =>
-  `${sanitizeTerminalLine(host)}/${sanitizeTerminalLine(runtime)} · ${formatToolModel(model, effort, openaiFastMode)}`;
-
 export const joinBoundedToolText = (parts: ReadonlyArray<string>): string =>
   boundToolOutput(parts.filter(Boolean).join("\n\n"));
 
 interface AttentionRun {
   readonly id: string;
   readonly name: string;
-  readonly state: SubagentRunCard["state"];
+  readonly state: SubagentRunView["state"];
   readonly question?: { readonly message: string } | undefined;
+  readonly writeIntent: SubagentRunView["writeIntent"];
+  readonly writeClaims?: ReadonlyArray<string> | undefined;
+  readonly writeAudit?: SubagentRunView["writeAudit"] | undefined;
+  readonly writeAdmissionPaused?: boolean | undefined;
+  readonly writeViolationOffender?: boolean | undefined;
+  readonly capabilities: SubagentRunView["capabilities"];
 }
 
-export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string => {
-  const waiting = runs.filter((run) => run.state === "waiting_for_parent" && run.question?.message);
-  if (waiting.length === 0) return "";
+const runTarget = (run: AttentionRun): string =>
+  `${sanitizeTerminalLine(run.name)} (${sanitizeTerminalLine(run.id)})`;
+
+const claimViolationPaths = (run: AttentionRun): ReadonlyArray<string> => [
+  ...new Set(run.writeAudit?.violations.map((violation) => violation.path) ?? []),
+];
+
+const grantableClaimPath = (path: string): string | undefined => {
+  const normalized = normalizeWriteClaim(path);
+  return normalized.ok ? normalized.claims[0] : undefined;
+};
+
+const safeMissingClaimPaths = (run: AttentionRun): ReadonlyArray<string> =>
+  claimViolationPaths(run).flatMap((path) => {
+    const claim = grantableClaimPath(path);
+    return claim && !writeClaimContains(run.writeClaims ?? [], claim) ? [claim] : [];
+  });
+
+const claimContainmentRecovery = (run: AttentionRun): ReadonlyArray<string> => {
+  const id = JSON.stringify(run.id);
+  const paths = claimViolationPaths(run);
+  const audit = paths.map((path) => sanitizeTerminalLine(path)).join(", ");
+  const safeMissing = safeMissingClaimPaths(run);
+  const hasUngrantablePath = paths.some((path) => grantableClaimPath(path) === undefined);
+  const canResume = run.state === "paused" && run.capabilities.includes("resume");
+  const terminal = isTerminalRunState(run.state);
+  const header = `Claim containment for ${runTarget(run)} after: ${audit || "an out-of-claim write"}.`;
+  if (run.state !== "paused" && !terminal)
+    return [
+      header,
+      `Containment is in progress while the offender is ${runStateLabel(run.state)}.`,
+      `1. Wait for containment to reach paused or terminal, then inspect it: subagent_status({ runIds: [${id}] }).`,
+      `2. If status is paused and resume is supported, review the audit, grant only intended workspace-relative missing claims, reopen admission with subagent_claims({ action: "resume_admission", runId: ${id} }), then resume and await the offender.`,
+      `3. If status is terminal, confirm process and writer cleanup before subagent_claims({ action: "resume_admission", runId: ${id} }), then launch and await a corrected replacement.`,
+      "4. If status is still active, check again. Do not issue a duplicate stop solely because the paused state has not published yet.",
+    ];
+  if (canResume && !hasUngrantablePath) {
+    const grantStep =
+      safeMissing.length > 0
+        ? `2. If the missing files are intended and conflict-free, grant them: subagent_claims({ action: "grant", runId: ${id}, paths: ${JSON.stringify(safeMissing)} }). Otherwise skip this step.`
+        : "2. Keep the current claims unless the audit proves another workspace-relative file is intended and conflict-free.";
+    return [
+      header,
+      `1. Review the audit and shared tree: subagent_status({ runIds: [${id}] }).`,
+      grantStep,
+      `3. Reopen writer admission: subagent_claims({ action: "resume_admission", runId: ${id} }).`,
+      `4. Resume with the authoritative claims and guidance: subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Use the authoritative claims returned by subagent_claims. Continue only within them." }).`,
+      `5. Await this run again: subagent_await({ runIds: [${id}], until: "all_finished" }).`,
+    ];
+  }
+  const stopStep = terminal
+    ? "2. The offender is terminal. Confirm process and writer cleanup before reopening admission."
+    : `2. Stop the paused offender and wait for cleanup: subagent_lifecycle({ action: "stop", runIds: [${id}] }).`;
+  const replacementClaims = [...new Set([...(run.writeClaims ?? []), ...safeMissing])];
   return [
-    "Parent reply required; other unfinished subagents continue independently.",
-    ...waiting.flatMap((run) => {
+    header,
+    `1. Review the audit and shared tree: subagent_status({ runIds: [${id}] }).`,
+    stopStep,
+    `3. After cleanup is confirmed, reopen writer admission: subagent_claims({ action: "resume_admission", runId: ${id} }).`,
+    hasUngrantablePath
+      ? "4. Launch a corrected replacement with subagent_start only after narrowing the task to workspace-relative files. Supply exact writes, and do not copy outside-workspace or absolute paths into claims."
+      : `4. Launch a corrected replacement with subagent_start and reviewed exact writes${replacementClaims.length > 0 ? ` such as ${JSON.stringify(replacementClaims)}` : ""}.`,
+    "5. Await the replacement run ID with subagent_await.",
+  ];
+};
+
+const ordinaryPauseRecovery = (run: AttentionRun): ReadonlyArray<string> => {
+  const id = JSON.stringify(run.id);
+  if (run.capabilities.includes("resume"))
+    return [
+      `Paused run ${runTarget(run)} needs a parent decision.`,
+      `1. Review it: subagent_status({ runIds: [${id}] }).`,
+      `2. Resume it with guidance: subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue with the reviewed guidance." }).`,
+      `3. Await it again: subagent_await({ runIds: [${id}], until: "all_finished" }).`,
+    ];
+  return [
+    `Paused run ${runTarget(run)} cannot resume on its backend.`,
+    `1. Stop it: subagent_lifecycle({ action: "stop", runIds: [${id}] }).`,
+    "2. Launch a corrected replacement with subagent_start after cleanup is confirmed.",
+    "3. Await the replacement run ID with subagent_await.",
+  ];
+};
+
+const pausedAdmissionPeerRecovery = (run: AttentionRun): ReadonlyArray<string> => [
+  `Writer admission is paused for ${runTarget(run)} because its cwd pool is under claim containment.`,
+  "1. Inspect subagent_list and the paused or stopped offender's subagent_status write audit.",
+  "2. Do not change this peer's claims. Contain or clean up the recorded offender first.",
+  "3. Use resume_admission only after every offender is paused or terminal, then continue or await this peer.",
+];
+
+export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string => {
+  const attention = runs.filter(
+    (run) => isParentActionRequiredRun(run) || run.writeViolationOffender === true,
+  );
+  if (attention.length === 0) return "";
+  const parentActionRequired = attention.some(isParentActionRequiredRun);
+  return [
+    parentActionRequired
+      ? "Parent action required; other unfinished subagents continue independently."
+      : "Write-claim containment is still in progress; other unfinished subagents continue independently.",
+    ...attention.flatMap((run) => {
+      if (run.writeViolationOffender === true) return claimContainmentRecovery(run);
+      if (run.writeAdmissionPaused === true) return pausedAdmissionPeerRecovery(run);
+      if (run.state === "paused") return ordinaryPauseRecovery(run);
       const question = sanitizeTerminalLine(run.question?.message ?? "");
       const bounded = clipWithMarker(question, 512, "… [truncated]");
       return [
@@ -73,7 +170,7 @@ const boundedLine = (value: string, maximum: number): string =>
 
 export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
-  const route = formatToolRoute(run.host, run.runtime, run.model, run.effort, run.openaiFastMode);
+  const route = formatRunRoute(run.host, run.runtime, run.model, run.effort, run.openaiFastMode);
   const tree = run.depth
     ? ` · depth=${run.depth} · children=${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
     : "";
@@ -86,16 +183,9 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
   const now = synchronousNow();
   const durationEnd = run.endedAt ?? now;
-  const elapsedMilliseconds = durationEnd - run.startedAt;
-  const activityMilliseconds = now - run.lastActivityAt;
-  const elapsed =
-    elapsedMilliseconds >= 0 && elapsedMilliseconds <= 7 * 24 * 60 * 60 * 1_000
-      ? formatDuration(elapsedMilliseconds)
-      : undefined;
-  const activity =
-    activityMilliseconds >= 0 && activityMilliseconds <= 7 * 24 * 60 * 60 * 1_000
-      ? `${formatDuration(activityMilliseconds)} ago`
-      : undefined;
+  const elapsed = formatSessionAge(durationEnd, run.startedAt) || undefined;
+  const activityAge = formatSessionAge(now, run.lastActivityAt);
+  const activity = activityAge ? `${activityAge} ago` : undefined;
   const retained = run.state === "reported" && run.closeOnReport === false;
   // Unknown or zero-information usage renders nothing rather than "unknown".
   const usage = formatUsage(run.usage);
@@ -145,6 +235,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
       ? field("Writes", run.writeClaims?.join(", ") || "exclusive whole cwd")
       : undefined,
     run.writeAdmissionPaused ? field("Admission", "paused after claim violation") : undefined,
+    run.writeViolationOffender ? field("Containment", "current violation offender") : undefined,
     run.writeAudit
       ? field(
           "Write audit",

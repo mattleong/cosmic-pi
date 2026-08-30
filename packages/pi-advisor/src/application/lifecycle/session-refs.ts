@@ -1,5 +1,6 @@
 /** Mutable session handles shared across lifecycle factories. */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type * as Deferred from "effect/Deferred";
 import {
   summarizeAdvisorReview,
   type AdvisorDurableReviewSummary,
@@ -8,7 +9,6 @@ import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import type { LoadedAdvisorInstructions } from "../../review/instructions.ts";
 import type { AdvisorRuntimeServiceContract } from "../../runtime/runtime.ts";
 import type { AdvisorSessionInput } from "../../boundary/host-context.ts";
-import type { CancellationLatch } from "../controller-helpers.ts";
 import type { LastCandidate, ParentAnchor } from "../controller.ts";
 
 export type ActiveTrajectoryResource = {
@@ -34,7 +34,7 @@ export interface SessionRefs {
   activeToolCalls: Map<string, { toolName: string; args: unknown }>;
   latestStateSummary: string;
   latestDurableSummary: AdvisorDurableReviewSummary;
-  activeChildStart: CancellationLatch | undefined;
+  activeChildStart: Deferred.Deferred<void> | undefined;
 }
 
 export const createSessionRefs = (): SessionRefs => ({

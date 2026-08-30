@@ -12,12 +12,14 @@ export interface XaiAuthResultCredentials {
   readonly refreshToken?: Redacted.Redacted<string> | undefined;
   readonly expires?: number | undefined;
   readonly teamId?: string | undefined;
-  readonly source: "modelRegistry" | "authFile";
 }
 
 /** Internally constructed auth outcome; unknown auth documents are decoded before this point. */
 export type XaiAuthResult =
   | { readonly _tag: "Found"; readonly credentials: XaiAuthResultCredentials }
   | { readonly _tag: "Missing" }
-  | { readonly _tag: "Unavailable"; readonly operation: string; readonly message: string }
-  | { readonly _tag: "Malformed"; readonly operation: string; readonly message: string };
+  | {
+      readonly _tag: "Unavailable" | "Malformed";
+      readonly operation: string;
+      readonly message: string;
+    };

@@ -17,6 +17,7 @@ import {
   type JsonObject,
 } from "./platform/json-document.ts";
 import { JsonHttpClient } from "./platform/json-http.ts";
+import { invokeHostCallback } from "./host-session.ts";
 import { makeFrozenProjection } from "./projection.ts";
 import { maskIdentifier } from "./security.ts";
 import { formatTimestampOrNever } from "./subscription-format.ts";
@@ -44,13 +45,8 @@ export type UsageFetchOutcome<Snapshot, Patch> =
   | { readonly _tag: "Success"; readonly snapshot: Snapshot; readonly patch: Patch };
 
 /** Best-effort UI probe: skip only when the host explicitly reports no UI at all. */
-const hostHasUi = (ctx: ExtensionContext): boolean => {
-  try {
-    return ctx.hasUI !== false;
-  } catch {
-    return true;
-  }
-};
+const hostHasUi = (ctx: ExtensionContext): boolean =>
+  invokeHostCallback(() => ctx.hasUI !== false, true);
 
 type RefreshValue<Snapshot, Patch> =
   | { readonly _tag: "Skipped" }

@@ -11,7 +11,10 @@ import {
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
 import { profileRouteOptionLabel } from "./profile-workspace-model.ts";
-import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
+import {
+  SearchableSelectPage,
+  type SearchableSelectHostOptions,
+} from "./searchable-select-page.ts";
 
 export type ProfileModelChoice =
   | { readonly kind: "model"; readonly selector: string }
@@ -141,21 +144,13 @@ export interface ProfileModelPickerContext {
   readonly runtime: SubagentRuntime;
 }
 
-export interface ProfileModelPickerPageOptions {
+export interface ProfileModelPickerPageOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
   readonly choices: ReadonlyArray<ProfileModelPickerChoice>;
   readonly initialSelection?: string | undefined;
   readonly context: ProfileModelPickerContext;
   readonly targetLabel?: string | undefined;
   readonly notice?: string | undefined;
-  readonly getHeight: () => number;
-  readonly requestRender: () => void;
-  readonly matchesKeybinding?:
-    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
-    | undefined;
-  readonly keybindingLabel?:
-    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
-    | undefined;
   readonly select: (choice: ProfileModelChoice) => void;
   readonly cancel: () => void;
 }

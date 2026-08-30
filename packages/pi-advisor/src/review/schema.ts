@@ -1,6 +1,5 @@
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { stringifyJson } from "../boundary/json.ts";
 
 export const ADVISOR_VERDICTS = ["pass", "suggest", "revise"] as const;
 export const ADVISOR_SEVERITIES = ["concern", "blocker"] as const;
@@ -98,7 +97,7 @@ type AdvisorReviewFilterInput = {
 export const makeAdvisorReviewSizeFilter = <Review extends AdvisorReviewFilterInput>() =>
   Schema.makeFilter<Review>(
     (review) =>
-      stringifyJson({
+      JSON.stringify({
         verdict: review.verdict,
         summary: review.summary,
         suggestions: review.suggestions,
@@ -138,22 +137,6 @@ export const makeAdvisorReviewFingerprintFilter = <Review extends AdvisorReviewF
     { identifier: ADVISOR_REVIEW_FINGERPRINT_FILTER_IDENTIFIER },
   );
 
-const AdvisorReviewEncodedInputSchema = Schema.toEncoded(AdvisorReviewFieldsSchema);
-const AdvisorReviewBoundedEncodedSchema = AdvisorReviewEncodedInputSchema.check(
-  makeAdvisorReviewSizeFilter<Schema.Schema.Type<typeof AdvisorReviewEncodedInputSchema>>(),
-);
-const AdvisorReviewNormalizedSchema = AdvisorReviewBoundedEncodedSchema.pipe(
-  Schema.decodeTo(AdvisorReviewFieldsSchema),
-);
-type StrictAdvisorReview = Schema.Schema.Type<typeof AdvisorReviewNormalizedSchema>;
-export const AdvisorReviewSchema = AdvisorReviewNormalizedSchema.check(
-  makeAdvisorReviewLaneFilter<StrictAdvisorReview>(),
-  makeAdvisorReviewFingerprintFilter<StrictAdvisorReview>(),
-);
-export type ParsedAdvisorSuggestion = Schema.Schema.Type<typeof AdvisorSuggestionSchema>;
-export type ParsedAdvisorFinding = Schema.Schema.Type<typeof AdvisorFindingSchema>;
-export type ParsedAdvisorReview = Schema.Schema.Type<typeof AdvisorReviewSchema>;
-
 export interface AdvisorSuggestion {
   readonly fingerprint?: string;
   readonly kind: AdvisorSuggestionKind;
@@ -162,7 +145,7 @@ export interface AdvisorSuggestion {
   readonly relevance: AdvisorSuggestionRelevance;
 }
 
-/** Broader lifecycle shape. Strict model output uses ParsedAdvisorFinding. */
+/** Broader lifecycle shape used after strict model-output decoding. */
 export interface AdvisorFinding {
   readonly category: AdvisorFindingCategory;
   readonly severity: AdvisorSeverity;

@@ -15,38 +15,36 @@ export class ModelRegistryAuthError extends Schema.TaggedError<ModelRegistryAuth
 type Registry = Pick<ExtensionContext, "modelRegistry">["modelRegistry"];
 type Model = NonNullable<ExtensionContext["model"]>;
 
-export interface ModelRegistryAuthContract {
-  readonly getApiKey: Effect.Effect<string | undefined, ModelRegistryAuthError>;
-  readonly isUsingOAuth: (model: Model) => Effect.Effect<boolean, ModelRegistryAuthError>;
-}
-
 /** Synchronous Pi-renderer boundary. Host failures fail closed and never escape rendering. */
 export { isUsingOAuthAtHostBoundary } from "pi-cosmic-core";
 
 /** Named Pi boundary for the model registry's Promise-returning credential lookup. */
-export class ModelRegistryAuth extends Context.Service<
-  ModelRegistryAuth,
-  ModelRegistryAuthContract
->()("pi-better-xai/boundary/model-registry-auth/ModelRegistryAuth") {
-  static layer(getRegistry: () => Registry): Layer.Layer<ModelRegistryAuth> {
-    return Layer.succeed(this, {
-      getApiKey: Effect.tryPromise({
-        try: () => getRegistry().getApiKeyForProvider("xai"),
-        catch: () =>
-          new ModelRegistryAuthError({
-            operation: "lookup",
-            message: "Unable to read xAI credentials.",
-          }),
-      }),
-      isUsingOAuth: (model) =>
-        Effect.try({
-          try: () => getRegistry().isUsingOAuth(model),
+export class ModelRegistryAuth extends Context.Service<ModelRegistryAuth>()(
+  "pi-better-xai/boundary/model-registry-auth/ModelRegistryAuth",
+  {
+    make: (getRegistry: () => Registry) =>
+      Effect.succeed({
+        getApiKey: Effect.tryPromise({
+          try: () => getRegistry().getApiKeyForProvider("xai"),
           catch: () =>
             new ModelRegistryAuthError({
-              operation: "oauth-status",
-              message: "Unable to inspect xAI authentication status.",
+              operation: "lookup",
+              message: "Unable to read xAI credentials.",
             }),
         }),
-    });
+        isUsingOAuth: (model: Model) =>
+          Effect.try({
+            try: () => getRegistry().isUsingOAuth(model),
+            catch: () =>
+              new ModelRegistryAuthError({
+                operation: "oauth-status",
+                message: "Unable to inspect xAI authentication status.",
+              }),
+          }),
+      }),
+  },
+) {
+  static layer(getRegistry: () => Registry): Layer.Layer<ModelRegistryAuth> {
+    return Layer.effect(this, this.make(getRegistry));
   }
 }

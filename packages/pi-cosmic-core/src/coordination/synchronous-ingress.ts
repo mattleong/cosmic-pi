@@ -1,5 +1,4 @@
 import * as Cause from "effect/Cause";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
@@ -53,7 +52,6 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
     }
 
     const queue = yield* Queue.dropping<A>(capacity);
-    const workerDone = yield* Deferred.make<void>();
     let closed = false;
     let coalesced: { readonly value: A } | undefined;
     const reportDefect = options.onDefect;
@@ -84,10 +82,7 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
     const close = Effect.suspend(() => {
       closed = true;
       coalesced = undefined;
-      return Queue.shutdown(queue).pipe(
-        Effect.andThen(Deferred.succeed(workerDone, undefined)),
-        Effect.asVoid,
-      );
+      return Queue.shutdown(queue);
     });
     const worker = Effect.forever(
       Effect.gen(function* () {
@@ -115,19 +110,16 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
       return "coalesced";
     };
 
+    const awaitShutdown = Fiber.await(fiber).pipe(Effect.asVoid);
     const shutdown = Effect.uninterruptible(
       Effect.suspend(() => {
-        if (closed) return Deferred.await(workerDone);
+        if (closed) return awaitShutdown;
         // Reject synchronous ingress as soon as shutdown starts, before yielding to queue cleanup.
         closed = true;
         coalesced = undefined;
-        return Queue.shutdown(queue).pipe(
-          Effect.andThen(Fiber.interrupt(fiber)),
-          Effect.andThen(Deferred.await(workerDone)),
-          Effect.asVoid,
-        );
+        return Queue.shutdown(queue).pipe(Effect.andThen(Fiber.interrupt(fiber)));
       }),
     );
 
-    return { offer, shutdown, awaitShutdown: Deferred.await(workerDone) };
+    return { offer, shutdown, awaitShutdown };
   });

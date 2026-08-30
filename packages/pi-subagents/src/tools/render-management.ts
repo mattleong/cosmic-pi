@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { managerStateGlyph } from "pi-cosmic-ui/manager";
-import { formatToolRoute } from "./format.ts";
+import { formatRunRoute } from "../ui/run-presentation.ts";
 import { renderExpansionAffordance } from "./render-affordance.ts";
 import type {
   CompactSubagentToolDetails,
@@ -96,7 +96,7 @@ export const failureRecovery = (
 };
 
 const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): string =>
-  `${formatToolRoute(
+  `${formatRunRoute(
     candidate.host,
     candidate.runtime,
     candidate.model,

@@ -1,15 +1,5 @@
 /** Internal lifecycle dispatcher. Pi registration stays in `application/register.ts`. */
-import type {
-  AgentSettledEvent,
-  ExtensionContext,
-  MessageEndEvent,
-  MessageUpdateEvent,
-  ToolExecutionEndEvent,
-  ToolExecutionStartEvent,
-  ToolExecutionUpdateEvent,
-  TurnEndEvent,
-  TurnStartEvent,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import type { AdvisorApplicationEvent } from "../controller.ts";
 import { makeSessionLifecycle } from "./events/session.ts";
@@ -25,38 +15,27 @@ export const makeLifecycleEvents = (d: EventsDeps) => {
   const trajectory = makeTrajectoryEventHandlers(d);
 
   const dispatchEvent = (
-    name: string,
-    event: AdvisorApplicationEvent,
+    input: AdvisorApplicationEvent,
     ctx: ExtensionContext,
   ): Effect.Effect<void> =>
     Effect.suspend(() => {
-      switch (name) {
+      switch (input.type) {
         case "message_end":
-          // SAFETY: application/register.ts forwards only Pi message_end events with this name.
-          return turn.messageEnd(event as MessageEndEvent, ctx);
+          return turn.messageEnd(input.event, ctx);
         case "agent_settled":
-          // SAFETY: application/register.ts forwards only Pi agent_settled events with this name.
-          return turn.agentSettled(event as AgentSettledEvent, ctx);
+          return turn.agentSettled(input.event, ctx);
         case "turn_end":
-          // SAFETY: application/register.ts forwards only Pi turn_end events with this name.
-          return turn.turnEnd(event as TurnEndEvent, ctx);
+          return turn.turnEnd(input.event, ctx);
         case "turn_start":
-          // SAFETY: application/register.ts forwards only Pi turn_start events with this name.
-          return trajectory.turnStart(event as TurnStartEvent, ctx);
+          return trajectory.turnStart(input.event, ctx);
         case "message_update":
-          // SAFETY: application/register.ts forwards only Pi message_update events with this name.
-          return trajectory.messageUpdate(event as MessageUpdateEvent);
+          return trajectory.messageUpdate(input.event);
         case "tool_execution_start":
-          // SAFETY: application/register.ts forwards only Pi tool_execution_start events with this name.
-          return trajectory.toolExecutionStart(event as ToolExecutionStartEvent);
+          return trajectory.toolExecutionStart(input.event);
         case "tool_execution_update":
-          // SAFETY: application/register.ts forwards only Pi tool_execution_update events with this name.
-          return trajectory.toolExecutionUpdate(event as ToolExecutionUpdateEvent);
+          return trajectory.toolExecutionUpdate(input.event);
         case "tool_execution_end":
-          // SAFETY: application/register.ts forwards only Pi tool_execution_end events with this name.
-          return trajectory.toolExecutionEnd(event as ToolExecutionEndEvent);
-        default:
-          return Effect.void;
+          return trajectory.toolExecutionEnd(input.event);
       }
     });
 

@@ -31,9 +31,9 @@ import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
-import { executeSubagentActionEffect } from "../tools/execute.ts";
+import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
-import { registerSubagentTools, type SubagentToolRuntime } from "../tools/subagent.ts";
+import { registerSubagentTools } from "../tools/subagent.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
 

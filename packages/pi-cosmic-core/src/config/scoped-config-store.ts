@@ -105,11 +105,8 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
 ): ScopedConfigStore<File, Resolved, E> => {
   const { basename, decode, defaultDocument, errorFactory, resolve, spanPrefix } = options;
 
-  const configPaths = Effect.fn(`${spanPrefix}.configPaths`)(function* (
-    cwd: string,
-    agentDir: string,
-  ) {
-    return yield* scopedDocumentPaths(
+  const configPaths = Effect.fn(`${spanPrefix}.configPaths`)((cwd: string, agentDir: string) =>
+    scopedDocumentPaths(
       cwd,
       agentDir,
       options.extensionsDirectory === undefined
@@ -119,30 +116,27 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
             basename,
             extensionsDirectory: options.extensionsDirectory,
           },
-    );
-  });
+    ),
+  );
 
-  const readRawConfig = Effect.fn(`${spanPrefix}.readRawConfig`)(function* (path: string) {
-    return yield* readRawJsonObject(path, errorFactory);
-  });
+  const readRawConfig = Effect.fn(`${spanPrefix}.readRawConfig`)((path: string) =>
+    readRawJsonObject(path, errorFactory),
+  );
 
-  const readConfig = Effect.fn(`${spanPrefix}.readConfig`)(function* (path: string) {
-    return yield* readOptionalJsonObject(path, decode, errorFactory);
-  });
+  const readConfig = Effect.fn(`${spanPrefix}.readConfig`)((path: string) =>
+    readOptionalJsonObject(path, decode, errorFactory),
+  );
 
-  const writeConfig = Effect.fn(`${spanPrefix}.writeConfig`)(function* (
-    path: string,
-    config: JsonObject,
-  ) {
-    yield* writeJsonObject(path, config, errorFactory);
-  });
+  const writeConfig = Effect.fn(`${spanPrefix}.writeConfig`)((path: string, config: JsonObject) =>
+    writeJsonObject(path, config, errorFactory),
+  );
 
-  const modifyConfig = Effect.fn(`${spanPrefix}.modifyConfig`)(function* <A, AfterCommitR>(
-    path: string,
-    modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
-  ) {
-    return yield* modifyJsonObject(path, modify, errorFactory);
-  });
+  const modifyConfig = Effect.fn(`${spanPrefix}.modifyConfig`)(
+    <A, AfterCommitR>(
+      path: string,
+      modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
+    ) => modifyJsonObject(path, modify, errorFactory),
+  );
 
   const warning = `Unable to read a ${options.label} configuration document.`;
 

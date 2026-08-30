@@ -2,8 +2,8 @@ import * as Predicate from "effect/Predicate";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
+import { hasCodePreviewSessionCapability } from "../../../application/capability";
 import { DeferredPreview, shouldRenderDeferred } from "../../../preview/deferred";
-import { isCodePreviewSessionActive } from "../../../application/projection";
 import type { RendererState } from "./types";
 
 export function cachedPreview(
@@ -45,7 +45,7 @@ export function cachedDeferredPreview(
     componentName,
     key,
     () =>
-      shouldRenderDeferred(source) && isCodePreviewSessionActive()
+      shouldRenderDeferred(source) && hasCodePreviewSessionCapability()
         ? new DeferredPreview(loadingLabel, theme, render, invalidate)
         : render(),
     source,

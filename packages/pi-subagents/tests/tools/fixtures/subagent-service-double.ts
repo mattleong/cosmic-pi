@@ -1,73 +1,44 @@
 import * as Effect from "effect/Effect";
-import {
-  InvalidSubagentRequestError,
-  type SubagentNotFoundError,
-} from "../../../src/run/errors.ts";
+import type { SubagentNotFoundError } from "../../../src/run/errors.ts";
 import type { SubagentRunObservation, SubagentServiceContract } from "../../../src/run/service.ts";
 
-type ObservationMethods = Pick<
-  SubagentServiceContract,
-  | "startSessionOwned"
-  | "startSessionOwnedFrom"
-  | "visibleList"
-  | "authorizeTargets"
-  | "startRetrySessionOwned"
-  | "claimRetryContinuation"
-  | "releaseRetryClaim"
-  | "exhaustRetryClaim"
-  | "blockRetryClaim"
-  | "withAwaitTerminalObservations"
-  | "withStatusObservations"
-  | "consumeCompletions"
-  | "grantWriteClaims"
-  | "revokeWriteClaims"
-  | "resumeWriterAdmission"
->;
+export type SubagentServiceDoubleInput = Partial<SubagentServiceContract> & {
+  /** Optional per-run observation seed used to derive `withStatusObservations`. */
+  readonly observeStatus?: (
+    id: string,
+  ) => Effect.Effect<SubagentRunObservation, SubagentNotFoundError>;
+};
 
-export type SubagentServiceDoubleInput = Omit<SubagentServiceContract, keyof ObservationMethods> &
-  Partial<ObservationMethods> & {
-    /** Optional per-run observation seed used to derive `withStatusObservations`. */
-    readonly observeStatus?: (
-      id: string,
-    ) => Effect.Effect<SubagentRunObservation, SubagentNotFoundError>;
-  };
+const unexpected = (method: keyof SubagentServiceContract): Effect.Effect<never> =>
+  Effect.die(new Error(`Unexpected SubagentService.${method} call in test fixture.`));
 
-/**
- * Completes a `SubagentServiceContract` test double.
- *
- * The observation methods are required on the production shape. Doubles that only care about the
- * plain run methods get faithful derivations here instead of the tool re-implementing fallbacks.
- */
+/** Completes a partial service double with faithful adapters and loud unused-method defects. */
 export function subagentServiceDouble(base: SubagentServiceDoubleInput): SubagentServiceContract {
+  const start: SubagentServiceContract["start"] = base.start ?? (() => unexpected("start"));
   const startSessionOwned: SubagentServiceContract["startSessionOwned"] =
-    base.startSessionOwned ?? base.start;
+    base.startSessionOwned ?? start;
   const startSessionOwnedFrom: SubagentServiceContract["startSessionOwnedFrom"] =
     base.startSessionOwnedFrom ?? ((_callerRunId, request) => startSessionOwned(request));
-  const visibleList: SubagentServiceContract["visibleList"] = base.visibleList ?? (() => base.list);
+  const list: SubagentServiceContract["list"] = base.list ?? unexpected("list");
+  const visibleList: SubagentServiceContract["visibleList"] = base.visibleList ?? (() => list);
   const authorizeTargets: SubagentServiceContract["authorizeTargets"] =
-    base.authorizeTargets ?? (() => Effect.void);
-  const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] =
-    base.startRetrySessionOwned ?? base.start;
+    base.authorizeTargets ?? (() => unexpected("authorizeTargets"));
   const claimRetryContinuation: SubagentServiceContract["claimRetryContinuation"] =
-    base.claimRetryContinuation ??
-    ((id) =>
-      Effect.fail(
-        new InvalidSubagentRequestError({
-          code: "retry_route_unavailable",
-          message: `No retry continuation fixture for ${id}.`,
-        }),
-      ));
+    base.claimRetryContinuation ?? (() => unexpected("claimRetryContinuation"));
   const releaseRetryClaim: SubagentServiceContract["releaseRetryClaim"] =
-    base.releaseRetryClaim ?? (() => Effect.void);
+    base.releaseRetryClaim ?? (() => unexpected("releaseRetryClaim"));
   const exhaustRetryClaim: SubagentServiceContract["exhaustRetryClaim"] =
-    base.exhaustRetryClaim ?? (() => Effect.void);
+    base.exhaustRetryClaim ?? (() => unexpected("exhaustRetryClaim"));
   const blockRetryClaim: SubagentServiceContract["blockRetryClaim"] =
-    base.blockRetryClaim ?? (() => Effect.void);
+    base.blockRetryClaim ?? (() => unexpected("blockRetryClaim"));
+  const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] =
+    base.startRetrySessionOwned ?? (() => unexpected("startRetrySessionOwned"));
+  const awaitTerminal: SubagentServiceContract["awaitTerminal"] =
+    base.awaitTerminal ?? (() => unexpected("awaitTerminal"));
+  const status: SubagentServiceContract["status"] = base.status ?? (() => unexpected("status"));
   const observeStatus =
     base.observeStatus ??
-    ((id: string) => base.status(id).pipe(Effect.map((run): SubagentRunObservation => ({ run }))));
-  const consumeCompletions: SubagentServiceContract["consumeCompletions"] =
-    base.consumeCompletions ?? (() => Effect.void);
+    ((id: string) => status(id).pipe(Effect.map((run): SubagentRunObservation => ({ run }))));
   const withStatusObservations: SubagentServiceContract["withStatusObservations"] =
     base.withStatusObservations ??
     ((ids, use) =>
@@ -93,34 +64,42 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
           }),
         ),
       ));
-  const grantWriteClaims: SubagentServiceContract["grantWriteClaims"] =
-    base.grantWriteClaims ?? ((id) => base.status(id));
-  const revokeWriteClaims: SubagentServiceContract["revokeWriteClaims"] =
-    base.revokeWriteClaims ?? ((id) => base.status(id));
-  const resumeWriterAdmission: SubagentServiceContract["resumeWriterAdmission"] =
-    base.resumeWriterAdmission ?? ((id) => base.status(id));
   const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] =
     base.withAwaitTerminalObservations ??
     ((ids, until, onUpdate, use) =>
-      base
-        .awaitTerminal(ids, until, onUpdate)
-        .pipe(Effect.flatMap((runs) => use(runs.map((run): SubagentRunObservation => ({ run }))))));
+      awaitTerminal(ids, until, onUpdate).pipe(
+        Effect.flatMap((runs) => use(runs.map((run): SubagentRunObservation => ({ run })))),
+      ));
+
   return {
-    ...base,
+    start,
     startSessionOwned,
     startSessionOwnedFrom,
     visibleList,
     authorizeTargets,
-    startRetrySessionOwned,
     claimRetryContinuation,
     releaseRetryClaim,
     exhaustRetryClaim,
     blockRetryClaim,
-    consumeCompletions,
-    grantWriteClaims,
-    revokeWriteClaims,
-    resumeWriterAdmission,
-    withStatusObservations,
+    startRetrySessionOwned,
+    awaitTerminal,
     withAwaitTerminalObservations,
+    list,
+    status,
+    withStatusObservations,
+    consumeCompletions:
+      base.consumeCompletions ??
+      ((receipts) => (receipts.length === 0 ? Effect.void : unexpected("consumeCompletions"))),
+    send: base.send ?? (() => unexpected("send")),
+    reply: base.reply ?? (() => unexpected("reply")),
+    interrupt: base.interrupt ?? (() => unexpected("interrupt")),
+    resume: base.resume ?? (() => unexpected("resume")),
+    rename: base.rename ?? (() => unexpected("rename")),
+    stop: base.stop ?? (() => unexpected("stop")),
+    grantWriteClaims: base.grantWriteClaims ?? (() => unexpected("grantWriteClaims")),
+    revokeWriteClaims: base.revokeWriteClaims ?? (() => unexpected("revokeWriteClaims")),
+    resumeWriterAdmission:
+      base.resumeWriterAdmission ?? (() => unexpected("resumeWriterAdmission")),
+    projection: base.projection ?? unexpected("projection"),
   };
 }

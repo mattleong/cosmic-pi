@@ -1,12 +1,13 @@
 // Pi session-file identity and blank-child creation boundary for /herdr-btw.
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-// Synchronous host-boundary validation needs raw Node fs semantics (lstat and
-// O_NOFOLLOW descriptor reads without a scoped Effect runtime); Effect
-// FileSystem cannot express this pre-runtime, never-mutating probe contract.
+// Synchronous host-boundary validation needs raw Node fs semantics. Effect
+// FileSystem cannot express this pre-runtime, never-mutating no-follow probe.
 const nodeFs = process.getBuiltinModule("node:fs");
 const nodePath = process.getBuiltinModule("node:path");
 const nodeCrypto = process.getBuiltinModule("node:crypto");
@@ -27,6 +28,7 @@ const SessionHeaderSchema = Schema.Struct({
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_SESSION_PATH_CHARS)),
   ),
 });
+const SessionHeaderFromJson = Schema.fromJsonString(SessionHeaderSchema);
 
 export interface SessionHeaderFacts {
   readonly id: string;
@@ -47,15 +49,39 @@ const isBoundedSessionPath = (path: string): boolean =>
   !path.includes("\r") &&
   isAbsolute(path);
 
-const readFirstLine = (path: string): string | undefined => {
+const withRegularSessionDescriptor = <A>(
+  path: string,
+  use: (descriptor: number) => A,
+): A | undefined => {
+  if (!isBoundedSessionPath(path)) return undefined;
   let descriptor: number | undefined;
   try {
-    // O_NOFOLLOW closes the lstat TOCTOU window against symlink replacement.
+    if (!lstatSync(path).isFile()) return undefined;
+    // O_NOFOLLOW closes the path-replacement window against symlinks.
     descriptor = openSync(
       path,
       constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
     );
     if (!fstatSync(descriptor).isFile()) return undefined;
+    return use(descriptor);
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined)
+      try {
+        closeSync(descriptor);
+      } catch {
+        // Read-only validation is best effort and never exposes close failures.
+      }
+  }
+};
+
+/** Checks one bounded absolute session path without following a symlink. */
+export const isRegularSessionFile = (path: string): boolean =>
+  withRegularSessionDescriptor(path, () => true) === true;
+
+const readFirstLine = (path: string): string | undefined =>
+  withRegularSessionDescriptor(path, (descriptor) => {
     const buffer = Buffer.alloc(MAX_HEADER_LINE_BYTES);
     let total = 0;
     while (total < MAX_HEADER_LINE_BYTES) {
@@ -67,17 +93,7 @@ const readFirstLine = (path: string): string | undefined => {
     }
     if (total < MAX_HEADER_LINE_BYTES) return buffer.subarray(0, total).toString("utf8");
     return undefined;
-  } catch {
-    return undefined;
-  } finally {
-    if (descriptor !== undefined)
-      try {
-        closeSync(descriptor);
-      } catch {
-        // The probe is best-effort and must never escape a close failure.
-      }
-  }
-};
+  });
 
 /**
  * Reads only the first header line of a Pi session file with bounded bytes.
@@ -85,21 +101,9 @@ const readFirstLine = (path: string): string | undefined => {
  * through SessionManager, so it cannot migrate or rewrite the session.
  */
 export const probeSessionHeader = (path: string): SessionHeaderProbe => {
-  if (!isBoundedSessionPath(path)) return INVALID;
-  try {
-    if (!lstatSync(path).isFile()) return INVALID;
-  } catch {
-    return INVALID;
-  }
   const line = readFirstLine(path);
   if (line === undefined) return INVALID;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return INVALID;
-  }
-  const header = Option.getOrUndefined(Schema.decodeUnknownOption(SessionHeaderSchema)(parsed));
+  const header = Option.getOrUndefined(Schema.decodeUnknownOption(SessionHeaderFromJson)(line));
   if (!header) return INVALID;
   return { _tag: "valid", header: { id: header.id, parentSession: header.parentSession } };
 };
@@ -108,7 +112,6 @@ export interface BlankChildSessionFileInput {
   readonly sessionDir: string;
   readonly cwd: string;
   readonly sessionId: string;
-  readonly timestamp?: string | undefined;
 }
 
 export type BlankChildSessionFileResult =
@@ -118,14 +121,9 @@ export type BlankChildSessionFileResult =
 /** Cryptographically strong preassigned child ID compatible with Pi session IDs. */
 export const createChildSessionId = (): string => randomUUID();
 
-/**
- * Creates one blank persisted Pi session with exclusive ownership. Starting Pi
- * with `--session` against this header makes even a no-prompt side session
- * resumable immediately; Pi does not flush a brand-new `--session-id` session
- * until its first assistant message.
- */
-export const createBlankChildSessionFile = (
+const createBlankChildSessionFileAt = (
   input: BlankChildSessionFileInput,
+  now: number,
 ): BlankChildSessionFileResult => {
   if (
     !isBoundedSessionPath(input.sessionDir) ||
@@ -139,12 +137,7 @@ export const createBlankChildSessionFile = (
     return { _tag: "invalid" };
   try {
     if (!statSync(input.sessionDir).isDirectory()) return { _tag: "invalid" };
-    const instant =
-      input.timestamp === undefined
-        ? DateTime.nowUnsafe()
-        : Option.getOrUndefined(DateTime.make(input.timestamp));
-    if (instant === undefined) return { _tag: "invalid" };
-    const timestamp = DateTime.formatIso(instant);
+    const timestamp = DateTime.formatIso(DateTime.makeUnsafe(now));
     const fileTimestamp = timestamp.replace(/[:.]/gu, "-");
     const path = join(input.sessionDir, `${fileTimestamp}_${input.sessionId}.jsonl`);
     if (!isBoundedSessionPath(path)) return { _tag: "invalid" };
@@ -165,3 +158,14 @@ export const createBlankChildSessionFile = (
     return { _tag: "invalid" };
   }
 };
+
+/**
+ * Creates one blank persisted Pi session with exclusive ownership. Starting Pi
+ * with `--session` against this header makes even a no-prompt side session
+ * resumable immediately; Pi does not flush a brand-new `--session-id` session
+ * until its first assistant message.
+ */
+export const createBlankChildSessionFile = (
+  input: BlankChildSessionFileInput,
+): Effect.Effect<BlankChildSessionFileResult> =>
+  Clock.currentTimeMillis.pipe(Effect.map((now) => createBlankChildSessionFileAt(input, now)));

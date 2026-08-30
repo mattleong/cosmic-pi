@@ -165,12 +165,7 @@ export function loadProfileRouteDraft(
       return declared.candidates.length === 0
         ? { kind: "disabled", candidates: [] }
         : { kind: "explicit", candidates: cloneCandidates(declared.candidates) };
-    return {
-      kind: inspection.session.baseline.profileSources[profile].endsWith("-invalid")
-        ? "invalid"
-        : "inherit",
-      candidates: cloneCandidates(inspection.session.baseline.profiles[profile].candidates),
-    };
+    return inheritSessionDraft(inspection, profile);
   }
   const set = target.set;
   if (scopeRouteInvalid(inspection, set, profile)) return { kind: "invalid", candidates: [] };

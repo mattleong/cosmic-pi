@@ -34,7 +34,7 @@ interface SettingsSubmenuOptions {
   readonly items: () => SettingItem[];
   readonly onChange: (id: string, value: string) => Promise<void>;
   readonly done: (selectedValue?: string) => void;
-  readonly summary?: (() => string) | undefined;
+  readonly summary: () => string;
 }
 
 /** A small category panel backed by pi-tui's SettingsList. */
@@ -61,7 +61,7 @@ export class SettingsSubmenu extends Container {
           reconcile();
         }
       },
-      () => options.done(options.summary?.()),
+      () => options.done(options.summary()),
       // The outer VimSettingsAdapter owns search. A nested search input cannot clear its query
       // through that adapter, and these category lists are small enough not to need a filter.
       { enableSearch: false },

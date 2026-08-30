@@ -1,5 +1,3 @@
-import * as Predicate from "effect/Predicate";
-
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -49,13 +47,6 @@ export class XaiAuthError extends Schema.TaggedError<XaiAuthError>()("XaiAuthErr
   message: Schema.String,
 }) {}
 
-export interface XaiCredentials {
-  readonly accessToken: Redacted.Redacted<string>;
-  readonly refreshToken?: Redacted.Redacted<string>;
-  readonly expires?: number;
-  readonly teamId?: string;
-}
-
 export const extractTeamIdFromJwt = Effect.fn("XaiAuth.extractTeamIdFromJwt")(function* (
   token: string,
 ) {
@@ -83,16 +74,13 @@ const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function*
   );
   const accessToken = decoded.access;
   const refreshToken = decoded.refresh ?? undefined;
+  const expires = decoded.expires ?? undefined;
   const teamId = yield* extractTeamIdFromJwt(Redacted.value(accessToken));
-  const baseCredentials: XaiCredentials = { accessToken };
-  const withRefreshToken: XaiCredentials = refreshToken
-    ? { ...baseCredentials, refreshToken }
-    : baseCredentials;
-  const withExpires: XaiCredentials = Predicate.isNumber(decoded.expires)
-    ? { ...withRefreshToken, expires: decoded.expires }
-    : withRefreshToken;
-  const credentials: XaiCredentials = teamId ? { ...withExpires, teamId } : withExpires;
-  return credentials;
+  const credentials: XaiAuthResultCredentials = { accessToken };
+  const withRefreshToken =
+    refreshToken === undefined ? credentials : { ...credentials, refreshToken };
+  const withExpires = expires === undefined ? withRefreshToken : { ...withRefreshToken, expires };
+  return teamId === undefined ? withExpires : { ...withExpires, teamId };
 });
 
 export const readXaiAuthResult = Effect.fn("XaiAuth.readXaiAuthResult")(function* (
@@ -114,7 +102,7 @@ export const readXaiAuthResult = Effect.fn("XaiAuth.readXaiAuthResult")(function
     } as const satisfies XaiAuthResult;
   return {
     _tag: "Found",
-    credentials: { ...decoded.success, source: "authFile" as const },
+    credentials: decoded.success,
   } as const satisfies XaiAuthResult;
 });
 
@@ -194,9 +182,12 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
     expires,
   });
   const teamId = yield* extractTeamIdFromJwt(Redacted.value(accessToken));
-  const credentialsBase: XaiCredentials = { accessToken, refreshToken: nextRefresh, expires };
-  const credentials: XaiCredentials = teamId ? { ...credentialsBase, teamId } : credentialsBase;
-  return credentials;
+  const credentials: XaiAuthResultCredentials = {
+    accessToken,
+    refreshToken: nextRefresh,
+    expires,
+  };
+  return teamId === undefined ? credentials : { ...credentials, teamId };
 });
 
 const getModelRegistryXaiCredentials = Effect.fn("XaiAuth.getModelRegistryXaiCredentials")(
@@ -212,7 +203,6 @@ const getModelRegistryXaiCredentials = Effect.fn("XaiAuth.getModelRegistryXaiCre
     const teamId = yield* extractTeamIdFromJwt(registryAccess);
     const registryCredentials: XaiAuthResultCredentials = {
       accessToken: Redacted.make(registryAccess, { label: "xAI access token" }),
-      source: "modelRegistry" as const,
     };
     return teamId ? { ...registryCredentials, teamId } : registryCredentials;
   },
@@ -233,8 +223,7 @@ export const refreshRejectedXaiCredentials = Effect.fn("XaiAuth.refreshRejectedX
       Redacted.value(current.credentials.accessToken) !== Redacted.value(rejectedAccessToken)
     )
       return undefined;
-    const refreshed = yield* refreshXaiToken(authPath, current.credentials.refreshToken);
-    return { ...refreshed, source: "authFile" as const } satisfies XaiAuthResultCredentials;
+    return yield* refreshXaiToken(authPath, current.credentials.refreshToken);
   },
 );
 
@@ -293,13 +282,12 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
     if (refreshed._tag === "Success")
       return {
         _tag: "Found",
-        credentials: { ...refreshed.success, source: "authFile" as const },
+        credentials: refreshed.success,
       } as const;
     refreshFailure = refreshed.failure;
     // A failed refresh must not silently flip a still-valid file token over to the
     // model-registry credential source; keep using it until it actually expires.
-    if (auth.accessToken && now < auth.expires)
-      return { _tag: "Found", credentials: auth } as const;
+    if (now < auth.expires) return { _tag: "Found", credentials: auth } as const;
   }
 
   const registryCredentials = yield* getModelRegistryXaiCredentials().pipe(Effect.result);
@@ -308,7 +296,7 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
       _tag: "Found",
       credentials: registryCredentials.success,
     } as const satisfies XaiAuthResult;
-  if (auth?.accessToken && (auth.expires === undefined || now < auth.expires))
+  if (auth && (auth.expires === undefined || now < auth.expires))
     return { _tag: "Found", credentials: auth } as const;
   if (refreshFailure)
     return {

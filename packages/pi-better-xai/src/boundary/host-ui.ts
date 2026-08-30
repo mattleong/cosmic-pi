@@ -81,8 +81,13 @@ export function openSettingsSurfaceAtHostBoundary(
     return neutralSurfaceComponent();
   };
 
+  const opened = invokeHostCallback<PromiseLike<undefined> | undefined>(
+    () => ctx.ui.custom<undefined>(guardedFactory),
+    undefined,
+  );
+  if (opened === undefined) return Promise.resolve("failed");
   try {
-    return Promise.resolve(ctx.ui.custom<undefined>(guardedFactory)).then(
+    return Promise.resolve(opened).then(
       (): XaiHostSurfaceOutcome => (factoryFailed ? "failed" : "closed"),
       (): XaiHostSurfaceOutcome => "failed",
     );

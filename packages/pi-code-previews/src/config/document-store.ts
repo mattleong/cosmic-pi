@@ -3,6 +3,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
+  isJsonObject,
   JsonDocumentError,
   JsonDocumentStore,
   type JsonDocumentModification,
@@ -195,14 +196,10 @@ export function defaultSettingsSaveContext(defaults: CodePreviewSettings): Setti
   };
 }
 
-const RecordSchema = Schema.Record(Schema.String, Schema.Json);
-const isRecord = <Value>(value: Value): value is Value & JsonObject =>
-  Schema.is(RecordSchema)(value);
-
 /** `settings.json` documents contribute settings through their nested `codePreview` object only. */
 export function nestedCodePreviewSettings(document: JsonObject): JsonObject {
   const nested = document.codePreview;
-  return isRecord(nested) ? nested : {};
+  return isJsonObject(nested) ? nested : {};
 }
 
 /** The package `code-previews.json` document carries current setting keys flat at the root only. */

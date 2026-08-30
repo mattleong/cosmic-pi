@@ -1,7 +1,6 @@
 import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -11,13 +10,7 @@ import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import {
-  AgentDirectory,
-  JsonDocumentStore,
-  SafeFile,
-  sanitizeDiagnosticError,
-  StreamingHttpClient,
-} from "pi-cosmic-core";
+import { AgentDirectory, JsonDocumentStore, SafeFile, StreamingHttpClient } from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../config/schema.ts";
@@ -199,22 +192,13 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
             const ctx = MutableRef.get(options.context);
             const cfg = MutableRef.get(options.projection).config;
             const timeoutMs = cfg?.image.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs;
-            return generate(params, ctx, cfg).pipe(Effect.timeout(Duration.millis(timeoutMs)));
-          }).pipe(
-            Effect.mapError((error) => {
-              const message = sanitizeDiagnosticError(
-                Predicate.isObject(error) && Predicate.isString(error.message)
-                  ? error.message
-                  : "OpenAI image request timed out.",
-              );
-              return fail(
-                Predicate.isObject(error) && Predicate.isString(error.operation)
-                  ? error.operation
-                  : "timeout",
-                message,
-              );
-            }),
-          );
+            return generate(params, ctx, cfg).pipe(
+              Effect.timeoutOrElse({
+                duration: timeoutMs,
+                orElse: () => Effect.fail(fail("timeout", "OpenAI image request timed out.")),
+              }),
+            );
+          });
         return { generate: safeGenerate };
       }),
   },

@@ -10,6 +10,7 @@ import * as Predicate from "effect/Predicate";
 import {
   completeSettingsArguments,
   dispatchSettingsCommand,
+  invokeHostCallback,
   redactDiagnosticValue,
 } from "pi-cosmic-core";
 import {
@@ -32,53 +33,6 @@ import { OpenAIUsageService } from "../usage/controller.ts";
 import { settingItemsFromDescriptors, SettingsSubmenu, textPanel } from "./ui/panel.ts";
 
 const OPENAI_SETTINGS_COMMAND = "openai-settings";
-
-function guardHostUi<A>(callback: () => A, fallback: A): A {
-  let result = fallback;
-  safeHostUi(() => {
-    result = callback();
-  });
-  return result;
-}
-
-function quoted(value: string): string {
-  return `"${value
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
-    .replaceAll("\n", "\\n")
-    .replaceAll("\r", "\\r")
-    .replaceAll("\t", "\\t")}"`;
-}
-
-function formatDiagnosticValue<ValueInput>(value: ValueInput, depth = 0): string[] {
-  const indent = "  ".repeat(depth);
-  if (Array.isArray(value)) {
-    if (value.length === 0) return [`${indent}[]`];
-    return [
-      `${indent}[`,
-      ...value.flatMap((entry) => formatDiagnosticValue(entry, depth + 1)),
-      `${indent}]`,
-    ];
-  }
-  if (Predicate.isObject(value)) {
-    const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-    if (entries.length === 0) return [`${indent}{}`];
-    const lines = [`${indent}{`];
-    for (const [key, entry] of entries) {
-      const formatted = formatDiagnosticValue(entry, depth + 1);
-      const prefix = `${"  ".repeat(depth + 1)}${quoted(key)}: `;
-      lines.push(`${prefix}${formatted[0]?.trimStart() ?? "null"}`, ...formatted.slice(1));
-    }
-    lines.push(`${indent}}`);
-    return lines;
-  }
-  const scalar = Predicate.isString(value)
-    ? quoted(value)
-    : value === undefined
-      ? "undefined"
-      : String(value);
-  return [`${indent}${scalar}`];
-}
 
 export function registerSettingsController(
   pi: ExtensionAPI,
@@ -106,16 +60,14 @@ export function registerSettingsController(
     resetFastRoutingTransport,
     run,
   } = options;
-  const descriptors = [
-    {
-      id: "fast.enabled",
-      label: "Fast mode",
-      values: ["true", "false"] as const,
-      description: "Request OpenAI fast mode for supported models.",
-      currentValue: (_cfg: ResolvedConfig) => String(MutableRef.get(fastProjection).desiredActive),
-    },
-    ...SETTINGS_OPTION_DESCRIPTORS,
-  ];
+  const fastEnabledDescriptor = {
+    id: "fast.enabled",
+    label: "Fast mode",
+    values: ["true", "false"] as const,
+    description: `Request OpenAI fast mode. Activates for package-supported models: ${modelList()}.`,
+    currentValue: (_cfg: ResolvedConfig) => String(MutableRef.get(fastProjection).desiredActive),
+  };
+  const descriptors = [fastEnabledDescriptor, ...SETTINGS_OPTION_DESCRIPTORS];
 
   const readRedactedConfig = (ctx: ExtensionContext) =>
     run(
@@ -164,15 +116,6 @@ export function registerSettingsController(
     ).catch(() => undefined);
   };
 
-  const compactionSummary = (cfg: ResolvedConfig) =>
-    cfg.compaction.enabled ? "OpenAI native" : "Pi default";
-  const usageSummary = (cfg: ResolvedConfig) =>
-    cfg.usage.enabled ? `enabled · ${Math.round(cfg.usage.refreshIntervalMs / 1000)}s` : "disabled";
-  const imageSummary = (cfg: ResolvedConfig) =>
-    cfg.image.enabled
-      ? `enabled · ${cfg.image.defaultModel} · ${cfg.image.defaultSave}/${cfg.image.outputFormat}`
-      : "disabled";
-
   const showPicker = (ctx: ExtensionContext): Promise<void> => {
     updateContext(ctx);
     if (!hasTerminalUI(ctx)) {
@@ -200,11 +143,9 @@ export function registerSettingsController(
             let outerList: SettingsList | undefined;
             const fastItems = (): SettingItem[] => [
               {
-                id: "fast.enabled",
-                label: "Fast mode",
-                currentValue: String(MutableRef.get(fastProjection).desiredActive),
-                values: ["true", "false"],
-                description: `Request OpenAI fast mode. Activates for package-supported models: ${modelList()}.`,
+                ...fastEnabledDescriptor,
+                currentValue: fastEnabledDescriptor.currentValue(cfg),
+                values: [...fastEnabledDescriptor.values],
               },
               ...settingItemsFromDescriptors(FAST_SETTING_DESCRIPTORS, cfg),
             ];
@@ -239,7 +180,11 @@ export function registerSettingsController(
                 currentValue: "open",
                 description: "Show the selected raw config with sensitive fields redacted.",
                 submenu: (_value, complete) =>
-                  textPanel("Redacted config", formatDiagnosticValue(redactedConfig), complete),
+                  textPanel(
+                    "Redacted config",
+                    JSON.stringify(redactedConfig, null, 2).split("\n"),
+                    complete,
+                  ),
               },
             ];
             const submenu = (
@@ -255,6 +200,46 @@ export function registerSettingsController(
                 done: complete,
                 summary,
               });
+            const settingsGroups = [
+              {
+                id: "section.compaction",
+                label: "Compaction",
+                description: "Use OpenAI native compaction when Pi triggers compaction.",
+                submenuTitle: "Compaction settings",
+                descriptors: COMPACTION_SETTING_DESCRIPTORS,
+                summary: () => (cfg.compaction.enabled ? "OpenAI native" : "Pi default"),
+              },
+              {
+                id: "section.footer",
+                label: "Footer",
+                description: "Configure Better OpenAI footer ownership.",
+                submenuTitle: "Footer settings",
+                descriptors: FOOTER_SETTING_DESCRIPTORS,
+                summary: () => cfg.footer.mode,
+              },
+              {
+                id: "section.usage",
+                label: "Usage",
+                description: "Configure subscription usage fetching and display.",
+                submenuTitle: "Usage settings",
+                descriptors: USAGE_SETTING_DESCRIPTORS,
+                summary: () =>
+                  cfg.usage.enabled
+                    ? `enabled · ${Math.round(cfg.usage.refreshIntervalMs / 1000)}s`
+                    : "disabled",
+              },
+              {
+                id: "section.image",
+                label: "Image tool",
+                description: "Configure OpenAI image generation defaults.",
+                submenuTitle: "Image tool settings",
+                descriptors: IMAGE_SETTING_DESCRIPTORS,
+                summary: () =>
+                  cfg.image.enabled
+                    ? `enabled · ${cfg.image.defaultModel} · ${cfg.image.defaultSave}/${cfg.image.outputFormat}`
+                    : "disabled",
+              },
+            ];
             const sections = (): SettingsSurfaceItem[] => [
               {
                 kind: "group",
@@ -267,62 +252,22 @@ export function registerSettingsController(
                     settingsSummary(ctx, MutableRef.get(fastProjection)),
                   ),
               },
-              {
-                kind: "group",
-                id: "section.compaction",
-                label: "Compaction",
-                currentValue: compactionSummary(cfg),
-                description: "Use OpenAI native compaction when Pi triggers compaction.",
-                submenu: (_value, complete) =>
-                  submenu(
-                    "Compaction settings",
-                    () => settingItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, cfg),
-                    complete,
-                    () => compactionSummary(cfg),
-                  ),
-              },
-              {
-                kind: "group",
-                id: "section.footer",
-                label: "Footer",
-                currentValue: cfg.footer.mode,
-                description: "Configure Better OpenAI footer ownership.",
-                submenu: (_value, complete) =>
-                  submenu(
-                    "Footer settings",
-                    () => settingItemsFromDescriptors(FOOTER_SETTING_DESCRIPTORS, cfg),
-                    complete,
-                    () => cfg.footer.mode,
-                  ),
-              },
-              {
-                kind: "group",
-                id: "section.usage",
-                label: "Usage",
-                currentValue: usageSummary(cfg),
-                description: "Configure subscription usage fetching and display.",
-                submenu: (_value, complete) =>
-                  submenu(
-                    "Usage settings",
-                    () => settingItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, cfg),
-                    complete,
-                    () => usageSummary(cfg),
-                  ),
-              },
-              {
-                kind: "group",
-                id: "section.image",
-                label: "Image tool",
-                currentValue: imageSummary(cfg),
-                description: "Configure OpenAI image generation defaults.",
-                submenu: (_value, complete) =>
-                  submenu(
-                    "Image tool settings",
-                    () => settingItemsFromDescriptors(IMAGE_SETTING_DESCRIPTORS, cfg),
-                    complete,
-                    () => imageSummary(cfg),
-                  ),
-              },
+              ...settingsGroups.map(
+                (group): SettingsSurfaceItem => ({
+                  kind: "group",
+                  id: group.id,
+                  label: group.label,
+                  currentValue: group.summary(),
+                  description: group.description,
+                  submenu: (_value, complete) =>
+                    submenu(
+                      group.submenuTitle,
+                      () => settingItemsFromDescriptors(group.descriptors, cfg),
+                      complete,
+                      group.summary,
+                    ),
+                }),
+              ),
               {
                 kind: "group",
                 id: "section.diagnostics",
@@ -334,7 +279,7 @@ export function registerSettingsController(
               },
             ];
             const reconcilePicker = () =>
-              guardHostUi(() => {
+              invokeHostCallback(() => {
                 const nextConfig = pickerConfig(ctx);
                 if (nextConfig) cfg = nextConfig;
                 if (outerList)
@@ -377,7 +322,7 @@ export function registerSettingsController(
               requestRender: () => safeHostUi(() => tui.requestRender()),
               dim: (text) => theme.fg("dim", text),
               bridge: {
-                invoke: guardHostUi,
+                invoke: invokeHostCallback,
                 afterInput: () => safeHostUi(() => tui.requestRender()),
               },
             });

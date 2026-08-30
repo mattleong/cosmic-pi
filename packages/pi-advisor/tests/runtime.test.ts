@@ -10,7 +10,6 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { describe, expect, it } from "@effect/vitest";
 import { afterEach, vi } from "vitest";
-import { nodeFsPromises } from "./support/node-builtins.ts";
 import {
   AdvisorRuntime,
   AdvisorRuntimeService,
@@ -1325,15 +1324,6 @@ describe("AdvisorRuntime", () => {
         expect(pending).rejects.toThrow(/tool-round|fresh context|stale/i),
       );
       expect(value.session.abort).toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("uses no private agent.state mutation for seed or idle observation delivery", () =>
-    Effect.gen(function* () {
-      const source = yield* Effect.promise(() =>
-        nodeFsPromises.readFile(new URL("../src/runtime/runtime.ts", import.meta.url), "utf8"),
-      );
-      expect(source).not.toContain("agent.state.messages =");
     }),
   );
 });

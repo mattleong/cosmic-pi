@@ -11,7 +11,7 @@ The interpreter is the nested `pi-code-mode-runtime` workspace package under `ru
 0003). Its TypeScript source ships in this package and loads through one computed relative import
 in `src/boundary/codemode-runtime.ts`. The nested package name is never resolved at runtime, so a
 packed install needs no private registry package and uses the extension's single Effect instance.
-Only runtime source and legal or provenance documents ship.
+Only runtime source plus its README, legal, and provenance documents ship.
 
 ## Grouped ownership
 
@@ -25,8 +25,9 @@ Only runtime source and legal or provenance documents ship.
   result formatting, failure-detail retention, tool registration, active-list reconciliation,
   and renderer ticker cleanup.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
-  legacy details, `tool-renderer.ts` renders calls and results, and `result-output.ts` projects
-  small structured results without changing model-visible text.
+  legacy details, ignores malformed rows, and retains valid explicit totals. `tool-renderer.ts`
+  renders calls and results, while `result-output.ts` projects small structured results without
+  changing model-visible text.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
   Windows PowerShell, the explicit Background Tasks protocol client, the guarded progress
   publisher, Pi dialog adapters, and the process-memory deactivation handoff.
@@ -132,8 +133,9 @@ caught overruns cannot create free diagnostic text.
 Progress starts immediately. Queued admission and decoded running labels publish synchronously;
 status-only changes coalesce to a 16 ms host frame, and settlement flushes the latest snapshot.
 Rows never contain nested output. Selection prioritizes active, failed, cancelled, and recent rows
-within 32 visible slots, while exact counts include hidden calls. Selected rows and counts are
-copied before host publication, so a hostile `onUpdate` cannot alter execution state.
+within 32 visible slots, while exact counts include hidden calls and drive the hidden-row marker.
+Selected rows and counts are copied before host publication, so a hostile `onUpdate` cannot alter
+execution state.
 
 The renderer owns a weak 160 ms ticker. Missing or hostile state, invalidation, keybindings, clock,
 and ticker callbacks fall back without affecting execution. The controller captures sanitized

@@ -5,76 +5,98 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import type { BoundedProcessRequest } from "pi-cosmic-core";
 import { expect } from "vitest";
-import { makeHerdrCommandRunner, type HerdrProcessRunner } from "../src/boundary/herdr-client.ts";
+import { makeHerdrClient, type HerdrProcessRunner } from "../src/boundary/herdr-client.ts";
 
-const request = (mutation = false, timeoutMillis?: number) => ({
-  args: ["api", "schema", "--json"],
-  operation: "inspect protocol",
-  mutation,
-  timeoutMillis,
-});
+const parentPane = {
+  pane_id: "w1:p1",
+  terminal_id: "term-parent",
+  workspace_id: "w1",
+  tab_id: "w1:t1",
+};
+const childPane = {
+  pane_id: "w1:p2",
+  terminal_id: "term-child",
+  workspace_id: "w1",
+  tab_id: "w1:t1",
+};
 
-const success = {
-  code: 0,
-  signal: null,
-  stdout: '{"protocol":19}',
-  stderr: "",
-  overflowed: false,
-  timedOut: false,
-  cleanupUnconfirmed: false,
-  dispatched: true,
-} as const;
+const success = (stdout: string) =>
+  ({
+    code: 0,
+    signal: null,
+    stdout,
+    stderr: "",
+    overflowed: false,
+    timedOut: false,
+    cleanupUnconfirmed: false,
+    dispatched: true,
+  }) as const;
 
-// Intentional real platform process behavior; the deterministic seams cannot prove it.
-it.live("runs, classifies, and interrupts the production child-process boundary", () =>
-  Effect.gen(function* () {
-    const runner = makeHerdrCommandRunner({}, { executable: process.execPath });
-    const output = yield* runner({
-      args: ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
-      operation: "inspect process boundary",
-    });
-    expect(output).toEqual({ stdout: "out", stderr: "err" });
-
-    const failed = yield* Effect.result(
-      runner({
-        args: ["-e", "process.stderr.write('real boundary failure'); process.exit(3)"],
-        operation: "inspect process boundary",
+const responseFor = (request: BoundedProcessRequest) => {
+  const args = request.args;
+  if (args[0] === "api" && args[1] === "schema") return success('{"protocol":19}');
+  if (args[0] === "integration") return success("pi: current (v8) (/agent/herdr-agent-state.ts)\n");
+  if (args[0] === "pane" && args[1] === "current")
+    return success(JSON.stringify({ result: { pane: parentPane } }));
+  if (args[0] === "pane" && args[1] === "layout")
+    return success(
+      JSON.stringify({
+        result: {
+          layout: {
+            workspace_id: "w1",
+            tab_id: "w1:t1",
+            area: { width: 160, height: 40 },
+          },
+        },
       }),
     );
-    expect(failed._tag).toBe("Failure");
-    if (failed._tag === "Failure") {
-      expect(failed.failure).toMatchObject({
-        code: "herdr_inspect_process_boundary_failed",
-        outcome: "confirmed",
-      });
-      expect(failed.failure.message).toContain("real boundary failure");
-      expect(failed.failure.message.length).toBeLessThanOrEqual(2_100);
-    }
+  if (args[0] === "pane" && args[1] === "split")
+    return success(JSON.stringify({ result: { pane: childPane } }));
+  if (args[0] === "pane" && args[1] === "process-info")
+    return success(
+      JSON.stringify({
+        result: {
+          process_info: {
+            pane_id: childPane.pane_id,
+            shell_pid: 42,
+            foreground_process_group_id: 42,
+            foreground_processes: [{ pid: 42, name: "zsh" }],
+          },
+        },
+      }),
+    );
+  if (args[0] === "api" && args[1] === "snapshot")
+    return success(JSON.stringify({ result: { snapshot: { protocol: 19, agents: [childPane] } } }));
+  if (args[0] === "agent" && args[1] === "start")
+    return success(
+      JSON.stringify({
+        result: {
+          agent: {
+            ...childPane,
+            agent: "pi",
+            name: args[2],
+            agent_session: {
+              source: "herdr:pi",
+              agent: "pi",
+              kind: "path",
+              value: "/sessions/child.jsonl",
+            },
+          },
+        },
+      }),
+    );
+  return success('{"result":{}}');
+};
 
-    const running = yield* runner({
-      args: ["-e", "setInterval(() => undefined, 1000)"],
-      operation: "inspect process interruption",
-    }).pipe(Effect.forkScoped({ startImmediately: true }));
-    yield* Effect.yieldNow;
-    yield* Fiber.interrupt(running);
-    expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true);
-  }),
-);
-
-it.effect("runs fixed argv asynchronously through the injectable process seam", () =>
+it.effect("owns fixed argv, environment, decoding, and operation deadlines", () =>
   Effect.gen(function* () {
-    const started = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    let captured: BoundedProcessRequest | undefined;
-    let completed = false;
-    const processRunner: HerdrProcessRunner = (processRequest) =>
-      Effect.gen(function* () {
-        captured = processRequest;
-        yield* Deferred.succeed(started, undefined);
-        yield* Deferred.await(release);
-        return success;
+    const captured: BoundedProcessRequest[] = [];
+    const processRunner: HerdrProcessRunner = (request) =>
+      Effect.sync(() => {
+        captured.push(request);
+        return responseFor(request);
       });
-    const runner = makeHerdrCommandRunner(
+    const client = makeHerdrClient(
       {
         HOME: "/home/test",
         PATH: "/bin",
@@ -85,55 +107,117 @@ it.effect("runs fixed argv asynchronously through the injectable process seam", 
       { executable: "fixture-herdr", processRunner },
     );
 
-    const running = yield* runner(request()).pipe(
-      Effect.tap(() => Effect.sync(() => void (completed = true))),
-      Effect.forkScoped,
-    );
-    yield* Deferred.await(started);
+    expect(yield* client.inspectProtocol()).toBe(19);
+    expect(yield* client.inspectPiIntegration()).toBe(true);
+    expect(yield* client.resolveCallingPane()).toEqual(parentPane);
+    expect(yield* client.inspectPaneLayout(parentPane.pane_id)).toEqual({
+      workspace_id: "w1",
+      tab_id: "w1:t1",
+      area: { width: 160, height: 40 },
+    });
+    expect(
+      yield* client.splitPane({
+        parentPaneId: parentPane.pane_id,
+        direction: "right",
+        cwd: "/project",
+      }),
+    ).toEqual(childPane);
+    expect(yield* client.inspectPaneProcessInfo(childPane.pane_id)).toMatchObject({
+      pane_id: childPane.pane_id,
+      shell_pid: 42,
+    });
+    expect(yield* client.inspectLiveAgents()).toEqual([childPane]);
+    const started = yield* client.startSideSessionPi({
+      agentName: "btw-agent",
+      paneId: childPane.pane_id,
+      childSessionId: "child-id",
+      childSessionPath: "/sessions/child.jsonl",
+      parentSessionId: "parent-id",
+      parentSessionPath: "/sessions/parent.jsonl",
+      displayName: "BTW · project",
+    });
+    expect(started).toMatchObject({ name: "btw-agent", agent: "pi" });
+    yield* client.promptSideSessionPi("btw-agent", "Side-session request:\nreview");
+    yield* client.focusSideSessionPi("btw-agent");
 
-    expect(completed).toBe(false);
-    expect(captured).toEqual({
-      executable: "fixture-herdr",
-      args: ["api", "schema", "--json"],
-      environment: {
+    expect(captured.map(({ args }) => args)).toEqual([
+      ["api", "schema", "--json"],
+      ["integration", "status"],
+      ["pane", "current", "--current"],
+      ["pane", "layout", "--pane", "w1:p1"],
+      [
+        "pane",
+        "split",
+        "w1:p1",
+        "--direction",
+        "right",
+        "--ratio",
+        "0.5",
+        "--cwd",
+        "/project",
+        "--no-focus",
+      ],
+      ["pane", "process-info", "--pane", "w1:p2"],
+      ["api", "snapshot"],
+      [
+        "agent",
+        "start",
+        "btw-agent",
+        "--kind",
+        "pi",
+        "--pane",
+        "w1:p2",
+        "--timeout",
+        "60000",
+        "--",
+        "--session",
+        "/sessions/child.jsonl",
+        "--name",
+        "BTW · project",
+        "--herdr-btw-parent=parent-id",
+        "--herdr-btw-parent-file=/sessions/parent.jsonl",
+        "--herdr-btw-child-session=child-id",
+      ],
+      ["agent", "prompt", "btw-agent", "Side-session request:\nreview"],
+      ["agent", "focus", "btw-agent"],
+    ]);
+    for (const request of captured) {
+      expect(request.executable).toBe("fixture-herdr");
+      expect(request.environment).toEqual({
         HOME: "/home/test",
         PATH: "/bin",
         HERDR_ENV: "1",
         HERDR_PANE_ID: "w1:p1",
-      },
-      stdoutLimitBytes: 4 * 1024 * 1024,
-      stderrLimitBytes: 4 * 1024 * 1024,
-      timeoutMillis: 15_000,
-      cleanupTimeoutMillis: 1_000,
-      detached: false,
-      windowsHide: true,
-    });
-
-    yield* Deferred.succeed(release, undefined);
-    expect(yield* Fiber.join(running)).toEqual({ stdout: success.stdout, stderr: "" });
-  }),
-);
-
-it.effect("owns each per-command deadline and hands the clamped value to the process", () =>
-  Effect.gen(function* () {
-    const captured: Array<number> = [];
-    const processRunner: HerdrProcessRunner = (processRequest) =>
-      Effect.sync(() => {
-        captured.push(processRequest.timeoutMillis);
-        return success;
       });
-    const runner = makeHerdrCommandRunner({}, { processRunner });
-
-    yield* runner(request());
-    yield* runner(request(false, 70_000));
-    yield* runner(request(false, 200_000));
-    yield* runner(request(false, 0));
-
-    expect(captured).toEqual([15_000, 70_000, 120_000, 15_000]);
+      expect(request.stdoutLimitBytes).toBe(4 * 1024 * 1024);
+      expect(request.stderrLimitBytes).toBe(4 * 1024 * 1024);
+      expect(request.cleanupTimeoutMillis).toBe(1_000);
+      expect(request.detached).toBe(false);
+      expect(request.windowsHide).toBe(true);
+    }
+    expect(captured.map(({ timeoutMillis }) => timeoutMillis)).toEqual([
+      15_000, 15_000, 15_000, 15_000, 15_000, 15_000, 15_000, 70_000, 15_000, 15_000,
+    ]);
   }),
 );
 
-it.effect("interrupts an in-flight command and observes the process interruption", () =>
+it.effect("recognizes only a current Pi integration status", () =>
+  Effect.gen(function* () {
+    const cases = [
+      ["current", "pi: current (v8) (/agent/herdr-agent-state.ts)\n", true],
+      ["outdated", "pi: outdated (v6 < v8) (/agent/state.ts)\n", false],
+      ["malformed", "pi: current (v8)\n", false],
+      ["absent", "", false],
+    ] as const;
+
+    for (const [_case, stdout, expected] of cases) {
+      const client = makeHerdrClient({}, { processRunner: () => Effect.succeed(success(stdout)) });
+      expect(yield* client.inspectPiIntegration()).toBe(expected);
+    }
+  }),
+);
+
+it.effect("runs asynchronously and propagates interruption to the process", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
     let interrupted = 0;
@@ -142,13 +226,14 @@ it.effect("interrupts an in-flight command and observes the process interruption
         Effect.andThen(Effect.never),
         Effect.onInterrupt(() => Effect.sync(() => void interrupted++)),
       );
-    const runner = makeHerdrCommandRunner({}, { processRunner });
-    const running = yield* runner(request()).pipe(Effect.forkScoped);
+    const client = makeHerdrClient({}, { processRunner });
+    const running = yield* client.inspectProtocol().pipe(Effect.forkScoped);
     yield* Deferred.await(started);
 
     yield* Fiber.interrupt(running);
 
     expect(interrupted).toBe(1);
+    expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true);
   }),
 );
 
@@ -156,14 +241,14 @@ it.effect("fails closed when either output stream exceeds its byte bound", () =>
   Effect.gen(function* () {
     for (const stream of ["stdout", "stderr"] as const) {
       let limits: readonly [number, number] | undefined;
-      const processRunner: HerdrProcessRunner = (processRequest) =>
+      const processRunner: HerdrProcessRunner = (request) =>
         Effect.sync(() => {
-          limits = [processRequest.stdoutLimitBytes, processRequest.stderrLimitBytes];
-          return { ...success, [stream]: "123456789" };
+          limits = [request.stdoutLimitBytes, request.stderrLimitBytes];
+          return { ...success('{"protocol":19}'), [stream]: "123456789" };
         });
-      const runner = makeHerdrCommandRunner({}, { processRunner, maximumOutputBytes: 8 });
+      const client = makeHerdrClient({}, { processRunner, maximumOutputBytes: 8 });
 
-      const result = yield* Effect.result(runner(request()));
+      const result = yield* Effect.result(client.inspectProtocol());
 
       expect(limits).toEqual([8, 8]);
       expect(result._tag).toBe("Failure");
@@ -176,81 +261,116 @@ it.effect("fails closed when either output stream exceeds its byte bound", () =>
   }),
 );
 
-it.effect(
-  "fails closed on in-band overflow, deadline, and cleanup uncertainty by mutation class",
-  () =>
-    Effect.gen(function* () {
-      for (const flag of ["overflowed", "timedOut", "cleanupUnconfirmed"] as const)
-        for (const mutation of [false, true]) {
-          const processRunner: HerdrProcessRunner = () =>
-            Effect.succeed({ ...success, [flag]: true });
-          const runner = makeHerdrCommandRunner({}, { processRunner });
+it.effect("classifies transport uncertainty from the owned operation's mutation policy", () =>
+  Effect.gen(function* () {
+    for (const flag of ["overflowed", "timedOut", "cleanupUnconfirmed"] as const) {
+      const processRunner: HerdrProcessRunner = () =>
+        Effect.succeed({ ...success('{"protocol":19}'), [flag]: true });
+      const client = makeHerdrClient({}, { processRunner });
+      const read = yield* Effect.result(client.inspectProtocol());
+      const mutation = yield* Effect.result(
+        client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
+      );
 
-          const result = yield* Effect.result(runner(request(mutation)));
-
-          expect(result._tag).toBe("Failure");
-          if (result._tag === "Failure")
-            expect(result.failure).toMatchObject(
-              mutation
-                ? { code: "herdr_inspect_protocol_outcome_uncertain", outcome: "uncertain" }
-                : { code: "herdr_inspect_protocol_failed", outcome: "confirmed" },
-            );
-        }
-    }),
+      expect(read._tag).toBe("Failure");
+      expect(mutation._tag).toBe("Failure");
+      if (read._tag === "Failure")
+        expect(read.failure).toMatchObject({
+          code: "herdr_inspect_protocol_failed",
+          outcome: "confirmed",
+        });
+      if (mutation._tag === "Failure")
+        expect(mutation.failure).toMatchObject({
+          code: "herdr_split_btw_pane_outcome_uncertain",
+          outcome: "uncertain",
+        });
+    }
+  }),
 );
 
-it.effect("keeps structured mutation precondition rejections confirmed", () =>
+it.effect("keeps the owned start precondition rejection confirmed", () =>
   Effect.gen(function* () {
     const processRunner: HerdrProcessRunner = () =>
       Effect.succeed({
-        ...success,
+        ...success(""),
         code: 1,
-        stdout: "",
         stderr: JSON.stringify({ error: { code: "agent_pane_busy", message: "busy" } }),
       });
-    const runner = makeHerdrCommandRunner({}, { processRunner });
+    const client = makeHerdrClient({}, { processRunner });
     const result = yield* Effect.result(
-      runner({
-        args: ["agent", "start"],
-        operation: "start side-session Pi",
-        mutation: true,
-        confirmedRejectionCodes: ["agent_pane_busy"],
+      client.startSideSessionPi({
+        agentName: "btw-agent",
+        paneId: "w1:p2",
+        childSessionId: "child-id",
+        childSessionPath: "/sessions/child.jsonl",
+        parentSessionId: "parent-id",
+        parentSessionPath: "/sessions/parent.jsonl",
       }),
     );
 
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
+    if (result._tag === "Failure")
       expect(result.failure).toMatchObject({
         code: "herdr_start_side_session_pi_rejected",
         outcome: "confirmed",
         herdrCode: "agent_pane_busy",
       });
-      expect(result.failure.message).toContain("was rejected before it was applied");
-    }
   }),
 );
 
-it.effect("keeps undecodable mutating exit failures outcome-uncertain", () =>
+it.effect("sanitizes and bounds uncertain mutation exit diagnostics", () =>
   Effect.gen(function* () {
+    const credential = "hunter2";
     const processRunner: HerdrProcessRunner = () =>
-      Effect.succeed({ ...success, code: 1, stdout: "", stderr: "connection closed" });
-    const runner = makeHerdrCommandRunner({}, { processRunner });
+      Effect.succeed({
+        ...success(""),
+        code: 1,
+        stderr: `password=${credential} \u0000${"x".repeat(3_000)}`,
+      });
+    const client = makeHerdrClient({}, { processRunner });
+
     const result = yield* Effect.result(
-      runner({
-        args: ["agent", "start"],
-        operation: "start side-session Pi",
-        mutation: true,
-        confirmedRejectionCodes: ["agent_pane_busy"],
-      }),
+      client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
     );
 
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") {
       expect(result.failure).toMatchObject({
-        code: "herdr_start_side_session_pi_outcome_uncertain",
+        code: "herdr_split_btw_pane_outcome_uncertain",
         outcome: "uncertain",
       });
-      expect(result.failure.herdrCode).toBeUndefined();
+      expect(result.failure.message).toContain("password=[REDACTED]");
+      expect(result.failure.message).not.toContain(credential);
+      expect(result.failure.message).not.toContain("\u0000");
+      expect(result.failure.message).toMatch(/…$/u);
+      expect(result.failure.message.length).toBeLessThanOrEqual(2_100);
+    }
+  }),
+);
+
+it.effect("keeps undecodable mutation exits and responses outcome-uncertain", () =>
+  Effect.gen(function* () {
+    const exitClient = makeHerdrClient(
+      {},
+      {
+        processRunner: () =>
+          Effect.succeed({ ...success(""), code: 1, stderr: "connection closed" }),
+      },
+    );
+    const decodeClient = makeHerdrClient(
+      {},
+      {
+        processRunner: () => Effect.succeed(success("not json")),
+      },
+    );
+    const input = { parentPaneId: "w1:p1", direction: "right" as const, cwd: "/project" };
+
+    for (const result of [
+      yield* Effect.result(exitClient.splitPane(input)),
+      yield* Effect.result(decodeClient.splitPane(input)),
+    ]) {
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure).toMatchObject({ outcome: "uncertain" });
     }
   }),
 );

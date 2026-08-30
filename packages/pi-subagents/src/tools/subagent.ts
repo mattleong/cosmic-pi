@@ -1,24 +1,10 @@
 // Pi tool execution is a Promise-shaped host boundary.
 import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
 import { withCodePreviewShell } from "pi-code-previews";
-import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
-import { SubagentBackendRegistry } from "../backend/service.ts";
-import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import { startHostUiTicker } from "../boundary/host-ui.ts";
-import type { ProfileCandidate, ProfileId, ProfileRouteSource } from "../profiles/model.ts";
-import { SubagentProfileService } from "../profiles/service.ts";
-import type {
-  SubagentEffort,
-  SubagentHost,
-  SubagentRuntime,
-  SubagentWriteIntent,
-} from "../domain/routing.ts";
-import type { FailedStartRecovery, SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
-import { SubagentService } from "../run/service.ts";
 import { decodeStartAwaitCardDetails } from "./details.ts";
-import { executeSubagentAction } from "./execute.ts";
+import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
@@ -51,83 +37,6 @@ export type {
   SubagentStatusInput,
   SubagentToolInput,
 } from "./schema.ts";
-
-export interface SubagentStartFailure {
-  readonly index: number;
-  readonly name?: string;
-  readonly message: string;
-  /** Machine-actionable failure code (specific validation code or the error tag). */
-  readonly code?: string;
-  /** Present only when launch admission occurred and complete cleanup facts have settled. */
-  readonly admittedRun?: FailedStartRecovery;
-}
-
-export interface SubagentStartResolvedRoute {
-  readonly profile: string;
-  readonly host: SubagentHost;
-  readonly runtime: SubagentRuntime;
-  readonly model: string;
-  readonly effort: SubagentEffort;
-  readonly openaiFastMode: boolean;
-  readonly candidateIndex?: number | undefined;
-  readonly warning?: string | undefined;
-}
-
-export type SubagentStartOutcome =
-  | {
-      readonly index: number;
-      readonly run: SubagentRunView;
-    }
-  | {
-      readonly index: number;
-      readonly failure: SubagentStartFailure;
-      /** Present only after a concrete route/model was selected and attempted. */
-      readonly resolvedRoute?: SubagentStartResolvedRoute | undefined;
-    };
-
-export interface SubagentActionFailure {
-  readonly id: string;
-  readonly message: string;
-  /** Machine-actionable failure code (specific validation code or the error tag). */
-  readonly code?: string;
-}
-
-export interface ProfileCandidateDiscovery extends ProfileCandidate {
-  readonly status: "eligible" | "skipped";
-  readonly reason: string;
-}
-
-export interface SubagentProfileView {
-  readonly id: ProfileId;
-  readonly description: string;
-  readonly source: ProfileRouteSource;
-  readonly isDefault: boolean;
-  readonly defaultContext: "fresh" | "fork";
-  readonly defaultWriteIntent: SubagentWriteIntent;
-  readonly defaultEffort?: SubagentEffort | undefined;
-  readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;
-}
-
-export interface SubagentToolRuntime {
-  readonly environment: SubagentSessionEnvironment;
-  /** Private nested-Pi transport. Public/root registrations leave this absent. */
-  readonly proxyCall?:
-    | ((
-        input: import("./schema.ts").SubagentToolInput,
-        signal: AbortSignal | undefined,
-        onUpdate:
-          | import("@earendil-works/pi-coding-agent").AgentToolUpdateCallback<unknown>
-          | undefined,
-        ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
-      ) => Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>>)
-    | undefined;
-  readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
-  readonly toolPresentation?: SubagentToolPresentation | undefined;
-  readonly run: <A, E>(
-    effect: Effect.Effect<A, E, SubagentService | SubagentProfileService | SubagentBackendRegistry>,
-    signal?: AbortSignal,
-  ) => Promise<A>;
-}
 
 export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRuntime): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
@@ -245,10 +154,10 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: SUBAGENT_TOOL_NAMES[4],
     label: "Wait for Subagents",
     description:
-      "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Awaited targets control completion and report claims; bounded visible descendants appear only as hierarchy context. Returns early if a target needs a parent reply, then call it again after subagent_reply. A retained target in reported state counts as finished for its current assignment.",
+      "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Awaited targets control completion and report claims; bounded visible descendants appear only as hierarchy context. Returns early when a target has a real parent question, is paused, or has writer admission paused. Follow the returned parent-action steps, then await again. A retained target in reported state counts as finished for its current assignment.",
     promptSnippet: "Wait at a dependency or synthesis barrier for selected subagent reports",
     promptGuidelines: [
-      "Use subagent_await only when progress or final synthesis depends on selected reports; otherwise continue independent work and let unclaimed completion reports arrive automatically. Do not poll subagent_status. If subagent_await returns for a parent question, use subagent_reply and then call subagent_await again; use subagent_status only for troubleshooting or a user-requested snapshot.",
+      "Use subagent_await only when progress or final synthesis depends on selected reports; otherwise continue independent work and let unclaimed completion reports arrive automatically. Do not poll subagent_status. When await returns for parent action, execute the ordered recovery it prints, then await again. Reply only to a real parent question. For claim containment, review the audit, optionally grant only intended workspace-relative claims to the confirmed paused offender, resume admission, then lifecycle-resume with authoritative claims. If the backend cannot resume or the write was outside the workspace, stop and confirm cleanup, resume admission, launch a corrected replacement, and await it. For an ordinary pause, resume if supported or stop and replace. Use subagent_status only for troubleshooting or a user-requested snapshot.",
     ],
     parameters: AwaitParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
@@ -340,11 +249,12 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: SUBAGENT_TOOL_NAMES[9],
     label: "Manage Writer Claims",
     description:
-      "Inspect, grant, or revoke exact cooperative file claims for active shared-cwd writers, or resume writer admission after reviewing a claim violation. Grant and revoke require the worker to be blocked on a parent claim question with no other active tool. This coordinates native edit, write, and Bash; it does not replace or sandbox them.",
+      "Inspect, grant, or revoke exact cooperative file claims for active shared-cwd writers, or resume writer admission after reviewing a claim violation. Grant and revoke require either a worker blocked on a parent claim question or the confirmed paused violation offender. In both cases no other tool may be active. Ordinary paused writers and non-offending peers remain ineligible. This coordinates native edit, write, and Bash; it does not replace or sandbox them.",
     promptSnippet: "Coordinate exact file ownership for shared-cwd writer pools",
     promptGuidelines: [
       "When a writer requests another file, grant it with subagent_claims before replying. Only the parent grants or transfers claims.",
-      "Revoke or transfer a claim only while its current owner is waiting on a parent claim question with no other active tool. Resume paused writer admission only after inspecting the violation and shared tree.",
+      "For a confirmed paused claim offender, inspect the audit and shared tree. Grant only intended workspace-relative missing files, if any. Then call resume_admission, lifecycle-resume with the authoritative claim set and guidance, and await again. Do not use subagent_reply for claim containment.",
+      "If the offender cannot resume or targeted an outside-workspace path, stop it and confirm cleanup before resume_admission. Launch a corrected replacement with exact safe claims, then await the replacement. Never reopen admission, resume work, or launch a replacement without the parent choosing that action.",
     ],
     parameters: ClaimsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>

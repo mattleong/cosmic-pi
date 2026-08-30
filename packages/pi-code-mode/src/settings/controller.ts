@@ -92,9 +92,6 @@ const scopeDisplayValue = (
 };
 
 type ApplyRequest = Extract<CodeModeSettingsDispatch, { readonly _tag: "Apply" | "Clear" }>;
-type ApplyOutcome =
-  | { readonly _tag: "Applied"; readonly state: CodeModeState }
-  | { readonly _tag: "Rejected"; readonly message: string };
 
 export interface CodeModeSettingsControllerOptions {
   snapshot(): CodeModeState | undefined;
@@ -153,20 +150,6 @@ export function registerCodeModeSettingsController(
       : feedback(ctx, UNAVAILABLE_MESSAGE, "warning");
   };
 
-  const settingEffect = (
-    request: ApplyRequest,
-  ): Effect.Effect<ApplyOutcome, never, CodeModeConfigStore> =>
-    CodeModeConfigStore.use((store) =>
-      request._tag === "Apply"
-        ? store.setSetting(request.scope, request.id, request.value)
-        : store.clearSetting(request.scope, request.id),
-    ).pipe(
-      Effect.map((state): ApplyOutcome => ({ _tag: "Applied", state })),
-      Effect.catch((error) =>
-        Effect.succeed<ApplyOutcome>({ _tag: "Rejected", message: error.message }),
-      ),
-    );
-
   const applySettingEffect = (
     ctx: ExtensionCommandContext,
     request: ApplyRequest,
@@ -174,27 +157,32 @@ export function registerCodeModeSettingsController(
     updateDisplay?: (currentValue: string) => void,
     notifySuccess = true,
   ): Effect.Effect<void, never, CodeModeConfigStore> =>
-    settingEffect(request).pipe(
-      Effect.tap((outcome) =>
-        Effect.sync(() => {
-          if (!active()) return;
-          if (outcome._tag === "Rejected") {
-            notifyAtHostBoundary(ctx, outcome.message, "error");
+    CodeModeConfigStore.use((store) =>
+      request._tag === "Apply"
+        ? store.setSetting(request.scope, request.id, request.value)
+        : store.clearSetting(request.scope, request.id),
+    ).pipe(
+      Effect.matchEffect({
+        onFailure: (error) =>
+          Effect.sync(() => {
+            if (!active()) return;
+            notifyAtHostBoundary(ctx, error.message, "error");
             invokeHostCallback(
               () => updateDisplay?.(scopeDisplayValue(snapshot(), request.scope, request.id)),
               undefined,
             );
-            return;
-          }
-          const display = scopeDisplayValue(outcome.state, request.scope, request.id);
-          if (updateDisplay) invokeHostCallback(() => updateDisplay(display), undefined);
-          else if (notifySuccess)
-            notifyAtHostBoundary(ctx, `${request.scope} ${request.id} = ${display}`, "info");
-          if (request.id === "enabled")
-            notifyAtHostBoundary(ctx, availabilityLine(outcome.state), "info");
-        }),
-      ),
-      Effect.asVoid,
+          }),
+        onSuccess: (state) =>
+          Effect.sync(() => {
+            if (!active()) return;
+            const display = scopeDisplayValue(state, request.scope, request.id);
+            if (updateDisplay) invokeHostCallback(() => updateDisplay(display), undefined);
+            else if (notifySuccess)
+              notifyAtHostBoundary(ctx, `${request.scope} ${request.id} = ${display}`, "info");
+            if (request.id === "enabled")
+              notifyAtHostBoundary(ctx, availabilityLine(state), "info");
+          }),
+      }),
     );
 
   const applySetting = (

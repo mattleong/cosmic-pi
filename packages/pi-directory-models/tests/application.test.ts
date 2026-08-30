@@ -154,13 +154,14 @@ const harness = (
     };
     // SAFETY: Tests invoke only the ExtensionContext members implemented by this fixture.
     ctx = contextFixture as typeof contextFixture & ExtensionContext;
-    registerDirectoryModelsApplication(pi, () => options.explicitModel ?? false);
+    registerDirectoryModelsApplication(pi, options.explicitModel ?? false);
 
     const emit = <Event>(name: string, event: Event): Effect.Effect<void> =>
       Effect.promise(() => Promise.resolve(handlers.get(name)?.(event, ctx)).then(() => undefined));
     const start = (reason: "startup" | "new" | "resume" | "fork" | "reload" = "startup") =>
       emit("session_start", { type: "session_start", reason });
     const shutdown = () => emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+    yield* Effect.addFinalizer(() => shutdown());
 
     return {
       cwd,

@@ -92,12 +92,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         () => undefined,
         () => undefined,
       );
-    const forwardEvent = (
-      name: string,
-      event: AdvisorApplicationEvent,
-      ctx: ExtensionContext,
-    ): Promise<void> =>
-      ignoreFailure(runController((controller) => controller.event(name, event, ctx)));
+    const forwardEvent = (input: AdvisorApplicationEvent, ctx: ExtensionContext): Promise<void> =>
+      ignoreFailure(runController((controller) => controller.event(input, ctx)));
 
     pi.registerCommand("advisor", {
       description: ADVISOR_COMMAND_DESCRIPTION,
@@ -123,16 +119,20 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     pi.on("session_tree", (_event, ctx) =>
       ignoreFailure(runController((controller) => controller.tree(ctx))),
     );
-    pi.on("message_end", (event, ctx) => forwardEvent("message_end", event, ctx));
-    pi.on("turn_start", (event, ctx) => forwardEvent("turn_start", event, ctx));
-    pi.on("message_update", (event, ctx) => forwardEvent("message_update", event, ctx));
-    pi.on("tool_execution_start", (event, ctx) => forwardEvent("tool_execution_start", event, ctx));
-    pi.on("tool_execution_update", (event, ctx) =>
-      forwardEvent("tool_execution_update", event, ctx),
+    pi.on("message_end", (event, ctx) => forwardEvent({ type: "message_end", event }, ctx));
+    pi.on("turn_start", (event, ctx) => forwardEvent({ type: "turn_start", event }, ctx));
+    pi.on("message_update", (event, ctx) => forwardEvent({ type: "message_update", event }, ctx));
+    pi.on("tool_execution_start", (event, ctx) =>
+      forwardEvent({ type: "tool_execution_start", event }, ctx),
     );
-    pi.on("tool_execution_end", (event, ctx) => forwardEvent("tool_execution_end", event, ctx));
-    pi.on("agent_settled", (event, ctx) => forwardEvent("agent_settled", event, ctx));
-    pi.on("turn_end", (event, ctx) => forwardEvent("turn_end", event, ctx));
+    pi.on("tool_execution_update", (event, ctx) =>
+      forwardEvent({ type: "tool_execution_update", event }, ctx),
+    );
+    pi.on("tool_execution_end", (event, ctx) =>
+      forwardEvent({ type: "tool_execution_end", event }, ctx),
+    );
+    pi.on("agent_settled", (event, ctx) => forwardEvent({ type: "agent_settled", event }, ctx));
+    pi.on("turn_end", (event, ctx) => forwardEvent({ type: "turn_end", event }, ctx));
   };
 }
 

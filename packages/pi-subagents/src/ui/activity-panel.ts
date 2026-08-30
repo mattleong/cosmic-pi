@@ -9,11 +9,11 @@ import {
   type SubagentRunView,
 } from "../run/model.ts";
 import { fleetTreeBranch, projectFleetTree, type FleetTreeRow } from "./fleet-tree.ts";
-import { aggregateUsage, formatDuration } from "./metrics.ts";
+import { aggregateUsage } from "./metrics.ts";
 import { subagentUiRefreshCadence, type SubagentUiRefreshCadence } from "./refresh.ts";
+import { formatSessionAge, projectRunRoutePresentation, shortRunId } from "./run-presentation.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
 
-const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 const RUN_ID_COLLATOR = new Intl.Collator("en", { numeric: true });
 
 export type SubagentActivityAwaitMode = "all_finished" | "any_finished";
@@ -107,15 +107,8 @@ export const subagentActivityPanelCadence = (
 ): SubagentUiRefreshCadence | undefined =>
   subagentUiRefreshCadence(panel.trackedRuns, { includePausedElapsed: true });
 
-const shortRunId = (id: string): string => (id.length <= 14 ? id : `…${id.slice(-13)}`);
-
-const runElapsed = (run: SubagentRunView, now: number): string => {
-  const end = run.endedAt ?? now;
-  const age = end - run.startedAt;
-  return Number.isFinite(age) && age >= 0 && age <= MAX_SESSION_DISPLAY_AGE
-    ? formatDuration(age)
-    : "";
-};
+const runElapsed = (run: SubagentRunView, now: number): string =>
+  formatSessionAge(run.endedAt ?? now, run.startedAt);
 
 const runActivity = (run: SubagentRunView): string => {
   if (run.state === "waiting_for_parent" || run.state === "paused") return runStateLabel(run.state);
@@ -231,16 +224,7 @@ const renderRunRoute = (
   layout: RunRouteLayout,
   dimmed: boolean,
 ): string => {
-  const profile = sanitizeTerminalLine(run.profile ?? "generalist");
-  const hostRuntime = `${sanitizeTerminalLine(run.host)}/${sanitizeTerminalLine(run.runtime)}`;
-  const providerModel = sanitizeTerminalLine(run.model);
-  const providerSeparator = providerModel.indexOf("/");
-  const modelName =
-    providerSeparator < 0 ? providerModel : providerModel.slice(providerSeparator + 1);
-  const effort = sanitizeTerminalLine(run.effort);
-  const fast = run.openaiFastMode ? " ⚡" : "";
-  const model = `${providerModel}:${effort}${fast}`;
-  const narrowModel = `${modelName}:${effort}${fast}`;
+  const { profile, hostRuntime, model, narrowModel } = projectRunRoutePresentation(run);
   const plain =
     layout === "model"
       ? `${profile} · ${narrowModel}`

@@ -146,6 +146,8 @@ export interface SubagentRunView {
   readonly writeClaims?: ReadonlyArray<string> | undefined;
   readonly writeAudit?: SubagentWriteAudit | undefined;
   readonly writeAdmissionPaused?: boolean | undefined;
+  /** This run is in the current pool pause's authoritative offender set. */
+  readonly writeViolationOffender?: boolean | undefined;
   readonly openaiFastMode: boolean;
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -251,6 +253,17 @@ export const hasSubagentCapability = (
   run: Pick<SubagentRunView, "capabilities">,
   capability: SubagentCapability,
 ): boolean => run.capabilities.includes(capability);
+
+/** Parent orchestration must act before an await can make useful progress. */
+export const isParentActionRequiredRun = (
+  run: Pick<SubagentRunView, "state" | "writeAdmissionPaused" | "writeViolationOffender"> & {
+    readonly question?: unknown;
+  },
+): boolean =>
+  (run.state === "waiting_for_parent" && run.question !== undefined) ||
+  run.state === "paused" ||
+  (run.writeAdmissionPaused === true &&
+    (run.writeViolationOffender !== true || isTerminalRunState(run.state)));
 
 export const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "starting",

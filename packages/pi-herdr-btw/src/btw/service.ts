@@ -1,16 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
-import {
-  AgentEnvelopeSchema,
-  LayoutEnvelopeSchema,
-  PaneEnvelopeSchema,
-  SnapshotEnvelopeSchema,
-  herdrCommand,
-  makeHerdrCommandRunner,
-  type HerdrCommandRunner,
-  type HerdrPane,
-} from "../boundary/herdr-client.ts";
+import { HerdrClient, type HerdrPane } from "../boundary/herdr-client.ts";
 import type { HerdrBtwLinkStore } from "../boundary/host-link-store.ts";
 import {
   isValidParentSessionFile,
@@ -27,7 +18,7 @@ import {
 } from "../boundary/session-file.ts";
 import { HerdrBtwError } from "./errors.ts";
 import type { HerdrBtwLink } from "./link.ts";
-import { herdrBtwParentMarkerArguments, parseHerdrBtwSessionId } from "./marker.ts";
+import { parseHerdrBtwSessionId } from "./marker.ts";
 import { makeAgentName, selectSplitDirection, sideSessionPrompt } from "./policy.ts";
 import {
   agentChildSessionPath,
@@ -38,7 +29,6 @@ import {
   waitForAvailableShell,
 } from "./validation.ts";
 
-const START_TIMEOUT_MILLIS = 70_000;
 const NEW_COMMAND_GUIDANCE = "Run /herdr-btw:new to create a fresh BTW session.";
 
 const retainPaneFailure = (
@@ -61,12 +51,11 @@ export interface HerdrBtwResult {
 }
 
 interface HerdrBtwServiceOptions {
-  readonly runner?: HerdrCommandRunner | undefined;
   readonly validateSessionFile?: ((path: string) => boolean) | undefined;
   readonly probeSessionHeader?: ((path: string) => SessionHeaderProbe) | undefined;
   readonly createChildSessionId?: (() => string) | undefined;
   readonly createBlankChildSessionFile?:
-    | ((input: BlankChildSessionFileInput) => BlankChildSessionFileResult)
+    | ((input: BlankChildSessionFileInput) => Effect.Effect<BlankChildSessionFileResult>)
     | undefined;
 }
 
@@ -88,21 +77,16 @@ interface PreparedCreateTarget {
   readonly childSessionPath: string;
 }
 
-export interface HerdrBtwServiceContract {
-  readonly open: (prompt?: string | undefined) => Effect.Effect<HerdrBtwResult, HerdrBtwError>;
-  readonly openNew: (prompt?: string | undefined) => Effect.Effect<HerdrBtwResult, HerdrBtwError>;
-}
-
 export const makeHerdrBtwService = (
   input: HerdrBtwSessionInput,
   linkStore: HerdrBtwLinkStore,
   options: HerdrBtwServiceOptions = {},
-): Effect.Effect<HerdrBtwServiceContract> =>
+) =>
   Effect.gen(function* () {
     // One permit serializes commands in this runtime. Fresh Herdr snapshots
     // separately guard observed live-session reuse across runtimes.
     const gate = yield* Semaphore.make(1);
-    const runner = options.runner ?? makeHerdrCommandRunner(input.environment);
+    const herdr = yield* HerdrClient;
     const validateSessionFile = options.validateSessionFile ?? isValidParentSessionFile;
     const probeSessionHeader = options.probeSessionHeader ?? probeSessionHeaderAtBoundary;
     const createChildSessionId = options.createChildSessionId ?? createChildSessionIdAtBoundary;
@@ -133,7 +117,7 @@ export const makeHerdrBtwService = (
             message: "The parent Pi session directory is unavailable.",
             outcome: "confirmed",
           });
-        const created = yield* Effect.try({
+        const creation = yield* Effect.try({
           try: () =>
             createBlankChildSessionFile({
               sessionDir,
@@ -148,6 +132,7 @@ export const makeHerdrBtwService = (
               outcome: "confirmed",
             }),
         });
+        const created = yield* creation;
         if (created._tag !== "created")
           return yield* new HerdrBtwError({
             operation: "create blank child session",
@@ -170,16 +155,7 @@ export const makeHerdrBtwService = (
         return { mode: "create", childSessionId, childSessionPath: created.path };
       });
 
-    const freshSnapshotAgents = Effect.suspend(() =>
-      Effect.map(
-        herdrCommand(runner, {
-          args: ["api", "snapshot"],
-          operation: "inspect live agents",
-          schema: SnapshotEnvelopeSchema,
-        }),
-        ({ result }) => result.snapshot.agents,
-      ),
-    );
+    const freshSnapshotAgents = Effect.suspend(() => herdr.inspectLiveAgents());
 
     const deliverAndFocus = (
       agentName: string,
@@ -190,20 +166,10 @@ export const makeHerdrBtwService = (
         const promptResult =
           prompt === undefined
             ? undefined
-            : yield* Effect.result(
-                runner({
-                  args: ["agent", "prompt", agentName, sideSessionPrompt(prompt)],
-                  operation: "prompt side-session Pi",
-                  mutation: true,
-                }),
-              );
-        const focusResult = yield* Effect.result(
-          runner({
-            args: ["agent", "focus", agentName],
-            operation: "focus side-session Pi",
-            mutation: true,
-          }),
-        );
+            : yield* Effect.result(herdr.promptSideSessionPi(agentName, sideSessionPrompt(prompt)));
+        // Focus is attempted after prompt settlement even when prompt delivery
+        // failed or its mutation outcome is uncertain.
+        const focusResult = yield* Effect.result(herdr.focusSideSessionPi(agentName));
         if (promptResult?._tag === "Failure")
           return yield* retainPaneFailure(
             promptResult.failure,
@@ -225,22 +191,11 @@ export const makeHerdrBtwService = (
       sessionId: string,
     ): Effect.Effect<HerdrBtwResult, HerdrBtwError> =>
       Effect.gen(function* () {
-        yield* ensurePiIntegration(runner);
+        yield* ensurePiIntegration(herdr);
 
-        const parentPane = (yield* herdrCommand(runner, {
-          args: ["pane", "current", "--current"],
-          operation: "resolve calling pane",
-          schema: PaneEnvelopeSchema,
-        })).result.pane;
-        const { result: layoutResult } = yield* herdrCommand(runner, {
-          args: ["pane", "layout", "--pane", parentPane.pane_id],
-          operation: "inspect calling pane layout",
-          schema: LayoutEnvelopeSchema,
-        });
-        if (
-          layoutResult.layout.workspace_id !== parentPane.workspace_id ||
-          layoutResult.layout.tab_id !== parentPane.tab_id
-        )
+        const parentPane = yield* herdr.resolveCallingPane();
+        const layout = yield* herdr.inspectPaneLayout(parentPane.pane_id);
+        if (layout.workspace_id !== parentPane.workspace_id || layout.tab_id !== parentPane.tab_id)
           return yield* new HerdrBtwError({
             operation: "inspect calling pane layout",
             code: "herdr_parent_topology_mismatch",
@@ -248,24 +203,12 @@ export const makeHerdrBtwService = (
             outcome: "confirmed",
           });
 
-        const direction = selectSplitDirection(layoutResult.layout.area.width);
-        const btwPane = (yield* herdrCommand(runner, {
-          args: [
-            "pane",
-            "split",
-            parentPane.pane_id,
-            "--direction",
-            direction,
-            "--ratio",
-            "0.5",
-            "--cwd",
-            input.cwd,
-            "--no-focus",
-          ],
-          operation: "split BTW pane",
-          mutation: true,
-          schema: PaneEnvelopeSchema,
-        })).result.pane;
+        const direction = selectSplitDirection(layout.area.width);
+        const btwPane = yield* herdr.splitPane({
+          parentPaneId: parentPane.pane_id,
+          direction,
+          cwd: input.cwd,
+        });
         return yield* Effect.gen(function* () {
           if (
             btwPane.pane_id === parentPane.pane_id ||
@@ -280,14 +223,13 @@ export const makeHerdrBtwService = (
               outcome: "uncertain",
             });
 
-          yield* waitForAvailableShell(runner, btwPane.pane_id);
+          yield* waitForAvailableShell(herdr, btwPane.pane_id);
 
           const preparedTarget =
             target.mode === "create"
               ? yield* prepareFreshLaunchTarget(target.childSessionId)
               : target;
           const agentName = makeAgentName(sessionId, btwPane.pane_id);
-          const displayName = parentBtwDisplayName(input.cwd);
           const childSessionId =
             preparedTarget.mode === "create"
               ? preparedTarget.childSessionId
@@ -296,11 +238,6 @@ export const makeHerdrBtwService = (
             preparedTarget.mode === "create"
               ? preparedTarget.childSessionPath
               : preparedTarget.link.childSessionPath;
-          const markerArguments = herdrBtwParentMarkerArguments(
-            sessionId,
-            sessionFile,
-            childSessionId,
-          );
           if (preparedTarget.mode === "resume") {
             const newlyLive = (yield* freshSnapshotAgents).filter(
               (agent) => agentChildSessionPath(agent) === preparedTarget.link.childSessionPath,
@@ -312,32 +249,18 @@ export const makeHerdrBtwService = (
                 "The linked child session became live while its new pane was being prepared; no second Pi was started.",
               );
           }
-          const piArguments =
-            preparedTarget.mode === "create"
-              ? ["--session", childSessionPath, "--name", displayName, ...markerArguments]
-              : ["--session", childSessionPath, ...markerArguments];
-          const { result: startedResult } = yield* herdrCommand(runner, {
-            args: [
-              "agent",
-              "start",
-              agentName,
-              "--kind",
-              "pi",
-              "--pane",
-              btwPane.pane_id,
-              "--timeout",
-              "60000",
-              "--",
-              ...piArguments,
-            ],
-            operation: "start side-session Pi",
-            mutation: true,
-            timeoutMillis: START_TIMEOUT_MILLIS,
-            confirmedRejectionCodes: ["agent_pane_busy"],
-            schema: AgentEnvelopeSchema,
+          const startedAgent = yield* herdr.startSideSessionPi({
+            agentName,
+            paneId: btwPane.pane_id,
+            childSessionId,
+            childSessionPath,
+            parentSessionId: sessionId,
+            parentSessionPath: sessionFile,
+            displayName:
+              preparedTarget.mode === "create" ? parentBtwDisplayName(input.cwd) : undefined,
           });
           yield* validateStartedAgent(
-            startedResult.agent,
+            startedAgent,
             btwPane,
             agentName,
             sessionFile,
@@ -366,7 +289,7 @@ export const makeHerdrBtwService = (
             childSessionId,
             childSessionPath,
             agentName,
-            terminalId: startedResult.agent.terminal_id,
+            terminalId: startedAgent.terminal_id,
           });
           if (!recorded)
             return yield* new HerdrBtwError({
@@ -434,19 +357,13 @@ export const makeHerdrBtwService = (
         );
       if (restoration._tag === "none") {
         const childSessionId = yield* freshChildSessionId;
-        yield* ensureHerdrProtocol(runner);
+        yield* ensureHerdrProtocol(herdr);
         return yield* launch({ mode: "create", childSessionId }, prompt, sessionFile, sessionId);
       }
 
+      // The link store has already filtered copied ancestor entries against the
+      // captured owner before returning a restored link.
       const link = restoration.link;
-      // Native forks copy custom entries. Ignore a reusable link inherited
-      // from an ancestor session instead of adopting that ancestor's child.
-      if (link.parentSessionId !== sessionId || link.parentSessionPath !== sessionFile) {
-        const childSessionId = yield* freshChildSessionId;
-        yield* ensureHerdrProtocol(runner);
-        return yield* launch({ mode: "create", childSessionId }, prompt, sessionFile, sessionId);
-      }
-
       const probe = probeSessionHeader(link.childSessionPath);
       if (
         link.childSessionPath === sessionFile ||
@@ -460,7 +377,7 @@ export const makeHerdrBtwService = (
           "The linked child session file is missing, replaced, or no longer matches the recorded blank side session.",
         );
 
-      yield* ensureHerdrProtocol(runner);
+      yield* ensureHerdrProtocol(herdr);
       const liveAgents = (yield* freshSnapshotAgents).filter(
         (agent) => agentChildSessionPath(agent) === link.childSessionPath,
       );
@@ -477,16 +394,17 @@ export const makeHerdrBtwService = (
         validateSessionFile,
       );
       const childSessionId = yield* freshChildSessionId;
-      yield* ensureHerdrProtocol(runner);
+      yield* ensureHerdrProtocol(herdr);
       return yield* launch({ mode: "create", childSessionId }, prompt, sessionFile, sessionId);
     });
 
-    const serialized = gate.withPermits(1);
     return {
-      open: (prompt?: string | undefined) => serialized(openInner(prompt)),
-      openNew: (prompt?: string | undefined) => serialized(openNewInner(prompt)),
-    } satisfies HerdrBtwServiceContract;
+      open: (prompt?: string | undefined) => gate.withPermit(openInner(prompt)),
+      openNew: (prompt?: string | undefined) => gate.withPermit(openNewInner(prompt)),
+    };
   });
+
+export type HerdrBtwServiceContract = Effect.Success<ReturnType<typeof makeHerdrBtwService>>;
 
 export class HerdrBtwService extends Context.Service<HerdrBtwService, HerdrBtwServiceContract>()(
   "pi-herdr-btw/btw/service/HerdrBtwService",

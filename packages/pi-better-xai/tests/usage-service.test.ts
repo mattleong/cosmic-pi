@@ -49,12 +49,10 @@ const usageSnapshot = (monthlyUsed: number, weeklyUsedPercent: number): UsageSna
   weeklyResetInSeconds: null,
   monthlyUsed,
   monthlyLimit: 1_000,
-  monthlyUsedPercent: monthlyUsed / 10,
   monthlyLeftPercent: 100 - monthlyUsed / 10,
   monthlyResetInSeconds: null,
   onDemandCap: 500,
   onDemandUsed: 100,
-  isLimited: false,
 });
 
 describe("XaiUsageService", () => {

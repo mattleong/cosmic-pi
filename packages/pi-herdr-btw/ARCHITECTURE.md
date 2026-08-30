@@ -4,11 +4,11 @@
 
 ## Ownership and lifecycle
 
-`src/extension.ts` is the registration entry. `src/application.ts` owns Pi event and command wiring. `src/layer.ts` composes the session-scoped `HerdrBtwService` Layer.
+`src/extension.ts` is the registration entry. `src/application.ts` owns Pi event and command wiring. `src/layer.ts` composes `HerdrClient` into the session-scoped `HerdrBtwService` Layer, so the live application exposes only the workflow service.
 
 `session_start` captures the guarded host session and constructs one managed runtime. The runtime owns command serialization and the Herdr workflows. The session slot publishes the immutable child parent-reference capability only from its generation-checked `onActivated` hook and clears it during deactivation. `session_shutdown` disposes the runtime but does not close panes or child sessions.
 
-The two commands are TUI-only. A single Effect semaphore serializes calls within one extension runtime. Prompt text reaches the command directly and is passed to Herdr as one bounded argument.
+The two commands are TUI-only. A single Effect semaphore serializes calls within one extension runtime. Command handlers resolve with `HerdrBtwResult`; typed workflow failures and runtime rejection remain Promise failures that the TUI controller reports through the same bounded notification path. Prompt text reaches the command directly and is passed to Herdr as one bounded argument.
 
 ## Reusable side session
 
@@ -18,9 +18,9 @@ The parent stores a versioned `pi-herdr-btw/reusable-link` custom entry. Each li
 - the child session ID and path
 - the live Herdr agent name and terminal ID
 
-Parent ownership fields matter because native Pi forks copy custom entries. Restoration ignores links owned by ancestor sessions. A malformed unscoped or current-owner record fails closed.
+Parent ownership fields matter because native Pi forks copy custom entries. The link store filters copied ancestor entries before returning a restoration, so the workflow does not repeat that ownership check. A malformed unscoped or current-owner record fails closed.
 
-A new side session does not use `--fork`. After the new pane reaches a stable shell, the session-file boundary exclusively creates a blank persisted Pi header with a preassigned child ID and no `parentSession` lineage. The service validates that file, then starts Pi with `--session` so the child is resumable even before its first assistant message. It validates the header again after startup and only then appends the reusable link. This commit remains authoritative if later optional prompt delivery or focus fails, because the child already exists and must not become orphaned.
+A new side session does not use `--fork`. After the new pane reaches a stable shell, the session-file boundary reads the Effect clock and exclusively creates a 0600 blank Pi header with `wx`, a preassigned child ID, and no `parentSession` lineage. The service validates that file, then starts Pi with `--session` so the child is resumable even before its first assistant message. It validates the header again after startup and only then appends the reusable link. This commit remains authoritative if later optional prompt delivery or focus fails, because the child already exists and must not become orphaned.
 
 Reuse validates the linked child header before reading live Herdr state. A fresh bounded `herdr api snapshot` has three outcomes:
 
@@ -47,8 +47,8 @@ The synchronous reference value is a plain host projection. The generation-check
 
 ## Boundaries
 
-- `src/boundary/herdr-client.ts` owns the fixed `herdr` executable, bounded argv execution, mutation outcome classification, and Effect Schema decoding for pane, agent, process, layout, protocol, and snapshot responses.
-- `src/boundary/session-file.ts` owns cryptographic child IDs, exclusive blank-session creation, and bounded read-only session-header probes. It opens probes with no-follow and nonblocking flags, verifies the descriptor is a regular file, and never uses `SessionManager`, so validation cannot migrate or rewrite a session.
+- `src/boundary/herdr-client.ts` defines the typed `HerdrClient` service. It alone owns the fixed `herdr` executable, every argument array and deadline, the selected environment, mutation outcome classification, and Effect Schema decoding for pane, agent, process, layout, protocol, and snapshot responses. Workflows call semantic operations and tests replace this owned client rather than the CLI transport.
+- `src/boundary/session-file.ts` owns cryptographic child IDs, Effect-clock blank-session creation, and the shared regular non-symlink session-file check used by parent validation and header probes. It opens read-only descriptors with `O_NOFOLLOW` and nonblocking flags, verifies each descriptor is a regular file, bounds header reads, and never uses `SessionManager`, so validation cannot migrate or rewrite a session.
 - `src/boundary/host-link-store.ts` is the single persistence door over `pi.appendEntry` and read-only parent session entries.
 - `src/btw/service.ts` is the service door. `src/btw/validation.ts` contains internal preflight, shell-readiness, and native identity checks. `src/btw/link.ts`, `marker.ts`, and `policy.ts` hold schemas and pure policy.
 - `src/parent-link/` contains pure reference resolution, prompt formatting, and the synchronous Pi host bridge.

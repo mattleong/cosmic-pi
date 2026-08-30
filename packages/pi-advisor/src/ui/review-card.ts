@@ -6,11 +6,10 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { redactSensitiveText } from "../domain/redaction.ts";
 import type { AdvisorReview } from "../review/schema.ts";
-import { isRecord } from "../shared/utils.ts";
+import { isJsonObject } from "pi-cosmic-core";
 
 export const ADVISOR_REVIEW_CARD_TYPE = "pi-advisor-review-card-v1";
 export const ADVISOR_REVIEW_ACTION_TYPE = "pi-advisor-review-action-v1";
-export const ADVISOR_REVIEW_CARD_VERSION = 1 as const;
 const MAX_CARD_ITEMS = 5;
 const MAX_SUMMARY = 800;
 const MAX_FIELD = 1_200;
@@ -88,12 +87,15 @@ export function makeAdvisorReviewCard(
 export function decodeAdvisorReviewCard<ValueInput>(
   value: ValueInput,
 ): AdvisorReviewCard | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["version", "cardId", "kind", "summary", "items"]))
+  if (
+    !isJsonObject(value) ||
+    !hasOnlyKeys(value, ["version", "cardId", "kind", "summary", "items"])
+  )
     return undefined;
   if (
     Array.isArray(value.items) &&
     value.items.some(
-      (item) => !isRecord(item) || !hasOnlyKeys(item, ["issue", "evidence", "suggestedFix"]),
+      (item) => !isJsonObject(item) || !hasOnlyKeys(item, ["issue", "evidence", "suggestedFix"]),
     )
   )
     return undefined;
@@ -123,7 +125,9 @@ export function decodeAdvisorReviewCard<ValueInput>(
 export function decodeAdvisorReviewAction<ValueInput>(
   value: ValueInput,
 ): AdvisorReviewAction | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["version", "cardId", "action"])) return undefined;
+  if (!isJsonObject(value) || !hasOnlyKeys(value, ["version", "cardId", "action"])) {
+    return undefined;
+  }
   const decoded = Schema.decodeUnknownOption(ReviewActionWireSchema, {
     onExcessProperty: "error",
   })(value);

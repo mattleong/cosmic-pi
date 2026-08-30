@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { getBuiltinToolOptions, type BuiltinToolOptions } from "../builtin-options";
 import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../names";
 import { getEnabledCodePreviewTools } from "../selection";
@@ -18,46 +18,22 @@ export interface RegisterToolRenderersOptions {
   projectTrusted?: boolean;
 }
 
-type ToolInstallerFactory = (
-  pi: ExtensionAPI,
-  cwd: string,
-  options: BuiltinToolOptions,
-) => () => void;
+type AnyToolDefinition = ToolDefinition<any, any, any>;
+type ToolDefinitionFactory = (cwd: string, options: BuiltinToolOptions) => AnyToolDefinition;
 
-const TOOL_INSTALLER_FACTORIES = {
-  bash: (pi, cwd, options) => {
-    const definition = createBashPreviewTool(cwd, options.bash);
-    return () => pi.registerTool(definition);
-  },
-  read: (pi, cwd, options) => {
-    const definition = createReadPreviewTool(cwd, options.read);
-    return () => pi.registerTool(definition);
-  },
-  write: (pi, cwd) => {
-    const definition = createWritePreviewTool(cwd);
-    return () => pi.registerTool(definition);
-  },
-  edit: (pi, cwd) => {
-    const definition = createEditPreviewTool(cwd);
-    return () => pi.registerTool(definition);
-  },
-  grep: (pi, cwd) => {
-    const definition = createGrepPreviewTool(cwd);
-    return () => pi.registerTool(definition);
-  },
-  find: (pi, cwd) => {
-    const definition = createFindPreviewTool(cwd);
-    return () => pi.registerTool(definition);
-  },
-  ls: (pi, cwd) => {
-    const definition = createLsPreviewTool(cwd);
-    return () => pi.registerTool(definition);
-  },
-} satisfies Record<CodePreviewToolName, ToolInstallerFactory>;
+const TOOL_DEFINITION_FACTORIES = {
+  bash: (cwd, options) => createBashPreviewTool(cwd, options.bash),
+  read: (cwd, options) => createReadPreviewTool(cwd, options.read),
+  write: (cwd) => createWritePreviewTool(cwd),
+  edit: (cwd) => createEditPreviewTool(cwd),
+  grep: (cwd) => createGrepPreviewTool(cwd),
+  find: (cwd) => createFindPreviewTool(cwd),
+  ls: (cwd) => createLsPreviewTool(cwd),
+} satisfies Record<CodePreviewToolName, ToolDefinitionFactory>;
 
 type PlannedTool = {
   readonly name: CodePreviewToolName;
-  readonly install: () => void;
+  readonly definition: AnyToolDefinition;
 };
 
 export function registerToolRenderers(
@@ -67,7 +43,7 @@ export function registerToolRenderers(
 ): void {
   const enabledTools = getEnabledCodePreviewTools();
   resetCodePreviewToolStatuses(enabledTools);
-  const existingTools = getExistingToolsByName(pi);
+  const existingTools = new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
   const toolOptions =
     options.toolOptions ?? getBuiltinToolOptions(cwd, options.projectTrusted ?? false);
   const plan: PlannedTool[] = [];
@@ -85,13 +61,13 @@ export function registerToolRenderers(
       continue;
     }
 
-    plan.push({ name, install: TOOL_INSTALLER_FACTORIES[name](pi, cwd, toolOptions) });
+    plan.push({ name, definition: TOOL_DEFINITION_FACTORIES[name](cwd, toolOptions) });
   }
 
-  for (const { name, install } of plan) {
+  for (const { name, definition } of plan) {
     try {
       options.ownedTools?.add(name);
-      install();
+      pi.registerTool(definition);
     } catch {
       setCodePreviewToolStatus(name, { state: "registration-error" });
       continue;
@@ -99,8 +75,4 @@ export function registerToolRenderers(
     options.installedTools?.add(name);
     setCodePreviewToolStatus(name, { state: "installed" });
   }
-}
-
-function getExistingToolsByName(pi: ExtensionAPI): Map<string, ToolInfo> {
-  return new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
 }

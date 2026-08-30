@@ -20,7 +20,7 @@ import {
 
 export function registerDirectoryModelsApplication(
   pi: ExtensionAPI,
-  hasExplicitModel: () => boolean = captureExplicitModelArgument,
+  explicitModel: boolean = captureExplicitModelArgument(),
 ): void {
   const warn = (ctx: ExtensionContext, message: string) =>
     notifyAtHostBoundary(ctx, message, "warning");
@@ -42,13 +42,7 @@ export function registerDirectoryModelsApplication(
     const captured = captureDirectorySession(event, ctx);
     if (!captured) {
       warn(ctx, "Directory model preferences are unavailable for this session.");
-      return slot.shutdown().then(() => undefined);
-    }
-    let explicitModel = false;
-    try {
-      explicitModel = hasExplicitModel();
-    } catch {
-      // Host CLI inspection is best effort; ordinary directory preference behavior remains safe.
+      return slot.shutdown();
     }
     return slot
       .start(

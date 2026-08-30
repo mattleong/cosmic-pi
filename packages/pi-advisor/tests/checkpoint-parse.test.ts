@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it, test } from "@effect/vitest";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedTracer } from "pi-cosmic-core/testing";
-import { classifyFailure } from "../src/application/controller-helpers.ts";
+import { classifyFailure } from "../src/domain/runtime-error-classifier.ts";
 import {
   MAX_ADVISOR_EVIDENCE_CHARS,
   MAX_ADVISOR_FINDINGS,

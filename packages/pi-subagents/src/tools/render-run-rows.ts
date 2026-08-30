@@ -1,6 +1,12 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
+import { aggregateUsage, formatUsage } from "../ui/metrics.ts";
+import {
+  formatSessionAge,
+  projectRunRoutePresentation,
+  shortRunId,
+} from "../ui/run-presentation.ts";
 import {
   animatedRunStateGlyph,
   runStateColor,
@@ -8,18 +14,7 @@ import {
   runStateLabel,
 } from "../ui/run-state.ts";
 import type { SubagentRunCard } from "./details.ts";
-import { aggregateUsage, formatDuration, formatUsage } from "../ui/metrics.ts";
 import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
-
-const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
-
-const shortRunId = (id: string): string => (id.length <= 14 ? id : `…${id.slice(-13)}`);
-
-const displayAge = (later: number, earlier: number | undefined): string => {
-  if (earlier === undefined) return "";
-  const age = later - earlier;
-  return age >= 0 && age <= MAX_SESSION_DISPLAY_AGE ? formatDuration(age) : "";
-};
 
 export const runTiming = (run: {
   readonly endedAt?: number | undefined;
@@ -27,8 +22,8 @@ export const runTiming = (run: {
   readonly startedAt?: number | undefined;
 }): string => {
   const now = synchronousNow();
-  const elapsed = displayAge(run.endedAt ?? now, run.startedAt);
-  const activeAge = run.endedAt === undefined ? displayAge(now, run.lastActivityAt) : "";
+  const elapsed = formatSessionAge(run.endedAt ?? now, run.startedAt);
+  const activeAge = run.endedAt === undefined ? formatSessionAge(now, run.lastActivityAt) : "";
   const active = activeAge ? `active ${activeAge} ago` : "";
   return [elapsed, active].filter(Boolean).join(" · ");
 };
@@ -38,17 +33,18 @@ export const aggregateRunUsage = aggregateUsage;
 const padVisible = (value: string, width: number): string =>
   `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
 
-const runProfile = (run: SubagentRunCard): string =>
-  sanitizeTerminalLine(run.profile ?? "generalist");
+const runRoute = (run: SubagentRunCard): string => {
+  const route = projectRunRoutePresentation(run);
+  return `${route.profile} → ${route.hostRuntime} · ${route.model}`;
+};
 
-const runRoute = (run: SubagentRunCard): string =>
-  `${runProfile(run)} → ${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.openaiFastMode ? " ⚡" : ""}`;
-
-const themedRunRoute = (run: SubagentRunCard, theme: Theme): string =>
-  `${theme.fg("muted", runProfile(run))} ${theme.fg("dim", "→")} ${theme.fg(
+const themedRunRoute = (run: SubagentRunCard, theme: Theme): string => {
+  const route = projectRunRoutePresentation(run);
+  return `${theme.fg("muted", route.profile)} ${theme.fg("dim", "→")} ${theme.fg(
     "toolOutput",
-    `${run.host ?? "local"}/${run.runtime ?? "pi"} · ${sanitizeTerminalLine(run.model)}:${run.effort}${run.openaiFastMode ? " ⚡" : ""}`,
+    `${route.hostRuntime} · ${route.model}`,
   )}`;
+};
 
 const renderRouteRail = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const prefix = width > 5 ? "     " : "   ";

@@ -1,6 +1,5 @@
 import * as Predicate from "effect/Predicate";
 
-import { stringifyJson } from "../boundary/json.ts";
 import { createHash } from "node:crypto";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -15,8 +14,8 @@ import {
   sanitizeInterventionBudgetSnapshot,
   type AdvisorInterventionBudgetSnapshot,
 } from "../review/intervention-budget.ts";
-import type { AdvisorFindingCategory, AdvisorReview, AdvisorSeverity } from "../review/schema.ts";
-import { isRecord } from "../shared/utils.ts";
+import type { AdvisorReview } from "../review/schema.ts";
+import { isJsonObject } from "pi-cosmic-core";
 
 export const ADVISOR_CHECKPOINT_ENTRY_TYPE = "pi-advisor-checkpoint";
 export const ADVISOR_CHECKPOINT_PROTOCOL_VERSION = 3;
@@ -53,10 +52,10 @@ const FindingLifecycleWireSchema = Schema.Struct({
 const InterventionBudgetWireSchema = Schema.Struct({
   delivered: NonNegativeIntSchema,
   correctionUsed: Schema.Boolean,
-  highestSeverity: Schema.optional(Schema.Literals(["concern", "blocker"])),
+  highestSeverity: Schema.optionalKey(Schema.Literals(["concern", "blocker"])),
 });
 const AdvisorCheckpointLedgerInputSchema = Schema.Struct({
-  protocolVersion: Schema.Literal(3),
+  protocolVersion: Schema.Literal(ADVISOR_CHECKPOINT_PROTOCOL_VERSION),
   fingerprint: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/i)),
   anchorId: Schema.String.check(Schema.isNonEmpty()),
   reviewSummary: ReviewSummaryWireSchema,
@@ -70,7 +69,7 @@ const AdvisorCheckpointLedgerInputSchema = Schema.Struct({
   ).check(Schema.isMaxLength(MAX_LEDGER_EMISSION_HASHES)),
 });
 export const AdvisorCheckpointLedgerWireSchema = Schema.Struct({
-  protocolVersion: Schema.Literal(3),
+  protocolVersion: Schema.Literal(ADVISOR_CHECKPOINT_PROTOCOL_VERSION),
   fingerprint: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/i)),
   anchorId: Schema.String.check(Schema.isNonEmpty()),
   reviewSummary: ReviewSummaryWireSchema,
@@ -90,26 +89,8 @@ export const AdvisorCheckpointLedgerWireSchema = Schema.Struct({
   ).check(Schema.isMaxLength(MAX_LEDGER_EMISSION_HASHES)),
 });
 
-export interface AdvisorDurableReviewSummary {
-  verdict: "none" | "pass" | "revise";
-  severityCounts: Record<AdvisorSeverity, number>;
-  categoryCounts: Record<AdvisorFindingCategory, number>;
-}
-
-export interface AdvisorCheckpointLedger {
-  protocolVersion: 3;
-  fingerprint: string;
-  anchorId: string;
-  reviewSummary: AdvisorDurableReviewSummary;
-  routing: {
-    cancellationLatched: boolean;
-    completedPrimaryTurns: number;
-    immunityUntilCompletedTurn: number;
-    interventionBudget?: AdvisorInterventionBudgetSnapshot;
-  };
-  findingLifecycle?: AdvisorFindingRecord[];
-  emissionHashes: string[];
-}
+export type AdvisorDurableReviewSummary = Schema.Schema.Type<typeof ReviewSummaryWireSchema>;
+export type AdvisorCheckpointLedger = Schema.Schema.Type<typeof AdvisorCheckpointLedgerWireSchema>;
 
 export interface LedgerFingerprintInput {
   provider: string;
@@ -123,7 +104,7 @@ export interface LedgerFingerprintInput {
 export function createLedgerFingerprint(input: LedgerFingerprintInput): string {
   return createHash("sha256")
     .update(
-      stringifyJson({
+      JSON.stringify({
         provider: input.provider,
         model: input.model,
         cwd: input.cwd,
@@ -149,7 +130,7 @@ export function summarizeAdvisorReview(review?: AdvisorReview): AdvisorDurableRe
 
 /** Render only extension-owned closed enums and bounded counts for child re-prime context. */
 export function renderDurableReviewSummary(summary: AdvisorDurableReviewSummary): string {
-  return stringifyJson(summary);
+  return JSON.stringify(summary);
 }
 
 export function createCheckpointLedger(input: {
@@ -199,7 +180,7 @@ export function restoreCheckpointLedger(
     if (
       entry?.type !== "custom" ||
       entry.customType !== ADVISOR_CHECKPOINT_ENTRY_TYPE ||
-      !isRecord(entry.data)
+      !isJsonObject(entry.data)
     )
       continue;
     const ledger = parseLedger(entry.data);
@@ -260,9 +241,7 @@ export function parseLedger<ValueInput>(value: ValueInput): AdvisorCheckpointLed
     : undefined;
 }
 
-function emptyReviewSummary(
-  verdict: AdvisorDurableReviewSummary["verdict"] = "none",
-): AdvisorDurableReviewSummary {
+function emptyReviewSummary(verdict: AdvisorDurableReviewSummary["verdict"] = "none") {
   return {
     verdict,
     severityCounts: { concern: 0, blocker: 0 },

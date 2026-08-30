@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
-import { freezeSnapshot, makeSynchronousIngress, ProjectionError } from "pi-cosmic-core";
+import { freezeSnapshot, makeSynchronousIngress } from "pi-cosmic-core";
 import type { ResolvedConfig } from "../config/schema.ts";
 import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
 import { OpenAIUsageService } from "../usage/controller.ts";
@@ -32,37 +32,26 @@ export class FastModeService extends Context.Service<FastModeService>()(
         const initialState = initialFastSnapshot();
         const state = yield* Ref.make(initialState);
         const transitionLock = yield* Semaphore.make(1);
-        const prepareSnapshot = (next: FastSnapshot) =>
-          Effect.try({
-            try: () => freezeSnapshot(next),
-            catch: () =>
-              new ProjectionError({
-                path: "$",
-                message: "Unable to publish the fast-mode snapshot.",
-              }),
-          });
-        const commitState = (next: FastSnapshot, snapshot: FastSnapshot) =>
-          Ref.set(state, next).pipe(
+        const commitState = (snapshot: FastSnapshot) =>
+          Ref.set(state, snapshot).pipe(
             Effect.andThen(Effect.sync(() => MutableRef.set(options.projection, snapshot))),
           );
         yield* Effect.sync(() => MutableRef.set(options.projection, initialState));
         const commitInMemory = (update: (current: FastSnapshot) => FastSnapshot) =>
           transitionLock.withPermit(
             Effect.gen(function* () {
-              const next = update(yield* Ref.get(state));
-              const snapshot = yield* prepareSnapshot(next);
-              yield* Effect.uninterruptible(commitState(next, snapshot));
+              const snapshot = freezeSnapshot(update(yield* Ref.get(state)));
+              yield* Effect.uninterruptible(commitState(snapshot));
             }),
           );
         const persistTransition = (update: (current: FastSnapshot) => FastSnapshot) =>
           transitionLock.withPermit(
             Effect.gen(function* () {
-              const next = update(yield* Ref.get(state));
-              const snapshot = yield* prepareSnapshot(next);
+              const snapshot = freezeSnapshot(update(yield* Ref.get(state)));
               yield* usage.persistFast(
-                next.active,
-                next.desiredActive,
-                commitState(next, snapshot),
+                snapshot.active,
+                snapshot.desiredActive,
+                commitState(snapshot),
               );
             }),
           );
@@ -74,14 +63,14 @@ export class FastModeService extends Context.Service<FastModeService>()(
               ...current,
               lastInjectedModel: event.model,
               lastInjectedTier: event.tier,
-            })).pipe(Effect.catchTag("ProjectionError", Effect.die)),
+            })),
         }).pipe(Effect.orDie);
         const transition = (ctx: ExtensionContext, desiredActive: boolean) =>
           persistTransition((current) => ({
             ...current,
             desiredActive,
             active: desiredActive && supportsFast(ctx),
-          })).pipe(Effect.catchTag("ProjectionError", Effect.die));
+          }));
 
         return {
           recordInjection: (event: FastInjectionEvent): void => {
@@ -101,7 +90,7 @@ export class FastModeService extends Context.Service<FastModeService>()(
             persistTransition((current) => ({
               ...current,
               active: current.desiredActive && supportsFast(ctx),
-            })).pipe(Effect.catchTag("ProjectionError", Effect.die)),
+            })),
         };
       }),
   },

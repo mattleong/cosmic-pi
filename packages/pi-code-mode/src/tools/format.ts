@@ -56,13 +56,12 @@ const ActivityInputSchema = Schema.Struct({
   id: Schema.optional(Schema.Unknown),
   name: Schema.optional(Schema.Unknown),
 });
-type ActivityField = keyof typeof ActivityInputSchema.Type;
+type ActivityInput = typeof ActivityInputSchema.Type;
+type ActivityField = keyof ActivityInput;
 
 /** One sanitized bounded field read from a schema-decoded nested-call input, if present. */
-const activityField = <Input>(input: Input, key: ActivityField): string | undefined => {
-  const decoded = Schema.decodeUnknownOption(ActivityInputSchema)(input);
-  if (Option.isNone(decoded)) return undefined;
-  const value = decoded.value[key];
+const activityField = (input: ActivityInput, key: ActivityField): string | undefined => {
+  const value = input[key];
   if (!Predicate.isString(value)) return undefined;
   const sanitized = sanitizeTerminalLine(value);
   return sanitized.length === 0 ? undefined : truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH);
@@ -75,33 +74,35 @@ const activityField = <Input>(input: Input, key: ActivityField): string | undefi
  */
 export const describeNestedActivity = <Name, Input>(name: Name, input: Input): string => {
   const toolName = Predicate.isString(name) ? name : "";
-  const at = (fallback: string) => activityField(input, "path") ?? fallback;
+  const decoded = Schema.decodeUnknownOption(ActivityInputSchema)(input);
+  const activityInput: ActivityInput = Option.isSome(decoded) ? decoded.value : {};
+  const at = (fallback: string) => activityField(activityInput, "path") ?? fallback;
   switch (toolName) {
     case "pi.read":
       return `Read ${at("file")}`;
     case "pi.bash":
     case "pi.powershell":
-      return `Run ${activityField(input, "command") ?? "command"}`;
+      return `Run ${activityField(activityInput, "command") ?? "command"}`;
     case "pi.edit":
       return `Edit ${at("file")}`;
     case "pi.write":
       return `Write ${at("file")}`;
     case "pi.grep":
-      return `Search ${activityField(input, "pattern") ?? "pattern"} in ${at("cwd")}`;
+      return `Search ${activityField(activityInput, "pattern") ?? "pattern"} in ${at("cwd")}`;
     case "pi.find":
-      return `Find ${activityField(input, "pattern") ?? "pattern"} in ${at("cwd")}`;
+      return `Find ${activityField(activityInput, "pattern") ?? "pattern"} in ${at("cwd")}`;
     case "pi.ls":
       return `List ${at("cwd")}`;
     case "session.backgroundTask": {
-      const action = activityField(input, "action") ?? "manage";
+      const action = activityField(activityInput, "action") ?? "manage";
       const target =
-        activityField(input, "id") ??
-        activityField(input, "name") ??
-        activityField(input, "command");
+        activityField(activityInput, "id") ??
+        activityField(activityInput, "name") ??
+        activityField(activityInput, "command");
       return `Background ${action}${target === undefined ? "" : ` ${target}`}`;
     }
     case "$codemode.search": {
-      const query = activityField(input, "query");
+      const query = activityField(activityInput, "query");
       return query === undefined ? "Discover tools" : `Discover tools for ${query}`;
     }
     default: {
@@ -139,7 +140,7 @@ export interface CodeModeToolDetails {
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   /** Exact lifecycle counts, including calls hidden by bounded display selection. */
   readonly counts?: CodeModeCallCounts;
-  /** Legacy total retained for tolerant older renderers. */
+  /** Total retained for hidden-row display and legacy detail compatibility. */
   readonly totalToolCalls?: number;
   /** Extension-only presentation hint; model-visible content remains the authoritative result. */
   readonly outputKind?: "text" | "structured";
@@ -212,8 +213,8 @@ export const progressResult = (
 ): AgentToolResult<CodeModeToolDetails> => {
   const counts = { ...exactCounts };
   const settled = counts.succeeded + counts.failed + counts.cancelled;
-  const shown = boundedCallEntries(calls);
-  const names = shown
+  const details = callEntryDetails(calls, counts);
+  const names = details.toolCalls
     .map((call) => {
       const symbol =
         call.status === "queued"
@@ -228,7 +229,8 @@ export const progressResult = (
       return `${call.tool}${symbol}`;
     })
     .join(", ");
-  const suffix = calls.length > shown.length ? `, +${calls.length - shown.length} earlier` : "";
+  const hidden = Math.max(0, counts.total - details.toolCalls.length);
+  const suffix = hidden > 0 ? `, +${hidden} earlier` : "";
   return {
     content: [
       {
@@ -241,7 +243,7 @@ export const progressResult = (
               }`,
       },
     ],
-    details: callEntryDetails(calls, counts),
+    details,
   };
 };
 

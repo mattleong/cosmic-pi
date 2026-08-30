@@ -35,7 +35,7 @@ import {
   renderStartProgressComponent,
   renderStartReceiptComponent,
 } from "./render-start.ts";
-import type { SubagentStartFailure } from "./subagent.ts";
+import type { SubagentStartFailure } from "./model.ts";
 
 interface RunOverviewHierarchy {
   readonly awaitedRunIds?: ReadonlySet<string> | undefined;

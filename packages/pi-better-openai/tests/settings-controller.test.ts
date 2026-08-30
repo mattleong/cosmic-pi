@@ -11,6 +11,8 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
+import * as Schema from "effect/Schema";
+import { redactDiagnosticValue } from "pi-cosmic-core";
 import { beforeAll, describe, vi } from "vitest";
 import { DEFAULT_FOOTER_CONFIG, type FooterMode } from "../src/config/schema.ts";
 import { initialFastSnapshot } from "../src/fast/controller.ts";
@@ -19,7 +21,7 @@ import { makeResolvedConfig } from "./helpers.ts";
 
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
 type SettingsRun = Parameters<typeof registerSettingsController>[1]["run"];
-type StubRunResult = void | Readonly<Record<string, never>>;
+type StubRunResult = void | Schema.Json;
 type TestCustomFactory<Value> = (
   tui: TUI,
   theme: Theme,
@@ -209,6 +211,37 @@ describe("Better OpenAI settings controller", () => {
       );
       expect(() => component.render(100)).not.toThrow();
       expect(renderedRow(component, "Footer")).toContain("status");
+    }),
+  );
+
+  it.effect("renders redacted config as terminal-safe JSON", () =>
+    Effect.gen(function* () {
+      const redactedConfig = redactDiagnosticValue({
+        access: "sk-private-token-123456",
+        message: "before\u001b]2;unsafe-title\u0007after",
+        enabled: true,
+      });
+      const h = settingsHarness([() => Promise.resolve(redactedConfig)]);
+      const { closed } = yield* h.open;
+      const component = h.selectedComponent();
+
+      for (let index = 0; index < 5; index += 1) component.handleInput?.(input.down);
+      component.handleInput?.(input.enter);
+      component.handleInput?.(input.down);
+      component.handleInput?.(input.down);
+      component.handleInput?.(input.enter);
+
+      const rendered = component.render(100).join("\n");
+      expect(rendered).toContain("Redacted config");
+      expect(rendered).toContain("[REDACTED]");
+      expect(rendered).not.toContain("sk-private-token-123456");
+      expect(rendered).not.toContain("\u001b");
+      expect(rendered).not.toContain("\u0007");
+
+      component.handleInput?.(input.escape);
+      component.handleInput?.(input.escape);
+      component.handleInput?.(input.escape);
+      yield* Effect.promise(() => closed);
     }),
   );
 

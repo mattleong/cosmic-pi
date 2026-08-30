@@ -7,10 +7,16 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
-import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
+import {
+  fakeChildLayer,
+  fakeRetainedBackendLayer,
+  request,
+  retainedServiceLayer,
+  serviceLayer,
+} from "./fixtures/service-harness.ts";
 
 describe("shared-cwd write claims", () => {
-  it.effect("grants and revokes claims only while the owner waits for the parent", () => {
+  it.effect("grants and revokes claims while a claim requester waits for the parent", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
     const layer = serviceLayer({
@@ -115,11 +121,16 @@ describe("shared-cwd write claims", () => {
       const violated = yield* service.status(first.id);
       expect(violated).toMatchObject({
         writeAdmissionPaused: true,
+        writeViolationOffender: true,
         writeAudit: {
           observedFileWrites: ["src/b.ts"],
           violations: [{ path: "src/b.ts", toolName: "edit" }],
         },
       });
+      const overlappingRepair = yield* service
+        .grantWriteClaims(first.id, ["src/b.ts"])
+        .pipe(Effect.flip);
+      expect(overlappingRepair).toMatchObject({ _tag: "SubagentWriterConflictError" });
 
       const blocked = yield* service
         .start(
@@ -137,6 +148,7 @@ describe("shared-cwd write claims", () => {
 
       const resumed = yield* service.resumeWriterAdmission(first.id);
       expect(resumed.writeAdmissionPaused).toBeUndefined();
+      expect(resumed.writeViolationOffender).toBeUndefined();
       const admitted = yield* service.start(
         request({
           name: "new-disjoint-writer",
@@ -249,6 +261,198 @@ describe("shared-cwd write claims", () => {
       }).pipe(Effect.scoped, provideBuiltLayer(layer));
     }),
   );
+
+  it.effect("repairs a confirmed paused offender without repeating the violation", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          name: "repairable-writer",
+          writeIntent: "writer",
+          writes: ["src/a.ts"],
+        }),
+      );
+
+      fake.controls[0]?.offer({
+        type: "tool_execution_start",
+        toolCallId: "missing-claim",
+        toolName: "edit",
+        args: { path: "src/c.ts", edits: [] },
+      });
+      yield* yieldUntil(
+        () =>
+          projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state === "paused",
+      );
+
+      const absolute = yield* service
+        .grantWriteClaims(run.id, ["/tmp/outside.ts"])
+        .pipe(Effect.flip);
+      expect(absolute).toMatchObject({ code: "write_claim_absolute" });
+      const outsideMarker = yield* service
+        .grantWriteClaims(run.id, ["<outside workspace>"])
+        .pipe(Effect.flip);
+      expect(outsideMarker).toMatchObject({ code: "write_claim_outside_workspace" });
+
+      const granted = yield* service.grantWriteClaims(run.id, ["src/c.ts"]);
+      expect(granted).toMatchObject({
+        writeClaims: ["src/a.ts", "src/c.ts"],
+        writeViolationOffender: true,
+      });
+      const reopened = yield* service.resumeWriterAdmission(run.id);
+      expect(reopened.writeViolationOffender).toBeUndefined();
+      expect((yield* service.resume(run.id)).state).toBe("running");
+
+      fake.controls[0]?.offer({
+        type: "tool_execution_start",
+        toolCallId: "now-claimed",
+        toolName: "edit",
+        args: { path: "src/c.ts", edits: [] },
+      });
+      yield* yieldUntil(
+        () =>
+          projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.currentTool ===
+          "edit",
+      );
+      const repaired = yield* service.status(run.id);
+      expect(repaired).toMatchObject({
+        state: "running",
+        writeClaims: ["src/a.ts", "src/c.ts"],
+        writeAudit: { violations: [{ path: "src/c.ts" }] },
+      });
+      expect(repaired.writeAudit?.violations).toHaveLength(1);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("rejects claim changes for ordinary pauses and non-offending peers", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const ordinary = yield* service.start(
+        request({ name: "ordinary-pause", writeIntent: "writer", writes: ["src/a.ts"] }),
+      );
+      const offender = yield* service.start(
+        request({ name: "offender", writeIntent: "writer", writes: ["src/b.ts"] }),
+      );
+      const peer = yield* service.start(
+        request({ name: "non-offender", writeIntent: "writer", writes: ["src/c.ts"] }),
+      );
+
+      yield* service.interrupt(ordinary.id);
+      const ordinaryChange = yield* service
+        .grantWriteClaims(ordinary.id, ["src/d.ts"])
+        .pipe(Effect.flip);
+      expect(ordinaryChange).toMatchObject({ code: "write_claim_change_not_waiting" });
+
+      fake.controls[1]?.offer({
+        type: "tool_execution_start",
+        toolCallId: "offender-edit",
+        toolName: "edit",
+        args: { path: "src/e.ts", edits: [] },
+      });
+      yield* yieldUntil(
+        () =>
+          projections.at(-1)?.runs.find((candidate) => candidate.id === offender.id)?.state ===
+          "paused",
+      );
+      expect(yield* service.status(peer.id)).toMatchObject({
+        writeAdmissionPaused: true,
+        writeViolationOffender: undefined,
+      });
+      const peerChange = yield* service.grantWriteClaims(peer.id, ["src/f.ts"]).pipe(Effect.flip);
+      expect(peerChange).toMatchObject({ code: "write_claim_change_not_waiting" });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("stops an interrupt-capable backend that cannot resume", () => {
+    const backend = fakeRetainedBackendLayer({
+      capabilities: ["interrupt", "rename-display"],
+    });
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          name: "non-resumable-writer",
+          host: "herdr",
+          runtime: "claude",
+          writeIntent: "writer",
+          writes: ["src/a.ts"],
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "tool_started",
+        assignmentEpoch: backend.controls[0]?.assignmentEpochs[0] ?? 1,
+        toolCallId: "non-resumable-edit",
+        toolName: "edit",
+        args: { path: "src/b.ts", edits: [] },
+      });
+
+      yield* yieldUntil(
+        () =>
+          projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
+          "stopped",
+      );
+      yield* yieldUntil(() => backend.controls[0]?.released() === 1);
+      expect((yield* service.resumeWriterAdmission(run.id)).writeAdmissionPaused).toBeUndefined();
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("keeps admission paused until terminal offender cleanup is confirmed", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          name: "cleanup-pending-writer",
+          writeIntent: "writer",
+          writes: ["src/a.ts"],
+        }),
+      );
+      const releaseGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateRelease(releaseGate);
+      fake.controls[0]?.offer({
+        type: "tool_execution_start",
+        toolCallId: "cleanup-pending-edit",
+        toolName: "edit",
+        args: { path: "src/b.ts", edits: [] },
+      });
+      yield* yieldUntil(
+        () =>
+          projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state === "paused",
+      );
+
+      fake.controls[0]?.offerProtocolError("Fixture terminal failure after containment.");
+      yield* yieldUntil(
+        () =>
+          projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state === "failed",
+      );
+      const cleanupPending = yield* service.resumeWriterAdmission(run.id).pipe(Effect.flip);
+      expect(cleanupPending).toMatchObject({
+        code: "write_violation_containment_pending",
+      });
+
+      fake.controls[0]?.exit(1);
+      yield* Deferred.succeed(releaseGate, undefined);
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      expect((yield* service.resumeWriterAdmission(run.id)).writeAdmissionPaused).toBeUndefined();
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
 
   it.effect("records likely mutating Bash as an audit notice without a sticky warning", () => {
     const fake = fakeChildLayer();

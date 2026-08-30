@@ -21,8 +21,9 @@ import type { SessionProfileOverrideSeed } from "../../../src/profiles/session-o
 import { InvalidSubagentRequestError } from "../../../src/run/errors.ts";
 import { type StartSubagentRequest, type SubagentRunView } from "../../../src/run/model.ts";
 import { SubagentService, type SubagentServiceContract } from "../../../src/run/service.ts";
+import type { SubagentToolRuntime } from "../../../src/tools/execute.ts";
+import { registerSubagentTools } from "../../../src/tools/subagent.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
-import { registerSubagentTools, type SubagentToolRuntime } from "../../../src/tools/subagent.ts";
 
 type NativeCapturedTool = ToolDefinition<any, any, any>;
 type NativeExecute = NativeCapturedTool["execute"];
@@ -324,14 +325,4 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
           })(),
         );
       }),
-    awaitTerminal: () => Effect.succeed([]),
-    list: Effect.succeed([]),
-    status: () => Effect.succeed(view()),
-    send: () => Effect.succeed(view()),
-    reply: () => Effect.succeed(view()),
-    interrupt: () => Effect.succeed(view()),
-    resume: () => Effect.succeed(view()),
-    rename: () => Effect.succeed(view()),
-    stop: () => Effect.succeed(view()),
-    projection: Effect.succeed({ revision: 0, runs: [] }),
   });

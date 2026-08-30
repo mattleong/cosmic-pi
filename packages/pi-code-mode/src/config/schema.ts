@@ -25,7 +25,7 @@ export const CODE_MODE_INTEGER_BOUNDS = Object.freeze({
 export type CodeModeIntegerFieldId = keyof typeof CODE_MODE_INTEGER_BOUNDS;
 
 const boundedInteger = (bounds: CodeModeIntegerBounds) =>
-  Schema.Finite.check(Schema.isInt(), Schema.isBetween(bounds));
+  Schema.Int.check(Schema.isBetween(bounds));
 
 /** The one authoritative configuration schema. */
 export const CodeModeConfigSchema = Schema.Struct({

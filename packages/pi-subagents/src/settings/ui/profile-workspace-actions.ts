@@ -5,6 +5,7 @@ import {
   disableRouteDraft,
   duplicateRouteCandidate,
   inheritProjectDraft,
+  inheritSessionDraft,
   moveRouteCandidate,
   removeRouteCandidate,
   resetGlobalDraft,
@@ -12,7 +13,6 @@ import {
   type ProfileSettingsInspection,
   type ProfileSettingsScope,
 } from "../profile-route-editor.ts";
-import { sessionBaselineProfileDraft } from "./profile-workspace-model.ts";
 import type { ProfileWorkspaceConfirmation } from "./profile-workspace-render.ts";
 
 export type ProfileWorkspaceDraftAction =
@@ -122,11 +122,6 @@ export const profileWorkspaceActionChoices = (input: {
   ];
 };
 
-export const currentSessionBaselineDraft = (
-  inspection: ProfileSettingsInspection,
-  profile: ProfileId,
-): ProfileRouteDraft => sessionBaselineProfileDraft(inspection, profile);
-
 export type ProfileWorkspaceDraftActionResult =
   | {
       readonly draft: ProfileRouteDraft;
@@ -201,7 +196,7 @@ export const applyProfileWorkspaceDraftAction = (input: {
         ? resetGlobalDraft(input.profile)
         : input.scope === "project"
           ? inheritProjectDraft(input.inspection, input.profile)
-          : currentSessionBaselineDraft(input.inspection, input.profile),
+          : inheritSessionDraft(input.inspection, input.profile),
     description:
       input.scope === "session"
         ? "Current Session changes undone"

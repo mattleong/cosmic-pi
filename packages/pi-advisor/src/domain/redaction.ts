@@ -7,8 +7,7 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
-import { stringifyJson } from "../boundary/json.ts";
-import { isRecord } from "../shared/utils.ts";
+import { isJsonObject } from "pi-cosmic-core";
 import { snapshotData } from "./safe-data.ts";
 
 const SENSITIVE_KEY_PATTERN =
@@ -27,7 +26,7 @@ function redactSnapshot(value: Schema.MutableJson | undefined, depth: number): S
   if (Predicate.isString(value)) return redactSensitiveText(value);
   if (Array.isArray(value))
     return value.slice(0, 256).map((item) => redactSnapshot(item, depth + 1));
-  if (!isRecord(value)) return value ?? null;
+  if (!isJsonObject(value)) return value ?? null;
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const result: Schema.MutableJsonObject = Object.create(null);
   for (const [key, item] of Object.entries(value).slice(0, 256)) {
@@ -40,7 +39,7 @@ export function stringifyRedactedObservation<ValueInput>(value: ValueInput): str
   try {
     const snapshot = snapshotData(value);
     if (snapshot === undefined) return "[unavailable]";
-    return stringifyJson(redactSnapshot(snapshot, 0)) ?? "[unavailable]";
+    return JSON.stringify(redactSnapshot(snapshot, 0)) ?? "[unavailable]";
   } catch {
     return "[unserializable]";
   }

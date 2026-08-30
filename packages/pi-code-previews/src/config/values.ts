@@ -12,10 +12,8 @@ import { formatToolsSettingValue, getEffectiveCodePreviewTools } from "../tools/
 import { defaultCodePreviewSettings } from "./defaults";
 import {
   CodePreviewSettingsSchema,
-  ToolCallBackgroundModeSchema,
   type CodePreviewEditableSettingId,
   type CodePreviewSettings,
-  type ToolCallBackgroundMode,
 } from "./schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "./state";
 
@@ -31,12 +29,6 @@ export interface NormalizedCodePreviewSettings {
 
 export function formatOnOff(value: boolean): OnOffValue {
   return value ? "on" : "off";
-}
-
-export function isToolCallBackgroundMode<ValueInput>(
-  value: ValueInput,
-): value is ValueInput & ToolCallBackgroundMode {
-  return Schema.is(ToolCallBackgroundModeSchema)(value);
 }
 
 export function formatSettingValue(

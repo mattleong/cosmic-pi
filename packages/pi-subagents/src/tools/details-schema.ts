@@ -166,6 +166,7 @@ export const SubagentRunCardSchema = Schema.Struct({
   writeClaimsOmitted: Schema.optionalKey(Schema.Literal(true)),
   writeAudit: Schema.optionalKey(WriteAuditSchema),
   writeAdmissionPaused: Schema.optionalKey(Schema.Literal(true)),
+  writeViolationOffender: Schema.optionalKey(Schema.Literal(true)),
   capabilities: boundedArray(
     Schema.Literals(PI_SUBAGENT_CAPABILITIES),
     PI_SUBAGENT_CAPABILITIES.length,
@@ -557,7 +558,14 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
   return true;
 };
 
+const validRunCardRelationships = (card: SubagentRunCard): boolean =>
+  card.writeViolationOffender !== true ||
+  (card.writeIntent === "writer" &&
+    card.writeAdmissionPaused === true &&
+    (card.writeAudit?.violations.length ?? 0) > 0);
+
 const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
+  if (!details.cards.every(validRunCardRelationships)) return false;
   const awaitedRunIds = details.awaitedRunIds;
   if (!awaitedRunIds) return true;
   const uniqueTargets = new Set(awaitedRunIds);
@@ -601,4 +609,9 @@ export const decodeStartAwaitCardDetails = <ValueInput>(
 /** Safe current-version decoder for all non-start tool details. */
 export const decodeCompactToolDetails = <ValueInput>(
   value: ValueInput,
-): CompactSubagentToolDetails | undefined => safeDecode(CompactSubagentToolDetailsSchema, value);
+): CompactSubagentToolDetails | undefined =>
+  safeDecode(
+    CompactSubagentToolDetailsSchema,
+    value,
+    (details) => details.action === "models" || details.cards.every(validRunCardRelationships),
+  );

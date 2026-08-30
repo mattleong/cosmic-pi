@@ -1,7 +1,8 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { loadCodePreviewSettings } from "pi-code-previews";
+import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
 import {
+  bestEffortHostBootstrap,
   captureSessionHost,
   isProjectTrusted,
   makePiManagedRuntime,
@@ -25,17 +26,16 @@ import { registerTaskManagerCommand } from "./settings/controller.ts";
 import { registerBackgroundTaskTool } from "./tools/background-task.ts";
 
 export interface BackgroundTaskApplicationBoundaries {
-  readonly loadSettings: (cwd: string, projectTrusted: boolean) => Promise<void>;
+  readonly loadSettings: (
+    cwd: string,
+    projectTrusted: boolean,
+    signal: AbortSignal,
+  ) => PromiseLike<CodePreviewSettings | void>;
 }
-
-const LIVE_APPLICATION_BOUNDARIES: BackgroundTaskApplicationBoundaries = {
-  loadSettings: (cwd, projectTrusted) =>
-    loadCodePreviewSettings(cwd, projectTrusted).then(() => undefined),
-};
 
 export function registerBackgroundTaskApplication(
   pi: ExtensionAPI,
-  boundaries: BackgroundTaskApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
+  boundaries: BackgroundTaskApplicationBoundaries = { loadSettings: loadCodePreviewSettings },
 ): void {
   const bridge = makeProjectionBridge(pi.events);
   const codeModeHost = makeBackgroundTaskCodeModeHost(pi.events);
@@ -58,11 +58,11 @@ export function registerBackgroundTaskApplication(
     startup: (input) =>
       Effect.gen(function* () {
         // The slot has already deactivated any prior runtime, so no tool call can target the
-        // prior session while this activation loads trusted code-preview settings. Superseded
-        // or aborted starts never reach this settings boundary.
-        yield* Effect.tryPromise(() =>
-          boundaries.loadSettings(input.cwd, input.projectTrusted),
-        ).pipe(Effect.ignore);
+        // prior session while this activation loads trusted code-preview settings. Replacement
+        // and shutdown interrupt this best-effort prerequisite without awaiting a hostile loader.
+        yield* bestEffortHostBootstrap("pi-background-task.preview-settings", (signal) =>
+          boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
+        );
         const config = yield* BackgroundTaskConfigStore;
         return { showFooterStatus: config.showFooterStatus };
       }),

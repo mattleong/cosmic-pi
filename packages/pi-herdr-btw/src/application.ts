@@ -8,7 +8,7 @@ import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
 import { makeHostHerdrBtwLinkStore, type HerdrBtwLinkStore } from "./boundary/host-link-store.ts";
 import { notifyHerdrBtw } from "./boundary/host-notifier.ts";
 import { captureHerdrBtwSession, type HerdrBtwSessionInput } from "./boundary/host-session.ts";
-import { registerHerdrBtwCommands, type HerdrBtwCommandOutcome } from "./btw/controller.ts";
+import { registerHerdrBtwCommands } from "./btw/controller.ts";
 import {
   HerdrBtwService,
   type HerdrBtwResult,
@@ -44,18 +44,7 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
 
   const runCommand = (
     use: (service: HerdrBtwServiceContract) => Effect.Effect<HerdrBtwResult, HerdrBtwError>,
-  ): Promise<HerdrBtwCommandOutcome> =>
-    slot.run(
-      HerdrBtwService.use(use).pipe(
-        Effect.match({
-          onSuccess: (result): HerdrBtwCommandOutcome => ({ _tag: "opened", result }),
-          onFailure: (failure): HerdrBtwCommandOutcome => ({
-            _tag: "failed",
-            message: failure.message,
-          }),
-        }),
-      ),
-    );
+  ): Promise<HerdrBtwResult> => slot.run(HerdrBtwService.use(use));
 
   registerHerdrBtwCommands(pi, {
     open: (prompt) => runCommand((service) => service.open(prompt)),

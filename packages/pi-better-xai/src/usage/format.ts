@@ -62,12 +62,10 @@ export interface UsageSnapshot {
   readonly weeklyResetInSeconds: number | null;
   readonly monthlyUsed: number | null;
   readonly monthlyLimit: number | null;
-  readonly monthlyUsedPercent: number | null;
   readonly monthlyLeftPercent: number | null;
   readonly monthlyResetInSeconds: number | null;
   readonly onDemandCap: number | null;
   readonly onDemandUsed: number | null;
-  readonly isLimited: boolean;
 }
 
 function parseIsoToSecondsFromNow(value: string | undefined, now: number): number | null {
@@ -82,12 +80,7 @@ export function parseMonthlyBilling<PayloadInput>(
   now: number,
 ): Pick<
   UsageSnapshot,
-  | "monthlyUsed"
-  | "monthlyLimit"
-  | "monthlyUsedPercent"
-  | "monthlyLeftPercent"
-  | "monthlyResetInSeconds"
-  | "onDemandCap"
+  "monthlyUsed" | "monthlyLimit" | "monthlyLeftPercent" | "monthlyResetInSeconds" | "onDemandCap"
 > {
   const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(MonthlyBillingSchema)(payload));
   const monthlyUsed = decoded?.config.used?.val ?? null;
@@ -100,7 +93,6 @@ export function parseMonthlyBilling<PayloadInput>(
   return {
     monthlyUsed,
     monthlyLimit,
-    monthlyUsedPercent,
     monthlyLeftPercent: usedToLeftPercent(monthlyUsedPercent),
     monthlyResetInSeconds: parseIsoToSecondsFromNow(decoded?.config.billingPeriodEnd, now),
     onDemandCap,
@@ -135,16 +127,7 @@ export function parseUsageSnapshot<MonthlyPayloadInput>(
 ): UsageSnapshot {
   const monthly = parseMonthlyBilling(monthlyPayload, now);
   const weekly = parseWeeklyBilling(weeklyPayload ?? {}, now);
-  return {
-    capturedAt: now,
-    ...weekly,
-    ...monthly,
-    isLimited:
-      (weekly.weeklyUsedPercent !== null && weekly.weeklyUsedPercent >= 100) ||
-      (monthly.monthlyUsed !== null &&
-        monthly.monthlyLimit !== null &&
-        monthly.monthlyUsed >= monthly.monthlyLimit),
-  };
+  return { capturedAt: now, ...weekly, ...monthly };
 }
 
 export function formatUsageSnapshot(

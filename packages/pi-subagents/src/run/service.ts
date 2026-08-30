@@ -803,44 +803,69 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       return selected ?? snapshotView((yield* requireRecord(id)).view);
     });
 
+  // Do not publish a pool pause without admitting its containment fiber to the service scope.
   containWriteClaimViolation = (record, message) =>
-    withLock(
-      Effect.gen(function* () {
-        if (record.writeViolationContainmentStarted) return false;
-        const pool = record.writerPool;
-        if (!pool) return false;
-        record.writeViolationContainmentStarted = true;
-        pool.admissionPaused = true;
-        pool.violationRunIds.add(record.view.id);
-        pool.pauseReason = message;
-        for (const memberId of pool.members.keys()) {
-          const member = records.get(memberId);
-          if (member && member.view.writeAdmissionPaused !== true)
-            member.view = { ...member.view, writeAdmissionPaused: true };
-        }
-        yield* publish;
-        return hasSubagentCapability(record.view, "interrupt") &&
-          (record.view.state === "running" || record.view.state === "waiting_for_parent")
-          ? ("interrupt" as const)
-          : record.view.state === "starting"
+    Effect.uninterruptible(
+      withLock(
+        Effect.gen(function* () {
+          if (record.writeViolationContainmentStarted) return false;
+          const pool = record.writerPool;
+          if (!pool) return false;
+          record.writeViolationContainmentStarted = true;
+          pool.admissionPaused = true;
+          pool.violationRunIds.add(record.view.id);
+          pool.pauseReason = message;
+          for (const memberId of pool.members.keys()) {
+            const member = records.get(memberId);
+            if (!member) continue;
+            member.view = {
+              ...member.view,
+              writeAdmissionPaused: true,
+              writeViolationOffender: pool.violationRunIds.has(memberId) ? true : undefined,
+            };
+          }
+          yield* publish;
+          const resumableInterrupt =
+            hasSubagentCapability(record.view, "interrupt") &&
+            hasSubagentCapability(record.view, "resume");
+          if (
+            resumableInterrupt &&
+            (record.view.state === "running" || record.view.state === "waiting_for_parent")
+          )
+            return "interrupt" as const;
+          return isActiveRunState(record.view.state) &&
+            record.view.state !== "paused" &&
+            record.view.state !== "stopping"
             ? ("stop" as const)
             : undefined;
-      }),
-    ).pipe(
-      Effect.flatMap((containmentAction) => {
-        if (!containmentAction) return Effect.void;
-        const containment =
-          containmentAction === "interrupt" ? interrupt(record.view.id) : stop(record.view.id);
-        return containment.pipe(
-          Effect.catch((error) =>
-            Effect.logWarning(`Could not contain write-claim violation: ${error.message}`).pipe(
-              Effect.annotateLogs("runId", record.view.id),
-            ),
-          ),
-          Effect.forkIn(ownerScope, { startImmediately: true }),
-          Effect.asVoid,
-        );
-      }),
+        }),
+      ).pipe(
+        Effect.flatMap((containmentAction) => {
+          if (!containmentAction) return Effect.void;
+          const stopAfterFailure = (interruptError?: SubagentError) =>
+            stop(record.view.id).pipe(
+              Effect.asVoid,
+              Effect.catch((stopError) =>
+                Effect.logWarning(
+                  interruptError
+                    ? `Could not contain write-claim violation after interrupt and stop failed: ${stopError.message}`
+                    : `Could not contain write-claim violation because stop failed: ${stopError.message}`,
+                ).pipe(Effect.annotateLogs("runId", record.view.id)),
+              ),
+            );
+          const containment =
+            containmentAction === "interrupt"
+              ? interrupt(record.view.id).pipe(
+                  Effect.asVoid,
+                  Effect.catch((interruptError) => stopAfterFailure(interruptError)),
+                )
+              : stopAfterFailure();
+          return containment.pipe(
+            Effect.forkIn(ownerScope, { startImmediately: true }),
+            Effect.asVoid,
+          );
+        }),
+      ),
     );
 
   const writeClaims = makeRunWriteClaimControl({

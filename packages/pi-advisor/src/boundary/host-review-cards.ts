@@ -81,6 +81,44 @@ export function sendCompactAdvisorGuidanceAtHostBoundary(
   }
 }
 
+/** Visible findings are durable local entries and never context messages. */
+export function sendAdvisorAdvice(
+  pi: ExtensionAPI,
+  review: AdvisorReview,
+): AdvisorReviewCardPublishResult {
+  return appendAdvisorReviewCardAtHostBoundary(pi, review);
+}
+
+/** Automatic perspectives steer only after the local card append succeeds. */
+export function sendAdvisorPerspective(
+  pi: ExtensionAPI,
+  review: AdvisorReview,
+): AdvisorGuidancePublishResult {
+  const published = appendAdvisorReviewCardAtHostBoundary(pi, review);
+  return {
+    ...published,
+    guidanceSent:
+      published.appended && published.card
+        ? sendCompactAdvisorGuidanceAtHostBoundary(pi, published.card, false)
+        : false,
+  };
+}
+
+/** Corrections may still steer with the generated card when its local append fails. */
+export function sendCorrection(
+  pi: ExtensionAPI,
+  review: AdvisorReview,
+  triggerTurn: boolean,
+): AdvisorGuidancePublishResult {
+  const published = appendAdvisorReviewCardAtHostBoundary(pi, review);
+  return {
+    ...published,
+    guidanceSent: published.card
+      ? sendCompactAdvisorGuidanceAtHostBoundary(pi, published.card, triggerTurn)
+      : false,
+  };
+}
+
 /** Restore the latest card not followed by an action tombstone on the active branch. */
 export function latestOpenAdvisorReviewCardAtHostBoundary(
   ctx: ExtensionContext,

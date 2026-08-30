@@ -58,7 +58,6 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 export type CodePreviewSettings = Omit<Mutable<SchemaSettings>, "tools"> & {
   tools: Array<(typeof CodePreviewToolNameSchema)["Type"]>;
 };
-export type DiffBackgroundIntensity = typeof DiffBackgroundIntensitySchema.Type;
 export type DiffWordEmphasis = typeof DiffWordEmphasisSchema.Type;
 export type ToolCallBackgroundMode = typeof ToolCallBackgroundModeSchema.Type;
 export type PathIconMode = typeof PathIconModeSchema.Type;

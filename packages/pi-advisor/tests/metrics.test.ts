@@ -1,9 +1,9 @@
 import { expect, it } from "@effect/vitest";
 import {
+  emptyAdvisorSessionMetrics,
   recordReviewDurationMetrics,
   recordUsageMetrics,
-} from "../src/application/lifecycle/metrics.ts";
-import { emptyAdvisorSessionMetrics } from "../src/application/state.ts";
+} from "../src/domain/metrics.ts";
 
 it("aggregates only visible usage totals", () => {
   const initial = emptyAdvisorSessionMetrics();

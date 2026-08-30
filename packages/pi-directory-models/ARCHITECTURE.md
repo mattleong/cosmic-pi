@@ -1,26 +1,19 @@
 # Architecture
 
-`pi-directory-models` is an Effect-managed Pi extension that remembers the active model and thinking level for each canonical working directory.
+`pi-directory-models` remembers the active model and thinking level for each canonical working directory.
 
-## Source map
+## Ownership
 
-- `src/extension.ts`: thin Pi registration entrypoint.
-- `src/layer.ts`: session Layer composition.
-- `src/application.ts`: session lifecycle and model/thinking event wiring.
-- `src/config/schema.ts`: persisted preference shape.
-- `src/config/path-key.ts`: pure, deterministic readable preference filenames.
-- `src/config/store.ts`: the single persistence door; canonicalizes the cwd and reads/writes atomic per-directory documents.
-- `src/preference/service.ts`: serialized restore and remember policy.
-- `src/boundary/host-cli.ts`: one-off `--model` detection.
-- `src/boundary/host-model.ts`: guarded Pi model registry and model/thinking operations, including Schema-decoded synchronous host model and thinking-level capture.
-- `src/boundary/host-session.ts`: fresh-session classification over the shared `pi-cosmic-core` host session capture.
+`src/application.ts` owns Pi registration and the session runtime slot. `src/layer.ts` composes the Effect Layer from `DirectoryModelPreferenceService` and `DirectoryModelStore`. The preference service owns restore and remember policy, its one-permit semaphore, and its session-local directory identity cache. Successful identity lookup is cached; a failed lookup remains retryable on a later event.
+
+`src/config/store.ts` is the only persistence door. It canonicalizes the cwd and reads or atomically replaces one Schema-validated document per directory. Host argv, session, model registry, model selection, and thinking-level calls stay in `src/boundary/`. Schema and path-key modules remain pure.
 
 ## Lifecycle
 
-`session_start` creates one managed runtime. Fresh sessions without an explicit `--model` restore or initialize the directory preference. Resume, fork, and reload starts preserve their session model.
+Registration captures the presence of Pi's explicit `--model` argument once. Each `session_start` creates one managed runtime and reuses that captured decision. Fresh sessions without `--model` restore or initialize the directory preference. Resume, fork, and reload starts preserve their session model.
 
-Restoration runs inside pre-activation startup: the session slot activates only after the whole startup Effect, including Pi's awaited `setModel` settlement, resolves. Model events emitted by restoration are therefore dropped before activation, with `source === "restore"` kept as defense in depth. Pi's noncancelable `setModel` Promise settlement is the only narrow uninterruptible region: runtime disposal or replacement waits for it before starting a successor, while registry lookup and surrounding reads remain interruptible.
+Restoration runs before slot activation. The slot activates only after startup and Pi's awaited `setModel` settlement complete, so restoration events are dropped before activation. The `source === "restore"` check remains as defense in depth. The noncancelable `setModel` settlement is the only uninterruptible region; replacement waits for it before starting the next runtime.
 
-Admitted model and thinking events run `DirectoryModelPreferenceService.remember` under one semaphore, which snapshots the live session model and Pi's current thinking level so a delayed host event re-persists the current state idempotently rather than a stale one. Events arriving before activation or after shutdown, and malformed events at the host boundary, are ignored without a write or warning. `session_shutdown` disposes the runtime.
+Admitted model and thinking events run `remember` under the service semaphore. The service snapshots the live model and thinking level at serialized capture time, so delayed events persist current state rather than stale event data. Events outside an active runtime and malformed host values do not write. `session_shutdown` disposes the runtime.
 
-Preference documents live under `<agent-dir>/pi-directory-models/` and use `<readable-basename>--<12-char-sha256>.json`. Each document contains the full canonical cwd, which is validated before use. Separate files avoid lost updates between Pi instances working in different directories; same-directory writes atomically replace one complete record.
+Preference documents live under `<agent-dir>/pi-directory-models/` as `<readable-basename>--<12-char-sha256>.json`. Each document records its canonical cwd, which the store validates before use.

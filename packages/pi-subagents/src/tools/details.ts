@@ -239,7 +239,8 @@ const projectWriteCardFields = (
         .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file"))
     : undefined;
   const observedLimit = density === "full" ? 64 : density === "compact" ? 16 : 0;
-  const violationLimit = density === "full" ? 16 : density === "compact" ? 8 : 0;
+  const violationLimit =
+    density === "full" ? 16 : density === "compact" ? 8 : run.writeViolationOffender ? 1 : 0;
   return {
     ...(projectedClaims !== undefined && {
       writeClaims: projectedClaims,
@@ -265,6 +266,7 @@ const projectWriteCardFields = (
       },
     }),
     ...(run.writeAdmissionPaused === true && { writeAdmissionPaused: true as const }),
+    ...(run.writeViolationOffender === true && { writeViolationOffender: true as const }),
   };
 };
 

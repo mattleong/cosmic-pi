@@ -26,15 +26,14 @@ import {
   type XaiSessionInput,
 } from "./layer.ts";
 import { xaiUsageFooterPrimitive } from "./ui/primitives.ts";
+import { XaiBoundaryError, XaiUsageService } from "./usage/controller.ts";
+import { formatDebug } from "./usage/debug.ts";
 import {
-  XaiBoundaryError,
-  XaiUsageService,
-  formatDebug,
   makeProjection,
   resetProjection,
   synchronizeProjectionContext,
   type XaiProjection,
-} from "./usage/index.ts";
+} from "./usage/projection.ts";
 
 const XAI_STATUS_COMMAND = "xai-usage";
 
@@ -61,10 +60,10 @@ export function registerBetterXaiApplication(
 ): void {
   const projection = makeProjection();
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
-  let footerController: ReturnType<typeof createFooterController>;
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-xai");
 
   const config = (_ctx: ExtensionContext) => requiredConfig(projection);
+  const footerController = createFooterController({ config, projection, hasTerminalUI });
   const updateFooter = (fallback: ExtensionContext) => {
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
     if (!MutableRef.get(projection).config) return;
@@ -73,8 +72,6 @@ export function registerBetterXaiApplication(
     if (usage) cosmicUi.upsert(usage);
     else cosmicUi.remove("xai.usage");
   };
-
-  footerController = createFooterController({ config, projection, hasTerminalUI });
 
   const slot = makePiSessionRuntimeSlot<XaiSessionInput, XaiApplication, never, XaiRuntimeError>({
     makeRuntime: (input) =>

@@ -2,7 +2,7 @@ import * as Predicate from "effect/Predicate";
 
 import { redactSensitiveText, stringifyRedactedObservation } from "../domain/redaction.ts";
 import { snapshotDataRecord } from "../domain/safe-data.ts";
-import { isRecord } from "../shared/utils.ts";
+import { isJsonObject } from "pi-cosmic-core";
 
 export const DEFAULT_MAX_CONTEXT_CHARS = 240_000;
 
@@ -254,7 +254,7 @@ function serializeAssistantContent<ContentInput>(content: ContentInput): string 
   if (!Array.isArray(content)) return serializeContent(content, false);
   return content
     .flatMap((part) => {
-      if (!isRecord(part) || !Predicate.isString(part.type)) return [];
+      if (!isJsonObject(part) || !Predicate.isString(part.type)) return [];
       if (part.type === "text" && Predicate.isString(part.text)) return [part.text];
       if (part.type === "thinking") {
         if (Predicate.isString(part.thinking) && part.thinking) {
@@ -279,7 +279,7 @@ function serializeContent<ContentInput>(content: ContentInput, includeImages: bo
   if (!Array.isArray(content)) return "";
   return content
     .flatMap((part) => {
-      if (!isRecord(part) || !Predicate.isString(part.type)) return [];
+      if (!isJsonObject(part) || !Predicate.isString(part.type)) return [];
       if (part.type === "text" && Predicate.isString(part.text)) return [part.text];
       if (includeImages && part.type === "image") {
         const mimeType = nonEmptyString(part.mimeType);

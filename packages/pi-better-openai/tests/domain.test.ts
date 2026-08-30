@@ -96,7 +96,7 @@ describe("OpenAI configuration and credentials", () => {
     ctx.modelRegistry.getApiKeyForProvider = () => Promise.reject(new Error("registry"));
     return Effect.gen(function* () {
       const result = yield* getCodexCredentialsResult("/auth.json", ctx);
-      expect(result._tag).toBe("Unavailable");
+      expect(result._tag).toBe("Failure");
       expect(serializedSnapshot(result)).not.toContain("redacted");
     }).pipe(provideBuiltLayer(layer));
   });
@@ -112,6 +112,65 @@ describe("OpenAI configuration and credentials", () => {
       yield* Fiber.interrupt(fiber);
       expect(true).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(store.layer));
+  });
+
+  it.effect("preserves valid credential fallback when the other source is malformed", () => {
+    const validAuthPath = "/agent/valid-auth.json";
+    const malformedAuthPath = "/agent/malformed-auth.json";
+    const store = documents({
+      [validAuthPath]: {
+        "openai-codex": {
+          type: "oauth",
+          access: "file-token",
+          accountId: "acct_file",
+        },
+      },
+      [malformedAuthPath]: {
+        "openai-codex": {
+          type: "oauth",
+          access: "",
+          accountId: "acct_file",
+        },
+      },
+    });
+    const registryPayload = JSON.stringify({
+      access: "registry-token",
+      accountId: "acct_registry",
+    });
+
+    return Effect.gen(function* () {
+      const fileFallback = yield* getCodexCredentialsResult(
+        validAuthPath,
+        context("{malformed-registry"),
+      );
+      expect(fileFallback._tag).toBe("Found");
+      if (fileFallback._tag === "Found") {
+        expect(fileFallback.credentials.source).toBe("authFile");
+        expect(Redacted.value(fileFallback.credentials.accessToken)).toBe("file-token");
+      }
+
+      const registryFallback = yield* getCodexCredentialsResult(
+        malformedAuthPath,
+        context(registryPayload),
+      );
+      expect(registryFallback._tag).toBe("Found");
+      if (registryFallback._tag === "Found") {
+        expect(registryFallback.credentials.source).toBe("modelRegistry");
+        expect(Redacted.value(registryFallback.credentials.accessToken)).toBe("registry-token");
+      }
+
+      const malformed = yield* getCodexCredentialsResult(
+        malformedAuthPath,
+        context("{malformed-registry"),
+      );
+      expect(malformed._tag).toBe("Failure");
+      expect(serializedSnapshot([fileFallback, registryFallback, malformed])).not.toContain(
+        "file-token",
+      );
+      expect(serializedSnapshot([fileFallback, registryFallback, malformed])).not.toContain(
+        "registry-token",
+      );
+    }).pipe(provideBuiltLayer(store.layer));
   });
 
   it.effect("parses lossy registry credentials with auth-file fallback and expiry", () => {

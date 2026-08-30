@@ -3,19 +3,15 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import type * as MutableRef from "effect/MutableRef";
 import { createFooterPresenter } from "pi-cosmic-core";
 import type { ResolvedConfig } from "../config/index.ts";
-import { visibleStatusLine, type XaiProjection } from "../usage/index.ts";
+import { visibleStatusLine, type XaiProjection } from "../usage/projection.ts";
 
 const STATUS_KEY = "better-xai";
-
-export interface FooterController {
-  update(ctx: ExtensionContext): void;
-}
 
 export function createFooterController(deps: {
   config(ctx: ExtensionContext): ResolvedConfig;
   projection: MutableRef.MutableRef<XaiProjection>;
   hasTerminalUI(ctx: ExtensionContext): boolean;
-}): FooterController {
+}) {
   const { config, projection, hasTerminalUI } = deps;
   return createFooterPresenter({
     statusKey: STATUS_KEY,

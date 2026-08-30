@@ -1,6 +1,9 @@
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  sessionEntryToContextMessages,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { snapshotData } from "../domain/safe-data.ts";
@@ -282,6 +285,11 @@ export const readAdvisorContextEntriesEffect = (
     const result = readAdvisorContextEntriesAtHostBoundary(ctx);
     return result.ok ? Effect.succeed(result.value) : Effect.fail(result.error);
   });
+
+export function activeContextMessages(ctx: ExtensionContext): unknown[] {
+  const result = readAdvisorContextEntriesAtHostBoundary(ctx);
+  return result.ok ? result.value.flatMap(sessionEntryToContextMessages) : [];
+}
 
 export const readAdvisorParentIdleAtHostBoundary = (
   ctx: ExtensionContext,

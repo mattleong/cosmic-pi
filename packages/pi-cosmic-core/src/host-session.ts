@@ -43,23 +43,19 @@ export type CapturedSessionHost =
 
 /** True when the host is a terminal UI session (explicit TUI mode or UI-capable default). */
 export function hasTerminalUI(ctx: HostUiContext): boolean {
-  try {
+  return invokeHostCallback(() => {
     const mode = ctx.mode;
     const hasUI = ctx.hasUI;
     return mode === "tui" || (mode === undefined && Boolean(hasUI));
-  } catch {
-    return false;
-  }
+  }, false);
 }
 
 /** True only when the host explicitly reports literal project trust. */
 export function isProjectTrusted(ctx: HostTrustContext): boolean {
-  try {
+  return invokeHostCallback(() => {
     const readTrust = ctx.isProjectTrusted;
     return Predicate.isFunction(readTrust) && readTrust.call(ctx) === true;
-  } catch {
-    return false;
-  }
+  }, false);
 }
 
 /** Best-effort Pi notification boundary; a hostile or stale host UI never throws into the caller. */
@@ -104,11 +100,7 @@ export function isUsingOAuthAtHostBoundary<Model>(
   registry: HostModelRegistry<Model>,
   model: Model,
 ): boolean {
-  try {
-    return registry.isUsingOAuth(model);
-  } catch {
-    return false;
-  }
+  return invokeHostCallback(() => registry.isUsingOAuth(model), false);
 }
 
 /** Capture the session abort signal without throwing across the host boundary. */

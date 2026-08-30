@@ -5,6 +5,11 @@ import {
   type AdvisorAbortInput,
 } from "../../boundary/host-context.ts";
 import {
+  sendAdvisorAdvice,
+  sendAdvisorPerspective,
+  sendCorrection,
+} from "../../boundary/host-review-cards.ts";
+import {
   filterAdvisorFindingsWithRollback,
   rollbackAdvisorFindingDedupe,
 } from "../../review/dedupe.ts";
@@ -31,16 +36,11 @@ import {
   type AdvisorRoute,
 } from "../../review/routing.ts";
 import { advisorActiveToolCount } from "../../review/trajectory.ts";
-import type { AdvisorCheckpoint } from "../../runtime/runtime.ts";
+import { incrementBounded } from "../../domain/metrics.ts";
 import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
-import type { AdvisorApplicationState } from "../state.ts";
+import type { AdvisorCheckpoint } from "../../runtime/runtime.ts";
 import type { ReviewPhase, ReviewSource } from "../controller.ts";
-import {
-  incrementBounded,
-  sendAdvisorAdvice,
-  sendAdvisorPerspective,
-  sendCorrection,
-} from "../controller-helpers.ts";
+import type { AdvisorApplicationState } from "../state.ts";
 import { parentIsIdle, parentSignalAborted } from "./parent-session.ts";
 
 export type DeliverFn = (

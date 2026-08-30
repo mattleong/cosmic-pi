@@ -9,8 +9,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import { withCodePreviewShell } from "pi-code-previews";
+import { sanitizeDiagnosticError } from "pi-cosmic-core";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
-import { describeHostFailure } from "../ui/notify-text.ts";
 import { OpenAIImageService } from "./service.ts";
 import { TOOL_PARAMS, type CodexImageResult, type ToolParams } from "./types.ts";
 
@@ -127,7 +127,7 @@ export function registerOpenAIImage(
         Effect.tapError((error) =>
           ignoreHostUi("image.command.failed", () =>
             ctx.ui.notify(
-              `OpenAI image generation failed${describeHostFailure(error)}.`,
+              `OpenAI image generation failed: ${sanitizeDiagnosticError(error.message)}.`,
               "warning",
             ),
           ),

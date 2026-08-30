@@ -1,4 +1,5 @@
 /** Child runtime start/stop/replace controls. */
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import {
   sessionEntryToContextMessages,
@@ -15,6 +16,7 @@ import {
 } from "../../checkpoint/ledger.ts";
 import { createAdvisorEmissionGuardState } from "../../review/emission-guard.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
+import { classifyFailure } from "../../domain/runtime-error-classifier.ts";
 import * as Scope from "effect/Scope";
 import { makeAdvisorReviewQueue, type AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import {
@@ -28,7 +30,6 @@ import {
 import { emptyAdvisorRoutingState, sanitizeAdvisorRoutingState } from "../../review/routing.ts";
 import type { AdvisorUsageTelemetry } from "../../runtime/client.ts";
 import type { AdvisorRuntimeServiceContract } from "../../runtime/runtime.ts";
-import { classifyFailure, makeCancellationLatch } from "../controller-helpers.ts";
 import { AdvisorExtensionError, extensionError, type ParentAnchor } from "../controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
 import type { SessionRefs } from "./session-refs.ts";
@@ -101,11 +102,14 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
       );
     });
   const cancelActiveChildStartEffect = (): Effect.Effect<void> =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       // The start token wins the race and its acquisition finalizer disposes only that child.
       // Do not abort the reusable refs.runtime service: a delayed abort could hit its replacement.
-      refs.activeChildStart?.cancel();
+      const activeChildStart = refs.activeChildStart;
       refs.activeChildStart = undefined;
+      return activeChildStart
+        ? Deferred.succeed(activeChildStart, undefined).pipe(Effect.asVoid)
+        : Effect.void;
     });
   const stopRuntimeEffect = (): Effect.Effect<void> =>
     cancelActiveChildStartEffect().pipe(Effect.andThen(d.productionController.stopChild()));
@@ -119,6 +123,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
       const startEpoch = d.advanceDomainCounter("epoch");
       let nextRuntime: AdvisorRuntimeServiceContract | undefined;
       let nextQueue: AdvisorReviewQueue | undefined;
+      let startCancellation: Deferred.Deferred<void> | undefined;
       const releaseNextOwnedEffect = (): Effect.Effect<void> =>
         Effect.suspend(() => {
           const queue = nextQueue;
@@ -180,7 +185,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
           refs.latestStateSummary = ledger ? renderDurableReviewSummary(ledger.reviewSummary) : "";
         }
         const runtimeConfig = { ...d.currentConfig() };
-        const startCancellation = makeCancellationLatch();
+        startCancellation = yield* Deferred.make<void>();
         refs.activeChildStart = startCancellation;
         const baseStartOptions = {
           ctx: {
@@ -222,7 +227,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
               new AdvisorExtensionError({ operation: "child startup", message: error.message }),
           ),
           Effect.raceFirst(
-            startCancellation.await.pipe(
+            Deferred.await(startCancellation).pipe(
               Effect.andThen(
                 Effect.fail(
                   new AdvisorExtensionError({
@@ -263,7 +268,8 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
       }).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
-            refs.activeChildStart = undefined;
+            if (startCancellation && refs.activeChildStart === startCancellation)
+              refs.activeChildStart = undefined;
             yield* releaseNextOwnedEffect();
             if (startEpoch === d.getState().epoch) {
               const kind = classifyFailure(error);

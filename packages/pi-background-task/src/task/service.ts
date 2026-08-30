@@ -48,7 +48,6 @@ interface TaskRecord {
   wake: Deferred.Deferred<void>;
   completion: Deferred.Deferred<BackgroundTaskSnapshot>;
   handleReady: Deferred.Deferred<LocalProcessHandle, LocalProcessError>;
-  terminationStarted: boolean;
   terminalOutcome?: "stopped" | "timed_out";
   ingressDroppedObserved: number;
 }
@@ -137,7 +136,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   const retainedLogBudget = Math.max(1, Math.floor(config.totalLogBufferBytes / 2));
   const ingressLogBudget = Math.max(1, config.totalLogBufferBytes - retainedLogBudget);
 
-  const withLock = lock.withPermits(1);
+  const withLock = Semaphore.withPermit(lock);
   const wake = (record: TaskRecord) => {
     const current = record.wake;
     record.wake = Deferred.makeUnsafe<void>();
@@ -210,10 +209,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     const completed = [...tasks.values()]
       .filter((record) => !isActiveTaskState(record.snapshot.state))
       .sort((left, right) => (left.snapshot.endedAt ?? 0) - (right.snapshot.endedAt ?? 0));
-    while (tasks.size > config.maxRetained && completed.length > 0) {
-      const evicted = completed.shift();
-      if (evicted) tasks.delete(evicted.snapshot.id);
-    }
+    const evictionCount = completed.length - config.maxRetained;
+    if (evictionCount <= 0) return;
+    for (const evicted of completed.slice(0, evictionCount)) tasks.delete(evicted.snapshot.id);
   };
   const completeRecord = (
     record: TaskRecord,
@@ -303,8 +301,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
                 terminal: record.snapshot,
               } satisfies StopPreparation);
             }
-            const owner = !record.terminationStarted;
-            record.terminationStarted = true;
+            const owner = record.snapshot.state !== "stopping";
             record.terminalOutcome ??= outcome;
             record.snapshot = { ...record.snapshot, state: "stopping" };
             wake(record);
@@ -324,11 +321,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             );
         const stopPhase = Effect.gen(function* () {
           const handle = Option.getOrUndefined(
-            Option.flatten(
-              yield* Deferred.await(prepared.record.handleReady).pipe(
-                Effect.option,
-                Effect.timeoutOption("5 seconds"),
-              ),
+            yield* Deferred.await(prepared.record.handleReady).pipe(
+              Effect.timeout("5 seconds"),
+              Effect.option,
             ),
           );
           if (!handle) return;
@@ -401,7 +396,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           }),
         );
         if (terminateLateHandle) {
-          yield* handle.terminate("force").pipe(Effect.catch(() => Effect.void));
+          yield* handle.terminate("force").pipe(Effect.ignore);
         }
         const outputFiber = yield* handle.output.pipe(
           Stream.runForEach((event) =>
@@ -413,7 +408,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         if (request.timeoutSeconds !== undefined) {
           yield* Effect.sleep(Duration.seconds(request.timeoutSeconds)).pipe(
             Effect.andThen(requestStop(id, false, "timed_out")),
-            Effect.catch(() => Effect.void),
+            Effect.ignore,
             Effect.forkScoped({ startImmediately: true }),
           );
         }
@@ -514,7 +509,6 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
               wake: Deferred.makeUnsafe<void>(),
               completion: Deferred.makeUnsafe<BackgroundTaskSnapshot>(),
               handleReady: Deferred.makeUnsafe<LocalProcessHandle, LocalProcessError>(),
-              terminationStarted: false,
               ingressDroppedObserved: 0,
             };
             tasks.set(id, created);
@@ -755,11 +749,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       Effect.sync(() => {
         admissionsClosed = true;
       }),
-    ).pipe(
-      Effect.andThen(stopAll(false)),
-      Effect.asVoid,
-      Effect.catch(() => Effect.void),
-    ),
+    ).pipe(Effect.andThen(stopAll(false)), Effect.ignore),
   );
 
   return service;

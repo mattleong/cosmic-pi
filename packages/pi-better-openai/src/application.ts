@@ -15,6 +15,7 @@ import {
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
+  sanitizeDiagnosticError,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import {
@@ -24,7 +25,6 @@ import {
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
-import { describeHostFailure } from "./ui/notify-text.ts";
 import type { ResolvedConfig } from "./config/schema.ts";
 import type { OpenAIConfigError } from "./config/store.ts";
 import {
@@ -248,7 +248,8 @@ export function betterOpenAIWithDependencies(
           update,
           "fast mode",
           ctx,
-          (error) => `OpenAI fast mode is unavailable${describeHostFailure(error)}.`,
+          (error: { readonly message: string }) =>
+            `OpenAI fast mode is unavailable: ${sanitizeDiagnosticError(error.message)}.`,
         ),
         signal,
       ).catch(() => {
@@ -270,7 +271,8 @@ export function betterOpenAIWithDependencies(
           refresh,
           "usage",
           ctx,
-          (error) => `OpenAI usage is unavailable${describeHostFailure(error)}.`,
+          (error: { readonly message: string }) =>
+            `OpenAI usage is unavailable: ${sanitizeDiagnosticError(error.message)}.`,
         ),
         signal,
       ).catch(() => {

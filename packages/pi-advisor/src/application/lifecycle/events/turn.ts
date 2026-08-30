@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { captureAdvisorAbortInputAtHostBoundary } from "../../../boundary/host-context.ts";
+import { sendCorrection } from "../../../boundary/host-review-cards.ts";
 import {
   assistantStopReason,
   assistantToolCalls,
@@ -13,8 +14,8 @@ import {
   contentText,
   isGenuineUserMessage,
 } from "../../../domain/candidate.ts";
+import { incrementBounded } from "../../../domain/metrics.ts";
 import { completeAdvisorPrimaryTurn } from "../../../review/routing.ts";
-import { incrementBounded, sendCorrection } from "../../controller-helpers.ts";
 import { settleAdvisorPendingRecovery } from "../../state.ts";
 import { parentHasPendingMessages, parentIsIdle, parentSignalAborted } from "../parent-session.ts";
 import type { EventsDeps } from "./types.ts";

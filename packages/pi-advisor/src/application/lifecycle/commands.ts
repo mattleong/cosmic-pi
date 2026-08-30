@@ -9,8 +9,8 @@ import {
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
 import type { CheckpointOrchestratorContract } from "../../checkpoint/orchestrator.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
+import { incrementBounded } from "../../domain/metrics.ts";
 import type { AdvisorCommandActions } from "../../settings/controller.ts";
-import { incrementBounded } from "../controller-helpers.ts";
 import type { AdvisorApplicationState } from "../state.ts";
 import type { EventsDeps } from "./events/types.ts";
 import type { SessionRefs } from "./session-refs.ts";

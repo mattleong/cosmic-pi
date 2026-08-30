@@ -22,18 +22,13 @@ import {
   profileWorkspaceActionChoices,
   type ProfileWorkspaceDraftAction,
 } from "./profile-workspace-actions.ts";
-import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
+import {
+  SearchableSelectPage,
+  type SearchableSelectHostOptions,
+} from "./searchable-select-page.ts";
 
-interface SharedSelectorOptions {
+interface SharedSelectorOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
-  readonly getHeight: () => number;
-  readonly requestRender: () => void;
-  readonly matchesKeybinding?:
-    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
-    | undefined;
-  readonly keybindingLabel?:
-    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
-    | undefined;
 }
 
 const targetLabel = (target: ProfileWorkspaceTarget): string =>

@@ -8,12 +8,12 @@ import {
   makeSessionProfileSnapshot,
   type SessionProfileOverrideSeed,
 } from "../src/profiles/session-overrides.ts";
+import { inheritSessionDraft } from "../src/settings/profile-route-editor.ts";
 import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceOptions,
   type ProfileWorkspaceSaveResult,
 } from "../src/settings/profile-workspace.ts";
-import { currentSessionBaselineDraft } from "../src/settings/ui/profile-workspace-actions.ts";
 
 const makeInspection = (seed?: SessionProfileOverrideSeed) => {
   const global = decodeSubagentConfig(
@@ -212,7 +212,7 @@ describe("profile workspace navigation", () => {
 
   it("keeps an invalid clean Current Session baseline fail-closed", () => {
     const inspection = invalidBaselineInspection(false);
-    expect(currentSessionBaselineDraft(inspection, "generalist")).toEqual({
+    expect(inheritSessionDraft(inspection, "generalist")).toEqual({
       kind: "invalid",
       candidates: [],
     });

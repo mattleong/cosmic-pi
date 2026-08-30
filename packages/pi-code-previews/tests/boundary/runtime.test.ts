@@ -5,20 +5,20 @@ import { test } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { clearCodePreviewSessionCapability } from "../../src/application/capability";
-import { previewScheduleEffect } from "../../src/application/scheduler";
 import {
-  deferProjectedCodePreview,
-  scheduleProjectedCodePreview,
-} from "../../src/application/projection";
+  clearCodePreviewSessionCapability,
+  deferCodePreview,
+  scheduleCodePreview,
+} from "../../src/application/capability";
+import { previewScheduleEffect } from "../../src/application/scheduler";
 
 test("no background work starts before acquisition or after shutdown", () => {
   clearCodePreviewSessionCapability();
   let calls = 0;
-  const cancelDeferred = deferProjectedCodePreview(() => calls++);
-  const cancelProjectedSchedule = scheduleProjectedCodePreview(1, () => calls++);
+  const cancelDeferred = deferCodePreview(() => calls++);
+  const cancelSchedule = scheduleCodePreview(1, () => calls++);
   cancelDeferred();
-  cancelProjectedSchedule();
+  cancelSchedule();
   assert.equal(calls, 0);
 });
 

@@ -1,11 +1,8 @@
 import * as Effect from "effect/Effect";
-import {
-  PaneProcessInfoEnvelopeSchema,
-  ProtocolSchema,
-  herdrCommand,
-  type HerdrCommandRunner,
-  type HerdrPane,
-  type HerdrPaneProcessInfo,
+import type {
+  HerdrClientContract,
+  HerdrPane,
+  HerdrPaneProcessInfo,
 } from "../boundary/herdr-client.ts";
 import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
 import { HerdrBtwError } from "./errors.ts";
@@ -35,35 +32,24 @@ const HERDR_SHELL_PROCESS_NAMES = new Set([
 ]);
 
 export const ensureHerdrProtocol = (
-  runner: HerdrCommandRunner,
+  client: HerdrClientContract,
 ): Effect.Effect<void, HerdrBtwError> =>
   Effect.gen(function* () {
-    const protocol = yield* herdrCommand(runner, {
-      args: ["api", "schema", "--json"],
-      operation: "inspect protocol",
-      schema: ProtocolSchema,
-    });
-    if (protocol.protocol < MINIMUM_HERDR_PROTOCOL)
+    const protocol = yield* client.inspectProtocol();
+    if (protocol < MINIMUM_HERDR_PROTOCOL)
       return yield* new HerdrBtwError({
         operation: "inspect protocol",
         code: "herdr_upgrade_required",
-        message: `Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer is required; found ${protocol.protocol}.`,
+        message: `Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer is required; found ${protocol}.`,
         outcome: "confirmed",
       });
   });
 
 export const ensurePiIntegration = (
-  runner: HerdrCommandRunner,
+  client: HerdrClientContract,
 ): Effect.Effect<void, HerdrBtwError> =>
   Effect.gen(function* () {
-    const integrations = yield* runner({
-      args: ["integration", "status"],
-      operation: "inspect Pi integration",
-    });
-    const piIntegration = integrations.stdout
-      .split(/\r?\n/gu)
-      .find((line) => line.startsWith("pi:"));
-    if (!piIntegration || !/^pi: current \(v\d+\) \(.+\)$/u.test(piIntegration))
+    if (!(yield* client.inspectPiIntegration()))
       return yield* new HerdrBtwError({
         operation: "inspect Pi integration",
         code: "herdr_pi_integration_unavailable",
@@ -140,18 +126,14 @@ const paneHasAvailableShell = (processInfo: HerdrPaneProcessInfo): boolean => {
 };
 
 export const waitForAvailableShell = (
-  runner: HerdrCommandRunner,
+  client: HerdrClientContract,
   paneId: string,
 ): Effect.Effect<void, HerdrBtwError> =>
   Effect.gen(function* () {
     let stableReadings = 0;
     for (let attempt = 1; attempt <= SHELL_READINESS_ATTEMPTS; attempt += 1) {
-      const { result } = yield* herdrCommand(runner, {
-        args: ["pane", "process-info", "--pane", paneId],
-        operation: "inspect BTW pane shell",
-        schema: PaneProcessInfoEnvelopeSchema,
-      });
-      if (result.process_info.pane_id !== paneId)
+      const processInfo = yield* client.inspectPaneProcessInfo(paneId);
+      if (processInfo.pane_id !== paneId)
         return yield* new HerdrBtwError({
           operation: "inspect BTW pane shell",
           code: "herdr_btw_pane_shell_mismatch",
@@ -159,7 +141,7 @@ export const waitForAvailableShell = (
             "Herdr returned process information for a different pane. No Pi launch was attempted.",
           outcome: "confirmed",
         });
-      stableReadings = paneHasAvailableShell(result.process_info) ? stableReadings + 1 : 0;
+      stableReadings = paneHasAvailableShell(processInfo) ? stableReadings + 1 : 0;
       if (stableReadings >= REQUIRED_STABLE_SHELL_READINGS) return;
       if (attempt < SHELL_READINESS_ATTEMPTS) yield* Effect.sleep(SHELL_READINESS_DELAY_MILLIS);
     }

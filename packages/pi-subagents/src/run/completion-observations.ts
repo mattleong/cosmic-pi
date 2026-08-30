@@ -4,6 +4,7 @@ import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "./error
 import type { RunRecord } from "./internal.ts";
 import {
   isAssignmentFinishedRunState,
+  isParentActionRequiredRun,
   type SubagentProjection,
   type SubagentRunView,
 } from "./model.ts";
@@ -215,11 +216,9 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
             const terminalCount = runs.filter((run) =>
               isAssignmentFinishedRunState(run.state),
             ).length;
-            const parentAttentionRequired = runs.some(
-              (run) => run.state === "waiting_for_parent" && run.question !== undefined,
-            );
+            const parentActionRequired = runs.some(isParentActionRequiredRun);
             const done =
-              parentAttentionRequired ||
+              parentActionRequired ||
               (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
             if (done) return { done: true as const, runs, observations };
             return {

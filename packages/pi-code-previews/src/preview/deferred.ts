@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
+import { deferCodePreview } from "../application/capability";
 import { codePreviewPerformanceConfig } from "../config/env";
-import { deferProjectedCodePreview } from "../application/projection";
 import { escapeControlChars } from "../shared/terminal-text";
 
 export function shouldRenderDeferred(text: string): boolean {
@@ -20,7 +20,7 @@ export class DeferredPreview implements Component {
   constructor(message: string, theme: Theme, compute: () => Component, invalidate: () => void) {
     this.component = new Text(theme.fg("muted", message), 0, 0);
     const generation = ++this.generation;
-    this.cancellation = deferProjectedCodePreview(() => {
+    this.cancellation = deferCodePreview(() => {
       if (generation !== this.generation) return;
       let next: Component;
       try {

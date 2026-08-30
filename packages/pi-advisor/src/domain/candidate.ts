@@ -1,10 +1,9 @@
 import * as Predicate from "effect/Predicate";
 
 import type { TurnEndEvent } from "@earendil-works/pi-coding-agent";
-import { stringifyJson } from "../boundary/json.ts";
 import { snapshotData } from "./safe-data.ts";
 import { stringifyRedactedObservation } from "./redaction.ts";
-import { isRecord } from "../shared/utils.ts";
+import { isJsonObject } from "pi-cosmic-core";
 
 export type AdvisorReviewPhase = "final" | "progress";
 
@@ -15,12 +14,14 @@ export type CandidateClassification =
 /** Extract user-visible text from a safely snapshotted host message. */
 export function contentText<MessageInput>(message: MessageInput): string {
   const snapshot = snapshotData(message);
-  if (!isRecord(snapshot)) return "";
+  if (!isJsonObject(snapshot)) return "";
   if (Predicate.isString(snapshot.content)) return snapshot.content;
   if (!Array.isArray(snapshot.content)) return "";
   return snapshot.content
     .flatMap((part) =>
-      isRecord(part) && part.type === "text" && Predicate.isString(part.text) ? [part.text] : [],
+      isJsonObject(part) && part.type === "text" && Predicate.isString(part.text)
+        ? [part.text]
+        : [],
     )
     .join("\n");
 }
@@ -32,7 +33,7 @@ export function assistantStopReason<MessageInput>(
   message: MessageInput,
 ): "stop" | "aborted" | "error" | "length" {
   const snapshot = snapshotData(message);
-  if (!isRecord(snapshot)) return "error";
+  if (!isJsonObject(snapshot)) return "error";
   return snapshot.stopReason === "aborted" ||
     snapshot.stopReason === "error" ||
     snapshot.stopReason === "length"
@@ -42,9 +43,9 @@ export function assistantStopReason<MessageInput>(
 
 export function assistantToolCalls<MessageInput>(message: MessageInput): string[] {
   const snapshot = snapshotData(message);
-  if (!isRecord(snapshot) || !Array.isArray(snapshot.content)) return [];
+  if (!isJsonObject(snapshot) || !Array.isArray(snapshot.content)) return [];
   return snapshot.content.flatMap((part) =>
-    isRecord(part) && part.type === "toolCall"
+    isJsonObject(part) && part.type === "toolCall"
       ? [
           `${Predicate.isString(part.name) ? part.name : "unknown"} ${safeObservationJson(part.arguments)}`,
         ]
@@ -54,12 +55,12 @@ export function assistantToolCalls<MessageInput>(message: MessageInput): string[
 
 export function isGenuineUserMessage<MessageInput>(message: MessageInput): boolean {
   const snapshot = snapshotData(message);
-  return isRecord(snapshot) && snapshot.role === "user";
+  return isJsonObject(snapshot) && snapshot.role === "user";
 }
 
 export function classifyReviewCheckpoint(event: TurnEndEvent): CandidateClassification {
   const message = snapshotData(event.message);
-  if (!isRecord(message) || message.role !== "assistant") {
+  if (!isJsonObject(message) || message.role !== "assistant") {
     return { eligible: false, reason: "not-assistant" };
   }
   if (
@@ -69,7 +70,9 @@ export function classifyReviewCheckpoint(event: TurnEndEvent): CandidateClassifi
   )
     return { eligible: false, reason: "incomplete" };
   if (!Array.isArray(message.content)) return { eligible: false, reason: "empty" };
-  const hasToolCall = message.content.some((part) => isRecord(part) && part.type === "toolCall");
+  const hasToolCall = message.content.some(
+    (part) => isJsonObject(part) && part.type === "toolCall",
+  );
   if (hasToolCall) {
     const candidate = assistantCheckpointText(message);
     return candidate
@@ -85,11 +88,15 @@ export function classifyReviewCheckpoint(event: TurnEndEvent): CandidateClassifi
 
 export function assistantCheckpointText<MessageInput>(message: MessageInput): string | undefined {
   const snapshot = snapshotData(message);
-  if (!isRecord(snapshot) || snapshot.role !== "assistant" || !Array.isArray(snapshot.content)) {
+  if (
+    !isJsonObject(snapshot) ||
+    snapshot.role !== "assistant" ||
+    !Array.isArray(snapshot.content)
+  ) {
     return undefined;
   }
   const parts = snapshot.content.flatMap((part) => {
-    if (!isRecord(part)) return [];
+    if (!isJsonObject(part)) return [];
     if (part.type === "text" && Predicate.isString(part.text) && part.text.trim()) {
       return [part.text.trim()];
     }
@@ -97,7 +104,7 @@ export function assistantCheckpointText<MessageInput>(message: MessageInput): st
     const name = Predicate.isString(part.name) && part.name ? part.name : "unknown";
     let args = "";
     try {
-      args = part.arguments === undefined ? "" : ` ${stringifyJson(part.arguments)}`;
+      args = part.arguments === undefined ? "" : ` ${JSON.stringify(part.arguments)}`;
     } catch {
       args = " [unserializable arguments]";
     }
@@ -109,12 +116,18 @@ export function assistantCheckpointText<MessageInput>(message: MessageInput): st
 
 export function assistantText<MessageInput>(message: MessageInput): string | undefined {
   const snapshot = snapshotData(message);
-  if (!isRecord(snapshot) || snapshot.role !== "assistant" || !Array.isArray(snapshot.content)) {
+  if (
+    !isJsonObject(snapshot) ||
+    snapshot.role !== "assistant" ||
+    !Array.isArray(snapshot.content)
+  ) {
     return undefined;
   }
   const text = snapshot.content
     .flatMap((part) =>
-      isRecord(part) && part.type === "text" && Predicate.isString(part.text) ? [part.text] : [],
+      isJsonObject(part) && part.type === "text" && Predicate.isString(part.text)
+        ? [part.text]
+        : [],
     )
     .join("\n")
     .trim();

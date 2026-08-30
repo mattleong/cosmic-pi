@@ -6,8 +6,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as SchemaGetter from "effect/SchemaGetter";
-import * as SchemaTransformation from "effect/SchemaTransformation";
 import { JsonDocumentError } from "./errors.ts";
 import { ProcessCoordinator } from "./process-coordinator.ts";
 
@@ -32,17 +30,8 @@ export interface JsonDocumentModification<A, AfterCommitR = never> {
   readonly afterCommit?: Effect.Effect<void, never, AfterCommitR>;
 }
 
-const UnknownFromPrettyJsonString = Schema.String.pipe(
-  Schema.decodeTo(
-    Schema.Unknown,
-    new SchemaTransformation.Transformation<unknown, string>(
-      SchemaGetter.parseJson(),
-      SchemaGetter.stringifyJson({ space: 2 }),
-    ),
-  ),
-);
 const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
-const JsonObjectFromString = UnknownFromPrettyJsonString.pipe(Schema.decodeTo(JsonObjectSchema));
+const JsonObjectFromString = Schema.fromJsonString(JsonObjectSchema, { space: 2 });
 
 export interface JsonDocumentStoreContract {
   readonly exists: (path: string) => Effect.Effect<boolean, JsonDocumentError>;
@@ -88,11 +77,11 @@ export class JsonDocumentStore extends Context.Service<
       const mapError = (operation: string, path: string, message: string) => () =>
         new JsonDocumentError({ operation, path, message });
 
-      const exists = Effect.fn("JsonDocumentStore.exists")(function* (path: string) {
-        return yield* fs
+      const exists = Effect.fn("JsonDocumentStore.exists")((path: string) =>
+        fs
           .exists(path)
-          .pipe(Effect.mapError(mapError("exists", path, "Unable to inspect JSON document path.")));
-      });
+          .pipe(Effect.mapError(mapError("exists", path, "Unable to inspect JSON document path."))),
+      );
 
       const readObjectUnlocked = Effect.fn("JsonDocumentStore.readObjectUnlocked")(function* (
         path: string,

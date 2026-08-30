@@ -6,9 +6,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback, isJsonObject } from "pi-cosmic-core";
 import { snapshotData } from "../domain/safe-data.ts";
-import { isRecord } from "../shared/utils.ts";
 import { AdvisorModelError } from "./client.ts";
 import { ADVISOR_TOOL_NAMES } from "./tools.ts";
 
@@ -203,7 +202,7 @@ export function isToolCallDelta<ValueInput>(
   value: ValueInput,
 ): value is ValueInput & { delta: string } {
   return (
-    isRecord(value) &&
+    isJsonObject(value) &&
     (value.type === "toolcall_delta" || value.type === "tool_call_delta") &&
     Predicate.isString(value.delta)
   );

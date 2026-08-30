@@ -2,13 +2,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { notifyHerdrBtw } from "../boundary/host-notifier.ts";
 import type { HerdrBtwResult } from "./service.ts";
 
-export type HerdrBtwCommandOutcome =
-  | { readonly _tag: "opened"; readonly result: HerdrBtwResult }
-  | { readonly _tag: "failed"; readonly message: string };
-
 export interface HerdrBtwCommandHandlers {
-  readonly open: (prompt?: string | undefined) => Promise<HerdrBtwCommandOutcome>;
-  readonly openNew: (prompt?: string | undefined) => Promise<HerdrBtwCommandOutcome>;
+  readonly open: (prompt?: string | undefined) => Promise<HerdrBtwResult>;
+  readonly openNew: (prompt?: string | undefined) => Promise<HerdrBtwResult>;
 }
 
 const successMessage = (result: HerdrBtwResult): string => {
@@ -26,7 +22,7 @@ const registerCommand = (
   pi: ExtensionAPI,
   name: string,
   description: string,
-  run: (prompt?: string | undefined) => Promise<HerdrBtwCommandOutcome>,
+  run: (prompt?: string | undefined) => Promise<HerdrBtwResult>,
 ): void => {
   pi.registerCommand(name, {
     description,
@@ -38,13 +34,8 @@ const registerCommand = (
 
       const trimmed = args.trim();
       return run(trimmed || undefined).then(
-        (outcome) => {
-          if (outcome._tag === "opened")
-            notifyHerdrBtw(ctx, successMessage(outcome.result), "info");
-          else notifyHerdrBtw(ctx, outcome.message.slice(0, 2_000), "error");
-        },
+        (result) => notifyHerdrBtw(ctx, successMessage(result), "info"),
         (failure) => {
-          // Inactive-slot or unexpected runtime rejections; domain failures arrive as typed outcomes.
           const message =
             failure instanceof Error ? failure.message : "Unable to open a Herdr BTW session.";
           notifyHerdrBtw(ctx, message.slice(0, 2_000), "error");

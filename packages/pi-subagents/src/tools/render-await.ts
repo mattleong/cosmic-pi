@@ -75,7 +75,7 @@ export const formatAwaitSummary = (
     : outcome.timedOut
       ? "Await timed out"
       : outcome.attentionRequired
-        ? "Parent reply required"
+        ? "Parent action required"
         : settledNormally
           ? until === "any_finished" && firstSummary
             ? `${completionGlyph} ${firstSummary}`

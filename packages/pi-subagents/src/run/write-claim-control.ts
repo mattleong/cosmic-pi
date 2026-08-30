@@ -59,10 +59,23 @@ export function makeRunWriteClaimControl(dependencies: RunWriteClaimControlDepen
       const hasOtherActiveTool = [...record.activeTools.values()].some(
         (toolName) => !isBlockingClaimQuestionTool(toolName),
       );
-      if (record.view.state !== "waiting_for_parent" || hasOtherActiveTool)
+      const waitingForParentClaimDecision =
+        record.view.state === "waiting_for_parent" &&
+        !record.writerPool.admissionPaused &&
+        !hasOtherActiveTool;
+      const confirmedPausedViolationOffender =
+        record.view.state === "paused" &&
+        record.writerPool.state === "held" &&
+        record.writerPool.admissionPaused &&
+        record.writerPool.violationRunIds.has(id) &&
+        record.activeTools.size === 0 &&
+        !record.pauseRequested &&
+        record.pauseOutcome === undefined &&
+        record.pausedAssignmentEpoch === record.assignment.epoch;
+      if (!waitingForParentClaimDecision && !confirmedPausedViolationOffender)
         return yield* invalid(
           "write_claim_change_not_waiting",
-          `Subagent ${id} must be blocked on a parent claim question with no other active tool before its claims can change.`,
+          `Subagent ${id} must be blocked on a parent claim question or be the confirmed paused claim-violation offender, with no other active tool, before its claims can change.`,
         );
       return record;
     });
@@ -98,9 +111,13 @@ export function makeRunWriteClaimControl(dependencies: RunWriteClaimControlDepen
               "too_many_write_claims",
               `A writer may claim at most ${MAX_WRITE_CLAIMS} files.`,
             );
+          const conflictPools =
+            record.view.state === "paused" && record.writerPool?.violationRunIds.has(id)
+              ? new Map([...writerPools].filter(([digest]) => digest !== canonicalCwd.digest))
+              : writerPools;
           const conflict = writerConflictError(
             records,
-            writerPools,
+            conflictPools,
             canonicalCwd,
             combined,
             record,
@@ -186,8 +203,8 @@ export function makeRunWriteClaimControl(dependencies: RunWriteClaimControlDepen
           .find(
             (offender) =>
               offender !== undefined &&
-              offender.view.state !== "paused" &&
-              !isTerminalRunState(offender.view.state),
+              (offender.cleanupPending ||
+                (offender.view.state !== "paused" && !isTerminalRunState(offender.view.state))),
           );
         if (uncontained)
           return yield* invalid(
@@ -200,8 +217,12 @@ export function makeRunWriteClaimControl(dependencies: RunWriteClaimControlDepen
         for (const member of records.values()) {
           if (member.canonicalWriterCwd?.digest !== pool.cwd.digest) continue;
           member.writeViolationContainmentStarted = false;
-          if (member.view.writeAdmissionPaused)
-            member.view = { ...member.view, writeAdmissionPaused: undefined };
+          if (member.view.writeAdmissionPaused || member.view.writeViolationOffender)
+            member.view = {
+              ...member.view,
+              writeAdmissionPaused: undefined,
+              writeViolationOffender: undefined,
+            };
         }
         if (pool.state === "paused" && pool.members.size === 0) {
           if (writerPools.get(pool.cwd.digest) === pool) writerPools.delete(pool.cwd.digest);

@@ -117,7 +117,6 @@ describe("xAI authentication", () => {
       expect(refreshAttempts).toBe(1);
       expect(result._tag).toBe("Found");
       if (result._tag === "Found") {
-        expect(result.credentials.source).toBe("modelRegistry");
         expect(Redacted.value(result.credentials.accessToken)).toBe(registrySecret);
       }
       const serialized = `${serializedSnapshot(result)}\n${capturedTelemetrySnapshot({
@@ -158,7 +157,6 @@ describe("xAI authentication", () => {
       expect(refreshAttempts).toBe(1);
       expect(result._tag).toBe("Found");
       if (result._tag === "Found") {
-        expect(result.credentials.source).toBe("authFile");
         expect(Redacted.value(result.credentials.accessToken)).toBe("valid-access-secret");
       }
     }).pipe(provideBuiltLayer(layer));

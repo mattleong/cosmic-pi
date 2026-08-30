@@ -4,7 +4,6 @@ import type {
   ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -27,20 +26,23 @@ interface CapturedTool {
   }>;
 }
 interface CapturedCommand {
-  readonly handler: (args: string, ctx: ExtensionContext) => void | Promise<void>;
+  readonly handler: (args: string, ctx: ExtensionContext) => Promise<void>;
 }
 
 afterEach(() => vi.unstubAllEnvs());
 
-const controlled = () => {
-  const handle = Deferred.makeUnsafe<void>();
-  return {
-    promise: Effect.runPromise(Deferred.await(handle)),
-    resolve: () => {
-      Effect.runSync(Deferred.succeed(handle, undefined));
-    },
-  };
-};
+interface PromiseGate<A> {
+  readonly promise: Promise<A>;
+  readonly resolve: (value: A | PromiseLike<A>) => void;
+}
+
+const controlled = () =>
+  // SAFETY: Every supported Node version implements Promise.withResolvers; ES2023 libs omit it.
+  (
+    Promise as PromiseConstructor & {
+      withResolvers<A>(): PromiseGate<A>;
+    }
+  ).withResolvers<void>();
 
 const harness = (
   loadPreviewSettings: (
@@ -176,9 +178,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         throw new Error("stale UI");
       });
       // SAFETY: The captured handler reads only the notify field supplied here.
-      yield* Effect.promise(() =>
-        Promise.resolve(command.handler("", { ui: { notify } } as never)),
-      );
+      yield* Effect.promise(() => command.handler("", { ui: { notify } } as never));
       expect(notify).toHaveBeenCalledOnce();
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
