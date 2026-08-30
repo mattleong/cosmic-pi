@@ -66,6 +66,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   private message:
     | { readonly kind: "info" | "warning" | "error"; readonly text: string }
     | undefined;
+  private alternateHelp = false;
   private readonly keymap = new FullScreenKeymap();
   private readonly options: ProfileSetPickerOptions;
   private disposed = false;
@@ -231,21 +232,62 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     }
     if (this.searching) {
       const resolution = this.keymap.resolve(data, {
-        mode: "navigation",
+        mode: "search",
         matchesKeybinding: this.options.matchesKeybinding,
       });
-      if (
-        resolution?._tag === "Action" &&
-        (resolution.action === "cancel" || resolution.action === "quit")
-      ) {
-        this.searching = false;
-        this.query = "";
-        this.selectedIndex = initialProfileSetPickerIndex(
-          this.allEntries,
-          this.options.initialScope,
-        );
-      } else if (resolution?._tag === "Action" && resolution.action === "confirm") {
-        this.searching = false;
+      if (resolution?._tag === "Action") {
+        const steps = pageSteps(this.options.getHeight() - 8);
+        switch (resolution.action) {
+          case "cancel":
+            this.searching = false;
+            this.query = "";
+            this.selectedIndex = initialProfileSetPickerIndex(
+              this.allEntries,
+              this.options.initialScope,
+            );
+            break;
+          case "confirm": {
+            const selected = this.selected();
+            this.searching = false;
+            this.query = "";
+            this.selectedIndex = selected ? this.allEntries.indexOf(selected) : 0;
+            this.editSelected();
+            break;
+          }
+          case "up":
+            this.move(-1);
+            break;
+          case "down":
+            this.move(1);
+            break;
+          case "half-page-up":
+            this.move(-steps.half);
+            break;
+          case "half-page-down":
+            this.move(steps.half);
+            break;
+          case "full-page-up":
+            this.move(-steps.page);
+            break;
+          case "full-page-down":
+            this.move(steps.page);
+            break;
+          case "first":
+            this.selectedIndex = 0;
+            break;
+          case "last":
+            this.selectedIndex = Math.max(0, this.entries().length - 1);
+            break;
+          case "quit":
+          case "back":
+          case "forward":
+          case "search":
+          case "help":
+          case "next-pane":
+          case "previous-pane":
+          case "pending-first":
+            break;
+        }
       } else if (data === "\u007f" || data === "\b") {
         this.query = this.query.slice(0, -1);
         this.selectedIndex = 0;
@@ -322,10 +364,12 @@ export class ProfileSetPickerComponent implements Component, Focusable {
         this.query = "";
         this.selectedIndex = 0;
         break;
+      case "help":
+        this.alternateHelp = !this.alternateHelp;
+        break;
       case "back":
       case "next-pane":
       case "previous-pane":
-      case "help":
       case "pending-first":
         break;
     }
@@ -344,6 +388,8 @@ export class ProfileSetPickerComponent implements Component, Focusable {
         searching: this.searching,
         reloadRequired: this.options.reloadRequired,
         sessionOverrideCount: Object.keys(this.options.inspection.session.overrides).length,
+        projectTrusted: this.options.projectTrusted,
+        alternateHelp: this.alternateHelp,
         activeSelectionLabel: profileSetSelectionLabel(
           this.options.inspection.session.baseConfig.currentProfileSet,
         ),

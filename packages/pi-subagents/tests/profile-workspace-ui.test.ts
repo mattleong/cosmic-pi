@@ -85,6 +85,35 @@ const inspection = (): ProfileSettingsInspection => {
   };
 };
 
+const pendingInspection = (): ProfileSettingsInspection => {
+  const saved = inspection();
+  const activeGlobal = decodeSubagentConfig(
+    {
+      version: 6,
+      defaultProfileSet: "global-work",
+      profileSets: {
+        "global-work": {
+          profiles: {
+            reviewer: globalRoute,
+            worker: routeOption("openai/active-worker"),
+          },
+        },
+      },
+    },
+    "global",
+  );
+  const activeConfig = resolveSubagentConfig({
+    globalConfigPath: "/agent/pi-subagents.json",
+    projectConfigPath: "/repo/.pi/pi-subagents.json",
+    projectTrusted: true,
+    globalConfigExists: true,
+    projectConfigExists: true,
+    global: activeGlobal,
+    project: saved.project,
+  });
+  return { ...saved, session: makeSessionProfileSnapshot(activeConfig) };
+};
+
 const profileIndex = (profile: ProfileId): number => PROFILE_IDS.indexOf(profile);
 
 const renderState = (
@@ -117,14 +146,16 @@ const render = (
 const joined = (lines: ReadonlyArray<string>): string => lines.join("\n");
 
 describe("profile workspace projection", () => {
-  it("shows the scope dashboard and marks an unavailable Project scope", () => {
+  it("shows a concise scope dashboard and marks an unavailable Project scope", () => {
     const output = joined(render({ pane: "profiles", projectTrusted: false }));
 
-    expect(output).toContain("1 Session · 2 Project · 3 Global");
-    expect(output).toContain("Current  3 Global");
-    expect(output).toContain("Project unavailable (trust required)");
-    expect(output).toContain("s Sets");
-    expect(output).toContain("[S] Session > [P] Project > [G] Global > [B] Built-in");
+    expect(output).toContain("/subagents profiles › Global");
+    expect(output).toContain("[G] global-work");
+    expect(output).toContain("Project unavailable until trusted");
+    expect(output).toContain("1/2/3 Scope");
+    expect(output).toContain("? More");
+    expect(output).not.toContain("Effective source");
+    expect(output).not.toContain("Actions");
   });
 
   it("presents route priority and fields in task order", () => {
@@ -134,8 +165,16 @@ describe("profile workspace projection", () => {
     expect(route).toContain("Fallback 1");
     expect(route).toContain("Fallback 2");
     expect(route).toContain("Add fallback");
-    expect(route).toContain("Clone fallback");
-    expect(route).toContain("Remove route option");
+    expect(route).toContain("? More");
+    expect(route).not.toContain("Clone fallback");
+    expect(route).not.toContain("Remove route option");
+
+    const expandedHelp = joined(
+      render({ pane: "candidates", profileIndex: profileIndex("worker"), alternateHelp: true }),
+    );
+    expect(expandedHelp).toContain("c Clone");
+    expect(expandedHelp).toContain("x Remove");
+    expect(expandedHelp).toContain("d Disable");
 
     const fields = joined(
       render({ pane: "fields", profileIndex: profileIndex("worker"), candidateIndex: 1 }),
@@ -153,6 +192,28 @@ describe("profile workspace projection", () => {
     ];
     for (let index = 1; index < labels.length; index += 1)
       expect(fields.indexOf(labels[index]!)).toBeGreaterThan(fields.indexOf(labels[index - 1]!));
+  });
+
+  it("labels saved routing while showing the distinct active Primary", () => {
+    const route = joined(
+      render({
+        inspection: pendingInspection(),
+        pane: "candidates",
+        profileIndex: profileIndex("worker"),
+      }),
+    );
+    expect(route).toContain("Routing order · worker · saved");
+    expect(route).toContain("Active Primary: [G] global · openai/active-worker");
+    expect(route).toContain("Primary    openai/primary");
+
+    const fields = joined(
+      render({
+        inspection: pendingInspection(),
+        pane: "fields",
+        profileIndex: profileIndex("worker"),
+      }),
+    );
+    expect(fields).toContain("worker › Primary · saved");
   });
 
   it("projects confirmation through Enter and Esc instead of the action key", () => {
@@ -175,14 +236,25 @@ describe("profile workspace projection", () => {
     const shadowed = joined(
       render({ pane: "candidates", profileIndex: profileIndex("reviewer") }, 160, 30),
     );
-    expect(shadowed).toContain("Project declarations override Global profile by profile");
-    expect(shadowed).toContain("Omitted Project profiles inherit Global");
-    expect(shadowed).toContain("shadowed only for reviewer");
+    expect(shadowed).toContain("Project shadows this Global reviewer route");
+    expect(shadowed).toContain("open s Sets to edit it");
 
     const inherited = joined(
       render({ pane: "candidates", profileIndex: profileIndex("worker") }, 160, 30),
     );
-    expect(inherited).not.toContain("shadowed only for worker");
+    expect(inherited).not.toContain("shadows this Global worker route");
+  });
+
+  it("keeps compact safety state visible before secondary context", () => {
+    for (const height of [3, 4, 5, 6]) {
+      const untrusted = joined(render({ pane: "profiles", projectTrusted: false }, 100, height));
+      expect(untrusted).toContain("Project unavailable until trusted");
+
+      const shadowed = joined(
+        render({ pane: "candidates", profileIndex: profileIndex("reviewer") }, 100, height),
+      );
+      expect(shadowed).toContain("Global edit shadowed only for reviewer");
+    }
   });
 
   it("keeps compact pages bounded with status, selection, and essential controls", () => {
@@ -200,7 +272,7 @@ describe("profile workspace projection", () => {
       expect(lines).toHaveLength(height);
       expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
       expect(output).toContain("reload");
-      if (state.pane === "profiles") expect(output).toContain("s Sets");
+      if (state.pane === "profiles") expect(output).toContain("? More");
       expect(output).toContain("Enter");
       expect(output).toContain("Esc");
       expect(output).toMatch(/worker|Fallback 1|File access/);

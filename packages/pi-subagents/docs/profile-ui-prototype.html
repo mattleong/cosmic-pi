@@ -989,7 +989,7 @@
         <ul class="principles">
           <li>Each screen asks one question.</li>
           <li>Enter opens or edits. Esc goes back.</li>
-          <li>Scope and activation state stay visible.</li>
+          <li>Only exceptional status stays visible.</li>
           <li>Persistent changes explain when reload is needed.</li>
         </ul>
       </aside>
@@ -1001,9 +1001,9 @@
             <h1>Subagent profile settings</h1>
             <p class="subtitle">
               The production TUI now includes the dashboard-first entry, scope controls, secondary
-              Sets workspace, Primary/Fallback routing, and Enter/Esc confirmations explored here.
-              Guided fallback setup, More menus, grouped Advanced fields, and route-diff previews
-              remain follow-up ideas rather than shipped behavior.
+              Sets workspace, Primary/Fallback routing, Enter/Esc confirmations, and progressive
+              contextual help. Guided fallback setup, grouped Advanced fields, and route-diff
+              previews remain follow-up ideas rather than shipped behavior.
             </p>
           </div>
           <div class="view-switcher" aria-label="Prototype view">
@@ -1136,7 +1136,7 @@ worker / Routing order
   Fallback 1   Local Codex
 
 Enter Edit · a Add fallback
-m More · Esc Profiles</pre
+? More · Esc Profiles</pre
                 >
                 <div class="comparison-points">
                   <div>Enter always drills into the selected item.</div>
@@ -1201,8 +1201,17 @@ m More · Esc Profiles</pre
           .join("")}
       </div>`;
 
-      const footer = (...items) =>
-        `<div class="terminal-footer">${items
+      const footer = (...items) => {
+        const actions = items.filter((item) => !item.label.includes("More"));
+        const escape = actions.find((item) => item.label.startsWith("Esc"));
+        const primary = actions.filter((item) => item !== escape);
+        const expandable = actions.length > 2;
+        const visible = state.helpExpanded
+          ? [...actions, ...(expandable ? [{ label: "? Less", action: "help" }] : [])]
+          : expandable
+            ? [primary[0], { label: "? More", action: "help" }, escape].filter(Boolean)
+            : actions;
+        return `<div class="terminal-footer">${visible
           .map((item) =>
             item.step !== undefined
               ? `<button type="button" class="terminal-control" data-step="${item.step}">${item.label}</button>`
@@ -1210,20 +1219,28 @@ m More · Esc Profiles</pre
                 ? `<button type="button" class="terminal-control" data-back>${item.label}</button>`
                 : item.action === "next"
                   ? `<button type="button" class="terminal-control" data-next>${item.label}</button>`
-                  : `<span>${item.label}</span>`,
+                  : item.action === "help"
+                    ? `<button type="button" class="terminal-control" data-help>${item.label}</button>`
+                    : `<span>${item.label}</span>`,
           )
           .join("")}</div>`;
+      };
 
-      const screen = ({ path, status, title, description, body, footerItems = [] }) => `
-        <div class="terminal-header">
-          <span class="terminal-path">${path}</span>
-          <span class="terminal-status">${status}</span>
-        </div>
-        <h3 class="screen-title" tabindex="-1">${title}</h3>
-        ${description ? `<p class="screen-description">${description}</p>` : ""}
-        ${body}
-        ${footer(...footerItems)}
-      `;
+      const screen = ({ path, status, title, description, body, footerItems = [] }) => {
+        const exceptionalStatus =
+          status === "active now" || status === "Team default active" ? "" : status;
+        const visibleDescription = exceptionalStatus ? description : "";
+        return `
+          <div class="terminal-header">
+            <span class="terminal-path">${path}</span>
+            <span class="terminal-status">${exceptionalStatus}</span>
+          </div>
+          <h3 class="screen-title" tabindex="-1">${title}</h3>
+          ${visibleDescription ? `<p class="screen-description">${visibleDescription}</p>` : ""}
+          ${body}
+          ${footer(...footerItems)}
+        `;
+      };
 
       const flows = [
         {
@@ -1240,10 +1257,10 @@ m More · Esc Profiles</pre
                   title: "Profiles",
                   description: "Choose the kind of subagent you want to configure.",
                   body: `${tabs("Session")}<div class="terminal-list">
-                    ${staticRow("generalist", "Default when no profile is specified · openai/gpt-5.4")}
-                    ${row("worker", "Implements changes · openai/gpt-5.4 · high", { selected: true, next: true })}
-                    ${staticRow("reviewer", "Reviews changes · anthropic/claude-sonnet-4-6 · high")}
-                    ${staticRow("scout", "Maps the codebase · openai/gpt-5.4-mini · medium")}
+                    ${staticRow("generalist", "Built-in · parent")}
+                    ${row("worker", "Global · openai/gpt-5.4", { selected: true, next: true })}
+                    ${staticRow("reviewer", "Project · anthropic/claude-sonnet-4-6")}
+                    ${staticRow("scout", "Built-in · openai/gpt-5.4-mini")}
                   </div>`,
                   footerItems: [
                     { label: "Enter Edit", action: "next" },
@@ -1263,8 +1280,8 @@ m More · Esc Profiles</pre
                   title: "worker / Routing order",
                   description: "Try the primary route first, then each fallback in order.",
                   body: `<div class="terminal-list">
-                    ${row("Primary", "Local Pi · openai/gpt-5.4 · high · writer", { selected: true, next: true })}
-                    ${staticRow("Fallback 1", "Local Codex · gpt-5.3-codex · high · writer")}
+                    ${row("Primary", "openai/gpt-5.4 · high", { selected: true, next: true })}
+                    ${staticRow("Fallback 1", "gpt-5.3-codex · high")}
                   </div>`,
                   footerItems: [
                     { label: "Enter Edit", action: "next" },
@@ -1661,12 +1678,10 @@ m More · Esc Profiles</pre
                   title: "Profile sets",
                   description: "A set is a named collection of profile routes.",
                   body: `<div class="terminal-list">
-                    ${staticRow("Project", "")}
-                    ${staticRow("Team default", "Active · 7 configured profiles")}
-                    ${staticRow("Experimental", "5 configured profiles · modified yesterday", { selected: true })}
-                    ${staticRow("Global", "")}
-                    ${staticRow("Built-in routes", "No saved overrides")}
-                    ${staticRow("Personal default", "4 configured profiles")}
+                    ${staticRow("[P] Team default", "saved")}
+                    ${staticRow("[P] Experimental", "5 configured profiles", { selected: true })}
+                    ${staticRow("[G] Built-in routes", "")}
+                    ${staticRow("[G] Personal default", "")}
                   </div>
                   <div class="action-stack">
                     ${action("u", "Use Experimental", { primary: true, next: true })}
@@ -1749,6 +1764,7 @@ m More · Esc Profiles</pre
         step: 0,
         size: "standard",
         view: "prototype",
+        helpExpanded: false,
       };
 
       const flowNav = document.querySelector("#flow-nav");
@@ -1830,12 +1846,14 @@ m More · Esc Profiles</pre
       const setFlow = (flowIndex) => {
         state.flow = Math.max(0, Math.min(flows.length - 1, flowIndex));
         state.step = 0;
+        state.helpExpanded = false;
         renderPrototype();
       };
 
       const setStep = (stepIndex) => {
         const last = flows[state.flow].steps.length - 1;
         state.step = Math.max(0, Math.min(last, stepIndex));
+        state.helpExpanded = false;
         renderPrototype();
       };
 
@@ -1864,6 +1882,11 @@ m More · Esc Profiles</pre
         }
         if (target.hasAttribute("data-back")) {
           goPrevious();
+          return;
+        }
+        if (target.hasAttribute("data-help")) {
+          state.helpExpanded = !state.helpExpanded;
+          renderPrototype();
           return;
         }
         if (target.dataset.size) {
@@ -1897,7 +1920,11 @@ m More · Esc Profiles</pre
 
       document.addEventListener("keydown", (event) => {
         if (state.view !== "prototype") return;
-        if (event.key === "Escape" && stepDestination("previous") !== undefined) {
+        if (event.key === "?" && terminalBody.contains(document.activeElement)) {
+          event.preventDefault();
+          state.helpExpanded = !state.helpExpanded;
+          renderPrototype();
+        } else if (event.key === "Escape" && stepDestination("previous") !== undefined) {
           event.preventDefault();
           goPrevious();
         } else if (event.key === "ArrowDown" && terminalBody.contains(document.activeElement)) {

@@ -146,7 +146,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
 
   private selectedChoice(): SearchableSelectPageChoice<A> | undefined {
     const selected = this.list?.getSelectedItem();
-    return selected ? this.filtered.find((entry) => entry.item === selected) : undefined;
+    return selected ? this.filtered.find((entry) => entry.value === selected.value) : undefined;
   }
 
   private buildList(preferred?: SearchableSelectPageChoice<A>): SelectList {
@@ -157,7 +157,9 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     );
     const theme = this.options.theme;
     const list = new SelectList(
-      this.filtered.map((choice) => choice.item),
+      this.filtered.map((choice) =>
+        this.alternateHelp ? choice.item : { value: choice.item.value, label: choice.item.label },
+      ),
       this.listHeight,
       {
         selectedPrefix: (text: string) => theme.fg("accent", text),
@@ -226,9 +228,12 @@ export class SearchableSelectPage<A> implements Component, Focusable {
           }
           this.feedback = undefined;
           break;
-        case "help":
+        case "help": {
+          const selected = this.selectedChoice();
           this.alternateHelp = !this.alternateHelp;
+          this.list = this.buildList(selected);
           break;
+        }
         case "pending-first":
         case "previous-pane":
         case "next-pane":
@@ -276,27 +281,29 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const body: string[] = [];
     if (height < 10) {
       const bodyHeight = Math.max(0, height - 2);
-      const inputLine = this.input.render(Math.max(1, inner)).slice(0, 1);
       const noticeLine = activeNotice
         ? theme.fg("warning", truncateToWidth(activeNotice, inner, "…"))
         : undefined;
-      const compactHeader =
-        bodyHeight <= 0
-          ? []
-          : bodyHeight === 1
-            ? noticeLine
-              ? [noticeLine]
-              : []
-            : bodyHeight === 2
-              ? noticeLine
-                ? [noticeLine]
-                : inputLine
-              : noticeLine
-                ? [...inputLine, noticeLine]
-                : [theme.fg("accent", theme.bold(this.options.title)), ...inputLine];
-      const listRows = Math.max(1, bodyHeight - compactHeader.length);
-      this.resizeList(listRows);
-      body.push(...compactHeader, ...this.list.render(inner).slice(0, listRows));
+      const inputLine = this.searchMode
+        ? this.input.render(Math.max(1, inner)).slice(0, 1)[0]
+        : undefined;
+      if (bodyHeight === 1) {
+        const single = inputLine ?? noticeLine;
+        if (single) body.push(single);
+        else {
+          this.resizeList(1);
+          body.push(...this.list.render(inner).slice(0, 1));
+        }
+      } else if (bodyHeight > 1) {
+        const compactHeader = [
+          ...(inputLine ? [inputLine] : []),
+          ...(noticeLine ? [noticeLine] : []),
+          ...(bodyHeight > 3 ? [theme.fg("accent", theme.bold(this.options.title))] : []),
+        ].slice(0, bodyHeight - 1);
+        const listRows = Math.max(1, bodyHeight - compactHeader.length);
+        this.resizeList(listRows);
+        body.push(...compactHeader, ...this.list.render(inner).slice(0, listRows));
+      }
     } else {
       const limitedWrap = (value: string, maximumLines: number): ReadonlyArray<string> => {
         const lines = wrapTextWithAnsi(value, Math.max(1, inner));
@@ -306,53 +313,28 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         return shown;
       };
       const bodyHeight = Math.max(0, height - 2);
-      const metadataBudget = Math.max(1, bodyHeight - 7);
       const noticeLines = activeNotice
-        ? limitedWrap(activeNotice, Math.min(3, metadataBudget)).map((line) =>
-            theme.fg("warning", line),
-          )
+        ? limitedWrap(activeNotice, 2).map((line) => theme.fg("warning", line))
         : [];
-      const subtitleBudget = Math.max(0, metadataBudget - noticeLines.length);
-      const subtitleLines =
-        subtitleBudget > 0
-          ? limitedWrap(this.options.subtitle, Math.min(2, subtitleBudget)).map((line) =>
-              theme.fg("dim", line),
-            )
-          : [];
-      const inputLines = this.input.render(Math.max(1, inner));
+      const subtitleLines = limitedWrap(this.options.subtitle, 1).map((line) =>
+        theme.fg("dim", line),
+      );
+      const searchLines = this.searchMode
+        ? [
+            theme.fg("dim", fullScreenSettingsHint({ searching: true })),
+            ...this.input.render(Math.max(1, inner)),
+          ]
+        : [];
       const header = [
         theme.fg("accent", theme.bold(this.options.title)),
         ...subtitleLines,
         ...noticeLines,
-        theme.fg(
-          "dim",
-          this.searchMode ? fullScreenSettingsHint({ searching: true }) : "Press / to filter",
-        ),
-        ...inputLines,
+        ...searchLines,
         "",
       ];
-      const desiredListHeight = Math.max(1, bodyHeight - header.length - 2);
+      const desiredListHeight = Math.max(1, bodyHeight - header.length);
       this.resizeList(desiredListHeight);
-      body.push(...header);
-      const dropdownWidth = Math.max(0, inner - 2);
-      const dropdownTitle = truncateToWidth(
-        ` Options · ${this.filtered.length}/${this.options.choices.length} `,
-        dropdownWidth,
-        "",
-      );
-      body.push(
-        `${theme.fg("borderMuted", "╭")}${dropdownTitle}${theme.fg(
-          "borderMuted",
-          "─".repeat(Math.max(0, inner - visibleWidth(dropdownTitle) - 2)),
-        )}${theme.fg("borderMuted", "╮")}`,
-      );
-      for (const line of this.list.render(dropdownWidth))
-        body.push(
-          `${theme.fg("borderMuted", "│")}${padToWidth(line, dropdownWidth)}${theme.fg("borderMuted", "│")}`,
-        );
-      body.push(
-        `${theme.fg("borderMuted", "╰")}${theme.fg("borderMuted", "─".repeat(dropdownWidth))}${theme.fg("borderMuted", "╯")}`,
-      );
+      body.push(...header, ...this.list.render(inner).slice(0, desiredListHeight));
     }
 
     const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
@@ -365,29 +347,23 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const normalNavigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
     const footer = this.searchMode
       ? renderResponsiveManagerFooter(inner, [
-          ["Type to filter", "↑/↓ Navigate", `${confirm} Select · ${cancel} Done`],
-          ["↑/↓ Navigate", `${confirm} Select · ${cancel} Done`],
+          ["Type to filter · ↑/↓ Navigate", `${confirm} Select · ${cancel} Done`],
           [`${confirm} Select`, `${cancel} Done`],
         ])
       : this.alternateHelp
         ? renderResponsiveManagerFooter(inner, [
             [
               `${normalNavigation} Navigate · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
-              "/ Filter",
-              `l/${confirm} Select · h/q/${cancel} Back · ? Less`,
+              `/ Filter · l/${confirm} Select · h/q/${cancel} Back · ? Less`,
             ],
             [`${normalNavigation} · C-u/d · PgUp/PgDn · gg/G`, `? Less · q Back`],
-            ["? Less · q Back"],
           ])
         : renderResponsiveManagerFooter(inner, [
             [
-              `${normalNavigation} Navigate · C-u/d · gg/G`,
-              "/ Filter",
-              `l/${confirm} Select · h/q/${cancel} Back · ? Help`,
+              `${normalNavigation} Navigate · ${confirm} Select`,
+              `/ Filter · ? More · ${cancel} Back`,
             ],
-            [`${normalNavigation} · C-u/d · gg/G`, "/ Filter", `${confirm} Select · q Back`],
-            ["q Back", "l Select"],
-            ["q Back"],
+            [`${confirm} Select`, `? · ${cancel} Back`],
           ]);
     const bottom = `${theme.fg("borderAccent", "╰")}${theme.fg(
       "borderAccent",

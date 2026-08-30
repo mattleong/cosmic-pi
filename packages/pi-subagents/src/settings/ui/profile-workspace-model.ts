@@ -145,6 +145,20 @@ export const candidateFastModeApplied = (
   return model !== undefined && supportsSubagentFastMode(candidate.runtime, model);
 };
 
+export const effectiveProfilePrimarySummary = (
+  inspection: ProfileSettingsInspection,
+  profile: ProfileId,
+): string => {
+  const route = inspection.session.effectiveConfig.profiles[profile];
+  const source = profileSourceLabel(inspection.session.effectiveConfig.profileSources[profile]);
+  const primary = route.candidates[0];
+  if (!primary)
+    return inspection.session.effectiveConfig.profileSources[profile].endsWith("-invalid")
+      ? `${source} · ${managerNoticeGlyph("error")} fails closed`
+      : `${source} · — disabled`;
+  return `${source} · ${primary.model}`;
+};
+
 export const effectiveProfileSummary = (
   inspection: ProfileSettingsInspection,
   profile: ProfileId,

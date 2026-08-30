@@ -164,6 +164,32 @@ describe("profile-set picker", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
+  it("keeps invalid and untrusted safety states visible without selection", () => {
+    const document = {
+      version: 6,
+      defaultProfileSet: "valid",
+      profileSets: { broken: null, valid: { profiles: {} } },
+    };
+    const global = decodeSubagentConfig(document, "global");
+    const config = resolveSubagentConfig({
+      globalConfigPath: "/agent/pi-subagents.json",
+      projectConfigPath: "/repo/.pi/pi-subagents.json",
+      projectTrusted: false,
+      globalConfigExists: true,
+      projectConfigExists: false,
+      global,
+    });
+    const value: ProfileSettingsInspection = {
+      config,
+      global,
+      globalDocument: document,
+      session: makeSessionProfileSnapshot(config),
+    };
+    const output = makePicker({ value, projectTrusted: false }).component.render(100).join("\n");
+    expect(output).toContain("[G] broken · ! invalid");
+    expect(output).toContain("Project sets unavailable until the project is trusted");
+  });
+
   it("edits a valid named set with Enter or forward navigation", () => {
     const enter = makePicker();
     enter.component.handleInput("\r");
@@ -203,8 +229,8 @@ describe("profile-set picker", () => {
     picker.component.handleInput("u");
 
     const output = picker.component.render(100).join("\n");
-    expect(output).toContain("Reload  Not required");
-    expect(output).not.toContain("Required after activation");
+    expect(output).toContain("Already active");
+    expect(output).not.toContain("Reload required after activation");
   });
 
   it("cancels activation confirmation with Esc", () => {
@@ -328,7 +354,7 @@ describe("profile-set picker", () => {
     activation.component.handleInput("u");
     const activationOutput = activation.component.render(100).join("\n");
     expect(activationOutput).toContain("Confirm · Use [G] common?");
-    expect(activationOutput).toContain("Reload  Required after activation");
+    expect(activationOutput).toContain("Reload required after activation");
     expect(activationOutput).toContain("Enter Confirm · Esc Cancel");
 
     const deletion = makePicker();
@@ -355,11 +381,48 @@ describe("profile-set picker", () => {
       { theme: renderTheme, width: 100, height: 12 },
     ).join("\n");
 
-    expect(output).toContain("Active now       [G] gold");
-    expect(output).toContain("Saved selection  [P] project");
+    expect(output).toContain("Active  [G] gold");
+    expect(output).toContain("Saved   [P] project");
   });
 
-  it("keeps the selected entry visible when scope headings consume rows", () => {
+  it("keeps search text, navigation, and Enter editing consistent", () => {
+    const text = makePicker();
+    text.component.handleInput("/");
+    text.component.handleInput("q");
+    expect(text.component.render(100).join("\n")).toContain("Search  /q");
+    expect(text.component.render(100).join("\n")).not.toContain("? More");
+    expect(text.close).not.toHaveBeenCalled();
+    text.component.handleInput("\u001b");
+    expect(text.component.render(100).join("\n")).not.toContain("Search  /");
+
+    const navigation = makePicker();
+    navigation.component.handleInput("/");
+    for (const character of "common") navigation.component.handleInput(character);
+    navigation.component.handleInput("\u001b[B");
+    navigation.component.handleInput("\r");
+    expect(navigation.close).toHaveBeenCalledWith({
+      action: "edit",
+      target: { scope: "global", name: "common" },
+    });
+  });
+
+  it("keeps secondary set actions behind progressive help", () => {
+    const picker = makePicker();
+    const initial = picker.component.render(100).join("\n");
+    expect(initial).not.toContain("ready");
+    expect(initial).not.toContain("c Copy");
+    expect(initial).not.toContain("Active  ");
+    expect(initial).toContain("? More");
+
+    picker.component.handleInput("?");
+    const expanded = picker.component.render(180).join("\n");
+    expect(expanded).toContain("c Copy");
+    expect(expanded).toContain("R Rename");
+    expect(expanded).toContain("x Delete");
+    expect(expanded).toContain("? Less");
+  });
+
+  it("keeps the selected entry visible in compact windows", () => {
     const entries = profileSetPickerEntries(inspection(), true);
     const lines = renderProfileSetPicker(
       {
@@ -406,6 +469,28 @@ describe("profile-set picker", () => {
         expect(lines).toHaveLength(4);
         expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
       }
+    }
+
+    for (const height of [3, 4, 5, 6]) {
+      const lines = renderProfileSetPicker(
+        {
+          entries,
+          selectedIndex: entries.length - 1,
+          query: "co",
+          searching: true,
+          reloadRequired: true,
+          sessionOverrideCount: 0,
+          projectTrusted: false,
+          activeSelectionLabel: "[G] gold",
+          savedSelectionLabel: "[P] project",
+        },
+        { theme: renderTheme, width: 120, height },
+      );
+      const output = lines.join("\n");
+      expect(lines).toHaveLength(height);
+      expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true);
+      expect(output).toContain("Search  /co");
+      expect(output).toContain("Project locked");
     }
   });
 

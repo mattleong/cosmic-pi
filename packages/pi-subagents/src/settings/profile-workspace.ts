@@ -609,7 +609,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
             const baseResult = {
               theme: this.options.theme,
               choices: picker.choices,
-              current: preferAdvertisedDefault
+              initialSelection: preferAdvertisedDefault
                 ? (picker.defaultSelector ?? picker.current)
                 : picker.current,
               context: picker.context,

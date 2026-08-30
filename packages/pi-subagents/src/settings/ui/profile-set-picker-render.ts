@@ -10,6 +10,8 @@ export interface ProfileSetPickerRenderState {
   readonly searching: boolean;
   readonly reloadRequired: boolean;
   readonly sessionOverrideCount: number;
+  readonly projectTrusted?: boolean | undefined;
+  readonly alternateHelp?: boolean | undefined;
   readonly activeSelectionLabel?: string | undefined;
   readonly savedSelectionLabel?: string | undefined;
   readonly message?: { readonly kind: "info" | "warning" | "error"; readonly text: string };
@@ -37,15 +39,25 @@ export const renderProfileSetPicker = (
   if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
   const theme = options.theme;
   const inner = width - 2;
-  const status = state.reloadRequired
-    ? theme.fg("warning", "saved changes pending reload")
-    : state.sessionOverrideCount > 0
+  const statusParts = [
+    state.reloadRequired ? "reload pending · r Reload" : undefined,
+    state.sessionOverrideCount > 0
+      ? `${state.sessionOverrideCount} session override${state.sessionOverrideCount === 1 ? "" : "s"}`
+      : undefined,
+    state.projectTrusted === false ? "Project locked" : undefined,
+  ].filter((part): part is string => part !== undefined);
+  const status =
+    statusParts.length > 0
       ? theme.fg(
-          "accent",
-          `${state.sessionOverrideCount} session override${state.sessionOverrideCount === 1 ? "" : "s"}`,
+          state.reloadRequired || state.projectTrusted === false ? "warning" : "accent",
+          statusParts.join(" · "),
         )
-      : theme.fg("muted", "ready");
-  const title = truncateToWidth(` /subagents profiles · ${status} `, inner, "");
+      : undefined;
+  const title = truncateToWidth(
+    status ? ` /subagents profiles › Sets · ${status} ` : " /subagents profiles › Sets ",
+    inner,
+    "",
+  );
   const top = `${theme.fg("borderAccent", "╭")}${title}${theme.fg(
     "borderAccent",
     `${"─".repeat(Math.max(0, inner - visibleWidth(title)))}╮`,
@@ -60,29 +72,31 @@ export const renderProfileSetPicker = (
     confirmation?.kind === "use"
       ? [
           theme.fg("warning", theme.bold(`Confirm · Use ${confirmation.label}?`)),
-          theme.fg("toolOutput", `  Set     ${confirmation.label}`),
           theme.fg(
             "toolOutput",
-            `  Reload  ${confirmation.reloadRequired ? "Required after activation" : "Not required; this default is already active"}`,
+            confirmation.reloadRequired ? "Reload required after activation" : "Already active",
           ),
         ]
       : confirmation?.kind === "delete"
         ? [
             theme.fg("warning", theme.bold(`Confirm · Delete ${confirmation.label}?`)),
-            theme.fg("toolOutput", `  Set     ${confirmation.label}`),
-            theme.fg("toolOutput", "  Change  Remove this set from saved profile settings"),
+            theme.fg("toolOutput", "Removes this saved set"),
           ]
         : [];
-  const header = [
-    theme.fg("accent", theme.bold("Profile sets")),
-    `Active now       ${activeSelectionLabel}`,
-    ...(selectionPending ? [`Saved selection  ${savedSelectionLabel} · reload required`] : []),
-    ...(state.sessionOverrideCount > 0
-      ? [
-          `Session  ${state.sessionOverrideCount} temporary profile override${state.sessionOverrideCount === 1 ? "" : "s"}`,
+  const pendingSelectionRows = selectionPending
+    ? height <= 5
+      ? [theme.fg("warning", `${activeSelectionLabel} → ${savedSelectionLabel} · reload required`)]
+      : [
+          `Active  ${activeSelectionLabel}`,
+          theme.fg("warning", `Saved   ${savedSelectionLabel} · reload required`),
         ]
+    : [];
+  const header = [
+    ...(state.searching ? [`Search  /${state.query}`] : []),
+    ...pendingSelectionRows,
+    ...(state.projectTrusted === false
+      ? [theme.fg("warning", "Project sets unavailable until the project is trusted")]
       : []),
-    ...(state.searching ? [`Search   /${state.query}`] : []),
     ...(confirmationRows.length > 0
       ? confirmationRows
       : state.message
@@ -97,49 +111,60 @@ export const renderProfileSetPicker = (
             ),
           ]
         : []),
-    "",
   ];
   const selected = state.entries[state.selectedIndex];
-  const contextualActions =
+  const extendedActions =
     selected?.kind === "set"
       ? "e Edit · n New · c Copy · R Rename · x Delete · / Search"
       : "n New · / Search";
-  const compactContextualActions = selected?.kind === "set" ? "e · n · c · R · x · /" : "n · /";
+  const compactExtendedActions = selected?.kind === "set" ? "e · n · c · R · x · /" : "n · /";
   const footer = confirmation
     ? renderResponsiveManagerFooter(inner, [["Enter Confirm · Esc Cancel"]])
-    : renderResponsiveManagerFooter(inner, [
-        [
-          "↑/↓ Select · Enter Edit · u Use",
-          contextualActions,
-          state.reloadRequired ? "r Reload · Esc Close" : "Esc Close",
-        ],
-        [
-          "↑/↓ · Enter Edit · u Use",
-          compactContextualActions,
-          state.reloadRequired ? "r · Esc" : "Esc",
-        ],
-      ]);
+    : state.searching
+      ? renderResponsiveManagerFooter(inner, [
+          ["Type to filter · ↑/↓ Select", "Enter Edit · Esc Clear"],
+          ["↑/↓ Select", "Enter · Esc"],
+        ])
+      : state.alternateHelp
+        ? renderResponsiveManagerFooter(inner, [
+            [
+              "↑/↓ Select · Enter Edit · u Use",
+              extendedActions,
+              `${state.reloadRequired ? "r Reload · " : ""}? Less · Esc Close`,
+            ],
+            [
+              "↑/↓ · Enter · u",
+              compactExtendedActions,
+              `${state.reloadRequired ? "r · " : ""}? · Esc`,
+            ],
+          ])
+        : renderResponsiveManagerFooter(inner, [
+            ["↑/↓ Select · Enter Edit · u Use", "? More · Esc Close"],
+            ["↑/↓ · Enter · u", "? · Esc"],
+          ]);
   const bodyHeight = Math.max(0, height - 2);
-  const listHeight = Math.max(1, bodyHeight - header.length - 1);
+  const normalHeaderBudget = state.searching && bodyHeight === 1 ? 1 : Math.max(0, bodyHeight - 1);
+  const visibleHeader = confirmation
+    ? header.slice(0, bodyHeight)
+    : header.slice(0, normalHeaderBudget);
+  const separateHeader = visibleHeader.length > 0 && bodyHeight - visibleHeader.length >= 2;
+  const listHeight = Math.max(1, bodyHeight - visibleHeader.length - (separateHeader ? 1 : 0));
   const logicalRows: ReadonlyArray<{ readonly text: string; readonly entryIndex?: number }> =
     (() => {
       const rows: Array<{ readonly text: string; readonly entryIndex?: number }> = [];
-      let priorScope: "global" | "project" | undefined;
       for (let index = 0; index < state.entries.length; index += 1) {
         const entry = state.entries[index];
         if (!entry) continue;
-        if (entry.scope !== priorScope) {
-          rows.push({
-            text: theme.fg("muted", entry.scope === "project" ? "Project" : "Global"),
-          });
-          priorScope = entry.scope;
-        }
-        const marker = index === state.selectedIndex ? ">" : " ";
-        const savedMarker = entry.current ? " saved" : "";
+        const selectedEntry = index === state.selectedIndex;
+        const marker = selectedEntry ? ">" : " ";
+        const savedMarker = entry.current ? " · saved" : "";
+        const invalid = entry.kind === "invalid-default" || (entry.kind === "set" && entry.invalid);
+        const invalidBadge = invalid ? " · ! invalid" : "";
+        const detail = selectedEntry ? ` · ${entry.description}` : "";
         rows.push({
           entryIndex: index,
           text: truncateToWidth(
-            `${marker} ${entry.label}${savedMarker.padEnd(10)} · ${entry.description}`,
+            `${marker} ${entry.label}${savedMarker}${invalidBadge}${detail}`,
             inner,
           ),
         });
@@ -154,7 +179,7 @@ export const renderProfileSetPicker = (
   const rows = logicalRows.slice(start, start + listHeight).map((row) => row.text);
   if (state.entries.length === 0)
     rows.push("No profile sets are available. Press n to create one.");
-  const bodyRows = [...header, ...rows];
+  const bodyRows = [...visibleHeader, ...(separateHeader ? [""] : []), ...rows];
   const body = bodyRows
     .slice(0, bodyHeight)
     .map(

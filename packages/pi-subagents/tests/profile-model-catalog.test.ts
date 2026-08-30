@@ -143,6 +143,7 @@ describe("profile model catalog", () => {
         (choice) => choice.choice.kind === "model" && choice.choice.selector === "openai/gpt-old",
       );
       expect(selected?.item.value).toBe("openai/gpt-old");
+      expect(selected?.item.label).toContain("(current)");
       expect(selected?.choice).toEqual({ kind: "model", selector: "openai/gpt-old" });
       const parent = piPicker.choices.find((choice) => choice.choice.kind === "parent");
       expect(parent?.item.label).toContain("parent → openai/gpt-old");
@@ -174,6 +175,7 @@ describe("profile model catalog", () => {
       expect(nativePicker.choices[0]?.item.value).toBe("claude-safe");
       expect(nativePicker.choices[0]?.choice).toEqual({ kind: "model", selector: "claude-safe" });
       expect(nativePicker.choices[0]?.item.label).toMatch(/^claude-safe/);
+      expect(nativePicker.choices[0]?.item.label).toContain("(default) (current)");
       expect(nativePicker.choices[0]?.item.description).toContain("Claude Safe");
       expect(hasTerminalControls(nativePicker.choices[0]?.item.label ?? "")).toBe(false);
       expect(hasTerminalControls(nativePicker.choices[0]?.item.description ?? "")).toBe(false);

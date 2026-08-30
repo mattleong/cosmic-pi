@@ -35,6 +35,11 @@ const boundedMiddle = (value: string, maximum: number): string => {
   return `${characters.slice(0, left).join("")}…${characters.slice(characters.length - (maximum - left - 1)).join("")}`;
 };
 
+const compactSelectItem = (value: string, label: string, description?: string): SelectItem => {
+  const base = { value, label };
+  return description ? { ...base, description } : base;
+};
+
 /** Authenticated canonical Pi models, plus local Pi's special parent selector. */
 export function createProfileModelChoices(input: {
   readonly models: ReadonlyArray<ProjectedPiModel>;
@@ -59,8 +64,8 @@ export function createProfileModelChoices(input: {
             ),
             description: sanitizeTerminalLine(
               canonical
-                ? `${input.parentModel?.name ? `${boundedMiddle(sanitizeTerminalLine(input.parentModel.name), 48)} · ` : ""}Resolved parent model · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
-                : "The parent selector resolves to the active model when this route launches",
+                ? `${input.parentModel?.name ? `${boundedMiddle(sanitizeTerminalLine(input.parentModel.name), 48)} · ` : ""}resolved parent model · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
+                : "Resolves to the active model when this route launches",
             ),
           },
           searchText: sanitizeTerminalLine(
@@ -88,15 +93,15 @@ export function createProfileModelChoices(input: {
     const efforts = model.supportedEfforts;
     result.push({
       choice: { kind: "model", selector: canonical },
-      item: {
-        value: canonical,
-        label: sanitizeTerminalLine(
+      item: compactSelectItem(
+        canonical,
+        sanitizeTerminalLine(
           `${boundedMiddle(sanitizeTerminalLine(canonical), 88)}${input.currentSelector === canonical ? " (current)" : ""}`,
         ),
-        description: sanitizeTerminalLine(
+        sanitizeTerminalLine(
           `${model.name && model.name !== model.id ? `${boundedMiddle(sanitizeTerminalLine(model.name), 48)} · ` : ""}${model.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}${supportsSubagentFastMode("pi", canonical) ? " · fast mode available" : ""}`,
         ),
-      },
+      ),
       searchText: sanitizeTerminalLine(`${canonical} ${model.name ?? ""}`),
       supportedEfforts: efforts,
       fastModeAvailable: supportsSubagentFastMode("pi", canonical),
@@ -113,15 +118,15 @@ export const createNativeModelChoices = (
     .filter((model) => isSafeNativeModelSelector(model.selector))
     .map((model) => ({
       choice: { kind: "model", selector: model.selector },
-      item: {
-        value: model.selector,
-        label: sanitizeTerminalLine(
+      item: compactSelectItem(
+        model.selector,
+        sanitizeTerminalLine(
           `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
         ),
-        description: sanitizeTerminalLine(
-          `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
+        sanitizeTerminalLine(
+          `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}${model.isDefault ? "runtime default · " : ""}efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
         ),
-      },
+      ),
       searchText: sanitizeTerminalLine(
         `${model.selector} ${model.label} ${model.description ?? ""}`,
       ),
@@ -139,7 +144,7 @@ export interface ProfileModelPickerContext {
 export interface ProfileModelPickerPageOptions {
   readonly theme: Theme;
   readonly choices: ReadonlyArray<ProfileModelPickerChoice>;
-  readonly current?: string | undefined;
+  readonly initialSelection?: string | undefined;
   readonly context: ProfileModelPickerContext;
   readonly targetLabel?: string | undefined;
   readonly reloadRequired?: boolean | undefined;
@@ -163,23 +168,19 @@ const runtimeLabel = (runtime: SubagentRuntime): string =>
 export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOptions) => {
   const context = options.context;
   const host = context.host === "local" ? "Local" : "Herdr";
-  const source =
-    context.runtime === "pi"
-      ? `authenticated canonical models${context.host === "local" ? " · parent allowed" : ""}`
-      : "native advertised models";
   const optionLabel = profileRouteOptionLabel(context.candidateIndex);
   const baseResult = {
     theme: options.theme,
     breadcrumb: `/subagents profiles › ${context.profile} › ${optionLabel} › Model`,
     title: `Choose model · ${context.profile} · ${optionLabel}`,
-    subtitle: `${options.targetLabel ? `${options.targetLabel} · ` : ""}${host} ${runtimeLabel(context.runtime)} · ${source}${options.reloadRequired ? " · reload pending" : ""}`,
+    subtitle: `${options.targetLabel ? `${options.targetLabel} · ` : ""}${host} ${runtimeLabel(context.runtime)}${options.reloadRequired ? " · reload pending" : ""}`,
     choices: options.choices.map((choice) => ({
       value: choiceValue(choice.choice),
       item: choice.item,
       searchText: choice.searchText,
       payload: choice.choice,
     })),
-    current: options.current,
+    current: options.initialSelection,
   };
   const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
   return new SearchableSelectPage<ProfileModelChoice>({

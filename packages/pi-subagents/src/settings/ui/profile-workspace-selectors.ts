@@ -12,7 +12,7 @@ import {
 import {
   candidateFieldChoices,
   candidateFieldRows,
-  effectiveProfileSummary,
+  effectiveProfilePrimarySummary,
   profileRouteOptionLabel,
   selectCandidateField,
   type ProfileWorkspaceField,
@@ -85,7 +85,7 @@ export const makeCandidateFieldSelector = (
         theme: options.theme,
         breadcrumb: `/subagents profiles › ${options.profile} › ${optionLabel} › ${label}`,
         title: `Choose ${label.toLowerCase()}`,
-        subtitle: `${targetLabel} · ${options.profile} · ${optionLabel} · current: ${row?.value ?? current}${options.reloadRequired ? " · reload pending" : ""}`,
+        subtitle: `${targetLabel} · current: ${row?.value ?? current}${options.reloadRequired ? " · reload pending" : ""}`,
       };
       const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
       const withChoicesAndAdditionalFields = {
@@ -147,20 +147,15 @@ export const makeProfileSearchSelector = (
         theme: options.theme,
         breadcrumb: "/subagents profiles › search",
         title: "Search profiles",
-        subtitle: `Choose a profile to edit at ${targetLabel}. Effective routing is shown for reference.`,
+        subtitle: `${targetLabel} · active Primary route shown`,
         choices: PROFILE_IDS.map((profile) => ({
           value: profile,
           item: {
             value: profile,
             label: `${profile}${profile === "generalist" ? " · when omitted" : ""}`,
-            description: effectiveProfileSummary(
-              options.inspection,
-              profile,
-              options.parentEffort,
-              options.parentModel,
-            ),
+            description: effectiveProfilePrimarySummary(options.inspection, profile),
           },
-          searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${effectiveProfileSummary(options.inspection, profile, options.parentEffort, options.parentModel)}`,
+          searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${effectiveProfilePrimarySummary(options.inspection, profile)}`,
           payload: profile,
         })),
         current: options.current,

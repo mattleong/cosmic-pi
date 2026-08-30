@@ -165,18 +165,18 @@ describe("profile settings controller navigation", () => {
     const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
 
     yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(1)));
-    expect(fixture.overlays[0]?.render(120).join("\n")).toContain("Current  1 Session");
+    expect(fixture.overlays[0]?.render(120).join("\n")).toContain("/subagents profiles › Session");
     fixture.overlays[0]?.handleInput?.("s");
 
     yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(2)));
     fixture.overlays[1]?.handleInput?.("\r");
 
     yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-    expect(fixture.overlays[2]?.render(120).join("\n")).toContain("Current  2 Project");
+    expect(fixture.overlays[2]?.render(120).join("\n")).toContain("[P] project");
     fixture.overlays[2]?.handleInput?.("3");
 
     yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(4)));
-    expect(fixture.overlays[3]?.render(120).join("\n")).toContain("Current  3 Global");
+    expect(fixture.overlays[3]?.render(120).join("\n")).toContain("[G] global");
     fixture.overlays[3]?.handleInput?.("\u001b");
     yield* step(() => running);
   });
@@ -192,8 +192,8 @@ describe("profile settings controller navigation", () => {
 
     yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(2)));
     const sets = fixture.overlays[1]?.render(120).join("\n");
-    expect(sets).toContain("Active now       [G] global");
-    expect(sets).toContain("Saved selection  [P] project");
+    expect(sets).toContain("Active  [G] global");
+    expect(sets).toContain("Saved   [P] project");
     fixture.overlays[1]?.handleInput?.("\u001b");
 
     yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
@@ -233,7 +233,7 @@ describe("profile settings controller navigation", () => {
       const running = fixture.command?.("profiles global", fixture.ctx) ?? Promise.resolve();
 
       yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(1)));
-      expect(fixture.overlays[0]?.render(120).join("\n")).toContain("Profile sets");
+      expect(fixture.overlays[0]?.render(120).join("\n")).toContain("/subagents profiles › Sets");
       fixture.overlays[0]?.handleInput?.("\u001b");
       yield* step(() => running);
 
