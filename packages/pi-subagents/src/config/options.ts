@@ -47,9 +47,39 @@ export interface ResolveSubagentConfigInput {
   readonly project?: DecodedSubagentConfig | undefined;
 }
 
+export type NamedProfileSetScope = "global" | "project";
+export type ResolvedNamedProfileSetStatus =
+  | "resolved"
+  | "invalid-routes"
+  | "missing"
+  | "structurally-invalid";
+
+export interface ResolvedNamedProfileSet {
+  readonly origin: {
+    readonly scope: NamedProfileSetScope;
+    readonly name: string;
+  };
+  readonly status: ResolvedNamedProfileSetStatus;
+  readonly invalidProfiles: ReadonlyArray<ProfileId>;
+  readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
+  readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
+}
+
+export interface ResolveNamedProfileSetInput {
+  readonly scope: NamedProfileSetScope;
+  readonly name: string;
+  readonly global: DecodedSubagentConfig;
+  readonly project?: DecodedSubagentConfig | undefined;
+}
+
 interface ResolvedProfileLayer {
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
+}
+
+interface ResolvedNamedProfileLayer {
+  readonly layer: ResolvedProfileLayer;
+  readonly status: ResolvedNamedProfileSetStatus;
 }
 
 const builtInProfileLayer = (): ResolvedProfileLayer => {
@@ -78,23 +108,22 @@ const invalidProfileLayer = (
   return { profiles, profileSources };
 };
 
-const resolveProfileSetLayer = (
+const resolveNamedProfileLayer = (
   decoded: DecodedSubagentConfig,
-  scope: "global" | "project",
+  scope: NamedProfileSetScope,
+  name: string,
   lower: ResolvedProfileLayer,
-): ResolvedProfileLayer => {
-  const defaultName = decoded.file.defaultProfileSet;
-  if (decoded.invalidDefaultProfileSet)
-    return invalidProfileLayer(scope === "project" ? "project-invalid" : "global-invalid");
-  if (defaultName === undefined) return lower;
+): ResolvedNamedProfileLayer => {
+  const invalidSource = scope === "project" ? "project-invalid" : "global-invalid";
+  if (decoded.invalidProfileSets.includes(name))
+    return { layer: invalidProfileLayer(invalidSource), status: "structurally-invalid" };
   const profileSets = decoded.file.profileSets;
   const profileSet =
-    profileSets && Object.prototype.hasOwnProperty.call(profileSets, defaultName)
-      ? profileSets[defaultName]
+    profileSets && Object.prototype.hasOwnProperty.call(profileSets, name)
+      ? profileSets[name]
       : undefined;
-  if (!profileSet)
-    return invalidProfileLayer(scope === "project" ? "project-invalid" : "global-invalid");
-  const invalidRoutes = decoded.invalidProfileSetRoutes[defaultName] ?? [];
+  if (!profileSet) return { layer: invalidProfileLayer(invalidSource), status: "missing" };
+  const invalidRoutes = decoded.invalidProfileSetRoutes[name] ?? [];
   // SAFETY: Every fixed profile ID receives one route and source in the same loop.
   const profiles = {} as Record<ProfileId, ProfileRoute>;
   // SAFETY: Every fixed profile ID receives one route and source in the same loop.
@@ -102,10 +131,10 @@ const resolveProfileSetLayer = (
   for (const id of PROFILE_IDS) {
     if (invalidRoutes.includes(id)) {
       profiles[id] = { candidates: [] };
-      profileSources[id] = scope === "project" ? "project-invalid" : "global-invalid";
+      profileSources[id] = invalidSource;
       continue;
     }
-    const declaration = profileSet.profiles?.[id];
+    const declaration = profileSet.profiles[id];
     if (declaration === undefined) {
       profiles[id] = cloneProfileRoute(lower.profiles[id]);
       profileSources[id] = lower.profileSources[id];
@@ -114,8 +143,55 @@ const resolveProfileSetLayer = (
       profileSources[id] = scope;
     }
   }
-  return { profiles, profileSources };
+  const hasInvalidRoutes = PROFILE_IDS.some(
+    (id) => profileSources[id] === "global-invalid" || profileSources[id] === "project-invalid",
+  );
+  return {
+    layer: { profiles, profileSources },
+    status: hasInvalidRoutes ? "invalid-routes" : "resolved",
+  };
 };
+
+const resolveProfileSetLayer = (
+  decoded: DecodedSubagentConfig,
+  scope: NamedProfileSetScope,
+  lower: ResolvedProfileLayer,
+): ResolvedProfileLayer => {
+  const defaultName = decoded.file.defaultProfileSet;
+  if (decoded.invalidDefaultProfileSet)
+    return invalidProfileLayer(scope === "project" ? "project-invalid" : "global-invalid");
+  if (defaultName === undefined) return lower;
+  return resolveNamedProfileLayer(decoded, scope, defaultName, lower).layer;
+};
+
+/** Resolves one saved set without changing either document's selected default. */
+export function resolveNamedProfileSet(
+  input: ResolveNamedProfileSetInput,
+): ResolvedNamedProfileSet {
+  const builtin = builtInProfileLayer();
+  const lower =
+    input.scope === "project" ? resolveProfileSetLayer(input.global, "global", builtin) : builtin;
+  const decoded = input.scope === "global" ? input.global : input.project;
+  const resolved = decoded
+    ? resolveNamedProfileLayer(decoded, input.scope, input.name, lower)
+    : {
+        layer: invalidProfileLayer(
+          input.scope === "project" ? "project-invalid" : "global-invalid",
+        ),
+        status: "missing" as const,
+      };
+  return freezeSnapshot({
+    origin: { scope: input.scope, name: input.name },
+    status: resolved.status,
+    invalidProfiles: PROFILE_IDS.filter(
+      (id) =>
+        resolved.layer.profileSources[id] === "global-invalid" ||
+        resolved.layer.profileSources[id] === "project-invalid",
+    ),
+    profiles: resolved.layer.profiles,
+    profileSources: resolved.layer.profileSources,
+  });
+}
 
 const selectedSet = (
   global: DecodedSubagentConfig,

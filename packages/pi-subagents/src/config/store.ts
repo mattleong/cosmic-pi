@@ -4,15 +4,20 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, makeConfigDocumentErrorFactory, type JsonObject } from "pi-cosmic-core";
-import type {
-  DeclaredProfileCandidate,
-  DeclaredProfileRoute,
-  ProfileId,
+import {
+  MAX_PROFILE_CANDIDATES,
+  PROFILE_IDS,
+  type DeclaredProfileCandidate,
+  type DeclaredProfileRoute,
+  type ProfileId,
+  type ProfileRoute,
 } from "../profiles/model.ts";
 import { resolveSubagentConfig, type ResolvedSubagentConfig } from "./options.ts";
 import {
+  decodeProfileCandidate,
   decodeSubagentConfig,
   isProfileSetName,
   type DecodedSubagentConfig,
@@ -69,6 +74,12 @@ export interface SubagentCreateProfileSetPatch extends SubagentConfigPatchBase {
   readonly profileSet: string;
 }
 
+export interface SubagentCreateProfileSetFromSnapshotPatch extends SubagentConfigPatchBase {
+  readonly profileSet: string;
+  /** One coherent, complete session snapshot. Every route is persisted explicitly. */
+  readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
+}
+
 export interface SubagentCopyProfileSetPatch extends SubagentConfigPatchBase {
   readonly sourceProfileSet: string;
   readonly profileSet: string;
@@ -114,6 +125,11 @@ export interface SubagentConfigStoreContract {
     cwd: string,
     agentDirectory: string,
     patch: SubagentCreateProfileSetPatch,
+  ) => Effect.Effect<void, SubagentConfigStoreError>;
+  readonly createProfileSetFromSnapshot: (
+    cwd: string,
+    agentDirectory: string,
+    patch: SubagentCreateProfileSetFromSnapshotPatch,
   ) => Effect.Effect<void, SubagentConfigStoreError>;
   readonly copyProfileSet: (
     cwd: string,
@@ -368,6 +384,8 @@ const applyDefaultProfileSetPatch = (
     !decoded.file.profileSets?.[patch.defaultProfileSet]
   )
     return mutationError(path, "The selected profile set is structurally invalid.");
+  if ((decoded.invalidProfileSetRoutes[patch.defaultProfileSet]?.length ?? 0) > 0)
+    return mutationError(path, "The selected profile set contains an invalid profile route.");
   next.defaultProfileSet = patch.defaultProfileSet;
   return next;
 };
@@ -386,6 +404,109 @@ const applyCreateProfileSet = (
   if (Object.keys(sets).length >= MAX_PROFILE_SETS)
     return mutationError(path, `A document may contain at most ${MAX_PROFILE_SETS} profile sets.`);
   sets[patch.profileSet] = { profiles: {} };
+  return { ...upgraded, profileSets: sets };
+};
+
+interface OwnDataValue {
+  readonly value: unknown;
+}
+
+const readOwnDataValue = <ValueInput>(
+  value: ValueInput,
+  key: PropertyKey,
+): OwnDataValue | undefined => {
+  if (!hasObjectRuntimeType(value) || value === null) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && "value" in descriptor ? { value: descriptor.value } : undefined;
+};
+
+/** Captures one ordinary dense array without consulting an input iterator or invoking accessors. */
+const snapshotCandidateArray = <ValueInput>(
+  value: ValueInput,
+): ReadonlyArray<unknown> | undefined => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+  if (Object.getOwnPropertyDescriptor(value, Symbol.iterator) !== undefined) return undefined;
+  const lengthProperty = readOwnDataValue(value, "length");
+  const length = lengthProperty?.value;
+  if (
+    !Predicate.isNumber(length) ||
+    !Number.isSafeInteger(length) ||
+    length < 0 ||
+    length > MAX_PROFILE_CANDIDATES
+  )
+    return undefined;
+  const snapshot: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const element = readOwnDataValue(value, String(index));
+    if (!element) return undefined;
+    snapshot.push(element.value);
+  }
+  return snapshot;
+};
+
+const snapshotProfilesJson = (
+  routes: Readonly<Record<ProfileId, ProfileRoute>>,
+  path: string,
+): JsonObject | SubagentConfigStoreError => {
+  try {
+    const keys = Reflect.ownKeys(routes);
+    if (
+      keys.length !== PROFILE_IDS.length ||
+      keys.some(
+        (key) => !Predicate.isString(key) || !PROFILE_IDS.some((profile) => profile === key),
+      )
+    )
+      return mutationError(path, "A session snapshot must contain exactly all seven profiles.");
+    const profiles: JsonObject = {};
+    for (const profile of PROFILE_IDS) {
+      const routeProperty = readOwnDataValue(routes, profile);
+      const route = routeProperty?.value;
+      if (!routeProperty || !hasObjectRuntimeType(route) || route === null)
+        return mutationError(path, "The session snapshot contains an invalid profile route.");
+      const routeKeys = Reflect.ownKeys(route);
+      if (routeKeys.length !== 1 || routeKeys[0] !== "candidates")
+        return mutationError(path, "The session snapshot contains an invalid profile route.");
+      const candidatesProperty = readOwnDataValue(route, "candidates");
+      const candidateInputs = candidatesProperty
+        ? snapshotCandidateArray(candidatesProperty.value)
+        : undefined;
+      if (!candidateInputs)
+        return mutationError(path, "The session snapshot contains an invalid profile route.");
+      if (candidateInputs.length === 0) {
+        profiles[profile] = "disabled";
+        continue;
+      }
+      const candidates: JsonObject[] = [];
+      for (let index = 0; index < candidateInputs.length; index += 1) {
+        const decoded = decodeProfileCandidate(candidateInputs[index]);
+        if (!decoded)
+          return mutationError(path, "The session snapshot contains an invalid profile route.");
+        candidates.push(candidateJson(decoded, "current"));
+      }
+      profiles[profile] = candidates;
+    }
+    return profiles;
+  } catch {
+    return mutationError(path, "The session snapshot contains an invalid profile route.");
+  }
+};
+
+const applyCreateProfileSetFromSnapshot = (
+  current: JsonObject,
+  patch: SubagentCreateProfileSetFromSnapshotPatch,
+  path: string,
+): JsonObject | SubagentConfigStoreError => {
+  if (!isProfileSetName(patch.profileSet)) return mutationError(path, "Invalid profile-set name.");
+  const profiles = snapshotProfilesJson(patch.profiles, path);
+  if (profiles instanceof SubagentConfigStoreError) return profiles;
+  const upgraded = upgradeDocument(current, path);
+  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
+  const sets = { ...currentProfileSets(upgraded) };
+  if (own(sets, patch.profileSet))
+    return mutationError(path, "A profile set with that name exists.");
+  if (Object.keys(sets).length >= MAX_PROFILE_SETS)
+    return mutationError(path, `A document may contain at most ${MAX_PROFILE_SETS} profile sets.`);
+  sets[patch.profileSet] = { profiles };
   return { ...upgraded, profileSets: sets };
 };
 
@@ -555,16 +676,17 @@ export const subagentConfigStoreLayer = Layer.effect(
         if (!modifyObject) return yield* storeError("update", target)();
         yield* modifyObject(target, (current) =>
           Effect.gen(function* () {
+            const currentExists = yield* documents.exists(target);
             const currentIsEmpty = Object.keys(current).length === 0;
             if (
-              (!patch.expectedExists && !currentIsEmpty) ||
+              currentExists !== patch.expectedExists ||
               (patch.expectedExists &&
                 stableJson(current) !== stableJson(patch.expectedDocument ?? {}))
             )
               return yield* conflictError(target);
             if (!currentIsEmpty && !isAcceptedVersion(current.version))
               return yield* unsupportedVersionError(target);
-            if (currentIsEmpty && !patch.expectedExists && missingIsNoop)
+            if (!currentExists && missingIsNoop)
               return { value: undefined, document: current, write: false };
             const base = currentIsEmpty ? { version: SUBAGENT_CONFIG_VERSION } : current;
             const next = apply(base, patch, target);
@@ -602,6 +724,9 @@ export const subagentConfigStoreLayer = Layer.effect(
       agentDirectory,
       patch,
     ) => patchDocument(cwd, agentDirectory, patch, applyCreateProfileSet);
+    const createProfileSetFromSnapshot: SubagentConfigStoreContract["createProfileSetFromSnapshot"] =
+      (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch, applyCreateProfileSetFromSnapshot);
     const copyProfileSet: SubagentConfigStoreContract["copyProfileSet"] = (
       cwd,
       agentDirectory,
@@ -630,6 +755,7 @@ export const subagentConfigStoreLayer = Layer.effect(
       patchProfile,
       patchDefaultProfileSet,
       createProfileSet,
+      createProfileSetFromSnapshot,
       copyProfileSet,
       renameProfileSet,
       deleteProfileSet,

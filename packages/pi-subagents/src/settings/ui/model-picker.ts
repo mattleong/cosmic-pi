@@ -60,12 +60,12 @@ export function createProfileModelChoices(input: {
           item: {
             value: "parent",
             label: sanitizeTerminalLine(
-              `parent → ${canonical ? boundedMiddle(sanitizeTerminalLine(canonical), 72) : "active model at launch"}${input.currentSelector === "parent" ? " (current)" : ""}`,
+              `Current Pi model${canonical ? ` → ${boundedMiddle(sanitizeTerminalLine(canonical), 72)}` : ""}${input.currentSelector === "parent" ? " (current)" : ""}`,
             ),
             description: sanitizeTerminalLine(
               canonical
-                ? `${input.parentModel?.name ? `${boundedMiddle(sanitizeTerminalLine(input.parentModel.name), 48)} · ` : ""}resolved parent model · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
-                : "Resolves to the active model when this route launches",
+                ? `${input.parentModel?.name ? `${boundedMiddle(sanitizeTerminalLine(input.parentModel.name), 48)} · ` : ""}current Pi model · ${input.parentModel?.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts?.join(", ") || "none"}`
+                : "Use the current Pi model when this run starts",
             ),
           },
           searchText: sanitizeTerminalLine(
@@ -99,7 +99,7 @@ export function createProfileModelChoices(input: {
           `${boundedMiddle(sanitizeTerminalLine(canonical), 88)}${input.currentSelector === canonical ? " (current)" : ""}`,
         ),
         sanitizeTerminalLine(
-          `${model.name && model.name !== model.id ? `${boundedMiddle(sanitizeTerminalLine(model.name), 48)} · ` : ""}${model.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}${supportsSubagentFastMode("pi", canonical) ? " · fast mode available" : ""}`,
+          `${model.name && model.name !== model.id ? `${boundedMiddle(sanitizeTerminalLine(model.name), 48)} · ` : ""}${model.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts.join(", ") || "none"}${supportsSubagentFastMode("pi", canonical) ? " · fast mode available" : ""}`,
         ),
       ),
       searchText: sanitizeTerminalLine(`${canonical} ${model.name ?? ""}`),
@@ -124,7 +124,7 @@ export const createNativeModelChoices = (
           `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
         ),
         sanitizeTerminalLine(
-          `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}${model.isDefault ? "runtime default · " : ""}efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
+          `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}${model.isDefault ? "default model · " : ""}reasoning levels: ${model.supportedEfforts.join(", ") || "default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
         ),
       ),
       searchText: sanitizeTerminalLine(
@@ -147,7 +147,6 @@ export interface ProfileModelPickerPageOptions {
   readonly initialSelection?: string | undefined;
   readonly context: ProfileModelPickerContext;
   readonly targetLabel?: string | undefined;
-  readonly reloadRequired?: boolean | undefined;
   readonly notice?: string | undefined;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
@@ -162,7 +161,7 @@ export interface ProfileModelPickerPageOptions {
 }
 
 const runtimeLabel = (runtime: SubagentRuntime): string =>
-  runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude Code" : "Codex";
+  runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude" : "Codex";
 
 /** Full-page searchable model dropdown used inside the profile workspace. */
 export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOptions) => {
@@ -173,7 +172,7 @@ export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOption
     theme: options.theme,
     breadcrumb: `/subagents profiles › ${context.profile} › ${optionLabel} › Model`,
     title: `Choose model · ${context.profile} · ${optionLabel}`,
-    subtitle: `${options.targetLabel ? `${options.targetLabel} · ` : ""}${host} ${runtimeLabel(context.runtime)}${options.reloadRequired ? " · reload pending" : ""}`,
+    subtitle: `${options.targetLabel ? `${options.targetLabel} · ` : ""}${host} ${runtimeLabel(context.runtime)}`,
     choices: options.choices.map((choice) => ({
       value: choiceValue(choice.choice),
       item: choice.item,

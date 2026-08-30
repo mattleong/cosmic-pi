@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
-import { resolveSubagentConfig } from "../src/config/options.ts";
+import { resolveNamedProfileSet, resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig, SUBAGENT_CONFIG_VERSION } from "../src/config/schema.ts";
 import { SubagentConfigStore } from "../src/config/store.ts";
 import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
@@ -274,6 +274,64 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(config.profileSources.worker).toBe("global");
     expect(config.profiles.scout.candidates).toHaveLength(1);
     expect(config.profileSources.scout).toBe("builtin");
+  });
+
+  it("resolves named global and project sets with explicit invalid selection states", () => {
+    const global = decodeSubagentConfig(
+      document({
+        defaultProfileSet: "selected",
+        profileSets: {
+          selected: { profiles: { reviewer: candidate({ model: "openai/global-default" }) } },
+          saved: { profiles: { scout: candidate({ model: "openai/global-saved" }) } },
+          invalidRoute: { profiles: { worker: null } },
+          broken: { profiles: {}, extra: true },
+        },
+      }),
+      "global",
+    );
+    const project = decodeSubagentConfig(
+      document({
+        profileSets: {
+          saved: { profiles: { scout: candidate({ model: "openai/project-saved" }) } },
+        },
+      }),
+      "project",
+    );
+
+    const namedGlobal = resolveNamedProfileSet({ scope: "global", name: "saved", global });
+    expect(namedGlobal).toMatchObject({
+      status: "resolved",
+      origin: { scope: "global", name: "saved" },
+      invalidProfiles: [],
+    });
+    expect(namedGlobal.profiles.scout.candidates[0]?.model).toBe("openai/global-saved");
+    expect(namedGlobal.profileSources.reviewer).toBe("builtin");
+
+    const namedProject = resolveNamedProfileSet({
+      scope: "project",
+      name: "saved",
+      global,
+      project,
+    });
+    expect(namedProject.status).toBe("resolved");
+    expect(namedProject.profiles.scout.candidates[0]?.model).toBe("openai/project-saved");
+    expect(namedProject.profiles.reviewer.candidates[0]?.model).toBe("openai/global-default");
+    expect(namedProject.profileSources.reviewer).toBe("global");
+
+    const invalidRoute = resolveNamedProfileSet({
+      scope: "global",
+      name: "invalidRoute",
+      global,
+    });
+    expect(invalidRoute.status).toBe("invalid-routes");
+    expect(invalidRoute.invalidProfiles).toEqual(["worker"]);
+    expect(invalidRoute.profileSources.worker).toBe("global-invalid");
+    expect(resolveNamedProfileSet({ scope: "global", name: "broken", global }).status).toBe(
+      "structurally-invalid",
+    );
+    expect(resolveNamedProfileSet({ scope: "global", name: "missing", global }).status).toBe(
+      "missing",
+    );
   });
 
   it("defaults fast mode off and accepts only eligible persisted fast routes", () => {
@@ -585,21 +643,24 @@ describe("subagent v6 profile configuration and resolution", () => {
     });
   });
 
-  it("guards hostile candidate getters and proxies with structural paths", () => {
+  it("rejects persisted candidate getters without invoking them and guards hostile proxies", () => {
+    let candidateReads = 0;
     let unknownRead = false;
-    const throwingCandidate = { ...candidate() };
-    Object.defineProperty(throwingCandidate, "model", {
+    const accessorCandidate = { ...candidate() };
+    Object.defineProperty(accessorCandidate, "model", {
       enumerable: true,
       get: () => {
-        throw new Error("private model getter");
+        candidateReads += 1;
+        return "parent";
       },
     });
     const getterDecoded = decodeSubagentConfig(
-      hostileDocument({ version: 4, profiles: { worker: throwingCandidate } }),
+      hostileDocument({ version: 4, profiles: { worker: accessorCandidate } }),
       "project",
     );
     expect(getterDecoded.invalidProfileRoutes).toEqual(["worker"]);
     expect(getterDecoded.diagnostics).toContain("project.profiles.worker");
+    expect(candidateReads).toBe(0);
 
     const unknownCandidate = { ...candidate() };
     Object.defineProperty(unknownCandidate, "unknown", {
@@ -672,6 +733,7 @@ describe("subagent v6 profile configuration and resolution", () => {
       patchProfile: () => Effect.die("unused"),
       patchDefaultProfileSet: () => Effect.die("unused"),
       createProfileSet: () => Effect.die("unused"),
+      createProfileSetFromSnapshot: () => Effect.die("unused"),
       copyProfileSet: () => Effect.die("unused"),
       renameProfileSet: () => Effect.die("unused"),
       deleteProfileSet: () => Effect.die("unused"),
@@ -714,6 +776,7 @@ describe("subagent v6 profile configuration and resolution", () => {
       patchProfile: () => Effect.die("unused"),
       patchDefaultProfileSet: () => Effect.die("unused"),
       createProfileSet: () => Effect.die("unused"),
+      createProfileSetFromSnapshot: () => Effect.die("unused"),
       copyProfileSet: () => Effect.die("unused"),
       renameProfileSet: () => Effect.die("unused"),
       deleteProfileSet: () => Effect.die("unused"),

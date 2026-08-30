@@ -176,9 +176,11 @@ const readField = (
 
 const readCandidateField = (record: Readonly<JsonObject>, key: string) => {
   try {
-    if (!Object.prototype.hasOwnProperty.call(record, key))
-      return { readable: true as const, present: false as const };
-    return { readable: true as const, present: true as const, value: record[key] };
+    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    if (!descriptor) return { readable: true as const, present: false as const };
+    return "value" in descriptor
+      ? { readable: true as const, present: true as const, value: descriptor.value }
+      : { readable: false as const, present: true as const };
   } catch {
     return { readable: false as const, present: true as const };
   }

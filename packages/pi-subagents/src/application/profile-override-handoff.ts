@@ -7,7 +7,7 @@ import {
 
 export interface ProfileOverrideHandoff {
   readonly capture: () => SessionProfileOverrideSeed;
-  /** Present once this application instance has authoritative temporary-route state. */
+  /** Present after the runtime publishes its complete frozen session baseline and overlays. */
   readonly captureAuthoritative: () => SessionProfileOverrideSeed | undefined;
   readonly captureBaseConfig: () => ResolvedSubagentConfig | undefined;
   readonly publishBaseConfig: (
@@ -24,7 +24,7 @@ export interface ProfileOverrideHandoff {
 }
 
 /**
- * Keeps temporary profile routes across the package's internal `/tree` runtime replacement.
+ * Keeps the complete detached session profile baseline, sparse edits, and nesting across `/tree`.
  * Real Pi session lifecycle boundaries clear this host-owned handoff explicitly.
  */
 export const makeProfileOverrideHandoff = (): ProfileOverrideHandoff => {

@@ -2,35 +2,50 @@
 
 Part of the [pi-subagents](../README.md) architecture documentation. Routing policy is in [routing.md](routing.md).
 
-## Workspace behavior
+## Current Session
 
-`/subagents settings` edits nesting policy in Session, Global, or trusted-Project scope. Direct children accept integers from 1 through 32 and depth accepts integers from 0 through 8. The controller rejects invalid input instead of clamping it. Session changes apply to later batches immediately. Persistent writes use `config/store.ts`, migrate valid version-4/5 documents to version 6, and require `/reload`. Lowering a policy never stops admitted runs.
+`/subagents profiles` always opens Current Session. It is the only active working set. At session start it is a complete seven-profile snapshot resolved from the trusted Project default, Global default, and built-ins. Editing a profile changes later launches and `subagent_models` immediately. Active runs keep the route captured when they started.
 
-`/subagents profiles` opens the Session profile dashboard. `/subagents profiles session` is equivalent. The dashboard shows the current scope and uses `1 Session`, `2 Project`, and `3 Global` to reopen a fresh immutable target while preserving the selected profile and pending-reload state. Project stays unavailable when the project is untrusted. If a persistent scope uses built-ins, inherits another scope, or has no valid editable default, the command opens Sets so the user can choose or create one.
+Current Session is independent of saved sets. Applying a saved set resolves all seven profiles first, rejects any invalid route, previews the complete replacement, and commits it with one expected session revision. The replacement updates the session starting point and clears per-profile changes in one transition. It never changes a Project or Global document.
 
-`s` opens the secondary full-screen Sets workspace. Trusted projects show `[P]` and `[G]` sets together, plus `[P] Inherit global`; untrusted projects show only Global. The picker separates the active session-base selection from a saved selection waiting for reload. Enter edits a valid named set. `u` previews activation, and Enter confirms it. Delete uses the same Enter/Esc confirmation pattern. Create, same-scope copy, rename, search, and reload remain available. A project/global name collision remains two independent entries. Invalid defaults stay visible in redacted repair state, and structurally invalid sets cannot be activated or edited.
+The header names what Current Session is based on and how many profiles have changed. Session state survives `/tree` and `/reload` through the bounded handoff. It clears on `/new`, `/resume`, `/fork`, quit, or process restart.
 
-The profile dashboard opens the Profiles → Routing order → Primary/Fallback settings workspace against one immutable Session or `{scope, set}` target. Its default view uses progressive disclosure: the dashboard shows each profile's active Primary route, Routing order shows concise options plus details for the selected option, and field pickers appear only after drilling in. Ordinary `ready` state, repeated action blocks, secondary keyboard commands, and selector metadata stay hidden; `?` expands additional contextual help and option details. Sets shows details only for the selected row, and value selectors use one frame with search input shown only after `/`. Safety warnings, pending reload, active session overrides, trust requirements, and confirmations remain visible without opening help. Session routes are complete copy-on-write overlays, apply immediately to new launches, and write no files. Global and project edits use optimistic exact-document concurrency through `config/store.ts`, preserve unrelated sets and routes, and require `/reload`. Invalid intermediates never commit. Existing route options can be added, cloned, moved, removed, disabled, reset, or inherited without reordering another option. Destructive route changes use Enter to confirm and Esc to cancel.
+## Profile editor
 
-The Sets workspace lives at `src/settings/profile-set-picker.ts`; the profile dashboard and route workspace live at `src/settings/profile-workspace.ts`. The interaction prototype is [`profile-ui-prototype.html`](profile-ui-prototype.html). `src/settings/ui/` contains only pure renderers, selectors, and picker projection. Disposal is idempotent. Components ignore later input/render/invalidation and discard late save, clear, reload, and catalog UI continuations. Already submitted persistence still settles. Disposal aborts catalog work and the registry refresh, then clears the controller's render callback.
+At 100 columns or more, the editor uses the shared list/detail frame with profiles or Primary/Fallback choices on the left and selected details on the right. Widths from 60 through 99 use a stacked list/detail dashboard. Narrow terminals show the selected detail, and very short terminals keep a bounded safety-first summary. Every layout includes the selected profile description and preserves exact width and height bounds.
 
-## Model catalog
+Profiles open into ordered Primary and Fallback rows. Candidate settings show Model, Reasoning, File access, and Run with first. Run with combines host and runtime into the six Local or Herdr plus Pi, Claude, or Codex choices. Advanced expands Context, OpenAI fast mode, and Report policy only when those values apply or need repair.
 
-`src/settings/profile-model-catalog.ts` owns one replace-only immutable snapshot containing the root registry's projected authenticated Pi models. Registry refresh starts without delaying the overlay and accepts the overlay's abort signal. A successful non-aborted refresh projects the complete next generation and swaps it atomically. Failure, registry error, stale completion, or abort retains the prior snapshot. Each picker action captures one snapshot, so model fields never mix generations. Host/runtime actions derive the preferred Herdr Pi selector from the latest snapshot at that moment rather than from the snapshot that opened the workspace.
+The main footer is `Enter Edit`, `p Profile sets`, and `Esc Close`. Route additions, copies, reordering, removal, disable, and restore operations live in the explicit Actions selector. Destructive choices require Enter confirmation and allow Esc cancellation. Model catalogs load asynchronously from one captured generation; cancellation or disposal aborts outstanding catalog work and ignores late UI continuations.
 
-Local Pi offers `parent` plus authenticated canonical selectors. Herdr Pi offers the same canonical root-registry models except `parent`, which remains local-only. OpenCode Go can appear only as a provider in this Pi registry; it is not a subagent runtime or backend adapter. The root registry already reflects project trust, so extension-registered providers need no separate provenance gate. A configured selector that is no longer available remains an explicit current choice, so Enter cannot replace it silently. All provider, parent, and native catalog labels, descriptions, warnings, and search text pass through `sanitizeTerminalLine`; selector values remain unchanged.
+## Saved-set library
 
-Claude and Codex discovery stays cancelable and keeps current/default fallback choices when native discovery fails. Native selector grammar filters advertised entries. Codex fast-mode availability comes only from the captured live catalog's advertised `priority` tier; fallback selectors do not infer it. Pi fast mode uses the canonical static supported-model policy, while `parent` is resolved against the active model at action and launch time.
+`p Profile sets` opens a separate library grouped as Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable.
 
-## Session handoff
+Enter opens actions for the selected saved set:
 
-The authoritative session route and nesting overlay survives `/tree`. During `/reload`, shutdown publishes only a frozen seed keyed by the current Pi session ID. The new instance first performs a shallow data-descriptor check of every known candidate-array length, without reading candidate elements, then schema-decodes the envelope and reapplies it to the newly loaded persistent base. Oversized or hostile envelopes are discarded. New, resume, fork, quit, and process restart clear the handoff.
+- Use in Current Session
+- Edit saved set
+- Make default for new sessions, or clear the current default so Project uses Global or Global uses built-ins
+- Copy
+- Rename
+- Delete
+
+Using a set changes only Current Session. Editing a saved set changes only that library value, and the editor header reads `Saved set · Project/name · Current Session unchanged` or its Global equivalent. Making a set default affects new sessions only. Saving and editing no longer ask for reload because saved values are not the active working set.
+
+Invalid saved sets remain visible and cannot be used or made default. Project-set status includes routes inherited from the selected Global set. A set with invalid routes remains editable so explicit routes can repair it. A structurally invalid set must be deleted and recreated. A malformed unnamed default appears as a clearable repair row. A selected default must first be replaced or cleared before deletion. Store mutations retain exact-document optimistic conflict checks and preserve unrelated sets and routes.
+
+`s Save Current Session` prompts for Project or Global destination and a name. One `createProfileSetFromSnapshot` store action writes all seven effective session routes. Saving does not make the new set a default. The controller refuses to save fail-closed Project or Global routes. The profile service holds its revision lock through the document transaction, so an interleaved session edit either commits first and rejects the save or waits until the reviewed snapshot has been saved.
+
+## Nesting settings
+
+`/subagents settings` still edits nesting policy in Session, Global, or trusted Project scope. Direct children accept integers from 1 through 32 and depth accepts integers from 0 through 8. The controller rejects invalid input instead of clamping it. Session changes apply to later batches immediately. Persistent nesting writes require `/reload`; lowering a limit never stops admitted runs.
 
 ## Module responsibilities
 
-- `src/settings/controller.ts` owns root `/subagents`, `/subagents settings`, the dashboard-first profile loop, immutable scope handoffs, secondary Sets orchestration, fresh trust checks, and host lifecycle callbacks. `proxy-controller.ts` owns the packaged nested-Pi subtree command and keeps its visibility root fixed.
-- `src/settings/profile-set-picker.ts` owns combined persistent-set editing, explicit activation, and lifecycle action input.
+- `src/settings/controller.ts` owns `/subagents`, `/subagents settings`, Current Session replacement, saved-set orchestration, trust checks, optimistic revisions, and host lifecycle callbacks.
+- `src/settings/profile-workspace.ts` owns the disposable Current Session or fixed saved-set editor, catalog cancellation, and route action flow.
+- `src/settings/profile-set-picker.ts` owns the grouped saved-set library and explicit saved-set action menu.
 - `src/settings/profile-route-editor.ts` owns fixed-target route drafts and canonical validation messages.
 - `src/settings/profile-model-catalog.ts` owns atomic Pi catalog refresh and runtime-specific picker loading.
-- `src/settings/profile-workspace.ts` owns asynchronous fixed-target workspace state and disposal.
-- `src/settings/ui/` owns pure set/workspace rendering, selectors, searchable pages, and sanitized model-choice projection.
+- `src/settings/ui/` contains pure selectors, projections, responsive geometry, and rendering.

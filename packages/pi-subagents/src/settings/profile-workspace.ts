@@ -2,7 +2,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import { FullScreenKeymap, pageSteps } from "pi-cosmic-ui/manager/keymap";
-import { MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
 import {
   PROFILE_IDS,
   sameProfileCandidate,
@@ -12,11 +11,9 @@ import {
 import type { SubagentEffort } from "../domain/routing.ts";
 import {
   declaredRouteForDraft,
+  hasOwnProfileRouteDeclaration,
   inheritProjectDraft,
-  inheritSessionDraft,
-  loadProfileRouteDraft,
   profileWorkspaceScope,
-  profileWorkspaceTargetLabel,
   replaceRouteCandidate,
   resetGlobalDraft,
   type CandidateUpdate,
@@ -31,17 +28,16 @@ import {
 } from "./profile-model-catalog.ts";
 import { makeProfileModelPickerPage, type ProfileModelChoice } from "./ui/model-picker.ts";
 import {
-  PROFILE_WORKSPACE_FIELDS,
-  PROFILE_WORKSPACE_SHORTCUTS,
   candidateFieldRows,
   draftKindLabel,
   profileRouteDraftSummary,
-  profileSourceLabel,
-  type ProfileWorkspaceField,
+  targetProfileRouteDraft,
   type ProfileWorkspacePane,
+  type SelectableCandidateField,
 } from "./ui/profile-workspace-model.ts";
 import {
   applyProfileWorkspaceDraftAction,
+  currentSessionBaselineDraft,
   profileWorkspaceConfirmation,
   type ProfileWorkspaceDraftAction,
 } from "./ui/profile-workspace-actions.ts";
@@ -49,6 +45,7 @@ import { renderProfileWorkspace } from "./ui/profile-workspace-render.ts";
 import {
   makeCandidateFieldSelector,
   makeProfileSearchSelector,
+  makeRouteActionsSelector,
 } from "./ui/profile-workspace-selectors.ts";
 import {
   SearchableSelectPage,
@@ -63,20 +60,8 @@ export type ProfileWorkspaceSaveResult =
   | { readonly refreshError: string };
 
 export type ProfileWorkspaceCloseResult =
-  | boolean
-  | "reloaded"
-  | {
-      readonly action: "sets";
-      readonly profile: ProfileId;
-      readonly reloadRequired: boolean;
-      readonly preferredScope: "global" | "project";
-    }
-  | {
-      readonly action: "scope";
-      readonly scope: ProfileSettingsScope;
-      readonly profile: ProfileId;
-      readonly reloadRequired: boolean;
-    };
+  | false
+  | { readonly action: "sets"; readonly profile: ProfileId };
 
 export interface ProfileWorkspaceOptions {
   readonly theme: Theme;
@@ -84,8 +69,6 @@ export interface ProfileWorkspaceOptions {
   readonly projectTrusted: boolean;
   readonly target: ProfileWorkspaceTarget;
   readonly initialProfile?: ProfileId | undefined;
-  readonly initialReloadRequired?: boolean | undefined;
-  /** Resolved from the latest catalog snapshot when a controlling field action runs. */
   readonly preferredPiModel: () => string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
@@ -103,7 +86,6 @@ export interface ProfileWorkspaceOptions {
     profile: ProfileId,
     draft: ProfileRouteDraft,
   ) => Promise<ProfileWorkspaceSaveResult>;
-  readonly clearSessionOverrides: () => Promise<ProfileWorkspaceSaveResult>;
   readonly loadModelPicker: (
     profile: ProfileId,
     candidateIndex: number,
@@ -114,26 +96,19 @@ export interface ProfileWorkspaceOptions {
     candidate: ProfileCandidate,
   ) => ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable: (candidate: ProfileCandidate) => boolean;
-  readonly reload: () => Promise<boolean>;
   readonly onDispose?: (() => void) | undefined;
 }
 
-type PendingAction = "remove" | "disable" | "reset" | "clear-session";
+type PendingAction = Extract<ProfileWorkspaceDraftAction, "remove" | "disable" | "reset">;
 type WorkspaceMessage = {
   readonly kind: "info" | "success" | "warning" | "error";
   readonly text: string;
 };
 
-const paneOrder: ReadonlyArray<ProfileWorkspacePane> = ["profiles", "candidates", "fields"];
-const dashboardShortcuts: ReadonlySet<string> = new Set([
-  ...PROFILE_WORKSPACE_SHORTCUTS,
-  "s",
-  "1",
-  "2",
-  "3",
-]);
-const saveScopeLabel = (scope: ProfileSettingsScope): string =>
-  scope === "session" ? "to this session" : scope === "global" ? "globally" : "to project";
+const targetSaveLabel = (target: ProfileWorkspaceTarget): string =>
+  target.kind === "session"
+    ? "Current Session"
+    : `${target.set.scope === "project" ? "Project" : "Global"}/${target.set.name}`;
 
 export class ProfileWorkspaceComponent implements Component, Focusable {
   private inspection: ProfileSettingsInspection;
@@ -142,14 +117,12 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private profileIndex: number;
   private candidateIndex = 0;
   private fieldIndex = 0;
+  private advancedExpanded = false;
   private optimisticDraft: ProfileRouteDraft | undefined;
   private optimisticProfile: ProfileId | undefined;
-  private optimisticScope: ProfileSettingsScope | undefined;
   private busy = false;
   private refreshBlocked = false;
-  private reloadRequired = false;
   private message: WorkspaceMessage | undefined;
-  private alternateHelp = false;
   private pendingAction: PendingAction | undefined;
   private catalogLoad: AbortController | undefined;
   private modelPicker: ReturnType<typeof makeProfileModelPickerPage> | undefined;
@@ -163,8 +136,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.options = options;
     this.inspection = options.inspection;
     this.scope = profileWorkspaceScope(options.target);
-    this.profileIndex = PROFILE_IDS.indexOf(options.initialProfile ?? "generalist");
-    this.reloadRequired = options.initialReloadRequired ?? false;
+    this.profileIndex = Math.max(0, PROFILE_IDS.indexOf(options.initialProfile ?? "generalist"));
     this.reconcile();
   }
 
@@ -185,11 +157,23 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
 
   private draft(): ProfileRouteDraft {
     const profile = this.profile();
-    return this.optimisticDraft &&
-      this.optimisticProfile === profile &&
-      this.optimisticScope === this.scope
-      ? this.optimisticDraft
-      : loadProfileRouteDraft(this.inspection, this.options.target, profile);
+    if (this.optimisticDraft && this.optimisticProfile === profile) return this.optimisticDraft;
+    return targetProfileRouteDraft(this.inspection, this.options.target, profile);
+  }
+
+  private rows() {
+    const candidate = this.draft().candidates[this.candidateIndex];
+    if (!candidate)
+      return [
+        { field: "actions" as const, label: "Actions", value: "add or fix profile", fixed: false },
+      ];
+    return candidateFieldRows(
+      candidate,
+      this.profile(),
+      this.options.parentEffort,
+      this.options.parentModel,
+      this.advancedExpanded,
+    );
   }
 
   private reconcile(): void {
@@ -199,7 +183,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       0,
       Math.min(Math.max(0, candidates.length - 1), this.candidateIndex),
     );
-    this.fieldIndex = Math.max(0, Math.min(PROFILE_WORKSPACE_FIELDS.length - 1, this.fieldIndex));
+    this.fieldIndex = Math.max(0, Math.min(Math.max(0, this.rows().length - 1), this.fieldIndex));
   }
 
   private renderSoon(): void {
@@ -212,78 +196,25 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.message = { kind, text };
   }
 
-  private clearMessage(): void {
-    this.message = undefined;
-  }
-
-  private preferredSetScope(): "global" | "project" {
-    return this.scope === "project" ||
-      (this.scope === "global" && this.projectOverrideActive()) ||
-      (this.scope === "session" && this.inspection.config.currentProfileSet.scope === "project")
-      ? "project"
-      : "global";
-  }
-
-  private projectOverrideActive(profile = this.profile()): boolean {
-    const project = this.inspection.project;
-    const setName = project?.file.defaultProfileSet;
-    if (!project || !setName) return project?.invalidDefaultProfileSet ?? false;
-    const profileSet = project.file.profileSets?.[setName];
-    return Boolean(
-      project.invalidDefaultProfileSet ||
-      project.invalidProfileSetRoutes[setName]?.includes(profile) ||
-      Object.prototype.hasOwnProperty.call(profileSet?.profiles ?? {}, profile),
-    );
-  }
-
-  private selectProfile(offset: number): void {
-    this.profileIndex = Math.max(0, Math.min(PROFILE_IDS.length - 1, this.profileIndex + offset));
+  private resetSelectionForProfile(): void {
     this.candidateIndex = 0;
     this.fieldIndex = 0;
+    this.advancedExpanded = false;
     this.pendingAction = undefined;
-    this.clearMessage();
-  }
-
-  private selectCandidate(offset: number): void {
-    const length = this.draft().candidates.length;
-    this.candidateIndex = Math.max(
-      0,
-      Math.min(Math.max(0, length - 1), this.candidateIndex + offset),
-    );
-    this.fieldIndex = 0;
-    this.pendingAction = undefined;
-    this.clearMessage();
-  }
-
-  private selectField(offset: number): void {
-    this.fieldIndex += offset;
-    this.pendingAction = undefined;
-    this.clearMessage();
-  }
-
-  private navigate(direction: -1 | 1): void {
-    if (direction === 1 && this.pane === "candidates" && this.draft().candidates.length === 0) {
-      this.setMessage("info", "Add a candidate before opening candidate details.");
-      return;
-    }
-    const current = paneOrder.indexOf(this.pane);
-    const next = Math.max(0, Math.min(paneOrder.length - 1, current + direction));
-    this.pane = paneOrder[next] ?? "profiles";
-    this.pendingAction = undefined;
-    this.keymap.resetChord();
-    this.clearMessage();
+    this.message = undefined;
   }
 
   private persist(
     next: ProfileRouteDraft,
     description: string,
     preferredCandidateIndex = this.candidateIndex,
+    optimisticDraft: ProfileRouteDraft = next,
   ): void {
     if (this.busy) return;
     if (this.refreshBlocked) {
       this.setMessage(
         "error",
-        "Profile state could not be safely refreshed. Reopen /subagents profiles before editing again.",
+        "Profiles could not be refreshed. Close and reopen the editor before making changes.",
       );
       this.renderSoon();
       return;
@@ -294,17 +225,15 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.renderSoon();
       return;
     }
-    const scope = this.scope;
     const profile = this.profile();
-    this.optimisticDraft = next;
+    this.optimisticDraft = optimisticDraft;
     this.optimisticProfile = profile;
-    this.optimisticScope = scope;
     this.candidateIndex = preferredCandidateIndex;
     this.busy = true;
     this.pendingAction = undefined;
     this.setMessage(
       "info",
-      `${scope === "session" ? "Applying" : "Saving"} ${saveScopeLabel(scope)} · ${profile} · ${description}`,
+      `Saving ${targetSaveLabel(this.options.target)} · ${profile} · ${description}`,
     );
     this.renderSoon();
     void this.options
@@ -312,7 +241,6 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       .then((result) => {
         if (this.disposed) return;
         this.busy = false;
-        if (scope !== "session") this.reloadRequired = true;
         this.candidateIndex = preferredCandidateIndex;
         if ("refreshError" in result) {
           this.refreshBlocked = true;
@@ -321,11 +249,10 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           this.inspection = result.inspection;
           this.optimisticDraft = undefined;
           this.optimisticProfile = undefined;
-          this.optimisticScope = undefined;
           this.setMessage(
             result.conflictMessage ? "warning" : "success",
             result.conflictMessage ??
-              `${scope === "session" ? "Applied" : "Saved"} ${saveScopeLabel(scope)} · ${profile} · ${description}`,
+              `Saved ${targetSaveLabel(this.options.target)} · ${profile} · ${description}`,
           );
         }
         this.renderSoon();
@@ -334,48 +261,10 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         if (this.disposed) return;
         this.optimisticDraft = undefined;
         this.optimisticProfile = undefined;
-        this.optimisticScope = undefined;
         this.busy = false;
         this.refreshBlocked = true;
-        const message = error instanceof Error ? error.message : "Could not save profile settings.";
-        this.setMessage("error", `${message} Reopen /subagents profiles before editing again.`);
-        this.renderSoon();
-      });
-  }
-
-  private clearAllSessionOverrides(): void {
-    if (this.busy) return;
-    this.busy = true;
-    this.pendingAction = undefined;
-    this.setMessage("info", "Clearing all session profile overrides…");
-    this.renderSoon();
-    void this.options
-      .clearSessionOverrides()
-      .then((result) => {
-        if (this.disposed) return;
-        this.busy = false;
-        if ("refreshError" in result) {
-          this.refreshBlocked = true;
-          this.setMessage("error", result.refreshError);
-        } else {
-          this.inspection = result.inspection;
-          this.optimisticDraft = undefined;
-          this.optimisticProfile = undefined;
-          this.optimisticScope = undefined;
-          this.setMessage(
-            result.conflictMessage ? "warning" : "success",
-            result.conflictMessage ?? "Cleared all session profile overrides.",
-          );
-        }
-        this.renderSoon();
-      })
-      .catch((error) => {
-        if (this.disposed) return;
-        this.busy = false;
-        this.refreshBlocked = true;
-        const message =
-          error instanceof Error ? error.message : "Could not clear session overrides.";
-        this.setMessage("error", `${message} Reopen /subagents profiles before editing again.`);
+        const detail = error instanceof Error ? error.message : "Could not save profile settings.";
+        this.setMessage("error", `${detail} Close and reopen the editor before another edit.`);
         this.renderSoon();
       });
   }
@@ -383,7 +272,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private applyCandidateUpdate(update: CandidateUpdate | undefined, description: string): void {
     if (!update) return;
     if (update.error || !update.candidate) {
-      this.setMessage("warning", update.error ?? "Candidate update was rejected.");
+      this.setMessage("warning", update.error ?? "That change could not be applied.");
       this.renderSoon();
       return;
     }
@@ -398,107 +287,6 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       replaceRouteCandidate(this.draft(), this.candidateIndex, update.candidate),
       `${description}${notice}`,
     );
-  }
-
-  private openFieldPicker(): void {
-    const candidate = this.draft().candidates[this.candidateIndex];
-    const field = PROFILE_WORKSPACE_FIELDS[this.fieldIndex];
-    if (!candidate || !field || this.busy) return;
-    const row = candidateFieldRows(
-      candidate,
-      this.profile(),
-      this.options.parentEffort,
-      this.options.parentModel,
-    )[this.fieldIndex];
-    if (row?.fixed) {
-      this.setMessage(
-        "info",
-        row.fixedReason ?? `${row.label} is fixed by the current host/runtime policy.`,
-      );
-      this.renderSoon();
-      return;
-    }
-    if (field === "model") {
-      this.openModelPicker(candidate);
-      return;
-    }
-    if (field === "effort" && candidate.runtime !== "pi") {
-      this.openNativeEffortPicker(candidate);
-      return;
-    }
-    if (field === "openaiFastMode") {
-      this.openFastModePicker(candidate);
-      return;
-    }
-    this.showFieldPicker(
-      candidate,
-      field,
-      candidate.runtime === "pi" ? this.options.supportedPiEfforts(candidate) : undefined,
-    );
-  }
-
-  private showFieldPicker(
-    candidate: ProfileCandidate,
-    field: Exclude<ProfileWorkspaceField, "model">,
-    supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined,
-    fastModeAvailable?: boolean | undefined,
-    notice?: string | undefined,
-  ): void {
-    const candidateIndex = this.candidateIndex;
-    this.selectPage = makeCandidateFieldSelector(
-      (() => {
-        const baseResult = {
-          theme: this.options.theme,
-          profile: this.profile(),
-          candidateIndex,
-          candidate,
-          field,
-          fieldIndex: this.fieldIndex,
-          target: this.options.target,
-          reloadRequired: this.reloadRequired,
-          piModel: this.options.preferredPiModel(),
-          parentModel: this.options.parentModel,
-          parentEffort: this.options.parentEffort,
-          supportedEfforts,
-          fastModeAvailable,
-        };
-        const withNotice = notice ? { ...baseResult, notice } : baseResult;
-        const withGetHeightAndAdditionalFields = {
-          ...withNotice,
-          getHeight: this.options.getHeight,
-          requestRender: this.options.requestRender,
-          matchesKeybinding: this.options.matchesKeybinding,
-          keybindingLabel: this.options.keybindingLabel,
-          select: (update: CandidateUpdate, description: string) => {
-            this.selectPage = undefined;
-            this.candidateIndex = candidateIndex;
-            if (
-              field === "runtime" &&
-              update.candidate &&
-              update.candidate.runtime !== candidate.runtime &&
-              update.candidate.runtime !== "pi"
-            ) {
-              this.openModelPicker(
-                update.candidate,
-                true,
-                "Runtime and model updated",
-                update.notices,
-              );
-              return;
-            }
-            this.applyCandidateUpdate(update, description);
-          },
-          cancel: (label: string) => {
-            this.selectPage = undefined;
-            this.setMessage("info", `${label} selection canceled.`);
-            this.renderSoon();
-          },
-        };
-        return withGetHeightAndAdditionalFields;
-      })(),
-    );
-    this.selectPage.focused = this._focused;
-    this.renderSoon();
   }
 
   private beginCatalogLoad(message: string): AbortController {
@@ -523,13 +311,75 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.catalogLoad = undefined;
     this.busy = false;
     controller.abort();
-    this.setMessage("info", "Model catalog loading canceled.");
+    this.setMessage("info", "Stopped loading models.");
+    this.renderSoon();
+  }
+
+  private selectorTargetLabel(): string {
+    return this.options.target.kind === "session"
+      ? "Current Session"
+      : `Saved set · ${this.options.target.set.scope === "project" ? "Project" : "Global"}/${this.options.target.set.name} · Current Session unchanged`;
+  }
+
+  private showFieldPicker(
+    candidate: ProfileCandidate,
+    field: SelectableCandidateField,
+    supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined,
+    fastModeAvailable?: boolean | undefined,
+    notice?: string | undefined,
+  ): void {
+    const candidateIndex = this.candidateIndex;
+    const selectorBase = {
+      theme: this.options.theme,
+      profile: this.profile(),
+      candidateIndex,
+      candidate,
+      field,
+      target: this.options.target,
+      piModel: this.options.preferredPiModel(),
+      parentModel: this.options.parentModel,
+      parentEffort: this.options.parentEffort,
+      supportedEfforts,
+      fastModeAvailable,
+      getHeight: this.options.getHeight,
+      requestRender: this.options.requestRender,
+      matchesKeybinding: this.options.matchesKeybinding,
+      keybindingLabel: this.options.keybindingLabel,
+      select: (update: CandidateUpdate, description: string) => {
+        this.selectPage = undefined;
+        this.candidateIndex = candidateIndex;
+        if (
+          field === "runWith" &&
+          update.candidate &&
+          update.candidate.runtime !== candidate.runtime &&
+          update.candidate.runtime !== "pi"
+        ) {
+          this.openModelPicker(
+            update.candidate,
+            true,
+            "Run with and model changed",
+            update.notices,
+          );
+          return;
+        }
+        this.applyCandidateUpdate(update, description);
+      },
+      cancel: (label: string) => {
+        this.selectPage = undefined;
+        this.setMessage("info", `${label} was not changed.`);
+        this.renderSoon();
+      },
+    };
+    this.selectPage = makeCandidateFieldSelector(
+      notice ? { ...selectorBase, notice } : selectorBase,
+    );
+    this.selectPage.focused = this._focused;
     this.renderSoon();
   }
 
   private openFastModePicker(candidate: ProfileCandidate): void {
     const candidateIndex = this.candidateIndex;
-    const controller = this.beginCatalogLoad("Checking fast-mode availability…");
+    const controller = this.beginCatalogLoad("Checking fast mode…");
     void this.options
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
@@ -552,7 +402,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         if (!this.finishCatalogLoad(controller)) return;
         this.setMessage(
           "error",
-          error instanceof Error ? error.message : "Fast-mode discovery failed.",
+          error instanceof Error ? error.message : "Could not check fast mode.",
         );
         this.renderSoon();
       });
@@ -560,7 +410,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
 
   private openNativeEffortPicker(candidate: ProfileCandidate): void {
     const candidateIndex = this.candidateIndex;
-    const controller = this.beginCatalogLoad("Loading model effort choices…");
+    const controller = this.beginCatalogLoad("Loading reasoning levels…");
     void this.options
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
@@ -581,7 +431,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         if (!this.finishCatalogLoad(controller)) return;
         this.setMessage(
           "error",
-          error instanceof Error ? error.message : "Effort discovery failed.",
+          error instanceof Error ? error.message : "Could not load reasoning levels.",
         );
         this.renderSoon();
       });
@@ -590,113 +440,128 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private openModelPicker(
     candidate: ProfileCandidate,
     preferAdvertisedDefault = false,
-    description = "Model updated",
+    description = "Model changed",
     priorNotices: ReadonlyArray<string> = [],
   ): void {
     const candidateIndex = this.candidateIndex;
-    const controller = this.beginCatalogLoad("Loading model choices…");
+    const controller = this.beginCatalogLoad("Loading models…");
     void this.options
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
         if (!this.finishCatalogLoad(controller)) return;
         if (picker.choices.length === 0) {
-          this.setMessage("warning", picker.warning ?? "No models are available for this runtime.");
+          this.setMessage(
+            "warning",
+            picker.warning ?? "No models are available for this selection.",
+          );
           this.renderSoon();
           return;
         }
+        const pickerBase = {
+          theme: this.options.theme,
+          choices: picker.choices,
+          initialSelection: preferAdvertisedDefault
+            ? (picker.defaultSelector ?? picker.current)
+            : picker.current,
+          context: picker.context,
+          targetLabel: this.selectorTargetLabel(),
+          getHeight: this.options.getHeight,
+          requestRender: this.options.requestRender,
+          matchesKeybinding: this.options.matchesKeybinding,
+          keybindingLabel: this.options.keybindingLabel,
+          select: (choice: ProfileModelChoice) => {
+            this.modelPicker = undefined;
+            this.candidateIndex = candidateIndex;
+            const update = updateCandidateFromModelChoice(candidate, picker, choice);
+            this.applyCandidateUpdate(
+              update.candidate
+                ? { ...update, notices: [...priorNotices, ...update.notices] }
+                : update,
+              description,
+            );
+          },
+          cancel: () => {
+            this.modelPicker = undefined;
+            this.setMessage(
+              "info",
+              preferAdvertisedDefault
+                ? "Run with settings were not changed because no model was selected."
+                : "Model was not changed.",
+            );
+            this.renderSoon();
+          },
+        };
         this.modelPicker = makeProfileModelPickerPage(
-          (() => {
-            const baseResult = {
-              theme: this.options.theme,
-              choices: picker.choices,
-              initialSelection: preferAdvertisedDefault
-                ? (picker.defaultSelector ?? picker.current)
-                : picker.current,
-              context: picker.context,
-              targetLabel: profileWorkspaceTargetLabel(this.options.target),
-              reloadRequired: this.reloadRequired,
-              getHeight: this.options.getHeight,
-              requestRender: this.options.requestRender,
-              matchesKeybinding: this.options.matchesKeybinding,
-              keybindingLabel: this.options.keybindingLabel,
-            };
-            const withNotice = picker.warning
-              ? { ...baseResult, notice: picker.warning }
-              : baseResult;
-            const withSelectAndCancel = {
-              ...withNotice,
-              select: (choice: ProfileModelChoice) => {
-                this.modelPicker = undefined;
-                this.candidateIndex = candidateIndex;
-                const update = updateCandidateFromModelChoice(candidate, picker, choice);
-                this.applyCandidateUpdate(
-                  update.candidate
-                    ? { ...update, notices: [...priorNotices, ...update.notices] }
-                    : update,
-                  description,
-                );
-              },
-              cancel: () => {
-                this.modelPicker = undefined;
-                this.setMessage(
-                  "info",
-                  preferAdvertisedDefault
-                    ? "Runtime change canceled because no model was selected."
-                    : "Model selection canceled.",
-                );
-                this.renderSoon();
-              },
-            };
-            return withSelectAndCancel;
-          })(),
+          picker.warning ? { ...pickerBase, notice: picker.warning } : pickerBase,
         );
         this.modelPicker.focused = this._focused;
         this.renderSoon();
       })
       .catch((error) => {
         if (!this.finishCatalogLoad(controller)) return;
-        this.setMessage("error", error instanceof Error ? error.message : "Model picker failed.");
+        this.setMessage("error", error instanceof Error ? error.message : "Could not load models.");
         this.renderSoon();
       });
   }
 
-  private openProfileSearch(initialQuery = ""): void {
-    this.selectPage = makeProfileSearchSelector(
-      (() => {
-        const baseResult = {
-          theme: this.options.theme,
-          inspection: this.inspection,
-          current: this.profile(),
-          parentEffort: this.options.parentEffort,
-          parentModel: this.options.parentModel,
-          target: this.options.target,
-          scope: this.scope,
-        };
-        const withInitialQuery = initialQuery ? { ...baseResult, initialQuery } : baseResult;
-        const withGetHeightAndAdditionalFields = {
-          ...withInitialQuery,
-          getHeight: this.options.getHeight,
-          requestRender: this.options.requestRender,
-          matchesKeybinding: this.options.matchesKeybinding,
-          keybindingLabel: this.options.keybindingLabel,
-          select: (profile: ProfileId) => {
-            this.selectPage = undefined;
-            this.profileIndex = PROFILE_IDS.indexOf(profile);
-            this.candidateIndex = 0;
-            this.fieldIndex = 0;
-            this.pane = "candidates";
-            this.setMessage("info", `Opened ${profile} route.`);
-            this.renderSoon();
-          },
-          cancel: () => {
-            this.selectPage = undefined;
-            this.setMessage("info", "Profile search canceled.");
-            this.renderSoon();
-          },
-        };
-        return withGetHeightAndAdditionalFields;
-      })(),
-    );
+  private openProfileSearch(): void {
+    this.selectPage = makeProfileSearchSelector({
+      theme: this.options.theme,
+      inspection: this.inspection,
+      current: this.profile(),
+      parentEffort: this.options.parentEffort,
+      parentModel: this.options.parentModel,
+      target: this.options.target,
+      getHeight: this.options.getHeight,
+      requestRender: this.options.requestRender,
+      matchesKeybinding: this.options.matchesKeybinding,
+      keybindingLabel: this.options.keybindingLabel,
+      select: (profile: ProfileId) => {
+        this.selectPage = undefined;
+        this.profileIndex = PROFILE_IDS.indexOf(profile);
+        this.resetSelectionForProfile();
+        this.pane = "candidates";
+        this.renderSoon();
+      },
+      cancel: () => {
+        this.selectPage = undefined;
+        this.setMessage("info", "Profile search canceled.");
+        this.renderSoon();
+      },
+    });
+    this.selectPage.focused = this._focused;
+    this.renderSoon();
+  }
+
+  private openActions(): void {
+    this.selectPage = makeRouteActionsSelector({
+      theme: this.options.theme,
+      profile: this.profile(),
+      candidateIndex: this.candidateIndex,
+      draft: this.draft(),
+      scope: this.scope,
+      hasOwnDeclaration: hasOwnProfileRouteDeclaration(
+        this.inspection,
+        this.options.target,
+        this.profile(),
+      ),
+      target: this.options.target,
+      getHeight: this.options.getHeight,
+      requestRender: this.options.requestRender,
+      matchesKeybinding: this.options.matchesKeybinding,
+      keybindingLabel: this.options.keybindingLabel,
+      select: (action, destructive) => {
+        this.selectPage = undefined;
+        if (destructive && (action === "remove" || action === "disable" || action === "reset"))
+          this.arm(action);
+        else this.performDraftAction(action);
+      },
+      cancel: () => {
+        this.selectPage = undefined;
+        this.setMessage("info", "Actions closed.");
+        this.renderSoon();
+      },
+    });
     this.selectPage.focused = this._focused;
     this.renderSoon();
   }
@@ -709,6 +574,11 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       candidateIndex: this.candidateIndex,
       scope: this.scope,
       inspection: this.inspection,
+      hasOwnDeclaration: hasOwnProfileRouteDeclaration(
+        this.inspection,
+        this.options.target,
+        this.profile(),
+      ),
     });
     if ("error" in result) {
       this.setMessage("warning", result.error);
@@ -717,109 +587,92 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.pendingAction = undefined;
       this.setMessage("info", "No profile change was needed.");
       this.renderSoon();
-    } else this.persist(result.draft, result.description, result.candidateIndex);
+    } else {
+      this.fieldIndex = 0;
+      this.advancedExpanded = false;
+      const restoringInvalidLowerRoute =
+        action === "reset" && this.scope !== "global" && result.draft.kind === "invalid";
+      this.persist(
+        restoringInvalidLowerRoute
+          ? { kind: "inherit", candidates: result.draft.candidates }
+          : result.draft,
+        result.description,
+        result.candidateIndex,
+        result.draft,
+      );
+    }
   }
 
   private arm(action: PendingAction): void {
     if (this.busy) return;
-    if (action === "clear-session") {
-      if (Object.keys(this.inspection.session.overrides).length === 0) {
-        this.setMessage("info", "No session overrides are active.");
-        this.renderSoon();
-        return;
-      }
-      this.pendingAction = action;
-      this.renderSoon();
-      return;
-    }
-    const draft = this.draft();
-    if (
-      (action === "disable" && draft.kind === "disabled") ||
-      (action === "reset" &&
-        ((this.scope === "global" && draft.kind === "reset") ||
-          (this.scope !== "global" && draft.kind === "inherit")))
-    ) {
-      this.setMessage("info", "No profile change was needed.");
-      this.renderSoon();
-      return;
-    }
     this.pendingAction = action;
     this.renderSoon();
   }
 
   private confirmPending(): void {
-    if (this.pendingAction === "clear-session") this.clearAllSessionOverrides();
-    else if (this.pendingAction) this.performDraftAction(this.pendingAction);
+    if (this.pendingAction) this.performDraftAction(this.pendingAction);
   }
 
-  private requestScope(scope: ProfileSettingsScope): void {
-    if (scope === this.scope) {
-      const label = scope === "session" ? "Session" : scope === "project" ? "Project" : "Global";
-      this.setMessage("info", `Already editing ${label} profile routes.`);
+  private openSelectedField(): void {
+    const row = this.rows()[this.fieldIndex];
+    if (!row || this.busy) return;
+    if (row.field === "actions") {
+      this.openActions();
+      return;
+    }
+    if (row.field === "advanced") {
+      this.advancedExpanded = !this.advancedExpanded;
+      this.fieldIndex = this.rows().findIndex((entry) => entry.field === "advanced");
       this.renderSoon();
       return;
     }
-    if (scope === "project" && !this.options.projectTrusted) {
-      this.setMessage("warning", "Project profile settings require a trusted project.");
+    const candidate = this.draft().candidates[this.candidateIndex];
+    if (!candidate) return;
+    if (row.fixed) {
+      this.setMessage(
+        "info",
+        row.fixedReason ?? `${row.label.trim()} cannot be changed for this selection.`,
+      );
       this.renderSoon();
       return;
     }
-    this.options.close({
-      action: "scope",
-      scope,
-      profile: this.profile(),
-      reloadRequired: this.reloadRequired,
-    });
-  }
-
-  private requestReload(): void {
-    if (this.busy || !this.reloadRequired) return;
-    this.busy = true;
-    this.setMessage("info", "Reload requested…");
-    this.renderSoon();
-    void this.options
-      .reload()
-      .then((reloaded) => {
-        if (this.disposed) return;
-        this.busy = false;
-        if (reloaded) {
-          this.reloadRequired = false;
-          this.options.close("reloaded");
-          return;
-        }
-        this.setMessage("info", "Reload canceled; saved changes remain pending.");
-        this.renderSoon();
-      })
-      .catch((error) => {
-        if (this.disposed) return;
-        this.busy = false;
-        this.setMessage("error", error instanceof Error ? error.message : "Reload failed.");
-        this.renderSoon();
-      });
+    const field = row.field;
+    if (field === "model") {
+      this.openModelPicker(candidate);
+      return;
+    }
+    if (field === "effort" && candidate.runtime !== "pi") {
+      this.openNativeEffortPicker(candidate);
+      return;
+    }
+    if (field === "openaiFastMode") {
+      this.openFastModePicker(candidate);
+      return;
+    }
+    this.showFieldPicker(
+      candidate,
+      field,
+      candidate.runtime === "pi" ? this.options.supportedPiEfforts(candidate) : undefined,
+    );
   }
 
   private back(): void {
-    if (this.pane === "fields") {
-      this.pane = "candidates";
-      this.clearMessage();
-    } else if (this.pane === "candidates") {
-      this.pane = "profiles";
-      this.clearMessage();
-    } else this.options.close(this.reloadRequired);
+    this.message = undefined;
     this.pendingAction = undefined;
     this.keymap.resetChord();
+    if (this.pane === "fields") this.pane = "candidates";
+    else if (this.pane === "candidates") this.pane = "profiles";
+    else this.options.close(false);
   }
 
   private forward(): void {
-    if (this.pane === "profiles") {
-      this.pane = "candidates";
-      this.clearMessage();
-    } else if (this.pane === "candidates") {
-      if (this.draft().candidates.length > 0) {
-        this.pane = "fields";
-        this.clearMessage();
-      } else this.setMessage("info", "Add a candidate before opening candidate details.");
-    } else this.openFieldPicker();
+    this.message = undefined;
+    if (this.pane === "profiles") this.pane = "candidates";
+    else if (this.pane === "candidates") {
+      this.pane = "fields";
+      this.fieldIndex = 0;
+      this.advancedExpanded = false;
+    } else this.openSelectedField();
     this.keymap.resetChord();
   }
 
@@ -833,13 +686,10 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.selectPage.handleInput(data);
       return;
     }
-
-    const matchesKeybinding = this.options.matchesKeybinding;
-
     if (this.pendingAction) {
       const resolution = this.keymap.resolve(data, {
         mode: "confirmation",
-        matchesKeybinding,
+        matchesKeybinding: this.options.matchesKeybinding,
       });
       if (resolution?._tag === "Action" && resolution.action === "cancel") {
         this.pendingAction = undefined;
@@ -849,142 +699,94 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         this.confirmPending();
       return;
     }
-
     if (this.busy) {
-      const resolution = this.keymap.resolve(data, { mode: "busy", matchesKeybinding });
+      const resolution = this.keymap.resolve(data, {
+        mode: "busy",
+        matchesKeybinding: this.options.matchesKeybinding,
+      });
       if (this.catalogLoad && resolution?._tag === "Action" && resolution.action === "cancel")
         this.cancelCatalogLoad();
-      else {
-        this.setMessage("warning", "Wait for the current settings operation to finish.");
-        this.renderSoon();
-      }
       return;
     }
-
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
-      matchesKeybinding,
-      reservedKeys: dashboardShortcuts,
+      matchesKeybinding: this.options.matchesKeybinding,
+      reservedKeys: new Set(["/", "p"]),
     });
     if (!resolution) return;
     if (resolution._tag === "Shortcut") {
-      const shortcut = resolution.key;
-      if (shortcut === "s" && this.pane === "profiles") {
-        this.options.close({
-          action: "sets",
-          profile: this.profile(),
-          reloadRequired: this.reloadRequired,
-          preferredScope: this.preferredSetScope(),
-        });
+      if (resolution.key === "p") {
+        this.options.close({ action: "sets", profile: this.profile() });
         return;
       }
-      if (shortcut === "1" && this.pane === "profiles") {
-        this.requestScope("session");
-        return;
-      }
-      if (shortcut === "2" && this.pane === "profiles") {
-        this.requestScope("project");
-        return;
-      }
-      if (shortcut === "3" && this.pane === "profiles") {
-        this.requestScope("global");
-        return;
-      }
-      if (shortcut === "/" && this.pane === "profiles") this.openProfileSearch();
-      else if (
-        shortcut === "a" &&
-        this.pane === "candidates" &&
-        this.draft().candidates.length < MAX_PROFILE_CANDIDATES
-      )
-        this.performDraftAction("add");
-      else if (
-        shortcut === "c" &&
-        this.pane === "candidates" &&
-        this.draft().candidates.length > 0 &&
-        this.draft().candidates.length < MAX_PROFILE_CANDIDATES
-      )
-        this.performDraftAction("clone");
-      else if (shortcut === "K" && this.pane === "candidates" && this.candidateIndex > 0)
-        this.performDraftAction("move-up");
-      else if (
-        shortcut === "J" &&
-        this.pane === "candidates" &&
-        this.candidateIndex < this.draft().candidates.length - 1
-      )
-        this.performDraftAction("move-down");
-      else if (shortcut === "x" && this.pane === "candidates" && this.draft().candidates.length > 0)
-        this.arm("remove");
-      else if (shortcut === "d" && this.pane === "candidates") this.arm("disable");
-      else if (shortcut === "i" && this.pane !== "fields") this.arm("reset");
-      else if (shortcut === "X" && this.scope === "session" && this.pane === "profiles")
-        this.arm("clear-session");
-      else if (shortcut === "r") this.requestReload();
-      this.renderSoon();
+      if (resolution.key === "/" && this.pane === "profiles") this.openProfileSearch();
       return;
     }
-
-    const steps = pageSteps(this.options.getHeight() - 10);
-    const moveSelection = (offset: number) => {
-      if (this.pane === "profiles") this.selectProfile(offset);
-      else if (this.pane === "candidates") this.selectCandidate(offset);
-      else this.selectField(offset);
+    const steps = pageSteps(this.options.getHeight() - 8);
+    const move = (offset: number): void => {
+      if (this.pane === "profiles") {
+        this.profileIndex = Math.max(
+          0,
+          Math.min(PROFILE_IDS.length - 1, this.profileIndex + offset),
+        );
+        this.resetSelectionForProfile();
+      } else if (this.pane === "candidates") {
+        this.candidateIndex = Math.max(
+          0,
+          Math.min(Math.max(0, this.draft().candidates.length - 1), this.candidateIndex + offset),
+        );
+        this.fieldIndex = 0;
+        this.advancedExpanded = false;
+      } else {
+        this.fieldIndex = Math.max(0, Math.min(this.rows().length - 1, this.fieldIndex + offset));
+      }
+      this.message = undefined;
     };
     switch (resolution.action) {
       case "cancel":
       case "quit":
-        this.back();
-        return;
       case "back":
-        if (this.pane !== "profiles") this.back();
-        else this.renderSoon();
+        this.back();
         return;
       case "confirm":
       case "forward":
         this.forward();
         return;
-      case "next-pane":
-        this.navigate(1);
-        break;
-      case "previous-pane":
-        this.navigate(-1);
-        break;
       case "up":
-        moveSelection(-1);
+        move(-1);
         break;
       case "down":
-        moveSelection(1);
+        move(1);
         break;
       case "half-page-up":
-        moveSelection(-steps.half);
+        move(-steps.half);
         break;
       case "half-page-down":
-        moveSelection(steps.half);
+        move(steps.half);
         break;
       case "full-page-up":
-        moveSelection(-steps.page);
+        move(-steps.page);
         break;
       case "full-page-down":
-        moveSelection(steps.page);
+        move(steps.page);
         break;
       case "first":
         if (this.pane === "profiles") this.profileIndex = 0;
         else if (this.pane === "candidates") this.candidateIndex = 0;
         else this.fieldIndex = 0;
-        this.clearMessage();
         break;
       case "last":
         if (this.pane === "profiles") this.profileIndex = PROFILE_IDS.length - 1;
         else if (this.pane === "candidates")
           this.candidateIndex = Math.max(0, this.draft().candidates.length - 1);
-        else this.fieldIndex = PROFILE_WORKSPACE_FIELDS.length - 1;
-        this.clearMessage();
+        else this.fieldIndex = Math.max(0, this.rows().length - 1);
         break;
       case "search":
         if (this.pane === "profiles") this.openProfileSearch();
         return;
       case "help":
-        this.alternateHelp = !this.alternateHelp;
-        break;
+      case "next-pane":
+      case "previous-pane":
       case "pending-first":
         break;
     }
@@ -1003,12 +805,36 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         ? resetGlobalDraft(profile)
         : this.scope === "project"
           ? inheritProjectDraft(this.inspection, profile)
-          : inheritSessionDraft(this.inspection, profile);
+          : currentSessionBaselineDraft(this.inspection, profile);
     const resetCurrent = `${draftKindLabel(draft, this.scope)} · ${profileRouteDraftSummary(profile, draft, this.options.parentEffort, this.options.parentModel)}`;
-    const baseSource = profileSourceLabel(
-      this.inspection.session.baseConfig.profileSources[profile],
+    const resetSummary = profileRouteDraftSummary(
+      profile,
+      resetDraft,
+      this.options.parentEffort,
+      this.options.parentModel,
     );
-    const resetAfter = `${this.scope === "global" ? "[B] built-in" : this.scope === "project" ? "inherits [G] global / [B] built-in" : `inherits ${baseSource}`} · ${profileRouteDraftSummary(profile, resetDraft, this.options.parentEffort, this.options.parentModel)}`;
+    const resetAfter =
+      this.scope === "global"
+        ? `built-in · ${resetSummary}`
+        : this.scope === "project"
+          ? `next available default · ${resetSummary}`
+          : resetSummary;
+    const confirmationBase = this.pendingAction
+      ? {
+          action: this.pendingAction,
+          profile,
+          candidateIndex: this.candidateIndex,
+          candidateCount: draft.candidates.length,
+          scope: this.scope,
+        }
+      : undefined;
+    const confirmationInput =
+      confirmationBase && this.pendingAction === "reset"
+        ? { ...confirmationBase, currentSummary: resetCurrent, afterSummary: resetAfter }
+        : confirmationBase;
+    const pendingConfirmation = confirmationInput
+      ? profileWorkspaceConfirmation(confirmationInput)
+      : undefined;
     return renderProfileWorkspace(
       {
         inspection: this.inspection,
@@ -1022,43 +848,11 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         candidateIndex: this.candidateIndex,
         fieldIndex: this.fieldIndex,
         draft,
+        advancedExpanded: this.advancedExpanded,
         busy: this.busy,
         cancellableBusy: this.catalogLoad !== undefined,
-        reloadRequired: this.reloadRequired,
-        alternateHelp: this.alternateHelp,
         message: this.message,
-        pendingConfirmation:
-          this.pendingAction === "clear-session"
-            ? {
-                key: "X",
-                title: "Clear all session profile overrides?",
-                detail:
-                  "Every temporary route will be removed. Active project, global, or built-in routes will apply immediately to new launches.",
-              }
-            : this.pendingAction
-              ? profileWorkspaceConfirmation(
-                  (() => {
-                    const baseResult = {
-                      action: this.pendingAction,
-                      profile,
-                      candidateIndex: this.candidateIndex,
-                      candidateCount: draft.candidates.length,
-                      scope: this.scope,
-                      projectOverrideActive:
-                        this.scope === "global" && this.projectOverrideActive(),
-                    };
-                    const withCurrentSummaryAndAfterSummary =
-                      this.pendingAction === "reset"
-                        ? {
-                            ...baseResult,
-                            currentSummary: resetCurrent,
-                            afterSummary: resetAfter,
-                          }
-                        : baseResult;
-                    return withCurrentSummaryAndAfterSummary;
-                  })(),
-                )
-              : undefined,
+        pendingConfirmation,
       },
       {
         theme: this.options.theme,

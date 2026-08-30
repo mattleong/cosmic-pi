@@ -146,7 +146,7 @@ describe("profile model catalog", () => {
       expect(selected?.item.label).toContain("(current)");
       expect(selected?.choice).toEqual({ kind: "model", selector: "openai/gpt-old" });
       const parent = piPicker.choices.find((choice) => choice.choice.kind === "parent");
-      expect(parent?.item.label).toContain("parent → openai/gpt-old");
+      expect(parent?.item.label).toContain("Current Pi model → openai/gpt-old");
       for (const choice of piPicker.choices) {
         expect(hasTerminalControls(choice.item.label)).toBe(false);
         expect(hasTerminalControls(choice.item.description ?? "")).toBe(false);

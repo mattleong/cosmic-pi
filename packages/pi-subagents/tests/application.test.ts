@@ -8,8 +8,13 @@ import type {
 import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
+import { resolveSubagentConfig } from "../src/config/options.ts";
+import { decodeSubagentConfig } from "../src/config/schema.ts";
+import { makeSubagentProfileService } from "../src/profiles/service.ts";
 import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
@@ -27,6 +32,59 @@ const deferred = <A>() => {
 };
 
 describe("subagent Pi registration", () => {
+  effectTest("holds the session revision lock through a deferred saved-set write", function* () {
+    const global = decodeSubagentConfig({ version: 6, profileSets: {} }, "global");
+    const config = resolveSubagentConfig({
+      globalConfigPath: "/agent/pi-subagents.json",
+      projectConfigPath: "/repo/.pi/pi-subagents.json",
+      projectTrusted: false,
+      globalConfigExists: false,
+      projectConfigExists: false,
+      global,
+    });
+    const service = yield* makeSubagentProfileService(config);
+    const writeStarted = yield* Deferred.make<void>();
+    const releaseWrite = yield* Deferred.make<void>();
+    const editAttempted = yield* Deferred.make<void>();
+    const editFinished = yield* Deferred.make<void>();
+    let persistedReviewerCandidates: number | undefined;
+
+    const saving = yield* Effect.forkChild(
+      service
+        .withSnapshotAtRevision(0, (snapshot) =>
+          Effect.gen(function* () {
+            persistedReviewerCandidates =
+              snapshot.effectiveConfig.profiles.reviewer.candidates.length;
+            yield* Deferred.succeed(writeStarted, undefined);
+            yield* Deferred.await(releaseWrite);
+          }),
+        )
+        .pipe(Effect.orDie),
+    );
+    yield* Deferred.await(writeStarted);
+
+    const editing = yield* Effect.forkChild(
+      Effect.gen(function* () {
+        yield* Deferred.succeed(editAttempted, undefined);
+        yield* service.patchSessionProfile({
+          profile: "reviewer",
+          route: { candidates: [] },
+          expectedRevision: 0,
+        });
+        yield* Deferred.succeed(editFinished, undefined);
+      }).pipe(Effect.orDie),
+    );
+    yield* Deferred.await(editAttempted);
+    yield* Effect.yieldNow;
+    expect(Option.isNone(yield* Deferred.poll(editFinished))).toBe(true);
+
+    yield* Deferred.succeed(releaseWrite, undefined);
+    yield* Fiber.join(saving);
+    yield* Fiber.join(editing);
+    expect(persistedReviewerCandidates).toBeGreaterThan(0);
+    expect((yield* service.capture).effectiveConfig.profiles.reviewer.candidates).toEqual([]);
+  });
+
   effectTest(
     "aborts superseded preview loading and never registers the stale activation",
     function* () {
@@ -339,36 +397,43 @@ describe("subagent Pi registration", () => {
   effectTest(
     "preserves session overrides across tree and reload but clears them for a new session",
     function* () {
-      const handlers = new Map<string, Handler>();
+      let handlers = new Map<string, Handler>();
       let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
       let active = ["read"];
-      // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
-      const pi = extensionApiFixture({
-        registerTool: vi.fn((tool: { readonly name: string }) => {
-          active = [...new Set([...active, tool.name])];
-        }),
-        registerCommand: vi.fn(
-          (
-            _name: string,
-            definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
-          ) => {
-            command = definition.handler;
-          },
-        ),
-        on: vi.fn((name: string, handler: Handler) => {
-          handlers.set(name, handler);
-        }),
-        getActiveTools: vi.fn(() => [...active]),
-        setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
-          active = [...names];
-        }),
-        sendMessage: vi.fn(),
-        getThinkingLevel: vi.fn(() => "high"),
-      });
-      registerSubagentApplication(pi, {
-        getAgentDirectory: testAgentDirectory,
-        loadSettings: () => Promise.resolve(),
-      });
+      const registerFreshApplication = (): void => {
+        const nextHandlers = new Map<string, Handler>();
+        // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
+        const pi = extensionApiFixture({
+          registerTool: vi.fn((tool: { readonly name: string }) => {
+            active = [...new Set([...active, tool.name])];
+          }),
+          registerCommand: vi.fn(
+            (
+              _name: string,
+              definition: {
+                handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+              },
+            ) => {
+              command = definition.handler;
+            },
+          ),
+          on: vi.fn((name: string, handler: Handler) => {
+            nextHandlers.set(name, handler);
+          }),
+          getActiveTools: vi.fn(() => [...active]),
+          setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
+            active = [...names];
+          }),
+          sendMessage: vi.fn(),
+          getThinkingLevel: vi.fn(() => "high"),
+        });
+        registerSubagentApplication(pi, {
+          getAgentDirectory: testAgentDirectory,
+          loadSettings: () => Promise.resolve(),
+        });
+        handlers = nextHandlers;
+      };
+      registerFreshApplication();
 
       let component: Component | undefined;
       let closeOverlay: ((value: boolean) => void) | undefined;
@@ -417,35 +482,37 @@ describe("subagent Pi registration", () => {
       const first = command?.("profiles", ctx) ?? Promise.resolve();
       yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
       component?.handleInput?.("\r");
-      component?.handleInput?.("d");
+      component?.handleInput?.("\r");
+      for (let index = 0; index < 5; index += 1) component?.handleInput?.("j");
+      component?.handleInput?.("\r");
+      for (let index = 0; index < 3; index += 1) component?.handleInput?.("j");
+      component?.handleInput?.("\r");
+      expect(component?.render(120).join("\n")).toContain("Confirm");
       component?.handleInput?.("\r");
       yield* step(() =>
-        vi.waitFor(() =>
-          expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
-        ),
+        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
       );
       closeOverlay?.(false);
       yield* step(() => first);
 
       component = undefined;
       yield* settle(() => handlers.get("session_tree")?.({}, ctx));
-      const afterTree = command?.("profiles session", ctx) ?? Promise.resolve();
+      const afterTree = command?.("profiles", ctx) ?? Promise.resolve();
       yield* step(() =>
-        vi.waitFor(() =>
-          expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
-        ),
+        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
       );
       closeOverlay?.(false);
       yield* step(() => afterTree);
 
       component = undefined;
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
+      const startupHandlers = handlers;
+      registerFreshApplication();
+      expect(handlers).not.toBe(startupHandlers);
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
-      const afterReload = command?.("profiles session", ctx) ?? Promise.resolve();
+      const afterReload = command?.("profiles", ctx) ?? Promise.resolve();
       yield* step(() =>
-        vi.waitFor(() =>
-          expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
-        ),
+        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
       );
       closeOverlay?.(false);
       yield* step(() => afterReload);
@@ -453,11 +520,9 @@ describe("subagent Pi registration", () => {
       component = undefined;
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
-      const afterSecondReload = command?.("profiles session", ctx) ?? Promise.resolve();
+      const afterSecondReload = command?.("profiles", ctx) ?? Promise.resolve();
       yield* step(() =>
-        vi.waitFor(() =>
-          expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
-        ),
+        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
       );
       closeOverlay?.(false);
       yield* step(() => afterSecondReload);
@@ -475,27 +540,33 @@ describe("subagent Pi registration", () => {
       component = undefined;
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
-      const afterFailedTreeReload = command?.("profiles session", ctx) ?? Promise.resolve();
+      const afterFailedTreeReload = command?.("profiles", ctx) ?? Promise.resolve();
       yield* step(() =>
-        vi.waitFor(() =>
-          expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
-        ),
+        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
       );
       closeOverlay?.(false);
       yield* step(() => afterFailedTreeReload);
 
       component = undefined;
-      yield* settle(() => handlers.get("session_shutdown")?.({ reason: "new" }, ctx));
-      yield* settle(() => handlers.get("session_start")?.({ reason: "new" }, ctx));
-      const afterNew = command?.("profiles session", ctx) ?? Promise.resolve();
+      yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
+      // SAFETY: A new host session has a distinct session identity even when it uses the same project.
+      const newSessionContext = extensionContextFixture({
+        ...ctx,
+        sessionManager: { getSessionId: () => "application-new-session" },
+      });
+      yield* settle(() => handlers.get("session_start")?.({ reason: "new" }, newSessionContext));
+      const afterNew = command?.("profiles", newSessionContext) ?? Promise.resolve();
       yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      expect((component as Component | undefined)?.render(120).join("\n")).not.toContain(
-        "session override · applies now",
-      );
+      // SAFETY: vi.waitFor observed the custom-overlay callback assign a Component, which TypeScript cannot track.
+      const cleanHeader = (component as Component | undefined)?.render(120).join("\n");
+      expect(cleanHeader).toContain("Current Session · based on");
+      expect(cleanHeader).toContain("· no changes");
+      expect(cleanHeader).not.toContain("profile changed");
       closeOverlay?.(false);
       yield* step(() => afterNew);
-      yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
+      yield* settle(() =>
+        handlers.get("session_shutdown")?.({ reason: "quit" }, newSessionContext),
+      );
     },
   );
 

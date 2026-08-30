@@ -314,7 +314,22 @@ export function registerSubagentApplication(
       ),
     patchProfile: withConfigStore((store) => store.patchProfile),
     patchDefaultProfileSet: withConfigStore((store) => store.patchDefaultProfileSet),
-    createProfileSet: withConfigStore((store) => store.createProfileSet),
+    createProfileSetFromSnapshot: (request) =>
+      withCurrentActivation((activation) => {
+        const { expectedRevision, ...patch } = request;
+        return run(
+          Effect.gen(function* () {
+            const store = yield* SubagentConfigStore;
+            const profiles = yield* SubagentProfileService;
+            yield* profiles.withSnapshotAtRevision(expectedRevision, (snapshot) =>
+              store.createProfileSetFromSnapshot(activation.cwd, activation.agentDirectory, {
+                ...patch,
+                profiles: snapshot.effectiveConfig.profiles,
+              }),
+            );
+          }),
+        );
+      }),
     copyProfileSet: withConfigStore((store) => store.copyProfileSet),
     renameProfileSet: withConfigStore((store) => store.renameProfileSet),
     deleteProfileSet: withConfigStore((store) => store.deleteProfileSet),
@@ -323,14 +338,14 @@ export function registerSubagentApplication(
       run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))).then(
         () => undefined,
       ),
+    replaceSessionProfiles: (patch) =>
+      run(SubagentProfileService.use((profiles) => profiles.replaceSessionProfiles(patch))).then(
+        () => undefined,
+      ),
     patchSessionNesting: (patch) =>
       run(SubagentProfileService.use((profiles) => profiles.patchSessionNesting(patch))).then(
         () => undefined,
       ),
-    clearSessionProfiles: (expectedRevision) =>
-      run(
-        SubagentProfileService.use((profiles) => profiles.clearSessionProfiles(expectedRevision)),
-      ).then(() => undefined),
     listNativeModels: (runtime, signal) =>
       withCurrentActivation((activation) =>
         run(

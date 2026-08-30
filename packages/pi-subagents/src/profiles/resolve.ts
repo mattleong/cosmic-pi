@@ -358,7 +358,7 @@ export function resolveProfilePlan(
       source === "global-invalid" || source === "project-invalid"
         ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
         : source === "session"
-          ? `Profile ${profile} is temporarily disabled by a session override; clear it in /subagents profiles session to reveal the loaded persistent route.`
+          ? `Profile ${profile} is temporarily disabled by a session override; clear it in /subagents profiles to reveal the loaded persistent route.`
           : `Profile ${profile} is disabled and has no eligible candidate.`;
     return {
       kind: "failed",

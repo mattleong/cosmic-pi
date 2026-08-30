@@ -1,12 +1,10 @@
-import { MAX_PROFILE_CANDIDATES } from "../../profiles/model.ts";
-import type { ProfileId } from "../../profiles/model.ts";
+import { MAX_PROFILE_CANDIDATES, type ProfileId } from "../../profiles/model.ts";
 import {
   addRouteCandidate,
   defaultRouteCandidate,
   disableRouteDraft,
   duplicateRouteCandidate,
   inheritProjectDraft,
-  inheritSessionDraft,
   moveRouteCandidate,
   removeRouteCandidate,
   resetGlobalDraft,
@@ -14,6 +12,7 @@ import {
   type ProfileSettingsInspection,
   type ProfileSettingsScope,
 } from "../profile-route-editor.ts";
+import { sessionBaselineProfileDraft } from "./profile-workspace-model.ts";
 import type { ProfileWorkspaceConfirmation } from "./profile-workspace-render.ts";
 
 export type ProfileWorkspaceDraftAction =
@@ -24,6 +23,112 @@ export type ProfileWorkspaceDraftAction =
   | "remove"
   | "disable"
   | "reset";
+
+export interface ProfileWorkspaceActionChoice {
+  readonly action: ProfileWorkspaceDraftAction;
+  readonly label: string;
+  readonly description: string;
+  readonly destructive: boolean;
+}
+
+export const profileWorkspaceActionChoices = (input: {
+  readonly draft: ProfileRouteDraft;
+  readonly candidateIndex: number;
+  readonly scope: ProfileSettingsScope;
+  readonly hasOwnDeclaration: boolean;
+}): ReadonlyArray<ProfileWorkspaceActionChoice> => {
+  const count = input.draft.candidates.length;
+  const resetAvailable = input.hasOwnDeclaration;
+  return [
+    ...(count < MAX_PROFILE_CANDIDATES
+      ? [
+          {
+            action: "add" as const,
+            label: count === 0 ? "Add Primary" : "Add fallback",
+            description:
+              count === 0
+                ? "Add the first choice for this profile"
+                : "Add a fallback after the existing choices",
+            destructive: false,
+          },
+        ]
+      : []),
+    ...(count > 0 && count < MAX_PROFILE_CANDIDATES
+      ? [
+          {
+            action: "clone" as const,
+            label: "Copy selected choice",
+            description: "Insert the copy after the selected choice",
+            destructive: false,
+          },
+        ]
+      : []),
+    ...(count > 1 && input.candidateIndex > 0
+      ? [
+          {
+            action: "move-up" as const,
+            label: "Move earlier",
+            description: "Move the selected choice earlier in the order",
+            destructive: false,
+          },
+        ]
+      : []),
+    ...(count > 1 && input.candidateIndex < count - 1
+      ? [
+          {
+            action: "move-down" as const,
+            label: "Move later",
+            description: "Move the selected choice later in the order",
+            destructive: false,
+          },
+        ]
+      : []),
+    ...(count > 0
+      ? [
+          {
+            action: "remove" as const,
+            label: "Remove selected choice",
+            description: "Remove it and keep the remaining choices in order",
+            destructive: true,
+          },
+        ]
+      : []),
+    ...(input.draft.kind !== "disabled"
+      ? [
+          {
+            action: "disable" as const,
+            label: "Disable profile",
+            description:
+              input.scope === "session"
+                ? "Prevent new runs from using this profile in Current Session"
+                : "Disable this profile whenever this saved set is used",
+            destructive: true,
+          },
+        ]
+      : []),
+    ...(resetAvailable
+      ? [
+          {
+            action: "reset" as const,
+            label:
+              input.scope === "session"
+                ? "Restore Current Session starting point"
+                : "Remove saved profile settings",
+            description:
+              input.scope === "session"
+                ? "Discard this profile's changes and restore its Current Session starting point"
+                : "Use the next available default whenever this saved set is used",
+            destructive: true,
+          },
+        ]
+      : []),
+  ];
+};
+
+export const currentSessionBaselineDraft = (
+  inspection: ProfileSettingsInspection,
+  profile: ProfileId,
+): ProfileRouteDraft => sessionBaselineProfileDraft(inspection, profile);
 
 export type ProfileWorkspaceDraftActionResult =
   | {
@@ -41,13 +146,20 @@ export const applyProfileWorkspaceDraftAction = (input: {
   readonly candidateIndex: number;
   readonly scope: ProfileSettingsScope;
   readonly inspection: ProfileSettingsInspection;
+  readonly hasOwnDeclaration: boolean;
 }): ProfileWorkspaceDraftActionResult => {
   if (input.action === "add") {
     if (input.draft.candidates.length >= MAX_PROFILE_CANDIDATES)
-      return { error: `A route may contain at most ${MAX_PROFILE_CANDIDATES} candidates.` };
+      return {
+        error: `A profile can have at most ${MAX_PROFILE_CANDIDATES} Primary/Fallback choices.`,
+      };
     const draft = addRouteCandidate(input.draft, defaultRouteCandidate(input.profile));
     return draft
-      ? { draft, description: "candidate added", candidateIndex: draft.candidates.length - 1 }
+      ? {
+          draft,
+          description: input.draft.candidates.length === 0 ? "Primary added" : "fallback added",
+          candidateIndex: draft.candidates.length - 1,
+        }
       : { unchanged: true };
   }
   if (input.action === "clone") {
@@ -55,10 +167,12 @@ export const applyProfileWorkspaceDraftAction = (input: {
     return draft
       ? {
           draft,
-          description: "candidate cloned",
+          description: "selected choice copied",
           candidateIndex: Math.min(input.candidateIndex + 1, draft.candidates.length - 1),
         }
-      : { error: `A route may contain at most ${MAX_PROFILE_CANDIDATES} candidates.` };
+      : {
+          error: `A profile can have at most ${MAX_PROFILE_CANDIDATES} Primary/Fallback choices.`,
+        };
   }
   if (input.action === "move-up" || input.action === "move-down") {
     const direction = input.action === "move-up" ? "up" : "down";
@@ -67,7 +181,7 @@ export const applyProfileWorkspaceDraftAction = (input: {
       ? { unchanged: true }
       : {
           draft,
-          description: `candidate moved ${direction}`,
+          description: `selected choice moved ${direction}`,
           candidateIndex: direction === "up" ? input.candidateIndex - 1 : input.candidateIndex + 1,
         };
   }
@@ -75,36 +189,26 @@ export const applyProfileWorkspaceDraftAction = (input: {
     if (!input.draft.candidates[input.candidateIndex]) return { unchanged: true };
     return {
       draft: removeRouteCandidate(input.draft, input.candidateIndex),
-      description: "candidate removed",
+      description: "selected choice removed",
       candidateIndex: Math.max(0, input.candidateIndex - 1),
     };
   }
   if (input.action === "disable")
     return input.draft.kind === "disabled"
       ? { unchanged: true }
-      : {
-          draft: disableRouteDraft(),
-          description: "route disabled",
-          candidateIndex: 0,
-        };
-  if (
-    (input.scope === "global" && input.draft.kind === "reset") ||
-    (input.scope !== "global" && input.draft.kind === "inherit")
-  )
-    return { unchanged: true };
+      : { draft: disableRouteDraft(), description: "profile disabled", candidateIndex: 0 };
+  if (!input.hasOwnDeclaration) return { unchanged: true };
   return {
     draft:
       input.scope === "global"
         ? resetGlobalDraft(input.profile)
         : input.scope === "project"
           ? inheritProjectDraft(input.inspection, input.profile)
-          : inheritSessionDraft(input.inspection, input.profile),
+          : currentSessionBaselineDraft(input.inspection, input.profile),
     description:
-      input.scope === "global"
-        ? "profile reset to built-in"
-        : input.scope === "project"
-          ? "profile reset to inherit global"
-          : "session override cleared",
+      input.scope === "session"
+        ? "Current Session starting point restored"
+        : "saved profile settings removed",
     candidateIndex: 0,
   };
 };
@@ -115,56 +219,47 @@ export const profileWorkspaceConfirmation = (input: {
   readonly candidateIndex: number;
   readonly candidateCount: number;
   readonly scope: ProfileSettingsScope;
-  readonly projectOverrideActive?: boolean | undefined;
   readonly currentSummary?: string | undefined;
   readonly afterSummary?: string | undefined;
 }): ProfileWorkspaceConfirmation => {
-  const shadowed = input.projectOverrideActive
-    ? " The project override remains effective until it is reset."
-    : "";
   if (input.action === "remove")
     return {
-      key: "x",
-      title: `Remove candidate ${input.candidateIndex + 1} from ${input.profile}?`,
+      title: `Remove ${input.candidateIndex === 0 ? "Primary" : `Fallback ${input.candidateIndex}`} from ${input.profile}?`,
       detail:
         input.candidateCount === 1
-          ? input.projectOverrideActive
-            ? "This is the last global candidate. Removing it disables the global declaration; the project override remains effective."
-            : input.scope === "session"
-              ? "This is the last candidate. Removing it disables the route immediately for future launches; active runs are unchanged."
-              : "This is the last candidate. Removing it disables the route after reload."
-          : `The remaining candidates keep their order and the route is saved immediately.${shadowed}`,
+          ? input.scope === "session"
+            ? "This disables the profile for new runs in Current Session. Active runs do not change."
+            : "This disables the profile in this saved set. Current Session does not change."
+          : input.scope === "session"
+            ? "This removes the selected choice for new runs in Current Session. The remaining choices keep their order. Active runs do not change."
+            : "This removes the selected choice from this saved set. The remaining choices keep their order. Current Session does not change.",
     };
   if (input.action === "disable")
     return {
-      key: "d",
-      title: `Disable the ${input.profile} route?`,
-      detail: input.projectOverrideActive
-        ? "The global route declaration will be disabled; the project override remains effective."
-        : input.scope === "session"
-          ? "This immediately disables the profile for future launches; active runs are unchanged."
-          : "No candidate will launch for this profile after reload.",
-    };
-  return (() => {
-    const baseResult = {
-      key: "i",
-      title: `Reset ${input.profile}?`,
+      title: `Disable ${input.profile}?`,
       detail:
-        input.scope === "global"
-          ? input.projectOverrideActive
-            ? "The global declaration will be removed. The project override remains effective."
-            : "The global declaration will be removed. The effective route will return to the built-in profile."
-          : input.scope === "project"
-            ? "The project declaration will be removed. The effective route will come from global settings or the built-in profile."
-            : "The temporary session override will be removed. The active project, global, or built-in route will apply immediately.",
+        input.scope === "session"
+          ? "New runs cannot use this profile in Current Session. Active runs do not change."
+          : "This profile will be disabled in this saved set. Current Session does not change.",
     };
-    const withPreview =
-      input.currentSummary && input.afterSummary
-        ? {
-            ...baseResult,
-            preview: [`Current  ${input.currentSummary}`, `After    ${input.afterSummary}`],
-          }
-        : baseResult;
-    return withPreview;
-  })();
+  const base = {
+    title:
+      input.scope === "session"
+        ? `Restore ${input.profile} to its Current Session starting point?`
+        : `Remove ${input.profile} settings from this saved set?`,
+    detail:
+      input.scope === "session"
+        ? "This discards changes to this profile and restores its Current Session starting point. Active runs do not change."
+        : input.scope === "project"
+          ? "When this saved set is used, this profile will use the Global default, or the built-in default if none is set. Current Session does not change."
+          : "When this saved set is used, this profile will use the built-in default. Current Session does not change.",
+  };
+  if (!input.currentSummary || !input.afterSummary) return base;
+  return {
+    ...base,
+    preview:
+      input.scope === "session"
+        ? [`Current settings ${input.currentSummary}`, `Starting point  ${input.afterSummary}`]
+        : [`Current settings ${input.currentSummary}`, `After removal    ${input.afterSummary}`],
+  };
 };

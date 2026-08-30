@@ -1,4 +1,4 @@
-import type { ResolvedProfileSetSelection } from "../../config/options.ts";
+import { resolveNamedProfileSet } from "../../config/options.ts";
 import type { SubagentConfigScope } from "../../config/store.ts";
 import type {
   ProfileSettingsInspection,
@@ -7,46 +7,52 @@ import type {
 
 export type ProfileSetPickerEntry =
   | {
-      readonly kind: "inherit-project";
-      readonly key: "project:inherit";
-      readonly scope: "project";
-      readonly current: boolean;
-      readonly label: string;
-      readonly description: string;
-    }
-  | {
-      readonly kind: "builtin";
-      readonly key: "global:builtin";
-      readonly scope: "global";
-      readonly current: boolean;
+      readonly kind: "set";
+      readonly key: string;
+      readonly scope: SubagentConfigScope;
+      readonly ref: PersistentProfileSetRef;
+      readonly scopeDefault: boolean;
+      readonly invalid: boolean;
+      readonly repairable: boolean;
+      readonly invalidProfileCount: number;
+      readonly profileCount: number;
       readonly label: string;
       readonly description: string;
     }
   | {
       readonly kind: "invalid-default";
-      readonly key: "project:invalid-default" | "global:invalid-default";
+      readonly key: string;
       readonly scope: SubagentConfigScope;
-      readonly current: true;
+      readonly scopeDefault: true;
       readonly label: string;
       readonly description: string;
     }
   | {
-      readonly kind: "set";
-      readonly key: string;
+      readonly kind: "scope-note";
+      readonly key: "project:locked" | "project:empty" | "global:empty";
       readonly scope: SubagentConfigScope;
-      readonly ref: PersistentProfileSetRef;
-      readonly current: boolean;
-      readonly scopeDefault: boolean;
-      readonly invalid: boolean;
-      readonly profileCount: number;
       readonly label: string;
       readonly description: string;
+      readonly unavailable: boolean;
     };
 
 const setKey = (scope: SubagentConfigScope, name: string): string => `${scope}:${name}`;
 
 const decodedForScope = (inspection: ProfileSettingsInspection, scope: SubagentConfigScope) =>
   scope === "global" ? inspection.global : inspection.project;
+
+const resolvedSet = (
+  inspection: ProfileSettingsInspection,
+  scope: SubagentConfigScope,
+  name: string,
+) =>
+  scope === "global"
+    ? resolveNamedProfileSet({ scope, name, global: inspection.global })
+    : resolveNamedProfileSet(
+        inspection.project
+          ? { scope, name, global: inspection.global, project: inspection.project }
+          : { scope, name, global: inspection.global },
+      );
 
 const scopeEntries = (
   inspection: ProfileSettingsInspection,
@@ -59,119 +65,122 @@ const scopeEntries = (
     ...decoded.invalidProfileSets,
     ...(decoded.file.defaultProfileSet ? [decoded.file.defaultProfileSet] : []),
   ]);
-  return [...names]
+  const sets = [...names]
     .sort((left, right) => left.localeCompare(right))
     .map((name): ProfileSetPickerEntry => {
       const profileSet = decoded.file.profileSets?.[name];
-      const invalid =
-        decoded.invalidProfileSets.includes(name) ||
-        (decoded.file.defaultProfileSet === name && decoded.invalidDefaultProfileSet) ||
-        !profileSet;
+      const resolved = resolvedSet(inspection, scope, name);
+      const structurallyInvalid =
+        resolved.status === "structurally-invalid" || resolved.status === "missing";
+      const invalid = resolved.status !== "resolved";
+      const repairable = invalid && !structurallyInvalid;
+      const invalidProfileCount = resolved.invalidProfiles.length;
       const profileCount = profileSet ? Object.keys(profileSet.profiles).length : 0;
       const scopeDefault = decoded.file.defaultProfileSet === name;
-      const currentSelection = inspection.config.currentProfileSet;
-      const current = currentSelection.scope === scope && currentSelection.name === name;
-      const badge = scope === "project" ? "[P]" : "[G]";
+      const status = [
+        scopeDefault ? "default for new sessions" : undefined,
+        invalid
+          ? repairable
+            ? `${invalidProfileCount} invalid profile${invalidProfileCount === 1 ? "" : "s"}, fix before use`
+            : "invalid structure, delete and create a new set"
+          : `${profileCount} saved profile${profileCount === 1 ? "" : "s"}`,
+      ].filter((value): value is string => value !== undefined);
       return {
         kind: "set",
         key: setKey(scope, name),
         scope,
         ref: { scope, name },
-        current,
         scopeDefault,
         invalid,
+        repairable,
+        invalidProfileCount,
         profileCount,
-        label: `${badge} ${name}`,
-        description: invalid
-          ? "invalid set · fails closed"
-          : `${profileCount} explicit profile${profileCount === 1 ? "" : "s"}${scopeDefault && !current ? " · scope default" : ""}`,
+        label: name,
+        description: status.join(" · "),
       };
     });
+  return decoded.invalidDefaultProfileSet && decoded.file.defaultProfileSet === undefined
+    ? [
+        {
+          kind: "invalid-default",
+          key: `${scope}:invalid-default`,
+          scope,
+          scopeDefault: true,
+          label: "Invalid default setting",
+          description: `Clear the invalid ${scope === "project" ? "Project" : "Global"} default setting`,
+        },
+        ...sets,
+      ]
+    : sets;
 };
 
 export const profileSetPickerEntries = (
   inspection: ProfileSettingsInspection,
   projectTrusted: boolean,
 ): ReadonlyArray<ProfileSetPickerEntry> => {
-  const current = inspection.config.currentProfileSet;
-  const malformedProjectDefault =
-    current.scope === "project" && current.invalid && current.name === undefined;
-  const malformedGlobalDefault =
-    current.scope === "global" && current.invalid && current.name === undefined;
-  const projectEntries: ReadonlyArray<ProfileSetPickerEntry> = projectTrusted
-    ? [
+  const project = projectTrusted
+    ? scopeEntries(inspection, "project")
+    : [
         {
-          kind: "inherit-project",
-          key: "project:inherit",
-          scope: "project",
-          current: false,
-          label: "[P] Inherit global",
-          description: `Use ${inspection.global.file.defaultProfileSet ? `[G] ${inspection.global.file.defaultProfileSet}` : "built-in routes"}`,
+          kind: "scope-note" as const,
+          key: "project:locked" as const,
+          scope: "project" as const,
+          label: "Project sets unavailable",
+          description: "Trust this project to view or edit its saved profile sets",
+          unavailable: true,
         },
-        ...(malformedProjectDefault
-          ? [
-              {
-                kind: "invalid-default" as const,
-                key: "project:invalid-default" as const,
-                scope: "project" as const,
-                current: true as const,
-                label: "[P] Invalid default",
-                description: "Malformed default reference · fails closed",
-              },
-            ]
-          : []),
-        ...scopeEntries(inspection, "project"),
-      ]
-    : [];
-  const globalEntries: ReadonlyArray<ProfileSetPickerEntry> = [
-    {
-      kind: "builtin",
-      key: "global:builtin",
-      scope: "global",
-      current: current.scope === "builtin",
-      label: "[G] Built-in routes",
-      description: "No global default profile set",
-    },
-    ...(malformedGlobalDefault
+      ];
+  const projectRows =
+    projectTrusted && project.length === 0
       ? [
           {
-            kind: "invalid-default" as const,
-            key: "global:invalid-default" as const,
-            scope: "global" as const,
-            current: true as const,
-            label: "[G] Invalid default",
-            description: "Malformed default reference · fails closed",
+            kind: "scope-note" as const,
+            key: "project:empty" as const,
+            scope: "project" as const,
+            label: "No Project sets saved",
+            description: "Save Current Session here to add one",
+            unavailable: false,
           },
         ]
-      : []),
-    ...scopeEntries(inspection, "global"),
-  ];
-  return [...projectEntries, ...globalEntries];
+      : project;
+  const global = scopeEntries(inspection, "global");
+  const globalRows =
+    global.length === 0
+      ? [
+          {
+            kind: "scope-note" as const,
+            key: "global:empty" as const,
+            scope: "global" as const,
+            label: "No Global sets saved",
+            description: "Save Current Session here to add one",
+            unavailable: false,
+          },
+        ]
+      : global;
+  return [...projectRows, ...globalRows];
 };
 
 export const initialProfileSetPickerIndex = (
   entries: ReadonlyArray<ProfileSetPickerEntry>,
   preferredScope?: SubagentConfigScope,
 ): number => {
-  const preferredCurrent = entries.findIndex(
-    (entry) => entry.current && (preferredScope === undefined || entry.scope === preferredScope),
+  const defaultEntry = entries.findIndex(
+    (entry) =>
+      (entry.kind === "set" || entry.kind === "invalid-default") &&
+      entry.scopeDefault &&
+      (preferredScope === undefined || entry.scope === preferredScope),
   );
-  if (preferredCurrent >= 0) return preferredCurrent;
-  const preferred = entries.findIndex((entry) => entry.scope === preferredScope);
+  if (defaultEntry >= 0) return defaultEntry;
+  const preferred = entries.findIndex(
+    (entry) =>
+      entry.scope === preferredScope && (entry.kind === "set" || entry.kind === "invalid-default"),
+  );
   if (preferred >= 0) return preferred;
   return Math.max(
     0,
-    entries.findIndex((entry) => entry.current),
+    entries.findIndex((entry) => entry.kind === "set" || entry.kind === "invalid-default"),
   );
 };
 
 export const qualifiedProfileSetLabel = (ref: PersistentProfileSetRef): string =>
-  `[${ref.scope === "project" ? "P" : "G"}] ${ref.name}`;
-
-export const profileSetSelectionLabel = (selection: ResolvedProfileSetSelection): string => {
-  if (selection.scope === "builtin") return "[G] Built-in routes";
-  const badge = selection.scope === "project" ? "[P]" : "[G]";
-  return selection.invalid || !selection.name
-    ? `${badge} Invalid default`
-    : `${badge} ${selection.name}`;
-};
+  `${ref.scope === "project" ? "Project" : "Global"}/${ref.name}`;

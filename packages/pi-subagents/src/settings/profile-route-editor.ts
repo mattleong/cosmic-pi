@@ -1,3 +1,4 @@
+import { resolveNamedProfileSet } from "../config/options.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
@@ -100,33 +101,56 @@ const declaredAt = (
   profile: ProfileId,
 ): DeclaredProfileRoute | undefined => profileSetAt(inspection, set)?.profiles[profile];
 
+const resolvedSet = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) =>
+  set.scope === "global"
+    ? resolveNamedProfileSet({ scope: set.scope, name: set.name, global: inspection.global })
+    : resolveNamedProfileSet(
+        inspection.project
+          ? {
+              scope: set.scope,
+              name: set.name,
+              global: inspection.global,
+              project: inspection.project,
+            }
+          : { scope: set.scope, name: set.name, global: inspection.global },
+      );
+
 const scopeRouteInvalid = (
   inspection: ProfileSettingsInspection,
   set: PersistentProfileSetRef,
   profile: ProfileId,
-): boolean => {
-  const decoded = decodedAt(inspection, set.scope);
-  return (
-    !decoded ||
-    decoded.invalidProfileSets.includes(set.name) ||
-    !profileSetAt(inspection, set) ||
-    (decoded.invalidProfileSetRoutes[set.name]?.includes(profile) ?? false)
-  );
-};
+): boolean => resolvedSet(inspection, set).invalidProfiles.includes(profile);
 
-const globalReferenceCandidates = (
+const globalReferenceDraft = (
   inspection: ProfileSettingsInspection,
   profile: ProfileId,
-): ReadonlyArray<ProfileCandidate> => {
+): ProfileRouteDraft => {
   const name = inspection.global.file.defaultProfileSet;
-  if (inspection.global.invalidDefaultProfileSet) return [];
-  if (name === undefined) return cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates);
-  const set: PersistentProfileSetRef = { scope: "global", name };
-  if (scopeRouteInvalid(inspection, set, profile)) return [];
-  const declared = declaredAt(inspection, set, profile);
-  return declared === undefined
-    ? cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates)
-    : candidatesFromDeclaration(declared);
+  if (inspection.global.invalidDefaultProfileSet) return { kind: "invalid", candidates: [] };
+  if (name === undefined)
+    return {
+      kind: "inherit",
+      candidates: cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates),
+    };
+  const resolved = resolvedSet(inspection, { scope: "global", name });
+  return resolved.invalidProfiles.includes(profile)
+    ? { kind: "invalid", candidates: [] }
+    : { kind: "inherit", candidates: cloneCandidates(resolved.profiles[profile].candidates) };
+};
+
+/** Whether resetting this route can remove an actual declaration, including a malformed one. */
+export const hasOwnProfileRouteDeclaration = (
+  inspection: ProfileSettingsInspection,
+  target: ProfileWorkspaceTarget,
+  profile: ProfileId,
+): boolean => {
+  if (target.kind === "session") return inspection.session.overrides[profile] !== undefined;
+  const decoded = decodedAt(inspection, target.set.scope);
+  if (!decoded) return false;
+  return (
+    declaredAt(inspection, target.set, profile) !== undefined ||
+    (decoded.invalidProfileSetRoutes[target.set.name]?.includes(profile) ?? false)
+  );
 };
 
 /** Loads the exact declaration state without collapsing or reordering ordered candidates. */
@@ -142,8 +166,10 @@ export function loadProfileRouteDraft(
         ? { kind: "disabled", candidates: [] }
         : { kind: "explicit", candidates: cloneCandidates(declared.candidates) };
     return {
-      kind: "inherit",
-      candidates: cloneCandidates(inspection.session.baseConfig.profiles[profile].candidates),
+      kind: inspection.session.baseline.profileSources[profile].endsWith("-invalid")
+        ? "invalid"
+        : "inherit",
+      candidates: cloneCandidates(inspection.session.baseline.profiles[profile].candidates),
     };
   }
   const set = target.set;
@@ -152,7 +178,7 @@ export function loadProfileRouteDraft(
   if (declared === undefined)
     return set.scope === "global"
       ? { kind: "reset", candidates: cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates) }
-      : { kind: "inherit", candidates: globalReferenceCandidates(inspection, profile) };
+      : globalReferenceDraft(inspection, profile);
   if (declared === "disabled") return { kind: "disabled", candidates: [] };
   return { kind: "explicit", candidates: candidatesFromDeclaration(declared) };
 }
@@ -165,17 +191,16 @@ export const resetGlobalDraft = (profile: ProfileId): ProfileRouteDraft => ({
 export const inheritProjectDraft = (
   inspection: ProfileSettingsInspection,
   profile: ProfileId,
-): ProfileRouteDraft => ({
-  kind: "inherit",
-  candidates: globalReferenceCandidates(inspection, profile),
-});
+): ProfileRouteDraft => globalReferenceDraft(inspection, profile);
 
 export const inheritSessionDraft = (
   inspection: ProfileSettingsInspection,
   profile: ProfileId,
 ): ProfileRouteDraft => ({
-  kind: "inherit",
-  candidates: cloneCandidates(inspection.session.baseConfig.profiles[profile].candidates),
+  kind: inspection.session.baseline.profileSources[profile].endsWith("-invalid")
+    ? "invalid"
+    : "inherit",
+  candidates: cloneCandidates(inspection.session.baseline.profiles[profile].candidates),
 });
 
 export const disableRouteDraft = (): ProfileRouteDraft => ({ kind: "disabled", candidates: [] });
@@ -252,23 +277,26 @@ export const duplicateRouteCandidate = (
 export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
   cloneCandidate(BUILTIN_PROFILE_ROUTES[profile].candidates[0]!);
 
+const runtimeLabel = (runtime: SubagentRuntime): string =>
+  runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude" : "Codex";
+
 const candidateIssueMessage = (
   candidate: ProfileCandidate,
   code: ProfileCandidateValidationIssueCode,
 ): string => {
   switch (code) {
     case "model_selector_invalid":
-      return `Model is not a valid bounded ${candidate.runtime} selector.`;
+      return `Model is not a valid ${runtimeLabel(candidate.runtime)} model name.`;
     case "parent_requires_local_pi":
-      return "Parent model is valid only for local Pi.";
+      return "The parent model is available only with Local Pi.";
     case "fork_requires_local_pi":
-      return "Fork context is valid only for local Pi.";
+      return "Fork is available only with Local Pi.";
     case "retention_requires_herdr_read_only":
-      return "Retaining a reported run is valid only for Herdr read-only candidates.";
+      return "Only Herdr read-only runs can stay open after reporting.";
     case "fast_mode_unsupported":
-      return `Fast mode is unavailable for ${candidate.runtime}/${candidate.model}.`;
+      return `Fast mode is not available with ${runtimeLabel(candidate.runtime)}/${candidate.model}.`;
     case "effort_unsupported":
-      return `${candidate.runtime} does not support effort ${candidate.effort}.`;
+      return `${runtimeLabel(candidate.runtime)} does not support the ${candidate.effort} reasoning level.`;
   }
 };
 
@@ -302,10 +330,10 @@ export function updateCandidateControls(
     if (!model)
       return {
         notices,
-        error: "Herdr Pi requires an authenticated canonical Pi model, but none is available.",
+        error: "Herdr Pi needs a Pi model, but none is available. Check that Pi is signed in.",
       };
     next = { ...next, model };
-    notices.push(`Model reset to ${model} for ${patch.runtime}.`);
+    notices.push(`Model changed to ${model} for ${runtimeLabel(patch.runtime)}.`);
   }
 
   for (;;) {
@@ -318,25 +346,31 @@ export function updateCandidateControls(
         if (!defaults.piModel)
           return {
             notices: [],
-            error: "Herdr Pi requires an authenticated canonical Pi model, but none is available.",
+            error: "Herdr Pi needs a Pi model, but none is available. Check that Pi is signed in.",
           };
         next = { ...next, model: defaults.piModel };
-        notices.push(`Parent is local-only; model reset to ${defaults.piModel}.`);
+        notices.push(
+          `The parent model works only with Local Pi. Model changed to ${defaults.piModel}.`,
+        );
         break;
       case "fork_requires_local_pi":
         next = { ...next, context: "fresh" };
-        notices.push("Fork is local-Pi-only; context reset to fresh.");
+        notices.push("Fork works only with Local Pi. Context changed to Fresh.");
         break;
       case "retention_requires_herdr_read_only":
         next = { ...next, closeOnReport: true };
-        notices.push("Only Herdr read-only runs may be retained; close-on-report reset to true.");
+        notices.push(
+          "Only Herdr read-only runs can stay open after reporting. This run will now close after reporting.",
+        );
         break;
       case "fast_mode_unsupported":
         next = { ...next, openaiFastMode: false };
-        notices.push("Fast mode is unavailable for the selected runtime/model; reset to off.");
+        notices.push("The selected model does not support fast mode. Fast mode turned off.");
         break;
       case "effort_unsupported":
-        notices.push(`Effort ${next.effort} is unavailable for ${next.runtime}; reset to default.`);
+        notices.push(
+          `${runtimeLabel(next.runtime)} does not support the ${next.effort} reasoning level. Reasoning changed to the profile default.`,
+        );
         next = { ...next, effort: "default" };
         break;
     }
@@ -357,11 +391,13 @@ export function updateCandidateModel(
     !runtimeEfforts(candidate.runtime, supportedEfforts).includes(next.effort)
   ) {
     next = { ...next, effort: "default" };
-    notices.push(`Effort ${candidate.effort} is unavailable for ${model}; reset to default.`);
+    notices.push(
+      `${model} does not support the ${candidate.effort} reasoning level. Reasoning changed to the profile default.`,
+    );
   }
   if (next.openaiFastMode && !fastModeAvailable) {
     next = { ...next, openaiFastMode: false };
-    notices.push(`Fast mode is unavailable for ${model}; reset to off.`);
+    notices.push(`${model} does not support fast mode. Fast mode turned off.`);
   }
   const error = candidateValidationError(next);
   return error ? { notices, error } : { candidate: next, notices };
@@ -383,14 +419,18 @@ export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclaratio
       valid: false,
       error:
         draft.candidates.length > MAX_PROFILE_CANDIDATES
-          ? `A profile route may contain at most ${MAX_PROFILE_CANDIDATES} candidates.`
-          : "Replace the invalid route, disable it, or restore its scope default.",
+          ? `A profile can have at most ${MAX_PROFILE_CANDIDATES} Primary/Fallback choices.`
+          : "This profile won't run until you fix it, disable it, or restore its starting point.",
     };
   for (let index = 0; index < draft.candidates.length; index += 1) {
     const candidate = draft.candidates[index];
     if (!candidate) continue;
     const error = candidateValidationError(candidate);
-    if (error) return { valid: false, error: `Candidate ${index + 1}: ${error}` };
+    if (error)
+      return {
+        valid: false,
+        error: `${index === 0 ? "Primary" : `Fallback ${index}`}: ${error}`,
+      };
   }
   const candidates = cloneCandidates(draft.candidates);
   return {

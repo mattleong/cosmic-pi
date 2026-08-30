@@ -2,21 +2,26 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
-import {
-  profileWorkspaceTargetLabel,
-  type CandidateUpdate,
-  type ProfileSettingsInspection,
-  type ProfileSettingsScope,
-  type ProfileWorkspaceTarget,
+import type {
+  CandidateUpdate,
+  ProfileRouteDraft,
+  ProfileSettingsInspection,
+  ProfileSettingsScope,
+  ProfileWorkspaceTarget,
 } from "../profile-route-editor.ts";
 import {
   candidateFieldChoices,
   candidateFieldRows,
-  effectiveProfilePrimarySummary,
   profileRouteOptionLabel,
+  runWithValue,
   selectCandidateField,
-  type ProfileWorkspaceField,
+  targetProfilePrimarySummary,
+  type SelectableCandidateField,
 } from "./profile-workspace-model.ts";
+import {
+  profileWorkspaceActionChoices,
+  type ProfileWorkspaceDraftAction,
+} from "./profile-workspace-actions.ts";
 import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 interface SharedSelectorOptions {
@@ -31,14 +36,17 @@ interface SharedSelectorOptions {
     | undefined;
 }
 
+const targetLabel = (target: ProfileWorkspaceTarget): string =>
+  target.kind === "session"
+    ? "Current Session"
+    : `Saved set · ${target.set.scope === "project" ? "Project" : "Global"}/${target.set.name} · Current Session unchanged`;
+
 export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly candidate: ProfileCandidate;
-  readonly field: Exclude<ProfileWorkspaceField, "model">;
-  readonly fieldIndex: number;
-  readonly target?: ProfileWorkspaceTarget | undefined;
-  readonly reloadRequired?: boolean | undefined;
+  readonly field: SelectableCandidateField;
+  readonly target: ProfileWorkspaceTarget;
   readonly piModel?: string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
@@ -51,11 +59,13 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
 
 const currentFieldValue = (
   candidate: ProfileCandidate,
-  field: Exclude<ProfileWorkspaceField, "model">,
-): string =>
-  field === "closeOnReport" || field === "openaiFastMode"
+  field: SelectableCandidateField,
+): string => {
+  if (field === "runWith") return runWithValue(candidate);
+  return field === "closeOnReport" || field === "openaiFastMode"
     ? String(candidate[field])
     : candidate[field];
+};
 
 export const makeCandidateFieldSelector = (
   options: CandidateFieldSelectorOptions,
@@ -65,12 +75,9 @@ export const makeCandidateFieldSelector = (
     options.profile,
     options.parentEffort,
     options.parentModel,
+    true,
   ).find((entry) => entry.field === options.field);
-  const label = row?.label ?? options.field;
-  const optionLabel = profileRouteOptionLabel(options.candidateIndex);
-  const targetLabel = options.target
-    ? profileWorkspaceTargetLabel(options.target)
-    : "current target";
+  const label = row?.label.trim() ?? options.field;
   const current = currentFieldValue(options.candidate, options.field);
   const changeOptions = {
     piModel: options.piModel,
@@ -79,46 +86,83 @@ export const makeCandidateFieldSelector = (
     profile: options.profile,
     parentEffort: options.parentEffort,
   };
+  const pageOptions = {
+    theme: options.theme,
+    breadcrumb: `/subagents profiles › ${options.profile} › ${profileRouteOptionLabel(options.candidateIndex)} › ${label}`,
+    title:
+      options.field === "closeOnReport"
+        ? "Choose what happens after reporting"
+        : `Choose ${label.toLowerCase()}`,
+    subtitle: `${targetLabel(options.target)} · current: ${row?.value ?? current}`,
+    choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map(
+      (choice) => ({
+        value: choice.value,
+        item: {
+          value: choice.value,
+          label: `${choice.label}${choice.value === current ? " (current)" : ""}`,
+          description: choice.description,
+        },
+        searchText: `${choice.value} ${choice.label} ${choice.description}`,
+        payload: choice.value,
+      }),
+    ),
+    current,
+    emptyText: "No matching values",
+    getHeight: options.getHeight,
+    requestRender: options.requestRender,
+    matchesKeybinding: options.matchesKeybinding,
+    keybindingLabel: options.keybindingLabel,
+    select: (value: string) =>
+      options.select(
+        selectCandidateField(options.candidate, options.field, value, changeOptions),
+        `${label} changed`,
+        value,
+      ),
+    cancel: () => options.cancel(label),
+  };
   return new SearchableSelectPage<string>(
-    (() => {
-      const baseResult = {
-        theme: options.theme,
-        breadcrumb: `/subagents profiles › ${options.profile} › ${optionLabel} › ${label}`,
-        title: `Choose ${label.toLowerCase()}`,
-        subtitle: `${targetLabel} · current: ${row?.value ?? current}${options.reloadRequired ? " · reload pending" : ""}`,
-      };
-      const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
-      const withChoicesAndAdditionalFields = {
-        ...withNotice,
-        choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map(
-          (choice) => ({
-            value: choice.value,
-            item: {
-              value: choice.value,
-              label: `${choice.label}${choice.value === current ? " (current)" : ""}`,
-              description: choice.description,
-            },
-            searchText: `${choice.value} ${choice.label} ${choice.description}`,
-            payload: choice.value,
-          }),
-        ),
-        current,
-        emptyText: "No matching values",
-        getHeight: options.getHeight,
-        requestRender: options.requestRender,
-        matchesKeybinding: options.matchesKeybinding,
-        keybindingLabel: options.keybindingLabel,
-        select: (value: string) =>
-          options.select(
-            selectCandidateField(options.candidate, options.field, value, changeOptions),
-            `${label} updated`,
-            value,
-          ),
-        cancel: () => options.cancel(label),
-      };
-      return withChoicesAndAdditionalFields;
-    })(),
+    options.notice ? { ...pageOptions, notice: options.notice } : pageOptions,
   );
+};
+
+export interface RouteActionsSelectorOptions extends SharedSelectorOptions {
+  readonly profile: ProfileId;
+  readonly candidateIndex: number;
+  readonly draft: ProfileRouteDraft;
+  readonly scope: ProfileSettingsScope;
+  readonly hasOwnDeclaration: boolean;
+  readonly target: ProfileWorkspaceTarget;
+  readonly select: (action: ProfileWorkspaceDraftAction, destructive: boolean) => void;
+  readonly cancel: () => void;
+}
+
+export const makeRouteActionsSelector = (
+  options: RouteActionsSelectorOptions,
+): SearchableSelectPage<string> => {
+  const choices = profileWorkspaceActionChoices(options);
+  return new SearchableSelectPage<string>({
+    theme: options.theme,
+    breadcrumb: `/subagents profiles › ${options.profile} › Actions`,
+    title: "Profile actions",
+    subtitle: targetLabel(options.target),
+    choices: choices.map((choice) => ({
+      value: choice.action,
+      item: { value: choice.action, label: choice.label, description: choice.description },
+      searchText: `${choice.action} ${choice.label} ${choice.description}`,
+      payload: choice.action,
+    })),
+    current: "",
+    emptyText: "No actions are available",
+    getHeight: options.getHeight,
+    requestRender: options.requestRender,
+    matchesKeybinding: options.matchesKeybinding,
+    keybindingLabel: options.keybindingLabel,
+    select: (value: string) => {
+      const choice = choices.find((entry) => entry.action === value);
+      if (choice) options.select(choice.action, choice.destructive);
+    },
+    cancel: options.cancel,
+  });
 };
 
 export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
@@ -127,56 +171,46 @@ export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
   readonly parentEffort: SubagentEffort;
   readonly parentModel?: string | undefined;
   readonly initialQuery?: string | undefined;
-  readonly target?: ProfileWorkspaceTarget | undefined;
-  readonly scope?: ProfileSettingsScope | undefined;
+  readonly target: ProfileWorkspaceTarget;
   readonly select: (profile: ProfileId) => void;
   readonly cancel: () => void;
 }
 
 export const makeProfileSearchSelector = (
   options: ProfileSearchSelectorOptions,
-): SearchableSelectPage<string> =>
-  new SearchableSelectPage<string>(
-    (() => {
-      const targetLabel = options.target
-        ? profileWorkspaceTargetLabel(options.target)
-        : options.scope
-          ? `${options.scope[0]?.toUpperCase()}${options.scope.slice(1)} scope`
-          : "the current target";
-      const baseResult = {
-        theme: options.theme,
-        breadcrumb: "/subagents profiles › search",
-        title: "Search profiles",
-        subtitle: `${targetLabel} · active Primary route shown`,
-        choices: PROFILE_IDS.map((profile) => ({
+): SearchableSelectPage<string> => {
+  const pageOptions = {
+    theme: options.theme,
+    breadcrumb: "/subagents profiles › search",
+    title: "Search profiles",
+    subtitle: targetLabel(options.target),
+    choices: PROFILE_IDS.map((profile) => {
+      const summary = targetProfilePrimarySummary(options.inspection, options.target, profile);
+      return {
+        value: profile,
+        item: {
           value: profile,
-          item: {
-            value: profile,
-            label: `${profile}${profile === "generalist" ? " · when omitted" : ""}`,
-            description: effectiveProfilePrimarySummary(options.inspection, profile),
-          },
-          searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${effectiveProfilePrimarySummary(options.inspection, profile)}`,
-          payload: profile,
-        })),
-        current: options.current,
-        initialSearchMode: true,
-      };
-      const withInitialQuery = options.initialQuery
-        ? { ...baseResult, initialQuery: options.initialQuery }
-        : baseResult;
-      const withEmptyTextAndAdditionalFields = {
-        ...withInitialQuery,
-        emptyText: "No matching profiles",
-        getHeight: options.getHeight,
-        requestRender: options.requestRender,
-        matchesKeybinding: options.matchesKeybinding,
-        keybindingLabel: options.keybindingLabel,
-        select: (value: string) => {
-          const profile = PROFILE_IDS.find((entry) => entry === value);
-          if (profile) options.select(profile);
+          label: `${profile}${profile === "generalist" ? " · used when no profile is chosen" : ""}`,
+          description: summary,
         },
-        cancel: options.cancel,
+        searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${summary}`,
+        payload: profile,
       };
-      return withEmptyTextAndAdditionalFields;
-    })(),
+    }),
+    current: options.current,
+    initialSearchMode: true,
+    emptyText: "No matching profiles",
+    getHeight: options.getHeight,
+    requestRender: options.requestRender,
+    matchesKeybinding: options.matchesKeybinding,
+    keybindingLabel: options.keybindingLabel,
+    select: (value: string) => {
+      const profile = PROFILE_IDS.find((entry) => entry === value);
+      if (profile) options.select(profile);
+    },
+    cancel: options.cancel,
+  };
+  return new SearchableSelectPage<string>(
+    options.initialQuery ? { ...pageOptions, initialQuery: options.initialQuery } : pageOptions,
   );
+};

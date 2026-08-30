@@ -392,6 +392,41 @@ describe("SubagentConfigStore v6", () => {
   });
 
   effectTest(
+    "conflicts when an expected-missing document is externally created as an empty object",
+    function* () {
+      const paths = yield* step(fixture);
+      yield* step(() => writeFile(paths.globalPath, "{}"));
+
+      yield* step(() =>
+        expect(
+          withStore((store) =>
+            store.createProfileSet(paths.cwd, paths.agentDirectory, {
+              scope: "global",
+              profileSet: "new-set",
+              expectedExists: false,
+              projectTrusted: true,
+            }),
+          ),
+        ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+      );
+      yield* step(() =>
+        expect(
+          withStore((store) =>
+            store.patchProfile(paths.cwd, paths.agentDirectory, {
+              scope: "global",
+              profileSet: "default",
+              profile: "worker",
+              expectedExists: false,
+              projectTrusted: true,
+            }),
+          ),
+        ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+      );
+      expect(JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")))).toEqual({});
+    },
+  );
+
+  effectTest(
     "upgrades a v4 document on save even when its route patch is otherwise empty",
     function* () {
       const paths = yield* step(fixture);
@@ -624,6 +659,41 @@ describe("SubagentConfigStore v6", () => {
     expect(inspection.global.file.profileSets).toHaveProperty("valid");
   });
 
+  effectTest("refuses to select a set containing an invalid profile route", function* () {
+    const paths = yield* step(fixture);
+    const document = {
+      version: 6,
+      profileSets: {
+        broken: { profiles: { worker: null } },
+        valid: { profiles: {} },
+      },
+    };
+    yield* step(() => writeFile(paths.globalPath, JSON.stringify(document)));
+    const inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+    );
+    expect(inspection.global.invalidProfileSetRoutes.broken).toEqual(["worker"]);
+
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.patchDefaultProfileSet(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            defaultProfileSet: "broken",
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        operation: "update",
+        path: paths.globalPath,
+        message: expect.stringContaining("invalid profile route"),
+      }),
+    );
+    expect(JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")))).toEqual(document);
+  });
+
   effectTest(
     "creates, copies, renames, selects, and safely deletes scope-local sets",
     function* () {
@@ -743,6 +813,187 @@ describe("SubagentConfigStore v6", () => {
       expect(JSON.stringify(saved)).not.toContain("fastMode");
     },
   );
+
+  effectTest("atomically saves all seven session routes as a non-default set", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() =>
+      writeFile(
+        paths.globalPath,
+        JSON.stringify({
+          version: 6,
+          defaultProfileSet: "active",
+          profileSets: { active: { profiles: {} } },
+        }),
+      ),
+    );
+    const inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+    );
+    const profiles = {
+      ...inspection.config.profiles,
+      reviewer: {
+        candidates: [
+          {
+            host: "local" as const,
+            runtime: "pi" as const,
+            model: "openai/snapshot-reviewer",
+            effort: "high" as const,
+            context: "fresh" as const,
+            writeIntent: "read-only" as const,
+            closeOnReport: true,
+          },
+        ],
+      },
+      worker: { candidates: [] },
+    };
+    yield* step(() =>
+      withStore((store) =>
+        store.createProfileSetFromSnapshot(paths.cwd, paths.agentDirectory, {
+          scope: "global",
+          profileSet: "session-copy",
+          profiles,
+          expectedExists: true,
+          expectedDocument: inspection.globalDocument,
+          projectTrusted: true,
+        }),
+      ),
+    );
+    const saved = JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")));
+    expect(saved.defaultProfileSet).toBe("active");
+    expect(Object.keys(saved.profileSets["session-copy"].profiles).sort()).toEqual(
+      ["scout", "researcher", "planner", "worker", "reviewer", "oracle", "generalist"].sort(),
+    );
+    expect(saved.profileSets["session-copy"].profiles.worker).toBe("disabled");
+    expect(saved.profileSets["session-copy"].profiles.reviewer[0].model).toBe(
+      "openai/snapshot-reviewer",
+    );
+
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.createProfileSetFromSnapshot(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profileSet: "stale-copy",
+            profiles,
+            expectedExists: true,
+            expectedDocument: inspection.globalDocument,
+            projectTrusted: true,
+          }),
+        ),
+      ).rejects.toMatchObject({ operation: "update", path: paths.globalPath }),
+    );
+    const afterConflict = JSON.parse(yield* step(() => readFile(paths.globalPath, "utf8")));
+    expect(afterConflict.profileSets["stale-copy"]).toBeUndefined();
+    expect(afterConflict.profileSets["session-copy"]).toEqual(saved.profileSets["session-copy"]);
+  });
+
+  effectTest(
+    "rejects snapshot candidate accessors and custom iterators without invoking them",
+    function* () {
+      const paths = yield* step(fixture);
+      const inspection = yield* step(() =>
+        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
+      );
+      let accessorReads = 0;
+      let iteratorCalls = 0;
+      const routeWithCandidatesAccessor = Object.defineProperty({}, "candidates", {
+        enumerable: true,
+        get() {
+          accessorReads += 1;
+          throw new Error("candidates accessor must not run");
+        },
+      });
+      const candidatesWithElementAccessor: unknown[] = [];
+      Object.defineProperty(candidatesWithElementAccessor, "0", {
+        enumerable: true,
+        get() {
+          accessorReads += 1;
+          throw new Error("candidate accessor must not run");
+        },
+      });
+      const candidatesWithCustomIterator = [inspection.config.profiles.reviewer.candidates[0]];
+      Object.defineProperty(candidatesWithCustomIterator, Symbol.iterator, {
+        value: () => {
+          iteratorCalls += 1;
+          throw new Error("custom iterator must not run");
+        },
+      });
+      const candidateWithModelAccessor = {
+        ...inspection.config.profiles.reviewer.candidates[0]!,
+      };
+      Object.defineProperty(candidateWithModelAccessor, "model", {
+        enumerable: true,
+        get() {
+          accessorReads += 1;
+          return "openai/getter-must-not-decode";
+        },
+      });
+      const attempt = <ReviewerInput>(profileSet: string, reviewer: ReviewerInput) => {
+        // SAFETY: This test deliberately violates the typed route contract to exercise hostile input containment.
+        const profiles = { ...inspection.config.profiles, reviewer } as never;
+        return withStore((store) =>
+          store.createProfileSetFromSnapshot(paths.cwd, paths.agentDirectory, {
+            scope: "global",
+            profileSet,
+            profiles,
+            expectedExists: false,
+            projectTrusted: true,
+          }),
+        );
+      };
+
+      for (const [profileSet, reviewer] of [
+        ["route-accessor", routeWithCandidatesAccessor],
+        ["element-accessor", { candidates: candidatesWithElementAccessor }],
+        ["candidate-accessor", { candidates: [candidateWithModelAccessor] }],
+        ["custom-iterator", { candidates: candidatesWithCustomIterator }],
+      ] as const) {
+        yield* step(() =>
+          expect(attempt(profileSet, reviewer)).rejects.toMatchObject({
+            operation: "update",
+            path: paths.globalPath,
+          }),
+        );
+      }
+      expect(accessorReads).toBe(0);
+      expect(iteratorCalls).toBe(0);
+      yield* step(() => expect(readFile(paths.globalPath, "utf8")).rejects.toBeDefined());
+    },
+  );
+
+  effectTest("requires fresh Project trust for full-snapshot creation", function* () {
+    const paths = yield* step(fixture);
+    const inspection = yield* step(() =>
+      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, false)),
+    );
+    const patch = {
+      scope: "project" as const,
+      profileSet: "session-copy",
+      profiles: inspection.config.profiles,
+      expectedExists: false,
+      projectTrusted: false,
+    };
+    yield* step(() =>
+      expect(
+        withStore((store) =>
+          store.createProfileSetFromSnapshot(paths.cwd, paths.agentDirectory, patch),
+        ),
+      ).rejects.toMatchObject({ operation: "update", path: paths.projectPath }),
+    );
+    yield* step(() => expect(readFile(paths.projectPath, "utf8")).rejects.toBeDefined());
+
+    yield* step(() =>
+      withStore((store) =>
+        store.createProfileSetFromSnapshot(paths.cwd, paths.agentDirectory, {
+          ...patch,
+          projectTrusted: true,
+        }),
+      ),
+    );
+    const saved = JSON.parse(yield* step(() => readFile(paths.projectPath, "utf8")));
+    expect(saved.defaultProfileSet).toBeUndefined();
+    expect(Object.keys(saved.profileSets["session-copy"].profiles)).toHaveLength(7);
+  });
 
   effectTest("detects external edits instead of clobbering them", function* () {
     const paths = yield* step(fixture);

@@ -11,6 +11,7 @@ import {
   defaultRouteCandidate,
   disableRouteDraft,
   duplicateRouteCandidate,
+  hasOwnProfileRouteDeclaration,
   inheritProjectDraft,
   loadProfileRouteDraft,
   moveRouteCandidate,
@@ -93,6 +94,55 @@ const inspection = (
   })();
 };
 
+const inheritedInvalidSetInspection = (
+  own: "valid" | "invalid" | undefined,
+): ProfileSettingsInspection => {
+  const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
+  const invalidRoute = {
+    host: "local",
+    runtime: "pi",
+    model: "parent",
+    effort: "impossible",
+    context: "fresh",
+    writeIntent: "read-only",
+    openaiFastMode: false,
+    closeOnReport: true,
+  };
+  const globalDocument = Schema.decodeUnknownSync(JsonObjectSchema)({
+    version: 6,
+    defaultProfileSet: "lower",
+    profileSets: { lower: { profiles: { worker: invalidRoute } } },
+  });
+  const projectProfiles =
+    own === undefined
+      ? {}
+      : { worker: own === "valid" ? candidate("openai/project-repair") : invalidRoute };
+  const projectDocument = Schema.decodeUnknownSync(JsonObjectSchema)({
+    version: 6,
+    defaultProfileSet: "partial",
+    profileSets: { partial: { profiles: projectProfiles } },
+  });
+  const global = decodeSubagentConfig(globalDocument, "global");
+  const project = decodeSubagentConfig(projectDocument, "project");
+  const config = resolveSubagentConfig({
+    globalConfigPath: "/agent/pi-subagents.json",
+    projectConfigPath: "/repo/.pi/pi-subagents.json",
+    projectTrusted: true,
+    globalConfigExists: true,
+    projectConfigExists: true,
+    global,
+    project,
+  });
+  return {
+    config,
+    global,
+    project,
+    globalDocument,
+    projectDocument,
+    session: makeSessionProfileSnapshot(config),
+  };
+};
+
 const threeRoute = [
   candidate("openai/one", { effort: "low" }),
   candidate("claude-opus-5", { host: "herdr", runtime: "claude", effort: "medium" }),
@@ -132,6 +182,26 @@ describe("ordered profile-route editor state", () => {
     expect(loadProfileRouteDraft(inherited, { kind: "session" }, "reviewer")).toEqual({
       kind: "inherit",
       candidates: [candidate("openai/project")],
+    });
+
+    const detached = {
+      ...base,
+      session: makeSessionProfileSnapshot(base.config, {
+        revision: 2,
+        overrides: {},
+        baseline: {
+          origin: { scope: "global", name: "detached" },
+          profiles: {
+            ...base.session.baseline.profiles,
+            reviewer: { candidates: [candidate("openai/detached")] },
+          },
+          profileSources: { ...base.session.baseline.profileSources, reviewer: "global" },
+        },
+      }),
+    };
+    expect(loadProfileRouteDraft(detached, { kind: "session" }, "reviewer")).toEqual({
+      kind: "inherit",
+      candidates: [candidate("openai/detached")],
     });
   });
 
@@ -203,6 +273,32 @@ describe("ordered profile-route editor state", () => {
     expect(declaredRouteForDraft(inheritProjectDraft(value, "reviewer"))).toEqual({ valid: true });
   });
 
+  it("shows inherited fail-closed routes as invalid until an explicit route repairs them", () => {
+    const target = {
+      kind: "profile-set" as const,
+      set: { scope: "project" as const, name: "partial" },
+    };
+    const inherited = inheritedInvalidSetInspection(undefined);
+    const draft = loadProfileRouteDraft(inherited, target, "worker");
+    expect(draft).toEqual({ kind: "invalid", candidates: [] });
+    expect(inheritProjectDraft(inherited, "worker")).toEqual({
+      kind: "invalid",
+      candidates: [],
+    });
+    expect(hasOwnProfileRouteDeclaration(inherited, target, "worker")).toBe(false);
+
+    const repaired = addRouteCandidate(draft, defaultRouteCandidate("worker"));
+    expect(repaired?.kind).toBe("explicit");
+    expect(declaredRouteForDraft(repaired!)).toMatchObject({ valid: true });
+
+    const ownInvalid = inheritedInvalidSetInspection("invalid");
+    expect(loadProfileRouteDraft(ownInvalid, target, "worker")).toEqual({
+      kind: "invalid",
+      candidates: [],
+    });
+    expect(hasOwnProfileRouteDeclaration(ownInvalid, target, "worker")).toBe(true);
+  });
+
   it("adds, edits, duplicates, moves, and removes candidates in exact staged order", () => {
     let draft: ProfileRouteDraft = disableRouteDraft();
     draft = addRouteCandidate(draft, threeRoute[0]!)!;
@@ -251,7 +347,10 @@ describe("ordered profile-route editor state", () => {
         kind: "explicit",
         candidates: [...full.candidates, candidate("openai/overflow")],
       }),
-    ).toEqual({ valid: false, error: "A profile route may contain at most 32 candidates." });
+    ).toEqual({
+      valid: false,
+      error: "A profile can have at most 32 Primary/Fallback choices.",
+    });
   });
 });
 
@@ -308,7 +407,7 @@ describe("profile candidate normalization and validation", () => {
       },
     );
     expect(local.candidate).toMatchObject({ host: "local", closeOnReport: true });
-    expect(local.notices.join(" ")).toContain("close-on-report reset");
+    expect(local.notices.join(" ")).toContain("stay open after reporting");
 
     const claude = updateCandidateControls(
       candidate("parent", { context: "fork", effort: "minimal", openaiFastMode: true }),
@@ -359,7 +458,7 @@ describe("profile candidate normalization and validation", () => {
         }),
       ),
     ).toContain("Herdr read-only");
-    expect(candidateValidationError(candidate("parent", { host: "herdr" }))).toContain("local Pi");
+    expect(candidateValidationError(candidate("parent", { host: "herdr" }))).toContain("Local Pi");
     expect(
       candidateValidationError(candidate("openai/model", { runtime: "codex", context: "fork" })),
     ).toContain("Fork");
@@ -387,7 +486,7 @@ describe("profile candidate normalization and validation", () => {
       candidateValidationError(
         candidate("claude-opus-5", { runtime: "claude", effort: "minimal" }),
       ),
-    ).toContain("does not support effort minimal");
+    ).toContain("does not support the minimal reasoning level");
     expect(
       decodeSubagentConfig({
         version: 4,
@@ -407,8 +506,8 @@ describe("profile candidate normalization and validation", () => {
       effort: "default",
       openaiFastMode: false,
     });
-    expect(update.notices.join(" ")).toContain("reset to default");
-    expect(update.notices.join(" ")).toContain("Fast mode is unavailable");
+    expect(update.notices.join(" ")).toContain("profile default");
+    expect(update.notices.join(" ")).toContain("does not support fast mode");
   });
 
   it("rejects unsafe native selectors with the same bounded config rules", () => {
@@ -439,13 +538,13 @@ describe("profile candidate normalization and validation", () => {
     expect(isNativeProfileModelSelector("codex", "x".repeat(257))).toBe(false);
     for (const runtime of ["pi", "claude", "codex"] as const) {
       const model = runtime === "pi" ? "provider/model,(glob)*" : "model,(glob)*";
-      expect(candidateValidationError(candidate(model, { runtime }))).toContain("valid bounded");
+      expect(candidateValidationError(candidate(model, { runtime }))).toContain("valid");
       expect(updateCandidateModel(candidate("openai/model", { runtime }), model).candidate).toBe(
         undefined,
       );
     }
     expect(updateCandidateControls(candidate("parent"), { host: "herdr" }, {}).error).toContain(
-      "authenticated canonical Pi model",
+      "Check that Pi is signed in",
     );
   });
 

@@ -16,11 +16,13 @@ import {
   makeSessionProfileSnapshot,
   patchSessionNestingSnapshot,
   patchSessionProfileSnapshot,
+  replaceSessionProfileSnapshot,
   sessionProfileSeed,
+  SessionProfileConflictError,
   type SessionNestingPatch,
-  type SessionProfileConflictError,
   type SessionProfileOverrideSeed,
   type SessionProfilePatch,
+  type SessionProfileSetPatch,
   type SessionProfileSnapshot,
 } from "./session-overrides.ts";
 
@@ -32,8 +34,15 @@ export interface SubagentProfileServiceContract {
     profile: string,
     environment: ProfileResolutionEnvironment,
   ) => ProfileResolution;
+  readonly withSnapshotAtRevision: <A, E, R>(
+    expectedRevision: number,
+    operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | SessionProfileConflictError, R>;
   readonly patchSessionProfile: (
     patch: SessionProfilePatch,
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
+  readonly replaceSessionProfiles: (
+    patch: SessionProfileSetPatch,
   ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
   readonly patchSessionNesting: (
     patch: SessionNestingPatch,
@@ -74,9 +83,9 @@ export const makeSubagentProfileService = (
   > = {},
 ): Effect.Effect<SubagentProfileServiceContract> =>
   Effect.gen(function* () {
-    const state = yield* SynchronizedRef.make(
-      makeSessionProfileSnapshot(config, options.initialSessionOverrides),
-    );
+    const initial = makeSessionProfileSnapshot(config, options.initialSessionOverrides);
+    const state = yield* SynchronizedRef.make(initial);
+    yield* publishSeed(options.publishSessionOverrides, initial);
     const commit = <E>(
       transition: (current: SessionProfileSnapshot) => Effect.Effect<SessionProfileSnapshot, E>,
     ): Effect.Effect<SessionProfileSnapshot, E> =>
@@ -84,6 +93,31 @@ export const makeSubagentProfileService = (
         transition(current).pipe(
           Effect.tap((next) => publishSeed(options.publishSessionOverrides, next)),
         ),
+      );
+    const withSnapshotAtRevision = <A, E, R>(
+      expectedRevision: number,
+      operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E | SessionProfileConflictError, R> =>
+      SynchronizedRef.modifyEffect(
+        state,
+        (
+          current,
+        ): Effect.Effect<
+          readonly [A, SessionProfileSnapshot],
+          E | SessionProfileConflictError,
+          R
+        > => {
+          if (current.revision !== expectedRevision)
+            return Effect.fail(
+              new SessionProfileConflictError({
+                expectedRevision,
+                actualRevision: current.revision,
+                message:
+                  "Current Session changed while the saved-set write was pending; review it and try again.",
+              }),
+            );
+          return operation(current).pipe(Effect.map((result) => [result, current] as const));
+        },
       );
     return SubagentProfileService.of({
       capture: SynchronizedRef.get(state),
@@ -93,8 +127,11 @@ export const makeSubagentProfileService = (
       },
       resolve: (snapshot, profile, environment) =>
         resolveProfilePlan(profile, snapshot.effectiveConfig, environment),
+      withSnapshotAtRevision,
       patchSessionProfile: (patch) =>
         commit((current) => patchSessionProfileSnapshot(current, patch)),
+      replaceSessionProfiles: (patch) =>
+        commit((current) => replaceSessionProfileSnapshot(current, patch)),
       patchSessionNesting: (patch) =>
         commit((current) => patchSessionNestingSnapshot(current, patch)),
       clearSessionProfiles: (expectedRevision) =>

@@ -1,58 +1,53 @@
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
-import type { ProfileSettingsInspection, ProfileSettingsScope } from "../profile-route-editor.ts";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
+  cloneProfileCandidates,
   isLocalPiProfileCandidate,
   isRetainableProfileCandidate,
   supportsSubagentFastMode,
   type ProfileCandidate,
-  type ProfileCandidateEffort,
   type ProfileId,
   type ProfileRouteSource,
 } from "../../profiles/model.ts";
-import type { SubagentEffort } from "../../domain/routing.ts";
+import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
 import {
+  loadProfileRouteDraft,
+  profileWorkspaceScope,
   runtimeEfforts,
   updateCandidateControls,
   type CandidateUpdate,
   type ProfileRouteDraft,
+  type ProfileSettingsInspection,
+  type ProfileSettingsScope,
+  type ProfileWorkspaceTarget,
 } from "../profile-route-editor.ts";
 
 export type ProfileWorkspacePane = "profiles" | "candidates" | "fields";
 export type ProfileWorkspaceField =
-  | "host"
-  | "runtime"
   | "model"
   | "effort"
-  | "context"
   | "writeIntent"
+  | "runWith"
+  | "advanced"
+  | "context"
   | "openaiFastMode"
-  | "closeOnReport";
+  | "closeOnReport"
+  | "actions";
 
 export const PROFILE_WORKSPACE_FIELDS: ReadonlyArray<ProfileWorkspaceField> = [
-  "runtime",
   "model",
   "effort",
   "writeIntent",
-  "host",
+  "runWith",
+  "advanced",
   "context",
   "openaiFastMode",
   "closeOnReport",
+  "actions",
 ];
 
-/** Screen-owned printable shortcuts that win over configured movement keys. */
-export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set([
-  "/",
-  "J",
-  "K",
-  "X",
-  "a",
-  "c",
-  "d",
-  "i",
-  "r",
-  "x",
-]);
+/** Screen-owned shortcuts. Profile editing deliberately keeps only the saved-set door. */
+export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set(["/", "p"]);
 
 export interface ProfileWorkspaceFieldRow {
   readonly field: ProfileWorkspaceField;
@@ -85,32 +80,32 @@ const routeOptionCountLabel = (count: number): string =>
 export const profileSourceLabel = (source: ProfileRouteSource): string => {
   switch (source) {
     case "session":
-      return "[S] session";
+      return "Current Session";
     case "project":
-      return "[P] project";
+      return "Project default";
     case "global":
-      return "[G] global";
+      return "Global default";
     case "builtin":
-      return "[B] built-in";
+      return "Built-in default";
     case "project-invalid":
-      return "[P] project invalid";
+      return "Project default has an error";
     case "global-invalid":
-      return "[G] global invalid";
+      return "Global default has an error";
   }
 };
 
 export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsScope): string => {
   switch (draft.kind) {
     case "explicit":
-      return "explicit";
+      return "custom";
     case "disabled":
-      return "— disabled";
+      return "disabled";
     case "invalid":
-      return `${managerNoticeGlyph("error")} invalid · fails closed`;
+      return `${managerNoticeGlyph("error")} invalid, won't run until fixed`;
     case "inherit":
-      return scope === "session" ? "inherits active config" : "inherits global";
+      return scope === "session" ? "starting point" : "uses Global or built-in default";
     case "reset":
-      return scope === "global" ? "built-in" : "scope default";
+      return scope === "global" ? "built-in default" : "default";
   }
 };
 
@@ -132,7 +127,7 @@ export const candidateEffortLabel = (
   parentEffort: SubagentEffort,
 ): string => {
   const effective = effectiveCandidateEffort(profile, candidate, parentEffort);
-  return candidate.effort === "default" ? `${effective} (default)` : effective;
+  return candidate.effort === "default" ? `${effective} (profile default)` : effective;
 };
 
 export const candidateFastModeApplied = (
@@ -145,6 +140,34 @@ export const candidateFastModeApplied = (
   return model !== undefined && supportsSubagentFastMode(candidate.runtime, model);
 };
 
+export const runWithValue = (candidate: ProfileCandidate): string =>
+  `${candidate.host}/${candidate.runtime}`;
+
+export const runWithLabel = (candidate: ProfileCandidate): string => {
+  const runtime =
+    candidate.runtime === "pi" ? "Pi" : candidate.runtime === "claude" ? "Claude" : "Codex";
+  return `${candidate.host === "local" ? "Local" : "Herdr"} ${runtime}`;
+};
+
+export const sessionBaselineProfileDraft = (
+  inspection: ProfileSettingsInspection,
+  profile: ProfileId,
+): ProfileRouteDraft => ({
+  kind: inspection.session.baseline.profileSources[profile].endsWith("-invalid")
+    ? "invalid"
+    : "inherit",
+  candidates: cloneProfileCandidates(inspection.session.baseline.profiles[profile].candidates),
+});
+
+export const targetProfileRouteDraft = (
+  inspection: ProfileSettingsInspection,
+  target: ProfileWorkspaceTarget,
+  profile: ProfileId,
+): ProfileRouteDraft =>
+  target.kind === "session" && inspection.session.overrides[profile] === undefined
+    ? sessionBaselineProfileDraft(inspection, profile)
+    : loadProfileRouteDraft(inspection, target, profile);
+
 export const effectiveProfilePrimarySummary = (
   inspection: ProfileSettingsInspection,
   profile: ProfileId,
@@ -154,8 +177,8 @@ export const effectiveProfilePrimarySummary = (
   const primary = route.candidates[0];
   if (!primary)
     return inspection.session.effectiveConfig.profileSources[profile].endsWith("-invalid")
-      ? `${source} · ${managerNoticeGlyph("error")} fails closed`
-      : `${source} · — disabled`;
+      ? `${source} · ${managerNoticeGlyph("error")} won't run until fixed`
+      : `${source} · disabled`;
   return `${source} · ${primary.model}`;
 };
 
@@ -170,12 +193,11 @@ export const effectiveProfileSummary = (
   const first = route.candidates[0];
   if (!first)
     return inspection.session.effectiveConfig.profileSources[profile].endsWith("-invalid")
-      ? `${source} · ${managerNoticeGlyph("error")} fails closed`
-      : `${source} · — disabled`;
-  const count = route.candidates.length;
+      ? `${source} · ${managerNoticeGlyph("error")} won't run until fixed`
+      : `${source} · disabled`;
   const effort = candidateEffortLabel(profile, first, parentEffort);
   const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
-  return `${source} · ${routeOptionCountLabel(count)} · ${first.model} · ${first.host}/${first.runtime} · ${effort}${fast}`;
+  return `${source} · ${routeOptionCountLabel(route.candidates.length)} · ${first.model} · ${runWithLabel(first)} · ${effort}${fast}`;
 };
 
 export const profileRouteDraftSummary = (
@@ -184,20 +206,36 @@ export const profileRouteDraftSummary = (
   parentEffort: SubagentEffort,
   parentModel?: string | undefined,
 ): string => {
-  if (draft.kind === "invalid") return `${managerNoticeGlyph("error")} invalid · fails closed`;
+  if (draft.kind === "invalid")
+    return `${managerNoticeGlyph("error")} invalid, won't run until fixed`;
   const first = draft.candidates[0];
-  if (!first) return "— disabled";
-  const count = draft.candidates.length;
+  if (!first) return "disabled";
   const effort = candidateEffortLabel(profile, first, parentEffort);
   const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
-  return `${routeOptionCountLabel(count)} · ${first.model} · ${first.host}/${first.runtime} · ${effort}${fast}`;
+  return `${routeOptionCountLabel(draft.candidates.length)} · ${first.model} · ${runWithLabel(first)} · ${effort}${fast}`;
 };
+
+export const targetProfilePrimarySummary = (
+  inspection: ProfileSettingsInspection,
+  target: ProfileWorkspaceTarget,
+  profile: ProfileId,
+  draft: ProfileRouteDraft = targetProfileRouteDraft(inspection, target, profile),
+): string => {
+  const kind = draftKindLabel(draft, profileWorkspaceScope(target));
+  const primary = draft.candidates[0];
+  if (primary) return `${kind} · ${primary.model}`;
+  return draft.kind === "disabled" || draft.kind === "invalid" ? kind : `${kind} · disabled`;
+};
+
+export const profileDescription = (profile: ProfileId): string =>
+  PROFILE_DEFINITIONS[profile].description;
 
 export const candidateFieldRows = (
   candidate: ProfileCandidate,
   profile?: ProfileId,
   parentEffort: SubagentEffort = "high",
   parentModel?: string | undefined,
+  advancedExpanded = false,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const localPi = isLocalPiProfileCandidate(candidate);
   const retainedAllowed = isRetainableProfileCandidate(candidate);
@@ -205,139 +243,186 @@ export const candidateFieldRows = (
     candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
   const fastAvailable =
     fastModel !== undefined && supportsSubagentFastMode(candidate.runtime, fastModel);
-  const fastUnavailableReason =
-    candidate.runtime === "claude"
-      ? "Claude does not support OpenAI fast mode"
-      : candidate.model === "parent" && !parentModel
-        ? "no active parent model is available"
-        : "the selected model does not support OpenAI fast mode";
-  return [
-    { field: "runtime", label: "Runtime", value: candidate.runtime, fixed: false },
+  const advancedValues = [
+    localPi && candidate.context === "fork" ? "forked context" : undefined,
+    candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
+    !candidate.closeOnReport ? "stays open after reporting" : undefined,
+  ].filter((value): value is string => value !== undefined);
+  const advanced: ReadonlyArray<ProfileWorkspaceFieldRow> = [
+    ...(localPi || candidate.context !== "fresh"
+      ? [
+          {
+            field: "context" as const,
+            label: "  Context",
+            value: candidate.context,
+            fixed: !localPi,
+            ...(!localPi && {
+              fixedReason: "Fork is available only with Local Pi.",
+            }),
+          },
+        ]
+      : []),
+    ...(fastAvailable || candidate.openaiFastMode
+      ? [
+          {
+            field: "openaiFastMode" as const,
+            label: "  OpenAI fast mode",
+            value: fastAvailable
+              ? candidateFastModeApplied(candidate, parentModel)
+                ? "on, priority"
+                : "off, standard"
+              : "on, but unavailable",
+            fixed: !fastAvailable && !candidate.openaiFastMode,
+            ...(!fastAvailable &&
+              !candidate.openaiFastMode && {
+                fixedReason: "The selected model does not support OpenAI fast mode.",
+              }),
+          },
+        ]
+      : []),
+    ...(retainedAllowed || !candidate.closeOnReport
+      ? [
+          {
+            field: "closeOnReport" as const,
+            label: "  After reporting",
+            value: candidate.closeOnReport ? "close after reporting" : "stay open after reporting",
+            fixed: !retainedAllowed,
+            ...(!retainedAllowed && {
+              fixedReason: "Only Herdr read-only runs can stay open after reporting.",
+            }),
+          },
+        ]
+      : []),
+  ];
+  const essential: ReadonlyArray<ProfileWorkspaceFieldRow> = [
     { field: "model", label: "Model", value: candidate.model, fixed: false },
     {
       field: "effort",
-      label: "Effort",
+      label: "Reasoning",
       value: profile ? candidateEffortLabel(profile, candidate, parentEffort) : candidate.effort,
       fixed: false,
     },
-    {
-      field: "writeIntent",
-      label: "File access",
-      value: candidate.writeIntent,
-      fixed: false,
-    },
-    { field: "host", label: "Host", value: candidate.host, fixed: false },
-    (() => {
-      const baseResult = {
-        field: "context" as const,
-        label: "Context",
-        value: localPi ? candidate.context : `${candidate.context} · fixed: fork requires local Pi`,
-        fixed: !localPi,
-      };
-      const withFixedReason = !localPi
-        ? { ...baseResult, fixedReason: "Fork context is available only to local Pi." }
-        : baseResult;
-      return withFixedReason;
-    })(),
-    (() => {
-      const baseResult = {
-        field: "openaiFastMode" as const,
-        label: "OpenAI fast mode",
-        value: fastAvailable
-          ? candidateFastModeApplied(candidate, parentModel)
-            ? "on · priority"
-            : "off · standard"
-          : candidate.openaiFastMode
-            ? `configured on · unavailable: ${fastUnavailableReason} · turn off`
-            : `unavailable · ${fastUnavailableReason}`,
-        fixed: !fastAvailable && !candidate.openaiFastMode,
-      };
-      const withFixedReason =
-        !fastAvailable && !candidate.openaiFastMode
-          ? { ...baseResult, fixedReason: `${fastUnavailableReason}.` }
-          : baseResult;
-      return withFixedReason;
-    })(),
-    (() => {
-      const baseResult = {
-        field: "closeOnReport" as const,
-        label: "Report policy",
-        value: retainedAllowed
-          ? candidate.closeOnReport
-            ? "close after report"
-            : "retain for guidance"
-          : "close after report · fixed: retain requires Herdr read-only",
-        fixed: !retainedAllowed,
-      };
-      const withFixedReason = !retainedAllowed
-        ? {
-            ...baseResult,
-            fixedReason: "Retention is available only to Herdr read-only route options.",
-          }
-        : baseResult;
-      return withFixedReason;
-    })(),
+    { field: "writeIntent", label: "File access", value: candidate.writeIntent, fixed: false },
+    { field: "runWith", label: "Run with", value: runWithLabel(candidate), fixed: false },
+    ...(advanced.length > 0
+      ? [
+          {
+            field: "advanced" as const,
+            label: "Advanced",
+            value: advancedExpanded
+              ? "hide"
+              : advancedValues.length > 0
+                ? advancedValues.join(", ")
+                : "defaults",
+            fixed: false,
+          },
+        ]
+      : []),
+  ];
+  return [
+    ...essential,
+    ...(advancedExpanded ? advanced : []),
+    { field: "actions", label: "Actions", value: "manage Primary and fallbacks", fixed: false },
   ];
 };
 
+export type SelectableCandidateField = Exclude<
+  ProfileWorkspaceField,
+  "model" | "advanced" | "actions"
+>;
+
+const RUN_WITH_CHOICES: ReadonlyArray<
+  CandidateFieldChoice & { readonly host: SubagentHost; readonly runtime: SubagentRuntime }
+> = [
+  {
+    value: "local/pi",
+    label: "Local Pi",
+    description: "Run Pi locally on this computer",
+    host: "local",
+    runtime: "pi",
+  },
+  {
+    value: "local/claude",
+    label: "Local Claude",
+    description: "Run Claude Code locally on this computer",
+    host: "local",
+    runtime: "claude",
+  },
+  {
+    value: "local/codex",
+    label: "Local Codex",
+    description: "Run Codex locally on this computer",
+    host: "local",
+    runtime: "codex",
+  },
+  {
+    value: "herdr/pi",
+    label: "Herdr Pi",
+    description: "Run Pi in a Herdr pane",
+    host: "herdr",
+    runtime: "pi",
+  },
+  {
+    value: "herdr/claude",
+    label: "Herdr Claude",
+    description: "Run Claude Code in a Herdr pane",
+    host: "herdr",
+    runtime: "claude",
+  },
+  {
+    value: "herdr/codex",
+    label: "Herdr Codex",
+    description: "Run Codex in a Herdr pane",
+    host: "herdr",
+    runtime: "codex",
+  },
+];
+
 export const candidateFieldChoices = (
   candidate: ProfileCandidate,
-  field: Exclude<ProfileWorkspaceField, "model">,
+  field: SelectableCandidateField,
   options: CandidateFieldChangeOptions,
 ): ReadonlyArray<CandidateFieldChoice> => {
-  if (field === "host")
-    return [
-      { value: "local", label: "Local", description: "Run in a session-scoped local process" },
-      { value: "herdr", label: "Herdr", description: "Run through the persistent Herdr host" },
-    ];
-  if (field === "runtime")
-    return [
-      { value: "pi", label: "Pi", description: "Use a canonical authenticated Pi model" },
-      { value: "claude", label: "Claude Code", description: "Use Claude's native runtime" },
-      { value: "codex", label: "Codex", description: "Use Codex app-server" },
-    ];
+  if (field === "runWith") return RUN_WITH_CHOICES;
   if (field === "effort") {
     const definition = options.profile ? PROFILE_DEFINITIONS[options.profile] : undefined;
     const defaultEffort =
       definition && "defaultEffort" in definition ? definition.defaultEffort : undefined;
     const effectiveDefault = defaultEffort ?? options.parentEffort;
-    const defaultChoice = effectiveDefault
-      ? {
-          value: "default",
-          label: `${effectiveDefault} (default)`,
-          description: defaultEffort
-            ? `Use the ${options.profile} profile default: ${effectiveDefault}`
-            : `Use the current parent effort (${effectiveDefault}) when available; otherwise high`,
-        }
-      : {
-          value: "default",
-          label: "Profile default",
-          description: "Use the profile's soft default effort",
-        };
     return [
-      defaultChoice,
+      {
+        value: "default",
+        label: effectiveDefault ? `${effectiveDefault} (profile default)` : "Profile default",
+        description: effectiveDefault
+          ? `Use the profile default reasoning level, currently ${effectiveDefault}`
+          : "Use the profile's default reasoning level",
+      },
       ...runtimeEfforts(candidate.runtime, options.supportedEfforts).map((effort) => ({
         value: effort,
         label: effort,
-        description: `Use ${effort} reasoning effort`,
+        description: `Use the ${effort} reasoning level`,
       })),
     ];
   }
   if (field === "context")
     return isLocalPiProfileCandidate(candidate)
       ? [
-          { value: "fresh", label: "Fresh", description: "Start with a new context" },
-          { value: "fork", label: "Fork", description: "Fork the active parent context" },
+          { value: "fresh", label: "Fresh", description: "Start without earlier context" },
+          { value: "fork", label: "Fork", description: "Copy the current Pi context" },
         ]
-      : [{ value: "fresh", label: "Fresh", description: "Required by this host/runtime" }];
+      : [{ value: "fresh", label: "Fresh", description: "Start without earlier context" }];
   if (field === "writeIntent")
     return [
       {
         value: "read-only",
         label: "Read-only",
-        description: "Inspect and validate with Bash; do not modify project files",
+        description: "Inspect and validate, but do not change project files",
       },
-      { value: "writer", label: "Writer", description: "May modify files under writer policy" },
+      {
+        value: "writer",
+        label: "Writer",
+        description: "May change files within its assigned safety restrictions",
+      },
     ];
   if (field === "openaiFastMode") {
     const available =
@@ -345,13 +430,13 @@ export const candidateFieldChoices = (
       (candidate.model !== "parent" &&
         supportsSubagentFastMode(candidate.runtime, candidate.model));
     return [
-      { value: "false", label: "Off", description: "Use the model's standard service tier" },
+      { value: "false", label: "Off", description: "Do not request priority service" },
       ...(available
         ? [
             {
               value: "true",
-              label: "On · Fast",
-              description: "Request OpenAI priority service for this route option",
+              label: "On, fast",
+              description: "Request OpenAI priority service for this choice",
             },
           ]
         : []),
@@ -361,48 +446,50 @@ export const candidateFieldChoices = (
     ? [
         {
           value: "true",
-          label: "Close after report",
-          description: "Close after the first accepted report",
+          label: "Close after reporting",
+          description: "Close when the report is accepted",
         },
         {
           value: "false",
-          label: "Retain for guidance",
-          description: "Keep the read-only run for another assignment",
+          label: "Stay open after reporting",
+          description: "Keep this Herdr read-only run open for another assignment",
         },
       ]
     : [
         {
           value: "true",
-          label: "Close after report",
-          description: "Required by the current policy",
+          label: "Close after reporting",
+          description: "This selection must close after reporting",
         },
       ];
 };
 
-/** Selects one exact field value while preserving route normalization rules. */
-// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+// SAFETY: Every value comes from candidateFieldChoices for the same field.
 export function selectCandidateField(
   candidate: ProfileCandidate,
-  field: Exclude<ProfileWorkspaceField, "model">,
+  field: SelectableCandidateField,
   value: string,
   options: CandidateFieldChangeOptions,
 ): CandidateUpdate {
   if (!candidateFieldChoices(candidate, field, options).some((choice) => choice.value === value))
     return { error: `Invalid ${field} selection.`, notices: [] };
-  if (field === "host" && (value === "local" || value === "herdr"))
-    return updateCandidateControls(candidate, { host: value }, { piModel: options.piModel });
-  if (field === "runtime" && (value === "pi" || value === "claude" || value === "codex"))
-    return updateCandidateControls(candidate, { runtime: value }, { piModel: options.piModel });
-  if (
-    field === "effort" &&
-    (value === "default" ||
-      runtimeEfforts(candidate.runtime, options.supportedEfforts).includes(value as SubagentEffort))
-  )
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    return {
-      candidate: { ...candidate, effort: value as ProfileCandidateEffort },
-      notices: [],
-    };
+  if (field === "runWith") {
+    const choice = RUN_WITH_CHOICES.find((entry) => entry.value === value);
+    return choice
+      ? updateCandidateControls(
+          candidate,
+          { host: choice.host, runtime: choice.runtime },
+          { piModel: options.piModel },
+        )
+      : { error: "Invalid Run with selection.", notices: [] };
+  }
+  if (field === "effort") {
+    const effort = runtimeEfforts(candidate.runtime, options.supportedEfforts).find(
+      (entry) => entry === value,
+    );
+    if (value === "default") return { candidate: { ...candidate, effort: "default" }, notices: [] };
+    if (effort) return { candidate: { ...candidate, effort }, notices: [] };
+  }
   if (field === "context" && (value === "fresh" || value === "fork"))
     return { candidate: { ...candidate, context: value }, notices: [] };
   if (field === "writeIntent" && (value === "read-only" || value === "writer"))

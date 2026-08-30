@@ -185,7 +185,8 @@ const nativeFallbackModels = (
   [...new Set([current, PROFILE_NATIVE_MODEL_DEFAULTS[runtime]])].map((selector, index) => ({
     selector,
     label: selector,
-    description: index === 0 ? "Current configured selector" : `Default ${runtime} model selector`,
+    description:
+      index === 0 ? "Current model" : `Default ${runtime === "claude" ? "Claude" : "Codex"} model`,
     supportedEfforts: runtimeEfforts(runtime),
     // Fast mode for Codex is live catalog data. Fallback selectors never infer a tier.
     supportedServiceTiers: [],
@@ -220,7 +221,7 @@ const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateMo
           models,
           warning:
             models.length !== advertised.length
-              ? "Some advertised models used unsafe selectors and were omitted."
+              ? "Some model names could not be used safely and were left out."
               : undefined,
         };
       },
@@ -228,8 +229,8 @@ const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateMo
         models: [],
         warning:
           error instanceof Error
-            ? `${sanitizeTerminalLine(error.message)} Showing current/default model choices instead.`
-            : `Could not load the ${runtime} model catalog. Showing current/default choices instead.`,
+            ? `${sanitizeTerminalLine(error.message)} Showing the current and default models instead.`
+            : `Could not load ${runtime === "claude" ? "Claude" : "Codex"} models. Showing the current and default models instead.`,
       }),
     )
     .then(({ models, warning }) => {
@@ -284,7 +285,7 @@ export function loadCandidateModelPicker(
           value: candidate.model,
           label: sanitizeTerminalLine(`${candidate.model} (current · unavailable)`),
           description: sanitizeTerminalLine(
-            "Keep the configured value or choose an authenticated replacement",
+            "Keep the configured value or choose an available replacement",
           ),
         },
         searchText: sanitizeTerminalLine(`${candidate.model} current unavailable configured`),
@@ -303,12 +304,12 @@ export function loadCandidateModelPicker(
   ).length;
   const warnings = [
     unavailableCurrent
-      ? "The configured model is not currently authenticated. Keeping it makes no change; choose another model to replace it."
+      ? "The configured model is not available right now. Keep it unchanged or choose another model."
       : undefined,
     unsafeModels > 0
-      ? `${unsafeModels} authenticated model${unsafeModels === 1 ? " was" : "s were"} omitted because the canonical selector is unsafe.`
+      ? `${unsafeModels} model${unsafeModels === 1 ? " was" : "s were"} left out because the model name could not be used safely.`
       : undefined,
-    choices.length === 0 ? "No authenticated canonical Pi models are available." : undefined,
+    choices.length === 0 ? "No available Pi models can be used here." : undefined,
   ].flatMap((warning) => (warning === undefined ? [] : [sanitizeTerminalLine(warning)]));
   const base = {
     choices,
