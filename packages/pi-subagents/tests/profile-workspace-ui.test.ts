@@ -201,12 +201,12 @@ describe("profile workspace responsive projection", () => {
     const longModel = `openai/${"m".repeat(249)}`;
     expect(longModel).toHaveLength(256);
     const pendingConfirmation = {
-      title: "Restore worker to its Current Session starting point?",
+      title: "Undo changes to worker?",
       detail:
-        "This discards changes to this profile and restores its Current Session starting point. Active runs do not change.",
+        "This discards changes made to this profile in Current Session. Active runs do not change.",
       preview: [
-        `Current settings custom · Primary only · ${longModel}`,
-        "Starting point  invalid, won't run until fixed",
+        `Current     custom · Primary only · ${longModel}`,
+        "After undo  invalid, won't run until fixed",
       ],
     };
 
@@ -215,7 +215,7 @@ describe("profile workspace responsive projection", () => {
       expectBounded(confirmation, width, 9);
       const text = output(confirmation);
       expect(text).toContain("Confirm");
-      expect(text).toContain("Current Session starting point");
+      expect(text).toContain("Undo changes to worker?");
       expect(text).toContain("Enter confirms · Esc cancels");
 
       const message = render(

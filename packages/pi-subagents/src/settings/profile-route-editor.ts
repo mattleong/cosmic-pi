@@ -420,7 +420,7 @@ export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclaratio
       error:
         draft.candidates.length > MAX_PROFILE_CANDIDATES
           ? `A profile can have at most ${MAX_PROFILE_CANDIDATES} Primary/Fallback choices.`
-          : "This profile won't run until you fix it, disable it, or restore its starting point.",
+          : "This profile won't run until you fix it, disable it, or undo your changes.",
     };
   for (let index = 0; index < draft.candidates.length; index += 1) {
     const candidate = draft.candidates[index];

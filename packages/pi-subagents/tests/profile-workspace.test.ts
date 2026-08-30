@@ -221,9 +221,7 @@ describe("profile workspace navigation", () => {
     expect(component.render(120).join("\n")).toContain("invalid, won't run until fixed");
     expect(component.render(120).join("\n")).not.toContain("Profile disabled");
     openActions(component);
-    expect(component.render(120).join("\n")).not.toContain(
-      "Restore Current Session starting point",
-    );
+    expect(component.render(120).join("\n")).not.toContain("Undo changes");
   });
 
   it("does not offer removal for an inherited-invalid Project route without a declaration", () => {
@@ -273,21 +271,21 @@ describe("profile workspace navigation", () => {
     });
   });
 
-  it("restores an invalid starting point by clearing the repair override", () => {
+  it("reveals an invalid session setting when a repair is undone", () => {
     const inspection = invalidBaselineInspection(true);
     const restored = invalidBaselineInspection(false);
     const saveDraft = vi.fn(() => Promise.resolve({ inspection: restored }));
     const component = new ProfileWorkspaceComponent(baseOptions({ inspection, saveDraft }));
 
     openActions(component);
-    expect(component.render(120).join("\n")).toContain("Restore Current Session starting point");
+    expect(component.render(120).join("\n")).toContain("Undo changes");
     for (let index = 0; index < 4; index += 1) component.handleInput("j");
     component.handleInput("\r");
     const confirmation = component.render(120).join("\n");
-    expect(confirmation).toContain("Restore generalist to its Current Session starting point?");
-    expect(confirmation).toContain("Current Session starting point");
-    expect(confirmation).toContain("Current settings");
-    expect(confirmation).toContain("Starting point");
+    expect(confirmation).toContain("Undo changes to generalist?");
+    expect(confirmation).toContain("discards changes made to this profile");
+    expect(confirmation).toContain("Current");
+    expect(confirmation).toContain("After undo");
     expect(confirmation).not.toContain("resolved Project, Global, or built-in route");
 
     component.handleInput("\r");
@@ -302,7 +300,7 @@ describe("profile workspace navigation", () => {
     });
   });
 
-  it("edits the Current Session starting point after using a saved set", () => {
+  it("edits Current Session profiles after using a saved set", () => {
     const initial = makeInspection();
     const original = initial.session.baseline.profiles.generalist.candidates[0]!;
     const profiles = {

@@ -6,7 +6,7 @@ Part of the [pi-subagents](../README.md) architecture documentation. Routing pol
 
 `/subagents profiles` always opens Current Session. It is the only active working set. At session start it is a complete seven-profile snapshot resolved from the trusted Project default, Global default, and built-ins. Editing a profile changes later launches and `subagent_models` immediately. Active runs keep the route captured when they started.
 
-Current Session is independent of saved sets. Applying a saved set resolves all seven profiles first, rejects any invalid route, previews the complete replacement, and commits it with one expected session revision. The replacement updates the session starting point and clears per-profile changes in one transition. It never changes a Project or Global document.
+Current Session is independent of saved sets. Applying a saved set resolves all seven profiles first, rejects any invalid route, previews the complete replacement, and commits it with one expected session revision. The replacement becomes Current Session and clears earlier per-profile changes in one transition. It never changes a Project or Global document.
 
 The header names what Current Session is based on and how many profiles have changed. Session state survives `/tree` and `/reload` through the bounded handoff. It clears on `/new`, `/resume`, `/fork`, quit, or process restart.
 

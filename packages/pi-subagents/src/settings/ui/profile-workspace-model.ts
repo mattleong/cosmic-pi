@@ -103,7 +103,7 @@ export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsS
     case "invalid":
       return `${managerNoticeGlyph("error")} invalid, won't run until fixed`;
     case "inherit":
-      return scope === "session" ? "starting point" : "uses Global or built-in default";
+      return scope === "session" ? "unchanged" : "uses Global or built-in default";
     case "reset":
       return scope === "global" ? "built-in default" : "default";
   }

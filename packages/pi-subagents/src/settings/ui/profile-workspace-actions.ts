@@ -110,13 +110,10 @@ export const profileWorkspaceActionChoices = (input: {
       ? [
           {
             action: "reset" as const,
-            label:
-              input.scope === "session"
-                ? "Restore Current Session starting point"
-                : "Remove saved profile settings",
+            label: input.scope === "session" ? "Undo changes" : "Remove saved profile settings",
             description:
               input.scope === "session"
-                ? "Discard this profile's changes and restore its Current Session starting point"
+                ? "Discard changes to this profile in Current Session"
                 : "Use the next available default whenever this saved set is used",
             destructive: true,
           },
@@ -207,7 +204,7 @@ export const applyProfileWorkspaceDraftAction = (input: {
           : currentSessionBaselineDraft(input.inspection, input.profile),
     description:
       input.scope === "session"
-        ? "Current Session starting point restored"
+        ? "Current Session changes undone"
         : "saved profile settings removed",
     candidateIndex: 0,
   };
@@ -245,11 +242,11 @@ export const profileWorkspaceConfirmation = (input: {
   const base = {
     title:
       input.scope === "session"
-        ? `Restore ${input.profile} to its Current Session starting point?`
+        ? `Undo changes to ${input.profile}?`
         : `Remove ${input.profile} settings from this saved set?`,
     detail:
       input.scope === "session"
-        ? "This discards changes to this profile and restores its Current Session starting point. Active runs do not change."
+        ? "This discards changes made to this profile in Current Session. Active runs do not change."
         : input.scope === "project"
           ? "When this saved set is used, this profile will use the Global default, or the built-in default if none is set. Current Session does not change."
           : "When this saved set is used, this profile will use the built-in default. Current Session does not change.",
@@ -259,7 +256,7 @@ export const profileWorkspaceConfirmation = (input: {
     ...base,
     preview:
       input.scope === "session"
-        ? [`Current settings ${input.currentSummary}`, `Starting point  ${input.afterSummary}`]
+        ? [`Current     ${input.currentSummary}`, `After undo  ${input.afterSummary}`]
         : [`Current settings ${input.currentSummary}`, `After removal    ${input.afterSummary}`],
   };
 };
