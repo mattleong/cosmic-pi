@@ -1,17 +1,26 @@
-// Herdr-created child Pi processes gain a stable live parent reference.
+// Pi registration bridge for Herdr-created child parent references.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { probeSessionHeader, type SessionHeaderProbe } from "../boundary/session-file.ts";
 import {
   HERDR_BTW_CHILD_SESSION_FLAG,
   HERDR_BTW_PARENT_FILE_FLAG,
   HERDR_BTW_PARENT_FLAG,
 } from "../btw/marker.ts";
-import { parentReferenceInstruction } from "./instruction.ts";
-import { resolveParentReference, type HerdrBtwParentReference } from "./reference.ts";
+import {
+  parentReferenceInstruction,
+  resolveParentReferenceCandidate,
+  type HerdrBtwParentReference,
+} from "../parent-link/policy.ts";
+import {
+  compareSessionFileIdentity,
+  probeSessionHeader,
+  type SessionFileIdentityComparator,
+  type SessionHeaderProbe,
+} from "./session-file.ts";
 
 export interface ParentReferenceRegistrationOptions {
-  /** Test seam for deterministic header probing. */
+  /** Test seams for deterministic header and filesystem-identity probing. */
   readonly probe?: ((path: string) => SessionHeaderProbe) | undefined;
+  readonly compareIdentity?: SessionFileIdentityComparator | undefined;
 }
 
 export interface HerdrBtwParentReferenceBridge {
@@ -24,16 +33,24 @@ const captureParentReference = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   probe: (path: string) => SessionHeaderProbe,
+  compareIdentity: SessionFileIdentityComparator,
 ): HerdrBtwParentReference | undefined => {
   try {
-    return resolveParentReference({
+    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    const candidate = resolveParentReferenceCandidate({
       parentIdMarker: pi.getFlag(HERDR_BTW_PARENT_FLAG),
       parentFileMarker: pi.getFlag(HERDR_BTW_PARENT_FILE_FLAG),
       childSessionMarker: pi.getFlag(HERDR_BTW_CHILD_SESSION_FLAG),
-      sessionId: ctx.sessionManager.getSessionId(),
-      sessionFile: ctx.sessionManager.getSessionFile(),
-      probe,
+      sessionId,
+      sessionFile,
     });
+    if (!candidate || !sessionFile) return undefined;
+    if (compareIdentity(candidate.path, sessionFile) !== "distinct") return undefined;
+    const parentHeader = probe(candidate.path);
+    return parentHeader._tag === "valid" && parentHeader.header.id === candidate.id
+      ? candidate
+      : undefined;
   } catch {
     // A hostile or shutting-down host deactivates the reference fail-closed.
     return undefined;
@@ -41,16 +58,15 @@ const captureParentReference = (
 };
 
 /**
- * Registers the fixed parent-marker flag and before-turn prompt hook. Session
- * lifecycle ownership remains with the application's generation-checked slot:
- * only its onActivated/onDeactivated hooks publish or clear this synchronous
- * host projection.
+ * Registers the fixed parent-marker flags and before-turn prompt hook. The
+ * application's generation-checked slot remains the activation owner.
  */
 export const registerHerdrBtwParentReference = (
   pi: ExtensionAPI,
   options: ParentReferenceRegistrationOptions = {},
 ): HerdrBtwParentReferenceBridge => {
   const probe = options.probe ?? probeSessionHeader;
+  const compareIdentity = options.compareIdentity ?? compareSessionFileIdentity;
   let activeReference: HerdrBtwParentReference | undefined;
 
   pi.registerFlag(HERDR_BTW_PARENT_FLAG, {
@@ -69,7 +85,8 @@ export const registerHerdrBtwParentReference = (
     type: "string",
   });
 
-  const capture = (ctx: ExtensionContext) => captureParentReference(pi, ctx, probe);
+  const capture = (ctx: ExtensionContext) =>
+    captureParentReference(pi, ctx, probe, compareIdentity);
 
   pi.on("before_agent_start", (event, ctx) => {
     if (!activeReference) return undefined;

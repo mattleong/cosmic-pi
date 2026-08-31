@@ -6,7 +6,7 @@ import type {
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { getTextContent } from "../../data/results";
 import { showingFooter, trimSingleTrailingNewline } from "../../../preview/format";
-import { renderPathListLines } from "../../../tools/path-list-render";
+import { createPathListChunkRenderer } from "../../../tools/path-list-render";
 import { escapeControlChars } from "../../../shared/terminal-text";
 import { renderSelectedOutputLines } from "./preview-text";
 import { renderHiddenPreviewPrelude, renderResultPrelude } from "./result-prelude";
@@ -67,9 +67,10 @@ export function renderPathListResult(
 
   const rawLines = output.split("\n");
   const limit = expanded ? rawLines.length : config.collapsedLines;
-  const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
-    renderPathListLines(chunk.join("\n"), config.cwd, theme, { iconMode: config.iconMode }),
-  );
+  const renderChunk = createPathListChunkRenderer(rawLines, config.cwd, theme, {
+    iconMode: config.iconMode,
+  });
+  const preview = renderSelectedOutputLines(rawLines, limit, theme, renderChunk);
   let text = preview.lines.join("\n");
   if (preview.hidden > 0)
     text += showingFooter(theme, preview.shown, rawLines.length, config.footerNoun);

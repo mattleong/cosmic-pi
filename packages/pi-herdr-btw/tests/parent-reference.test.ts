@@ -4,8 +4,12 @@ import type {
   ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionHeaderProbe } from "../src/boundary/session-file.ts";
-import { registerHerdrBtwParentReference } from "../src/parent-link/register.ts";
+import { registerHerdrBtwParentReference } from "../src/boundary/host-parent-reference.ts";
+import type {
+  SessionFileIdentityComparison,
+  SessionHeaderProbe,
+} from "../src/boundary/session-file.ts";
+import { resolveParentReferenceCandidate } from "../src/parent-link/policy.ts";
 
 type Handler = ExtensionHandler<any, any>;
 
@@ -20,15 +24,26 @@ interface HarnessOptions {
   readonly sessionFile?: string | null;
   readonly parentSession?: string | undefined;
   readonly probeResult?: SessionHeaderProbe;
-  readonly hostileHeader?: boolean;
+  readonly identityResult?: SessionFileIdentityComparison;
+  readonly hostileFlag?: boolean;
+  readonly hostileIdentity?: boolean;
+  readonly hostileProbe?: boolean;
+  readonly hostileSessionFile?: boolean;
+  readonly hostileSessionId?: boolean;
 }
 
 const harness = (options: HarnessOptions = {}) => {
   const handlers = new Map<string, Handler[]>();
   const registerFlag = vi.fn();
-  const probe = vi.fn(
-    (_path: string): SessionHeaderProbe =>
-      options.probeResult ?? { _tag: "valid", header: { id: PARENT_ID } },
+  const probe = vi.fn((_path: string): SessionHeaderProbe => {
+    if (options.hostileProbe) throw new Error("host-probe-secret");
+    return options.probeResult ?? { _tag: "valid", header: { id: PARENT_ID } };
+  });
+  const compareIdentity = vi.fn(
+    (leftPath: string, rightPath: string): SessionFileIdentityComparison => {
+      if (options.hostileIdentity) throw new Error("host-identity-secret");
+      return options.identityResult ?? (leftPath === rightPath ? "same" : "distinct");
+    },
   );
   const piFixture = {
     on(name: string, handler: Handler) {
@@ -38,6 +53,7 @@ const harness = (options: HarnessOptions = {}) => {
     },
     registerFlag,
     getFlag: (name: string) => {
+      if (options.hostileFlag) throw new Error("host-flag-secret");
       if (name === "herdr-btw-parent") return options.flag;
       if (name === "herdr-btw-parent-file") return options.parentSession;
       if (name === "herdr-btw-child-session") return options.sessionId ?? "child-id";
@@ -46,15 +62,18 @@ const harness = (options: HarnessOptions = {}) => {
   };
   // SAFETY: The registration uses only the ExtensionAPI members implemented here.
   const pi = piFixture as typeof piFixture & ExtensionAPI;
-  const bridge = registerHerdrBtwParentReference(pi, { probe });
+  const bridge = registerHerdrBtwParentReference(pi, { compareIdentity, probe });
 
   const makeCtx = (override: Partial<HarnessOptions> = {}) => {
     const merged = { ...options, ...override };
     const contextFixture = {
       sessionManager: {
-        getSessionId: () => merged.sessionId ?? "child-id",
+        getSessionId: () => {
+          if (merged.hostileSessionId) throw new Error("host-session-id-secret");
+          return merged.sessionId ?? "child-id";
+        },
         getSessionFile: () => {
-          if (merged.hostileHeader) throw new Error("host-session-secret");
+          if (merged.hostileSessionFile) throw new Error("host-session-file-secret");
           return merged.sessionFile ?? CHILD_FILE;
         },
       },
@@ -79,10 +98,39 @@ const harness = (options: HarnessOptions = {}) => {
       makeCtx(),
     ) as { systemPrompt?: string } | undefined;
 
-  return { beforeAgentStart, makeCtx, probe, registerFlag, sessionShutdown, sessionStart };
+  return {
+    beforeAgentStart,
+    compareIdentity,
+    makeCtx,
+    probe,
+    registerFlag,
+    sessionShutdown,
+    sessionStart,
+  };
 };
 
 describe("herdr-btw parent reference", () => {
+  it("resolves marker and owning-child policy without host probing", () => {
+    expect(
+      resolveParentReferenceCandidate({
+        parentIdMarker: PARENT_ID,
+        parentFileMarker: PARENT_FILE,
+        childSessionMarker: "child-id",
+        sessionId: "child-id",
+        sessionFile: CHILD_FILE,
+      }),
+    ).toEqual({ path: PARENT_FILE, id: PARENT_ID });
+    expect(
+      resolveParentReferenceCandidate({
+        parentIdMarker: PARENT_ID,
+        parentFileMarker: PARENT_FILE,
+        childSessionMarker: "another-child",
+        sessionId: "child-id",
+        sessionFile: CHILD_FILE,
+      }),
+    ).toBeUndefined();
+  });
+
   it("registers the marker as a string extension CLI flag", () => {
     const h = harness();
     for (const name of ["herdr-btw-parent", "herdr-btw-parent-file", "herdr-btw-child-session"])
@@ -93,11 +141,12 @@ describe("herdr-btw parent reference", () => {
   });
 
   it("appends a stable instruction with the JSON-quoted parent path and expected ID", () => {
-    const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
+    const parentFile = '/sessions/parent "quoted" \\ file.jsonl';
+    const h = harness({ flag: PARENT_ID, parentSession: parentFile });
     h.sessionStart();
     const result = h.beforeAgentStart();
     expect(result?.systemPrompt?.startsWith(BASE_PROMPT)).toBe(true);
-    expect(result?.systemPrompt).toContain(JSON.stringify(PARENT_FILE));
+    expect(result?.systemPrompt).toContain(JSON.stringify(parentFile));
     expect(result?.systemPrompt).toContain(PARENT_ID);
     expect(result?.systemPrompt).toContain("append-only");
     expect(result?.systemPrompt).toContain("read-only");
@@ -114,13 +163,24 @@ describe("herdr-btw parent reference", () => {
   });
 
   it("drops the instruction when per-run parent identity revalidation fails", () => {
-    const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
-    h.sessionStart();
-    h.probe.mockReturnValueOnce({ _tag: "invalid" });
+    const failures: Array<SessionHeaderProbe | Error> = [
+      { _tag: "invalid" },
+      { _tag: "valid", header: { id: "another-parent" } },
+      new Error("probe-secret"),
+    ];
+    for (const failure of failures) {
+      const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
+      h.sessionStart();
+      if (failure instanceof Error)
+        h.probe.mockImplementationOnce(() => {
+          throw failure;
+        });
+      else h.probe.mockReturnValueOnce(failure);
 
-    expect(h.beforeAgentStart()).toBeUndefined();
-    expect(h.beforeAgentStart()).toBeUndefined();
-    expect(h.probe).toHaveBeenCalledTimes(2);
+      expect(h.beforeAgentStart()).toBeUndefined();
+      expect(h.beforeAgentStart()).toBeUndefined();
+      expect(h.probe).toHaveBeenCalledTimes(2);
+    }
   });
 
   it("stays inactive in unmarked Pi processes", () => {
@@ -138,18 +198,46 @@ describe("herdr-btw parent reference", () => {
     }
   });
 
-  it("requires the parent-file marker", () => {
-    const h = harness({ flag: PARENT_ID, parentSession: undefined });
-    h.sessionStart();
-    expect(h.beforeAgentStart()).toBeUndefined();
-    expect(h.probe).not.toHaveBeenCalled();
+  it("requires a bounded parent-file marker", () => {
+    for (const parentSession of [undefined, "", "a".repeat(4_097), "/sessions/bad\nname"]) {
+      const h = harness({ flag: PARENT_ID, parentSession });
+      h.sessionStart();
+      expect(h.beforeAgentStart()).toBeUndefined();
+      expect(h.probe).not.toHaveBeenCalled();
+    }
   });
 
-  it("rejects a self-referential parent pointer", () => {
+  it("rejects a self-referential parent pointer with a cheap raw-path check", () => {
     const h = harness({ flag: PARENT_ID, parentSession: CHILD_FILE, sessionFile: CHILD_FILE });
     h.sessionStart();
     expect(h.beforeAgentStart()).toBeUndefined();
+    expect(h.compareIdentity).not.toHaveBeenCalled();
     expect(h.probe).not.toHaveBeenCalled();
+  });
+
+  it("rejects parent-child filesystem aliases and unavailable identity", () => {
+    for (const identityResult of ["same", "unavailable"] as const) {
+      const h = harness({
+        flag: PARENT_ID,
+        parentSession: "/sessions/parent-alias.jsonl",
+        sessionFile: CHILD_FILE,
+        identityResult,
+      });
+      h.sessionStart();
+      expect(h.beforeAgentStart()).toBeUndefined();
+      expect(h.compareIdentity).toHaveBeenCalledWith("/sessions/parent-alias.jsonl", CHILD_FILE);
+      expect(h.probe).not.toHaveBeenCalled();
+    }
+  });
+
+  it("drops an active reference when parent and child become aliases", () => {
+    const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
+    h.sessionStart();
+    h.compareIdentity.mockReturnValueOnce("same");
+
+    expect(h.beforeAgentStart()).toBeUndefined();
+    expect(h.beforeAgentStart()).toBeUndefined();
+    expect(h.probe).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a missing, symlinked, or malformed parent file", () => {
@@ -172,10 +260,18 @@ describe("herdr-btw parent reference", () => {
     expect(h.beforeAgentStart()).toBeUndefined();
   });
 
-  it("deactivates fail-closed when the host session getters throw", () => {
-    const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE, hostileHeader: true });
-    h.sessionStart(h.makeCtx({ hostileHeader: true }));
-    expect(h.beforeAgentStart()).toBeUndefined();
+  it("contains throwing flag, session, and header-probe boundaries", () => {
+    for (const hostile of [
+      { hostileFlag: true },
+      { hostileSessionId: true },
+      { hostileSessionFile: true },
+      { hostileIdentity: true },
+      { hostileProbe: true },
+    ]) {
+      const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE, ...hostile });
+      h.sessionStart();
+      expect(h.beforeAgentStart()).toBeUndefined();
+    }
   });
 
   it("clears and refreshes the reference across session replacement", () => {

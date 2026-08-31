@@ -16,9 +16,16 @@ const SENSITIVE_KEY_PATTERN =
 const SENSITIVE_ASSIGNMENT_PATTERN =
   /(["']?)\b(?=[A-Za-z\d_-]*(?:api|key|access|refresh|auth|authorization|password|passwd|secret|token|client|private))([A-Za-z][A-Za-z\d_-]*)(["']?)(\s*[:=]\s*)((?:Bearer\s+)?)(?:(["'])([^"'\r\n]*)\6|[^\s,;}"'\]]+)/gi;
 
-/** Central recursive credential redaction used by every observation/delta path. */
-export function redactObservationValue<ValueInput>(value: ValueInput) {
-  return redactSnapshot(snapshotData(value), 0);
+/** Snapshot unknown input, then apply the central recursive credential policy. */
+export function redactObservationValue<ValueInput>(value: ValueInput): Schema.MutableJson {
+  return redactObservationSnapshot(snapshotData(value));
+}
+
+/** Redact an owner-produced safe-data snapshot without walking the source value again. */
+export function redactObservationSnapshot(
+  value: Schema.MutableJson | undefined,
+): Schema.MutableJson {
+  return redactSnapshot(value, 0);
 }
 
 function redactSnapshot(value: Schema.MutableJson | undefined, depth: number): Schema.MutableJson {
@@ -37,9 +44,19 @@ function redactSnapshot(value: Schema.MutableJson | undefined, depth: number): S
 
 export function stringifyRedactedObservation<ValueInput>(value: ValueInput): string {
   try {
-    const snapshot = snapshotData(value);
-    if (snapshot === undefined) return "[unavailable]";
-    return JSON.stringify(redactSnapshot(snapshot, 0)) ?? "[unavailable]";
+    return stringifyRedactedObservationSnapshot(snapshotData(value));
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+/** Serialize an owner-produced safe-data snapshot without snapshotting it again. */
+export function stringifyRedactedObservationSnapshot(
+  value: Schema.MutableJson | undefined,
+): string {
+  try {
+    if (value === undefined) return "[unavailable]";
+    return JSON.stringify(redactObservationSnapshot(value)) ?? "[unavailable]";
   } catch {
     return "[unserializable]";
   }

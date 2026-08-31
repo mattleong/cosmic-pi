@@ -5,6 +5,11 @@ import type {
   HerdrPaneProcessInfo,
 } from "../boundary/herdr-client.ts";
 import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
+import type {
+  SessionFileIdentityComparator,
+  SessionFileIdentityComparison,
+  SessionHeaderProbe,
+} from "../boundary/session-file.ts";
 import { HerdrBtwError } from "./errors.ts";
 import { parseHerdrBtwSessionId } from "./marker.ts";
 
@@ -30,6 +35,15 @@ const HERDR_SHELL_PROCESS_NAMES = new Set([
   "powershell",
   "cmd",
 ]);
+
+/** Exact blank child identity from a valid, unparented session header. */
+export const isValidBlankChildProbe = (
+  probe: SessionHeaderProbe,
+  childSessionId: string,
+): boolean =>
+  probe._tag === "valid" &&
+  probe.header.id === childSessionId &&
+  probe.header.parentSession === undefined;
 
 export const ensureHerdrProtocol = (
   client: HerdrClientContract,
@@ -62,7 +76,7 @@ export const ensurePiIntegration = (
 export const validateBtwInput = (
   prompt: string | undefined,
   input: HerdrBtwSessionInput,
-  validateSessionFile: (path: string) => boolean,
+  probeSessionHeader: (path: string) => SessionHeaderProbe,
 ): Effect.Effect<{ sessionFile: string; sessionId: string }, HerdrBtwError> =>
   Effect.gen(function* () {
     if (input.environment.HERDR_ENV !== "1" || !input.environment.HERDR_PANE_ID)
@@ -74,7 +88,7 @@ export const validateBtwInput = (
         outcome: "confirmed",
       });
 
-    if (!input.sessionFile || !validateSessionFile(input.sessionFile))
+    if (!input.sessionFile)
       return yield* new HerdrBtwError({
         operation: "validate parent session",
         code: "parent_session_unavailable",
@@ -88,6 +102,22 @@ export const validateBtwInput = (
         operation: "validate parent session",
         code: "parent_session_id_unavailable",
         message: "The current Pi session ID is unavailable or invalid.",
+        outcome: "confirmed",
+      });
+    const parentProbe = probeSessionHeader(input.sessionFile);
+    if (parentProbe._tag !== "valid")
+      return yield* new HerdrBtwError({
+        operation: "validate parent session",
+        code: "parent_session_unavailable",
+        message:
+          "The current Pi session does not have a readable persisted session file to reference.",
+        outcome: "confirmed",
+      });
+    if (parentProbe.header.id !== sessionId)
+      return yield* new HerdrBtwError({
+        operation: "validate parent session",
+        code: "parent_session_owner_mismatch",
+        message: "The parent session file header does not match the current Pi session identity.",
         outcome: "confirmed",
       });
 
@@ -160,9 +190,22 @@ export const validateStartedAgent = (
   pane: HerdrPane,
   agentName: string,
   parentSessionFile: string,
-  expectedChildPath: string | undefined,
+  expectedChildPath: string,
+  compareSessionFileIdentity: SessionFileIdentityComparator,
 ): Effect.Effect<void, HerdrBtwError> => {
   const childSession = agent.agent_session;
+  const hasPathEvidence =
+    childSession !== null &&
+    childSession !== undefined &&
+    childSession.source === "herdr:pi" &&
+    childSession.agent === "pi" &&
+    childSession.kind === "path";
+  const childMatchesLaunch =
+    hasPathEvidence && compareSessionFileIdentity(childSession.value, expectedChildPath) === "same";
+  const childDiffersFromParent =
+    expectedChildPath !== parentSessionFile &&
+    compareSessionFileIdentity(expectedChildPath, parentSessionFile) === "distinct";
+
   if (
     agent.pane_id !== pane.pane_id ||
     agent.terminal_id !== pane.terminal_id ||
@@ -170,13 +213,9 @@ export const validateStartedAgent = (
     agent.tab_id !== pane.tab_id ||
     agent.name !== agentName ||
     agent.agent !== "pi" ||
-    (childSession !== null &&
-      childSession !== undefined &&
-      (childSession.source !== "herdr:pi" ||
-        childSession.agent !== "pi" ||
-        childSession.kind !== "path" ||
-        childSession.value === parentSessionFile ||
-        (expectedChildPath !== undefined && childSession.value !== expectedChildPath)))
+    !hasPathEvidence ||
+    !childMatchesLaunch ||
+    !childDiffersFromParent
   )
     return Effect.fail(
       new HerdrBtwError({
@@ -190,14 +229,71 @@ export const validateStartedAgent = (
   return Effect.void;
 };
 
-/** Exact live child-session identity evidence for a snapshot agent. */
-export const agentChildSessionPath = (agent: HerdrPane): string | undefined => {
+const linkedAgentSessionIdentity = (
+  agent: HerdrPane,
+  childSessionId: string,
+  childSessionPath: string,
+  compareSessionFileIdentity: SessionFileIdentityComparator,
+): SessionFileIdentityComparison | undefined => {
   const session = agent.agent_session;
-  return session !== null &&
-    session !== undefined &&
-    session.source === "herdr:pi" &&
-    session.agent === "pi" &&
-    session.kind === "path"
-    ? session.value
-    : undefined;
+  if (
+    session === null ||
+    session === undefined ||
+    session.source !== "herdr:pi" ||
+    session.agent !== "pi"
+  )
+    return undefined;
+  if (session.kind === "id") return session.value === childSessionId ? "same" : "distinct";
+  return compareSessionFileIdentity(session.value, childSessionPath);
 };
+
+/** Matches stable Herdr metadata to the recorded child filesystem identity. */
+export const hasLinkedAgentSessionIdentity = (
+  agent: HerdrPane,
+  childSessionId: string,
+  childSessionPath: string,
+  compareSessionFileIdentity: SessionFileIdentityComparator,
+): boolean =>
+  linkedAgentSessionIdentity(
+    agent,
+    childSessionId,
+    childSessionPath,
+    compareSessionFileIdentity,
+  ) === "same";
+
+/** A recorded name or non-distinct child identity remains conflicting. */
+export const isLinkedAgentConflictCandidate = (
+  agent: HerdrPane,
+  agentName: string,
+  childSessionId: string,
+  childSessionPath: string,
+  compareSessionFileIdentity: SessionFileIdentityComparator,
+): boolean => {
+  if (agent.name === agentName) return true;
+  const identity = linkedAgentSessionIdentity(
+    agent,
+    childSessionId,
+    childSessionPath,
+    compareSessionFileIdentity,
+  );
+  return identity !== undefined && identity !== "distinct";
+};
+
+/** Exact recorded Herdr identity required before focusing a linked live Pi. */
+export const isExactLinkedAgent = (
+  agent: HerdrPane,
+  agentName: string,
+  terminalId: string,
+  childSessionId: string,
+  childSessionPath: string,
+  compareSessionFileIdentity: SessionFileIdentityComparator,
+): boolean =>
+  agent.name === agentName &&
+  agent.terminal_id === terminalId &&
+  agent.agent === "pi" &&
+  hasLinkedAgentSessionIdentity(
+    agent,
+    childSessionId,
+    childSessionPath,
+    compareSessionFileIdentity,
+  );

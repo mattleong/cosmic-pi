@@ -1,18 +1,18 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory, nodeFilePlatformLayer, PiApi } from "pi-cosmic-core";
 import {
   HostCallbackBoundary,
   type HostCallbackBoundaryContract,
 } from "./boundary/host-callback.ts";
-import { WorkingMessageHost } from "./boundary/host-working-message.ts";
+import { makePiExec } from "./boundary/host-exec.ts";
+import { makeWorkingMessageHost } from "./boundary/host-working-message.ts";
 import { CosmicUiConfigStore } from "./config/store.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import { FooterRegistryService, type FooterRegistryBridge } from "./footer/registry.ts";
 import { CosmicUiService, type CosmicUiProjection } from "./protocol/service.ts";
-import { PiExec } from "./boundary/host-exec.ts";
-import { RepositoryProbe } from "./probe/repository-probe.ts";
 import { makeFooterProtocolHostLayer, type FooterProtocolBuffer } from "./protocol/host.ts";
 import { WorkingTimerService } from "./working/service.ts";
 
@@ -46,25 +46,32 @@ export const makeCosmicUiApplicationLayer = (
     AgentDirectory.layerFromHost(() => getAgentDir()),
   );
   const configStore = CosmicUiConfigStore.layer.pipe(Layer.provide(platform));
-  const probe = RepositoryProbe.layer.pipe(Layer.provide(PiExec.layer));
-  const service = CosmicUiService.layer({
-    context,
-    cwd,
-    initialTotals,
-    projection: options.projection,
-    projectTrusted,
-    onChange: options.requestRender,
-  }).pipe(Layer.provide(Layer.mergeAll(configStore, probe, callbackBoundary)));
+  const service = Layer.effect(
+    CosmicUiService,
+    Effect.gen(function* () {
+      const pi = yield* PiApi;
+      return yield* CosmicUiService.make({
+        context,
+        cwd,
+        exec: makePiExec(pi.exec),
+        initialTotals,
+        projection: options.projection,
+        projectTrusted,
+        onChange: options.requestRender,
+      });
+    }),
+  ).pipe(Layer.provide(Layer.merge(configStore, callbackBoundary)));
   const registry = FooterRegistryService.layer({ bridge: options.bridge }).pipe(
     Layer.provide(callbackBoundary),
   );
   const protocol = makeFooterProtocolHostLayer({ buffer: options.protocolBuffer }).pipe(
     Layer.provideMerge(registry),
   );
-  const workingMessageHost = WorkingMessageHost.layer({ context }).pipe(
-    Layer.provide(callbackBoundary),
-  );
-  const workingTimer = WorkingTimerService.layer.pipe(Layer.provide(workingMessageHost));
+  const workingMessageHost = makeWorkingMessageHost({
+    context,
+    callbacks: options.callbacks,
+  });
+  const workingTimer = WorkingTimerService.layer(workingMessageHost);
   return Layer.mergeAll(service, protocol, workingTimer);
 };
 

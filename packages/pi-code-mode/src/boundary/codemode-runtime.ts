@@ -85,10 +85,6 @@ interface CodeModeApi {
   }) => { readonly instructions: () => string };
 }
 
-type ToolSchema = Schema.Decoder<unknown>;
-type ToolInput<Decoder> = Decoder extends Schema.Decoder<unknown> ? Decoder["Type"] : unknown;
-type ToolOutput<Decoder> = Decoder extends Schema.Decoder<unknown> ? Decoder["Encoded"] : unknown;
-
 interface ToolDefinition {
   readonly _tag: "CodeModeTool";
 }
@@ -99,16 +95,20 @@ interface CodeModeToolNamespace {
 
 interface ToolApi {
   readonly make: <
-    Input extends ToolSchema,
-    Output extends ToolSchema | undefined = undefined,
+    Input extends Schema.Decoder<unknown>,
+    Output extends Schema.Decoder<unknown> | undefined = undefined,
     Requirements = never,
   >(options: {
     readonly description: string;
     readonly input: Input;
     readonly output?: Output;
     readonly run: (
-      input: ToolInput<Input>,
-    ) => Effect.Effect<ToolOutput<Output>, unknown, Requirements>;
+      input: Input["Type"],
+    ) => Effect.Effect<
+      Output extends Schema.Decoder<unknown> ? Output["Encoded"] : unknown,
+      unknown,
+      Requirements
+    >;
   }) => ToolDefinition;
 }
 

@@ -1,6 +1,6 @@
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Latch from "effect/Latch";
 import * as Ref from "effect/Ref";
 import * as TxReentrantLock from "effect/TxReentrantLock";
 import { makeRefreshCoordinatorWith } from "./refresh-coordinator.ts";
@@ -34,8 +34,7 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
     const coordinator = yield* makeRefreshCoordinatorWith<Request, E>(options.mergeRequest);
     const revisionRef = yield* Ref.make(0);
     const commitGate = yield* TxReentrantLock.make();
-    const initialWake = yield* Deferred.make<void>();
-    const wakeRef = yield* Ref.make(initialWake);
+    const wakeLatch = yield* Latch.make();
     const equals = options.equals ?? Object.is;
     const spanName = options.spanName ?? "pi-cosmic-core.subscription.refresh";
 
@@ -44,11 +43,7 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
     const withCommitPermit = <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
       TxReentrantLock.withLock(commitGate, effect);
 
-    const wake = Effect.gen(function* () {
-      const nextWake = yield* Deferred.make<void>();
-      const previous = yield* Ref.getAndSet(wakeRef, nextWake);
-      yield* Deferred.succeed(previous, undefined);
-    });
+    const wake = Latch.release(wakeLatch).pipe(Effect.asVoid);
 
     const invalidate = withCommitPermit(Ref.update(revisionRef, (revision) => revision + 1)).pipe(
       Effect.andThen(wake),
@@ -74,11 +69,7 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
       Effect.gen(function* () {
         while (true) {
           const interval = yield* options.interval;
-          const currentWake = yield* Ref.get(wakeRef);
-          yield* Effect.raceFirst(
-            Effect.sleep(Duration.millis(interval)),
-            Deferred.await(currentWake),
-          );
+          yield* Effect.raceFirst(Effect.sleep(Duration.millis(interval)), Latch.await(wakeLatch));
           yield* request(pollRequest);
         }
       });

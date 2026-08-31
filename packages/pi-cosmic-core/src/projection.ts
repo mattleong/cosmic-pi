@@ -1,5 +1,5 @@
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType, runtimeTypeName } from "./runtime-values.ts";
+import { runtimeTypeName } from "./runtime-values.ts";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
@@ -57,7 +57,7 @@ const cloneAndFreeze = <Value>(
   }
   const kind = runtimeTypeName(value);
   if (kind === "function" || kind === "symbol" || kind === "bigint") return unsupported(path, kind);
-  if (!hasObjectRuntimeType(value) || value === null) return unsupported(path, kind);
+  if (!Predicate.isObjectOrArray(value)) return unsupported(path, kind);
 
   const object = value;
   const activePath = activePaths.get(object);

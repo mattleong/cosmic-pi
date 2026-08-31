@@ -8,6 +8,15 @@ type AnswerContent =
     }
   | { readonly kind: "custom"; readonly text: string };
 
+type DraftAnswerContent =
+  | { readonly kind: "choices"; readonly values: ReadonlyArray<string> }
+  | { readonly kind: "custom"; readonly text: string };
+
+/** Internal answer content retained until a question supplies its public key and choice labels. */
+export type AskUserAnswerDraft = DraftAnswerContent & {
+  readonly note?: string;
+};
+
 export type AskUserAnswer = AnswerContent & {
   readonly key: string;
   readonly note?: string;
@@ -19,7 +28,7 @@ export type AskUserOutcome =
 
 export interface QuestionDraft {
   readonly cursor: number;
-  readonly answer?: AnswerContent;
+  readonly answer?: DraftAnswerContent;
   readonly note?: string;
 }
 

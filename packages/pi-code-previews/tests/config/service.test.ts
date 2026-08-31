@@ -422,6 +422,47 @@ it.effect("save persists the flat document and publishes the committed settings"
   ).pipe(provideBuiltLayer(settingsLayer(documents)));
 });
 
+it.effect("save preserves concurrently changed known fields that the caller did not edit", () => {
+  let persisted: JsonObject = {
+    owner: "initial",
+    shikiTheme: "github-dark",
+    readCollapsedLines: 17,
+  };
+  const documents = JsonDocumentStore.of({
+    exists: () => Effect.succeed(true),
+    readObject: (path) =>
+      Effect.succeed(path === "/agent/code-previews.json" ? persisted : undefined),
+    writeObject: () => Effect.void,
+    modifyObject: (_path, modify) =>
+      modify(persisted).pipe(
+        Effect.flatMap(({ value, document, afterCommit }) =>
+          Effect.sync(() => {
+            persisted = document;
+          }).pipe(
+            Effect.andThen(afterCommit ?? Effect.void),
+            Effect.as(value),
+            Effect.uninterruptible,
+          ),
+        ),
+      ),
+    updateObject: () => Effect.die("legacy updateObject must not be used"),
+  });
+  return CodePreviewSettingsService.use((service) =>
+    Effect.gen(function* () {
+      const loaded = yield* loadSettings(service);
+      persisted = { ...persisted, owner: "external", shikiTheme: "github-light" };
+
+      yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 });
+
+      assert.deepEqual(persisted, {
+        owner: "external",
+        shikiTheme: "github-light",
+        readCollapsedLines: 42,
+      });
+    }),
+  ).pipe(provideBuiltLayer(settingsLayer(documents)));
+});
+
 it.effect("failed persistence leaves the published settings unchanged", () => {
   const documents = JsonDocumentStore.of({
     exists: () => Effect.succeed(false),

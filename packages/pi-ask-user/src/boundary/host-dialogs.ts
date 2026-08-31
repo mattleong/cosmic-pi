@@ -1,16 +1,15 @@
 // Pi dialog APIs are Promise-shaped host boundaries.
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import {
   notifyAtHostBoundary,
   stripTerminalControls,
   type HostNotificationLevel,
 } from "pi-cosmic-core";
 import { AskUserHostError } from "../questionnaire/errors.ts";
-import type { AskUserAnswer, AskUserOutcome } from "../questionnaire/model.ts";
-import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
+import type { AskUserAnswer, AskUserAnswerDraft, AskUserOutcome } from "../questionnaire/model.ts";
+import { cancelQuestionnaire, finalizeAskUserAnswer } from "../questionnaire/reducer.ts";
+import type { AskUserHost } from "../questionnaire/service.ts";
 import {
   MAX_CUSTOM_ANSWER_LENGTH,
   MAX_NOTE_LENGTH,
@@ -19,10 +18,6 @@ import {
 } from "../questionnaire/schema.ts";
 import { captureExternalEditorCommand, editWithExternalEditor } from "./host-external-editor.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
-
-interface HostDialogsContract {
-  readonly ask: (request: AskUserRequest) => Effect.Effect<AskUserOutcome, AskUserHostError>;
-}
 
 const hostError = (operation: string) =>
   new AskUserHostError({ operation, message: `Unable to ${operation} the user questionnaire.` });
@@ -85,21 +80,18 @@ const optionLines = (question: AskUserQuestion): string[] =>
       `${index + 1}. ${stripTerminalControls(choice.label)} — ${stripTerminalControls(choice.description)}`,
   );
 
-const choiceAnswer = (
-  question: AskUserQuestion,
+const choiceDraft = (
   choices: ReadonlyArray<AskUserQuestion["choices"][number]>,
-): AskUserAnswer => ({
-  key: question.key,
+): AskUserAnswerDraft => ({
   kind: "choices",
   values: choices.map((choice) => choice.value),
-  labels: choices.map((choice) => choice.label),
 });
 
 const askSingleQuestion = (
   ui: ExtensionUIContext,
   question: AskUserQuestion,
   title: string,
-): Effect.Effect<AskUserAnswer | undefined, AskUserHostError> =>
+): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
     const options = [
       ...optionLines(question),
@@ -111,10 +103,10 @@ const askSingleQuestion = (
       const index = options.indexOf(selected);
       if (index < 0) return undefined;
       if (index < question.choices.length) {
-        return choiceAnswer(question, [question.choices[index]!]);
+        return choiceDraft([question.choices[index]!]);
       }
       const text = yield* boundedInput(ui, `${title}\n\nWrite your answer:`, "Your answer");
-      if (text !== undefined) return { key: question.key, kind: "custom", text };
+      if (text !== undefined) return { kind: "custom", text };
       yield* notifyBestEffort(
         ui,
         "Custom answer dismissed; choose an option or cancel the question.",
@@ -127,7 +119,7 @@ const askMultipleQuestion = (
   ui: ExtensionUIContext,
   question: AskUserQuestion,
   title: string,
-): Effect.Effect<AskUserAnswer | undefined, AskUserHostError> =>
+): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
     const modes = ["Choose listed options", "Write a custom answer"];
     while (true) {
@@ -137,7 +129,7 @@ const askMultipleQuestion = (
       if (mode === undefined) return undefined;
       if (mode === modes[1]) {
         const text = yield* boundedInput(ui, `${title}\n\nWrite your answer:`, "Your answer");
-        if (text !== undefined) return { key: question.key, kind: "custom", text };
+        if (text !== undefined) return { kind: "custom", text };
         yield* notifyBestEffort(
           ui,
           "Custom answer dismissed; choose listed options, write a custom answer, or cancel the question.",
@@ -179,16 +171,12 @@ const askMultipleQuestion = (
           );
           continue;
         }
-        const unique = [...new Set(indices)];
-        return choiceAnswer(
-          question,
-          unique.map((index) => question.choices[index]!),
-        );
+        return choiceDraft(indices.map((index) => question.choices[index]!));
       }
     }
   });
 
-const attachNote = (answer: AskUserAnswer, note: string | undefined): AskUserAnswer => {
+const attachNote = (answer: AskUserAnswerDraft, note: string | undefined): AskUserAnswerDraft => {
   const { note: _previous, ...withoutNote } = answer;
   return note ? { ...withoutNote, note } : withoutNote;
 };
@@ -196,9 +184,9 @@ const attachNote = (answer: AskUserAnswer, note: string | undefined): AskUserAns
 const askOptionalNote = (
   ui: ExtensionUIContext,
   question: AskUserQuestion,
-  answer: AskUserAnswer,
+  answer: AskUserAnswerDraft,
   existingNote: string | undefined,
-): Effect.Effect<AskUserAnswer | undefined, AskUserHostError> =>
+): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
     const title = `Optional note for [${stripTerminalControls(question.title)}]`;
     while (true) {
@@ -231,7 +219,7 @@ const askRpcQuestion = (
   ui: ExtensionUIContext,
   question: AskUserQuestion,
   existingNote?: string,
-): Effect.Effect<AskUserAnswer | undefined, AskUserHostError> =>
+): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
     const title = `[${stripTerminalControls(question.title)}] ${stripTerminalControls(question.prompt)}${previewText(question)}`;
     const answer =
@@ -253,20 +241,20 @@ const runRpc = (
   request: AskUserRequest,
 ): Effect.Effect<AskUserOutcome, AskUserHostError> =>
   Effect.gen(function* () {
-    const answers: AskUserAnswer[] = [];
+    const drafts: AskUserAnswerDraft[] = [];
     for (const question of request.questions) {
-      const answer = yield* askRpcQuestion(ctx.ui, question);
-      if (!answer) return cancelQuestionnaire();
-      answers.push(answer);
+      const draft = yield* askRpcQuestion(ctx.ui, question);
+      if (!draft) return cancelQuestionnaire();
+      drafts.push(draft);
     }
 
     while (true) {
       const reviewTitle = [
         "Review answers",
-        ...answers.map(
-          (answer, index) =>
-            `${index + 1}. [${stripTerminalControls(request.questions[index]!.title)}] ${answerSummary(answer)}`,
-        ),
+        ...drafts.map((draft, index) => {
+          const question = request.questions[index]!;
+          return `${index + 1}. [${stripTerminalControls(question.title)}] ${answerSummary(finalizeAskUserAnswer(question, draft))}`;
+        }),
       ].join("\n");
       const editOptions = request.questions.map(
         (question, index) => `Edit ${index + 1}. ${stripTerminalControls(question.title)}`,
@@ -278,91 +266,100 @@ const runRpc = (
       if (selected === undefined || selected === options[options.length - 1]) {
         return cancelQuestionnaire();
       }
-      if (selected === options[0]) return { outcome: "submitted", answers };
+      if (selected === options[0]) {
+        return {
+          outcome: "submitted",
+          answers: drafts.map((draft, index) =>
+            finalizeAskUserAnswer(request.questions[index]!, draft),
+          ),
+        };
+      }
       const editIndex = editOptions.indexOf(selected);
       if (editIndex < 0) return cancelQuestionnaire();
       const question = request.questions[editIndex]!;
-      const replacement = yield* askRpcQuestion(ctx.ui, question, answers[editIndex]?.note);
+      const replacement = yield* askRpcQuestion(ctx.ui, question, drafts[editIndex]?.note);
       if (!replacement) return cancelQuestionnaire();
-      answers[editIndex] = replacement;
+      drafts[editIndex] = replacement;
     }
   });
 
-// Promise-shaped Pi overlay boundary; the caller adapts it with an interruption-linked signal.
-function runTui(
+/** Pi's custom overlay has no signal option, so this boundary closes it during finalization. */
+const runTui = (
   ctx: ExtensionContext,
   bridge: AskUserDialogBridge,
   request: AskUserRequest,
-  signal: AbortSignal,
-): Promise<AskUserOutcome> {
-  return import("../ui/dialog.ts").then(({ AskUserDialog }) => {
-    if (signal.aborted) return cancelQuestionnaire();
-    const editorCommand = captureExternalEditorCommand(ctx);
-    let close: ((outcome: AskUserOutcome) => void) | undefined;
-    let bridgeToken: number | undefined;
-    let dialog: import("../ui/dialog.ts").AskUserDialog | undefined;
-    const abort = () => close?.(cancelQuestionnaire());
-    signal.addEventListener("abort", abort, { once: true });
-    return ctx.ui
-      .custom<AskUserOutcome>(
-        (tui, theme, keybindings, done) => {
-          const settle = (outcome: AskUserOutcome): void => {
-            try {
-              done(outcome);
-            } catch {
-              const token = bridgeToken;
-              if (token === undefined) return;
-              bridgeToken = undefined;
-              try {
-                bridge.clear(token);
-              } catch {
-                // Settlement must not throw back into Pi or an abort listener.
-              }
-            }
-          };
-          close = settle;
-          dialog = new AskUserDialog({
-            tui,
-            theme,
-            keybindings,
-            request,
-            done: settle,
-            editExternally: (value) => editWithExternalEditor(tui, editorCommand, value, signal),
-            onCollapse: () => {
-              if (bridgeToken !== undefined) bridge.markCollapsed(bridgeToken);
-            },
-          });
-          if (signal.aborted) settle(cancelQuestionnaire());
-          else bridgeToken = bridge.activate(() => dialog?.resume());
-          return dialog;
-        },
-        {
-          overlay: true,
-          overlayOptions: {
-            anchor: "bottom-center",
-            width: "100%",
-            maxHeight: "100%",
-            margin: { left: 0, right: 0, bottom: 0 },
-          },
-          onHandle: (handle) => dialog?.setOverlayHandle(handle),
-        },
-      )
-      .finally(() => {
-        signal.removeEventListener("abort", abort);
-        if (bridgeToken !== undefined) bridge.clear(bridgeToken);
-      });
-  });
-}
+): Effect.Effect<AskUserOutcome, AskUserHostError> =>
+  Effect.tryPromise(() => import("../ui/dialog.ts")).pipe(
+    Effect.flatMap(({ AskUserDialog }) =>
+      Effect.suspend(() => {
+        const editorCommand = captureExternalEditorCommand(ctx);
+        const authority = new AbortController();
+        let settled = false;
+        let hostDone: ((outcome: AskUserOutcome) => void) | undefined;
+        let bridgeToken: number | undefined;
+        let dialog: InstanceType<typeof AskUserDialog> | undefined;
 
-export class HostDialogs extends Context.Service<HostDialogs, HostDialogsContract>()(
-  "pi-ask-user/boundary/host-dialogs/HostDialogs",
-) {
-  static layer(ctx: ExtensionContext, bridge: AskUserDialogBridge): Layer.Layer<HostDialogs> {
-    return Layer.succeed(HostDialogs, {
-      ask: (request) =>
-        ctx.mode === "tui"
-          ? dialogCall((signal) => runTui(ctx, bridge, request, signal), "render")
-          : runRpc(ctx, request),
-    });
-  }
-}
+        const clearOwnedBridge = (): void => {
+          const token = bridgeToken;
+          if (token === undefined) return;
+          bridgeToken = undefined;
+          bridge.clear(token);
+        };
+        const finish = (outcome: AskUserOutcome): void => {
+          if (settled || hostDone === undefined) return;
+          settled = true;
+          hostDone(outcome);
+        };
+        const close = (): void => {
+          authority.abort();
+          finish(cancelQuestionnaire());
+          clearOwnedBridge();
+        };
+
+        return Effect.tryPromise(() =>
+          ctx.ui.custom<AskUserOutcome>(
+            (tui, theme, keybindings, done) => {
+              hostDone = done;
+              dialog = new AskUserDialog({
+                tui,
+                theme,
+                keybindings,
+                request,
+                done: finish,
+                editExternally: (value) =>
+                  editWithExternalEditor(tui, editorCommand, value, authority.signal),
+                onCollapse: () => {
+                  const token = bridgeToken;
+                  if (!authority.signal.aborted && token !== undefined) {
+                    bridge.markCollapsed(token);
+                  }
+                },
+              });
+              bridgeToken = bridge.activate(() => {
+                if (!authority.signal.aborted) dialog?.resume();
+              });
+              return dialog;
+            },
+            {
+              overlay: true,
+              overlayOptions: {
+                anchor: "bottom-center",
+                width: "100%",
+                maxHeight: "100%",
+                margin: { left: 0, right: 0, bottom: 0 },
+              },
+              onHandle: (handle) => {
+                if (!authority.signal.aborted) dialog?.setOverlayHandle(handle);
+              },
+            },
+          ),
+        ).pipe(Effect.ensuring(Effect.sync(close)));
+      }),
+    ),
+    Effect.mapError(() => hostError("render")),
+  );
+
+export const makeAskUserHost = (ctx: ExtensionContext, bridge: AskUserDialogBridge): AskUserHost =>
+  ctx.mode === "tui"
+    ? (request) => runTui(ctx, bridge, request)
+    : (request) => runRpc(ctx, request);

@@ -236,10 +236,9 @@ describe("code mode untrusted project I/O", () => {
     return Effect.gen(function* () {
       const store = yield* CodeModeConfigStore;
       const state = store.snapshot();
-      // The project path is calculated as inert metadata only.
-      expect(state.projectConfigPath).toBe(PROJECT_PATH);
       expect(state.projectValues).toEqual({});
       expect(state.config.timeoutMs).toBe(45_000);
+      expect(state.provenance.enabled).toBe("default");
       expect(state.available).toBe(false);
 
       // Global writes never read, stat, or write the project document either.

@@ -5,7 +5,7 @@ import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
-import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details.ts";
+import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
 import { aggregateRunUsage, renderResponsiveRunRows, runTiming } from "./render-run-rows.ts";
 import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
 

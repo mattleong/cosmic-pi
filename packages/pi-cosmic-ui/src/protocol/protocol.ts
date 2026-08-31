@@ -1,8 +1,11 @@
 import * as Predicate from "effect/Predicate";
-
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "../schema/decode.ts";
+import {
+  detachCosmicFooterContribution,
+  detachCosmicFooterContributionFromReceiver,
+} from "./canonicalization.ts";
 
 export const COSMIC_UI_PROTOCOL_VERSION = 1 as const;
 export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v1:host:query";
@@ -78,6 +81,9 @@ export type CosmicFooterContribution =
   | CosmicFooterTextContribution
   | CosmicFooterStatusContribution
   | CosmicFooterSurfaceContribution;
+
+export { detachCosmicFooterContribution };
+
 export interface CosmicUiHostQuery {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
   respond(): void;
@@ -163,17 +169,35 @@ const InvalidateData = Schema.Struct({
 
 const optionalFunction = <Value>(value: Value) =>
   value === undefined || Predicate.isFunction(value);
-const decode = <S extends Schema.ConstraintDecoder<unknown>, Value>(
-  schema: S,
-  value: Value,
-): S["Type"] | undefined => Option.getOrUndefined(Schema.decodeUnknownOption(schema)(value));
+
+type DecodedUpsert = typeof UpsertData.Type;
+interface DecodedUpsertWithReceiver {
+  readonly event: DecodedUpsert;
+  readonly callbackReceiver: object;
+}
+
+const decodeUpsertSafely = <Value>(value: Value): DecodedUpsertWithReceiver | undefined => {
+  try {
+    if (!Predicate.isObject(value)) return undefined;
+    const input = {
+      version: value.version,
+      owner: value.owner,
+      contribution: value.contribution,
+    };
+    if (!Predicate.isObject(input.contribution)) return undefined;
+    const event = decodeUnknownOrUndefined(UpsertData, input);
+    return event === undefined ? undefined : { event, callbackReceiver: input.contribution };
+  } catch {
+    return undefined;
+  }
+};
 
 const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>, Value>(
   schema: S,
   value: Value,
 ): S["Type"] | undefined => {
   try {
-    return decode(schema, value);
+    return decodeUnknownOrUndefined(schema, value);
   } catch {
     return undefined;
   }
@@ -189,15 +213,21 @@ export function normalizeCosmicUiHostQuery<ValueInput>(
   const query = decodeSafely(HostQueryData, value);
   if (!query || !Predicate.isFunction(query.respond)) return undefined;
   const respond = query.respond;
-  return Object.freeze({ version: query.version, respond: () => respond() });
+  return Object.freeze({
+    version: query.version,
+    respond: () => {
+      Function.prototype.apply.call(respond, query, []);
+    },
+  });
 }
 
 /** Reads every hostile upsert field exactly once into a detached plain snapshot. */
 export function normalizeCosmicFooterUpsertEvent<ValueInput>(
   value: ValueInput,
 ): CosmicFooterUpsertEvent | undefined {
-  const event = decodeSafely(UpsertData, value);
-  if (!event) return undefined;
+  const decoded = decodeUpsertSafely(value);
+  if (!decoded) return undefined;
+  const { event, callbackReceiver } = decoded;
   const contribution = event.contribution;
   if (contribution.kind === "text" || contribution.kind === "status") {
     if (
@@ -230,14 +260,17 @@ export function normalizeCosmicFooterUpsertEvent<ValueInput>(
     return Object.freeze({
       version: event.version,
       owner: event.owner,
-      contribution: Object.freeze(detached),
+      contribution: detachCosmicFooterContribution(detached as CosmicFooterContribution),
     }) as CosmicFooterUpsertEvent;
   }
   // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return Object.freeze({
     version: event.version,
     owner: event.owner,
-    contribution: Object.freeze({ ...contribution }),
+    contribution: detachCosmicFooterContributionFromReceiver(
+      contribution as CosmicFooterContribution,
+      { value: callbackReceiver },
+    ),
   }) as CosmicFooterUpsertEvent;
 }
 

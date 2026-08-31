@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decodeCompactToolDetails, makeCompactToolDetails } from "../../src/tools/details.ts";
+import { makeCompactToolDetails } from "../../src/tools/details.ts";
+import { decodeCompactToolDetails } from "../../src/tools/details-schema.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
 describe("subagent writer containment card details", () => {

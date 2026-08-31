@@ -9,7 +9,7 @@ import {
   makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
-import { captureExplicitModelArgument } from "./boundary/host-cli.ts";
+import { captureExplicitPreferenceArgument } from "./boundary/host-cli.ts";
 import { captureSelectedModel, captureThinkingLevel } from "./boundary/host-model.ts";
 import { captureDirectorySession } from "./boundary/host-session.ts";
 import { makeDirectoryModelsLayer } from "./layer.ts";
@@ -20,7 +20,7 @@ import {
 
 export function registerDirectoryModelsApplication(
   pi: ExtensionAPI,
-  explicitModel: boolean = captureExplicitModelArgument(),
+  explicitPreference: boolean = captureExplicitPreferenceArgument(),
 ): void {
   const warn = (ctx: ExtensionContext, message: string) =>
     notifyAtHostBoundary(ctx, message, "warning");
@@ -50,7 +50,7 @@ export function registerDirectoryModelsApplication(
           ctx,
           cwd: captured.cwd,
           fresh: captured.fresh,
-          explicitModel,
+          explicitPreference,
         },
         captured.signal,
       )

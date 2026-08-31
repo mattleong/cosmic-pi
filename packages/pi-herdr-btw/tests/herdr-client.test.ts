@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import type { BoundedProcessRequest } from "pi-cosmic-core";
+import { BoundedProcessError, type BoundedProcessRequest } from "pi-cosmic-core";
 import { expect } from "vitest";
 import { makeHerdrClient, type HerdrProcessRunner } from "../src/boundary/herdr-client.ts";
 
@@ -234,6 +234,29 @@ it.effect("runs asynchronously and propagates interruption to the process", () =
 
     expect(interrupted).toBe(1);
     expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true);
+  }),
+);
+
+it.effect("confirms only mutation failures that occur before process dispatch", () =>
+  Effect.gen(function* () {
+    for (const operation of ["spawn", "stream"] as const) {
+      const processRunner: HerdrProcessRunner = () =>
+        Effect.fail(new BoundedProcessError({ operation, message: "bounded fixture failure" }));
+      const client = makeHerdrClient({}, { processRunner });
+      const result = yield* Effect.result(
+        client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
+      );
+
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({
+          code:
+            operation === "spawn"
+              ? "herdr_split_btw_pane_failed"
+              : "herdr_split_btw_pane_outcome_uncertain",
+          outcome: operation === "spawn" ? "confirmed" : "uncertain",
+        });
+    }
   }),
 );
 

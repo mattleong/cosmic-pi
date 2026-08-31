@@ -36,35 +36,11 @@ import {
   type CompactToolActionFailure,
   type SubagentAwaitDetails,
   type SubagentCardFailure,
-  type SubagentProfileCandidateCard,
   type SubagentProfileRouteCard,
   type SubagentRunCard,
-  type SubagentStartAwaitCardDetails,
   type SubagentStartDetails,
   type SubagentStartEntry,
 } from "./details-schema.ts";
-
-export {
-  MAX_CARD_MODEL_CHARS,
-  MAX_CARD_PROVENANCE_CHARS,
-  MAX_CARD_QUESTION_CHARS,
-  MAX_CARD_SKIPS,
-  SUBAGENT_CARD_DETAILS_VERSION,
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
-};
-export type {
-  CompactSubagentToolDetails,
-  CompactToolActionFailure,
-  SubagentAwaitDetails,
-  SubagentCardFailure,
-  SubagentProfileCandidateCard,
-  SubagentProfileRouteCard,
-  SubagentRunCard,
-  SubagentStartAwaitCardDetails,
-  SubagentStartDetails,
-  SubagentStartEntry,
-};
 
 const MAX_PROFILE_CHARS = 64;
 const MAX_ACTION_FAILURE_ID_CHARS = 128;

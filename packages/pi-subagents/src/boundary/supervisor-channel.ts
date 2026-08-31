@@ -301,6 +301,13 @@ interface PreparedStateDirectory {
   readonly connectionConfigPath: string;
 }
 
+interface StagedNodeChannelAcquisition {
+  prepared: PreparedStateDirectory | undefined;
+  ownsStateDirectory: boolean;
+  internalScope: Scope.Closeable | undefined;
+  state: NodeChannelState | undefined;
+}
+
 class SupervisorPrivateStateError extends Schema.TaggedError<SupervisorPrivateStateError>()(
   "SupervisorPrivateStateError",
   {
@@ -938,29 +945,31 @@ const acquireNodeChannelEffect = (
 ): Effect.Effect<NodeChannelState, SupervisorChannelError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      let stateDirectory: string | undefined;
-      let connectionConfigPath: string | undefined;
-      let internalScope: Scope.Closeable | undefined;
-      let state: NodeChannelState | undefined;
-      let ownsStateDirectory = false;
+      const acquisition: StagedNodeChannelAcquisition = {
+        prepared: undefined,
+        ownsStateDirectory: false,
+        internalScope: undefined,
+        state: undefined,
+      };
       const requestedAuthTimeout = options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS;
       const authTimeoutMillis = Number.isFinite(requestedAuthTimeout)
         ? Math.max(1, Math.min(60_000, Math.floor(requestedAuthTimeout)))
         : AUTH_TIMEOUT_MILLIS;
 
       const cleanupPartial = Effect.gen(function* () {
-        if (state)
-          return yield* closeNodeChannelEffect(state).pipe(Effect.catchCause(() => Effect.void));
-        if (internalScope)
-          yield* Scope.close(internalScope, Exit.void).pipe(Effect.catchCause(() => Effect.void));
-        if (ownsStateDirectory && stateDirectory && connectionConfigPath)
-          yield* removePrivateState(stateDirectory, connectionConfigPath).pipe(Effect.ignore);
-        else if (ownsStateDirectory && stateDirectory) {
-          const directory = stateDirectory;
-          yield* privateStateOperation("remove-partial-channel-state", () =>
-            fs.rmdir(directory),
+        if (acquisition.state)
+          return yield* closeNodeChannelEffect(acquisition.state).pipe(
+            Effect.catchCause(() => Effect.void),
+          );
+        if (acquisition.internalScope)
+          yield* Scope.close(acquisition.internalScope, Exit.void).pipe(
+            Effect.catchCause(() => Effect.void),
+          );
+        if (acquisition.ownsStateDirectory && acquisition.prepared)
+          yield* removePrivateState(
+            acquisition.prepared.stateDirectory,
+            acquisition.prepared.connectionConfigPath,
           ).pipe(Effect.ignore);
-        }
       });
 
       return yield* Effect.gen(function* () {
@@ -969,11 +978,10 @@ const acquireNodeChannelEffect = (
             options.agentDirectory,
             runId,
             (candidate) => {
-              stateDirectory = candidate.stateDirectory;
-              connectionConfigPath = candidate.connectionConfigPath;
+              acquisition.prepared = candidate;
             },
             () => {
-              ownsStateDirectory = true;
+              acquisition.ownsStateDirectory = true;
             },
           ).pipe(
             Effect.mapError(() =>
@@ -985,9 +993,9 @@ const acquireNodeChannelEffect = (
             ),
           ),
         );
-        stateDirectory = prepared.stateDirectory;
-        connectionConfigPath = prepared.connectionConfigPath;
-        internalScope = yield* Scope.make();
+        acquisition.prepared = prepared;
+        const internalScope = yield* Scope.make();
+        acquisition.internalScope = internalScope;
         const baseServer = yield* restore(
           NodeSocketServer.make({ host: LOOPBACK_HOST, port: 0, exclusive: true }).pipe(
             Scope.provide(internalScope),
@@ -1005,8 +1013,8 @@ const acquireNodeChannelEffect = (
         const metadata = makeMetadata(
           runId,
           baseServer.address.port,
-          stateDirectory,
-          connectionConfigPath,
+          prepared.stateDirectory,
+          prepared.connectionConfigPath,
         );
         const token = Redacted.make(
           SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")),
@@ -1018,8 +1026,8 @@ const acquireNodeChannelEffect = (
           peers: new Map(),
           events,
           metadata,
-          stateDirectory,
-          connectionConfigPath,
+          stateDirectory: prepared.stateDirectory,
+          connectionConfigPath: prepared.connectionConfigPath,
           token,
           allowPiProxy,
           assignmentEpochs: new Set(),
@@ -1038,7 +1046,7 @@ const acquireNodeChannelEffect = (
         acquiredState.close = yield* Effect.cached(
           Effect.uninterruptible(cleanupNodeChannelEffect(acquiredState)),
         );
-        state = acquiredState;
+        acquisition.state = acquiredState;
         const serialization = RpcSerialization.makeNdjson({
           maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
         });
@@ -1048,13 +1056,13 @@ const acquireNodeChannelEffect = (
           maxConnections: MAX_CONNECTIONS,
           openSessionTag: SupervisorOpenSessionRpc._tag,
           onDisconnect: (clientId) => {
-            if (state) removePeer(state, clientId);
+            removePeer(acquiredState, clientId);
           },
         }).pipe(
           Effect.provideService(RpcSerialization.RpcSerialization, serialization),
           Scope.provide(internalScope),
         );
-        const handlers = yield* makeRpcHandlers(state);
+        const handlers = yield* makeRpcHandlers(acquiredState);
         yield* RpcServer.make(SupervisorRpcGroup, {
           concurrency: MAX_ACTIVE_RPC_REQUESTS,
           disableTracing: true,
@@ -1071,22 +1079,24 @@ const acquireNodeChannelEffect = (
           port: metadata.port,
           token: Redacted.value(token),
         });
-        if (options.beforeConfigCommit)
+        const beforeConfigCommit = options.beforeConfigCommit;
+        if (beforeConfigCommit)
           yield* Effect.tryPromise({
-            try: () => options.beforeConfigCommit!(metadata),
+            try: () => beforeConfigCommit(metadata),
             catch: configWriteError,
           });
         yield* Effect.tryPromise({
-          try: () => writePrivateConfig(connectionConfigPath!, config),
+          try: () => writePrivateConfig(prepared.connectionConfigPath, config),
           catch: configWriteError,
         });
         // Deliver interruption only after the config writer has settled, while acquisition still
         // owns failure cleanup for the listener, token document, and private state directory.
         yield* restore(Effect.void);
-        if (options.beforeAcquireComplete)
+        const beforeAcquireComplete = options.beforeAcquireComplete;
+        if (beforeAcquireComplete)
           yield* restore(
             Effect.tryPromise({
-              try: () => options.beforeAcquireComplete!(metadata),
+              try: () => beforeAcquireComplete(metadata),
               catch: () =>
                 channelError(
                   "open channel",
@@ -1095,7 +1105,7 @@ const acquireNodeChannelEffect = (
                 ),
             }),
           );
-        return state;
+        return acquiredState;
       }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : cleanupPartial)));
     }),
   );

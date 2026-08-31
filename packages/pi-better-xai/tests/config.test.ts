@@ -1,9 +1,48 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import type { JsonObject } from "pi-cosmic-core";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import { provideBuiltLayer, type JsonObject } from "pi-cosmic-core";
+import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { InvalidSettingError, decodeSettingUpdate } from "../src/config/options.ts";
+import { resolveConfig } from "../src/config/store.ts";
 
-describe("xAI setting updates", () => {
+describe("xAI configuration", () => {
+  it.effect(
+    "applies project fields over global fields over defaults before clamping refresh",
+    () => {
+      const documents = makeInMemoryDocuments({
+        "/project/.pi/extensions/pi-better-xai.json": {
+          usage: {
+            enabled: "invalid-project-value",
+            refreshIntervalMs: 4_000,
+            showResetTimes: false,
+          },
+          footer: { mode: "status" },
+        },
+        "/agent/extensions/pi-better-xai.json": {
+          usage: {
+            enabled: false,
+            refreshIntervalMs: 20_000,
+            showOnlyOnSubscriptionModels: false,
+          },
+          footer: { mode: "off" },
+        },
+      });
+
+      return Effect.gen(function* () {
+        const resolved = yield* resolveConfig("/project", "/agent", true);
+        expect(resolved.usage).toEqual({
+          enabled: false,
+          refreshIntervalMs: 5_000,
+          showOnlyOnSubscriptionModels: false,
+          showResetTimes: false,
+        });
+        expect(resolved.footer).toEqual({ mode: "status" });
+      }).pipe(provideBuiltLayer(Layer.merge(Path.layer, documents.layer)));
+    },
+  );
+
   it.effect("patches the exact dotted path for every setting id", () =>
     Effect.gen(function* () {
       const cases: ReadonlyArray<readonly [string, string, JsonObject]> = [

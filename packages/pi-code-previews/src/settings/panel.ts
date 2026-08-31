@@ -1,6 +1,7 @@
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { SettingsList } from "@earendil-works/pi-tui";
 import type { LoadSettingsOptions } from "../config/document-store";
+import type { CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
 import { updateSetting } from "../config/values";
 import {
@@ -15,6 +16,31 @@ interface SettingsListControllerOptions {
   notify: (message: string, level: "info" | "warning") => void;
   done: () => void;
   loadOptions: LoadSettingsOptions;
+}
+
+export interface SettingsPanelSaveEffects {
+  readonly queueSave: (
+    settings: CodePreviewSettings,
+    options: LoadSettingsOptions,
+  ) => Promise<void>;
+  readonly initializeSyntax: (theme: CodePreviewSettings["shikiTheme"]) => Promise<void>;
+}
+
+const liveSettingsPanelSaveEffects: SettingsPanelSaveEffects = {
+  queueSave: queueSettingsSave,
+  initializeSyntax: initializeShiki,
+};
+
+export function persistSettingsChange(
+  settings: CodePreviewSettings,
+  previousTheme: CodePreviewSettings["shikiTheme"],
+  loadOptions: LoadSettingsOptions,
+  effects: SettingsPanelSaveEffects = liveSettingsPanelSaveEffects,
+): Promise<void> {
+  return effects.queueSave(settings, loadOptions).then(() => {
+    if (settings.shikiTheme !== previousTheme)
+      void effects.initializeSyntax(settings.shikiTheme).catch(() => undefined);
+  });
 }
 
 export function createCodePreviewSettingsList({
@@ -37,9 +63,8 @@ export function createCodePreviewSettingsList({
     const changeRevision = ++revision;
     draftSettings = next;
     syncSettingsListValues(list, draftSettings, handleSettingChange);
-    void queueSettingsSave(next, loadOptions)
+    void persistSettingsChange(next, previousTheme, loadOptions)
       .then(() => {
-        if (next.shikiTheme !== previousTheme) void initializeShiki(next.shikiTheme);
         if (resetRequested) notify("Code preview settings reset to defaults", "info");
       })
       .catch((error) => {

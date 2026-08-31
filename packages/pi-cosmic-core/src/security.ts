@@ -1,8 +1,10 @@
+import * as Encoding from "effect/Encoding";
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "./runtime-values.ts";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 const ANSI_ESCAPE_PATTERN = String.raw`\u001B\[[0-?]*[ -/]*[@-~]`;
 const ANSI_ESCAPE_REGEXP = new RegExp(ANSI_ESCAPE_PATTERN, "g");
+const CONTROL_CHARACTER_REGEXP = /\p{Cc}/u;
 const DIAGNOSTIC_MAX_LENGTH = 500;
 const REDACTED = "[REDACTED]";
 const SENSITIVE_KEY_SUFFIXES = [
@@ -24,6 +26,9 @@ export interface DiagnosticSanitizerOptions {
   readonly maximumLength?: number;
   readonly extraPatterns?: readonly RegExp[];
 }
+
+/** Whether a string contains a Unicode control character (General Category Cc). */
+export const hasControlCharacter = (value: string): boolean => CONTROL_CHARACTER_REGEXP.test(value);
 
 const replaceControlCharacters = (value: string): string => value.replace(/\p{Cc}/gu, " ");
 
@@ -122,11 +127,7 @@ const redactSensitiveText = (message: string, extraPatterns: readonly RegExp[] =
 
 export function decodeJwtPayloadText(token: string): string | undefined {
   const payload = token.split(".")[1];
-  if (!payload) return undefined;
-  const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(normalized + "=".repeat((4 - (normalized.length % 4)) % 4), "base64").toString(
-    "utf8",
-  );
+  return payload ? Result.getOrUndefined(Encoding.decodeBase64UrlString(payload)) : undefined;
 }
 
 export function maskIdentifier(value: string | undefined): string | undefined {
@@ -180,7 +181,7 @@ export function redactDiagnosticValue<ValueInput>(
     if (current === null) return null;
     if (Predicate.isBoolean(current)) return current;
     if (Predicate.isNumber(current)) return Number.isFinite(current) ? current : null;
-    if (!hasObjectRuntimeType(current)) return null;
+    if (!Predicate.isObjectOrArray(current)) return null;
     if (depth >= 16 || seen.has(current)) return "[TRUNCATED]";
     seen.add(current);
     if (Array.isArray(current)) return current.map((entry) => redact(entry, depth + 1));

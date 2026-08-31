@@ -125,7 +125,7 @@ export function registerOpenAIImage(
       const signal = safeHostSignal(ctx);
       const request = generateEffect({ prompt }).pipe(
         Effect.tapError((error) =>
-          ignoreHostUi("image.command.failed", () =>
+          ignoreHostUi(() =>
             ctx.ui.notify(
               `OpenAI image generation failed: ${sanitizeDiagnosticError(error.message)}.`,
               "warning",
@@ -138,7 +138,7 @@ export function registerOpenAIImage(
             ? Effect.succeed(Option.none())
             : Effect.logError("Better OpenAI image command raised an unexpected defect.").pipe(
                 Effect.andThen(
-                  ignoreHostUi("image.command.defect", () =>
+                  ignoreHostUi(() =>
                     ctx.ui.notify("OpenAI image generation failed unexpectedly.", "warning"),
                   ),
                 ),

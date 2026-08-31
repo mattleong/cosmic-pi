@@ -73,7 +73,6 @@ describe("code mode config store", () => {
       expect(state.config).toEqual(DEFAULT_CODE_MODE_CONFIG);
       expect(state.available).toBe(true);
       expect(state.projectTrusted).toBe(true);
-      expect(state.diagnostics).toEqual([]);
       expect(Object.isFrozen(state)).toBe(true);
       expect(Object.isFrozen(state.config)).toBe(true);
       expect(h.readDoc(h.globalPath)).toEqual({});
@@ -98,7 +97,7 @@ describe("code mode config store", () => {
     }),
   );
 
-  it.effect("drops malformed fields independently with bounded, path-only diagnostics", () =>
+  it.effect("drops malformed fields independently", () =>
     Effect.gen(function* () {
       const h = harness(true);
       h.writeDoc(h.globalPath, {
@@ -113,28 +112,8 @@ describe("code mode config store", () => {
       expect(state.config.maxToolCalls).toBe(64);
       expect(state.config.enabled).toBe(true);
       expect(state.config.maxOutputBytes).toBe(2_048);
-      const paths = state.diagnostics.map((diagnostic) => diagnostic.path);
-      expect(paths).toContain("global.config.timeoutMs");
-      expect(paths).toContain("global.config.catalogBudget");
-      expect(paths).toContain("project.config.enabled");
-      for (const diagnostic of state.diagnostics) {
-        expect(Object.keys(diagnostic).sort()).toEqual(["issue", "path"]);
-        expect(diagnostic.issue).toBe("invalid");
-      }
-      expect(state.diagnostics.length).toBeLessThanOrEqual(32);
-    }),
-  );
-
-  it.effect("never reads the project document in an untrusted project", () =>
-    Effect.gen(function* () {
-      const h = harness(false);
-      h.writeDoc(h.globalPath, { timeoutMs: 45_000 });
-      h.writeDoc(h.projectPath, { enabled: true, timeoutMs: 1_000 });
-      const state = yield* Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
-      expect(state.config.timeoutMs).toBe(45_000);
-      expect(state.projectValues).toEqual({});
-      expect(state.provenance.enabled).toBe("default");
-      expect(state.available).toBe(false);
+      expect(state.globalValues).toEqual({ maxToolCalls: 64 });
+      expect(state.projectValues).toEqual({ maxOutputBytes: 2_048 });
     }),
   );
 

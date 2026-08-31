@@ -112,20 +112,27 @@ type BridgeReply =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "notification"; readonly message: string };
 
-const decodeInboundOption = Schema.decodeUnknownOption;
+const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const decodeBridgeNotificationOption = Schema.decodeUnknownOption(BridgeNotification);
+const decodeBridgeResponseDiscriminantOption = Schema.decodeUnknownOption(
+  BridgeResponseDiscriminant,
+);
+const decodeBridgeResponseOption = Schema.decodeUnknownOption(BridgeResponse);
+const decodeBridgeInitializeResultOption = Schema.decodeUnknownOption(BridgeInitializeResult);
+const decodeBridgeToolResultOption = Schema.decodeUnknownOption(BridgeToolResult);
 
 const classifyBridgeLine = (line: string): InboundClassification<BridgeReply> => {
-  const parsed = decodeInboundOption(Schema.fromJsonString(Schema.Unknown))(line);
+  const parsed = decodeUnknownJsonOption(line);
   if (Option.isNone(parsed))
     return { kind: "protocol-error", reason: "Private supervisor bridge returned malformed JSON." };
   const value = parsed.value;
-  const notification = decodeInboundOption(BridgeNotification)(value);
+  const notification = decodeBridgeNotificationOption(value);
   if (Option.isSome(notification))
     return {
       kind: "event",
       value: { kind: "notification", message: notification.value.params.message },
     };
-  const discriminant = decodeInboundOption(BridgeResponseDiscriminant)(value);
+  const discriminant = decodeBridgeResponseDiscriminantOption(value);
   if (Option.isNone(discriminant)) {
     return {
       kind: "protocol-error",
@@ -135,7 +142,7 @@ const classifyBridgeLine = (line: string): InboundClassification<BridgeReply> =>
   const rawId = discriminant.value.id;
   const id = Predicate.isString(rawId) ? rawId : undefined;
   if (!id) return { kind: "ignore" };
-  const response = decodeInboundOption(BridgeResponse)(value);
+  const response = decodeBridgeResponseOption(value);
   if (Option.isNone(response)) {
     return {
       kind: "rejection",
@@ -147,7 +154,7 @@ const classifyBridgeLine = (line: string): InboundClassification<BridgeReply> =>
     return { kind: "rejection", id, detail: "Private supervisor helper rejected the request." };
   }
   if (id === INITIALIZE_REQUEST_ID) {
-    const result = decodeInboundOption(BridgeInitializeResult)(response.value.result);
+    const result = decodeBridgeInitializeResultOption(response.value.result);
     if (Option.isNone(result)) {
       return {
         kind: "rejection",
@@ -157,7 +164,7 @@ const classifyBridgeLine = (line: string): InboundClassification<BridgeReply> =>
     }
     return { kind: "reply", id, value: { kind: "initialized", result: result.value } };
   }
-  const result = decodeInboundOption(BridgeToolResult)(response.value.result);
+  const result = decodeBridgeToolResultOption(response.value.result);
   const text = Option.isSome(result) ? result.value.content[0]?.text : undefined;
   if (Option.isNone(result) || result.value.isError === true || text === undefined) {
     return {

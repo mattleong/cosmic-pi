@@ -222,20 +222,16 @@ export const decodeProfileCandidate = <ValueInput>(
     !closeOnReport.readable
   )
     return undefined;
-  const base = {
+  const plain = {
     host: host.value,
     runtime: runtime.value,
     model: model.value,
     effort: effort.value,
     context: context.value,
     writeIntent: writeIntent.value,
+    ...(openaiFastMode.present && { openaiFastMode: openaiFastMode.value }),
+    ...(closeOnReport.present && { closeOnReport: closeOnReport.value }),
   };
-  const withOpenaiFastMode = openaiFastMode.present
-    ? { ...base, openaiFastMode: openaiFastMode.value }
-    : base;
-  const plain = closeOnReport.present
-    ? { ...withOpenaiFastMode, closeOnReport: closeOnReport.value }
-    : withOpenaiFastMode;
   try {
     const decoded = Schema.decodeUnknownOption(CandidateContractSchema)(plain);
     if (Option.isNone(decoded)) return undefined;

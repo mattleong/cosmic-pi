@@ -17,7 +17,6 @@ import {
   type JsonObject,
   type ProjectionError,
   type ScopedConfigMetadata,
-  type TolerantFieldDiagnostic,
 } from "pi-cosmic-core";
 import {
   findCodeModeSettingDescriptor,
@@ -50,16 +49,8 @@ export type CodeModeSettingsError =
 
 const mapDocumentError = makeConfigDocumentErrorFactory(CodeModeConfigError, "Code Mode");
 
-const MAX_DIAGNOSTICS = 32;
-
-interface CodeModeConfigFile {
-  readonly values: Partial<CodeModeConfig>;
-  readonly diagnostics: readonly TolerantFieldDiagnostic[];
-}
-
-function decodeConfigFile(value: JsonObject): CodeModeConfigFile {
-  const decoded = decodeTolerantFields(value, CODE_MODE_FIELD_SCHEMAS, { path: "config" });
-  return { values: decoded.value, diagnostics: decoded.diagnostics };
+function decodeConfigFile(value: JsonObject): Partial<CodeModeConfig> {
+  return decodeTolerantFields(value, CODE_MODE_FIELD_SCHEMAS, { path: "config" }).value;
 }
 
 interface ResolvedCodeModeDocuments extends ScopedConfigMetadata {
@@ -67,17 +58,7 @@ interface ResolvedCodeModeDocuments extends ScopedConfigMetadata {
   readonly provenance: CodeModeProvenance;
   readonly globalValues: Partial<CodeModeConfig>;
   readonly projectValues: Partial<CodeModeConfig>;
-  readonly diagnostics: readonly TolerantFieldDiagnostic[];
 }
-
-const scopeDiagnostics = (
-  scope: CodeModeSettingScope,
-  file: CodeModeConfigFile | undefined,
-): readonly TolerantFieldDiagnostic[] =>
-  (file?.diagnostics ?? []).map((diagnostic) => ({
-    ...diagnostic,
-    path: `${scope}.${diagnostic.path}`,
-  }));
 
 const store = makeScopedConfigStore({
   errorFactory: mapDocumentError,
@@ -89,20 +70,16 @@ const store = makeScopedConfigStore({
   defaultDocument: (): JsonObject => ({}),
   resolve: (
     metadata: ScopedConfigMetadata,
-    project: CodeModeConfigFile | undefined,
-    global: CodeModeConfigFile | undefined,
+    project: Partial<CodeModeConfig> | undefined,
+    global: Partial<CodeModeConfig> | undefined,
   ): ResolvedCodeModeDocuments => {
-    const resolution = resolveCodeModeConfig(global?.values, project?.values);
+    const resolution = resolveCodeModeConfig(global, project);
     return {
       ...metadata,
       config: resolution.config,
       provenance: resolution.provenance,
-      globalValues: global?.values ?? {},
-      projectValues: project?.values ?? {},
-      diagnostics: [
-        ...scopeDiagnostics("global", global),
-        ...scopeDiagnostics("project", project),
-      ].slice(0, MAX_DIAGNOSTICS),
+      globalValues: global ?? {},
+      projectValues: project ?? {},
     };
   },
 });
@@ -116,10 +93,6 @@ export interface CodeModeState {
   readonly provenance: CodeModeProvenance;
   readonly globalValues: Partial<CodeModeConfig>;
   readonly projectValues: Partial<CodeModeConfig>;
-  /** Bounded, path-only decode diagnostics (never raw values). */
-  readonly diagnostics: readonly TolerantFieldDiagnostic[];
-  readonly globalConfigPath: string;
-  readonly projectConfigPath: string;
 }
 
 export interface CodeModeConfigStoreOptions {
@@ -149,9 +122,6 @@ const toState = (resolved: ResolvedCodeModeDocuments, projectTrusted: boolean): 
   provenance: resolved.provenance,
   globalValues: resolved.globalValues,
   projectValues: resolved.projectValues,
-  diagnostics: resolved.diagnostics,
-  globalConfigPath: resolved.globalConfigPath,
-  projectConfigPath: resolved.projectConfigPath,
 });
 
 const requireDescriptor = (id: string) => {
@@ -236,32 +206,24 @@ export class CodeModeConfigStore extends Context.Service<
           );
 
         /**
-         * Deterministically resolves the exact committed document plus the pre-commit
-         * other-scope snapshot into the next authoritative state — no post-commit I/O.
-         * Committing a scope makes its document exist; existence decides the preferred path.
+         * Resolves the committed document plus the pre-commit other-scope snapshot without
+         * post-commit I/O. Only the observed other-scope existence is patched here; the core
+         * store owns committed-scope existence and preferred-path selection.
          */
         const resolveCommittedDocuments = (
           current: ResolvedCodeModeDocuments,
           scope: CodeModeSettingScope,
           committed: JsonObject,
           other: OtherScopeDocument,
-        ): ResolvedCodeModeDocuments => {
-          const projectConfigExists = scope === "project" ? true : other.exists;
-          const globalConfigExists = scope === "global" ? true : other.exists;
-          const metadata: ScopedConfigMetadata = {
-            configPath: projectConfigExists ? current.projectConfigPath : current.globalConfigPath,
-            projectConfigPath: current.projectConfigPath,
-            globalConfigPath: current.globalConfigPath,
-            projectConfigExists,
-            globalConfigExists,
-          };
-          return store.resolveCommittedConfig(
-            { ...current, ...metadata },
+        ): ResolvedCodeModeDocuments =>
+          store.resolveCommittedConfig(
+            scope === "project"
+              ? { ...current, globalConfigExists: other.exists }
+              : { ...current, projectConfigExists: other.exists },
             committed,
             other.raw,
             scope,
           );
-        };
 
         /**
          * One serialized settings commit. The committed JSON document and the authoritative

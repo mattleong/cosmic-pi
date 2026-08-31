@@ -1,9 +1,9 @@
 // Pi tool execution is a Promise-shaped host boundary.
 import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { withCodePreviewShell } from "pi-code-previews";
-import { startHostUiTicker } from "../boundary/host-ui.ts";
-import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
-import { decodeStartAwaitCardDetails } from "./details.ts";
+import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
+import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
+import { decodeStartAwaitCardDetails } from "./details-schema.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
@@ -21,21 +21,6 @@ import {
   StartParameters,
   StatusParameters,
   prepareSubagentStartArguments,
-} from "./schema.ts";
-
-export type {
-  SubagentAwaitInput,
-  SubagentClaimsInput,
-  SubagentLifecycleInput,
-  SubagentListInput,
-  SubagentModelsInput,
-  SubagentRenameInput,
-  SubagentReplyInput,
-  SubagentSendInput,
-  SubagentStartInput,
-  SubagentStartSpec,
-  SubagentStatusInput,
-  SubagentToolInput,
 } from "./schema.ts";
 
 export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRuntime): void {
@@ -80,7 +65,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   };
 
   const models = defineTool({
-    name: SUBAGENT_TOOL_NAMES[0],
+    name: SUBAGENT_TOOL_NAME.models,
     label: "Inspect Profile Routes",
     description:
       "Static preflight of complete version 6 profile-set candidates in declared order, including host, runtime, model, effort, context, write intent, OpenAI fast mode, closeOnReport, and implementation eligibility. All local and Herdr Pi/Claude/Codex adapters are implemented; runtime authentication, native integration, and private-harness readiness are checked at launch.",
@@ -93,7 +78,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const start = defineTool({
-    name: SUBAGENT_TOOL_NAMES[1],
+    name: SUBAGENT_TOOL_NAME.start,
     label: "Start Subagents",
     description:
       "Launch one to thirty-two session-scoped background subagents, subject to the caller's configured direct-child capacity, for bounded independent workstreams such as codebase reconnaissance, research, planning, review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. A claimless writer remains exclusive; writers with disjoint claims may share the checkout cooperatively. Native edit, write, and Bash are unchanged. Ordered readiness failures fall through only before spawn; an unsupported Herdr protocol first retries the same candidate on the local host and forces closeOnReport=true. An admitted failed start reports its run ID and settled cleanup/retry disposition. Post-ownership uncertainty never falls through.",
@@ -122,7 +107,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const list = defineTool({
-    name: SUBAGENT_TOOL_NAMES[2],
+    name: SUBAGENT_TOOL_NAME.list,
     label: "List Subagents",
     description:
       "List every visible session-scoped subagent run as a compact parent-before-child hierarchy.",
@@ -134,7 +119,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const status = defineTool({
-    name: SUBAGENT_TOOL_NAMES[3],
+    name: SUBAGENT_TOOL_NAME.status,
     label: "Subagent Status",
     description:
       "Inspect up to twelve specific subagent run IDs, including each run's capabilities.",
@@ -151,7 +136,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const awaitTool = defineTool({
-    name: SUBAGENT_TOOL_NAMES[4],
+    name: SUBAGENT_TOOL_NAME.await,
     label: "Wait for Subagents",
     description:
       "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Awaited targets control completion and report claims; bounded visible descendants appear only as hierarchy context. Returns early when a target has a real parent question, is paused, or has writer admission paused. Follow the returned parent-action steps, then await again. A retained target in reported state counts as finished for its current assignment.",
@@ -179,7 +164,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const send = defineTool({
-    name: SUBAGENT_TOOL_NAMES[5],
+    name: SUBAGENT_TOOL_NAME.send,
     label: "Send Subagent Guidance",
     description:
       "Send the same guidance message to one or more running subagents. For a reported retained run, this begins its next assignment and report generation. Mixed-target calls report each success and failure.",
@@ -196,7 +181,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const reply = defineTool({
-    name: SUBAGENT_TOOL_NAMES[6],
+    name: SUBAGENT_TOOL_NAME.reply,
     label: "Reply to Subagent",
     description: "Answer a blocking parent question from one subagent.",
     parameters: ReplyParameters,
@@ -208,7 +193,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const lifecycle = defineTool({
-    name: SUBAGENT_TOOL_NAMES[7],
+    name: SUBAGENT_TOOL_NAME.lifecycle,
     label: "Manage Subagents",
     description:
       "Interrupt, resume, stop, or explicitly continue failed subagents on their next configured profile candidate. Retry creates a new linked run from the immutable launch-time route, never re-attempts the failed candidate, and fails closed on uncertain execution or cleanup. Use generalist only after retry reports route exhaustion. Interrupt and resume require reported capabilities; stop is available for active runs. Message is accepted only for resume. Mixed-target calls report each success and failure.",
@@ -234,7 +219,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const rename = defineTool({
-    name: SUBAGENT_TOOL_NAMES[8],
+    name: SUBAGENT_TOOL_NAME.rename,
     label: "Rename Subagent",
     description: "Change one subagent's local display name.",
     parameters: RenameParameters,
@@ -246,7 +231,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   });
 
   const claims = defineTool({
-    name: SUBAGENT_TOOL_NAMES[9],
+    name: SUBAGENT_TOOL_NAME.claims,
     label: "Manage Writer Claims",
     description:
       "Inspect, grant, or revoke exact cooperative file claims for active shared-cwd writers, or resume writer admission after reviewing a claim violation. Grant and revoke require either a worker blocked on a parent claim question or the confirmed paused violation offender. In both cases no other tool may be active. Ordinary paused writers and non-offending peers remain ineligible. This coordinates native edit, write, and Bash; it does not replace or sandbox them.",

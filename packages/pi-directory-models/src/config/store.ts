@@ -1,7 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { AgentDirectory, JsonDocumentStore } from "pi-cosmic-core";
@@ -23,24 +22,10 @@ export class DirectoryModelStoreError extends Schema.TaggedError<DirectoryModelS
 
 const storeError = () => new DirectoryModelStoreError();
 
-export interface DirectoryModelStoreContract {
-  readonly identify: (cwd: string) => Effect.Effect<DirectoryIdentity, DirectoryModelStoreError>;
-  readonly read: (
-    identity: DirectoryIdentity,
-  ) => Effect.Effect<DirectoryModelPreference | undefined, DirectoryModelStoreError>;
-  readonly write: (
-    identity: DirectoryIdentity,
-    preference: DirectoryModelPreference,
-  ) => Effect.Effect<void, DirectoryModelStoreError>;
-}
-
-export class DirectoryModelStore extends Context.Service<
-  DirectoryModelStore,
-  DirectoryModelStoreContract
->()("pi-directory-models/config/store/DirectoryModelStore") {
-  static readonly layer = Layer.effect(
-    this,
-    Effect.gen(function* () {
+export class DirectoryModelStore extends Context.Service<DirectoryModelStore>()(
+  "pi-directory-models/config/store/DirectoryModelStore",
+  {
+    make: Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const paths = yield* Path.Path;
       const documents = yield* JsonDocumentStore;
@@ -80,7 +65,7 @@ export class DirectoryModelStore extends Context.Service<
           .pipe(Effect.mapError(storeError));
       });
 
-      return DirectoryModelStore.of({ identify, read, write });
+      return { identify, read, write };
     }),
-  );
-}
+  },
+) {}

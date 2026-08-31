@@ -2,6 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ExtensionHandler,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -33,6 +34,47 @@ function model(provider: string, id: string): Model {
   // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   return { provider, id, reasoning: true } as Model;
 }
+
+const entryBase = (id: string, parentId: string | null = null) => ({
+  id,
+  parentId,
+  timestamp: "2026-01-01T00:00:00.000Z",
+});
+
+const userEntry = (id: string, parentId: string | null = null): SessionEntry => ({
+  ...entryBase(id, parentId),
+  type: "message",
+  message: { role: "user", content: "hello", timestamp: 0 },
+});
+
+const customMessageEntry = (id: string, parentId: string | null = null): SessionEntry => ({
+  ...entryBase(id, parentId),
+  type: "custom_message",
+  customType: "test",
+  content: "context",
+  display: false,
+});
+
+const compactionEntry = (id: string, parentId: string | null = null): SessionEntry => ({
+  ...entryBase(id, parentId),
+  type: "compaction",
+  summary: "earlier conversation",
+  firstKeptEntryId: id,
+  tokensBefore: 100,
+});
+
+const branchSummaryEntry = (id: string, parentId: string | null = null): SessionEntry => ({
+  ...entryBase(id, parentId),
+  type: "branch_summary",
+  fromId: parentId ?? id,
+  summary: "earlier branch",
+});
+
+const customEntry = (id: string, parentId: string | null = null): SessionEntry => ({
+  ...entryBase(id, parentId),
+  type: "custom",
+  customType: "test",
+});
 
 const preferencePath = (agentDirectory: string, cwd: string) =>
   Effect.gen(function* () {
@@ -77,10 +119,13 @@ const writePreference = (
 
 const harness = (
   options: {
-    readonly explicitModel?: boolean;
-    readonly entries?: readonly { readonly type: string; readonly summary?: unknown }[];
+    readonly explicitPreference?: boolean;
+    readonly entries?: readonly SessionEntry[];
+    readonly leafId?: string | null;
+    readonly sessionReadFailure?: "entries" | "leaf" | "both";
     readonly cwd?: string;
     readonly delayThinkingEvents?: boolean;
+    readonly modelReadFailure?: boolean;
     readonly setModelDenied?: boolean;
     readonly setModelSettlement?: Promise<void>;
   } = {},
@@ -137,9 +182,23 @@ const harness = (
     };
     // SAFETY: Tests invoke only the ExtensionAPI members implemented by this fixture.
     const pi = piFixture as typeof piFixture & ExtensionAPI;
+    const getEntries = vi.fn(() => {
+      if (options.sessionReadFailure === "entries" || options.sessionReadFailure === "both") {
+        throw new Error("entries read failed");
+      }
+      return [...(options.entries ?? [])];
+    });
+    const getLeafId = vi.fn(() => {
+      if (options.sessionReadFailure === "leaf" || options.sessionReadFailure === "both") {
+        throw new Error("leaf read failed");
+      }
+      if (options.leafId !== undefined) return options.leafId;
+      return options.entries?.at(-1)?.id ?? null;
+    });
     const contextFixture = {
       cwd,
       get model() {
+        if (options.modelReadFailure) throw new Error("model getter failed");
         return activeModel;
       },
       modelRegistry: {
@@ -147,14 +206,12 @@ const harness = (
           return available.get(`${provider}/${id}`);
         },
       },
-      sessionManager: {
-        buildContextEntries: () => [...(options.entries ?? [])],
-      },
+      sessionManager: { getEntries, getLeafId },
       ui: { notify },
     };
     // SAFETY: Tests invoke only the ExtensionContext members implemented by this fixture.
     ctx = contextFixture as typeof contextFixture & ExtensionContext;
-    registerDirectoryModelsApplication(pi, options.explicitModel ?? false);
+    registerDirectoryModelsApplication(pi, options.explicitPreference ?? false);
 
     const emit = <Event>(name: string, event: Event): Effect.Effect<void> =>
       Effect.promise(() => Promise.resolve(handlers.get(name)?.(event, ctx)).then(() => undefined));
@@ -170,6 +227,8 @@ const harness = (
       remembered,
       alternate,
       notify,
+      getEntries,
+      getLeafId,
       setModel,
       setThinkingLevel,
       start,
@@ -208,7 +267,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         model: h.initial.id,
         thinkingLevel: "low",
       });
-      yield* h.shutdown();
     }),
   );
 
@@ -230,7 +288,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start("new");
       expect(h.setModel).toHaveBeenLastCalledWith(h.remembered);
       expect(h.thinking()).toBe("high");
-      yield* h.shutdown();
     }),
   );
 
@@ -269,14 +326,13 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect(h.setModel).toHaveBeenCalledTimes(1);
       expect(h.thinking()).toBe("high");
       expect(h.notify).not.toHaveBeenCalled();
-      yield* h.shutdown();
     });
   });
 
-  it.effect("leaves explicit --model and resumed session choices alone", () =>
+  it.effect("leaves explicit CLI preferences and resumed session choices alone", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const explicit = yield* harness({ explicitModel: true });
+      const explicit = yield* harness({ explicitPreference: true });
       yield* explicit.start();
       expect(yield* fs.exists(yield* preferencePath(explicit.agentDirectory, explicit.cwd))).toBe(
         false,
@@ -288,8 +344,8 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       );
       yield* explicit.shutdown();
 
-      for (const entry of [{ type: "message" }, { type: "custom_message" }]) {
-        const resumed = yield* harness({ entries: [entry] });
+      for (const entries of [[userEntry("user")], [customMessageEntry("custom-message")]]) {
+        const resumed = yield* harness({ entries });
         yield* resumed.start();
         expect(yield* fs.exists(yield* preferencePath(resumed.agentDirectory, resumed.cwd))).toBe(
           false,
@@ -300,17 +356,87 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
-  it.effect("classifies compaction and branch-summary startups", () =>
+  it.effect("uses Pi's resolved session context to classify startup freshness", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      for (const [entry, initializes] of [
-        [{ type: "compaction" }, false],
-        [{ type: "branch_summary", summary: "earlier conversation" }, false],
-        [{ type: "branch_summary" }, true],
-      ] as const) {
-        const h = yield* harness({ entries: [entry] });
+      const cases: ReadonlyArray<{
+        entries: readonly SessionEntry[];
+        leafId?: string;
+        initializes: boolean;
+      }> = [
+        { entries: [compactionEntry("compaction")], initializes: false },
+        { entries: [branchSummaryEntry("branch-summary")], initializes: false },
+        { entries: [customEntry("custom")], initializes: true },
+        {
+          entries: [userEntry("inactive-branch"), customEntry("active-branch")],
+          leafId: "active-branch",
+          initializes: true,
+        },
+      ];
+      for (const testCase of cases) {
+        const h = yield* harness(testCase);
         yield* h.start();
-        expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(initializes);
+        expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(
+          testCase.initializes,
+        );
+        yield* h.shutdown();
+      }
+    }),
+  );
+
+  it.effect("fails closed when startup cannot resolve the active session context", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      for (const sessionReadFailure of ["entries", "leaf"] as const) {
+        const h = yield* harness({ sessionReadFailure });
+        yield* h.start();
+        expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(false);
+        expect(h.notify).toHaveBeenCalledTimes(1);
+        expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+        yield* h.shutdown();
+      }
+    }),
+  );
+
+  it.effect("restores /new without querying a hostile session manager", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ sessionReadFailure: "both" });
+      yield* writePreference(h.agentDirectory, h.cwd, {
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "high",
+      });
+
+      yield* h.start("new");
+      expect(h.getEntries).not.toHaveBeenCalled();
+      expect(h.getLeafId).not.toHaveBeenCalled();
+      expect(h.setModel).toHaveBeenCalledWith(h.remembered);
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("keeps nonfresh starts available without querying hostile session managers", () =>
+    Effect.gen(function* () {
+      for (const reason of ["resume", "fork", "reload"] as const) {
+        const h = yield* harness({ sessionReadFailure: "both" });
+        yield* h.start(reason);
+        expect(h.getEntries).not.toHaveBeenCalled();
+        expect(h.getLeafId).not.toHaveBeenCalled();
+        expect(h.setModel).not.toHaveBeenCalled();
+
+        h.select(h.remembered, "high");
+        yield* h.emit("model_select", {
+          type: "model_select",
+          model: h.remembered,
+          previousModel: h.initial,
+          source: "set",
+        });
+        expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+          provider: h.remembered.provider,
+          model: h.remembered.id,
+          thinkingLevel: "high",
+        });
+        expect(h.notify).not.toHaveBeenCalled();
         yield* h.shutdown();
       }
     }),
@@ -370,7 +496,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         model: h.remembered.id,
         thinkingLevel: "high",
       });
-      yield* h.shutdown();
     }),
   );
 
@@ -391,7 +516,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         model: h.initial.id,
         thinkingLevel: "low",
       });
-      yield* h.shutdown();
     }),
   );
 
@@ -419,7 +543,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         model: h.alternate.id,
         thinkingLevel: "medium",
       });
-      yield* h.shutdown();
     }),
   );
 
@@ -442,7 +565,28 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       });
       expect(h.notify).toHaveBeenCalledTimes(1);
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-      yield* h.shutdown();
+    }),
+  );
+
+  it.effect("retains the preference when Pi's current model getter fails", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ modelReadFailure: true });
+      yield* writePreference(h.agentDirectory, h.cwd, {
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "high",
+      });
+
+      yield* h.start();
+      expect(h.setModel).not.toHaveBeenCalled();
+      expect(h.setThinkingLevel).not.toHaveBeenCalled();
+      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "high",
+      });
+      expect(h.notify).toHaveBeenCalledTimes(1);
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
@@ -463,7 +607,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       });
       expect(h.notify).toHaveBeenCalledTimes(1);
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-      yield* h.shutdown();
     }),
   );
 
@@ -509,6 +652,37 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
+  it.effect("retries identity lookup after an earlier failure", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fs.makeTempDirectoryScoped({
+        prefix: "pi-directory-models-late-project-parent-",
+      });
+      const cwd = path.join(parent, "created-after-startup");
+      const h = yield* harness({ cwd });
+
+      yield* h.start();
+      expect(h.notify).toHaveBeenCalledTimes(1);
+
+      yield* fs.makeDirectory(cwd);
+      h.select(h.remembered, "high");
+      yield* h.emit("model_select", {
+        type: "model_select",
+        model: h.remembered,
+        previousModel: h.initial,
+        source: "set",
+      });
+
+      expect(yield* readPreference(h.agentDirectory, cwd)).toMatchObject({
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "high",
+      });
+      expect(h.notify).toHaveBeenCalledTimes(1);
+    }),
+  );
+
   it.effect("fails open and preserves malformed or foreign-cwd preference documents", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -542,9 +716,9 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
-  it.effect("leaves an existing preference untouched when --model is explicit", () =>
+  it.effect("suppresses the atomic restore when a CLI preference is explicit", () =>
     Effect.gen(function* () {
-      const h = yield* harness({ explicitModel: true });
+      const h = yield* harness({ explicitPreference: true });
       yield* writePreference(h.agentDirectory, h.cwd, {
         provider: h.remembered.provider,
         model: h.remembered.id,
@@ -559,7 +733,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         model: h.remembered.id,
         thinkingLevel: "high",
       });
-      yield* h.shutdown();
     }),
   );
 
@@ -580,7 +753,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         yield* fs.realPath(target),
       );
       expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, alias))).toBe(true);
-      yield* h.shutdown();
     }),
   );
 });

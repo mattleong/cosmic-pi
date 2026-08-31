@@ -6,7 +6,6 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { StreamingHttpError } from "./errors.ts";
-import { encodeJsonBody } from "./json-body.ts";
 
 export interface StreamingHttpRequest {
   readonly url: string;
@@ -45,19 +44,6 @@ export interface StreamingHttpClientContract {
 const streamingHttpError = (operation: StreamingHttpError["operation"], message: string) => () =>
   new StreamingHttpError({ operation, message });
 
-export const encodeStreamingJsonBody = <A, E, R>(
-  bodySchema: StreamingJsonBodyCodec<A, E, R>,
-  body: A,
-): Effect.Effect<Schema.Json, StreamingHttpError, R> =>
-  encodeJsonBody(bodySchema, body).pipe(
-    Effect.mapError(
-      streamingHttpError(
-        "encode",
-        "Streaming HTTP request body did not match the expected schema.",
-      ),
-    ),
-  );
-
 export class StreamingHttpClient extends Context.Service<
   StreamingHttpClient,
   StreamingHttpClientContract
@@ -70,11 +56,9 @@ export class StreamingHttpClient extends Context.Service<
         input: StreamingHttpRequest,
         body?: Schema.Json,
       ) {
-        let outgoing =
-          input.method === "POST"
-            ? HttpClientRequest.post(input.url)
-            : HttpClientRequest.get(input.url);
-        if (input.headers) outgoing = HttpClientRequest.setHeaders(outgoing, input.headers);
+        let outgoing = HttpClientRequest.make(input.method ?? "GET")(input.url, {
+          headers: input.headers,
+        });
         if (body !== undefined) {
           outgoing = yield* HttpClientRequest.bodyJson(outgoing, body).pipe(
             Effect.mapError(
@@ -110,7 +94,13 @@ export class StreamingHttpClient extends Context.Service<
         bodySchema,
         body,
       ) =>
-        encodeStreamingJsonBody(bodySchema, body).pipe(
+        Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
+          Effect.mapError(
+            streamingHttpError(
+              "encode",
+              "Streaming HTTP request body did not match the expected schema.",
+            ),
+          ),
           Effect.flatMap((encodedBody) => execute(input, encodedBody)),
         );
       return StreamingHttpClient.of({ requestRawBytes, requestJsonRawBytes });

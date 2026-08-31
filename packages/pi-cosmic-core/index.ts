@@ -1,3 +1,5 @@
+import * as Effect from "effect/Effect";
+
 /** Shared Effect-first foundations for cosmic-pi extensions. */
 export { PiApi } from "./src/runtime/pi-api.ts";
 export {
@@ -8,13 +10,7 @@ export {
   type PiManagedRuntime,
 } from "./src/runtime/runtime.ts";
 export { bestEffortHostBootstrap } from "./src/runtime/host-bootstrap.ts";
-import * as Effect from "effect/Effect";
-import type * as Layer from "effect/Layer";
-
-export const provideBuiltLayer: <ROut, E2, RIn>(
-  layer: Layer.Layer<ROut, E2, RIn>,
-) => <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E | E2, RIn | Exclude<R, ROut>> =
-  Effect.provide;
+export const provideBuiltLayer = Effect.provide;
 export {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
@@ -200,6 +196,7 @@ export { awaitProcessClose, type ProcessCloseSource } from "./src/platform/proce
 export { synchronousNow } from "./src/platform/native-clock.ts";
 export {
   decodeJwtPayloadText,
+  hasControlCharacter,
   maskIdentifier,
   redactDiagnosticValue,
   sanitizeDiagnosticContent,

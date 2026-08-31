@@ -41,6 +41,14 @@ function surface<Override extends SurfaceOverride = object>(
   return fixture as typeof fixture & SurfaceFixture<Override>;
 }
 
+const throwingBindProxy = (callback: () => void): (() => void) =>
+  new Proxy(callback, {
+    get(_target, property) {
+      if (property === "bind") throw new Error("hostile bind getter");
+      return undefined;
+    },
+  });
+
 function registryLayer(callbacks = makeHostCallbackBoundary()) {
   const bridge: FooterRegistryBridge = {
     snapshot: emptyFooterRegistrySnapshot(),
@@ -96,6 +104,159 @@ describe("FooterRegistryService", () => {
     );
   });
 
+  it.effect("publishes one detached frozen contribution and preserves callback receivers", () => {
+    const { bridge, layer } = registryLayer();
+    const receivers: unknown[] = [];
+    const calls: string[] = [];
+    const raw = {
+      kind: "surface" as const,
+      id: "media",
+      region: "media" as const,
+      preferredWidth: 10,
+      attach() {
+        receivers.push(this);
+        calls.push("attach");
+      },
+      detach() {
+        receivers.push(this);
+        calls.push("detach");
+      },
+      render() {
+        receivers.push(this);
+        calls.push("render");
+        return ["original"];
+      },
+      invalidate() {
+        receivers.push(this);
+        calls.push("invalidate");
+      },
+      dispose() {
+        receivers.push(this);
+        calls.push("dispose");
+      },
+    } satisfies CosmicFooterSurfaceContribution;
+
+    return withRegistry(layer, (registry) =>
+      Effect.gen(function* () {
+        yield* registry.upsert("owner", raw);
+        const published = bridge.snapshot.contributions[0];
+        expect(published).not.toBe(raw);
+        expect(Object.isFrozen(published)).toBe(true);
+
+        raw.id = "mutated";
+        raw.preferredWidth = 99;
+        raw.attach = () => calls.push("mutated-attach");
+        raw.detach = () => calls.push("mutated-detach");
+        raw.render = () => ["mutated"];
+        raw.invalidate = () => calls.push("mutated-invalidate");
+        raw.dispose = () => calls.push("mutated-dispose");
+
+        yield* registry.setRenderRequest(() => undefined);
+        expect(bridge.snapshot.contributions[0]).toBe(published);
+        expect(published).toMatchObject({ id: "media", preferredWidth: 10 });
+        expect(published?.kind).toBe("surface");
+        if (published?.kind === "surface")
+          expect(
+            published.render({
+              width: 10,
+              placement: "inline-right",
+              theme: { fg: (_color, value) => value },
+            }),
+          ).toEqual(["original"]);
+        yield* registry.invalidate("owner", "media");
+        expect(bridge.snapshot.contributions[0]).toBe(published);
+        yield* registry.remove("owner", "media");
+
+        expect(calls).toEqual(["attach", "render", "invalidate", "detach", "dispose"]);
+        expect(receivers).toHaveLength(5);
+        expect(receivers.every((receiver) => receiver === raw)).toBe(true);
+      }),
+    );
+  });
+
+  it.effect("copies frozen raw accessors and reuses only canonical contribution identity", () => {
+    const { bridge, layer } = registryLayer();
+    let text = "before";
+    let reads = 0;
+    const raw = Object.freeze({
+      kind: "text" as const,
+      id: "accessor",
+      region: "details" as const,
+      get text() {
+        reads++;
+        return text;
+      },
+    });
+
+    return withRegistry(layer, (registry) =>
+      Effect.gen(function* () {
+        yield* registry.upsert("owner", raw);
+        const snapshot = bridge.snapshot;
+        const canonical = snapshot.contributions[0];
+        expect(canonical).not.toBe(raw);
+        expect(Object.isFrozen(canonical)).toBe(true);
+        const readsAfterUpsert = reads;
+        expect(readsAfterUpsert).toBeGreaterThan(0);
+        expect(canonical).toMatchObject({ text: "before" });
+        expect(reads).toBe(readsAfterUpsert);
+
+        text = "after";
+        expect(canonical).toMatchObject({ text: "before" });
+        expect(reads).toBe(readsAfterUpsert);
+
+        if (!canonical) throw new Error("Expected a canonical contribution.");
+        yield* registry.upsert("owner", canonical);
+        expect(bridge.snapshot).toBe(snapshot);
+        expect(bridge.snapshot.contributions[0]).toBe(canonical);
+        expect(reads).toBe(readsAfterUpsert);
+      }),
+    );
+  });
+
+  it.effect("keeps projection identity for lifecycle-only work without replacing resources", () => {
+    const { bridge, layer } = registryLayer();
+    const active = surface();
+    const render = vi.fn();
+
+    return withRegistry(layer, (registry) =>
+      Effect.gen(function* () {
+        yield* registry.upsert("owner", active);
+        const snapshot = bridge.snapshot;
+        const canonical = snapshot.contributions[0];
+        expect(Object.isFrozen(canonical)).toBe(true);
+
+        yield* registry.setRenderRequest(render);
+        expect(bridge.snapshot).toBe(snapshot);
+        expect(active.attach).toHaveBeenCalledOnce();
+        expect(render).toHaveBeenCalledOnce();
+
+        render.mockClear();
+        yield* registry.invalidate("owner", "media");
+        expect(bridge.snapshot).toBe(snapshot);
+        expect(active.invalidate).toHaveBeenCalledOnce();
+        expect(render).toHaveBeenCalledOnce();
+
+        render.mockClear();
+        if (!canonical) throw new Error("Expected a canonical contribution.");
+        yield* registry.upsert("owner", canonical);
+        expect(bridge.snapshot).toBe(snapshot);
+        expect(active.attach).toHaveBeenCalledOnce();
+        expect(active.detach).not.toHaveBeenCalled();
+        expect(active.dispose).not.toHaveBeenCalled();
+        expect(render).toHaveBeenCalledOnce();
+
+        yield* registry.setRenderRequest(undefined);
+        expect(bridge.snapshot).toBe(snapshot);
+        expect(active.detach).toHaveBeenCalledOnce();
+        expect(active.dispose).not.toHaveBeenCalled();
+
+        yield* registry.remove("owner", "media");
+        expect(bridge.snapshot).not.toBe(snapshot);
+        expect(active.dispose).toHaveBeenCalledOnce();
+      }),
+    );
+  });
+
   it.effect("keeps NUL-containing owner/id pairs collision-free for surface resources", () => {
     const { layer } = registryLayer();
     const render = vi.fn();
@@ -145,6 +306,91 @@ describe("FooterRegistryService", () => {
         yield* registry.remove("owner");
         yield* registry.remove("owner");
         expect(second.dispose).toHaveBeenCalledOnce();
+      }),
+    );
+  });
+
+  it.effect("contains hostile callable proxies while retaining replacement ownership", () => {
+    const { bridge, layer } = registryLayer();
+    const detach = vi.fn();
+    const invalidate = vi.fn();
+    const dispose = vi.fn();
+    const replacement = surface();
+    const first = surface({
+      detach: throwingBindProxy(detach),
+      invalidate: throwingBindProxy(invalidate),
+      dispose: throwingBindProxy(dispose),
+    });
+
+    return withRegistry(layer, (registry) =>
+      Effect.gen(function* () {
+        yield* registry.upsert("owner", first);
+        yield* registry.setRenderRequest(() => undefined);
+        yield* registry.invalidate("owner", "media");
+        yield* registry.upsert("owner", replacement);
+
+        expect(detach).toHaveBeenCalledOnce();
+        expect(invalidate).toHaveBeenCalledOnce();
+        expect(dispose).toHaveBeenCalledOnce();
+        const published = bridge.snapshot.contributions[0];
+        expect(published?.kind).toBe("surface");
+        expect(published).not.toBe(replacement);
+        expect(Object.isFrozen(published)).toBe(true);
+        if (published?.kind === "surface")
+          expect(
+            published.render({
+              width: 10,
+              placement: "inline-right",
+              theme: { fg: (_color, value) => value },
+            }),
+          ).toEqual([]);
+      }),
+    ).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          expect(replacement.dispose).toHaveBeenCalledOnce();
+        }),
+      ),
+    );
+  });
+
+  it.effect("attaches before publish, then closes the old resource before rendering", () => {
+    const { bridge, layer } = registryLayer();
+    const events: string[] = [];
+    const firstRender = () => [];
+    const secondRender = () => [];
+    let firstPublished: CosmicFooterSurfaceContribution | undefined;
+    const snapshotName = () => {
+      const current = bridge.snapshot.contributions[0];
+      if (current?.kind !== "surface") return "none";
+      return current === firstPublished ? "first" : "second";
+    };
+    const first = surface({
+      render: firstRender,
+      detach: vi.fn(() => events.push(`first-detach:${snapshotName()}`)),
+      dispose: vi.fn(() => events.push(`first-dispose:${snapshotName()}`)),
+    });
+    const second = surface({
+      render: secondRender,
+      attach: vi.fn(() => events.push(`second-attach:${snapshotName()}`)),
+    });
+    return withRegistry(layer, (registry) =>
+      Effect.gen(function* () {
+        yield* registry.upsert("owner", first);
+        const published = bridge.snapshot.contributions[0];
+        if (published?.kind === "surface") firstPublished = published;
+        yield* registry.setRenderRequest(() => events.push(`render:${snapshotName()}`));
+        events.length = 0;
+
+        yield* registry.upsert("owner", second);
+
+        expect(events).toEqual([
+          "second-attach:first",
+          "first-detach:second",
+          "first-dispose:second",
+          "render:second",
+        ]);
+        expect(bridge.snapshot.contributions[0]).not.toHaveProperty("resource");
       }),
     );
   });
@@ -262,6 +508,7 @@ describe("FooterRegistryService", () => {
         secondAttached = false;
       }),
     });
+    let firstPublished: CosmicFooterSurfaceContribution | undefined;
     const observations: Array<{
       readonly surface: "first" | "second" | "none";
       readonly firstAttached: boolean;
@@ -270,17 +517,17 @@ describe("FooterRegistryService", () => {
     return withRegistry(layer, (registry) =>
       Effect.gen(function* () {
         yield* registry.upsert("owner", first);
+        const published = bridge.snapshot.contributions[0];
+        if (published?.kind === "surface") firstPublished = published;
         yield* registry.setRenderRequest(() => {
           const current = bridge.snapshot.contributions[0];
           observations.push({
             surface:
               current?.kind !== "surface"
                 ? "none"
-                : current.render === firstRender
+                : current === firstPublished
                   ? "first"
-                  : current.render === secondRender
-                    ? "second"
-                    : "none",
+                  : "second",
             firstAttached,
             secondAttached,
           });

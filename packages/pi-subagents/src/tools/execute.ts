@@ -43,12 +43,8 @@ import { MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { getFailedStartRecovery } from "../run/launch.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import {
-  makeAwaitDetails,
-  makeCompactToolDetails,
-  makeStartDetails,
-  type SubagentStartEntry,
-} from "./details.ts";
+import { makeAwaitDetails, makeCompactToolDetails, makeStartDetails } from "./details.ts";
+import type { SubagentStartEntry } from "./details-schema.ts";
 import {
   attentionRecoveryText,
   boundToolOutput,

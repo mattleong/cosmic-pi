@@ -20,20 +20,17 @@ export type SettingsOptionDescriptor = {
   label: string;
   description: string;
   values?: readonly string[];
-  decode(rawValue: string): Effect.Effect<boolean | number | string, InvalidSettingError>;
+  decoder: Schema.Decoder<boolean | number | string>;
   currentValue(cfg: ResolvedConfig): string;
 };
-const decodeJson = (id: string, schema: Schema.Decoder<boolean | number>) => (raw: string) =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(raw).pipe(
-    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
-  );
-const decodeLiteral = (id: string, schema: Schema.Decoder<string>) => (raw: string) =>
-  Schema.decodeUnknownEffect(schema)(raw).pipe(
-    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
-  );
-const finiteNumber = Schema.Number.check(Schema.isFinite());
-const boolean = (id: string) => decodeJson(id, Schema.Boolean);
-const number = (id: string) => decodeJson(id, finiteNumber);
+
+const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
+const FiniteNumberFromJsonSchema = Schema.fromJsonString(Schema.Number.check(Schema.isFinite()));
+const NonBlankStringSchema = Schema.String.check(
+  Schema.makeFilter((value: string) => value.trim().length > 0, {
+    identifier: "NonBlankSettingString",
+  }),
+);
 
 export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
@@ -42,7 +39,7 @@ export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.persistState),
     values: ["true", "false"],
     description: "Remember fast-mode state across sessions.",
-    decode: boolean("persistState"),
+    decoder: BooleanFromJsonSchema,
   },
 ];
 export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
@@ -53,7 +50,7 @@ export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[]
     values: ["true", "false"],
     description:
       "Use OpenAI native compaction when Pi triggers compaction for OpenAI Responses models.",
-    decode: boolean("compaction.enabled"),
+    decoder: BooleanFromJsonSchema,
   },
 ];
 export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
@@ -64,7 +61,7 @@ export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     values: FOOTER_MODES,
     description:
       "replace = custom footer, status = pi footer plus status line, off = no Better OpenAI footer/status.",
-    decode: decodeLiteral("footer.mode", FooterModeSchema),
+    decoder: FooterModeSchema,
   },
 ];
 export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
@@ -74,7 +71,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.enabled),
     values: ["true", "false"],
     description: "Fetch and display OpenAI subscription usage windows.",
-    decode: boolean("usage.enabled"),
+    decoder: BooleanFromJsonSchema,
   },
   {
     id: "usage.refreshIntervalMs",
@@ -82,7 +79,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.refreshIntervalMs),
     values: ["15000", "30000", "60000", "120000", "300000", "600000"],
     description: "Usage refresh interval in milliseconds.",
-    decode: number("usage.refreshIntervalMs"),
+    decoder: FiniteNumberFromJsonSchema,
   },
   {
     id: "usage.showOnlyOnSubscriptionModels",
@@ -90,7 +87,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.showOnlyOnSubscriptionModels),
     values: ["true", "false"],
     description: "Only show usage when the current OpenAI model uses subscription/OAuth auth.",
-    decode: boolean("usage.showOnlyOnSubscriptionModels"),
+    decoder: BooleanFromJsonSchema,
   },
   {
     id: "usage.showResetTimes",
@@ -98,7 +95,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.showResetTimes),
     values: ["true", "false"],
     description: "Include compact reset countdowns and local reset times.",
-    decode: boolean("usage.showResetTimes"),
+    decoder: BooleanFromJsonSchema,
   },
 ];
 export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
@@ -108,7 +105,7 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.image.enabled),
     values: ["true", "false"],
     description: "Allow the openai_image tool to make image requests.",
-    decode: boolean("image.enabled"),
+    decoder: BooleanFromJsonSchema,
   },
   {
     id: "image.defaultModel",
@@ -116,15 +113,7 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => cfg.image.defaultModel,
     values: ["gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5"],
     description: "Mainline model used for image generation when current model is not openai-codex.",
-    decode: (raw) =>
-      raw.trim()
-        ? Effect.succeed(raw)
-        : Effect.fail(
-            new InvalidSettingError({
-              id: "image.defaultModel",
-              message: "Invalid value for image.defaultModel.",
-            }),
-          ),
+    decoder: NonBlankStringSchema,
   },
   {
     id: "image.defaultSave",
@@ -132,7 +121,7 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => cfg.image.defaultSave,
     values: IMAGE_SAVE_MODES,
     description: "Where generated images are saved by default.",
-    decode: decodeLiteral("image.defaultSave", ImageSaveModeSchema),
+    decoder: ImageSaveModeSchema,
   },
   {
     id: "image.outputFormat",
@@ -140,7 +129,7 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => cfg.image.outputFormat,
     values: IMAGE_OUTPUT_FORMATS,
     description: "Generated image file format.",
-    decode: decodeLiteral("image.outputFormat", ImageOutputFormatSchema),
+    decoder: ImageOutputFormatSchema,
   },
   {
     id: "image.timeoutMs",
@@ -148,7 +137,7 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.image.timeoutMs),
     values: ["30000", "60000", "120000", "180000", "300000"],
     description: "Image request timeout in milliseconds.",
-    decode: number("image.timeoutMs"),
+    decoder: FiniteNumberFromJsonSchema,
   },
 ];
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
@@ -168,7 +157,9 @@ export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
   if (!descriptor)
     return yield* new InvalidSettingError({ id, message: `Unknown setting: ${id}.` });
-  const parsedValue = yield* descriptor.decode(rawValue);
+  const parsedValue = yield* Schema.decodeUnknownEffect(descriptor.decoder)(rawValue).pipe(
+    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
+  );
   const separator = descriptor.id.indexOf(".");
   if (separator < 0)
     return (current: JsonObject): JsonObject => ({ ...current, [descriptor.id]: parsedValue });

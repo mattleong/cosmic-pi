@@ -16,10 +16,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
 import {
+  BACKGROUND_TASK_CODE_MODE_BOUNDS,
   BACKGROUND_TASK_CODE_MODE_QUERY,
   BACKGROUND_TASK_CODE_MODE_VERSION,
   normalizeBackgroundTaskCodeModeCapability,
   type BackgroundTaskCodeModeCapability,
+  type BackgroundTaskCodeModeInput,
 } from "../src/code-mode/protocol.ts";
 import {
   registerBackgroundTaskApplication,
@@ -472,29 +474,94 @@ describe("background-task Pi lifecycle", () => {
       expect(discovered).toHaveLength(1);
       const capability = discovered[0];
       if (!capability) throw new Error("background capability was not discovered");
-      yield* Effect.promise(() =>
-        expect(
-          capability.execute(
-            "nested-list-refused",
-            { action: "list" },
-            new AbortController().signal,
-            0,
-          ),
-        ).rejects.toMatchObject({ _tag: "InvalidBackgroundCommandError" }),
-      );
-      const result = yield* Effect.promise(() =>
+      const rejectedStarts: ReadonlyArray<{
+        readonly callId: string;
+        readonly input: BackgroundTaskCodeModeInput;
+        readonly maxOutputBytes: number;
+      }> = [
+        {
+          callId: "nested-start-zero",
+          input: { action: "start", command: 'node -e "setTimeout(() => {}, 10000)"' },
+          maxOutputBytes: 0,
+        },
+        {
+          callId: "nested-start-command-too-large",
+          input: {
+            action: "start",
+            command: "x".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxCommandChars + 1),
+          },
+          maxOutputBytes: 1_000_000,
+        },
+        {
+          callId: "nested-start-name-too-large",
+          input: {
+            action: "start",
+            command: 'node -e "setTimeout(() => {}, 10000)"',
+            name: "x".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxNameChars + 1),
+          },
+          maxOutputBytes: 1_000_000,
+        },
+        {
+          callId: "nested-start-cwd-too-large-after-resolution",
+          input: {
+            action: "start",
+            command: 'node -e "setTimeout(() => {}, 10000)"',
+            cwd: "x".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxPathChars),
+          },
+          maxOutputBytes: 1_000_000,
+        },
+        {
+          callId: "nested-start-id-too-large",
+          input: {
+            action: "start",
+            command: 'node -e "setTimeout(() => {}, 10000)"',
+            id: "x".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxIdChars + 1),
+          },
+          maxOutputBytes: 1_000_000,
+        },
+      ];
+      for (const rejected of rejectedStarts) {
+        yield* Effect.promise(() =>
+          expect(
+            capability.execute(
+              rejected.callId,
+              rejected.input,
+              new AbortController().signal,
+              rejected.maxOutputBytes,
+            ),
+          ).rejects.toBeDefined(),
+        );
+      }
+
+      const emptyNestedList = yield* Effect.promise(() =>
         capability.execute(
-          "nested-list",
+          "nested-list-empty",
           { action: "list", state: "all" },
           new AbortController().signal,
           4_096,
         ),
       );
-      expect(result).toEqual({ action: "list", text: "No background tasks.", tasks: [] });
+      expect(emptyNestedList).toEqual({
+        action: "list",
+        text: "No background tasks.",
+        tasks: [],
+      });
+      const topLevelTool = app.tools[0];
+      if (!topLevelTool) throw new Error("top-level background tool was not registered");
+      const emptyTopLevelList = yield* Effect.promise(() =>
+        topLevelTool.execute(
+          "top-level-list-empty",
+          { action: "list", state: "all" },
+          new AbortController().signal,
+          undefined,
+          ctx,
+        ),
+      );
+      expect(emptyTopLevelList).toMatchObject({ details: { action: "list", tasks: [] } });
 
       const started = yield* Effect.promise(() =>
         capability.execute(
-          "nested-start",
+          "nested-start-valid-4k",
           {
             action: "start",
             command: `node -e "setTimeout(() => {}, 10000)"`,
@@ -505,18 +572,28 @@ describe("background-task Pi lifecycle", () => {
       );
       if (started.action !== "start") throw new Error("nested start returned the wrong action");
       const taskId = started.snapshot.id;
-      const topLevelTool = app.tools[0];
-      if (!topLevelTool) throw new Error("top-level background tool was not registered");
-      const status = yield* Effect.promise(() =>
+      expect(taskId).toBe("task-1");
+      const visibleNestedList = yield* Effect.promise(() =>
+        capability.execute(
+          "nested-list-visible",
+          { action: "list", state: "all" },
+          new AbortController().signal,
+          4_096,
+        ),
+      );
+      expect(visibleNestedList).toMatchObject({ tasks: [{ id: taskId }] });
+      const visibleTopLevelList = yield* Effect.promise(() =>
         topLevelTool.execute(
-          "top-level-status",
-          { action: "status", id: taskId },
+          "top-level-list-visible",
+          { action: "list", state: "all" },
           new AbortController().signal,
           undefined,
           ctx,
         ),
       );
-      expect(status).toMatchObject({ details: { snapshot: { id: taskId } } });
+      expect(visibleTopLevelList).toMatchObject({
+        details: { action: "list", tasks: [{ id: taskId }] },
+      });
 
       app.activeTools.splice(0, app.activeTools.length);
       yield* Effect.promise(() =>

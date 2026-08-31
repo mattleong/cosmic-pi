@@ -2,11 +2,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureSessionHost } from "pi-cosmic-core";
 import { selectHerdrEnvironment } from "./herdr-client.ts";
-import { isRegularSessionFile } from "./session-file.ts";
-
-const nodePath = process.getBuiltinModule("node:path");
-if (!nodePath) throw new Error("Node path builtin is unavailable.");
-const { basename } = nodePath;
 
 export interface HerdrBtwSessionInput {
   readonly cwd: string;
@@ -40,7 +35,3 @@ export const captureHerdrBtwSession = (
     return undefined;
   }
 };
-
-export const isValidParentSessionFile = isRegularSessionFile;
-
-export const parentBtwDisplayName = (cwd: string): string => `BTW · ${basename(cwd) || "Pi"}`;

@@ -12,14 +12,12 @@ import {
 import { ADVISOR_OPERATION_TIMEOUT_MS, type ResolvedAdvisorConfig } from "../../config/options.ts";
 import { classifyFailure } from "../../domain/runtime-error-classifier.ts";
 import type { FailureLoggerContract } from "../../logging/logger.ts";
-import type { AdvisorReviewQueueError } from "../../queue/errors.ts";
 import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
 import { applyBlockerVerification, isVerificationCandidate } from "../../review/finding-gates.ts";
 import type { AdvisorReviewFocus } from "../../review/schema.ts";
 import {
   awaitAdvisorCatchUpEffect,
-  extensionError,
   type AdvisorCheckpointHandle,
   type CheckpointSettlement,
   type ParentAnchor,
@@ -119,7 +117,6 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
     let validForDelivery = true;
     let activeQueue: AdvisorReviewQueue | undefined;
     let activeCheckpointId: string | undefined;
-    let providerFailureKind: string | undefined;
     let ownerGeneration: CheckpointOwnerGeneration | undefined;
     const ledgerScope = d.lifecycleScope(options.ctx);
     const startedAt = d.now();
@@ -134,10 +131,6 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       return settlement;
     };
     const discardRequest = (): CheckpointSettlement => settleReview("discarded");
-    const mapCheckpointError = (operation: string) => (error: AdvisorReviewQueueError) => {
-      providerFailureKind = classifyFailure(error);
-      return extensionError(operation)();
-    };
     const admissionIsCurrent = (state: AdvisorApplicationState = d.getState()): boolean => {
       return (
         validForDelivery &&
@@ -200,25 +193,21 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       ownerGeneration = owner;
       const id = `advisor-${owner.epoch}-${++d.refs.checkpointId}`;
       activeCheckpointId = id;
-      let checkpoint = yield* activeQueue
-        .checkpointEffect({
-          checkpointId: id,
-          focus: options.focus,
-        })
-        .pipe(Effect.mapError(mapCheckpointError("checkpoint")));
+      let checkpoint = yield* activeQueue.checkpointEffect({
+        checkpointId: id,
+        focus: options.focus,
+      });
       if (!requestIsCurrent()) return discardRequest();
       const verifyBlocker =
         options.source !== "last" && checkpoint.findings.some(isVerificationCandidate);
       if (verifyBlocker) {
         const verificationId = `advisor-${owner.epoch}-${++d.refs.checkpointId}`;
         activeCheckpointId = verificationId;
-        const verification = yield* activeQueue
-          .checkpointEffect({
-            checkpointId: verificationId,
-            focus: "blocker-verification",
-            verificationReview: checkpoint,
-          })
-          .pipe(Effect.mapError(mapCheckpointError("verification checkpoint")));
+        const verification = yield* activeQueue.checkpointEffect({
+          checkpointId: verificationId,
+          focus: "blocker-verification",
+          verificationReview: checkpoint,
+        });
         if (!requestIsCurrent()) return discardRequest();
         checkpoint = applyBlockerVerification(checkpoint, verification);
       }
@@ -249,7 +238,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       Effect.catch((error) =>
         Effect.gen(function* () {
           if (!requestIsCurrent()) return discardRequest();
-          const kind = providerFailureKind ?? classifyFailure(error);
+          const kind = classifyFailure(error);
           settleReview("failed");
           d.updateMetrics((metrics) => ({ ...metrics, lastAction: "failure" }));
           const config = d.currentConfig();

@@ -42,6 +42,34 @@ describe("Cosmic UI protocol guards", () => {
     }
   });
 
+  it("contains hostile proxies outside schema decoding", () => {
+    const hostileProxy = () =>
+      new Proxy(
+        {},
+        {
+          get() {
+            throw new Error("hostile protocol proxy");
+          },
+          has() {
+            throw new Error("hostile protocol proxy");
+          },
+          ownKeys() {
+            throw new Error("hostile protocol proxy");
+          },
+        },
+      );
+
+    for (const normalize of [
+      normalizeCosmicUiHostQuery,
+      normalizeCosmicFooterUpsertEvent,
+      normalizeCosmicFooterRemoveEvent,
+      normalizeCosmicFooterInvalidateEvent,
+    ]) {
+      expect(() => normalize(hostileProxy())).not.toThrow();
+      expect(normalize(hostileProxy())).toBeUndefined();
+    }
+  });
+
   it("agrees with normalization for accepted and version-mismatched messages", () => {
     const query = { version: COSMIC_UI_PROTOCOL_VERSION, respond: () => undefined };
     const upsert = {

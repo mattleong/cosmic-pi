@@ -108,24 +108,6 @@ export const acknowledgeAdvisorFindings = (
     ),
   };
 };
-export const supersedeAdvisorFindings = (
-  state: AdvisorFindingLifecycleState,
-  ids: readonly string[],
-): AdvisorFindingLifecycleState => {
-  const selected = new Set(ids);
-  return {
-    records: state.records.map((record) =>
-      selected.has(record.id) && (record.status === "open" || record.status === "acknowledged")
-        ? { ...record, status: "superseded" }
-        : record,
-    ),
-  };
-};
-export const advisorFindingLifecycleCounts = (state: AdvisorFindingLifecycleState) => {
-  const counts = { open: 0, acknowledged: 0, resolved: 0, superseded: 0 };
-  for (const record of state.records) counts[record.status] += 1;
-  return counts;
-};
 function trimRecords(records: AdvisorFindingRecord[]): AdvisorFindingRecord[] {
   if (records.length <= MAX_FINDING_LIFECYCLE_RECORDS) return records;
   const sorted = [...records].sort(

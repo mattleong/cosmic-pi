@@ -163,17 +163,17 @@ export const makeCodeModeToolExecute =
       const calls: MutableCallEntry[] = [];
       const callById = new Map<number, MutableCallEntry>();
       // `/reload` refreshes this TypeScript extension but Node can retain the already-imported
-      // runtime JS module. Older runtime instances emit only the legacy start/end hooks, so keep
-      // an independent index for that backward-compatible path instead of assuming lifecycle
-      // `queued` events always materialized the row first.
-      const legacyCallByIndex = new Map<number, MutableCallEntry>();
+      // runtime JS module. Older runtime instances emit only the legacy start/end hooks. Their
+      // negative execution-local IDs remain disjoint from modern non-negative lifecycle IDs.
       const counts = emptyCounts();
       const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
       const publishNow = () => publisher.publishNow(progressResult(snapshotCalls(calls), counts));
       const trackQueued = (entry: MutableCallEntry): boolean => {
         if (counts.total > config.maxToolCalls) return false;
         if (calls.length >= MAX_TRACKED_CALL_ENTRIES) {
-          const evictedIndex = calls.findIndex((call) => call.status === "completed");
+          const evictedIndex = calls.findIndex(
+            (call) => call.status !== "queued" && call.status !== "running",
+          );
           if (evictedIndex < 0) return false;
           const [evicted] = calls.splice(evictedIndex, 1);
           if (evicted !== undefined) callById.delete(evicted.id);
@@ -263,21 +263,18 @@ export const makeCodeModeToolExecute =
             }),
           onToolCallStart: ({ index, lifecycleId, name, input }) =>
             Effect.sync(() => {
-              let current =
-                lifecycleId === undefined
-                  ? legacyCallByIndex.get(index)
-                  : callById.get(lifecycleId);
+              const id = lifecycleId ?? -(index + 1);
+              let current = callById.get(id);
               if (current === undefined && lifecycleId === undefined) {
                 counts.total += 1;
                 counts.running += 1;
                 current = {
-                  // Legacy indices are execution-local and disjoint from non-negative lifecycle IDs.
-                  id: -(index + 1),
+                  id,
                   tool: name,
                   status: "running",
                   activity: describeNestedActivity(name, input),
                 };
-                if (trackQueued(current)) legacyCallByIndex.set(index, current);
+                trackQueued(current);
               } else if (current !== undefined) {
                 transitionCall(current, "running", counts);
                 current.activity = describeNestedActivity(name, input);
@@ -291,12 +288,13 @@ export const makeCodeModeToolExecute =
               // Modern runtimes emit one authoritative terminal lifecycle event immediately after
               // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
               if (lifecycleId !== undefined) return;
-              const current = legacyCallByIndex.get(index);
+              const id = -(index + 1);
+              const current = callById.get(id);
               const nextStatus = outcome === "success" ? "completed" : "error";
               if (current !== undefined) {
                 transitionCall(current, nextStatus, counts);
                 current.durationMs = durationMs;
-                legacyCallByIndex.delete(index);
+                callById.delete(id);
               } else {
                 // The legacy call was counted but its row exceeded the bounded host-side cap.
                 counts.running -= 1;

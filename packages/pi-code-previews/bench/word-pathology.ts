@@ -11,6 +11,7 @@ import {
   benchTheme,
   formatDuration,
   formatMs,
+  numberedLines,
   printBenchHeader,
   printLayerSummary,
   printResults,
@@ -34,6 +35,9 @@ type PairingCase = {
   lines: number;
 };
 
+const wordCases = makeWordCases();
+const pairingCases = makePairingCases();
+
 try {
   printBenchHeader("word-emphasis and changed-line pathology");
   setCodePreviewSettings({
@@ -43,7 +47,7 @@ try {
   });
 
   const results = [];
-  for (const benchCase of makeWordCases()) {
+  for (const benchCase of wordCases) {
     for (const mode of MODES) {
       setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: mode });
       results.push(
@@ -55,7 +59,7 @@ try {
     }
   }
 
-  for (const benchCase of makePairingCases()) {
+  for (const benchCase of pairingCases) {
     for (const mode of ["off", "smart"] as const) {
       setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: mode });
       results.push(
@@ -72,8 +76,8 @@ try {
   }
 
   printLayerSummary(results);
-  printOverheadSummary(results);
-  printConfidenceSummary(makeWordCases(), makePairingCases());
+  printOverheadSummary(results, pairingCases);
+  printConfidenceSummary(wordCases, pairingCases);
   benchLog("changedRanges cases target weighted exact LCS and anchor fallback paths.");
   benchLog("renderChangedBlock cases target exact and positional fallback changed-line pairing.");
   benchLog("");
@@ -87,13 +91,13 @@ function makeWordCases(): WordCase[] {
   return [
     {
       name: "token weighted LCS boundary 512x512 reversed",
-      before: numberedTokens("tok", 512).join(" "),
-      after: numberedTokens("tok", 512).toReversed().join(" "),
+      before: numberedLines("tok", 512).join(" "),
+      after: numberedLines("tok", 512).toReversed().join(" "),
     },
     {
       name: "token anchor fallback 513x513 reversed",
-      before: numberedTokens("tok", 513).join(" "),
-      after: numberedTokens("tok", 513).toReversed().join(" "),
+      before: numberedLines("tok", 513).join(" "),
+      after: numberedLines("tok", 513).toReversed().join(" "),
     },
     {
       name: "repeated tokens no unique anchors fallback",
@@ -175,8 +179,9 @@ function makePairingCases(): PairingCase[] {
 
 function printOverheadSummary(
   results: Array<{ caseName: string; layer: string; mode: string; meanMs: number }>,
+  benchCases: PairingCase[],
 ): void {
-  const rows = makePairingCases().map((benchCase) => {
+  const rows = benchCases.map((benchCase) => {
     const off = findResult(results, benchCase.name, "renderChangedBlock", "off");
     const smart = findResult(results, benchCase.name, "renderChangedBlock", "smart");
     const overhead = off && smart ? Math.max(0, smart.meanMs - off.meanMs) : 0;
@@ -192,11 +197,14 @@ function printOverheadSummary(
   benchLog("");
 }
 
-function printConfidenceSummary(wordCases: WordCase[], pairingCases: PairingCase[]): void {
+function printConfidenceSummary(
+  wordBenchCases: WordCase[],
+  pairingBenchCases: PairingCase[],
+): void {
   setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "smart" });
   benchLog("Word emphasis confidence summary");
   benchTable(
-    wordCases.map((benchCase) => {
+    wordBenchCases.map((benchCase) => {
       const ranges = changedRangesWithConfidence(benchCase.before, benchCase.after, "smart");
       return {
         case: benchCase.name,
@@ -208,7 +216,7 @@ function printConfidenceSummary(wordCases: WordCase[], pairingCases: PairingCase
   );
   benchLog("Changed-line pair confidence summary");
   benchTable(
-    pairingCases.map((benchCase) => {
+    pairingBenchCases.map((benchCase) => {
       const telemetry = wordEmphasisTelemetry(benchCase.diff, benchCase.lines, "smart");
       return {
         case: benchCase.name,
@@ -298,10 +306,6 @@ function repeatedBefore(index: number): string {
 function repeatedAfter(index: number): string {
   const reversed = 31 - index;
   return `items.map((item) => item.shared${reversed % 4}).filter(Boolean) // new ${reversed % 3}`;
-}
-
-function numberedTokens(prefix: string, count: number): string[] {
-  return Array.from({ length: count }, (_, index) => `${prefix}${index}`);
 }
 
 function repeatedTokens(prefix: string, count: number): string {

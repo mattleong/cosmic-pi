@@ -13,7 +13,7 @@ import {
   runStateGlyph,
   runStateLabel,
 } from "../ui/run-state.ts";
-import type { SubagentRunCard } from "./details.ts";
+import type { SubagentRunCard } from "./details-schema.ts";
 import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
 
 export const runTiming = (run: {

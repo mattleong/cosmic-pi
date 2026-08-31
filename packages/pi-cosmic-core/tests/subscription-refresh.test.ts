@@ -39,25 +39,75 @@ it.effect("discards a response when its key or revision becomes stale", () =>
   }).pipe(Effect.scoped),
 );
 
-it.effect("wakes polling so a shortened interval takes effect immediately", () =>
+it.effect("does not retain a wake pulse emitted before polling waits", () =>
   Effect.gen(function* () {
-    const interval = yield* Ref.make(60_000);
+    const intervalRead = yield* Deferred.make<void>();
+    const fetched = yield* Deferred.make<void>();
     const calls = yield* Ref.make(0);
     const refresh = yield* makeSubscriptionRefresh({
       mergeRequest: merge,
       currentKey: Effect.succeed("key"),
-      interval: Ref.get(interval),
-      fetch: () => Ref.updateAndGet(calls, (count) => count + 1),
+      interval: Deferred.succeed(intervalRead, undefined).pipe(Effect.as(1_000)),
+      fetch: () =>
+        Ref.updateAndGet(calls, (count) => count + 1).pipe(
+          Effect.tap(() => Deferred.succeed(fetched, undefined)),
+        ),
       commit: () => Effect.void,
     });
+
+    yield* refresh.wake;
     const poller = yield* refresh.startPolling({}).pipe(Effect.forkScoped);
+    yield* Deferred.await(intervalRead);
+    yield* Effect.yieldNow;
+    yield* TestClock.adjust("999 millis");
+    expect(yield* Ref.get(calls)).toBe(0);
+    yield* TestClock.adjust("1 millis");
+    yield* Deferred.await(fetched);
+    expect(yield* Ref.get(calls)).toBe(1);
+    yield* Fiber.interrupt(poller);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("releases the current polling wait and applies the next interval", () =>
+  Effect.gen(function* () {
+    const interval = yield* Ref.make(60_000);
+    const intervalReads = yield* Ref.make(0);
+    const firstWaitReady = yield* Deferred.make<void>();
+    const secondWaitReady = yield* Deferred.make<void>();
+    const firstFetch = yield* Deferred.make<void>();
+    const secondFetch = yield* Deferred.make<void>();
+    const calls = yield* Ref.make(0);
+    const refresh = yield* makeSubscriptionRefresh({
+      mergeRequest: merge,
+      currentKey: Effect.succeed("key"),
+      interval: Effect.gen(function* () {
+        const read = yield* Ref.updateAndGet(intervalReads, (count) => count + 1);
+        if (read === 1) yield* Deferred.succeed(firstWaitReady, undefined);
+        if (read === 2) yield* Deferred.succeed(secondWaitReady, undefined);
+        return yield* Ref.get(interval);
+      }),
+      fetch: () =>
+        Effect.gen(function* () {
+          const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+          if (call === 1) yield* Deferred.succeed(firstFetch, undefined);
+          if (call === 2) yield* Deferred.succeed(secondFetch, undefined);
+          return call;
+        }),
+      commit: () => Effect.void,
+    });
+
+    const poller = yield* refresh.startPolling({}).pipe(Effect.forkScoped);
+    yield* Deferred.await(firstWaitReady);
     yield* Effect.yieldNow;
     yield* Ref.set(interval, 1_000);
     yield* refresh.wake;
+    yield* Deferred.await(firstFetch);
+    yield* Deferred.await(secondWaitReady);
     yield* Effect.yieldNow;
+    yield* TestClock.adjust("999 millis");
     expect(yield* Ref.get(calls)).toBe(1);
-    yield* TestClock.adjust("1 second");
-    yield* Effect.yieldNow;
+    yield* TestClock.adjust("1 millis");
+    yield* Deferred.await(secondFetch);
     expect(yield* Ref.get(calls)).toBe(2);
     yield* Fiber.interrupt(poller);
   }).pipe(Effect.scoped),

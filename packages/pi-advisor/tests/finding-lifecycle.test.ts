@@ -1,12 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
   acknowledgeAdvisorFindings,
-  advisorFindingLifecycleCounts,
   emptyAdvisorFindingLifecycle,
   MAX_FINDING_LIFECYCLE_RECORDS,
   reconcileAdvisorFindings,
   restoreAdvisorFindingLifecycle,
-  supersedeAdvisorFindings,
   type AdvisorFindingLifecycleState,
   type AdvisorFindingRecord,
 } from "../src/review/finding-lifecycle.ts";
@@ -27,17 +25,11 @@ function lifecycleDriver() {
     acknowledge(ids: readonly string[]) {
       state = acknowledgeAdvisorFindings(state, ids);
     },
-    supersede(ids: readonly string[]) {
-      state = supersedeAdvisorFindings(state, ids);
-    },
     snapshot(): AdvisorFindingRecord[] {
       return state.records.map((record) => ({ ...record }));
     },
     restore(records: readonly AdvisorFindingRecord[] | undefined) {
       state = restoreAdvisorFindingLifecycle(records);
-    },
-    counts() {
-      return advisorFindingLifecycleCounts(state);
     },
   };
 }
@@ -112,15 +104,27 @@ describe("advisor finding lifecycle", () => {
     expect(next[0]?.status).toBe("acknowledged");
   });
 
-  test("supports explicit supersession without reopening terminal records", () => {
+  test("restores legacy superseded records and opens a new generation", () => {
     const lifecycle = lifecycleDriver();
     const current = lifecycle.reconcile([finding], {
       scope: "session",
       completedTurn: 1,
       complete: false,
     });
-    lifecycle.supersede([current[0]!.id!]);
-    expect(lifecycle.snapshot()[0]?.status).toBe("superseded");
+    lifecycle.restore(
+      lifecycle.snapshot().map((record) => ({ ...record, status: "superseded" as const })),
+    );
+
+    const next = lifecycle.reconcile([finding], {
+      scope: "session",
+      completedTurn: 2,
+      complete: false,
+    });
+    const snapshot = lifecycle.snapshot();
+    expect(next[0]?.id).not.toBe(current[0]?.id);
+    expect(next[0]?.status).toBe("open");
+    expect(snapshot.find((record) => record.id === current[0]?.id)?.status).toBe("superseded");
+    expect(snapshot.find((record) => record.id === next[0]?.id)?.generation).toBe(1);
   });
 
   test("hard-bounds open records with oldest-first eviction", () => {
@@ -135,12 +139,7 @@ describe("advisor finding lifecycle", () => {
     const records = lifecycle.snapshot();
     expect(records).toHaveLength(MAX_FINDING_LIFECYCLE_RECORDS);
     expect(Math.min(...records.map((record) => record.firstSeenTurn))).toBe(7);
-    expect(lifecycle.counts()).toEqual({
-      open: MAX_FINDING_LIFECYCLE_RECORDS,
-      acknowledged: 0,
-      resolved: 0,
-      superseded: 0,
-    });
+    expect(records.every((record) => record.status === "open")).toBe(true);
   });
 
   test("evicts terminal records before open records at the hard bound", () => {
@@ -154,7 +153,14 @@ describe("advisor finding lifecycle", () => {
           complete: false,
         })[0]!,
     );
-    lifecycle.supersede([records.at(-1)!.id!]);
+    const supersededId = records.at(-1)!.id!;
+    lifecycle.restore(
+      lifecycle
+        .snapshot()
+        .map((record) =>
+          record.id === supersededId ? { ...record, status: "superseded" as const } : record,
+        ),
+    );
     lifecycle.reconcile([{ ...finding, fingerprint: "bounded-new" }], {
       scope: "session",
       completedTurn: MAX_FINDING_LIFECYCLE_RECORDS + 1,

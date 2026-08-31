@@ -1,4 +1,8 @@
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
@@ -9,15 +13,16 @@ import {
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import { makeAskUserDialogBridge } from "./boundary/host-ui.ts";
-import {
-  makeAskUserLayer,
-  type AskUserApplication,
-  type AskUserRuntimeError,
-  type AskUserSessionInput,
-} from "./layer.ts";
+import { makeAskUserLayer, type AskUserApplication, type AskUserRuntimeError } from "./layer.ts";
 import { AskUserRuntimeClosedError } from "./questionnaire/errors.ts";
 import { AskUserService } from "./questionnaire/service.ts";
 import { registerAskUserTool } from "./tools/ask-user.ts";
+
+interface AskUserSessionInput {
+  readonly ctx: ExtensionContext;
+  readonly cwd: string;
+  readonly projectTrusted: boolean;
+}
 
 type PreviewSettingsLoader = (
   projectCwd: string,
@@ -39,7 +44,7 @@ export function askUserWithDependencies(
     AskUserRuntimeError
   >({
     makeRuntime: (input) =>
-      makePiManagedRuntime(pi, makeAskUserLayer(input, bridge), {
+      makePiManagedRuntime(pi, makeAskUserLayer(input.ctx, bridge), {
         agentDirectory: getAgentDir,
         packageName: "pi-ask-user",
       }),

@@ -113,11 +113,19 @@ const applicationInstance = (activeTools: string[]) => {
   const cwd = temporaryDirectory("pi-code-mode-handoff-cwd-");
   const handlers = new Map<string, Handler>();
   const registerTool = vi.fn();
+  let restoreCodeModeAfterNextObservation = false;
   const pi = extensionApiFixture({
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     registerCommand: () => undefined,
     registerTool,
-    getActiveTools: () => [...activeTools],
+    getActiveTools: () => {
+      const snapshot = [...activeTools];
+      if (restoreCodeModeAfterNextObservation) {
+        restoreCodeModeAfterNextObservation = false;
+        if (!activeTools.includes(CODE_MODE_TOOL_NAME)) activeTools.push(CODE_MODE_TOOL_NAME);
+      }
+      return snapshot;
+    },
     setActiveTools: (names: string[]) => {
       activeTools.splice(0, activeTools.length, ...names);
     },
@@ -147,7 +155,14 @@ const applicationInstance = (activeTools: string[]) => {
           sessionManager: { getSessionId: () => sessionId },
         });
   };
-  return { handlers, registerTool, context };
+  return {
+    handlers,
+    registerTool,
+    context,
+    restoreCodeModeAfterNextObservation: () => {
+      restoreCodeModeAfterNextObservation = true;
+    },
+  };
 };
 
 const start = (
@@ -173,6 +188,31 @@ const deactivate = (activeTools: string[]): void => {
 };
 
 describe("deactivation intent across sessions", () => {
+  it.effect("finishes teardown when the process handoff slot rejects its first write", () =>
+    Effect.gen(function* () {
+      const active = ["read", "bash"];
+      const application = applicationInstance(active);
+      const ctx = application.context("session-A");
+      yield* start(application, ctx);
+      deactivate(active);
+
+      Object.defineProperty(globalThis, HANDOFF_SLOT, {
+        configurable: true,
+        get: () => undefined,
+        set: () => {
+          throw new Error("poisoned handoff slot");
+        },
+      });
+      // Simulate the host restoring the registered tool immediately after intent observation.
+      // Shutdown must still remove it after the optional handoff publication attempt.
+      application.restoreCodeModeAfterNextObservation();
+      yield* shutdown(application, ctx);
+
+      expect(active).toEqual(["read", "bash"]);
+      expect(captureCodeModeDeactivation("session-A")).toBe(true);
+    }),
+  );
+
   it.effect("applies closure intent only to the same stable session", () =>
     Effect.gen(function* () {
       const transitions = [

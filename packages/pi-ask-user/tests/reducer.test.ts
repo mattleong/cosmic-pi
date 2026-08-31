@@ -49,6 +49,10 @@ describe("questionnaire reducer", () => {
     });
 
     expect(isQuestionnaireComplete(state)).toBe(true);
+    expect(state.drafts.map((draft) => draft.answer)).toEqual([
+      { kind: "choices", values: ["luxon"] },
+      { kind: "custom", text: "Run the smoke suite." },
+    ]);
     expect(submitQuestionnaire(state)).toEqual({
       outcome: "submitted",
       answers: [
@@ -75,6 +79,10 @@ describe("questionnaire reducer", () => {
     state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 1 });
     state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
     expect(isQuestionnaireComplete(state)).toBe(true);
+    expect(state.drafts[1]?.answer).toEqual({
+      kind: "choices",
+      values: ["unit", "integration"],
+    });
     expect(submitQuestionnaire(state)?.answers[1]).toEqual({
       key: "checks",
       kind: "choices",

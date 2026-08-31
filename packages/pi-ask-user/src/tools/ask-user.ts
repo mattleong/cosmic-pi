@@ -79,12 +79,10 @@ const decodeOutcomeDetails = projection(OutcomeDetailsProjection);
 const decodeContent = projection(ContentProjection);
 const decodeTextContentPart = projection(TextContentPartProjection);
 
-type AskUserHandler = (
-  request: AskUserRequest,
-  signal: AbortSignal | undefined,
-) => Promise<AskUserOutcome>;
-
-export function registerAskUserTool(pi: ExtensionAPI, ask: AskUserHandler): void {
+export function registerAskUserTool(
+  pi: ExtensionAPI,
+  ask: (request: AskUserRequest, signal: AbortSignal | undefined) => Promise<AskUserOutcome>,
+): void {
   const tool = defineTool({
     name: "ask_user",
     label: "Ask User",

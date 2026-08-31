@@ -50,22 +50,6 @@ const completionNotification = (
   record: RunRecord,
   completion: CompletionGenerationRecord,
 ): SubagentCompletionNotification => {
-  const baseResult = {
-    id: record.view.id,
-    name: record.view.name,
-    generation: completion.generation,
-    outcome: completion.outcome,
-  };
-  const withFinalText = completion.finalText
-    ? { ...baseResult, finalText: completion.finalText }
-    : baseResult;
-  const withError = completion.error
-    ? { ...withFinalText, error: completion.error }
-    : withFinalText;
-  const withWarning = completion.warning
-    ? { ...withError, warning: completion.warning }
-    : withError;
-  const withRetained = completion.retained ? { ...withWarning, retained: true } : withWarning;
   const remainingCandidateCount = record.view.remainingCandidateCount ?? 0;
   const retryAvailable =
     completion.outcome === "failed" &&
@@ -75,12 +59,18 @@ const completionNotification = (
     record.view.retryBlocked !== true &&
     record.view.supersededByRunId === undefined &&
     !record.assignment.outcomeUncertain;
-  const withProfile = record.view.profile
-    ? { ...withRetained, profile: record.view.profile }
-    : withRetained;
-  return retryAvailable
-    ? { ...withProfile, retryAvailable: true, remainingCandidateCount }
-    : withProfile;
+  return {
+    id: record.view.id,
+    name: record.view.name,
+    generation: completion.generation,
+    outcome: completion.outcome,
+    ...(completion.finalText && { finalText: completion.finalText }),
+    ...(completion.error && { error: completion.error }),
+    ...(completion.warning && { warning: completion.warning }),
+    ...(completion.retained && { retained: true }),
+    ...(record.view.profile && { profile: record.view.profile }),
+    ...(retryAvailable && { retryAvailable: true, remainingCandidateCount }),
+  };
 };
 
 export interface CompletionDeliverySelection {

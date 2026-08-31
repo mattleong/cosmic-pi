@@ -121,6 +121,7 @@ describe("progress containment", () => {
     const text = partial.content[0]?.type === "text" ? partial.content[0].text : "";
     expect(text).toContain("100 nested tool calls (100 settled, 0 running, 0 queued)");
     expect(text).toContain("+68 earlier");
+    expect(partial.details.counts?.total).toBe(100);
     expect(partial.details.totalToolCalls).toBe(100);
   });
 
@@ -142,7 +143,7 @@ describe("progress containment", () => {
     expect(details.counts).toMatchObject({ total: 42, running: 1, failed: 1, succeeded: 40 });
   });
 
-  it("records the true total only when calls exceed the bounded entries", () => {
+  it("retains the legacy total only when rows are hidden", () => {
     const few: CodeModeCallEntry[] = [{ tool: "pi.read", status: "completed" }];
     const fewDetails = callEntryDetails(few);
     expect(fewDetails).toEqual({
@@ -164,6 +165,7 @@ describe("progress containment", () => {
     const details = callEntryDetails(many);
     expect(details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
     expect(details.toolCalls.at(-1)).not.toBe(many.at(-1));
+    expect(details.counts?.total).toBe(MAX_PROGRESS_ENTRIES + 8);
     expect(details.totalToolCalls).toBe(MAX_PROGRESS_ENTRIES + 8);
   });
 });

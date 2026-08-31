@@ -20,9 +20,7 @@ import {
   type JsonHttpRequestInput,
 } from "../platform/json-http.ts";
 import { JsonDocumentError, JsonHttpError, StreamingHttpError } from "../platform/errors.ts";
-import { encodeJsonBody } from "../platform/json-body.ts";
 import {
-  encodeStreamingJsonBody,
   StreamingHttpClient,
   type StreamingHttpClientContract,
   type StreamingHttpRequest,
@@ -299,7 +297,7 @@ export const jsonHttpTestLayer = (
     });
   const request: JsonHttpClientContract["request"] = (input) => execute(input);
   const requestJson: JsonHttpClientContract["requestJson"] = (input, bodySchema, body) =>
-    encodeJsonBody(bodySchema, body).pipe(
+    Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
       Effect.mapError(
         jsonHttpError("encode", "HTTP request body did not match the expected schema."),
       ),
@@ -323,7 +321,14 @@ export const streamingHttpTestLayer = (
     bodySchema,
     body,
   ) =>
-    encodeStreamingJsonBody(bodySchema, body).pipe(
+    Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
+      Effect.mapError(
+        () =>
+          new StreamingHttpError({
+            operation: "encode",
+            message: "Streaming HTTP request body did not match the expected schema.",
+          }),
+      ),
       Effect.flatMap((encodedJsonBody) => handle({ ...input, encodedJsonBody })),
     );
   return Layer.succeed(

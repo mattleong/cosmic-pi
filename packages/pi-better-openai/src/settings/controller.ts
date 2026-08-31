@@ -100,16 +100,14 @@ export function registerSettingsController(
       update.pipe(
         Effect.tap(() =>
           Effect.gen(function* () {
-            yield* ignoreHostUi("settings.render", () => updateFooter(ctx));
-            yield* ignoreHostUi("settings.notify", () => {
+            yield* ignoreHostUi(() => updateFooter(ctx));
+            yield* ignoreHostUi(() => {
               const descriptor = descriptors.find((candidate) => candidate.id === id);
               ctx.ui.notify(`${id} = ${descriptor?.currentValue(config(ctx)) ?? value}`, "info");
             });
           }),
         ),
-        Effect.catch((error) =>
-          ignoreHostUi("settings.notify.error", () => ctx.ui.notify(error.message, "error")),
-        ),
+        Effect.catch((error) => ignoreHostUi(() => ctx.ui.notify(error.message, "error"))),
         Effect.asVoid,
       ),
       safeHostSignal(ctx),

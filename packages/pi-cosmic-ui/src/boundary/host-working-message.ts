@@ -1,40 +1,30 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { HostCallbackBoundary } from "./host-callback.ts";
+import type { HostCallbackBoundaryContract } from "./host-callback.ts";
+
+export type WorkingMessageHostResult = "written" | "unavailable" | "failed";
 
 export interface WorkingMessageHostContract {
-  /** Updates Pi's live working row. Returns false when the TUI host is unavailable. */
-  readonly set: (message?: string) => Effect.Effect<boolean>;
+  /** Updates Pi's live working row without conflating host absence with a failed write. */
+  readonly set: (message?: string) => Effect.Effect<WorkingMessageHostResult>;
 }
 
-export class WorkingMessageHost extends Context.Service<
-  WorkingMessageHost,
-  WorkingMessageHostContract
->()("pi-cosmic-ui/boundary/host-working-message/WorkingMessageHost") {
-  static layer(options: { readonly context: MutableRef.MutableRef<ExtensionContext> }) {
-    return Layer.effect(
-      this,
-      Effect.gen(function* () {
-        const callbacks = yield* HostCallbackBoundary;
-        return WorkingMessageHost.of({
-          set: (message) =>
-            Effect.sync(() =>
-              callbacks.invoke(
-                "working-message",
-                () => {
-                  const ctx = MutableRef.get(options.context);
-                  if (ctx.mode !== "tui") return false;
-                  ctx.ui.setWorkingMessage(message);
-                  return true;
-                },
-                false,
-              ),
-            ),
-        });
-      }),
-    );
-  }
-}
+export const makeWorkingMessageHost = (options: {
+  readonly context: MutableRef.MutableRef<ExtensionContext>;
+  readonly callbacks: HostCallbackBoundaryContract;
+}): WorkingMessageHostContract => ({
+  set: (message) =>
+    Effect.sync(() =>
+      options.callbacks.invoke(
+        "working-message",
+        () => {
+          const ctx = MutableRef.get(options.context);
+          if (ctx.mode !== "tui") return "unavailable";
+          ctx.ui.setWorkingMessage(message);
+          return "written";
+        },
+        "failed",
+      ),
+    ),
+});

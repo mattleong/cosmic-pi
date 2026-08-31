@@ -141,6 +141,20 @@ const CodexCatalogResponse = Schema.Struct({
   }),
 });
 
+const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const decodeClaudeCatalogCorrelatedFrameOption = Schema.decodeUnknownOption(
+  ClaudeCatalogCorrelatedFrame,
+);
+const decodeCodexCatalogCorrelatedFrameOption = Schema.decodeUnknownOption(
+  CodexCatalogCorrelatedFrame,
+);
+const decodeClaudeCatalogErrorResponseOption = Schema.decodeUnknownOption(
+  ClaudeCatalogErrorResponse,
+);
+const decodeCodexCatalogErrorResponseOption = Schema.decodeUnknownOption(CodexCatalogErrorResponse);
+const decodeClaudeCatalogResponseEffect = Schema.decodeUnknownEffect(ClaudeCatalogResponse);
+const decodeCodexCatalogResponseEffect = Schema.decodeUnknownEffect(CodexCatalogResponse);
+
 export interface NativeRuntimeModel {
   readonly selector: string;
   readonly label: string;
@@ -248,12 +262,12 @@ const catalogFrames = (runtime: LocalCliRuntime): ReadonlyArray<CatalogRequestFr
 const isClaudeCatalogErrorResponse = <ValueInput>(
   value: ValueInput,
 ): value is ValueInput & ClaudeCatalogErrorFrame =>
-  Option.isSome(Schema.decodeUnknownOption(ClaudeCatalogErrorResponse)(value));
+  Option.isSome(decodeClaudeCatalogErrorResponseOption(value));
 
 const isCodexCatalogErrorResponse = <ValueInput>(
   value: ValueInput,
 ): value is ValueInput & CodexCatalogErrorFrame =>
-  Option.isSome(Schema.decodeUnknownOption(CodexCatalogErrorResponse)(value));
+  Option.isSome(decodeCodexCatalogErrorResponseOption(value));
 
 const runCatalogProcess = (
   runtime: LocalCliRuntime,
@@ -267,6 +281,10 @@ const runCatalogProcess = (
   Effect.scoped(
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        const decodeCorrelatedFrameOption =
+          runtime === "codex"
+            ? decodeCodexCatalogCorrelatedFrameOption
+            : decodeClaudeCatalogCorrelatedFrameOption;
         const input = new TextEncoder().encode(
           `${frames.map((frame) => JSON.stringify(frame)).join("\n")}\n`,
         );
@@ -318,7 +336,7 @@ const runCatalogProcess = (
           Stream.splitLines,
           Stream.mapEffect((line) => {
             if (!line.trim()) return Effect.succeedNone;
-            const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(line);
+            const parsed = decodeUnknownJsonOption(line);
             if (Option.isNone(parsed))
               return Effect.fail(
                 catalogError(
@@ -327,11 +345,9 @@ const runCatalogProcess = (
                   `${runtime} catalog emitted invalid JSONL.`,
                 ),
               );
-            const correlated = Schema.decodeUnknownOption(
-              runtime === "codex" ? CodexCatalogCorrelatedFrame : ClaudeCatalogCorrelatedFrame,
-            )(parsed.value);
+            const correlated = decodeCorrelatedFrameOption(parsed.value);
             return Effect.succeed(
-              Option.isSome(correlated) ? Option.some(parsed.value) : Option.none(),
+              correlated._tag === "Some" ? Option.some(parsed.value) : Option.none(),
             );
           }),
           Stream.filter(Option.isSome),
@@ -405,7 +421,7 @@ const runCatalogProcess = (
   );
 
 const decodeClaudeModels = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(ClaudeCatalogResponse)(value).pipe(
+  decodeClaudeCatalogResponseEffect(value).pipe(
     Effect.map((response) =>
       response.response.response.models.map(
         (model): NativeRuntimeModel => ({
@@ -426,7 +442,7 @@ const decodeClaudeModels = <ValueInput>(value: ValueInput) =>
   );
 
 const decodeCodexModels = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(CodexCatalogResponse)(value).pipe(
+  decodeCodexCatalogResponseEffect(value).pipe(
     Effect.map((response) =>
       response.result.data.map(
         (model): NativeRuntimeModel => ({

@@ -1,9 +1,9 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { synchronousNow } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
+import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
-import { startHostUiTicker } from "../boundary/host-ui.ts";
-import { decodeCompactToolDetails, type SubagentRunCard } from "../tools/details.ts";
+import { decodeCompactToolDetails, type SubagentRunCard } from "../tools/details-schema.ts";
 import type { SubagentToolInput } from "../tools/schema.ts";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
 import { SubagentFleetComponent, type FleetMessageMode } from "../ui/fleet.ts";

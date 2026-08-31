@@ -103,6 +103,8 @@ Recommended defaults:
 
 Capacity applies to `starting`, `running`, and `stopping` tasks. When retention exceeds its limit, evict the oldest completed tasks only. Never evict an active task.
 
+Retention and `clear` govern new registry lookups. Once a `logs` or `wait` call finds its task, it keeps that record and re-inspects it under the registry semaphore after wakes and timeouts. An admitted call can therefore return terminal data after eviction while a new `status`, `logs`, or `wait` call fails with `BackgroundTaskNotFoundError`. Removed records are not reinserted.
+
 The total log budget is split roughly in half: one half bounds retained in-memory logs across all tasks and the other funds per-process ingress buffers divided across the running-task capacity.
 
 ### 4.5 Output model
@@ -243,10 +245,18 @@ runtime share a stable Pi session id, the captured slot token remains current, a
 `background_task` tool is active.
 
 The capability runs the same action Effect and same service registry as the top-level tool. It
-returns copied structured snapshots, wait data, bounded log text, and log cursor metadata. Code
+returns detached structured snapshots, wait data, bounded log text, and log cursor metadata. Code
 Mode supplies the current remaining child-output allowance, capped at 16 MiB. The provider bounds
-text while formatting and estimates the structured JSON size before copying snapshots. No service,
-Layer, runtime, Ref, or scope crosses the protocol. A Code Mode timeout or cancellation
+request command, name, cwd, and id fields in its input Schema. Before a nested `start` calls the task
+service, the shared executor trims the command and name, resolves cwd, and checks a conservative
+successful-start envelope against that allowance. The envelope includes the largest generated id,
+PID and numeric metadata, plus the fields possible when a process exits before `start` returns.
+A refusal therefore happens before id allocation, registry insertion, monitor creation, or process
+acquisition. The provider also bounds text while formatting and estimates aggregate structured JSON
+size without allocating a JSON copy after execution. This second check remains a defense for every
+action. Only output that fits reaches the producer-owned output Schema, which validates numeric
+metadata, removes undeclared keys, and creates the detached value. The provider freezes that
+accepted value. No service, Layer, runtime, Ref, or scope crosses the protocol. A Code Mode timeout or cancellation
 interrupts an active wait or log call. A completed start remains owned by Background Tasks and may
 outlive the outer Code Mode call until explicit stop or Pi session shutdown. See ADR 0006.
 

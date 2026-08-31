@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { afterAll, describe, expect } from "vitest";
 import {
+  compareSessionFileIdentity,
   createBlankChildSessionFile,
   createChildSessionId,
   isRegularSessionFile,
@@ -15,10 +16,18 @@ const nodeFs = process.getBuiltinModule("node:fs");
 const nodeOs = process.getBuiltinModule("node:os");
 const nodePath = process.getBuiltinModule("node:path");
 if (!nodeFs || !nodeOs || !nodePath) throw new Error("Node builtins are unavailable.");
-const { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } =
-  nodeFs;
+const {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} = nodeFs;
 const { tmpdir } = nodeOs;
-const { join } = nodePath;
+const { join, sep } = nodePath;
 
 const PARENT_FILE = "/sessions/parent.jsonl";
 const FIRST_TIMESTAMP = "2026-08-26T01:02:03.004Z";
@@ -106,6 +115,49 @@ describe("session-file validation", () => {
     for (const path of ["relative/session.jsonl", `${dir}/bad\npath.jsonl`, ""]) {
       expect(isRegularSessionFile(path)).toBe(false);
       expect(probeSessionHeader(path)).toEqual({ _tag: "invalid" });
+    }
+  });
+});
+
+describe("session-file identity", () => {
+  it("matches normalized lexical aliases and descriptor-identical hardlinks", () => {
+    const original = writeSession(
+      "identity-original.jsonl",
+      JSON.stringify({ type: "session", id: "identity", timestamp: "t", cwd: "/project" }),
+    );
+    const lexicalAlias = `${dir}${sep}.${sep}identity-original.jsonl`;
+    const hardlink = join(dir, "identity-hardlink.jsonl");
+    linkSync(original, hardlink);
+
+    expect(compareSessionFileIdentity(original, lexicalAlias)).toBe("same");
+    expect(compareSessionFileIdentity(original, hardlink)).toBe("same");
+  });
+
+  it("reports distinct only when both descriptor probes succeed", () => {
+    const first = writeSession(
+      "identity-first.jsonl",
+      JSON.stringify({ type: "session", id: "first", timestamp: "t", cwd: "/project" }),
+    );
+    const second = writeSession(
+      "identity-second.jsonl",
+      JSON.stringify({ type: "session", id: "second", timestamp: "t", cwd: "/project" }),
+    );
+
+    expect(compareSessionFileIdentity(first, second)).toBe("distinct");
+  });
+
+  it("treats symlinks, missing files, and invalid paths as unavailable", () => {
+    const target = writeSession(
+      "identity-target.jsonl",
+      JSON.stringify({ type: "session", id: "target", timestamp: "t", cwd: "/project" }),
+    );
+    const symlink = join(dir, "identity-symlink.jsonl");
+    symlinkSync(target, symlink);
+    const missing = join(dir, "identity-missing.jsonl");
+
+    for (const unavailable of [symlink, missing, "relative.jsonl", `${dir}/bad\npath`]) {
+      expect(compareSessionFileIdentity(target, unavailable)).toBe("unavailable");
+      expect(compareSessionFileIdentity(unavailable, unavailable)).toBe("unavailable");
     }
   });
 });

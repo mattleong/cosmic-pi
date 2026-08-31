@@ -80,14 +80,18 @@ export function registerBackgroundTaskTool(
           collapsedLogFooter = `Showing 12 of ${lines.length} log lines · ${expandHint}`;
         } else text = normalized;
       }
-      if (expanded && details?.snapshot) {
+      if (
+        expanded &&
+        details !== undefined &&
+        (details.action === "start" || details.action === "status" || details.action === "stop")
+      ) {
         const snapshot = details.snapshot;
         text += `\n${sanitizeTerminalLine(snapshot.cwd)}${snapshot.pid ? ` · pid ${snapshot.pid}` : ""}`;
         if (snapshot.droppedLogBytes > 0) {
           text += `\n${snapshot.droppedLogBytes} log bytes discarded`;
         }
       }
-      if (expanded && details?.logs) {
+      if (expanded && details?.action === "logs") {
         text += `\nnext cursor ${details.logs.nextCursor} · earliest ${details.logs.earliestAvailableCursor}`;
       }
       let rendered = theme.fg(

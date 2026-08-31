@@ -1,7 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import { PiApi } from "pi-cosmic-core";
@@ -17,12 +16,7 @@ export interface DirectoryModelSessionInput {
   readonly ctx: ExtensionContext;
   readonly cwd: string;
   readonly fresh: boolean;
-  readonly explicitModel: boolean;
-}
-
-export interface DirectoryModelPreferenceServiceContract {
-  readonly initialize: Effect.Effect<void>;
-  readonly remember: Effect.Effect<void>;
+  readonly explicitPreference: boolean;
 }
 
 /**
@@ -35,13 +29,10 @@ const READ_WARNING = "Directory model preference is invalid; using Pi's current 
 const IDENTIFY_WARNING = "Directory model preference is unavailable for this working directory.";
 const WRITE_WARNING = "Unable to save the directory model preference.";
 
-export class DirectoryModelPreferenceService extends Context.Service<
-  DirectoryModelPreferenceService,
-  DirectoryModelPreferenceServiceContract
->()("pi-directory-models/preference/service/DirectoryModelPreferenceService") {
-  static readonly layer = (input: DirectoryModelSessionInput, warn: DirectoryModelWarn) =>
-    Layer.effect(
-      this,
+export class DirectoryModelPreferenceService extends Context.Service<DirectoryModelPreferenceService>()(
+  "pi-directory-models/preference/service/DirectoryModelPreferenceService",
+  {
+    make: (input: DirectoryModelSessionInput, warn: DirectoryModelWarn) =>
       Effect.gen(function* () {
         const pi = yield* PiApi;
         const store = yield* DirectoryModelStore;
@@ -65,15 +56,11 @@ export class DirectoryModelPreferenceService extends Context.Service<
         ): Effect.Effect<Value | undefined> =>
           Effect.catch(effect, () => Effect.as(warnOnce(key, message), undefined));
 
-        const identity = Effect.suspend(() => {
-          if (cachedIdentity) return Effect.succeed(cachedIdentity);
-          return store.identify(input.cwd).pipe(
-            Effect.tap((identified) =>
-              Effect.sync(() => {
-                cachedIdentity = identified;
-              }),
-            ),
-          );
+        const identity = Effect.gen(function* () {
+          if (cachedIdentity) return cachedIdentity;
+          const identified = yield* store.identify(input.cwd);
+          cachedIdentity = identified;
+          return identified;
         });
 
         const write = (identified: DirectoryIdentity, preference: DirectoryModelPreference) =>
@@ -107,7 +94,7 @@ export class DirectoryModelPreferenceService extends Context.Service<
 
         const initialize = gate.withPermit(
           Effect.gen(function* () {
-            if (!input.fresh || input.explicitModel) return;
+            if (!input.fresh || input.explicitPreference) return;
             const identified = yield* recovered(identity, "identify", IDENTIFY_WARNING);
             if (!identified) return;
             // None means the read failed (already warned); Some(undefined) means no document.
@@ -134,7 +121,7 @@ export class DirectoryModelPreferenceService extends Context.Service<
           }),
         );
 
-        return DirectoryModelPreferenceService.of({ initialize, remember });
+        return { initialize, remember };
       }),
-    );
-}
+  },
+) {}

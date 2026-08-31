@@ -11,7 +11,7 @@ import {
   makeUsageRefreshController,
   sanitizeDiagnosticError,
 } from "pi-cosmic-core";
-import { getCodexCredentialsResult } from "../auth/codex-auth.ts";
+import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { prepareSettingUpdate, type InvalidSettingError } from "../config/options.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
 import {
@@ -85,28 +85,29 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         refreshKeyScope: (ctx) => usageScopeForModel(ctx.model?.id),
         fetchOutcome: ({ ctx, authPath }) =>
           Effect.gen(function* () {
-            const authOutcome = yield* getCodexCredentialsResult(authPath, ctx).pipe(
+            const authAttempt = yield* getCodexCredentials(authPath, ctx).pipe(
               Effect.timeout("10 seconds"),
               Effect.result,
             );
-            if (authOutcome._tag === "Failure")
-              return { _tag: "Failure", message: "Codex credential lookup timed out." } as const;
-            const authResult = authOutcome.success;
-            if (authResult._tag === "Missing") return { _tag: "Missing" } as const;
-            if (authResult._tag !== "Found")
+            if (authAttempt._tag === "Failure")
               return {
                 _tag: "Failure",
-                message: sanitizeDiagnosticError(authResult.message),
+                message:
+                  authAttempt.failure._tag === "CodexAuthError"
+                    ? sanitizeDiagnosticError(authAttempt.failure.message)
+                    : "Codex credential lookup timed out.",
               } as const;
+            const credentials = authAttempt.success;
+            if (credentials === undefined) return { _tag: "Missing" } as const;
             const authPatch = {
               authFound: true,
-              authSource: authResult.credentials.source,
-              accountId: authResult.credentials.accountId,
+              authSource: credentials.source,
+              accountId: credentials.accountId,
             } as const;
-            const usage = yield* requestCodexUsageWithCredentials(
-              authResult.credentials,
-              ctx.model?.id,
-            ).pipe(Effect.timeout("10 seconds"), Effect.result);
+            const usage = yield* requestCodexUsageWithCredentials(credentials, ctx.model?.id).pipe(
+              Effect.timeout("10 seconds"),
+              Effect.result,
+            );
             if (usage._tag === "Failure")
               return {
                 _tag: "Failure",

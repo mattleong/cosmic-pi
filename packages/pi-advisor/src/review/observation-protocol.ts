@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { snapshotDataRecord } from "../domain/safe-data.ts";
 import { isJsonObject } from "pi-cosmic-core";
-import { redactObservationValue } from "../domain/redaction.ts";
+import { redactObservationSnapshot } from "../domain/redaction.ts";
 
 export const OBSERVATION_PROTOCOL_VERSION = 1;
 export const MAX_OBSERVATION_RECORDS = 256;
@@ -152,7 +152,7 @@ export class AdvisorObservationBuffer {
       throw new AdvisorObservationError({ message: "Invalid observation input." });
     }
     const sequence = ++this.nextSequence;
-    const record = sanitizeObservation({
+    const record = sanitizeObservationSnapshot({
       ...snapshot,
       epoch: this.epoch,
       sequence,
@@ -303,8 +303,8 @@ export function renderObservations(observations: readonly AdvisorObservation[]):
   ].join("\n\n");
 }
 
-function sanitizeObservation<ValueInput>(value: ValueInput): AdvisorObservation {
-  const redacted = redactObservationValue(value);
+function sanitizeObservationSnapshot(value: Schema.MutableJsonObject): AdvisorObservation {
+  const redacted = redactObservationSnapshot(value);
   if (!isJsonObject(redacted) || !Predicate.isString(redacted.type))
     throw new AdvisorObservationError({ message: "Invalid observation." });
   const clipped: Schema.MutableJsonObject = Object.fromEntries(Object.entries(redacted));

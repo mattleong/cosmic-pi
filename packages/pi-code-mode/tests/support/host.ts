@@ -43,8 +43,5 @@ export const codeModeStateFixture = (
   },
   globalValues: {},
   projectValues: {},
-  diagnostics: [],
-  globalConfigPath: "/tmp/global.json",
-  projectConfigPath: "/tmp/project.json",
   ...overrides,
 });

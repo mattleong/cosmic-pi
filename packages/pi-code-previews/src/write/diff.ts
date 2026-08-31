@@ -17,11 +17,7 @@ export type ExistingFilePreview =
       sizeExceeded?: boolean;
     };
 
-const PreviewByteLength = Schema.Number.check(
-  Schema.isFinite(),
-  Schema.isInt(),
-  Schema.isGreaterThanOrEqualTo(0),
-);
+const PreviewByteLength = Schema.Natural;
 const SkippedExistingFilePreview = Schema.Struct({
   kind: Schema.Literal("skipped"),
   reason: Schema.String,

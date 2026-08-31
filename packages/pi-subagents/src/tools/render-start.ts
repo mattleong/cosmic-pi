@@ -11,7 +11,7 @@ import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { managerNoticeGlyph, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import { formatRunRoute, shortRunId } from "../ui/run-presentation.ts";
-import type { SubagentStartEntry } from "./details.ts";
+import type { SubagentStartEntry } from "./details-schema.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import { renderExpansionAffordance } from "./render-affordance.ts";
 import { failureRecovery } from "./render-management.ts";

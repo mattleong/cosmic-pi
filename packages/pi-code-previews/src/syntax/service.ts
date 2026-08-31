@@ -107,7 +107,11 @@ export class CodePreviewSyntaxService extends Context.Service<
         transition: (current: SyntaxState) => Effect.Effect<readonly [A, SyntaxState]>,
       ) =>
         SynchronizedRef.modifyEffect(state, (current) =>
-          transition(current).pipe(Effect.tap(([, next]) => Effect.sync(() => publish(next)))),
+          transition(current).pipe(
+            Effect.tap(([, next]) =>
+              next === current ? Effect.void : Effect.sync(() => publish(next)),
+            ),
+          ),
         );
 
       const dispose = highlighterLifecycle.withPermits(1)(

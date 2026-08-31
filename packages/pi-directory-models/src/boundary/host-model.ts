@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   makeDirectoryModelPreference,
   type DirectoryModelPreference,
@@ -27,27 +28,15 @@ const hostError = (operation: string, message: string) => () =>
   new DirectoryModelHostError({ operation, message });
 
 export function captureThinkingLevel<ValueInput>(value: ValueInput): ThinkingLevel | undefined {
-  try {
-    return Option.getOrUndefined(decodeThinkingLevel(value));
-  } catch {
-    return undefined;
-  }
+  return invokeHostCallback(() => Option.getOrUndefined(decodeThinkingLevel(value)), undefined);
 }
 
 export function captureSelectedModel<ValueInput>(value: ValueInput): SelectedModel | undefined {
-  try {
-    return Option.getOrUndefined(decodeSelectedModel(value));
-  } catch {
-    return undefined;
-  }
+  return invokeHostCallback(() => Option.getOrUndefined(decodeSelectedModel(value)), undefined);
 }
 
 export function captureContextModel(ctx: ExtensionContext): SelectedModel | undefined {
-  try {
-    return captureSelectedModel(ctx.model);
-  } catch {
-    return undefined;
-  }
+  return invokeHostCallback(() => captureSelectedModel(ctx.model), undefined);
 }
 
 const thinkingReadError = hostError("thinking", "Unable to read Pi's thinking level.");
@@ -76,7 +65,7 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
   preference: DirectoryModelPreference,
 ) {
   const current = yield* Effect.try({
-    try: () => captureSelectedModel(ctx.model),
+    try: () => Option.getOrUndefined(decodeSelectedModel(ctx.model)),
     catch: hostError("read", "Unable to inspect Pi's current model."),
   });
   if (current?.provider !== preference.provider || current.id !== preference.model) {

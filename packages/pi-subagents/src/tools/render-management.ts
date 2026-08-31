@@ -14,7 +14,7 @@ import type {
   SubagentProfileCandidateCard,
   SubagentProfileRouteCard,
   SubagentRunCard,
-} from "./details.ts";
+} from "./details-schema.ts";
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;

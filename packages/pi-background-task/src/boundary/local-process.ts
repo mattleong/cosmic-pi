@@ -28,7 +28,14 @@ const { spawn: spawnWindowsTreeTerminator } = childProcessModule;
 const { stat } = nodeFsModule.promises;
 
 const INGRESS_CHUNKS = 32;
-const BLOCKED_ENVIRONMENT_KEYS = new Set(["BASH_ENV", "ENV", "NODE_OPTIONS", "NODE_PATH"]);
+const BLOCKED_ENVIRONMENT_KEYS = new Set([
+  "BASH_ENV",
+  "ENV",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "PI_SESSION_FILE",
+  "PI_SESSION_ID",
+]);
 
 export interface LocalProcessRequest {
   readonly command: string;
@@ -46,7 +53,6 @@ export interface LocalProcessOutput {
 export interface LocalProcessExit {
   readonly exitCode: number | null;
   readonly signal?: string;
-  readonly error?: string;
 }
 
 export interface LocalProcessHandle {
@@ -82,9 +88,7 @@ export function makeBackgroundProcessEnvironment(
     Object.entries(source).filter(
       ([key, value]) =>
         value !== undefined &&
-        !BLOCKED_ENVIRONMENT_KEYS.has(key) &&
-        key !== "PI_SESSION_FILE" &&
-        key !== "PI_SESSION_ID",
+        !BLOCKED_ENVIRONMENT_KEYS.has(platform === "win32" ? key.toUpperCase() : key),
     ),
   );
   // Background stdout/stderr are pipes, so compatible CLIs otherwise suppress useful color.

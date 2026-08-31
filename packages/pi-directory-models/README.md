@@ -13,7 +13,8 @@ pi install npm:pi-directory-models
 - Fresh sessions restore the preference for the canonical current directory.
 - `/new` restores the directory preference.
 - Resumed, forked, and reloaded sessions keep their session model.
-- An explicit `--model` is a one-off override and is not saved.
+- An exact `--model <value>` or `--thinking <value>` before `--` is a one-off override. Either option suppresses restoration of both the saved model and thinking level, and the override is not saved.
+- Bare terminal flags and tokens after `--` do not count as overrides.
 - `/model`, model cycling, and thinking-level changes update the preference.
 - Symlink aliases of the same directory share a preference.
 
@@ -49,4 +50,4 @@ Invalid records, unavailable models, missing authentication, and persistence fai
 
 ## Pi global default
 
-Pi's public `setModel()` API also updates Pi's global default. This extension cannot suppress that internal write, but remembered directories restore their own preference instead of relying on the shared global value.
+Restoring a directory preference changes only the current session. Pi's extension `setModel()` API does not update Pi's global default.

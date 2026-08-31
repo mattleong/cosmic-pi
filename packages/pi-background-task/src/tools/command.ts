@@ -16,20 +16,34 @@ import type {
   BackgroundLogSlice,
   BackgroundTaskSnapshot,
   BackgroundTaskWaitResult,
+  StartBackgroundTask,
 } from "../task/model.ts";
 import { BackgroundTaskService } from "../task/service.ts";
 import { utf8ByteLength } from "../task/utf8.ts";
-import type { BackgroundTaskAction, BackgroundTaskToolInput } from "./schema.ts";
+import type { BackgroundTaskToolInput } from "./schema.ts";
 
-export interface BackgroundTaskToolDetails {
-  readonly action: BackgroundTaskAction;
-  readonly snapshot?: BackgroundTaskSnapshot;
-  readonly tasks?: ReadonlyArray<BackgroundTaskSnapshot>;
-  readonly logs?: BackgroundLogSlice;
-  readonly wait?: BackgroundTaskWaitResult;
-  readonly removed?: number;
-  readonly truncation?: ReturnType<typeof truncateTail>;
-}
+export type BackgroundTaskToolDetails =
+  | {
+      readonly action: "start" | "status" | "stop";
+      readonly snapshot: BackgroundTaskSnapshot;
+    }
+  | {
+      readonly action: "list" | "stop_all";
+      readonly tasks: ReadonlyArray<BackgroundTaskSnapshot>;
+    }
+  | {
+      readonly action: "logs";
+      readonly logs: BackgroundLogSlice;
+      readonly truncation?: ReturnType<typeof truncateTail>;
+    }
+  | {
+      readonly action: "wait";
+      readonly wait: BackgroundTaskWaitResult;
+    }
+  | {
+      readonly action: "clear";
+      readonly removed: number;
+    };
 
 export interface BackgroundTaskCommandResult {
   readonly text: string;
@@ -112,8 +126,20 @@ const reply = (text: string, details: BackgroundTaskToolDetails): BackgroundTask
   details,
 });
 
+/** The exact successful-start formatter used by execution and Code Mode admission. */
+export const backgroundTaskStartCommandResult = (
+  snapshot: BackgroundTaskSnapshot,
+  maxTextBytes: number,
+): BackgroundTaskCommandResult =>
+  reply(boundedText(`Started ${formatBackgroundTask(snapshot)}`, maxTextBytes), {
+    action: "start",
+    snapshot,
+  });
+
 export interface BackgroundTaskCommandOptions {
   readonly maxTextBytes?: number;
+  /** Optional nested-call barrier, evaluated after exact start normalization and before service.start. */
+  readonly startOutputFits?: (request: StartBackgroundTask, maxTextBytes: number) => boolean;
 }
 
 /** Shared action executor used by the top-level Pi tool and the explicit Code Mode adapter. */
@@ -131,18 +157,24 @@ export const executeBackgroundTaskCommand = (
     const path = yield* Path.Path;
     switch (input.action) {
       case "start": {
-        const snapshot = yield* service.start({
+        const name = input.name?.trim();
+        const request: StartBackgroundTask = {
           command: yield* required(input.command, "command"),
           cwd: path.resolve(sessionCwd, input.cwd ?? "."),
-          ...(input.name && { name: input.name }),
+          ...(name && { name }),
           ...(input.timeoutSeconds !== undefined && {
             timeoutSeconds: input.timeoutSeconds,
           }),
-        });
-        return reply(boundedText(`Started ${formatBackgroundTask(snapshot)}`, maxTextBytes), {
-          action: input.action,
-          snapshot,
-        });
+        };
+        if (options.startOutputFits && !options.startOutputFits(request, maxTextBytes)) {
+          return yield* new InvalidBackgroundCommandError({
+            message:
+              "Background task result exceeds the current Code Mode child-output allowance. " +
+              "Use a shorter command, name, or cwd and retry.",
+          });
+        }
+        const snapshot = yield* service.start(request);
+        return backgroundTaskStartCommandResult(snapshot, maxTextBytes);
       }
       case "list": {
         const tasks = yield* service.list(input.state ?? "all");

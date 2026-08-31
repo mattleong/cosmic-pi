@@ -4,7 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { runBoundedProcessNode, sanitizeDiagnosticContent } from "pi-cosmic-core";
+import {
+  runBoundedProcessNode,
+  sanitizeDiagnosticContent,
+  type BoundedProcessError,
+} from "pi-cosmic-core";
 import { HerdrBtwError, type HerdrBtwErrorOutcome } from "../btw/errors.ts";
 import { herdrBtwParentMarkerArguments } from "../btw/marker.ts";
 
@@ -215,14 +219,23 @@ export const selectHerdrEnvironment = (source: Readonly<NodeJS.ProcessEnv>): Nod
     ),
   );
 
-const herdrTransportFailure = (request: HerdrCommandRequest): HerdrBtwError => {
-  const outcome: HerdrBtwErrorOutcome = request.mutation ? "uncertain" : "confirmed";
+const herdrTransportFailure = (
+  request: HerdrCommandRequest,
+  failure?: BoundedProcessError | undefined,
+): HerdrBtwError => {
+  const failedBeforeDispatch = failure?.operation === "spawn";
+  const outcome: HerdrBtwErrorOutcome =
+    request.mutation && !failedBeforeDispatch ? "uncertain" : "confirmed";
   return new HerdrBtwError({
     operation: request.operation,
-    code: operationCode(request.operation, request.mutation ? "outcome_uncertain" : "failed"),
-    message: request.mutation
-      ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.`
-      : `Unable to run Herdr ${request.operation}.`,
+    code: operationCode(
+      request.operation,
+      request.mutation && !failedBeforeDispatch ? "outcome_uncertain" : "failed",
+    ),
+    message:
+      request.mutation && !failedBeforeDispatch
+        ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.`
+        : `Unable to run Herdr ${request.operation}.`,
     outcome,
   });
 };
@@ -252,7 +265,7 @@ const makeHerdrCommandRunner = (
       detached: false,
       windowsHide: true,
     }).pipe(
-      Effect.mapError(() => herdrTransportFailure(request)),
+      Effect.mapError((failure) => herdrTransportFailure(request, failure)),
       Effect.flatMap((output) => {
         if (
           output.overflowed ||

@@ -15,7 +15,7 @@ if (!nodeFs || !nodePath || !nodeCrypto)
   throw new Error("Node fs/path/crypto builtins are unavailable.");
 const { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync, writeFileSync } =
   nodeFs;
-const { isAbsolute, join } = nodePath;
+const { isAbsolute, join, normalize } = nodePath;
 const { randomUUID } = nodeCrypto;
 
 const MAX_SESSION_PATH_CHARS = 4_096;
@@ -39,7 +39,14 @@ export type SessionHeaderProbe =
   | { readonly _tag: "valid"; readonly header: SessionHeaderFacts }
   | { readonly _tag: "invalid" };
 
+export type SessionFileIdentityComparison = "same" | "distinct" | "unavailable";
+export type SessionFileIdentityComparator = (
+  leftPath: string,
+  rightPath: string,
+) => SessionFileIdentityComparison;
+
 const INVALID: SessionHeaderProbe = { _tag: "invalid" };
+const IDENTITY_UNAVAILABLE: SessionFileIdentityComparison = "unavailable";
 
 const isBoundedSessionPath = (path: string): boolean =>
   path.length > 0 &&
@@ -79,6 +86,29 @@ const withRegularSessionDescriptor = <A>(
 /** Checks one bounded absolute session path without following a symlink. */
 export const isRegularSessionFile = (path: string): boolean =>
   withRegularSessionDescriptor(path, () => true) === true;
+
+/**
+ * Compares two regular session files by descriptor identity. Paths are bounded
+ * and normalized before either no-follow open. Any failed probe makes identity
+ * unavailable, never evidence that the files are distinct.
+ */
+export const compareSessionFileIdentity: SessionFileIdentityComparator = (leftPath, rightPath) => {
+  if (!isBoundedSessionPath(leftPath) || !isBoundedSessionPath(rightPath))
+    return IDENTITY_UNAVAILABLE;
+  const normalizedLeftPath = normalize(leftPath);
+  const normalizedRightPath = normalize(rightPath);
+  if (!isBoundedSessionPath(normalizedLeftPath) || !isBoundedSessionPath(normalizedRightPath))
+    return IDENTITY_UNAVAILABLE;
+
+  const comparison = withRegularSessionDescriptor(normalizedLeftPath, (leftDescriptor) =>
+    withRegularSessionDescriptor(normalizedRightPath, (rightDescriptor) => {
+      const left = fstatSync(leftDescriptor, { bigint: true });
+      const right = fstatSync(rightDescriptor, { bigint: true });
+      return left.dev === right.dev && left.ino === right.ino ? "same" : "distinct";
+    }),
+  );
+  return comparison ?? IDENTITY_UNAVAILABLE;
+};
 
 const readFirstLine = (path: string): string | undefined =>
   withRegularSessionDescriptor(path, (descriptor) => {

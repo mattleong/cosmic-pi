@@ -10,7 +10,6 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   AgentDirectory,
   JsonDocumentStore,
-  PiApi,
   provideBuiltLayer,
   type AtomicJsonDocumentStoreContract,
   type JsonObject,
@@ -20,8 +19,17 @@ import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/
 import { extensionContextFixture } from "./support/host.ts";
 import { CosmicUiConfigStore } from "../src/config/store.ts";
 import { CosmicUiService, makeProjection } from "../src/protocol/service.ts";
-import { PiExec } from "../src/boundary/host-exec.ts";
-import { RepositoryProbe } from "../src/probe/repository-probe.ts";
+import { makePiExec } from "../src/boundary/host-exec.ts";
+import {
+  makeFooterProtocolBuffer,
+  protocolRemove,
+  protocolUpsert,
+  type FooterProtocolEvent,
+} from "../src/protocol/host.ts";
+import {
+  COSMIC_UI_PROTOCOL_VERSION,
+  normalizeCosmicFooterUpsertEvent,
+} from "../src/protocol/protocol.ts";
 
 function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
   const memory = makeInMemoryDocuments(initial);
@@ -83,14 +91,10 @@ function serviceLayer(
   const store = options.store ?? documents(options.documents);
   const platform = Layer.mergeAll(store.layer, Path.layer, AgentDirectory.layer("/agent"));
   const repository = CosmicUiConfigStore.layer.pipe(Layer.provide(platform));
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  const probe = RepositoryProbe.layer.pipe(
-    Layer.provide(PiExec.layer),
-    Layer.provide(PiApi.layer({ exec } as ExtensionAPI)),
-  );
   const baseServiceOptions = {
     context: contextRef,
     cwd: "/project",
+    exec: makePiExec(exec),
     projection,
     onChange() {},
     startPolling: options.startPolling ?? false,
@@ -99,10 +103,185 @@ function serviceLayer(
     ? baseServiceOptions
     : { ...baseServiceOptions, projectTrusted: options.projectTrusted ?? true };
   const layer = CosmicUiService.layer(serviceOptions).pipe(
-    Layer.provide(Layer.mergeAll(repository, probe, HostCallbackBoundary.layer(callbacks))),
+    Layer.provide(Layer.merge(repository, HostCallbackBoundary.layer(callbacks))),
   );
   return { layer, projection, contextRef, callbacks, documents: store.values };
 }
+
+const protocolEventId = (event: FooterProtocolEvent): string | undefined =>
+  event._tag === "Remove" ? event.id : undefined;
+
+describe("FooterProtocolBuffer", () => {
+  it.effect("detaches raw contributions and reuses normalized frozen contributions", () => {
+    const buffer = makeFooterProtocolBuffer(3);
+    const raw = {
+      kind: "text" as const,
+      id: "raw",
+      region: "metrics" as const,
+      text: "before",
+    };
+    const normalized = normalizeCosmicFooterUpsertEvent({
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "normalized-owner",
+      contribution: {
+        kind: "text",
+        id: "normalized",
+        region: "metrics",
+        text: "stable",
+      },
+    });
+    const surfaceSource = {
+      kind: "surface" as const,
+      id: "surface",
+      region: "media" as const,
+      preferredWidth: 10,
+      state: "owned",
+      render() {
+        expect(this).toBe(surfaceSource);
+        return [this.state];
+      },
+    };
+    const normalizedSurface = normalizeCosmicFooterUpsertEvent({
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "surface-owner",
+      contribution: surfaceSource,
+    });
+    if (!normalized || !normalizedSurface)
+      throw new Error("Expected valid normalized contributions.");
+    expect(buffer.offer(protocolUpsert("raw-owner", raw))).toBe("accepted");
+    expect(buffer.offer(protocolUpsert(normalized.owner, normalized.contribution))).toBe(
+      "accepted",
+    );
+    expect(
+      buffer.offer(protocolUpsert(normalizedSurface.owner, normalizedSurface.contribution)),
+    ).toBe("accepted");
+    raw.text = "after";
+    const drained: FooterProtocolEvent[] = [];
+
+    return buffer
+      .drain((event) => Effect.sync(() => drained.push(event)))
+      .pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            expect(drained[0]?._tag).toBe("Upsert");
+            if (drained[0]?._tag === "Upsert") {
+              expect(drained[0].contribution).not.toBe(raw);
+              expect(drained[0].contribution).toMatchObject({ text: "before" });
+              expect(Object.isFrozen(drained[0].contribution)).toBe(true);
+            }
+            expect(drained[1]?._tag).toBe("Upsert");
+            if (drained[1]?._tag === "Upsert")
+              expect(drained[1].contribution).toBe(normalized.contribution);
+            expect(drained[2]?._tag).toBe("Upsert");
+            if (drained[2]?._tag === "Upsert") {
+              expect(drained[2].contribution).toBe(normalizedSurface.contribution);
+              expect(drained[2].contribution.kind).toBe("surface");
+              if (drained[2].contribution.kind === "surface")
+                expect(
+                  drained[2].contribution.render({
+                    width: 10,
+                    placement: "inline-right",
+                    theme: { fg: (_color, value) => value },
+                  }),
+                ).toEqual(["owned"]);
+            }
+          }),
+        ),
+      );
+  });
+
+  it.effect("restores the failed event and untouched suffix in FIFO order", () => {
+    const buffer = makeFooterProtocolBuffer(4);
+    for (const id of ["a", "b", "c"])
+      expect(buffer.offer(protocolRemove("owner", id))).toBe("accepted");
+    const first: Array<string | undefined> = [];
+    const replayed: Array<string | undefined> = [];
+
+    return Effect.gen(function* () {
+      yield* buffer
+        .drain((event) => {
+          const id = protocolEventId(event);
+          first.push(id);
+          return id === "b" ? Effect.fail("stop") : Effect.void;
+        })
+        .pipe(Effect.ignore);
+
+      expect(buffer.offer(protocolRemove("owner", "d"))).toBe("accepted");
+      yield* buffer.drain((event) => Effect.sync(() => replayed.push(protocolEventId(event))));
+
+      expect(first).toEqual(["a", "b"]);
+      expect(replayed).toEqual(["b", "c", "d"]);
+    });
+  });
+
+  it.effect("reset invalidates an active drain's reservation and failure restoration", () => {
+    const buffer = makeFooterProtocolBuffer(1);
+    expect(buffer.offer(protocolRemove("owner", "old"))).toBe("accepted");
+
+    return Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const fiber = yield* buffer
+        .drain(() =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(Effect.fail("stop")),
+          ),
+        )
+        .pipe(Effect.forkScoped);
+
+      yield* Deferred.await(started);
+      buffer.reset();
+      expect(buffer.offer(protocolRemove("owner", "fresh"))).toBe("accepted");
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(fiber).pipe(Effect.ignore);
+      expect(buffer.offer(protocolRemove("owner", "newest"))).toBe("accepted");
+
+      const drained: Array<string | undefined> = [];
+      yield* buffer.drain((event) => Effect.sync(() => drained.push(protocolEventId(event))));
+      expect(drained).toEqual(["newest"]);
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("reserves drained capacity across yields and synchronously flushes activation", () => {
+    const buffer = makeFooterProtocolBuffer(2);
+    expect(buffer.offer(protocolRemove("owner", "a"))).toBe("accepted");
+    expect(buffer.offer(protocolRemove("owner", "b"))).toBe("accepted");
+
+    return Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const drained: Array<string | undefined> = [];
+      const fiber = yield* buffer
+        .drain((event) =>
+          Effect.sync(() => drained.push(protocolEventId(event))).pipe(
+            Effect.andThen(
+              protocolEventId(event) === "a"
+                ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)))
+                : Effect.void,
+            ),
+          ),
+        )
+        .pipe(Effect.forkScoped);
+
+      yield* Deferred.await(started);
+      expect(buffer.offer(protocolRemove("owner", "c"))).toBe("dropped");
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(fiber);
+      expect(drained).toEqual(["a", "b"]);
+
+      expect(buffer.offer(protocolRemove("owner", "c"))).toBe("accepted");
+      const activated: Array<string | undefined> = [];
+      buffer.activate((event) => {
+        activated.push(protocolEventId(event));
+        return "accepted";
+      });
+      expect(activated).toEqual(["c"]);
+      expect(buffer.offer(protocolRemove("owner", "d"))).toBe("accepted");
+      expect(activated).toEqual(["c", "d"]);
+    }).pipe(Effect.scoped);
+  });
+});
 
 describe("Cosmic UI host service", () => {
   it.effect("treats omitted project trust as untrusted", () => {

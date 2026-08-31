@@ -55,28 +55,6 @@ function decodeConfig<ValueInput>(value: ValueInput): DecodedConfig {
   return { usage, footer };
 }
 
-type ResolvedConfigValues = Pick<ResolvedConfig, "usage" | "footer">;
-
-const defaultConfigValues = (): ResolvedConfigValues => ({
-  usage: { ...DEFAULT_USAGE_CONFIG },
-  footer: { ...DEFAULT_FOOTER_CONFIG },
-});
-
-function overlayConfigValues(
-  primary: DecodedConfig | void,
-  fallback: ResolvedConfigValues,
-): ResolvedConfigValues {
-  const values = primary ?? { usage: {}, footer: {} };
-  const usage = { ...fallback.usage, ...values.usage };
-  return {
-    usage: {
-      ...usage,
-      refreshIntervalMs: Math.max(5_000, usage.refreshIntervalMs),
-    },
-    footer: { ...fallback.footer, ...values.footer },
-  };
-}
-
 const store = makeScopedConfigStore({
   errorFactory: mapDocumentError,
   label: "Better xAI",
@@ -84,15 +62,33 @@ const store = makeScopedConfigStore({
   projectConfigDirectory: CONFIG_DIR_NAME,
   basename: CONFIG_BASENAME,
   decode: decodeConfig,
-  defaultDocument: (): JsonObject => defaultConfigValues(),
+  defaultDocument: (): JsonObject => ({
+    usage: { ...DEFAULT_USAGE_CONFIG },
+    footer: { ...DEFAULT_FOOTER_CONFIG },
+  }),
   resolve: (
     metadata: ScopedConfigMetadata,
     project: DecodedConfig | undefined,
     global: DecodedConfig | undefined,
-  ): ResolvedConfig => ({
-    ...metadata,
-    ...overlayConfigValues(project, overlayConfigValues(global, defaultConfigValues())),
-  }),
+  ): ResolvedConfig => {
+    const usage = {
+      ...DEFAULT_USAGE_CONFIG,
+      ...global?.usage,
+      ...project?.usage,
+    };
+    return {
+      ...metadata,
+      usage: {
+        ...usage,
+        refreshIntervalMs: Math.max(5_000, usage.refreshIntervalMs),
+      },
+      footer: {
+        ...DEFAULT_FOOTER_CONFIG,
+        ...global?.footer,
+        ...project?.footer,
+      },
+    };
+  },
 });
 
 export const { modifyConfig, readRawConfig, resolveCommittedConfig, resolveConfig } = store;

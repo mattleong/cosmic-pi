@@ -1,6 +1,11 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
-import { advisorFindingId } from "../src/review/finding-lifecycle.ts";
+import {
+  advisorFindingId,
+  MAX_FINDING_LIFECYCLE_RECORDS,
+  type AdvisorFindingRecord,
+} from "../src/review/finding-lifecycle.ts";
+import { MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST } from "../src/review/intervention-budget.ts";
 import {
   ADVISOR_CHECKPOINT_ENTRY_TYPE,
   ADVISOR_CHECKPOINT_PROTOCOL_VERSION,
@@ -54,6 +59,20 @@ function reviewSummary() {
       },
     ],
   });
+}
+
+function findingRecord(index: number): AdvisorFindingRecord {
+  const key = index.toString(16).padStart(64, "0");
+  return {
+    id: advisorFindingId(key, 0),
+    key,
+    generation: 0,
+    category: "correctness",
+    severity: "concern",
+    status: "open",
+    firstSeenTurn: index,
+    lastSeenTurn: index,
+  };
 }
 
 describe("checkpoint ledger", () => {
@@ -222,6 +241,84 @@ describe("checkpoint ledger", () => {
         },
       }),
     ).toBeUndefined();
+  });
+
+  test("defaults the legacy v3 completed-turn field while tolerating unknown root fields", () => {
+    const ledger = createCheckpointLedger({
+      fingerprint: "a".repeat(64),
+      anchorId: "anchor",
+      cancellationLatched: true,
+      immunityUntilCompletedTurn: 4,
+    });
+    const legacyRouting = {
+      cancellationLatched: ledger.routing.cancellationLatched,
+      immunityUntilCompletedTurn: ledger.routing.immunityUntilCompletedTurn,
+    };
+
+    expect(parseLedger({ ...ledger, routing: legacyRouting, futureRootField: true })).toEqual({
+      ...ledger,
+      routing: { ...legacyRouting, completedPrimaryTurns: 0 },
+    });
+  });
+
+  test("keeps valid records from mixed lifecycle input and normalizes their wire fields", () => {
+    const ledger = createCheckpointLedger({
+      fingerprint: "a".repeat(64),
+      anchorId: "anchor",
+    });
+    const valid = findingRecord(1);
+    const parsed = parseLedger({
+      ...ledger,
+      findingLifecycle: [
+        { ...valid, futureField: "ignored" },
+        { ...findingRecord(2), lastSeenTurn: 1 },
+        "not-a-record",
+      ],
+    });
+
+    expect(parsed?.findingLifecycle).toEqual([valid]);
+  });
+
+  test("normalizes routing values and caps bounded lifecycle state", () => {
+    const ledger = createCheckpointLedger({
+      fingerprint: "a".repeat(64),
+      anchorId: "anchor",
+    });
+    const lifecycle = Array.from({ length: MAX_FINDING_LIFECYCLE_RECORDS + 3 }, (_, index) =>
+      findingRecord(index),
+    );
+    const parsed = parseLedger({
+      ...ledger,
+      routing: {
+        ...ledger.routing,
+        interventionBudget: {
+          delivered: MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST + 99,
+          correctionUsed: "not-a-boolean",
+          highestSeverity: "critical",
+          futureField: true,
+        },
+      },
+      findingLifecycle: lifecycle,
+    });
+
+    expect(parsed?.routing.interventionBudget).toEqual({
+      delivered: MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST,
+      correctionUsed: false,
+    });
+    expect(parsed?.findingLifecycle).toHaveLength(MAX_FINDING_LIFECYCLE_RECORDS);
+    expect(parsed?.findingLifecycle?.[0]).toEqual(lifecycle[3]);
+    expect(
+      createCheckpointLedger({
+        fingerprint: "a".repeat(64),
+        anchorId: "anchor",
+        completedPrimaryTurns: -2,
+        immunityUntilCompletedTurn: 4.9,
+      }).routing,
+    ).toEqual({
+      cancellationLatched: false,
+      completedPrimaryTurns: 0,
+      immunityUntilCompletedTurn: 4,
+    });
   });
 
   test("rejects lifecycle records whose ID does not match key and generation", () => {

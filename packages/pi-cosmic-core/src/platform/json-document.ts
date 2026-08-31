@@ -1,10 +1,10 @@
-import { hasObjectRuntimeType } from "../runtime-values.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { JsonDocumentError } from "./errors.ts";
 import { ProcessCoordinator } from "./process-coordinator.ts";
@@ -16,10 +16,7 @@ export type JsonValue = Schema.MutableJson;
 export type JsonObject = Schema.MutableJsonObject;
 
 export const isJsonObject = <Value>(value: Value): value is Value & JsonObject =>
-  Schema.is(Schema.MutableJson)(value) &&
-  hasObjectRuntimeType(value) &&
-  value !== null &&
-  !Array.isArray(value);
+  Schema.is(Schema.MutableJson)(value) && Predicate.isObject(value);
 
 export interface JsonDocumentModification<A, AfterCommitR = never> {
   readonly value: A;

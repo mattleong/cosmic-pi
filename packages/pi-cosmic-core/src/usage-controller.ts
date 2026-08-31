@@ -9,7 +9,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Tracer from "effect/Tracer";
 import { mergeRefreshRequest, type RefreshRequest } from "./coordination/refresh-coordinator.ts";
 import { makeSubscriptionRefresh } from "./coordination/subscription-refresh.ts";
-import type { ScopedConfigMetadata } from "./config/scoped-config-store.ts";
+import type { ScopedConfigMetadata, ScopedConfigStore } from "./config/scoped-config-store.ts";
 import { AgentDirectory } from "./platform/agent-directory.ts";
 import {
   JsonDocumentStore,
@@ -86,6 +86,11 @@ export interface UsageControllerStore<Resolved, E> {
     modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
   ) => Effect.Effect<A, E, JsonDocumentStore | AfterCommitR>;
 }
+
+type ScopedUsageControllerStore<Resolved extends ScopedConfigMetadata, E> = Pick<
+  ScopedConfigStore<unknown, Resolved, E>,
+  "resolveConfig" | "readRawConfig" | "resolveCommittedConfig" | "modifyConfig"
+>;
 
 export interface UsageRefreshControllerOptions<
   P extends UsageProjectionBase<Resolved, Snapshot>,
@@ -195,25 +200,22 @@ export const makeUsageRefreshController = <
 ) =>
   Effect.gen(function* () {
     const { context, cwd, projection, onChange, logLabel } = options;
-    const path = yield* Path.Path;
-    const documents = yield* JsonDocumentStore;
-    const http = yield* JsonHttpClient;
-    const tracer = yield* Tracer.Tracer;
+    const store: ScopedUsageControllerStore<Resolved, E> = options.store;
+    const ambientDependencies = yield* Effect.context<UsageProviderRequirements>();
     // Capture only these shared services, never the whole ambient context. Context.merge keeps
     // the second context on key collisions, so provider dependencies cannot replace them.
-    const sharedDependencies = Context.make(Path.Path, path).pipe(
-      Context.add(JsonDocumentStore, documents),
-      Context.add(JsonHttpClient, http),
-      Context.add(Tracer.Tracer, tracer),
+    const sharedDependencies = ambientDependencies.pipe(
+      Context.pick(Path.Path, JsonDocumentStore, JsonHttpClient, Tracer.Tracer),
     );
     const dependencies = Context.merge(options.dependencies, sharedDependencies);
+    const path = Context.get(sharedDependencies, Path.Path);
     const provideDependencies = <A, E2>(
       effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
     ): Effect.Effect<A, E2> => Effect.provideContext(effect, dependencies);
     const agentDir = options.agentDir ?? (yield* AgentDirectory);
     const authPath = path.join(agentDir, "auth.json");
     const projectTrusted = options.projectTrusted === true;
-    const config = yield* options.store.resolveConfig(cwd, agentDir, projectTrusted);
+    const config = yield* store.resolveConfig(cwd, agentDir, projectTrusted);
     // The overridden fields all belong to UsageProjectionBase, so the merge stays within P.
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const mergeState = (
@@ -384,18 +386,18 @@ export const makeUsageRefreshController = <
     ) {
       if (current.configPath !== current.projectConfigPath || !current.globalConfigExists)
         return undefined;
-      return yield* options.store.readRawConfig(current.globalConfigPath);
+      return yield* store.readRawConfig(current.globalConfigPath);
     });
     const updateSettingWithRequirements = Effect.fn(`${options.spanPrefix}.updateSetting`)(
       function* (id: string, value: string) {
         const update = yield* options.decodeSettingUpdate(id, value);
         yield* settingUpdates.withPermit(
           Effect.gen(function* () {
-            const freshConfig = yield* options.store.resolveConfig(cwd, agentDir, projectTrusted);
+            const freshConfig = yield* store.resolveConfig(cwd, agentDir, projectTrusted);
             const globalFallback = yield* readGlobalFallback(freshConfig);
-            yield* options.store.modifyConfig(freshConfig.configPath, (raw) => {
+            yield* store.modifyConfig(freshConfig.configPath, (raw) => {
               const committed = update(raw);
-              const nextConfig = options.store.resolveCommittedConfig(
+              const nextConfig = store.resolveCommittedConfig(
                 freshConfig,
                 committed,
                 globalFallback,

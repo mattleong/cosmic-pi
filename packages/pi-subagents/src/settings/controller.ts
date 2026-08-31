@@ -7,13 +7,14 @@ import {
   isProjectTrusted,
   synchronousNow,
 } from "pi-cosmic-core";
+import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import {
   makeAdaptiveHostRefreshTicker,
   type AdaptiveHostRefreshTicker,
 } from "../boundary/host-refresh-ticker.ts";
-import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
+import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
 import { resolveNamedProfileSet, type ResolvedNamedProfileSet } from "../config/options.ts";

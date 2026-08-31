@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -12,13 +14,16 @@ import {
   makeCapturedTracer,
   makeInMemoryDocuments,
 } from "pi-cosmic-core/testing";
-import { getXaiCredentialsResult, readXaiAuthResult } from "../src/auth/auth.ts";
+import { extractTeamIdFromJwt, getXaiCredentials, readXaiCredentials } from "../src/auth/auth.ts";
 import { ModelRegistryAuth } from "../src/boundary/model-registry-auth.ts";
 
-const jwt = (teamId: string) => {
-  const payload = Buffer.from(JSON.stringify({ team_id: teamId })).toString("base64url");
+type JwtFixturePayload = { readonly team_id?: string | number };
+
+const jwtPayload = (value: JwtFixturePayload) => {
+  const payload = Buffer.from(JSON.stringify(value)).toString("base64url");
   return `header.${payload}.signature`;
 };
+const jwt = (teamId: string) => jwtPayload({ team_id: teamId });
 
 // Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
 // runtime values (tagged errors, redacted credentials) for secret fragments.
@@ -34,6 +39,20 @@ const registryLayer = (token?: string) =>
   );
 
 describe("xAI authentication", () => {
+  it("extracts trimmed team metadata and ignores invalid, missing, or blank claims", () => {
+    const invalidJson = `header.${Buffer.from("{").toString("base64url")}.signature`;
+    for (const token of [
+      "not-a-jwt",
+      "header.!!!!.signature",
+      invalidJson,
+      jwtPayload({}),
+      jwtPayload({ team_id: 42 }),
+      jwt("  \t  "),
+    ])
+      expect(extractTeamIdFromJwt(token)).toBeUndefined();
+    expect(extractTeamIdFromJwt(jwt("  team-owned  "))).toBe("team-owned");
+  });
+
   it.effect("distinguishes missing, malformed, and valid redacted auth documents", () => {
     const authPath = "/agent/auth.json";
     const missing = makeInMemoryDocuments();
@@ -59,23 +78,28 @@ describe("xAI authentication", () => {
     });
 
     return Effect.gen(function* () {
-      expect(yield* readXaiAuthResult(authPath).pipe(provideBuiltLayer(missing.layer))).toEqual({
-        _tag: "Missing",
-      });
+      expect(
+        yield* readXaiCredentials(authPath).pipe(provideBuiltLayer(missing.layer)),
+      ).toBeUndefined();
 
-      const malformedResult = yield* readXaiAuthResult(authPath).pipe(
+      const malformedAttempt = yield* readXaiCredentials(authPath).pipe(
         provideBuiltLayer(malformed.layer),
+        Effect.result,
       );
-      expect(malformedResult).toMatchObject({ _tag: "Malformed", operation: "decode" });
-      expect(serializedSnapshot(malformedResult)).not.toContain("refresh-secret-malformed");
+      expect(malformedAttempt._tag).toBe("Failure");
+      if (malformedAttempt._tag === "Failure")
+        expect(malformedAttempt.failure.operation).toBe("decode");
+      expect(serializedSnapshot(malformedAttempt)).not.toContain("refresh-secret-malformed");
 
-      const validResult = yield* readXaiAuthResult(authPath).pipe(provideBuiltLayer(valid.layer));
-      expect(validResult._tag).toBe("Found");
-      if (validResult._tag === "Found") {
-        expect(Redacted.value(validResult.credentials.accessToken)).toBe(accessToken);
-        expect(validResult.credentials.teamId).toBe("team-owned");
-        expect(serializedSnapshot(validResult.credentials)).not.toContain(accessToken);
-        expect(serializedSnapshot(validResult.credentials)).not.toContain("refresh-secret-valid");
+      const validCredentials = yield* readXaiCredentials(authPath).pipe(
+        provideBuiltLayer(valid.layer),
+      );
+      expect(validCredentials).toBeDefined();
+      if (validCredentials !== undefined) {
+        expect(Redacted.value(validCredentials.accessToken)).toBe(accessToken);
+        expect(validCredentials.teamId).toBe("team-owned");
+        expect(serializedSnapshot(validCredentials)).not.toContain(accessToken);
+        expect(serializedSnapshot(validCredentials)).not.toContain("refresh-secret-valid");
       }
     });
   });
@@ -113,18 +137,194 @@ describe("xAI authentication", () => {
       // Advance past expiry (plus skew) so the refresh fires and the still-valid-token
       // guard cannot mask the registry fallback.
       yield* TestClock.setTime(4_000_000);
-      const result = yield* getXaiCredentialsResult(authPath);
+      const credentials = yield* getXaiCredentials(authPath);
       expect(refreshAttempts).toBe(1);
-      expect(result._tag).toBe("Found");
-      if (result._tag === "Found") {
-        expect(Redacted.value(result.credentials.accessToken)).toBe(registrySecret);
-      }
-      const serialized = `${serializedSnapshot(result)}\n${capturedTelemetrySnapshot({
+      expect(credentials).toBeDefined();
+      if (credentials !== undefined)
+        expect(Redacted.value(credentials.accessToken)).toBe(registrySecret);
+      const serialized = `${serializedSnapshot(credentials)}\n${capturedTelemetrySnapshot({
         entries: logger.entries,
         spans: tracer.spans,
       })}`;
       for (const secret of [expiredAccess, refreshSecret, registrySecret, "provider-secret-body"])
         expect(serialized).not.toContain(secret);
+    }).pipe(provideBuiltLayer(layer));
+  });
+
+  it.effect("preserves fields added while an OAuth refresh request is in flight", () => {
+    const authPath = "/agent/auth.json";
+    const documents = makeInMemoryDocuments({
+      [authPath]: {
+        xai: {
+          type: "oauth",
+          access: "expiring-access-secret",
+          refresh: "refresh-secret",
+          expires: 1,
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const refreshStarted = yield* Deferred.make<void>();
+      const releaseRefresh = yield* Deferred.make<void>();
+      const http = jsonHttpTestLayer(() =>
+        Deferred.succeed(refreshStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseRefresh)),
+          Effect.as(
+            jsonHttpRawResponse(
+              200,
+              JSON.stringify({ access_token: "refreshed-access-secret", expires_in: 3_600 }),
+            ),
+          ),
+        ),
+      );
+      const layer = Layer.mergeAll(documents.layer, registryLayer(), http);
+      const fiber = yield* getXaiCredentials(authPath).pipe(
+        provideBuiltLayer(layer),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(refreshStarted);
+      yield* documents.service.updateObject(authPath, (document) => ({
+        ...document,
+        concurrentRootField: "preserved",
+        xai: {
+          type: "oauth",
+          access: "expiring-access-secret",
+          refresh: "refresh-secret",
+          expires: 1,
+          concurrentEntryField: "preserved",
+        },
+      }));
+      yield* Deferred.succeed(releaseRefresh, undefined);
+      const credentials = yield* Fiber.join(fiber);
+
+      expect(credentials).toBeDefined();
+      expect(documents.documents.get(authPath)).toMatchObject({
+        concurrentRootField: "preserved",
+        xai: {
+          concurrentEntryField: "preserved",
+          access: "refreshed-access-secret",
+          refresh: "refresh-secret",
+        },
+      });
+    });
+  });
+
+  it.effect("keeps a new login that lands while an OAuth refresh request is paused", () => {
+    const authPath = "/agent/auth.json";
+    const capturedAccess = "captured-access-secret";
+    const capturedRefresh = "captured-refresh-secret";
+    const staleAccess = "stale-refreshed-access-secret";
+    const staleRefresh = "stale-rotated-refresh-secret";
+    const loginAccess = "new-login-access-secret";
+    const loginRefresh = "new-login-refresh-secret";
+    const loginExpires = 7_200_000;
+    const documents = makeInMemoryDocuments({
+      [authPath]: {
+        xai: {
+          type: "oauth",
+          access: capturedAccess,
+          refresh: capturedRefresh,
+          expires: 1,
+        },
+      },
+    });
+    const logger = makeCapturedLogger();
+    const tracer = makeCapturedTracer();
+
+    return Effect.gen(function* () {
+      const refreshStarted = yield* Deferred.make<void>();
+      const releaseRefresh = yield* Deferred.make<void>();
+      const http = jsonHttpTestLayer(() =>
+        Deferred.succeed(refreshStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseRefresh)),
+          Effect.as(
+            jsonHttpRawResponse(
+              200,
+              JSON.stringify({
+                access_token: staleAccess,
+                refresh_token: staleRefresh,
+                expires_in: 3_600,
+              }),
+            ),
+          ),
+        ),
+      );
+      const layer = Layer.mergeAll(
+        documents.layer,
+        registryLayer(),
+        http,
+        logger.layer,
+        tracer.layer,
+      );
+      const fiber = yield* getXaiCredentials(authPath).pipe(
+        provideBuiltLayer(layer),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(refreshStarted);
+      yield* documents.service.updateObject(authPath, (document) => ({
+        ...document,
+        xai: {
+          type: "oauth",
+          access: loginAccess,
+          refresh: loginRefresh,
+          expires: loginExpires,
+        },
+      }));
+      yield* Deferred.succeed(releaseRefresh, undefined);
+      const credentials = yield* Fiber.join(fiber);
+
+      expect(credentials).toBeDefined();
+      if (credentials !== undefined) {
+        expect(Redacted.value(credentials.accessToken)).toBe(loginAccess);
+        expect(credentials.refreshToken).toBeDefined();
+        if (credentials.refreshToken !== undefined)
+          expect(Redacted.value(credentials.refreshToken)).toBe(loginRefresh);
+        expect(credentials.expires).toBe(loginExpires);
+      }
+      expect(documents.documents.get(authPath)?.xai).toEqual({
+        type: "oauth",
+        access: loginAccess,
+        refresh: loginRefresh,
+        expires: loginExpires,
+      });
+      const diagnostics = `${serializedSnapshot(credentials)}\n${capturedTelemetrySnapshot({
+        entries: logger.entries,
+        spans: tracer.spans,
+      })}`;
+      for (const secret of [
+        capturedAccess,
+        capturedRefresh,
+        staleAccess,
+        staleRefresh,
+        loginAccess,
+        loginRefresh,
+      ])
+        expect(diagnostics).not.toContain(secret);
+    });
+  });
+
+  it.effect("prefers a registry token when the file token does not need refresh", () => {
+    const authPath = "/agent/auth.json";
+    const documents = makeInMemoryDocuments({
+      [authPath]: {
+        xai: {
+          type: "oauth",
+          access: "file-access-secret",
+          expires: 3_600_000,
+        },
+      },
+    });
+    const layer = Layer.mergeAll(
+      documents.layer,
+      registryLayer("registry-access-secret"),
+      jsonHttpTestLayer(() => Effect.die("unexpected refresh request")),
+    );
+
+    return Effect.gen(function* () {
+      const credentials = yield* getXaiCredentials(authPath);
+      expect(credentials).toBeDefined();
+      if (credentials !== undefined)
+        expect(Redacted.value(credentials.accessToken)).toBe("registry-access-secret");
     }).pipe(provideBuiltLayer(layer));
   });
 
@@ -153,12 +353,11 @@ describe("xAI authentication", () => {
       }),
     );
     return Effect.gen(function* () {
-      const result = yield* getXaiCredentialsResult(authPath);
+      const credentials = yield* getXaiCredentials(authPath);
       expect(refreshAttempts).toBe(1);
-      expect(result._tag).toBe("Found");
-      if (result._tag === "Found") {
-        expect(Redacted.value(result.credentials.accessToken)).toBe("valid-access-secret");
-      }
+      expect(credentials).toBeDefined();
+      if (credentials !== undefined)
+        expect(Redacted.value(credentials.accessToken)).toBe("valid-access-secret");
     }).pipe(provideBuiltLayer(layer));
   });
 });

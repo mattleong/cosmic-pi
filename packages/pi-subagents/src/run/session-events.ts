@@ -132,23 +132,14 @@ export function startToolSessionEvent(
   },
 ): ReadonlyArray<SubagentSessionEvent> {
   const target = summarizeToolArguments(input.toolName, input.args);
-  return appendSessionEvent(
-    current,
-    (() => {
-      const baseResult = {
-        type: "tool" as const,
-        toolCallId: sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS),
-        toolName: sanitizeDiagnosticText(input.toolName, 200),
-      };
-      const withTarget = target ? { ...baseResult, target } : baseResult;
-      const withStateAndStartedAt = {
-        ...withTarget,
-        state: "running" as const,
-        startedAt: input.startedAt,
-      };
-      return withStateAndStartedAt;
-    })(),
-  );
+  return appendSessionEvent(current, {
+    type: "tool" as const,
+    toolCallId: sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS),
+    toolName: sanitizeDiagnosticText(input.toolName, 200),
+    ...(target && { target }),
+    state: "running" as const,
+    startedAt: input.startedAt,
+  });
 }
 
 export function finishToolSessionEvent(

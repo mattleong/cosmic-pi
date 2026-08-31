@@ -50,6 +50,9 @@ const WeeklyBillingSchema = Schema.Struct({
   }),
 });
 
+type MonthlyBillingBody = typeof MonthlyBillingSchema.Type;
+type WeeklyBillingBody = typeof WeeklyBillingSchema.Type;
+
 export class XaiUsageError extends Schema.TaggedError<XaiUsageError>()("XaiUsageError", {
   operation: Schema.String,
   message: Schema.String,
@@ -75,17 +78,16 @@ function parseIsoToSecondsFromNow(value: string | undefined, now: number): numbe
   return Math.max(0, (DateTime.toEpochMillis(parsed.value) - now) / 1000);
 }
 
-export function parseMonthlyBilling<PayloadInput>(
-  payload: PayloadInput,
+export function parseMonthlyBilling(
+  payload: MonthlyBillingBody,
   now: number,
 ): Pick<
   UsageSnapshot,
   "monthlyUsed" | "monthlyLimit" | "monthlyLeftPercent" | "monthlyResetInSeconds" | "onDemandCap"
 > {
-  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(MonthlyBillingSchema)(payload));
-  const monthlyUsed = decoded?.config.used?.val ?? null;
-  const monthlyLimit = decoded?.config.monthlyLimit?.val ?? null;
-  const onDemandCap = decoded?.config.onDemandCap?.val ?? null;
+  const monthlyUsed = payload.config.used?.val ?? null;
+  const monthlyLimit = payload.config.monthlyLimit?.val ?? null;
+  const onDemandCap = payload.config.onDemandCap?.val ?? null;
   const monthlyUsedPercent =
     monthlyUsed !== null && monthlyLimit !== null && monthlyLimit > 0
       ? clampPercent((monthlyUsed / monthlyLimit) * 100)
@@ -94,20 +96,19 @@ export function parseMonthlyBilling<PayloadInput>(
     monthlyUsed,
     monthlyLimit,
     monthlyLeftPercent: usedToLeftPercent(monthlyUsedPercent),
-    monthlyResetInSeconds: parseIsoToSecondsFromNow(decoded?.config.billingPeriodEnd, now),
+    monthlyResetInSeconds: parseIsoToSecondsFromNow(payload.config.billingPeriodEnd, now),
     onDemandCap,
   };
 }
 
-export function parseWeeklyBilling<PayloadInput>(
-  payload: PayloadInput,
+export function parseWeeklyBilling(
+  payload: WeeklyBillingBody | undefined,
   now: number,
 ): Pick<
   UsageSnapshot,
   "weeklyUsedPercent" | "weeklyLeftPercent" | "weeklyResetInSeconds" | "onDemandUsed"
 > {
-  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WeeklyBillingSchema)(payload));
-  const config = decoded?.config;
+  const config = payload?.config;
   // A decodable payload without creditUsagePercent is "unknown", not "0 used":
   // rendering 0 would claim certainty ("100% left") the provider never reported.
   const weeklyUsedPercent = config?.creditUsagePercent ?? null;
@@ -120,13 +121,13 @@ export function parseWeeklyBilling<PayloadInput>(
   };
 }
 
-export function parseUsageSnapshot<MonthlyPayloadInput>(
-  monthlyPayload: MonthlyPayloadInput,
-  weeklyPayload: unknown | null | undefined,
+export function parseUsageSnapshot(
+  monthlyPayload: MonthlyBillingBody,
+  weeklyPayload: WeeklyBillingBody | null | undefined,
   now: number,
 ): UsageSnapshot {
   const monthly = parseMonthlyBilling(monthlyPayload, now);
-  const weekly = parseWeeklyBilling(weeklyPayload ?? {}, now);
+  const weekly = parseWeeklyBilling(weeklyPayload ?? undefined, now);
   return { capturedAt: now, ...weekly, ...monthly };
 }
 
@@ -177,9 +178,11 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string
     now,
   );
   const onDemand =
-    snapshot.onDemandCap && snapshot.onDemandCap > 0
-      ? `$${(snapshot.onDemandUsed ?? 0) / 100} / $${snapshot.onDemandCap / 100}`
-      : "disabled";
+    snapshot.onDemandCap === null || snapshot.onDemandCap <= 0
+      ? "disabled"
+      : snapshot.onDemandUsed === null
+        ? "unavailable"
+        : `$${snapshot.onDemandUsed / 100} / $${snapshot.onDemandCap / 100}`;
   return [
     "xAI subscription usage",
     `  Weekly:  ${weeklyUsed} (${weeklyLeft} left)${weeklyReset ? `  · ${weeklyReset}` : ""}`,

@@ -5,8 +5,8 @@ import { Text } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { redactSensitiveText } from "../domain/redaction.ts";
+import { snapshotData } from "../domain/safe-data.ts";
 import type { AdvisorReview } from "../review/schema.ts";
-import { isJsonObject } from "pi-cosmic-core";
 
 export const ADVISOR_REVIEW_CARD_TYPE = "pi-advisor-review-card-v1";
 export const ADVISOR_REVIEW_ACTION_TYPE = "pi-advisor-review-action-v1";
@@ -36,23 +36,9 @@ const ReviewActionWireSchema = Schema.Struct({
   action: Schema.Literals(["fix", "dismiss"]),
 });
 
-export interface AdvisorReviewCardItem {
-  readonly issue: string;
-  readonly evidence: string;
-  readonly suggestedFix: string;
-}
-export interface AdvisorReviewCard {
-  readonly version: 1;
-  readonly cardId: string;
-  readonly kind: "issues" | "suggestion";
-  readonly summary: string;
-  readonly items: readonly AdvisorReviewCardItem[];
-}
-export interface AdvisorReviewAction {
-  readonly version: 1;
-  readonly cardId: string;
-  readonly action: "fix" | "dismiss";
-}
+export type AdvisorReviewCardItem = Schema.Schema.Type<typeof CardItemWireSchema>;
+export type AdvisorReviewCard = Schema.Schema.Type<typeof ReviewCardWireSchema>;
+export type AdvisorReviewAction = Schema.Schema.Type<typeof ReviewActionWireSchema>;
 
 export function makeAdvisorReviewCard(
   cardId: string,
@@ -87,50 +73,33 @@ export function makeAdvisorReviewCard(
 export function decodeAdvisorReviewCard<ValueInput>(
   value: ValueInput,
 ): AdvisorReviewCard | undefined {
-  if (
-    !isJsonObject(value) ||
-    !hasOnlyKeys(value, ["version", "cardId", "kind", "summary", "items"])
-  )
-    return undefined;
-  if (
-    Array.isArray(value.items) &&
-    value.items.some(
-      (item) => !isJsonObject(item) || !hasOnlyKeys(item, ["issue", "evidence", "suggestedFix"]),
-    )
-  )
-    return undefined;
+  const snapshot = snapshotData(value);
   const decoded = Schema.decodeUnknownOption(ReviewCardWireSchema, {
     onExcessProperty: "error",
-  })(value);
+  })(snapshot);
   if (Option.isNone(decoded)) return undefined;
-  const items = decoded.value.items.map((item) => {
-    const normalized = {
+  const items: AdvisorReviewCardItem[] = [];
+  for (const item of decoded.value.items) {
+    const normalized: AdvisorReviewCardItem = {
       issue: clip(sanitizeCardText(item.issue), MAX_FIELD),
       evidence: clip(sanitizeCardText(item.evidence), MAX_FIELD),
       suggestedFix: clip(sanitizeCardText(item.suggestedFix), MAX_FIELD),
     };
-    return validItem(normalized) ? normalized : undefined;
-  });
-  if (items.some((item) => !item)) return undefined;
+    if (!validItem(normalized)) return undefined;
+    items.push(normalized);
+  }
   const summary = clip(sanitizeCardText(decoded.value.summary), MAX_SUMMARY);
   if (!summary) return undefined;
-  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-  return {
-    ...decoded.value,
-    summary,
-    items: items as AdvisorReviewCardItem[],
-  };
+  return { ...decoded.value, summary, items };
 }
 
 export function decodeAdvisorReviewAction<ValueInput>(
   value: ValueInput,
 ): AdvisorReviewAction | undefined {
-  if (!isJsonObject(value) || !hasOnlyKeys(value, ["version", "cardId", "action"])) {
-    return undefined;
-  }
+  const snapshot = snapshotData(value);
   const decoded = Schema.decodeUnknownOption(ReviewActionWireSchema, {
     onExcessProperty: "error",
-  })(value);
+  })(snapshot);
   return Option.isSome(decoded) ? decoded.value : undefined;
 }
 
@@ -186,10 +155,6 @@ function sanitizeCardText(value: string): string {
 
 function validItem(item: AdvisorReviewCardItem): boolean {
   return Boolean(item.issue && item.evidence && item.suggestedFix);
-}
-function hasOnlyKeys(value: Schema.JsonObject, allowed: readonly string[]): boolean {
-  const keys = Object.keys(value);
-  return keys.length === allowed.length && keys.every((key) => allowed.includes(key));
 }
 function sanitizeId<ValueInput>(value: ValueInput): string | undefined {
   return Predicate.isString(value) && CARD_ID_PATTERN.test(value) ? value : undefined;

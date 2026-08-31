@@ -6,7 +6,6 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { JsonHttpError } from "./errors.ts";
-import { encodeJsonBody } from "./json-body.ts";
 
 export interface JsonHttpRequest<S extends Schema.ConstraintDecoder<unknown, unknown>> {
   readonly url: string;
@@ -90,11 +89,9 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
         input: JsonHttpRequestInput<A, R>,
         jsonBody?: Schema.Json,
       ) {
-        let outgoing =
-          input.method === "POST"
-            ? HttpClientRequest.post(input.url)
-            : HttpClientRequest.get(input.url);
-        if (input.headers) outgoing = HttpClientRequest.setHeaders(outgoing, input.headers);
+        let outgoing = HttpClientRequest.make(input.method ?? "GET")(input.url, {
+          headers: input.headers,
+        });
         if (input.formBody) outgoing = HttpClientRequest.bodyUrlParams(outgoing, input.formBody);
         if (jsonBody !== undefined) {
           outgoing = yield* HttpClientRequest.bodyJson(outgoing, jsonBody).pipe(
@@ -150,7 +147,7 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
       });
       const request: JsonHttpClientContract["request"] = (input) => execute(input);
       const requestJson: JsonHttpClientContract["requestJson"] = (input, bodySchema, body) =>
-        encodeJsonBody(bodySchema, body).pipe(
+        Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
           Effect.mapError(
             jsonHttpError("encode", "HTTP request body did not match the expected schema."),
           ),

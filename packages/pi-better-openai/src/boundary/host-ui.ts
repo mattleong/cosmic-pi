@@ -1,30 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import { captureHostSignal, invokeHostCallback } from "pi-cosmic-core";
 
-export class OpenAIHostUiError extends Schema.TaggedError<OpenAIHostUiError>()(
-  "OpenAIHostUiError",
-  { operation: Schema.String, message: Schema.String },
-) {}
-
-/** Isolates synchronous Pi UI callbacks from the Effect application error channel. */
-export const tryHostUi = Effect.fn("OpenAIHostUi.try")(function* <A>(
-  operation: string,
-  callback: () => A,
-) {
-  return yield* Effect.try({
-    try: callback,
-    catch: () =>
-      new OpenAIHostUiError({
-        operation,
-        message: "Unable to update Better OpenAI UI.",
-      }),
+/** Best-effort Effect adapter for synchronous Pi UI callbacks. */
+export const ignoreHostUi = <Result>(callback: () => Result) =>
+  Effect.sync(() => {
+    invokeHostCallback<Result | undefined>(callback, undefined);
   });
-});
-
-export const ignoreHostUi = <Result>(operation: string, callback: () => Result) =>
-  tryHostUi(operation, callback).pipe(Effect.ignore);
 
 /** Best-effort adapter for Pi callbacks that cannot enter the session runtime. */
 export function safeHostUi<Result>(callback: () => Result): void {

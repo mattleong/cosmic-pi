@@ -155,92 +155,84 @@ export const makeImageOutput = (dependencies: {
       )
         return yield* fail("save", "Image temporary file escaped its protected root.");
     });
-    const acquireTemporary = Effect.gen(function* () {
-      const fileScope = yield* Scope.make();
-      return yield* Effect.gen(function* () {
-        const file = yield* fs
-          .open(temporary, { flag: "wx" })
-          .pipe(
-            Effect.mapError(imageError("save", "Unable to create image temporary file.")),
-            Effect.provideService(Scope.Scope, fileScope),
-          );
-        const opened = yield* file.stat.pipe(
-          Effect.mapError(imageError("save", "Unable to verify image temporary file identity.")),
-        );
-        const openedInode = Option.getOrUndefined(opened.ino);
-        if (opened.type !== "File" || openedInode === undefined)
-          return yield* fail("save", "Unable to verify image temporary file identity.");
-        ownedIdentity = { dev: opened.dev, ino: openedInode };
-        return { file, fileScope };
-      }).pipe(
-        Effect.onError((cause) =>
-          Scope.close(fileScope, Exit.failCause(cause)).pipe(
-            Effect.ignoreCause,
-            Effect.andThen(removeOwnedTemporary),
-          ),
-        ),
-      );
-    });
-    return yield* Effect.acquireUseRelease(
-      acquireTemporary,
-      ({ file, fileScope }) =>
+    const acquireTemporary = Effect.scoped(
+      Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          yield* verifyPublicationSource();
-          yield* file
-            .writeAll(bytes)
-            .pipe(Effect.mapError(imageError("save", "Unable to save generated image.")));
-          yield* file.sync.pipe(
-            Effect.mapError(imageError("save", "Unable to sync generated image.")),
-          );
-          yield* Scope.close(fileScope, Exit.void).pipe(
-            Effect.catchDefect(() =>
-              Effect.fail(fail("save", "Unable to close image temporary file.")),
-            ),
-          );
-        }).pipe(
-          Effect.andThen(
+          const parentScope = yield* Effect.scope;
+          const fileScope = yield* Scope.fork(parentScope);
+          const writeExit = yield* restore(
             Effect.gen(function* () {
-              yield* verifyPublicationSource();
-              yield* fs
-                .link(temporary, destination)
+              const file = yield* fs
+                .open(temporary, { flag: "wx" })
                 .pipe(
-                  Effect.mapError(
-                    imageError("save", "Unable to publish generated image without clobbering."),
-                  ),
+                  Effect.mapError(imageError("save", "Unable to create image temporary file.")),
                 );
-              // Linking is the commit point. Never remove the destination after this succeeds:
-              // another process may replace it before verification observes the path.
-              const published = yield* fs.stat(destination).pipe(
-                Effect.option,
-                Effect.tap((published) =>
-                  Option.isNone(published)
-                    ? Effect.logWarning(imageVerificationLostMessage)
-                    : Effect.void,
-                ),
-                Effect.catchCause(() =>
-                  Effect.logWarning(imageVerificationLostMessage).pipe(Effect.as(Option.none())),
+              const opened = yield* file.stat.pipe(
+                Effect.mapError(
+                  imageError("save", "Unable to verify image temporary file identity."),
                 ),
               );
-              if (Option.isNone(published)) return;
-              const publishedStat = published.value;
-              const publishedInode = Option.getOrUndefined(publishedStat.ino);
-              if (
-                !ownedIdentity ||
-                publishedStat.type !== "File" ||
-                publishedInode === undefined ||
-                publishedInode !== ownedIdentity.ino ||
-                publishedStat.dev !== ownedIdentity.dev
-              )
-                return yield* fail(
-                  "save",
-                  "Published image did not match the owned temporary file.",
-                );
-            }).pipe(Effect.uninterruptible),
-          ),
-        ),
-      ({ fileScope }, exit) =>
-        Scope.close(fileScope, exit).pipe(Effect.ignoreCause, Effect.andThen(removeOwnedTemporary)),
-    ).pipe(Effect.as(destination));
+              const openedInode = Option.getOrUndefined(opened.ino);
+              if (opened.type !== "File" || openedInode === undefined)
+                return yield* fail("save", "Unable to verify image temporary file identity.");
+              ownedIdentity = { dev: opened.dev, ino: openedInode };
+              yield* verifyPublicationSource();
+              yield* file
+                .writeAll(bytes)
+                .pipe(Effect.mapError(imageError("save", "Unable to save generated image.")));
+              yield* file.sync.pipe(
+                Effect.mapError(imageError("save", "Unable to sync generated image.")),
+              );
+            }).pipe(Scope.provide(fileScope)),
+          ).pipe(Effect.exit);
+          const closeExit = yield* Scope.close(fileScope, writeExit).pipe(Effect.exit);
+          if (Exit.isFailure(writeExit)) return yield* Effect.failCause(writeExit.cause);
+          if (Exit.isFailure(closeExit))
+            return yield* fail("save", "Unable to close image temporary file.");
+        }),
+      ),
+    ).pipe(Effect.onError(() => removeOwnedTemporary));
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.acquireUseRelease(
+        restore(acquireTemporary),
+        () =>
+          Effect.gen(function* () {
+            yield* verifyPublicationSource();
+            yield* fs
+              .link(temporary, destination)
+              .pipe(
+                Effect.mapError(
+                  imageError("save", "Unable to publish generated image without clobbering."),
+                ),
+              );
+            // Linking is the commit point. Never remove the destination after this succeeds:
+            // another process may replace it before verification observes the path.
+            const published = yield* fs.stat(destination).pipe(
+              Effect.option,
+              Effect.tap((published) =>
+                Option.isNone(published)
+                  ? Effect.logWarning(imageVerificationLostMessage)
+                  : Effect.void,
+              ),
+              Effect.catchCause(() =>
+                Effect.logWarning(imageVerificationLostMessage).pipe(Effect.as(Option.none())),
+              ),
+            );
+            if (Option.isNone(published)) return;
+            const publishedStat = published.value;
+            const publishedInode = Option.getOrUndefined(publishedStat.ino);
+            if (
+              !ownedIdentity ||
+              publishedStat.type !== "File" ||
+              publishedInode === undefined ||
+              publishedInode !== ownedIdentity.ino ||
+              publishedStat.dev !== ownedIdentity.dev
+            )
+              return yield* fail("save", "Published image did not match the owned temporary file.");
+          }).pipe(Effect.uninterruptible),
+        () => removeOwnedTemporary,
+      ).pipe(Effect.as(destination)),
+    );
   });
   return { validatedGeneratedImage, persistImage } as const;
 };

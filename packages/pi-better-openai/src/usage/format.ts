@@ -61,9 +61,6 @@ export class CodexUsageError extends Schema.TaggedError<CodexUsageError>()("Code
   message: Schema.String,
 }) {}
 
-const normalizeBucket = <Value>(value: Value): RateLimitBucket | null =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(RateLimitBucketSchema)(value)) ?? null;
-
 function sparkBucket(data: CodexUsageResponse): RateLimitBucket | null {
   const additional = data.additional_rate_limits;
   const values = Array.isArray(additional)
@@ -103,17 +100,13 @@ function resetSeconds(window: UsageWindow | null | undefined, now: number): numb
 export const usageScopeForModel = (modelId: string | undefined): UsageScope =>
   modelId === SPARK_MODEL_ID ? "spark" : "default";
 
-export function parseUsageSnapshot<PayloadInput>(
-  payload: PayloadInput,
+export function parseUsageSnapshot(
+  data: CodexUsageResponse,
   modelId: string | undefined,
   now: number,
 ): UsageSnapshot {
-  const data = Option.getOrUndefined(Schema.decodeUnknownOption(CodexUsageSchema)(payload)) ?? {};
   const scope = usageScopeForModel(modelId);
-  const bucket =
-    scope === "spark"
-      ? (sparkBucket(data) ?? normalizeBucket(data.rate_limit))
-      : normalizeBucket(data.rate_limit);
+  const bucket = scope === "spark" ? (sparkBucket(data) ?? data.rate_limit) : data.rate_limit;
   const primary = bucket?.primary_window ?? null;
   const secondary = bucket?.secondary_window ?? null;
   const fiveHour = secondary ? primary : null;

@@ -115,6 +115,21 @@ const fakeDefinitions = (
   );
 };
 
+const numericDefinitions = (calls: FakeCall[]): NestedPiToolDefinitions => {
+  const implemented = (name: PiGuestToolName) => () => Promise.resolve(name);
+  return fakeDefinitions(
+    {
+      read: implemented("read"),
+      bash: implemented("bash"),
+      powershell: implemented("powershell"),
+      grep: implemented("grep"),
+      find: implemented("find"),
+      ls: implemented("ls"),
+    },
+    calls,
+  );
+};
+
 interface HarnessOptions {
   readonly config?: Partial<CodeModeConfig>;
   readonly available?: boolean;
@@ -178,6 +193,158 @@ describe("guest catalog", () => {
         ).rejects.toThrow(/\[InvalidToolInput\]/),
       );
       expect(calls).toHaveLength(0);
+    }),
+  );
+
+  it.effect("rejects every invalid numeric combination before dispatch", () =>
+    Effect.gen(function* () {
+      const positiveIntegerExpressions = [
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        "0",
+        "-1",
+        "1.5",
+        "Number.MAX_SAFE_INTEGER + 1",
+      ];
+      const contextExpressions = [
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        "-1",
+        "1.5",
+        "Number.MAX_SAFE_INTEGER + 1",
+      ];
+      const timeoutExpressions = ["NaN", "Infinity", "-Infinity", "0", "-0.5"];
+      const invalidNumericCalls = [
+        ...positiveIntegerExpressions.flatMap((expression) => [
+          `tools.pi.read({ path: "x", offset: ${expression} })`,
+          `tools.pi.read({ path: "x", limit: ${expression} })`,
+          `tools.pi.grep({ pattern: "x", limit: ${expression} })`,
+          `tools.pi.find({ pattern: "*", limit: ${expression} })`,
+          `tools.pi.ls({ limit: ${expression} })`,
+        ]),
+        ...contextExpressions.map(
+          (expression) => `tools.pi.grep({ pattern: "x", context: ${expression} })`,
+        ),
+        ...timeoutExpressions.flatMap((expression) => [
+          `tools.pi.bash({ command: "true", timeout: ${expression} })`,
+          `tools.pi.powershell({ command: "Write-Output ok", timeout: ${expression} })`,
+        ]),
+      ];
+      const calls: FakeCall[] = [];
+      const execute = makeHarness({
+        config: { maxToolCalls: 100 },
+        definitions: numericDefinitions(calls),
+      });
+      const attempts = invalidNumericCalls
+        .map((call) => `[${JSON.stringify(call)}, () => ${call}]`)
+        .join(",\n");
+      const result = yield* Effect.promise(() =>
+        execute(
+          "call-invalid-numeric-inputs",
+          {
+            code: `
+              const rejected = [];
+              const attempts = [${attempts}];
+              for (const [label, attempt] of attempts) {
+                try {
+                  await attempt();
+                } catch {
+                  rejected.push(label);
+                }
+              }
+              return rejected;
+            `,
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      );
+      expect(guestJson(textOf(result))).toEqual(invalidNumericCalls);
+      expect(calls).toEqual([]);
+    }),
+  );
+
+  it.effect("dispatches every valid numeric boundary with its exact input", () =>
+    Effect.gen(function* () {
+      const validNumericCalls = [
+        {
+          name: "read",
+          source: `tools.pi.read({ path: "x", offset: 1, limit: Number.MAX_SAFE_INTEGER })`,
+          input: { path: "x", offset: 1, limit: Number.MAX_SAFE_INTEGER },
+        },
+        {
+          name: "grep",
+          source: `tools.pi.grep({ pattern: "x", context: 0, limit: Number.MAX_SAFE_INTEGER })`,
+          input: { pattern: "x", context: 0, limit: Number.MAX_SAFE_INTEGER },
+        },
+        {
+          name: "find",
+          source: `tools.pi.find({ pattern: "*", limit: 1 })`,
+          input: { pattern: "*", limit: 1 },
+        },
+        {
+          name: "find",
+          source: `tools.pi.find({ pattern: "*", limit: Number.MAX_SAFE_INTEGER })`,
+          input: { pattern: "*", limit: Number.MAX_SAFE_INTEGER },
+        },
+        {
+          name: "ls",
+          source: `tools.pi.ls({ limit: 1 })`,
+          input: { limit: 1 },
+        },
+        {
+          name: "ls",
+          source: `tools.pi.ls({ limit: Number.MAX_SAFE_INTEGER })`,
+          input: { limit: Number.MAX_SAFE_INTEGER },
+        },
+        {
+          name: "bash",
+          source: `tools.pi.bash({ command: "true", timeout: 0.5 })`,
+          input: { command: "true", timeout: 0.5 },
+        },
+        {
+          name: "bash",
+          source: `tools.pi.bash({ command: "true", timeout: Number.MIN_VALUE })`,
+          input: { command: "true", timeout: Number.MIN_VALUE },
+        },
+        {
+          name: "powershell",
+          source: `tools.pi.powershell({ command: "Write-Output ok", timeout: 0.5 })`,
+          input: { command: "Write-Output ok", timeout: 0.5 },
+        },
+        {
+          name: "powershell",
+          source: `tools.pi.powershell({ command: "Write-Output ok", timeout: Number.MIN_VALUE })`,
+          input: { command: "Write-Output ok", timeout: Number.MIN_VALUE },
+        },
+      ] as const;
+      const calls: FakeCall[] = [];
+      const execute = makeHarness({ definitions: numericDefinitions(calls) });
+      const body = validNumericCalls
+        .map(({ source }) => `values.push(await ${source});`)
+        .join("\n");
+      const result = yield* Effect.promise(() =>
+        execute(
+          "call-valid-numeric-boundaries",
+          {
+            code: `
+              const values = [];
+              ${body}
+              return values;
+            `,
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      );
+      expect(guestJson(textOf(result))).toEqual(validNumericCalls.map(({ name }) => name));
+      expect(calls.map(({ name, input }) => ({ name, input }))).toEqual(
+        validNumericCalls.map(({ name, input }) => ({ name, input })),
+      );
     }),
   );
 
@@ -683,6 +850,152 @@ describe("progress", () => {
       });
       expect(result.details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
       expect(result.details.toolCalls[0]?.tool).toBe("pi.read");
+    }),
+  );
+
+  it.effect("retains recent failures and cancellations beyond the 256-row cap", () =>
+    Effect.gen(function* () {
+      const callCount = 300;
+      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
+        options,
+      ) =>
+        Effect.gen(function* () {
+          for (let id = 0; id < callCount; id += 1) {
+            const name = `nested-${id}`;
+            yield* options.onToolCallLifecycle?.({ id, name, status: "queued" }) ?? Effect.void;
+            if (id % 2 === 0) {
+              yield* (
+                options.onToolCallLifecycle?.({
+                  id,
+                  name,
+                  status: "running",
+                }) ?? Effect.void
+              );
+              yield* (
+                options.onToolCallLifecycle?.({
+                  id,
+                  name,
+                  status: "failed",
+                  started: true,
+                  durationMs: 1,
+                }) ?? Effect.void
+              );
+            } else {
+              yield* (
+                options.onToolCallLifecycle?.({
+                  id,
+                  name,
+                  status: "cancelled",
+                  started: false,
+                  durationMs: 1,
+                }) ?? Effect.void
+              );
+            }
+          }
+          return { ok: true as const, value: "done" };
+        });
+      const execute = makeHarness({
+        config: { maxToolCalls: callCount },
+        executeCodeMode,
+      });
+      const result = yield* Effect.promise(() =>
+        execute("call-settled-retention", { code: "return 'done';" }, undefined, undefined, ctx),
+      );
+
+      expect(result.details.counts).toEqual({
+        total: callCount,
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: callCount / 2,
+        cancelled: callCount / 2,
+      });
+      expect(result.details.toolCalls.map(({ tool }) => tool)).toEqual(
+        Array.from(
+          { length: MAX_PROGRESS_ENTRIES },
+          (_, offset) => `nested-${callCount - MAX_PROGRESS_ENTRIES + offset}`,
+        ),
+      );
+      expect(result.details.toolCalls.map(({ status }) => status)).toEqual(
+        Array.from({ length: MAX_PROGRESS_ENTRIES }, (_, offset) =>
+          (callCount - MAX_PROGRESS_ENTRIES + offset) % 2 === 0 ? "error" : "cancelled",
+        ),
+      );
+    }),
+  );
+
+  it.effect("never evicts queued or running rows at the 256-row cap", () =>
+    Effect.gen(function* () {
+      const succeeded = 300;
+      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
+        options,
+      ) =>
+        Effect.gen(function* () {
+          yield* (
+            options.onToolCallLifecycle?.({
+              id: 0,
+              name: "queued-survivor",
+              status: "queued",
+            }) ?? Effect.void
+          );
+          yield* (
+            options.onToolCallLifecycle?.({
+              id: 1,
+              name: "running-survivor",
+              status: "queued",
+            }) ?? Effect.void
+          );
+          yield* (
+            options.onToolCallLifecycle?.({
+              id: 1,
+              name: "running-survivor",
+              status: "running",
+            }) ?? Effect.void
+          );
+          for (let offset = 0; offset < succeeded; offset += 1) {
+            const id = offset + 2;
+            const name = `completed-${id}`;
+            yield* options.onToolCallLifecycle?.({ id, name, status: "queued" }) ?? Effect.void;
+            yield* (
+              options.onToolCallLifecycle?.({
+                id,
+                name,
+                status: "running",
+              }) ?? Effect.void
+            );
+            yield* (
+              options.onToolCallLifecycle?.({
+                id,
+                name,
+                status: "succeeded",
+                started: true,
+                durationMs: 1,
+              }) ?? Effect.void
+            );
+          }
+          return { ok: true as const, value: "done" };
+        });
+      const execute = makeHarness({
+        config: { maxToolCalls: succeeded + 2 },
+        executeCodeMode,
+      });
+      const result = yield* Effect.promise(() =>
+        execute("call-active-retention", { code: "return 'done';" }, undefined, undefined, ctx),
+      );
+
+      expect(result.details.counts).toEqual({
+        total: succeeded + 2,
+        queued: 0,
+        running: 0,
+        succeeded,
+        failed: 0,
+        cancelled: 2,
+      });
+      expect(result.details.toolCalls.slice(0, 2)).toEqual([
+        expect.objectContaining({ tool: "queued-survivor", status: "cancelled" }),
+        expect.objectContaining({ tool: "running-survivor", status: "cancelled" }),
+      ]);
+      expect(result.details.toolCalls.at(-1)?.tool).toBe(`completed-${succeeded + 1}`);
     }),
   );
 

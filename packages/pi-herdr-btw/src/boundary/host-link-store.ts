@@ -7,38 +7,97 @@ import {
   type HerdrBtwLinkOwner,
   type HerdrBtwLinkRestoration,
 } from "../btw/link.ts";
+import { probeSessionHeader, type SessionHeaderProbe } from "./session-file.ts";
+
+export type HerdrBtwLinkRecord = Pick<
+  HerdrBtwLink,
+  "childSessionId" | "childSessionPath" | "agentName" | "terminalId"
+>;
+
+export type HerdrBtwLinkRecordResult = "recorded" | "refused" | "uncertain";
 
 export interface HerdrBtwLinkStore {
   /** Reconstructs the authoritative link from current parent-session entries. */
   readonly restore: () => HerdrBtwLinkRestoration;
-  /** Appends a confirmed link entry; `false` reports a failed host append. */
-  readonly record: (link: HerdrBtwLink) => boolean;
+  /** Appends child facts after stamping the captured version and parent owner. */
+  readonly record: (link: HerdrBtwLinkRecord) => HerdrBtwLinkRecordResult;
 }
 
+export interface HostHerdrBtwLinkStoreOptions {
+  /** Test seam for deterministic bounded parent-header probing. */
+  readonly probeSessionHeader?: ((path: string) => SessionHeaderProbe) | undefined;
+}
+
+const readOwner = (ctx: ExtensionContext): HerdrBtwLinkOwner | undefined => {
+  const sessionId = ctx.sessionManager.getSessionId();
+  const sessionPath = ctx.sessionManager.getSessionFile();
+  return sessionId && sessionPath ? { sessionId, sessionPath } : undefined;
+};
+
+const isSameOwner = (
+  captured: HerdrBtwLinkOwner,
+  current: HerdrBtwLinkOwner | undefined,
+): boolean =>
+  current !== undefined &&
+  captured.sessionId === current.sessionId &&
+  captured.sessionPath === current.sessionPath;
+
+const hasOwnerHeader = (
+  captured: HerdrBtwLinkOwner,
+  probe: (path: string) => SessionHeaderProbe,
+): boolean => {
+  const result = probe(captured.sessionPath);
+  return result._tag === "valid" && result.header.id === captured.sessionId;
+};
+
 /**
- * The store reads through the read-only session manager of the captured
- * session and appends through `pi.appendEntry`, so restoration always follows
- * the current session across reload and resume. A throwing host is reported
- * as malformed (restore) or unrecorded (record) so callers fail closed.
+ * Uses the owner captured by application startup, then revalidates the live
+ * session ID, path, and bounded no-follow header before every read or append.
+ * A replacement session, missing identity, or throwing pre-append host call
+ * fails closed. Callers supply child facts only; the store stamps version and
+ * owner.
  */
 export const makeHostHerdrBtwLinkStore = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  owner: HerdrBtwLinkOwner,
-): HerdrBtwLinkStore => ({
-  restore: () => {
-    try {
-      return restoreHerdrBtwLink(ctx.sessionManager.getEntries(), owner);
-    } catch {
-      return { _tag: "malformed" };
-    }
-  },
-  record: (link) => {
-    try {
-      pi.appendEntry(HERDR_BTW_LINK_ENTRY_TYPE, link);
-      return true;
-    } catch {
-      return false;
-    }
-  },
-});
+  capturedOwner: HerdrBtwLinkOwner,
+  options: HostHerdrBtwLinkStoreOptions = {},
+): HerdrBtwLinkStore => {
+  const probe = options.probeSessionHeader ?? probeSessionHeader;
+  return {
+    restore: () => {
+      try {
+        const currentOwner = readOwner(ctx);
+        if (!isSameOwner(capturedOwner, currentOwner) || !hasOwnerHeader(capturedOwner, probe))
+          return { _tag: "malformed" };
+        return restoreHerdrBtwLink(ctx.sessionManager.getEntries(), capturedOwner);
+      } catch {
+        return { _tag: "malformed" };
+      }
+    },
+    record: (link) => {
+      try {
+        const currentOwner = readOwner(ctx);
+        if (!isSameOwner(capturedOwner, currentOwner) || !hasOwnerHeader(capturedOwner, probe))
+          return "refused";
+      } catch {
+        return "refused";
+      }
+
+      try {
+        pi.appendEntry(HERDR_BTW_LINK_ENTRY_TYPE, {
+          version: 1,
+          parentSessionId: capturedOwner.sessionId,
+          parentSessionPath: capturedOwner.sessionPath,
+          childSessionId: link.childSessionId,
+          childSessionPath: link.childSessionPath,
+          agentName: link.agentName,
+          terminalId: link.terminalId,
+        });
+        return "recorded";
+      } catch {
+        return "uncertain";
+      }
+    },
+  };
+};

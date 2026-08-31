@@ -7,13 +7,7 @@ import type {
 import * as Effect from "effect/Effect";
 import { captureAdvisorAbortInputAtHostBoundary } from "../../../boundary/host-context.ts";
 import { sendCorrection } from "../../../boundary/host-review-cards.ts";
-import {
-  assistantStopReason,
-  assistantToolCalls,
-  classifyReviewCheckpoint,
-  contentText,
-  isGenuineUserMessage,
-} from "../../../domain/candidate.ts";
+import { inspectAssistantMessage, inspectUserMessage } from "../../../domain/candidate.ts";
 import { incrementBounded } from "../../../domain/metrics.ts";
 import { completeAdvisorPrimaryTurn } from "../../../review/routing.ts";
 import { settleAdvisorPendingRecovery } from "../../state.ts";
@@ -24,11 +18,11 @@ export const makeTurnEventHandlers = (d: EventsDeps) => {
   const refs = d.refs;
 
   const messageEnd = (event: MessageEndEvent, ctx: ExtensionContext): Effect.Effect<void> => {
-    if (!isGenuineUserMessage(event.message)) return Effect.void;
+    const text = inspectUserMessage(event.message);
+    if (text === undefined) return Effect.void;
     d.clearPersistentTrajectoryResources();
     d.beginUserRequest();
     d.persistCurrentLedger(ctx);
-    const text = contentText(event.message);
     d.ingest({ type: "user", text: text || "[user content unavailable]" });
     refs.activeContext = ctx;
     return Effect.void;
@@ -98,13 +92,12 @@ export const makeTurnEventHandlers = (d: EventsDeps) => {
   const turnEnd = (event: TurnEndEvent, ctx: ExtensionContext): Effect.Effect<void> => {
     const trajectory = d.getState().activeTrajectory;
     d.clearPersistentTrajectory();
-    const classification = classifyReviewCheckpoint(event);
-    const stopReason = assistantStopReason(event.message);
+    const { classification, stopReason, toolCalls } = inspectAssistantMessage(event.message);
     if (classification.eligible) {
       d.ingest({
         type: "assistant_final",
         text: classification.candidate,
-        toolCalls: assistantToolCalls(event.message),
+        toolCalls,
       });
     }
     d.ingest({ type: "turn_complete", status: stopReason });

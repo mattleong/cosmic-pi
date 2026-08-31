@@ -16,4 +16,12 @@ export const makeAgentName = (sessionId: string, paneId: string): string => {
   return `btw-${session}-${pane}`.slice(0, 32).replaceAll(/-$/gu, "");
 };
 
+export const parentBtwDisplayName = (cwd: string): string => {
+  const directoryName = cwd
+    .replaceAll(/[\\/]+$/gu, "")
+    .split(/[\\/]/gu)
+    .at(-1);
+  return `BTW · ${directoryName || "Pi"}`;
+};
+
 export const sideSessionPrompt = (prompt: string): string => `Side-session request:\n${prompt}`;

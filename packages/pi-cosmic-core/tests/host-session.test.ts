@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isProjectTrusted } from "../src/host-session.ts";
+import { isProjectTrusted, notifyAtHostBoundary } from "../src/host-session.ts";
 
 describe("project trust capture", () => {
   it("requires an explicit callback returning literal true", () => {
@@ -17,5 +17,42 @@ describe("project trust capture", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("notification boundary", () => {
+  it("contains hostile thenable inspection", () => {
+    const hostileThenable = new Proxy(
+      {},
+      {
+        has: (_target, property) => property === "then",
+        get: (_target, property) => {
+          if (property === "then") throw new Error("hostile then getter");
+          return undefined;
+        },
+      },
+    );
+
+    expect(() =>
+      notifyAtHostBoundary({ ui: { notify: () => hostileThenable } }, "message", "warning"),
+    ).not.toThrow();
+  });
+
+  it("attaches a rejection handler to callable thenables", () => {
+    let rejectionContained = false;
+    const callableThenable = new Proxy(() => undefined, {
+      has: (_target, property) => property === "then",
+      get: (_target, property) =>
+        property === "then"
+          ? (_resolve: () => void, reject: (reason: Error) => void) => {
+              reject(new Error("rejected callable thenable"));
+              rejectionContained = true;
+            }
+          : undefined,
+    });
+
+    notifyAtHostBoundary({ ui: { notify: () => callableThenable } }, "message", "warning");
+
+    expect(rejectionContained).toBe(true);
   });
 });

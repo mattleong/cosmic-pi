@@ -14,12 +14,7 @@ export const PathIconModeSchema = Schema.Literals(PATH_ICON_MODES);
 export const CodePreviewToolNameSchema = Schema.Literals(ALL_CODE_PREVIEW_TOOLS);
 export const BundledShikiThemeSchema = Schema.Literals(Object.keys(bundledThemes));
 
-export const PositiveIntegerSchema = Schema.Number.check(
-  Schema.isFinite(),
-  Schema.isInt(),
-  Schema.isGreaterThan(0),
-  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
-);
+export const PositiveIntegerSchema = Schema.Int.check(Schema.isGreaterThan(0));
 
 export const EditCollapsedLinesSchema = Schema.Union([
   PositiveIntegerSchema,

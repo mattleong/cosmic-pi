@@ -2,7 +2,7 @@
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import { hasControlCharacter, hasObjectRuntimeType } from "pi-cosmic-core";
 import { homedir } from "node:os";
 import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
@@ -19,11 +19,7 @@ export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined
     ? error.code
     : undefined;
 
-export const hasControlCharacter = (value: string): boolean =>
-  [...value].some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
-  });
+export { hasControlCharacter };
 
 export const ensurePrivateDirectory = (path: string): Promise<void> =>
   fs

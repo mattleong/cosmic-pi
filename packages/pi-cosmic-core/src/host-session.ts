@@ -1,5 +1,4 @@
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "./runtime-values.ts";
 /** Pure, best-effort reads of Pi session host fields shared by provider extensions. */
 
 export type HostUiContext = {
@@ -70,13 +69,8 @@ export function notifyAtHostBoundary(
     // Pi documents `notify` as synchronous void. A runtime that returns a thenable anyway must
     // not surface an unhandled rejection through this best-effort boundary, so any returned
     // thenable gets a no-op rejection handler; there is no resource to manage or await.
-    if (
-      hasObjectRuntimeType(outcome) &&
-      outcome !== null &&
-      Predicate.isFunction((outcome as { readonly then?: unknown }).then)
-    ) {
-      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-      (outcome as PromiseLike<unknown>).then(
+    if (Predicate.isPromiseLike(outcome)) {
+      outcome.then(
         () => undefined,
         () => undefined,
       );

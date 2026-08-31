@@ -99,6 +99,33 @@ describe("explicit Background Tasks guest adapter", () => {
     }),
   );
 
+  it.effect("contains hostile provider rejection coercion", () =>
+    Effect.gen(function* () {
+      const dispatch = makeBackgroundTaskDispatch({
+        events: eventsFor([
+          {
+            version: BACKGROUND_TASK_CODE_MODE_VERSION,
+            sessionId: "session-1",
+            execute: () =>
+              Promise.reject({
+                toString: () => {
+                  throw new Error("toString escaped");
+                },
+              }),
+          },
+        ]),
+        sessionId: "session-1",
+        toolCallId: "outer",
+        maxOutputBytes: () => 1_024,
+      });
+      const error = yield* dispatch({ action: "list" }).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "ToolError",
+        message: "Nested tool 'session.backgroundTask' failed: Unknown rejection",
+      });
+    }),
+  );
+
   it.effect("rejects malformed provider output without exposing its payload", () =>
     Effect.gen(function* () {
       const dispatch = makeBackgroundTaskDispatch({

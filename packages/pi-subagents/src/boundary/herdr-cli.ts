@@ -8,6 +8,7 @@ import { runBoundedProcessNode } from "pi-cosmic-core";
 import type { HerdrPaneProcessInfo } from "../backend/herdr-shell-readiness.ts";
 import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
+import { hasControlCharacter } from "./harness-shared.ts";
 
 const HERDR_EXECUTABLE = "herdr";
 const SUPPORTED_PROTOCOL = 20;
@@ -128,6 +129,25 @@ const PaneProcessInfoSchema = Schema.Struct({
     ).check(Schema.isMaxLength(64)),
   ),
 });
+const SnapshotEnvelopeSchema = Schema.Struct({ snapshot: SnapshotSchema });
+const AgentEnvelopeSchema = Schema.Struct({ agent: AgentSchema });
+const PaneEnvelopeSchema = Schema.Struct({ pane: PaneSchema });
+const PaneProcessInfoEnvelopeSchema = Schema.Struct({ process_info: PaneProcessInfoSchema });
+
+const decodeErrorEnvelopeJsonOption = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ErrorEnvelopeSchema),
+);
+const decodeUnknownJsonEffect = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeErrorEnvelopeOption = Schema.decodeUnknownOption(ErrorEnvelopeSchema);
+const decodeEnvelopeEffect = Schema.decodeUnknownEffect(EnvelopeSchema);
+const decodeSnapshotEnvelopeEffect = Schema.decodeUnknownEffect(SnapshotEnvelopeSchema);
+const decodeAgentEnvelopeEffect = Schema.decodeUnknownEffect(AgentEnvelopeSchema);
+const decodePaneEnvelopeEffect = Schema.decodeUnknownEffect(PaneEnvelopeSchema);
+const decodeSchemaDocumentEffect = Schema.decodeUnknownEffect(SchemaDocument);
+const decodeClaudeAuthStatusEffect = Schema.decodeUnknownEffect(ClaudeAuthStatusSchema);
+const decodePaneProcessInfoEnvelopeEffect = Schema.decodeUnknownEffect(
+  PaneProcessInfoEnvelopeSchema,
+);
 
 export interface HerdrPane {
   readonly paneId: string;
@@ -239,12 +259,6 @@ interface CommandResult {
   readonly cleanupUnconfirmed: boolean;
   readonly dispatched: boolean;
 }
-
-const hasControlCharacter = (value: string): boolean =>
-  [...value].some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
-  });
 
 const inheritedEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
   Object.freeze(
@@ -372,9 +386,7 @@ const runCommand = (
         let code = result.code === null ? "herdr_executable_unavailable" : "herdr_cli_failed";
         let message = `Herdr command failed during ${operation}.`;
         let confirmedRejection = false;
-        const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorEnvelopeSchema))(
-          result.stderr,
-        );
+        const decoded = decodeErrorEnvelopeJsonOption(result.stderr);
         if (Option.isSome(decoded)) {
           code = decoded.value.error.code.slice(0, 128);
           message = decoded.value.error.message.slice(0, 1_024);
@@ -398,7 +410,7 @@ const runCommand = (
 };
 
 const parseJson = (operation: string, source: string) =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(source).pipe(
+  decodeUnknownJsonEffect(source).pipe(
     Effect.mapError(() =>
       protocolError(
         operation,
@@ -411,7 +423,7 @@ const parseJson = (operation: string, source: string) =>
 const decodeEnvelope = (operation: string, source: string) =>
   parseJson(operation, source).pipe(
     Effect.flatMap((value) => {
-      const error = Schema.decodeUnknownOption(ErrorEnvelopeSchema)(value);
+      const error = decodeErrorEnvelopeOption(value);
       if (Option.isSome(error))
         return Effect.fail(
           processError(
@@ -420,7 +432,7 @@ const decodeEnvelope = (operation: string, source: string) =>
             error.value.error.message.slice(0, 1_024),
           ),
         );
-      return Schema.decodeUnknownEffect(EnvelopeSchema)(value).pipe(
+      return decodeEnvelopeEffect(value).pipe(
         Effect.mapError(() =>
           protocolError(
             operation,
@@ -433,58 +445,40 @@ const decodeEnvelope = (operation: string, source: string) =>
     }),
   );
 
-const paneView = (pane: Schema.Schema.Type<typeof PaneSchema>): HerdrPane =>
-  (() => {
-    const baseResult = {
-      paneId: pane.pane_id,
-      terminalId: pane.terminal_id,
-      workspaceId: pane.workspace_id,
-      tabId: pane.tab_id,
-    };
-    const withCwd = pane.cwd ? { ...baseResult, cwd: pane.cwd } : baseResult;
-    const withForegroundCwd = pane.foreground_cwd
-      ? { ...withCwd, foregroundCwd: pane.foreground_cwd }
-      : withCwd;
-    const withLabel = pane.label ? { ...withForegroundCwd, label: pane.label } : withForegroundCwd;
-    const withFocusedAndAgentStatus = {
-      ...withLabel,
-      focused: pane.focused,
-      agentStatus: pane.agent_status,
-    };
-    return withFocusedAndAgentStatus;
-  })();
-const agentView = (agent: Schema.Schema.Type<typeof AgentSchema>): HerdrAgent =>
-  (() => {
-    const baseResult = { ...paneView(agent) };
-    const withName = agent.name ? { ...baseResult, name: agent.name } : baseResult;
-    const withRuntime = agent.agent ? { ...withName, runtime: agent.agent } : withName;
-    const withStateChangeSequence = {
-      ...withRuntime,
-      stateChangeSequence: agent.state_change_seq ?? 0,
-    };
-    const withInteractiveReady =
-      agent.interactive_ready === undefined
-        ? withStateChangeSequence
-        : { ...withStateChangeSequence, interactiveReady: agent.interactive_ready };
-    const withAgentSessionAndNativeSession = agent.agent_session
-      ? {
-          ...withInteractiveReady,
-          agentSession: {
-            source: agent.agent_session.source,
-            agent: agent.agent_session.agent,
-            kind: agent.agent_session.kind,
-            value: agent.agent_session.value,
-          },
-          nativeSession: agent.agent_session.value,
-        }
-      : withInteractiveReady;
-    return withAgentSessionAndNativeSession;
-  })();
+const paneView = (pane: Schema.Schema.Type<typeof PaneSchema>): HerdrPane => ({
+  paneId: pane.pane_id,
+  terminalId: pane.terminal_id,
+  workspaceId: pane.workspace_id,
+  tabId: pane.tab_id,
+  ...(pane.cwd && { cwd: pane.cwd }),
+  ...(pane.foreground_cwd && { foregroundCwd: pane.foreground_cwd }),
+  ...(pane.label && { label: pane.label }),
+  focused: pane.focused,
+  agentStatus: pane.agent_status,
+});
+const agentView = (agent: Schema.Schema.Type<typeof AgentSchema>): HerdrAgent => ({
+  ...paneView(agent),
+  ...(agent.name && { name: agent.name }),
+  ...(agent.agent && { runtime: agent.agent }),
+  stateChangeSequence: agent.state_change_seq ?? 0,
+  ...(agent.interactive_ready !== undefined && {
+    interactiveReady: agent.interactive_ready,
+  }),
+  ...(agent.agent_session && {
+    agentSession: {
+      source: agent.agent_session.source,
+      agent: agent.agent_session.agent,
+      kind: agent.agent_session.kind,
+      value: agent.agent_session.value,
+    },
+    nativeSession: agent.agent_session.value,
+  }),
+});
 
 const decodeSnapshot = (source: string) =>
   decodeEnvelope("session snapshot", source).pipe(
     Effect.flatMap((result) =>
-      Schema.decodeUnknownEffect(Schema.Struct({ snapshot: SnapshotSchema }))(result).pipe(
+      decodeSnapshotEnvelopeEffect(result).pipe(
         Effect.mapError(() =>
           processError(
             "session snapshot",
@@ -495,45 +489,37 @@ const decodeSnapshot = (source: string) =>
       ),
     ),
     Effect.map(
-      ({ snapshot }) =>
-        (() => {
-          const baseResult = { version: snapshot.version, protocol: snapshot.protocol };
-          const withFocusedWorkspaceId = snapshot.focused_workspace_id
-            ? { ...baseResult, focusedWorkspaceId: snapshot.focused_workspace_id }
-            : baseResult;
-          const withFocusedTabId = snapshot.focused_tab_id
-            ? { ...withFocusedWorkspaceId, focusedTabId: snapshot.focused_tab_id }
-            : withFocusedWorkspaceId;
-          const withFocusedPaneId = snapshot.focused_pane_id
-            ? { ...withFocusedTabId, focusedPaneId: snapshot.focused_pane_id }
-            : withFocusedTabId;
-          const withWorkspacesAndAdditionalFields = {
-            ...withFocusedPaneId,
-            workspaces: snapshot.workspaces.map((workspace) => ({
-              workspaceId: workspace.workspace_id,
-              label: workspace.label,
-              focused: workspace.focused,
-              activeTabId: workspace.active_tab_id,
-            })),
-            tabs: snapshot.tabs.map((tab) => ({
-              tabId: tab.tab_id,
-              workspaceId: tab.workspace_id,
-              label: tab.label,
-              paneCount: tab.pane_count,
-              focused: tab.focused,
-            })),
-            panes: snapshot.panes.map(paneView),
-            agents: snapshot.agents.map(agentView),
-          };
-          return withWorkspacesAndAdditionalFields;
-        })() satisfies HerdrSnapshot,
+      ({ snapshot }): HerdrSnapshot => ({
+        version: snapshot.version,
+        protocol: snapshot.protocol,
+        ...(snapshot.focused_workspace_id && {
+          focusedWorkspaceId: snapshot.focused_workspace_id,
+        }),
+        ...(snapshot.focused_tab_id && { focusedTabId: snapshot.focused_tab_id }),
+        ...(snapshot.focused_pane_id && { focusedPaneId: snapshot.focused_pane_id }),
+        workspaces: snapshot.workspaces.map((workspace) => ({
+          workspaceId: workspace.workspace_id,
+          label: workspace.label,
+          focused: workspace.focused,
+          activeTabId: workspace.active_tab_id,
+        })),
+        tabs: snapshot.tabs.map((tab) => ({
+          tabId: tab.tab_id,
+          workspaceId: tab.workspace_id,
+          label: tab.label,
+          paneCount: tab.pane_count,
+          focused: tab.focused,
+        })),
+        panes: snapshot.panes.map(paneView),
+        agents: snapshot.agents.map(agentView),
+      }),
     ),
   );
 
 const decodeAgentResponse = (operation: string, source: string) =>
   decodeEnvelope(operation, source).pipe(
     Effect.flatMap((result) =>
-      Schema.decodeUnknownEffect(Schema.Struct({ agent: AgentSchema }))(result).pipe(
+      decodeAgentEnvelopeEffect(result).pipe(
         Effect.mapError(() =>
           protocolError(
             operation,
@@ -569,7 +555,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
   ).pipe(
     Effect.flatMap((source) => decodeEnvelope("resolve calling pane", source)),
     Effect.flatMap((result) =>
-      Schema.decodeUnknownEffect(Schema.Struct({ pane: PaneSchema }))(result).pipe(
+      decodePaneEnvelopeEffect(result).pipe(
         Effect.mapError(() =>
           protocolError(
             "resolve calling pane",
@@ -609,7 +595,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         ),
       );
       const document = yield* parseJson("inspect Herdr protocol", schemaSource).pipe(
-        Effect.flatMap((value) => Schema.decodeUnknownEffect(SchemaDocument)(value)),
+        Effect.flatMap(decodeSchemaDocumentEffect),
         Effect.mapError(() =>
           readinessError("herdr_schema_invalid", "Herdr returned an invalid protocol schema."),
         ),
@@ -727,7 +713,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         );
       if (runtime === "claude")
         yield* parseJson("inspect Claude authentication", native.stdout).pipe(
-          Effect.flatMap((value) => Schema.decodeUnknownEffect(ClaudeAuthStatusSchema)(value)),
+          Effect.flatMap(decodeClaudeAuthStatusEffect),
           Effect.mapError(() =>
             readinessError(
               "claude_unauthenticated",
@@ -753,7 +739,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
       ).pipe(
         Effect.flatMap((source) => decodeEnvelope("split pane", source)),
         Effect.flatMap((result) =>
-          Schema.decodeUnknownEffect(Schema.Struct({ pane: PaneSchema }))(result).pipe(
+          decodePaneEnvelopeEffect(result).pipe(
             Effect.mapError(() =>
               protocolError(
                 "split pane",
@@ -795,9 +781,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
       ).pipe(
         Effect.flatMap((source) => decodeEnvelope("inspect pane shell", source)),
         Effect.flatMap((result) =>
-          Schema.decodeUnknownEffect(Schema.Struct({ process_info: PaneProcessInfoSchema }))(
-            result,
-          ).pipe(
+          decodePaneProcessInfoEnvelopeEffect(result).pipe(
             Effect.mapError(() =>
               processError(
                 "inspect pane shell",
@@ -807,24 +791,18 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
             ),
           ),
         ),
-        Effect.map(({ process_info: info }) =>
-          (() => {
-            const baseResult = { paneId: info.pane_id };
-            const withShellPid = info.shell_pid
-              ? { ...baseResult, shellPid: info.shell_pid }
-              : baseResult;
-            const withForegroundProcessGroupId = info.foreground_process_group_id
-              ? { ...withShellPid, foregroundProcessGroupId: info.foreground_process_group_id }
-              : withShellPid;
-            const withForegroundProcesses = {
-              ...withForegroundProcessGroupId,
-              foregroundProcesses: (info.foreground_processes ?? []).map((process) => ({
-                pid: process.pid,
-                name: process.name,
-              })),
-            };
-            return withForegroundProcesses;
-          })(),
+        Effect.map(
+          ({ process_info: info }): HerdrPaneProcessInfo => ({
+            paneId: info.pane_id,
+            ...(info.shell_pid && { shellPid: info.shell_pid }),
+            ...(info.foreground_process_group_id && {
+              foregroundProcessGroupId: info.foreground_process_group_id,
+            }),
+            foregroundProcesses: (info.foreground_processes ?? []).map((process) => ({
+              pid: process.pid,
+              name: process.name,
+            })),
+          }),
         ),
       ),
     startAgent: (input) =>

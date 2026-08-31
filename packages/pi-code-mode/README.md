@@ -135,8 +135,8 @@ same cumulative budget.
 
 Documents live at `~/.pi/agent/extensions/pi-code-mode.json` (global) and
 `<project>/.pi/extensions/pi-code-mode.json` (trusted projects). Project fields override global
-fields one field at a time; malformed fields fall back independently with path-only diagnostics.
-Unrelated JSON fields are preserved on writes.
+fields one field at a time; malformed fields fall back independently. Unrelated JSON fields are
+preserved on writes.
 
 | Field                           | Default   | Bounds        |
 | ------------------------------- | --------- | ------------- |

@@ -464,6 +464,34 @@ describe("persistent extension cutover", () => {
     }),
   );
 
+  it.effect.each(["authentication", "timeout"] as const)(
+    "classifies typed %s startup failures without message heuristics",
+    (kind) =>
+      Effect.gen(function* () {
+        const value = harness(
+          {},
+          {
+            runtimeStartError: new AdvisorModelError({
+              message: "opaque child startup failure",
+              kind,
+            }),
+          },
+        );
+
+        yield* invoke(value.emit("session_start", { type: "session_start" }));
+
+        expect(value.ctx.ui.notify).toHaveBeenCalledWith(
+          `Advisor ${kind} failure; primary work remains unaffected.`,
+          "warning",
+        );
+        expect(
+          vi
+            .mocked(value.ctx.ui.notify)
+            .mock.calls.some((call) => String(call[0]).includes("provider failure")),
+        ).toBe(false);
+      }),
+  );
+
   it.effect("abort dispatch synchronously defeats a same-tick provider completion", () =>
     Effect.gen(function* () {
       const value = harness();
@@ -886,7 +914,7 @@ describe("persistent extension cutover", () => {
           }),
         );
         stale.runtimes[0]!.pending[0]!.reject(
-          new AdvisorModelError({ message: "authentication failed", kind: "authentication" }),
+          new AdvisorModelError({ message: "opaque stale rejection", kind: "authentication" }),
         );
         yield* invoke(staleTurn);
         yield* Effect.promise(() => tick());

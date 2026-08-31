@@ -102,6 +102,93 @@ describe("Advisor local review cards", () => {
     ).toBeUndefined();
   });
 
+  test("enforces card bounds at their exact limits", () => {
+    const item = {
+      issue: "i".repeat(1_200),
+      evidence: "e".repeat(1_200),
+      suggestedFix: "f".repeat(1_200),
+    };
+    const bounded = {
+      version: 1 as const,
+      cardId: `arc_${"a".repeat(80)}`,
+      kind: "issues" as const,
+      summary: "s".repeat(800),
+      items: Array.from({ length: 5 }, () => item),
+    };
+
+    expect(decodeAdvisorReviewCard(bounded)).toEqual(bounded);
+    expect(
+      decodeAdvisorReviewCard({ ...bounded, cardId: `arc_${"a".repeat(81)}` }),
+    ).toBeUndefined();
+    expect(
+      decodeAdvisorReviewCard({ ...bounded, items: [...bounded.items, item] }),
+    ).toBeUndefined();
+    expect(
+      decodeAdvisorReviewCard({
+        ...bounded,
+        items: [{ ...item, issue: "i".repeat(1_201) }],
+      }),
+    ).toBeUndefined();
+  });
+
+  test("rejects excess properties inside card items", () => {
+    expect(
+      decodeAdvisorReviewCard({
+        version: 1,
+        cardId: "arc_nested",
+        kind: "issues",
+        summary: "summary",
+        items: [{ issue: "x", evidence: "y", suggestedFix: "z", extra: true }],
+      }),
+    ).toBeUndefined();
+  });
+
+  test("snapshots hostile card and action input once without invoking accessors", () => {
+    const cardInput = {
+      version: 1 as const,
+      cardId: "arc_hostile",
+      kind: "issues" as const,
+      summary: "summary",
+      items: [{ issue: "x", evidence: "y", suggestedFix: "z" }],
+    };
+    let cardOwnKeyReads = 0;
+    const singleReadCard = new Proxy(cardInput, {
+      ownKeys(target) {
+        cardOwnKeyReads += 1;
+        if (cardOwnKeyReads > 1) throw new Error("card inspected twice");
+        return Reflect.ownKeys(target);
+      },
+    });
+    const actionInput = { version: 1 as const, cardId: "arc_hostile", action: "fix" as const };
+    let actionOwnKeyReads = 0;
+    const singleReadAction = new Proxy(actionInput, {
+      ownKeys(target) {
+        actionOwnKeyReads += 1;
+        if (actionOwnKeyReads > 1) throw new Error("action inspected twice");
+        return Reflect.ownKeys(target);
+      },
+    });
+    let getterInvoked = false;
+    const accessor = Object.defineProperty(
+      { version: 1, cardId: "arc_accessor", kind: "issues", items: cardInput.items },
+      "summary",
+      {
+        enumerable: true,
+        get() {
+          getterInvoked = true;
+          throw new Error("getter invoked");
+        },
+      },
+    );
+
+    expect(decodeAdvisorReviewCard(singleReadCard)).toEqual(cardInput);
+    expect(decodeAdvisorReviewAction(singleReadAction)).toEqual(actionInput);
+    expect(decodeAdvisorReviewCard(accessor)).toBeUndefined();
+    expect(cardOwnKeyReads).toBe(1);
+    expect(actionOwnKeyReads).toBe(1);
+    expect(getterInvoked).toBe(false);
+  });
+
   test("restores the latest untombstoned card from the active branch", () => {
     const first = makeAdvisorReviewCard("arc_first", review)!;
     const second = makeAdvisorReviewCard("arc_second", review)!;

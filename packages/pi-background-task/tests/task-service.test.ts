@@ -22,6 +22,7 @@ import {
 import { normalizeConfig } from "../src/config/options.ts";
 import { BackgroundTaskConfigStore } from "../src/config/store.ts";
 import type { BackgroundTaskConfig } from "../src/config/schema.ts";
+import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
 import type { BackgroundTaskState, BackgroundTaskProjection } from "../src/task/model.ts";
 import { BackgroundTaskService } from "../src/task/service.ts";
 
@@ -217,6 +218,57 @@ describe("BackgroundTaskService", () => {
       expect(yield* service.status(started.id)).toMatchObject({ state: "exited", exitCode: 0 });
     }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
+
+  it.effect(
+    "admits normalized start metadata at the bounds and rejects overflow before spawn",
+    () => {
+      const harness = serviceHarness();
+      const cwdAtLimit = `/${"d".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars - 1)}`;
+      return Effect.gen(function* () {
+        const service = yield* BackgroundTaskService;
+        const started = yield* service.start({
+          command: ` ${"c".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars)} `,
+          cwd: cwdAtLimit,
+          name: ` ${"n".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars)} `,
+        });
+        expect(started).toMatchObject({
+          id: "task-1",
+          command: "c".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars),
+          cwd: cwdAtLimit,
+          name: "n".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars),
+        });
+        expect(harness.controls).toHaveLength(1);
+
+        expect(
+          yield* service
+            .start({
+              command: ` ${"c".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars + 1)} `,
+              cwd: ".",
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "InvalidBackgroundCommandError" });
+        expect(
+          yield* service
+            .start({
+              command: "valid",
+              cwd: ".",
+              name: ` ${"n".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars + 1)} `,
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "InvalidBackgroundCommandError" });
+        expect(
+          yield* service.start({ command: "valid", cwd: `${cwdAtLimit}d` }).pipe(Effect.flip),
+        ).toMatchObject({ _tag: "InvalidBackgroundCwdError" });
+        expect(harness.controls).toHaveLength(1);
+        expect((yield* service.list()).map((task) => task.id)).toEqual(["task-1"]);
+
+        const next = yield* service.start({ command: "next", cwd: "." });
+        expect(next.id).toBe("task-2");
+        expect(harness.controls).toHaveLength(2);
+        yield* service.stopAll();
+      }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+    },
+  );
 
   it.effect("waits for literal output across retained chunks", () => {
     const harness = serviceHarness();
@@ -734,6 +786,45 @@ describe("BackgroundTaskService", () => {
         completed[1],
       ]);
       yield* service.stop(active.id);
+    }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
+  });
+
+  it.effect("finishes admitted log and wait reads after retention evicts their task", () => {
+    const harness = serviceHarness({ maxRunning: 2, maxRetained: 1 });
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      const first = yield* service.start({ command: "first", cwd: "." });
+      const second = yield* service.start({ command: "second", cwd: "." });
+      const readingLogs = yield* service
+        .logs({ id: first.id, afterCursor: 0, waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const waitingForExit = yield* service
+        .wait({ id: first.id, until: "exit", waitSeconds: 30 })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Effect.yieldNow;
+
+      // Both monitors are ready before either runs. The first completion wakes the admitted
+      // readers, then the second completion evicts that terminal record before they resume.
+      harness.controls[0]?.complete();
+      harness.controls[1]?.complete();
+      expect(yield* service.wait({ id: second.id, until: "exit", waitSeconds: 30 })).toMatchObject({
+        outcome: "completed",
+        snapshot: { state: "exited" },
+      });
+      expect(yield* service.status(first.id).pipe(Effect.flip)).toMatchObject({
+        _tag: "BackgroundTaskNotFoundError",
+      });
+
+      const [logs, waited] = yield* Effect.all([
+        Fiber.join(readingLogs),
+        Fiber.join(waitingForExit),
+      ]);
+      expect(logs).toMatchObject({ id: first.id, state: "exited", nextCursor: 0 });
+      expect(waited).toMatchObject({
+        id: first.id,
+        outcome: "completed",
+        snapshot: { state: "exited", exitCode: 0 },
+      });
     }).pipe(Effect.scoped, provideBuiltLayer(harness.layer));
   });
 

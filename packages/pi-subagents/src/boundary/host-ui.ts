@@ -14,8 +14,6 @@ import {
   type SubagentToolPresentation,
 } from "./host-activity-widget.ts";
 
-export { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-
 const STATUS_KEY = "pi-subagents";
 
 export interface SubagentProjectionBridge extends ProjectionBridge<SubagentProjection> {

@@ -194,15 +194,13 @@ export function betterOpenAIWithDependencies(
     typedMessage: (error: E) => string,
   ): Effect.Effect<A | void, never, R> =>
     effect.pipe(
-      Effect.catch((error) =>
-        ignoreHostUi(`${operation}.failure`, () => ctx.ui.notify(typedMessage(error), "warning")),
-      ),
+      Effect.catch((error) => ignoreHostUi(() => ctx.ui.notify(typedMessage(error), "warning"))),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.void
           : Effect.logError(`Better OpenAI ${operation} raised an unexpected defect.`).pipe(
               Effect.andThen(
-                ignoreHostUi(`${operation}.defect`, () =>
+                ignoreHostUi(() =>
                   ctx.ui.notify(`OpenAI ${operation} failed unexpectedly.`, "warning"),
                 ),
               ),
@@ -229,10 +227,10 @@ export function betterOpenAIWithDependencies(
         Effect.tap(() =>
           Effect.gen(function* () {
             yield* Effect.sync(() => resetProviderTransport(ctx));
-            yield* ignoreHostUi("fast.render", () => updateFooter(ctx));
+            yield* ignoreHostUi(() => updateFooter(ctx));
             const fast = MutableRef.get(fastProjection);
             const active = isFastActive(ctx, fast);
-            yield* ignoreHostUi("fast.notify", () =>
+            yield* ignoreHostUi(() =>
               ctx.ui.notify(
                 fast.desiredActive && !active
                   ? unsupportedRequestMessage(ctx)

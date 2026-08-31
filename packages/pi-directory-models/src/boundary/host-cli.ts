@@ -1,11 +1,18 @@
 // Pi does not expose built-in CLI flag values to extensions, so this narrow host adapter
-// detects the standard one-off --model argument when the extension registers.
+// detects one-off model or thinking preferences when the extension registers.
 import process from "node:process";
 
-export function captureExplicitModelArgument(args?: readonly string[]): boolean {
+export function captureExplicitPreferenceArgument(args?: readonly string[]): boolean {
   try {
     const argv = args ?? process.argv.slice(2);
-    return argv.includes("--model");
+    const endOfOptions = argv.indexOf("--");
+    const optionCount = endOfOptions < 0 ? argv.length : endOfOptions;
+
+    for (let index = 0; index + 1 < optionCount; index += 1) {
+      const argument = argv[index];
+      if (argument === "--model" || argument === "--thinking") return true;
+    }
+    return false;
   } catch {
     return false;
   }

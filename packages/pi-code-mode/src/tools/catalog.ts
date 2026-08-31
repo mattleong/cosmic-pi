@@ -5,24 +5,30 @@
  */
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type { BackgroundTaskToolInput } from "pi-background-task/code-mode";
-import { CodeMode, Tool, toolError, type ToolError } from "../boundary/codemode-runtime.ts";
 import {
+  BackgroundTaskCodeModeInputSchema,
   BackgroundTaskCodeModeOutputSchema,
-  type BackgroundTaskDispatch,
-} from "../boundary/host-background-task.ts";
+  type BackgroundTaskCodeModeInput,
+} from "pi-background-task/code-mode";
+import { CodeMode, Tool, toolError, type ToolError } from "../boundary/codemode-runtime.ts";
+import type { BackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import type { NestedPiToolDispatch, PiGuestToolName } from "../boundary/host-builtin-tools.ts";
 import type { CumulativeOutputBudget } from "./limits.ts";
 
 /** Input contracts validated by the runtime before any nested dispatch happens. */
+const SafeInteger = Schema.Number.check(Schema.isFinite(), Schema.isInt());
+const PositiveSafeInteger = SafeInteger.check(Schema.isGreaterThan(0));
+const NonNegativeSafeInteger = SafeInteger.check(Schema.isGreaterThanOrEqualTo(0));
+const PositiveFiniteNumber = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThan(0));
+
 const ReadInput = Schema.Struct({
   path: Schema.String,
-  offset: Schema.optionalKey(Schema.Number),
-  limit: Schema.optionalKey(Schema.Number),
+  offset: Schema.optionalKey(PositiveSafeInteger),
+  limit: Schema.optionalKey(PositiveSafeInteger),
 });
 const ShellInput = Schema.Struct({
   command: Schema.String,
-  timeout: Schema.optionalKey(Schema.Number),
+  timeout: Schema.optionalKey(PositiveFiniteNumber),
 });
 const EditInput = Schema.Struct({
   path: Schema.String,
@@ -43,40 +49,18 @@ const GrepInput = Schema.Struct({
   glob: Schema.optionalKey(Schema.String),
   ignoreCase: Schema.optionalKey(Schema.Boolean),
   literal: Schema.optionalKey(Schema.Boolean),
-  context: Schema.optionalKey(Schema.Number),
-  limit: Schema.optionalKey(Schema.Number),
+  context: Schema.optionalKey(NonNegativeSafeInteger),
+  limit: Schema.optionalKey(PositiveSafeInteger),
 });
 const FindInput = Schema.Struct({
   pattern: Schema.String,
   path: Schema.optionalKey(Schema.String),
-  limit: Schema.optionalKey(Schema.Number),
+  limit: Schema.optionalKey(PositiveSafeInteger),
 });
 const LsInput = Schema.Struct({
   path: Schema.optionalKey(Schema.String),
-  limit: Schema.optionalKey(Schema.Number),
+  limit: Schema.optionalKey(PositiveSafeInteger),
 });
-const PositiveFinite = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0.001));
-const NonNegativeInteger = Schema.Natural;
-const BackgroundTaskInput = Schema.Struct({
-  action: Schema.Literals(["start", "list", "status", "logs", "wait", "stop", "stop_all", "clear"]),
-  command: Schema.optionalKey(Schema.String),
-  cwd: Schema.optionalKey(Schema.String),
-  name: Schema.optionalKey(Schema.String),
-  timeoutSeconds: Schema.optionalKey(PositiveFinite),
-  id: Schema.optionalKey(Schema.String),
-  state: Schema.optionalKey(Schema.Literals(["active", "completed", "all"])),
-  until: Schema.optionalKey(Schema.Literals(["exit", "output"])),
-  contains: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
-  afterCursor: Schema.optionalKey(NonNegativeInteger),
-  tailLines: Schema.optionalKey(
-    Schema.Natural.check(Schema.isBetween({ minimum: 1, maximum: 2_000 })),
-  ),
-  waitSeconds: Schema.optionalKey(
-    Schema.Number.check(Schema.isFinite(), Schema.isBetween({ minimum: 0, maximum: 120 })),
-  ),
-  force: Schema.optionalKey(Schema.Boolean),
-});
-
 const GUEST_TOOL_DESCRIPTIONS = {
   read:
     "Read one text file (same behavior and filesystem authority as the top-level read tool; " +
@@ -130,9 +114,9 @@ const backgroundTaskTool = (invoke: BackgroundTaskDispatch) =>
       "Start and manage session-scoped local background commands through the explicit " +
       "pi-background-task adapter. Tasks may outlive this Code Mode call but are terminated " +
       "when the Pi session closes. Use wait once at a dependency barrier instead of polling.",
-    input: BackgroundTaskInput,
+    input: BackgroundTaskCodeModeInputSchema,
     output: BackgroundTaskCodeModeOutputSchema,
-    run: (input) => invoke(input satisfies BackgroundTaskToolInput),
+    run: (input) => invoke(input satisfies BackgroundTaskCodeModeInput),
   });
 
 export interface CodeModeCatalogOptions {

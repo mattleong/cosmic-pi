@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  decodeJwtPayloadText,
+  hasControlCharacter,
   maskIdentifier,
   redactDiagnosticValue,
   sanitizeDiagnosticContent,
@@ -8,6 +10,45 @@ import {
   sanitizeTerminalStyledText,
   stripTerminalControls,
 } from "../index.ts";
+
+describe("JWT payload decoding", () => {
+  const unpaddedPayload = "eyJzdWIiOiJvbmUifQ";
+  const paddedPayload = `${unpaddedPayload}==`;
+
+  it("accepts padded and unpadded Base64URL payloads without inspecting the signature", () => {
+    expect(decodeJwtPayloadText(`header.${unpaddedPayload}`)).toBe('{"sub":"one"}');
+    expect(decodeJwtPayloadText(`header.${paddedPayload}.signature.extra`)).toBe('{"sub":"one"}');
+  });
+
+  it("rejects missing and invalid payload segments", () => {
+    expect(decodeJwtPayloadText("header..signature")).toBeUndefined();
+    expect(decodeJwtPayloadText("header.not%base64.signature")).toBeUndefined();
+  });
+});
+
+describe("control character detection", () => {
+  it("recognizes every C0, DEL, and C1 control code point", () => {
+    const ranges = [
+      [0x00, 0x1f],
+      [0x7f, 0x9f],
+    ] as const;
+
+    for (const [start, end] of ranges) {
+      for (let codePoint = start; codePoint <= end; codePoint += 1) {
+        expect(hasControlCharacter(String.fromCodePoint(codePoint))).toBe(true);
+      }
+    }
+  });
+
+  it("does not treat neighboring or non-Cc Unicode categories as controls", () => {
+    const safeCodePoints = [0x20, 0x7e, 0xa0, 0x200e, 0x2028, 0x1f680];
+
+    for (const codePoint of safeCodePoints) {
+      expect(hasControlCharacter(String.fromCodePoint(codePoint))).toBe(false);
+    }
+    expect(hasControlCharacter("safe\u009fvalue")).toBe(true);
+  });
+});
 
 describe("security formatting", () => {
   it("redacts provider credentials and identifiers", () => {

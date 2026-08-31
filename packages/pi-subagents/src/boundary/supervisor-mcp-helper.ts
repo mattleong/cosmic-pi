@@ -199,8 +199,11 @@ class HelperConfigError extends Schema.TaggedError<HelperConfigError>()("HelperC
 }) {}
 
 const helperConfigError = (code: string) => new HelperConfigError({ code });
-const configFromJson = Schema.fromJsonString(SupervisorChannelConfigSchema);
-const unknownFromJson = Schema.fromJsonString(Schema.Unknown);
+const decodeConfigJsonOption = Schema.decodeUnknownOption(
+  Schema.fromJsonString(SupervisorChannelConfigSchema),
+  { onExcessProperty: "error" },
+);
+const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 const readConfig = (path: string): Effect.Effect<SupervisorChannelConfig, HelperConfigError> =>
   Effect.gen(function* () {
@@ -235,9 +238,7 @@ const readConfig = (path: string): Effect.Effect<SupervisorChannelConfig, Helper
           });
           if (Buffer.byteLength(source, "utf8") > MAX_CONFIG_BYTES)
             return yield* helperConfigError("oversized-config");
-          const decoded = Schema.decodeUnknownOption(configFromJson, {
-            onExcessProperty: "error",
-          })(source);
+          const decoded = decodeConfigJsonOption(source);
           if (Option.isNone(decoded)) return yield* helperConfigError("invalid-config");
           return decoded.value;
         }),
@@ -887,7 +888,7 @@ const main = Effect.gen(function* () {
     requestMainShutdown();
   };
   const onLine = (line: string): void => {
-    const decoded = Schema.decodeUnknownOption(unknownFromJson)(line);
+    const decoded = decodeUnknownJsonOption(line);
     if (Option.isNone(decoded)) {
       void rpcError(null, -32700, "Parse error.");
       return;

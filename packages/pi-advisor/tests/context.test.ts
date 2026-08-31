@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest";
 import {
   ADVISOR_CONTEXT_TRUNCATION_MARKER,
   buildAdvisorContext,
-  buildAdvisorTranscript,
   DEFAULT_MAX_CONTEXT_CHARS,
 } from "../src/review/context.ts";
 
@@ -298,7 +297,7 @@ describe("buildAdvisorContext", () => {
     expect(result.truncated).toBe(true);
   });
 
-  test("uses the 240k default and exposes a transcript-only convenience helper", () => {
+  test("uses the 240k default", () => {
     expect(DEFAULT_MAX_CONTEXT_CHARS).toBe(240_000);
     const options = {
       candidate: "candidate",
@@ -310,7 +309,6 @@ describe("buildAdvisorContext", () => {
     const result = buildAdvisorContext(options);
 
     expect(result.transcript.length).toBeLessThanOrEqual(DEFAULT_MAX_CONTEXT_CHARS);
-    expect(buildAdvisorTranscript(options)).toBe(result.transcript);
     expect(result.truncated).toBe(true);
   });
 });

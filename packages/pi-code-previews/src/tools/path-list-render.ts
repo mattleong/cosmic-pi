@@ -5,32 +5,35 @@ import { escapeControlChars } from "../shared/terminal-text";
 import { isToolOutputNoticeLine } from "../shared/helpers";
 import type { PathIconMode } from "../config/schema";
 
-export function renderPathListLines(
-  output: string,
+export function createPathListChunkRenderer(
+  allLines: readonly string[],
   cwd: string,
   theme: Theme,
   options: { iconMode: PathIconMode },
-): string[] {
+): (lines: string[]) => string[] {
   const { iconMode } = options;
-  const lines = output.split("\n");
-  const pathLines = lines.filter((line) => line && !isToolOutputNoticeLine(line));
-  const shouldTree = pathLines.some((line) => line.includes("/"));
-  if (!shouldTree) return lines.map((line) => renderPathListLine(line, cwd, theme, iconMode));
-
-  const rendered: string[] = [];
+  const shouldTree = allLines.some(
+    (line) => line.length > 0 && !isToolOutputNoticeLine(line) && line.includes("/"),
+  );
   const seenDirs = new Set<string>();
-  for (const line of lines) {
-    if (!line) {
-      rendered.push("");
-      continue;
+  if (!shouldTree)
+    return (lines) => lines.map((line) => renderPathListLine(line, cwd, theme, iconMode));
+
+  return (lines) => {
+    const rendered: string[] = [];
+    for (const line of lines) {
+      if (!line) {
+        rendered.push("");
+        continue;
+      }
+      if (isToolOutputNoticeLine(line)) {
+        rendered.push(theme.fg("warning", escapeControlChars(line)));
+        continue;
+      }
+      renderTreePath(line, theme, iconMode, seenDirs, rendered);
     }
-    if (isToolOutputNoticeLine(line)) {
-      rendered.push(theme.fg("warning", escapeControlChars(line)));
-      continue;
-    }
-    renderTreePath(line, theme, iconMode, seenDirs, rendered);
-  }
-  return rendered;
+    return rendered;
+  };
 }
 
 function renderTreePath(

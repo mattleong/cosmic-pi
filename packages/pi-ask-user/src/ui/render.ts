@@ -125,7 +125,10 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
     const answer = draft?.answer;
     const value =
       answer?.kind === "choices"
-        ? answer.labels.join(", ")
+        ? question.choices
+            .filter((choice) => answer.values.includes(choice.value))
+            .map((choice) => choice.label)
+            .join(", ")
         : answer?.kind === "custom"
           ? answer.text
           : "Unanswered";

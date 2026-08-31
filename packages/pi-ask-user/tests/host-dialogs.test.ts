@@ -4,12 +4,10 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
-import { HostDialogs } from "../src/boundary/host-dialogs.ts";
+import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
 import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
-
-const provideLayer = Effect.provide;
 
 const request: AskUserRequest = {
   questions: [
@@ -27,9 +25,47 @@ const request: AskUserRequest = {
 };
 
 const opaqueHostFixture = <Value>(value: Value): never => {
-  // SAFETY: Tests supply every opaque host member exercised by HostDialogs.
+  // SAFETY: Tests supply every opaque host member exercised by the dialog boundary.
   return value as never;
 };
+
+type TestDialogFactory = (
+  tui: TUI,
+  theme: Theme,
+  keybindings: KeybindingsManager,
+  done: (outcome: AskUserOutcome) => void,
+) => Component;
+
+interface TestDialogFactoryHost {
+  readonly tui: TUI;
+  readonly theme: Theme;
+  readonly keybindings: KeybindingsManager;
+}
+
+const dialogFactoryHost = (): TestDialogFactoryHost => ({
+  tui: opaqueHostFixture({ requestRender: vi.fn() }),
+  theme: opaqueHostFixture({
+    bold: (value: string) => value,
+    fg: (_color: string, value: string) => value,
+    bg: (_color: string, value: string) => value,
+  }),
+  keybindings: opaqueHostFixture({ matches: () => false }),
+});
+
+interface PromiseGate<Value> {
+  readonly promise: Promise<Value>;
+  readonly resolve: (value: Value | PromiseLike<Value>) => void;
+}
+
+const controllable = <Value>(): PromiseGate<Value> =>
+  // SAFETY: Supported Node versions implement Promise.withResolvers; the configured libs omit it.
+  (
+    Promise as PromiseConstructor & {
+      withResolvers<Resolved>(): PromiseGate<Resolved>;
+    }
+  ).withResolvers<Value>();
+
+const nonsettling = <Value>(): Promise<Value> => controllable<Value>().promise;
 
 const run = (
   ctx: ExtensionContext,
@@ -37,11 +73,7 @@ const run = (
   options?: { readonly bridge?: AskUserDialogBridge; readonly signal?: AbortSignal },
 ) =>
   Effect.runPromise(
-    provideLayer(
-      Effect.flatMap(HostDialogs, (host) => host.ask(selectedRequest)),
-      HostDialogs.layer(ctx, options?.bridge ?? makeAskUserDialogBridge()),
-      { local: true },
-    ),
+    makeAskUserHost(ctx, options?.bridge ?? makeAskUserDialogBridge())(selectedRequest),
     options?.signal ? { signal: options.signal } : undefined,
   );
 
@@ -271,6 +303,32 @@ describe("RPC questionnaire boundary", () => {
     });
   });
 
+  it("preserves first-entered RPC choice order while deduplicating repeated values", () => {
+    const multiple: AskUserRequest = {
+      questions: [{ ...request.questions[0]!, mode: "multiple" }],
+    };
+    let reviewTitle: string | undefined;
+    const select = vi.fn((title: string, options: string[]) => {
+      if (options.includes("Choose listed options")) return Promise.resolve(options[0]);
+      if (options.includes("Continue without a note")) return Promise.resolve(options[0]);
+      if (options.includes("Submit answers")) reviewTitle = title;
+      return Promise.resolve(options[0]);
+    });
+    const ui = {
+      select,
+      input: vi.fn(() => Promise.resolve("2,1,2,1")),
+      notify: vi.fn(),
+    };
+
+    return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }), multiple).then((outcome) => {
+      expect(outcome).toEqual({
+        outcome: "submitted",
+        answers: [{ key: "library", kind: "choices", values: ["b", "a"], labels: ["B", "A"] }],
+      });
+      expect(reviewTitle).toContain("B, A");
+    });
+  });
+
   effectIt.effect("fails closed when an RPC client returns an option that was not offered", () =>
     Effect.gen(function* () {
       for (const stage of ["answer-mode", "note", "review"] as const) {
@@ -346,29 +404,23 @@ describe("TUI questionnaire boundary", () => {
     }),
   );
 
-  effectIt.effect("contains a hostile done callback and clears its current bridge token", () =>
+  effectIt.effect("keeps normal dialog submission authoritative during cleanup", () =>
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
-      const done = vi.fn((_outcome: AskUserOutcome) => {
-        throw new Error("hostile done");
-      });
-      type DialogFactory = (
-        tui: TUI,
-        theme: Theme,
-        keybindings: KeybindingsManager,
-        done: (outcome: AskUserOutcome) => void,
-      ) => Component;
-      const custom = vi.fn((factory: DialogFactory) => {
-        const tui: TUI = opaqueHostFixture({ requestRender: vi.fn() });
-        const theme: Theme = opaqueHostFixture({
-          bold: (value: string) => value,
-          fg: (_color: string, value: string) => value,
-          bg: (_color: string, value: string) => value,
+      const done = vi.fn<(outcome: AskUserOutcome) => void>();
+      const custom = vi.fn((factory: TestDialogFactory) => {
+        const completed = controllable<AskUserOutcome>();
+        const host = dialogFactoryHost();
+        const keybindings: KeybindingsManager = opaqueHostFixture({
+          matches: (data: string, id: string) => data === "\r" && id === "tui.select.confirm",
         });
-        const keybindings: KeybindingsManager = opaqueHostFixture({ matches: () => false });
-        const component = factory(tui, theme, keybindings, done);
-        expect(() => component.handleInput?.("\x1b")).not.toThrow();
-        return Promise.resolve({ outcome: "cancelled" as const, answers: [] as const });
+        const component = factory(host.tui, host.theme, keybindings, (outcome) => {
+          done(outcome);
+          completed.resolve(outcome);
+        });
+        component.handleInput?.("1");
+        component.handleInput?.("\r");
+        return completed.promise;
       });
       const ctx = opaqueHostFixture({
         mode: "tui",
@@ -380,8 +432,12 @@ describe("TUI questionnaire boundary", () => {
 
       const outcome = yield* Effect.promise(() => run(ctx, request, { bridge }));
 
-      expect(outcome).toEqual({ outcome: "cancelled", answers: [] });
+      expect(outcome).toEqual({
+        outcome: "submitted",
+        answers: [{ key: "library", kind: "choices", values: ["a"], labels: ["A"] }],
+      });
       expect(done).toHaveBeenCalledOnce();
+      expect(done).toHaveBeenCalledWith(outcome);
       expect(bridge.resume()).toBe(false);
     }),
   );
@@ -409,6 +465,66 @@ describe("TUI questionnaire boundary", () => {
       expect(custom).toHaveBeenCalledOnce();
       expect(bridge.resume()).toBe(true);
       expect(resume).toHaveBeenCalledOnce();
+    }),
+  );
+
+  effectIt.effect("interrupts a nonsettling custom Promise and closes exactly once", () =>
+    Effect.gen(function* () {
+      const bridge = makeAskUserDialogBridge();
+      const done = vi.fn<(outcome: AskUserOutcome) => void>();
+      const custom = vi.fn((factory: TestDialogFactory) => {
+        const host = dialogFactoryHost();
+        factory(host.tui, host.theme, host.keybindings, done);
+        return nonsettling<AskUserOutcome>();
+      });
+      const ctx = opaqueHostFixture({
+        mode: "tui",
+        hasUI: true,
+        cwd: process.cwd(),
+        isProjectTrusted: () => true,
+        ui: { custom },
+      });
+      const controller = new AbortController();
+      const opening = run(ctx, request, { bridge, signal: controller.signal });
+
+      yield* Effect.promise(() => vi.waitFor(() => expect(custom).toHaveBeenCalledOnce()));
+      controller.abort();
+      yield* Effect.promise(() => expect(opening).rejects.toBeDefined());
+
+      expect(done).toHaveBeenCalledOnce();
+      expect(done).toHaveBeenCalledWith({ outcome: "cancelled", answers: [] });
+      expect(bridge.resume()).toBe(false);
+    }),
+  );
+
+  effectIt.effect("clears only its bridge token when a replacement wins during the open", () =>
+    Effect.gen(function* () {
+      const bridge = makeAskUserDialogBridge();
+      const done = vi.fn<(outcome: AskUserOutcome) => void>();
+      const replacementResume = vi.fn();
+      const custom = vi.fn((factory: TestDialogFactory) => {
+        const host = dialogFactoryHost();
+        factory(host.tui, host.theme, host.keybindings, done);
+        bridge.activate(replacementResume);
+        return nonsettling<AskUserOutcome>();
+      });
+      const ctx = opaqueHostFixture({
+        mode: "tui",
+        hasUI: true,
+        cwd: process.cwd(),
+        isProjectTrusted: () => true,
+        ui: { custom },
+      });
+      const controller = new AbortController();
+      const opening = run(ctx, request, { bridge, signal: controller.signal });
+
+      yield* Effect.promise(() => vi.waitFor(() => expect(custom).toHaveBeenCalledOnce()));
+      controller.abort();
+      yield* Effect.promise(() => expect(opening).rejects.toBeDefined());
+
+      expect(done).toHaveBeenCalledOnce();
+      expect(bridge.resume()).toBe(true);
+      expect(replacementResume).toHaveBeenCalledOnce();
     }),
   );
 });

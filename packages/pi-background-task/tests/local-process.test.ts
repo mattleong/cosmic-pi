@@ -129,14 +129,39 @@ describe("windows tree terminator", () => {
 });
 
 describe("local process boundary", () => {
+  it("case-folds blocked environment keys only on Windows", () => {
+    const blocked = {
+      BASH_ENV: "bash",
+      ENV: "shell",
+      NODE_OPTIONS: "--inspect",
+      NODE_PATH: "/modules",
+      PI_SESSION_FILE: "/private/session.jsonl",
+      PI_SESSION_ID: "private",
+    };
+    expect(makeBackgroundProcessEnvironment({ PATH: "/bin", ...blocked }, "linux")).toEqual({
+      PATH: "/bin",
+      FORCE_COLOR: "1",
+    });
+
+    const lowerCase = {
+      bash_env: "bash",
+      env: "shell",
+      node_options: "--inspect",
+      node_path: "/modules",
+      pi_session_file: "/private/session.jsonl",
+      pi_session_id: "private",
+    };
+    expect(makeBackgroundProcessEnvironment(lowerCase, "linux")).toEqual({
+      ...lowerCase,
+      FORCE_COLOR: "1",
+    });
+    expect(makeBackgroundProcessEnvironment({ PATH: "C:\\bin", ...lowerCase }, "win32")).toEqual({
+      PATH: "C:\\bin",
+      FORCE_COLOR: "1",
+    });
+  });
+
   it("requests color from compatible CLIs unless the environment explicitly configures it", () => {
-    expect(
-      makeBackgroundProcessEnvironment({
-        PATH: "/bin",
-        PI_SESSION_ID: "private",
-        NODE_OPTIONS: "--inspect",
-      }),
-    ).toEqual({ PATH: "/bin", FORCE_COLOR: "1" });
     expect(makeBackgroundProcessEnvironment({ FORCE_COLOR: "0" })).toEqual({ FORCE_COLOR: "0" });
     expect(makeBackgroundProcessEnvironment({ NO_COLOR: "1" })).toEqual({ NO_COLOR: "1" });
     expect(makeBackgroundProcessEnvironment({ force_color: "0" }, "win32")).toEqual({
@@ -167,6 +192,20 @@ describe("local process boundary", () => {
         const output = [...result.events].map((event) => `${event.stream}:${event.text}`).join("|");
         expect(output).toContain("stdout:out");
         expect(output).toContain("stderr:err");
+      }),
+    ),
+  );
+
+  it.effect("returns only exit code and signal data after a successful spawn", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        const processes = yield* LocalProcess;
+        const handle = yield* processes.spawn({
+          command: `node -e "process.exitCode = 7"`,
+          cwd: ".",
+          ingressBufferBytes: 64 * 1024,
+        });
+        expect(yield* handle.awaitExit).toEqual({ exitCode: 7 });
       }),
     ),
   );

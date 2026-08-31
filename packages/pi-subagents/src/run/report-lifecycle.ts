@@ -97,14 +97,14 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
       : record.completionGeneration;
     const text = report.text;
     const completionWarning = foldRunWarnings(record.warningSlots);
-    if (recordsCompletion) {
-      const baseResult = { generation, outcome: "completed" as const };
-      const withFinalText = text ? { ...baseResult, finalText: text } : baseResult;
-      const withWarning = completionWarning
-        ? { ...withFinalText, warning: completionWarning }
-        : withFinalText;
-      delivery.insertCompletionLocked(record, { ...withWarning, retained: true });
-    }
+    if (recordsCompletion)
+      delivery.insertCompletionLocked(record, {
+        generation,
+        outcome: "completed" as const,
+        ...(text && { finalText: text }),
+        ...(completionWarning && { warning: completionWarning }),
+        retained: true,
+      });
     record.notificationGeneration += 1;
     delivery.discardQuestionLocked(record.view.id);
     record.replyPendingRequestId = undefined;

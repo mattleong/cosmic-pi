@@ -2,12 +2,8 @@ import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { nodePlatformLayer } from "pi-cosmic-core";
-import {
-  InvalidSettingError,
-  SETTINGS_OPTION_DESCRIPTORS,
-  prepareSettingUpdate,
-} from "../src/config/options.ts";
+import { nodePlatformLayer, type JsonObject } from "pi-cosmic-core";
+import { InvalidSettingError, prepareSettingUpdate } from "../src/config/options.ts";
 import type { ConfigFile } from "../src/config/schema.ts";
 import {
   configPaths,
@@ -113,18 +109,30 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       }),
   );
 
-  it.effect.each([
-    ["usage.enabled", "true", true],
-    ["usage.refreshIntervalMs", "15000", 15_000],
-    ["usage.showResetTimes", "false", false],
-    ["footer.mode", "status", "status"],
-    ["compaction.enabled", "true", true],
-    ["image.defaultSave", "global", "global"],
-    ["image.timeoutMs", "45000", 45_000],
-  ] as const)("parses setting %s from its persisted string form", ([id, raw, expected]) =>
+  it.effect("patches the exact path for every setting id", () =>
     Effect.gen(function* () {
-      const descriptors = new Map(SETTINGS_OPTION_DESCRIPTORS.map((value) => [value.id, value]));
-      expect(yield* descriptors.get(id)!.decode(raw)).toBe(expected);
+      const cases: ReadonlyArray<readonly [string, string, JsonObject]> = [
+        ["persistState", "false", { persistState: false }],
+        ["compaction.enabled", "true", { compaction: { enabled: true } }],
+        ["footer.mode", "status", { footer: { mode: "status" } }],
+        ["usage.enabled", "true", { usage: { enabled: true } }],
+        ["usage.refreshIntervalMs", "15000", { usage: { refreshIntervalMs: 15_000 } }],
+        [
+          "usage.showOnlyOnSubscriptionModels",
+          "false",
+          { usage: { showOnlyOnSubscriptionModels: false } },
+        ],
+        ["usage.showResetTimes", "false", { usage: { showResetTimes: false } }],
+        ["image.enabled", "false", { image: { enabled: false } }],
+        ["image.defaultModel", " custom-model ", { image: { defaultModel: " custom-model " } }],
+        ["image.defaultSave", "global", { image: { defaultSave: "global" } }],
+        ["image.outputFormat", "webp", { image: { outputFormat: "webp" } }],
+        ["image.timeoutMs", "45000", { image: { timeoutMs: 45_000 } }],
+      ];
+      for (const [id, raw, expected] of cases) {
+        const update = yield* prepareSettingUpdate(id, raw);
+        expect(update({})).toEqual(expected);
+      }
     }),
   );
 
@@ -135,9 +143,11 @@ layer(nodePlatformLayer)("config helpers", (it) => {
         ["usage.refreshIntervalMs", "NaN"],
         ["footer.mode", "other"],
         ["compaction.enabled", "sometimes"],
+        ["image.defaultModel", " \t"],
       ] as const) {
         const failure = yield* prepareSettingUpdate(id, value).pipe(Effect.flip);
-        expect(failure).toBeDefined();
+        expect(failure).toBeInstanceOf(InvalidSettingError);
+        expect(failure).toMatchObject({ id, message: `Invalid value for ${id}.` });
       }
     }),
   );

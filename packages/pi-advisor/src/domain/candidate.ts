@@ -1,9 +1,7 @@
 import * as Predicate from "effect/Predicate";
-
-import type { TurnEndEvent } from "@earendil-works/pi-coding-agent";
-import { snapshotData } from "./safe-data.ts";
-import { stringifyRedactedObservation } from "./redaction.ts";
 import { isJsonObject } from "pi-cosmic-core";
+import { stringifyRedactedObservation, stringifyRedactedObservationSnapshot } from "./redaction.ts";
+import { snapshotData } from "./safe-data.ts";
 
 export type AdvisorReviewPhase = "final" | "progress";
 
@@ -11,10 +9,16 @@ export type CandidateClassification =
   | { eligible: true; candidate: string; phase: AdvisorReviewPhase }
   | { eligible: false; reason: "not-assistant" | "empty" | "incomplete" };
 
-/** Extract user-visible text from a safely snapshotted host message. */
-export function contentText<MessageInput>(message: MessageInput): string {
+export interface AssistantTurnInspection {
+  readonly classification: CandidateClassification;
+  readonly stopReason: "stop" | "aborted" | "error" | "length";
+  readonly toolCalls: string[];
+}
+
+/** Snapshot and inspect one untrusted user message. */
+export function inspectUserMessage<MessageInput>(message: MessageInput): string | undefined {
   const snapshot = snapshotData(message);
-  if (!isJsonObject(snapshot)) return "";
+  if (!isJsonObject(snapshot) || snapshot.role !== "user") return undefined;
   if (Predicate.isString(snapshot.content)) return snapshot.content;
   if (!Array.isArray(snapshot.content)) return "";
   return snapshot.content
@@ -29,107 +33,90 @@ export function contentText<MessageInput>(message: MessageInput): string {
 export const safeObservationJson = <Value>(value: Value): string =>
   stringifyRedactedObservation(value).slice(0, 12_000);
 
-export function assistantStopReason<MessageInput>(
-  message: MessageInput,
-): "stop" | "aborted" | "error" | "length" {
-  const snapshot = snapshotData(message);
-  if (!isJsonObject(snapshot)) return "error";
-  return snapshot.stopReason === "aborted" ||
-    snapshot.stopReason === "error" ||
-    snapshot.stopReason === "length"
-    ? snapshot.stopReason
-    : "stop";
-}
-
-export function assistantToolCalls<MessageInput>(message: MessageInput): string[] {
-  const snapshot = snapshotData(message);
-  if (!isJsonObject(snapshot) || !Array.isArray(snapshot.content)) return [];
-  return snapshot.content.flatMap((part) =>
-    isJsonObject(part) && part.type === "toolCall"
-      ? [
-          `${Predicate.isString(part.name) ? part.name : "unknown"} ${safeObservationJson(part.arguments)}`,
-        ]
-      : [],
-  );
-}
-
-export function isGenuineUserMessage<MessageInput>(message: MessageInput): boolean {
-  const snapshot = snapshotData(message);
-  return isJsonObject(snapshot) && snapshot.role === "user";
-}
-
-export function classifyReviewCheckpoint(event: TurnEndEvent): CandidateClassification {
-  const message = snapshotData(event.message);
+/** Snapshot and inspect one untrusted assistant message. */
+export function inspectAssistantMessage<MessageInput>(
+  messageInput: MessageInput,
+): AssistantTurnInspection {
+  const message = snapshotData(messageInput);
+  const stopReason =
+    !isJsonObject(message) || message.stopReason === "error"
+      ? "error"
+      : message.stopReason === "aborted" || message.stopReason === "length"
+        ? message.stopReason
+        : "stop";
   if (!isJsonObject(message) || message.role !== "assistant") {
-    return { eligible: false, reason: "not-assistant" };
+    return {
+      classification: { eligible: false, reason: "not-assistant" },
+      stopReason,
+      toolCalls: [],
+    };
   }
   if (
     message.stopReason === "aborted" ||
     message.stopReason === "error" ||
     message.stopReason === "length"
-  )
-    return { eligible: false, reason: "incomplete" };
-  if (!Array.isArray(message.content)) return { eligible: false, reason: "empty" };
-  const hasToolCall = message.content.some(
-    (part) => isJsonObject(part) && part.type === "toolCall",
-  );
-  if (hasToolCall) {
-    const candidate = assistantCheckpointText(message);
-    return candidate
-      ? { eligible: true, candidate, phase: "progress" }
-      : { eligible: false, reason: "empty" };
-  }
-  if (message.stopReason !== "stop") return { eligible: false, reason: "incomplete" };
-  const candidate = assistantText(message);
-  return candidate
-    ? { eligible: true, candidate, phase: "final" }
-    : { eligible: false, reason: "empty" };
-}
-
-export function assistantCheckpointText<MessageInput>(message: MessageInput): string | undefined {
-  const snapshot = snapshotData(message);
-  if (
-    !isJsonObject(snapshot) ||
-    snapshot.role !== "assistant" ||
-    !Array.isArray(snapshot.content)
   ) {
-    return undefined;
+    return {
+      classification: { eligible: false, reason: "incomplete" },
+      stopReason,
+      toolCalls: [],
+    };
   }
-  const parts = snapshot.content.flatMap((part) => {
-    if (!isJsonObject(part)) return [];
-    if (part.type === "text" && Predicate.isString(part.text) && part.text.trim()) {
-      return [part.text.trim()];
+  if (!Array.isArray(message.content)) {
+    return {
+      classification: { eligible: false, reason: "empty" },
+      stopReason,
+      toolCalls: [],
+    };
+  }
+
+  let hasToolCall = false;
+  const textParts: string[] = [];
+  const checkpointParts: string[] = [];
+  const toolCalls: string[] = [];
+  for (const part of message.content) {
+    if (!isJsonObject(part)) continue;
+    if (part.type === "text" && Predicate.isString(part.text)) {
+      textParts.push(part.text);
+      if (part.text.trim()) checkpointParts.push(part.text.trim());
+      continue;
     }
-    if (part.type !== "toolCall") return [];
+    if (part.type !== "toolCall") continue;
+    hasToolCall = true;
     const name = Predicate.isString(part.name) && part.name ? part.name : "unknown";
-    let args = "";
-    try {
-      args = part.arguments === undefined ? "" : ` ${JSON.stringify(part.arguments)}`;
-    } catch {
-      args = " [unserializable arguments]";
-    }
-    return [`[tool call: ${name}${args}]`];
-  });
-  const text = parts.join("\n").trim();
-  return text || undefined;
-}
-
-export function assistantText<MessageInput>(message: MessageInput): string | undefined {
-  const snapshot = snapshotData(message);
-  if (
-    !isJsonObject(snapshot) ||
-    snapshot.role !== "assistant" ||
-    !Array.isArray(snapshot.content)
-  ) {
-    return undefined;
+    const serializedArguments =
+      part.arguments === undefined
+        ? undefined
+        : stringifyRedactedObservationSnapshot(part.arguments);
+    checkpointParts.push(
+      `[tool call: ${name}${serializedArguments === undefined ? "" : ` ${serializedArguments}`}]`,
+    );
+    toolCalls.push(`${name} ${(serializedArguments ?? "[unavailable]").slice(0, 12_000)}`);
   }
-  const text = snapshot.content
-    .flatMap((part) =>
-      isJsonObject(part) && part.type === "text" && Predicate.isString(part.text)
-        ? [part.text]
-        : [],
-    )
-    .join("\n")
-    .trim();
-  return text || undefined;
+
+  if (hasToolCall) {
+    const candidate = checkpointParts.join("\n").trim();
+    return {
+      classification: candidate
+        ? { eligible: true, candidate, phase: "progress" }
+        : { eligible: false, reason: "empty" },
+      stopReason,
+      toolCalls,
+    };
+  }
+  if (message.stopReason !== "stop") {
+    return {
+      classification: { eligible: false, reason: "incomplete" },
+      stopReason,
+      toolCalls: [],
+    };
+  }
+  const candidate = textParts.join("\n").trim();
+  return {
+    classification: candidate
+      ? { eligible: true, candidate, phase: "final" }
+      : { eligible: false, reason: "empty" },
+    stopReason,
+    toolCalls: [],
+  };
 }

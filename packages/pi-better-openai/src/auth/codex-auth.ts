@@ -50,23 +50,6 @@ const redactAccessToken = (value: string): Redacted.Redacted<string> =>
 export type CodexCredentialsWithSource = CodexCredentials & {
   readonly source: "modelRegistry" | "authFile";
 };
-export type CodexAuthResult =
-  | {
-      readonly _tag: "Found";
-      readonly credentials: CodexCredentialsWithSource;
-    }
-  | { readonly _tag: "Missing" }
-  | {
-      readonly _tag: "Failure";
-      readonly operation: string;
-      readonly message: string;
-    };
-const failure = (operation: string, message: string): CodexAuthResult => ({
-  _tag: "Failure",
-  operation,
-  message,
-});
-
 export function extractAccountIdFromJwt(token: string): string | undefined {
   const source = Option.getOrUndefined(decodeJwtPayload(token));
   if (!source) return undefined;
@@ -92,7 +75,7 @@ export function parseCodexRegistryCredentials(
   return accountId ? { accessToken: redactAccessToken(value), accountId } : undefined;
 }
 
-export const readCodexAuthResult = Effect.fn("CodexAuth.readAuthResult")(function* (
+export const readCodexAuthCredentials = Effect.fn("CodexAuth.readAuthCredentials")(function* (
   authPath: string,
 ) {
   const document = yield* readSchemaDocument(authPath, CodexAuthDocumentSchema).pipe(
@@ -105,73 +88,68 @@ export const readCodexAuthResult = Effect.fn("CodexAuth.readAuthResult")(functio
     ),
   );
   const rawEntry = document?.value["openai-codex"];
-  if (rawEntry === undefined) return { _tag: "Missing" } as const;
+  if (rawEntry === undefined) return undefined;
   const entry = Option.getOrUndefined(Schema.decodeUnknownOption(CodexAuthEntrySchema)(rawEntry));
-  if (!entry) return failure("decode", "OpenAI credential fields are malformed.");
+  if (!entry)
+    return yield* new CodexAuthError({
+      operation: "decode",
+      message: "OpenAI credential fields are malformed.",
+    });
   const now = yield* Clock.currentTimeMillis;
-  if (Predicate.isNumber(entry.expires) && now >= entry.expires)
-    return { _tag: "Missing" } as const;
+  if (Predicate.isNumber(entry.expires) && now >= entry.expires) return undefined;
   const accessToken = entry.access;
   const accountId = (entry.accountId ?? entry.account_id)?.trim();
-  if (!accountId) return failure("decode", "OpenAI credential fields are malformed.");
-  return {
-    _tag: "Found",
-    credentials: {
-      accessToken,
-      accountId,
-      source: "authFile" as const,
-    },
-  } as const;
+  if (!accountId)
+    return yield* new CodexAuthError({
+      operation: "decode",
+      message: "OpenAI credential fields are malformed.",
+    });
+  return { accessToken, accountId, source: "authFile" as const };
 });
 
-export const getCodexCredentialsResult = Effect.fn("CodexAuth.getCredentialsResult")(function* (
-  authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
-) {
-  const [file, registryRaw] = yield* Effect.all(
-    [
-      readCodexAuthResult(authPath).pipe(
-        Effect.orElseSucceed(() => failure("read", "Unable to read openai-codex credentials.")),
-      ),
-      Effect.tryPromise({
-        try: () => ctx.modelRegistry.getApiKeyForProvider("openai-codex"),
-        catch: () =>
-          new CodexAuthError({
-            operation: "registry",
-            message: "Unable to read openai-codex credentials.",
-          }),
-      }).pipe(Effect.result),
-    ] as const,
-    { concurrency: 2 },
-  );
-  if (registryRaw._tag === "Success") {
-    const registry = parseCodexRegistryCredentials(
-      Predicate.isString(registryRaw.success) ? registryRaw.success : undefined,
-    );
-    // Deliberate precedence: a registry API key wins over an existing auth-file OAuth
-    // token (the inverse of the xAI package). Registry credentials are the
-    // subscription-native path; change only with intent.
-    if (registry)
-      return {
-        _tag: "Found",
-        credentials: { ...registry, source: "modelRegistry" as const },
-      } as const;
-    if (file._tag === "Found") return file;
-    if (registryRaw.success)
-      return failure("registry-decode", "OpenAI registry credentials are malformed.");
-  } else if (file._tag === "Found") return file;
-  if (file._tag !== "Missing") return file;
-  if (registryRaw._tag === "Failure")
-    return failure(registryRaw.failure.operation, registryRaw.failure.message);
-  return { _tag: "Missing" } as const;
-});
+export const readCodexRegistryCredentials = Effect.fn("CodexAuth.readRegistryCredentials")(
+  function* (ctx: Pick<ExtensionContext, "modelRegistry">) {
+    const raw = yield* Effect.tryPromise({
+      try: () => ctx.modelRegistry.getApiKeyForProvider("openai-codex"),
+      catch: () =>
+        new CodexAuthError({
+          operation: "registry",
+          message: "Unable to read openai-codex credentials.",
+        }),
+    });
+    const credentials = parseCodexRegistryCredentials(Predicate.isString(raw) ? raw : undefined);
+    if (credentials) return { ...credentials, source: "modelRegistry" as const };
+    if (raw)
+      return yield* new CodexAuthError({
+        operation: "registry-decode",
+        message: "OpenAI registry credentials are malformed.",
+      });
+    return undefined;
+  },
+);
 
 export const getCodexCredentials = Effect.fn("CodexAuth.getCredentials")(function* (
   authPath: string,
   ctx: Pick<ExtensionContext, "modelRegistry">,
 ) {
-  const result = yield* getCodexCredentialsResult(authPath, ctx);
-  if (result._tag === "Found") return result.credentials;
-  if (result._tag === "Missing") return undefined;
-  return yield* new CodexAuthError({ operation: result.operation, message: result.message });
+  const [fileAttempt, registryAttempt] = yield* Effect.all(
+    [
+      readCodexAuthCredentials(authPath).pipe(Effect.result),
+      readCodexRegistryCredentials(ctx).pipe(Effect.result),
+    ] as const,
+    { concurrency: 2 },
+  );
+
+  // Deliberate precedence: valid registry credentials win, then valid file credentials.
+  // A malformed non-empty registry value wins the failure tie. Otherwise the file failure
+  // wins before a registry read failure. Change this order only with intent.
+  if (registryAttempt._tag === "Success" && registryAttempt.success !== undefined)
+    return registryAttempt.success;
+  if (fileAttempt._tag === "Success" && fileAttempt.success !== undefined)
+    return fileAttempt.success;
+  if (registryAttempt._tag === "Failure" && registryAttempt.failure.operation === "registry-decode")
+    return yield* registryAttempt.failure;
+  if (fileAttempt._tag === "Failure") return yield* fileAttempt.failure;
+  if (registryAttempt._tag === "Failure") return yield* registryAttempt.failure;
+  return undefined;
 });

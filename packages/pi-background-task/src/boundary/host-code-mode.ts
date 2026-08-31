@@ -7,46 +7,21 @@ import { invokeHostCallback, PiSessionRuntimeError } from "pi-cosmic-core";
 import {
   BACKGROUND_TASK_CODE_MODE_QUERY,
   BACKGROUND_TASK_CODE_MODE_VERSION,
+  BackgroundTaskCodeModeInputSchema,
   normalizeBackgroundTaskCodeModeQuery,
   type BackgroundTaskCodeModeCapability,
+  type BackgroundTaskCodeModeInput,
 } from "../code-mode/protocol.ts";
-import { projectBackgroundTaskCodeModeOutput } from "../code-mode/output.ts";
+import {
+  backgroundTaskCodeModeStartOutputFits,
+  projectBackgroundTaskCodeModeOutput,
+} from "../code-mode/output.ts";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
 import { BackgroundTaskService } from "../task/service.ts";
 import { executeBackgroundTaskCommand } from "../tools/command.ts";
 import type { BackgroundTaskToolInput } from "../tools/schema.ts";
 
-const PositiveFinite = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0.001));
-const NonNegativeInteger = Schema.Number.check(
-  Schema.isFinite(),
-  Schema.isInt(),
-  Schema.isGreaterThanOrEqualTo(0),
-);
-const BackgroundTaskInputSchema = Schema.Struct({
-  action: Schema.Literals(["start", "list", "status", "logs", "wait", "stop", "stop_all", "clear"]),
-  command: Schema.optionalKey(Schema.String),
-  cwd: Schema.optionalKey(Schema.String),
-  name: Schema.optionalKey(Schema.String),
-  timeoutSeconds: Schema.optionalKey(PositiveFinite),
-  id: Schema.optionalKey(Schema.String),
-  state: Schema.optionalKey(Schema.Literals(["active", "completed", "all"])),
-  until: Schema.optionalKey(Schema.Literals(["exit", "output"])),
-  contains: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
-  afterCursor: Schema.optionalKey(NonNegativeInteger),
-  tailLines: Schema.optionalKey(
-    Schema.Number.check(
-      Schema.isFinite(),
-      Schema.isInt(),
-      Schema.isBetween({ minimum: 1, maximum: 2_000 }),
-    ),
-  ),
-  waitSeconds: Schema.optionalKey(
-    Schema.Number.check(Schema.isFinite(), Schema.isBetween({ minimum: 0, maximum: 120 })),
-  ),
-  force: Schema.optionalKey(Schema.Boolean),
-});
-
-const decodeInput = Schema.decodeUnknownEffect(BackgroundTaskInputSchema);
+const decodeInput = Schema.decodeUnknownEffect(BackgroundTaskCodeModeInputSchema);
 
 export const backgroundTaskCodeModeSessionId = (ctx: ExtensionContext): string | undefined =>
   invokeHostCallback(() => {
@@ -119,7 +94,7 @@ export const makeBackgroundTaskCodeModeHost = (
         sessionId,
         execute: (
           _callId: string,
-          input: BackgroundTaskToolInput,
+          input: BackgroundTaskCodeModeInput,
           signal: AbortSignal,
           maxOutputBytes: number,
         ) => {
@@ -141,7 +116,11 @@ export const makeBackgroundTaskCodeModeHost = (
                 executeBackgroundTaskCommand(
                   decoded satisfies BackgroundTaskToolInput,
                   activation.sessionCwd,
-                  { maxTextBytes: maxOutputBytes },
+                  {
+                    maxTextBytes: maxOutputBytes,
+                    startOutputFits: (request, maxTextBytes) =>
+                      backgroundTaskCodeModeStartOutputFits(request, maxTextBytes, maxOutputBytes),
+                  },
                 ),
               ),
               Effect.flatMap((result) => {

@@ -2,11 +2,9 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import { HostDialogs } from "../src/boundary/host-dialogs.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
-import { AskUserService } from "../src/questionnaire/service.ts";
+import { AskUserService, type AskUserHost } from "../src/questionnaire/service.ts";
 
 const provideLayer = Effect.provide;
 
@@ -43,16 +41,14 @@ it.effect("rejects an invalid ask while a valid host dialog holds the permit", (
     const releaseFirst = yield* Deferred.make<void>();
     let calls = 0;
 
-    const hostLayer = Layer.succeed(HostDialogs, {
-      ask: () =>
-        Effect.gen(function* () {
-          calls += 1;
-          yield* Deferred.succeed(firstEntered, undefined);
-          yield* Deferred.await(releaseFirst);
-          return outcome;
-        }),
-    });
-    const serviceLayer = AskUserService.layer.pipe(Layer.provide(hostLayer));
+    const host: AskUserHost = () =>
+      Effect.gen(function* () {
+        calls += 1;
+        yield* Deferred.succeed(firstEntered, undefined);
+        yield* Deferred.await(releaseFirst);
+        return outcome;
+      });
+    const serviceLayer = AskUserService.layer(host);
 
     const program = AskUserService.use((service) =>
       Effect.gen(function* () {
@@ -88,16 +84,14 @@ it.effect("serializes host asks and removes an interrupted queued caller", () =>
     const releaseFirst = yield* Deferred.make<void>();
     let calls = 0;
 
-    const hostLayer = Layer.succeed(HostDialogs, {
-      ask: () =>
-        Effect.gen(function* () {
-          calls += 1;
-          yield* Deferred.succeed(calls === 1 ? firstEntered : laterEntered, undefined);
-          if (calls === 1) yield* Deferred.await(releaseFirst);
-          return outcome;
-        }),
-    });
-    const serviceLayer = AskUserService.layer.pipe(Layer.provide(hostLayer));
+    const host: AskUserHost = () =>
+      Effect.gen(function* () {
+        calls += 1;
+        yield* Deferred.succeed(calls === 1 ? firstEntered : laterEntered, undefined);
+        if (calls === 1) yield* Deferred.await(releaseFirst);
+        return outcome;
+      });
+    const serviceLayer = AskUserService.layer(host);
 
     const program = AskUserService.use((service) =>
       Effect.gen(function* () {

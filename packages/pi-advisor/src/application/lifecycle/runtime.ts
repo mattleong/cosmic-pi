@@ -222,10 +222,6 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
             ? { ...baseStartOptions, instructions: refs.instructions.content }
             : baseStartOptions;
         yield* nextRuntime.start(startOptions).pipe(
-          Effect.mapError(
-            (error) =>
-              new AdvisorExtensionError({ operation: "child startup", message: error.message }),
-          ),
           Effect.raceFirst(
             Deferred.await(startCancellation).pipe(
               Effect.andThen(

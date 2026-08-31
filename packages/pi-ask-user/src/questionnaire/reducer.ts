@@ -1,11 +1,12 @@
 import type {
   AskUserAnswer,
+  AskUserAnswerDraft,
   AskUserOutcome,
   QuestionnaireAction,
   QuestionnaireState,
   QuestionDraft,
 } from "./model.ts";
-import type { AskUserRequest } from "./schema.ts";
+import type { AskUserQuestion, AskUserRequest } from "./schema.ts";
 
 export const createQuestionnaireState = (request: AskUserRequest): QuestionnaireState => ({
   request,
@@ -45,7 +46,7 @@ export function reduceQuestionnaire(
       if (!choice) return state;
       return updateDraft(state, action.question, (draft) => ({
         ...draft,
-        answer: { kind: "choices", values: [choice.value], labels: [choice.label] },
+        answer: { kind: "choices", values: [choice.value] },
       }));
     }
     case "toggle-many": {
@@ -56,7 +57,7 @@ export function reduceQuestionnaire(
         const current =
           draft.answer?.kind === "choices"
             ? draft.answer
-            : { kind: "choices" as const, values: [], labels: [] };
+            : { kind: "choices" as const, values: [] };
         const selected = current.values.includes(choice.value);
         const selectedValues = selected
           ? current.values.filter((value) => value !== choice.value)
@@ -65,8 +66,7 @@ export function reduceQuestionnaire(
           selectedValues.includes(candidate.value),
         );
         const values = selectedChoices.map((candidate) => candidate.value);
-        const labels = selectedChoices.map((candidate) => candidate.label);
-        if (values.length > 0) return { ...draft, answer: { kind: "choices", values, labels } };
+        if (values.length > 0) return { ...draft, answer: { kind: "choices", values } };
         return draft.note ? { cursor: draft.cursor, note: draft.note } : { cursor: draft.cursor };
       });
     }
@@ -91,6 +91,29 @@ export function reduceQuestionnaire(
 export const isQuestionnaireComplete = (state: QuestionnaireState): boolean =>
   state.drafts.every((draft) => draft.answer !== undefined);
 
+export function finalizeAskUserAnswer(
+  question: AskUserQuestion,
+  draft: AskUserAnswerDraft,
+): AskUserAnswer {
+  if (draft.kind === "custom") return { key: question.key, ...draft };
+
+  const choicesByValue = new Map(question.choices.map((choice) => [choice.value, choice]));
+  const seen = new Set<string>();
+  const selected = draft.values.flatMap((value) => {
+    if (seen.has(value)) return [];
+    seen.add(value);
+    const choice = choicesByValue.get(value);
+    return choice ? [choice] : [];
+  });
+  const answer: AskUserAnswer = {
+    key: question.key,
+    kind: "choices",
+    values: selected.map((choice) => choice.value),
+    labels: selected.map((choice) => choice.label),
+  };
+  return draft.note ? { ...answer, note: draft.note } : answer;
+}
+
 export function submitQuestionnaire(state: QuestionnaireState): AskUserOutcome | undefined {
   if (!isQuestionnaireComplete(state)) return undefined;
   const answers: AskUserAnswer[] = [];
@@ -98,8 +121,9 @@ export function submitQuestionnaire(state: QuestionnaireState): AskUserOutcome |
     const answer = draft.answer;
     const question = state.request.questions[index];
     if (!answer || !question) return;
-    const submitted: AskUserAnswer = { key: question.key, ...answer };
-    answers.push(draft.note ? { ...submitted, note: draft.note } : submitted);
+    answers.push(
+      finalizeAskUserAnswer(question, draft.note ? { ...answer, note: draft.note } : answer),
+    );
   });
   return { outcome: "submitted", answers };
 }

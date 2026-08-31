@@ -15,9 +15,7 @@ export function selectPreviewLines<T>(
   lines: T[],
   limit: number,
 ): { entries: Array<PreviewLineEntry<T>>; shown: number; hidden: number } {
-  return collectPreviewEntries(lines.length, limit, (push) => {
-    lines.forEach((line, index) => push(line, index));
-  });
+  return collectPreviewEntries(lines, limit);
 }
 
 const PREVIEW_SPLIT_MIN_LIMIT = 8;
@@ -34,24 +32,24 @@ function previewWindowPlan(total: number, limit: number): PreviewWindowPlan {
   return { kind: "split", head, tail, shown: head + tail, hidden: total - head - tail };
 }
 
-function collectPreviewEntries<T>(
-  total: number,
-  limit: number,
-  visit: (push: (line: T, index: number) => void) => void,
-) {
+function collectPreviewEntries<T>(lines: T[], limit: number) {
+  const total = lines.length;
   const plan = previewWindowPlan(total, limit);
   const entries: Array<PreviewLineEntry<T>> = [];
   let markerAdded = false;
   const tailStart = plan.kind === "split" ? total - plan.tail : total;
-  visit((line, index) => {
+  for (let index = 0; index < total; index++) {
+    if (!(index in lines)) continue;
+    // SAFETY: The property check preserves Array.prototype.forEach's sparse-array behavior.
+    const line = lines[index] as T;
     if (plan.kind === "all" || (plan.kind === "head" && index < plan.shown)) {
       entries.push({ kind: "line", line, index });
-      return;
+      continue;
     }
-    if (plan.kind !== "split") return;
+    if (plan.kind !== "split") continue;
     if (index < plan.head) {
       entries.push({ kind: "line", line, index });
-      return;
+      continue;
     }
     if (index >= tailStart) {
       if (!markerAdded) {
@@ -60,7 +58,7 @@ function collectPreviewEntries<T>(
       }
       entries.push({ kind: "line", line, index });
     }
-  });
+  }
   return { entries, shown: plan.shown, hidden: plan.hidden };
 }
 

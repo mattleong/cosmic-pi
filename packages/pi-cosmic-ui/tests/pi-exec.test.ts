@@ -1,22 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { PiApi, provideBuiltLayer } from "pi-cosmic-core";
-import { PiExec } from "../src/boundary/host-exec.ts";
+import { makePiExec, PiExecError } from "../src/boundary/host-exec.ts";
 
 describe("Pi exec", () => {
-  it.effect("disables optional locks for Git probes without changing gh arguments", () => {
+  it.effect("builds a boundary that disables Git locks without changing gh arguments", () => {
     const calls: Array<{ readonly command: string; readonly args: readonly string[] }> = [];
     const exec: ExtensionAPI["exec"] = (command, args) => {
       calls.push({ command, args: [...args] });
       return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
     };
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const layer = PiExec.layer.pipe(Layer.provide(PiApi.layer({ exec } as ExtensionAPI)));
+    const boundary = makePiExec(exec);
 
     return Effect.gen(function* () {
-      const boundary = yield* PiExec;
       yield* boundary.exec("git", ["status", "--short"], { cwd: "/project", timeout: 2_000 });
       yield* boundary.exec("git", ["diff", "--numstat", "HEAD", "--"], {
         cwd: "/project",
@@ -35,6 +31,21 @@ describe("Pi exec", () => {
         },
         { command: "gh", args: ["pr", "view", "--json", "number"] },
       ]);
-    }).pipe(provideBuiltLayer(layer));
+    });
+  });
+
+  it.effect("maps rejected host promises to a typed redacted error", () => {
+    const boundary = makePiExec(() => Promise.reject(new Error("secret host failure")));
+    return boundary.exec("gh", ["pr", "view"], { cwd: "/project", timeout: 2_000 }).pipe(
+      Effect.flip,
+      Effect.map((error) => {
+        expect(error).toBeInstanceOf(PiExecError);
+        expect(error).toMatchObject({
+          operation: "gh",
+          message: "Unable to inspect pull request status.",
+        });
+        expect(JSON.stringify(error)).not.toContain("secret host failure");
+      }),
+    );
   });
 });

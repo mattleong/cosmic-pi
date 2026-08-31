@@ -109,18 +109,22 @@ interface TrustInput {
   readonly command: string;
 }
 
-const decodeInboundOption = Schema.decodeUnknownOption;
+const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const decodeRpcSuccessOption = Schema.decodeUnknownOption(RpcSuccessSchema);
+const decodeRpcFailureOption = Schema.decodeUnknownOption(RpcFailureSchema);
+const decodeHooksListResultOption = Schema.decodeUnknownOption(HooksListResultSchema);
+const decodeConfigWriteResultOption = Schema.decodeUnknownOption(ConfigWriteResultSchema);
 
 const classifyRpcLine = (line: string): InboundClassification<RpcResponse> => {
-  const parsed = decodeInboundOption(Schema.fromJsonString(Schema.Unknown))(line);
+  const parsed = decodeUnknownJsonOption(line);
   if (Option.isNone(parsed))
     return { kind: "protocol-error", reason: "Codex hook session returned malformed JSON." };
   const value = parsed.value;
-  const success = decodeInboundOption(RpcSuccessSchema)(value);
+  const success = decodeRpcSuccessOption(value);
   if (Option.isSome(success)) {
     return { kind: "reply", id: success.value.id, value: success.value };
   }
-  const failure = decodeInboundOption(RpcFailureSchema)(value);
+  const failure = decodeRpcFailureOption(value);
   if (Option.isSome(failure)) {
     return { kind: "rejection", id: failure.value.id, detail: failure.value.error.message };
   }
@@ -158,7 +162,7 @@ const selectOwnedHook = (
   },
 ): Effect.Effect<HookEntry, HerdrCodexHooksError> =>
   Effect.gen(function* () {
-    const decoded = decodeInboundOption(HooksListResultSchema)(value);
+    const decoded = decodeHooksListResultOption(value);
     if (Option.isNone(decoded) || decoded.value.data.length !== 1) return yield* makeUnavailable();
     const result = decoded.value.data[0]!;
     if (
@@ -247,7 +251,7 @@ const runTrustSteps = (
       },
       timeoutMillis,
     );
-    const write = decodeInboundOption(ConfigWriteResultSchema)(trustResult);
+    const write = decodeConfigWriteResultOption(trustResult);
     if (
       Option.isNone(write) ||
       write.value.status !== "ok" ||

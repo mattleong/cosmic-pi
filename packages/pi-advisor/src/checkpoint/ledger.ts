@@ -54,29 +54,31 @@ const InterventionBudgetWireSchema = Schema.Struct({
   correctionUsed: Schema.Boolean,
   highestSeverity: Schema.optionalKey(Schema.Literals(["concern", "blocker"])),
 });
-const AdvisorCheckpointLedgerInputSchema = Schema.Struct({
+const CheckpointLedgerFields = {
   protocolVersion: Schema.Literal(ADVISOR_CHECKPOINT_PROTOCOL_VERSION),
   fingerprint: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/i)),
   anchorId: Schema.String.check(Schema.isNonEmpty()),
   reviewSummary: ReviewSummaryWireSchema,
-  routing: Schema.Struct({
-    cancellationLatched: Schema.Boolean,
-    completedPrimaryTurns: Schema.optional(NonNegativeIntSchema),
-    immunityUntilCompletedTurn: NonNegativeIntSchema,
-  }),
   emissionHashes: Schema.Array(
     Schema.String.check(Schema.isPattern(/^(?:concern|blocker):[a-f\d]{64}$/i)),
   ).check(Schema.isMaxLength(MAX_LEDGER_EMISSION_HASHES)),
+};
+const CheckpointRoutingFields = {
+  cancellationLatched: Schema.Boolean,
+  immunityUntilCompletedTurn: NonNegativeIntSchema,
+};
+const AdvisorCheckpointLedgerInputSchema = Schema.Struct({
+  ...CheckpointLedgerFields,
+  routing: Schema.Struct({
+    ...CheckpointRoutingFields,
+    completedPrimaryTurns: Schema.optional(NonNegativeIntSchema),
+  }),
 });
 export const AdvisorCheckpointLedgerWireSchema = Schema.Struct({
-  protocolVersion: Schema.Literal(ADVISOR_CHECKPOINT_PROTOCOL_VERSION),
-  fingerprint: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/i)),
-  anchorId: Schema.String.check(Schema.isNonEmpty()),
-  reviewSummary: ReviewSummaryWireSchema,
+  ...CheckpointLedgerFields,
   routing: Schema.Struct({
-    cancellationLatched: Schema.Boolean,
+    ...CheckpointRoutingFields,
     completedPrimaryTurns: NonNegativeIntSchema,
-    immunityUntilCompletedTurn: NonNegativeIntSchema,
     interventionBudget: Schema.optional(InterventionBudgetWireSchema),
   }),
   findingLifecycle: Schema.optional(
@@ -84,9 +86,6 @@ export const AdvisorCheckpointLedgerWireSchema = Schema.Struct({
       Schema.isMaxLength(MAX_FINDING_LIFECYCLE_RECORDS),
     ),
   ),
-  emissionHashes: Schema.Array(
-    Schema.String.check(Schema.isPattern(/^(?:concern|blocker):[a-f\d]{64}$/i)),
-  ).check(Schema.isMaxLength(MAX_LEDGER_EMISSION_HASHES)),
 });
 
 export type AdvisorDurableReviewSummary = Schema.Schema.Type<typeof ReviewSummaryWireSchema>;
@@ -236,9 +235,10 @@ export function parseLedger<ValueInput>(value: ValueInput): AdvisorCheckpointLed
   const ledger: AdvisorCheckpointLedger = Array.isArray(lifecycleSnapshot)
     ? { ...base, findingLifecycle: sanitizeFindingLifecycle(lifecycleSnapshot) }
     : base;
-  return Option.isSome(Schema.decodeUnknownOption(AdvisorCheckpointLedgerWireSchema)(ledger))
-    ? ledger
-    : undefined;
+  const validated = Schema.decodeUnknownOption(AdvisorCheckpointLedgerWireSchema, {
+    onExcessProperty: "error",
+  })(ledger);
+  return Option.isSome(validated) ? validated.value : undefined;
 }
 
 function emptyReviewSummary(verdict: AdvisorDurableReviewSummary["verdict"] = "none") {
@@ -263,11 +263,21 @@ function parseReviewSummary<ValueInput>(
 }
 
 function sanitizeFindingLifecycle(values: readonly unknown[]): AdvisorFindingRecord[] {
-  return values
-    .slice(-MAX_FINDING_LIFECYCLE_RECORDS)
-    .flatMap((value): AdvisorFindingRecord[] =>
-      isValidAdvisorFindingRecord(value) ? [{ ...value }] : [],
-    );
+  return values.slice(-MAX_FINDING_LIFECYCLE_RECORDS).flatMap((value): AdvisorFindingRecord[] => {
+    if (!isValidAdvisorFindingRecord(value)) return [];
+    return [
+      {
+        id: value.id,
+        key: value.key,
+        generation: value.generation,
+        category: value.category,
+        severity: value.severity,
+        status: value.status,
+        firstSeenTurn: value.firstSeenTurn,
+        lastSeenTurn: value.lastSeenTurn,
+      },
+    ];
+  });
 }
 
 function isEmissionRecord<ValueInput>(value: ValueInput): value is ValueInput & string {

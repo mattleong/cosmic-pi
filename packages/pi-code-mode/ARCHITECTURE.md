@@ -23,14 +23,17 @@ Only runtime source plus its README, legal, and provenance documents ship.
   notifications. `src/boundary/host-ui.ts` is the Promise and callback adapter for Pi dialogs.
 - `src/tools/` owns the reviewed guest catalog, execution admission, UTF-8 limits, progress state,
   result formatting, failure-detail retention, tool registration, active-list reconciliation,
-  and renderer ticker cleanup.
+  and renderer ticker cleanup. Its Background Tasks leaf imports the producer-owned v1 input and
+  output codecs instead of declaring a second protocol shape.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
   legacy details, ignores malformed rows, and retains valid explicit totals. `tool-renderer.ts`
   renders calls and results, while `result-output.ts` projects small structured results without
   changing model-visible text.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
   Windows PowerShell, the explicit Background Tasks protocol client, the guarded progress
-  publisher, Pi dialog adapters, and the process-memory deactivation handoff.
+  publisher, Pi dialog adapters, and the process-memory deactivation handoff. Foreign Promise
+  adapters use function-form `Effect.tryPromise`; they format `Cause.UnknownError.cause` through
+  the hostile-safe rejection formatter before returning a model-visible tool failure.
 - `tests/` covers configuration, atomic commits, lifecycle races, dialogs, adapters, limits,
   interpreter integration, progress, retention, and fail-soft rendering. `runtime/tests/` remains
   owned by the private runtime package.
@@ -39,12 +42,15 @@ Only runtime source plus its README, legal, and provenance documents ship.
 
 Global configuration is `<agent-dir>/extensions/pi-code-mode.json`. Project configuration is
 `<cwd>/.pi/extensions/pi-code-mode.json`. Fields resolve project over global over default, one
-field at a time. Malformed fields fall back independently and produce bounded path-only
-diagnostics. Writes preserve unknown fields.
+field at a time. Malformed fields fall back independently. Writes preserve unknown fields.
 
-An untrusted project performs no project-document I/O. The project path may exist as inert
-metadata, but the extension never stats, reads, or writes it. Availability is
+An untrusted project performs no project-document I/O. The store calculates the project path for
+its private persistence state but never stats, reads, or writes it. Availability is
 `projectTrusted && config.enabled`.
+
+The published `CodeModeState` contains the resolved config, scoped values, provenance, trust, and
+availability. Scope paths, existence metadata, and pre-commit documents stay inside the store's
+persistence workflow.
 
 `CodeModeConfigStore` serializes writes with one semaphore. Before commit it captures the other
 scope's document. The committed document then resolves to the next state without post-commit I/O.
@@ -108,10 +114,14 @@ persisted row after an active failure.
 
 The catalog contains seven core `tools.pi` leaves, conditional Windows PowerShell, the fixed
 `tools.session.backgroundTask` adapter, and runtime-owned search. Inputs pass Effect Schema before
-dispatch. Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and
-`tool_result` middleware, approvals, previews, registered overrides, and session-specific
-operations (ADR 0004). Background Tasks calls query one stable-session, token-checked Promise
-capability on each invocation. They never dispatch the registered top-level definition (ADR 0006).
+dispatch. Read offsets and limits are positive safe integers, as are grep, find, and ls limits.
+Grep context is a non-negative safe integer. Bash and PowerShell timeouts are positive finite
+numbers and may be fractional. Invalid numeric input fails before a fresh Pi definition runs.
+
+Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and `tool_result`
+middleware, approvals, previews, registered overrides, and session-specific operations (ADR 0004).
+Background Tasks calls query one stable-session, token-checked Promise capability on each
+invocation. They never dispatch the registered top-level definition (ADR 0006).
 
 Interpreter confinement limits JavaScript, not supplied-tool authority. Bash has full local-user
 process, environment, network, and filesystem authority. Read, edit, and write accept relative,
@@ -125,15 +135,19 @@ source-refusal, and unexpected-error text by exact UTF-8 bytes without splitting
 Zero bytes yields empty text. Only the stale or missing-state refusal uses a fixed bounded message
 because no current configuration exists. Successful nested text and catchable failure text share
 one cumulative budget. Structured Background Tasks output is charged as compact JSON. The
-provider first receives the current remaining allowance, capped at 16 MiB, and refuses an
-oversized projection before copying snapshots; the consumer then applies bounded schemas, repeats
-the aggregate estimate, and performs exact atomic admission. An output-overrun refusal is itself admitted through `admitFailure`, so repeated
-caught overruns cannot create free diagnostic text.
+provider owns and exports the exact v1 Effect codecs and shared structural bounds. It receives the
+remaining allowance, capped at 16 MiB, and refuses an oversized projection before copying
+snapshots. The
+consumer schema-decodes every provider response with that output codec, repeats the aggregate
+estimate, and performs exact atomic admission. An output-overrun refusal is itself admitted
+through `admitFailure`, so repeated caught overruns cannot create free diagnostic text.
 
 Progress starts immediately. Queued admission and decoded running labels publish synchronously;
 status-only changes coalesce to a 16 ms host frame, and settlement flushes the latest snapshot.
 Rows never contain nested output. Selection prioritizes active, failed, cancelled, and recent rows
 within 32 visible slots, while exact counts include hidden calls and drive the hidden-row marker.
+New details retain `totalToolCalls` when rows are hidden so older renderers keep the marker; exact
+counts carry current lifecycle totals. Tolerant render decoding still accepts historical details.
 Selected rows and counts are copied before host publication, so a hostile `onUpdate` cannot alter
 execution state.
 

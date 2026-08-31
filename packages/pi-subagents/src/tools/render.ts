@@ -20,7 +20,7 @@ import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
   type SubagentRunCard,
-} from "./details.ts";
+} from "./details-schema.ts";
 import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
 import { renderExpansionAffordance } from "./render-affordance.ts";
 import {

@@ -2,28 +2,33 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 import { HerdrClient, type HerdrPane } from "../boundary/herdr-client.ts";
-import type { HerdrBtwLinkStore } from "../boundary/host-link-store.ts";
+import type { HerdrBtwLinkRecordResult, HerdrBtwLinkStore } from "../boundary/host-link-store.ts";
+import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
 import {
-  isValidParentSessionFile,
-  parentBtwDisplayName,
-  type HerdrBtwSessionInput,
-} from "../boundary/host-session.ts";
-import {
+  compareSessionFileIdentity as compareSessionFileIdentityAtBoundary,
   createBlankChildSessionFile as createBlankChildSessionFileAtBoundary,
   createChildSessionId as createChildSessionIdAtBoundary,
   probeSessionHeader as probeSessionHeaderAtBoundary,
   type BlankChildSessionFileInput,
   type BlankChildSessionFileResult,
+  type SessionFileIdentityComparator,
   type SessionHeaderProbe,
 } from "../boundary/session-file.ts";
 import { HerdrBtwError } from "./errors.ts";
 import type { HerdrBtwLink } from "./link.ts";
 import { parseHerdrBtwSessionId } from "./marker.ts";
-import { makeAgentName, selectSplitDirection, sideSessionPrompt } from "./policy.ts";
 import {
-  agentChildSessionPath,
+  makeAgentName,
+  parentBtwDisplayName,
+  selectSplitDirection,
+  sideSessionPrompt,
+} from "./policy.ts";
+import {
   ensureHerdrProtocol,
   ensurePiIntegration,
+  isExactLinkedAgent,
+  isLinkedAgentConflictCandidate,
+  isValidBlankChildProbe,
   validateBtwInput,
   validateStartedAgent,
   waitForAvailableShell,
@@ -51,8 +56,8 @@ export interface HerdrBtwResult {
 }
 
 interface HerdrBtwServiceOptions {
-  readonly validateSessionFile?: ((path: string) => boolean) | undefined;
   readonly probeSessionHeader?: ((path: string) => SessionHeaderProbe) | undefined;
+  readonly compareSessionFileIdentity?: SessionFileIdentityComparator | undefined;
   readonly createChildSessionId?: (() => string) | undefined;
   readonly createBlankChildSessionFile?:
     | ((input: BlankChildSessionFileInput) => Effect.Effect<BlankChildSessionFileResult>)
@@ -66,6 +71,23 @@ const failClosedLink = (operation: string, code: string, message: string): Herdr
     message: `${message} ${NEW_COMMAND_GUIDANCE}`,
     outcome: "confirmed",
   });
+
+const linkRecordFailure = (result: Exclude<HerdrBtwLinkRecordResult, "recorded">): HerdrBtwError =>
+  result === "refused"
+    ? new HerdrBtwError({
+        operation: "record BTW link",
+        code: "herdr_btw_link_record_refused",
+        message:
+          "The side session started, but its reusable link was not recorded because the parent session changed or became unavailable before the append. Any prior reusable link remains authoritative.",
+        outcome: "confirmed",
+      })
+    : new HerdrBtwError({
+        operation: "record BTW link",
+        code: "herdr_btw_link_record_outcome_uncertain",
+        message:
+          "The side session started, and its reusable link may have been recorded, but the parent append did not return normally. Do not retry the command until you inspect the retained pane and parent session.",
+        outcome: "uncertain",
+      });
 
 type LaunchTarget =
   | { readonly mode: "create"; readonly childSessionId: string }
@@ -87,8 +109,9 @@ export const makeHerdrBtwService = (
     // separately guard observed live-session reuse across runtimes.
     const gate = yield* Semaphore.make(1);
     const herdr = yield* HerdrClient;
-    const validateSessionFile = options.validateSessionFile ?? isValidParentSessionFile;
     const probeSessionHeader = options.probeSessionHeader ?? probeSessionHeaderAtBoundary;
+    const compareSessionFileIdentity =
+      options.compareSessionFileIdentity ?? compareSessionFileIdentityAtBoundary;
     const createChildSessionId = options.createChildSessionId ?? createChildSessionIdAtBoundary;
     const createBlankChildSessionFile =
       options.createBlankChildSessionFile ?? createBlankChildSessionFileAtBoundary;
@@ -141,11 +164,7 @@ export const makeHerdrBtwService = (
             outcome: "confirmed",
           });
         const probe = probeSessionHeader(created.path);
-        if (
-          probe._tag !== "valid" ||
-          probe.header.id !== childSessionId ||
-          probe.header.parentSession !== undefined
-        )
+        if (!isValidBlankChildProbe(probe, childSessionId))
           return yield* new HerdrBtwError({
             operation: "create blank child session",
             code: "herdr_btw_child_create_invalid",
@@ -154,8 +173,6 @@ export const makeHerdrBtwService = (
           });
         return { mode: "create", childSessionId, childSessionPath: created.path };
       });
-
-    const freshSnapshotAgents = Effect.suspend(() => herdr.inspectLiveAgents());
 
     const deliverAndFocus = (
       agentName: string,
@@ -238,9 +255,26 @@ export const makeHerdrBtwService = (
             preparedTarget.mode === "create"
               ? preparedTarget.childSessionPath
               : preparedTarget.link.childSessionPath;
+          if (
+            childSessionPath === sessionFile ||
+            compareSessionFileIdentity(childSessionPath, sessionFile) !== "distinct"
+          )
+            return yield* new HerdrBtwError({
+              operation: "validate child session identity",
+              code: "herdr_btw_child_identity_invalid",
+              message:
+                "The child session file was unavailable or resolved to the parent session file. No Pi launch was attempted.",
+              outcome: "confirmed",
+            });
           if (preparedTarget.mode === "resume") {
-            const newlyLive = (yield* freshSnapshotAgents).filter(
-              (agent) => agentChildSessionPath(agent) === preparedTarget.link.childSessionPath,
+            const newlyLive = (yield* herdr.inspectLiveAgents()).filter((agent) =>
+              isLinkedAgentConflictCandidate(
+                agent,
+                preparedTarget.link.agentName,
+                preparedTarget.link.childSessionId,
+                preparedTarget.link.childSessionPath,
+                compareSessionFileIdentity,
+              ),
             );
             if (newlyLive.length > 0)
               return yield* failClosedLink(
@@ -265,13 +299,10 @@ export const makeHerdrBtwService = (
             agentName,
             sessionFile,
             childSessionPath,
+            compareSessionFileIdentity,
           );
           const childProbe = probeSessionHeader(childSessionPath);
-          if (
-            childProbe._tag !== "valid" ||
-            childProbe.header.id !== childSessionId ||
-            childProbe.header.parentSession !== undefined
-          )
+          if (!isValidBlankChildProbe(childProbe, childSessionId))
             return yield* new HerdrBtwError({
               operation: "validate started child session",
               code: "herdr_btw_child_invalid",
@@ -282,23 +313,13 @@ export const makeHerdrBtwService = (
 
           // The link is superseded only after confirmed startup and child-file
           // validation; every earlier failure keeps the prior link authoritative.
-          const recorded = linkStore.record({
-            version: 1,
-            parentSessionId: sessionId,
-            parentSessionPath: sessionFile,
+          const recordResult = linkStore.record({
             childSessionId,
             childSessionPath,
             agentName,
             terminalId: startedAgent.terminal_id,
           });
-          if (!recorded)
-            return yield* new HerdrBtwError({
-              operation: "record BTW link",
-              code: "herdr_btw_link_record_failed",
-              message:
-                "The side session started, but its reusable link could not be recorded in the parent session. Any prior reusable link remains authoritative.",
-              outcome: "confirmed",
-            });
+          if (recordResult !== "recorded") return yield* linkRecordFailure(recordResult);
 
           yield* deliverAndFocus(agentName, btwPane.pane_id, prompt);
 
@@ -323,9 +344,14 @@ export const makeHerdrBtwService = (
         if (
           liveAgents.length !== 1 ||
           live === undefined ||
-          live.name !== link.agentName ||
-          live.terminal_id !== link.terminalId ||
-          live.agent !== "pi"
+          !isExactLinkedAgent(
+            live,
+            link.agentName,
+            link.terminalId,
+            link.childSessionId,
+            link.childSessionPath,
+            compareSessionFileIdentity,
+          )
         )
           return yield* failClosedLink(
             "validate live BTW agent",
@@ -343,11 +369,7 @@ export const makeHerdrBtwService = (
       });
 
     const openInner = Effect.fn("HerdrBtwService.open")(function* (prompt?: string | undefined) {
-      const { sessionFile, sessionId } = yield* validateBtwInput(
-        prompt,
-        input,
-        validateSessionFile,
-      );
+      const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, probeSessionHeader);
       const restoration = linkStore.restore();
       if (restoration._tag === "malformed")
         return yield* failClosedLink(
@@ -366,10 +388,9 @@ export const makeHerdrBtwService = (
       const link = restoration.link;
       const probe = probeSessionHeader(link.childSessionPath);
       if (
+        !isValidBlankChildProbe(probe, link.childSessionId) ||
         link.childSessionPath === sessionFile ||
-        probe._tag !== "valid" ||
-        probe.header.id !== link.childSessionId ||
-        probe.header.parentSession !== undefined
+        compareSessionFileIdentity(link.childSessionPath, sessionFile) !== "distinct"
       )
         return yield* failClosedLink(
           "validate linked child session",
@@ -378,8 +399,14 @@ export const makeHerdrBtwService = (
         );
 
       yield* ensureHerdrProtocol(herdr);
-      const liveAgents = (yield* freshSnapshotAgents).filter(
-        (agent) => agentChildSessionPath(agent) === link.childSessionPath,
+      const liveAgents = (yield* herdr.inspectLiveAgents()).filter((agent) =>
+        isLinkedAgentConflictCandidate(
+          agent,
+          link.agentName,
+          link.childSessionId,
+          link.childSessionPath,
+          compareSessionFileIdentity,
+        ),
       );
       if (liveAgents.length > 0) return yield* focusLiveAgent(link, liveAgents, prompt);
       return yield* launch({ mode: "resume", link }, prompt, sessionFile, sessionId);
@@ -388,11 +415,7 @@ export const makeHerdrBtwService = (
     const openNewInner = Effect.fn("HerdrBtwService.openNew")(function* (
       prompt?: string | undefined,
     ) {
-      const { sessionFile, sessionId } = yield* validateBtwInput(
-        prompt,
-        input,
-        validateSessionFile,
-      );
+      const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, probeSessionHeader);
       const childSessionId = yield* freshChildSessionId;
       yield* ensureHerdrProtocol(herdr);
       return yield* launch({ mode: "create", childSessionId }, prompt, sessionFile, sessionId);

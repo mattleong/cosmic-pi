@@ -116,10 +116,29 @@ export const captureCodeModeDeactivation = (
 /** Publishes a deliberate deactivation for a recreated extension instance to consume. */
 export const publishCodeModeDeactivation = (key: CodeModeSessionKey | undefined): void => {
   if (key === undefined) return;
-  processState()[HANDOFF_SLOT_KEY] = Object.freeze({
-    version: 2,
-    key,
-    deactivated: true,
-    expiresAt: synchronousNow() + SESSION_KEY_TTL_MS,
-  } satisfies HandoffEnvelope);
+  let envelope: HandoffEnvelope;
+  try {
+    envelope = Object.freeze({
+      version: 2,
+      key,
+      deactivated: true,
+      expiresAt: synchronousNow() + SESSION_KEY_TTL_MS,
+    });
+  } catch {
+    return;
+  }
+
+  const writeEnvelope = (): boolean => {
+    try {
+      return Reflect.set(processState(), HANDOFF_SLOT_KEY, envelope);
+    } catch {
+      return false;
+    }
+  };
+  if (writeEnvelope()) return;
+
+  // A configurable hostile or stale descriptor can reject the first write. Remove it and make
+  // one last attempt, but never let this optional handoff block lifecycle teardown.
+  clearEnvelope();
+  writeEnvelope();
 };

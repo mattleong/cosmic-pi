@@ -18,8 +18,6 @@ import { normalizeSettingsWithDiagnostics } from "./values";
 export type SettingsSaveContext = {
   readonly baseline: CodePreviewSettings;
   readonly loaded: CodePreviewSettings;
-  readonly globalOverrides: Readonly<JsonObject>;
-  readonly globalDocument: JsonObject;
 };
 
 export type LoadSettingsOptions = {
@@ -49,7 +47,7 @@ const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
     const paths = normalized.diagnostics.map((diagnostic) => diagnostic.path).join(", ");
     yield* Effect.logWarning(`Ignored invalid code preview setting fields: ${paths}.`);
   }
-  return { document, data, settings: normalized.settings };
+  return normalized.settings;
 });
 
 /**
@@ -70,8 +68,7 @@ export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.load
     ];
     for (const candidate of baselinePaths) {
       const next = yield* loadSettingsFile(candidate, nestedCodePreviewSettings, effective);
-      if (!next) continue;
-      effective = next.settings;
+      if (next) effective = next;
     }
     const baseline = cloneCodePreviewSettings(effective);
     const globalSettings = yield* loadSettingsFile(
@@ -79,12 +76,10 @@ export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.load
       flatCodePreviewSettings,
       effective,
     );
-    if (globalSettings) effective = globalSettings.settings;
+    if (globalSettings) effective = globalSettings;
     return {
       baseline,
       loaded: cloneCodePreviewSettings(effective),
-      globalOverrides: { ...globalSettings?.data },
-      globalDocument: { ...globalSettings?.document },
     } satisfies SettingsSaveContext;
   },
 );
@@ -126,19 +121,14 @@ export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState"
   return yield* modifyObject(settingsPath, (latest) =>
     Effect.try({
       try: () => {
-        const globalDocument = settingsDocument(committedSettings, {
-          ...context,
-          globalDocument: latest,
-        });
+        const document = settingsDocument(committedSettings, context, latest);
         const nextContext = {
           baseline: cloneCodePreviewSettings(context.baseline),
           loaded: cloneCodePreviewSettings(committedSettings),
-          globalOverrides: flatCodePreviewSettings(globalDocument),
-          globalDocument,
         } satisfies SettingsSaveContext;
         return {
           value: nextContext,
-          document: globalDocument,
+          document,
           afterCommit: afterCommit(nextContext),
         } satisfies JsonDocumentModification<SettingsSaveContext>;
       },
@@ -155,8 +145,9 @@ export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState"
 function settingsOverrides(
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
+  latestGlobalDocument: JsonObject,
 ): JsonObject {
-  const overrides: JsonObject = { ...context.globalOverrides };
+  const overrides = flatCodePreviewSettings(latestGlobalDocument);
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = settings[key];
     if (settingValuesEqual(value, context.loaded[key])) continue;
@@ -167,9 +158,13 @@ function settingsOverrides(
 }
 
 /** Flat current-shape package document: unknown root fields are preserved untouched. */
-function settingsDocument(settings: CodePreviewSettings, context: SettingsSaveContext): JsonObject {
-  const overrides = settingsOverrides(settings, context);
-  const document = { ...context.globalDocument };
+function settingsDocument(
+  settings: CodePreviewSettings,
+  context: SettingsSaveContext,
+  latestGlobalDocument: JsonObject,
+): JsonObject {
+  const overrides = settingsOverrides(settings, context, latestGlobalDocument);
+  const document = { ...latestGlobalDocument };
   for (const key of CODE_PREVIEW_SETTING_KEYS) delete document[key];
   return { ...document, ...overrides };
 }
@@ -191,8 +186,6 @@ export function defaultSettingsSaveContext(defaults: CodePreviewSettings): Setti
   return {
     baseline: cloneCodePreviewSettings(defaults),
     loaded: cloneCodePreviewSettings(defaults),
-    globalOverrides: {},
-    globalDocument: {},
   };
 }
 

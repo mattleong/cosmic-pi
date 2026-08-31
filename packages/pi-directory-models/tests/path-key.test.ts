@@ -1,22 +1,22 @@
 import { describe, expect, test } from "vitest";
-import {
-  preferenceFilename,
-  readableDirectorySlug,
-  shortPathHash,
-} from "../src/config/path-key.ts";
+import { preferenceFilename } from "../src/config/path-key.ts";
 
 describe("directory preference path keys", () => {
-  test("keeps a recognizable basename and a stable short hash", () => {
-    expect(preferenceFilename("/Users/example/work/CERN", "CERN")).toMatch(
-      /^CERN--[a-f0-9]{12}\.json$/,
+  test("sanitizes unsafe basenames", () => {
+    expect(preferenceFilename("/work/cern", "  cern: detector / software  ")).toMatch(
+      /^cern-detector-software--[a-f0-9]{12}\.json$/,
     );
-    expect(shortPathHash("/Users/example/work/CERN")).toHaveLength(12);
+    expect(preferenceFilename("/work/directory", "...")).toMatch(/^directory--[a-f0-9]{12}\.json$/);
   });
 
-  test("sanitizes unsafe and unusually long basenames", () => {
-    expect(readableDirectorySlug("  cern: detector / software  ")).toBe("cern-detector-software");
-    expect(readableDirectorySlug("...")).toBe("directory");
-    expect(readableDirectorySlug("x".repeat(100))).toHaveLength(48);
+  test("bounds the readable slug", () => {
+    expect(preferenceFilename("/work/long", "x".repeat(100))).toMatch(
+      new RegExp(`^${"x".repeat(48)}--[a-f0-9]{12}\\.json$`),
+    );
+  });
+
+  test("appends a stable short hash suffix", () => {
+    expect(preferenceFilename("/Users/example/work/CERN", "CERN")).toBe("CERN--3c447ca20025.json");
   });
 
   test("disambiguates equal basenames at different paths", () => {

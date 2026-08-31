@@ -21,6 +21,7 @@ import {
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { formatForeignRejection } from "../tools/format.ts";
@@ -121,11 +122,6 @@ export type NestedPiToolDispatch = (
   input: PiGuestToolInput,
 ) => Effect.Effect<string, ToolError>;
 
-interface NestedToolRejection {
-  readonly _tag: "NestedToolRejection";
-  readonly rejection: unknown;
-}
-
 /**
  * Dispatches one nested call against the matching built-in definition.
  *
@@ -144,18 +140,11 @@ export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): Nested
       if (definition === undefined) {
         return Effect.fail(toolError(`Nested tool '${name}' is unavailable on this platform.`));
       }
-      return Effect.tryPromise({
-        try: (interruptSignal) =>
-          definition.execute(callId, input, interruptSignal, undefined, options.ctx),
-        // This object construction is total. Formatting happens after tryPromise because a
-        // throwing catch mapper becomes an Effect defect in the pinned rc.111 implementation.
-        catch: (rejection): NestedToolRejection => ({
-          _tag: "NestedToolRejection",
-          rejection,
-        }),
-      }).pipe(
-        Effect.mapError((error) =>
-          toolError(`Nested tool '${name}' failed: ${formatForeignRejection(error.rejection)}`),
+      return Effect.tryPromise((interruptSignal) =>
+        definition.execute(callId, input, interruptSignal, undefined, options.ctx),
+      ).pipe(
+        Effect.mapError((error: Cause.UnknownError) =>
+          toolError(`Nested tool '${name}' failed: ${formatForeignRejection(error.cause)}`),
         ),
         Effect.flatMap((result) => nestedResultToGuestData(name, result)),
       );

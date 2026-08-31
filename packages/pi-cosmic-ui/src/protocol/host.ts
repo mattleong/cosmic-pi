@@ -3,6 +3,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import { makeSynchronousIngress, type SynchronousIngressOfferResult } from "pi-cosmic-core";
 import { FooterRegistryService } from "../footer/registry.ts";
+import { detachCosmicFooterContribution } from "./canonicalization.ts";
 import type { CosmicFooterContribution } from "./protocol.ts";
 
 export type FooterProtocolEvent =
@@ -19,9 +20,9 @@ export interface FooterProtocolBuffer {
   readonly activate: (
     consumer: (event: FooterProtocolEvent) => SynchronousIngressOfferResult,
   ) => void;
-  readonly takePending: () => FooterProtocolEvent | undefined;
-  readonly completePending: () => void;
-  readonly restorePending: (event: FooterProtocolEvent) => void;
+  readonly drain: <A, E, R>(
+    consume: (event: FooterProtocolEvent) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<void, E, R>;
   readonly deactivate: () => void;
   readonly reset: () => void;
 }
@@ -30,7 +31,7 @@ const freezeEvent = (event: FooterProtocolEvent): FooterProtocolEvent => {
   if (event._tag !== "Upsert") return Object.freeze({ ...event });
   return Object.freeze({
     ...event,
-    contribution: Object.freeze({ ...event.contribution }),
+    contribution: detachCosmicFooterContribution(event.contribution),
   });
 };
 
@@ -40,6 +41,7 @@ export function makeFooterProtocolBuffer(capacity = 128): FooterProtocolBuffer {
   const pending: FooterProtocolEvent[] = [];
   let consumer: ((event: FooterProtocolEvent) => SynchronousIngressOfferResult) | undefined;
   let reserved = 0;
+  let resetGeneration = 0;
 
   const offer = (raw: FooterProtocolEvent): SynchronousIngressOfferResult => {
     const event = freezeEvent(raw);
@@ -55,25 +57,45 @@ export function makeFooterProtocolBuffer(capacity = 128): FooterProtocolBuffer {
     consumer = next;
     for (const event of pending.splice(0)) next(event);
   };
+  const drain: FooterProtocolBuffer["drain"] = (consume) =>
+    Effect.suspend(() => {
+      const generation = resetGeneration;
+      const draining = pending.splice(0);
+      reserved += draining.length;
+      let completed = 0;
+      return Effect.forEach(
+        draining,
+        (event) =>
+          consume(event).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                completed++;
+                if (generation === resetGeneration) reserved--;
+              }),
+            ),
+          ),
+        { discard: true },
+      ).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit) || generation !== resetGeneration
+            ? Effect.void
+            : Effect.sync(() => {
+                const remaining = draining.slice(completed);
+                reserved -= remaining.length;
+                pending.unshift(...remaining);
+              }),
+        ),
+      );
+    });
   return {
     offer,
     activate,
-    takePending: () => {
-      const event = pending.shift();
-      if (event !== undefined) reserved++;
-      return event;
-    },
-    completePending: () => {
-      if (reserved > 0) reserved--;
-    },
-    restorePending: (event) => {
-      if (reserved > 0) reserved--;
-      pending.unshift(freezeEvent(event));
-    },
+    drain,
     deactivate: () => {
       consumer = undefined;
     },
     reset: () => {
+      resetGeneration++;
       consumer = undefined;
       pending.length = 0;
       reserved = 0;
@@ -119,17 +141,7 @@ export const makeFooterProtocolHostLayer = (options: {
         overflow: "drop",
         handle,
       });
-      while (true) {
-        const pending = options.buffer.takePending();
-        if (pending === undefined) break;
-        yield* handle(pending).pipe(
-          Effect.onExit((exit) =>
-            Exit.isFailure(exit)
-              ? Effect.sync(() => options.buffer.restorePending(pending))
-              : Effect.sync(() => options.buffer.completePending()),
-          ),
-        );
-      }
+      yield* options.buffer.drain(handle);
       yield* Effect.acquireRelease(
         Effect.sync(() => options.buffer.activate(ingress.offer)),
         () => Effect.sync(() => options.buffer.deactivate()),

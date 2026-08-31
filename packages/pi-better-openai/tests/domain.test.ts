@@ -12,9 +12,8 @@ import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import {
   extractAccountIdFromJwt,
   getCodexCredentials,
-  getCodexCredentialsResult,
   parseCodexRegistryCredentials,
-  readCodexAuthResult,
+  readCodexAuthCredentials,
 } from "../src/auth/codex-auth.ts";
 import { readConfig, resolveConfig } from "../src/config/store.ts";
 
@@ -76,13 +75,13 @@ describe("OpenAI configuration and credentials", () => {
     }).pipe(provideBuiltLayer(Layer.merge(store.layer, Path.layer)));
   });
 
-  it.effect("distinguishes total credential failure from genuine absence", () => {
+  it.effect("preserves the file failure when both credential readers fail", () => {
     const failure = new JsonDocumentError({
       operation: "read",
       path: "/redacted",
       message: "unavailable",
     });
-    const layer = Layer.succeed(
+    const failingStore = Layer.succeed(
       JsonDocumentStore,
       JsonDocumentStore.of({
         exists: () => Effect.fail(failure),
@@ -92,13 +91,37 @@ describe("OpenAI configuration and credentials", () => {
         updateObject: () => Effect.fail(failure),
       }),
     );
-    const ctx = context();
-    ctx.modelRegistry.getApiKeyForProvider = () => Promise.reject(new Error("registry"));
+    const rejectedRegistryContext = context();
+    rejectedRegistryContext.modelRegistry.getApiKeyForProvider = () =>
+      Promise.reject(new Error("registry"));
+    return getCodexCredentials("/auth.json", rejectedRegistryContext).pipe(
+      Effect.result,
+      Effect.tap((failed) =>
+        Effect.sync(() => {
+          expect(failed._tag).toBe("Failure");
+          if (failed._tag === "Failure") expect(failed.failure.operation).toBe("read");
+          expect(serializedSnapshot(failed)).not.toContain("redacted");
+        }),
+      ),
+      provideBuiltLayer(failingStore),
+    );
+  });
+
+  it.effect("distinguishes a registry failure from genuine credential absence", () => {
+    const store = documents();
+    const rejectedRegistryContext = context();
+    rejectedRegistryContext.modelRegistry.getApiKeyForProvider = () =>
+      Promise.reject(new Error("registry"));
     return Effect.gen(function* () {
-      const result = yield* getCodexCredentialsResult("/auth.json", ctx);
-      expect(result._tag).toBe("Failure");
-      expect(serializedSnapshot(result)).not.toContain("redacted");
-    }).pipe(provideBuiltLayer(layer));
+      const registryFailure = yield* getCodexCredentials(
+        "/auth.json",
+        rejectedRegistryContext,
+      ).pipe(Effect.result);
+      expect(registryFailure._tag).toBe("Failure");
+      if (registryFailure._tag === "Failure")
+        expect(registryFailure.failure.operation).toBe("registry");
+      expect(yield* getCodexCredentials("/auth.json", context())).toBeUndefined();
+    }).pipe(provideBuiltLayer(store.layer));
   });
 
   it.effect("interrupts a pending model-registry credential lookup", () => {
@@ -139,31 +162,27 @@ describe("OpenAI configuration and credentials", () => {
     });
 
     return Effect.gen(function* () {
-      const fileFallback = yield* getCodexCredentialsResult(
+      const fileFallback = yield* getCodexCredentials(
         validAuthPath,
         context("{malformed-registry"),
       );
-      expect(fileFallback._tag).toBe("Found");
-      if (fileFallback._tag === "Found") {
-        expect(fileFallback.credentials.source).toBe("authFile");
-        expect(Redacted.value(fileFallback.credentials.accessToken)).toBe("file-token");
-      }
+      expect(fileFallback?.source).toBe("authFile");
+      if (fileFallback) expect(Redacted.value(fileFallback.accessToken)).toBe("file-token");
 
-      const registryFallback = yield* getCodexCredentialsResult(
+      const registryFallback = yield* getCodexCredentials(
         malformedAuthPath,
         context(registryPayload),
       );
-      expect(registryFallback._tag).toBe("Found");
-      if (registryFallback._tag === "Found") {
-        expect(registryFallback.credentials.source).toBe("modelRegistry");
-        expect(Redacted.value(registryFallback.credentials.accessToken)).toBe("registry-token");
-      }
+      expect(registryFallback?.source).toBe("modelRegistry");
+      if (registryFallback)
+        expect(Redacted.value(registryFallback.accessToken)).toBe("registry-token");
 
-      const malformed = yield* getCodexCredentialsResult(
+      const malformed = yield* getCodexCredentials(
         malformedAuthPath,
         context("{malformed-registry"),
-      );
+      ).pipe(Effect.result);
       expect(malformed._tag).toBe("Failure");
+      if (malformed._tag === "Failure") expect(malformed.failure.operation).toBe("registry-decode");
       expect(serializedSnapshot([fileFallback, registryFallback, malformed])).not.toContain(
         "file-token",
       );
@@ -214,13 +233,12 @@ describe("OpenAI configuration and credentials", () => {
     }
 
     return Effect.gen(function* () {
-      const file = yield* readCodexAuthResult(authPath);
-      expect(file._tag).toBe("Found");
-      if (file._tag === "Found") {
-        expect(file.credentials.accountId).toBe("acct_file");
-        expect(file.credentials.source).toBe("authFile");
-        expect(Redacted.value(file.credentials.accessToken)).toBe("file-token");
-        expect(serializedSnapshot(file.credentials)).not.toContain("file-token");
+      const file = yield* readCodexAuthCredentials(authPath);
+      expect(file?.accountId).toBe("acct_file");
+      expect(file?.source).toBe("authFile");
+      if (file) {
+        expect(Redacted.value(file.accessToken)).toBe("file-token");
+        expect(serializedSnapshot(file)).not.toContain("file-token");
       }
       expect((yield* getCodexCredentials(authPath, context()))?.source).toBe("authFile");
       expect((yield* getCodexCredentials(authPath, context("{malformed-registry")))?.source).toBe(
@@ -233,7 +251,7 @@ describe("OpenAI configuration and credentials", () => {
         "modelRegistry",
       );
       yield* TestClock.adjust("2 seconds");
-      expect(yield* readCodexAuthResult(authPath)).toEqual({ _tag: "Missing" });
+      expect(yield* readCodexAuthCredentials(authPath)).toBeUndefined();
     }).pipe(provideBuiltLayer(store.layer));
   });
 });

@@ -115,11 +115,6 @@ export function buildAdvisorContext(options: BuildAdvisorContextOptions): Adviso
   };
 }
 
-/** Convenience wrapper for callers that only need the serialized transcript. */
-export function buildAdvisorTranscript(options: BuildAdvisorContextOptions): string {
-  return buildAdvisorContext(options).transcript;
-}
-
 function buildWithClippedRequiredContent(
   candidate: string,
   userRequest: string,

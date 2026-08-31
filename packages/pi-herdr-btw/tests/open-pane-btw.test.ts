@@ -1,25 +1,29 @@
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vitest";
 import {
   HerdrClient,
   type HerdrClientContract,
-  type HerdrSplitPaneInput,
   type HerdrStartSideSessionInput,
 } from "../src/boundary/herdr-client.ts";
 import type { HerdrBtwLinkStore } from "../src/boundary/host-link-store.ts";
 import type { HerdrBtwSessionInput } from "../src/boundary/host-session.ts";
-import { HerdrBtwError } from "../src/btw/errors.ts";
+import type { SessionFileIdentityComparator } from "../src/boundary/session-file.ts";
 import type { HerdrBtwLink } from "../src/btw/link.ts";
-import { makeAgentName, selectSplitDirection } from "../src/btw/policy.ts";
+import { makeAgentName, parentBtwDisplayName, selectSplitDirection } from "../src/btw/policy.ts";
 import { makeHerdrBtwService } from "../src/btw/service.ts";
+import {
+  makeHerdrBtwCallRecorder,
+  operationInputs,
+  operationNames,
+  withShellReadiness,
+} from "./fixtures/herdr-btw-harness.ts";
 
 const SESSION_FILE = "/sessions/parent.jsonl";
 const SESSION_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
 const CHILD_ID = "0198aaaa-7564-4c88-8b67-child0btw001";
 const CHILD_FILE = "/sessions/child.jsonl";
+const CHILD_ALIAS = "/sessions/aliases/../child.jsonl";
 const CWD = "/project";
 
 interface FixtureOptions {
@@ -32,40 +36,14 @@ interface FixtureOptions {
   readonly startedSessionKind?: "id" | "path";
   readonly startedIdentityAvailable?: boolean;
   readonly startedTerminalId?: string;
+  readonly compareSessionFileIdentity?: SessionFileIdentityComparator;
   readonly shellReadyAfter?: number;
   readonly shellReadiness?: ReadonlyArray<boolean>;
   readonly failOperation?: string;
 }
 
-type ClientCallInput =
-  | HerdrSplitPaneInput
-  | HerdrStartSideSessionInput
-  | Readonly<{ paneId: string }>
-  | Readonly<{ agentName: string; prompt: string }>
-  | Readonly<{ agentName: string }>;
-
-interface ClientCall {
-  readonly operation: string;
-  readonly input?: ClientCallInput;
-}
-
-const MUTATIONS = new Set([
-  "split BTW pane",
-  "start side-session Pi",
-  "prompt side-session Pi",
-  "focus side-session Pi",
-]);
-
-const commandFailure = (operation: string) =>
-  new HerdrBtwError({
-    operation,
-    code: `fixture_${operation.toLowerCase().replaceAll(" ", "_")}`,
-    message: `Fixture failure during ${operation}.`,
-    outcome: MUTATIONS.has(operation) ? "uncertain" : "confirmed",
-  });
-
 const fixture = (options: FixtureOptions = {}) => {
-  const calls: ClientCall[] = [];
+  const { calls, run } = makeHerdrBtwCallRecorder(options.failOperation);
   let shellInspections = 0;
   let startedAgentName: string | undefined;
   const parentPane = {
@@ -98,14 +76,6 @@ const fixture = (options: FixtureOptions = {}) => {
       },
     };
   };
-
-  const run = <A>(operation: string, input: ClientCallInput | undefined, result: () => A) =>
-    Effect.suspend(() => {
-      calls.push(input === undefined ? { operation } : { operation, input });
-      return operation === options.failOperation
-        ? Effect.fail(commandFailure(operation))
-        : Effect.sync(result);
-    });
 
   const client = HerdrClient.of({
     inspectProtocol: () => run("inspect protocol", undefined, () => options.protocol ?? 19),
@@ -181,16 +151,26 @@ const fixture = (options: FixtureOptions = {}) => {
       return link === undefined ? { _tag: "none" } : { _tag: "restored", link };
     },
     record: (link) => {
-      recordedLinks.push(link);
-      return true;
+      recordedLinks.push({
+        version: 1,
+        parentSessionId: SESSION_ID,
+        parentSessionPath: SESSION_FILE,
+        ...link,
+      });
+      return "recorded";
     },
   };
   const serviceOptions = {
-    validateSessionFile: () => true,
-    probeSessionHeader: (path: string) =>
-      path === CHILD_FILE
+    probeSessionHeader: (path: string) => {
+      if (path === SESSION_FILE) return { _tag: "valid", header: { id: SESSION_ID } } as const;
+      return path === CHILD_FILE
         ? ({ _tag: "valid", header: { id: CHILD_ID } } as const)
-        : ({ _tag: "invalid" } as const),
+        : ({ _tag: "invalid" } as const);
+    },
+    compareSessionFileIdentity:
+      options.compareSessionFileIdentity ??
+      ((leftPath: string, rightPath: string) =>
+        leftPath === rightPath ? ("same" as const) : ("distinct" as const)),
     createChildSessionId: () => CHILD_ID,
     createBlankChildSessionFile: () =>
       Effect.succeed({ _tag: "created" as const, path: CHILD_FILE }),
@@ -204,21 +184,6 @@ const fixture = (options: FixtureOptions = {}) => {
   return { calls, client, input, linkStore, makeService, open, recordedLinks, serviceOptions };
 };
 
-const operationNames = (calls: ReadonlyArray<ClientCall>) => calls.map((call) => call.operation);
-
-const operationInputs = <A>(calls: ReadonlyArray<ClientCall>, operation: string): A[] => {
-  // SAFETY: Each fixture method records the semantic input paired with its fixed operation name.
-  return calls.filter((call) => call.operation === operation).map((call) => call.input as A);
-};
-
-/** Advances through the bounded shell-readiness window before joining. */
-const withShellReadiness = <A, E>(workflow: Effect.Effect<A, E>) =>
-  Effect.gen(function* () {
-    const fiber = yield* workflow.pipe(Effect.forkScoped({ startImmediately: true }));
-    for (let step = 0; step < 32; step += 1) yield* TestClock.adjust("200 millis");
-    return yield* Fiber.join(fiber);
-  });
-
 describe("herdr-btw policy", () => {
   it("uses a right split only when the current pane is wide", () => {
     expect(selectSplitDirection(99)).toBe("down");
@@ -229,6 +194,12 @@ describe("herdr-btw policy", () => {
     const name = makeAgentName("SESSION !!! WITH SPACES", "workspace:pane/999999999");
     expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
     expect(name.length).toBeLessThanOrEqual(32);
+  });
+
+  it("derives the child display name without host path state", () => {
+    expect(parentBtwDisplayName("/work/project/")).toBe("BTW · project");
+    expect(parentBtwDisplayName("C:\\work\\project")).toBe("BTW · project");
+    expect(parentBtwDisplayName("/")).toBe("BTW · Pi");
   });
 });
 
@@ -313,20 +284,40 @@ describe("herdr-btw workflow", () => {
     }),
   );
 
-  it.effect("accepts startup while optional Pi session metadata is pending", () =>
+  it.effect("retains the pane when startup omits exact Pi session identity", () =>
     Effect.gen(function* () {
       const test = fixture({ startedIdentityAvailable: false });
-      const result = yield* withShellReadiness(test.open("Review the BTW session."));
-      expect(result).toMatchObject({ paneId: "w1:p2", prompted: true, mode: "created" });
-      expect(operationNames(test.calls).slice(-3)).toEqual([
-        "start side-session Pi",
-        "prompt side-session Pi",
-        "focus side-session Pi",
-      ]);
-      expect(test.recordedLinks).toHaveLength(1);
+      const result = yield* Effect.result(withShellReadiness(test.open("Review the BTW session.")));
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({
+          code: "herdr_agent_ownership_mismatch",
+          outcome: "uncertain",
+          paneId: "w1:p2",
+        });
+      expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
+      expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
+      expect(test.recordedLinks).toEqual([]);
       expect(
         operationNames(test.calls).filter((name) => name === "start side-session Pi"),
       ).toHaveLength(1);
+    }),
+  );
+
+  it.effect("accepts path startup evidence for the same filesystem identity", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        startedSession: CHILD_ALIAS,
+        compareSessionFileIdentity: (leftPath, rightPath) =>
+          [leftPath, rightPath].every((path) => path === CHILD_FILE || path === CHILD_ALIAS)
+            ? "same"
+            : leftPath === rightPath
+              ? "same"
+              : "distinct",
+      });
+
+      expect(yield* withShellReadiness(test.open())).toMatchObject({ mode: "created" });
+      expect(test.recordedLinks[0]?.childSessionPath).toBe(CHILD_FILE);
     }),
   );
 
@@ -410,17 +401,30 @@ describe("herdr-btw workflow", () => {
     }),
   );
 
-  it.effect("requires a regular persisted parent session before a client call", () =>
+  it.effect("requires an exact bounded parent session header before a client call", () =>
     Effect.gen(function* () {
-      const test = fixture();
-      const service = yield* makeHerdrBtwService(test.input, test.linkStore, {
-        ...test.serviceOptions,
-        validateSessionFile: () => false,
-      }).pipe(Effect.provideService(HerdrClient, test.client));
-      const result = yield* Effect.result(service.open());
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(result.failure.code).toBe("parent_session_unavailable");
-      expect(test.calls).toEqual([]);
+      for (const parentProbe of [
+        { _tag: "invalid" as const },
+        { _tag: "valid" as const, header: { id: "another-parent" } },
+      ]) {
+        const test = fixture();
+        const service = yield* makeHerdrBtwService(test.input, test.linkStore, {
+          ...test.serviceOptions,
+          probeSessionHeader: (path) =>
+            path === SESSION_FILE ? parentProbe : test.serviceOptions.probeSessionHeader(path),
+        }).pipe(Effect.provideService(HerdrClient, test.client));
+        const result = yield* Effect.result(service.open());
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure")
+          expect(result.failure).toMatchObject({
+            code:
+              parentProbe._tag === "invalid"
+                ? "parent_session_unavailable"
+                : "parent_session_owner_mismatch",
+            outcome: "confirmed",
+          });
+        expect(test.calls).toEqual([]);
+      }
     }),
   );
 
@@ -526,6 +530,31 @@ describe("herdr-btw workflow", () => {
           paneId: "w1:p2",
         });
       expect(test.recordedLinks).toHaveLength(1);
+    }),
+  );
+
+  it.effect("refuses parent-child aliases or unavailable identity before Pi startup", () =>
+    Effect.gen(function* () {
+      for (const result of ["same", "unavailable"] as const) {
+        const test = fixture({
+          compareSessionFileIdentity: (leftPath, rightPath) =>
+            [leftPath, rightPath].every((path) => path === CHILD_FILE || path === SESSION_FILE)
+              ? result
+              : leftPath === rightPath
+                ? "same"
+                : "distinct",
+        });
+        const outcome = yield* Effect.result(withShellReadiness(test.open()));
+
+        expect(outcome._tag).toBe("Failure");
+        if (outcome._tag === "Failure")
+          expect(outcome.failure).toMatchObject({
+            code: "herdr_btw_child_identity_invalid",
+            outcome: "confirmed",
+            paneId: "w1:p2",
+          });
+        expect(operationNames(test.calls)).not.toContain("start side-session Pi");
+      }
     }),
   );
 

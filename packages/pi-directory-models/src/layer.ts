@@ -13,6 +13,11 @@ export const makeDirectoryModelsLayer = (
   warn: DirectoryModelWarn,
 ) => {
   const platform = Layer.merge(nodeFilePlatformLayer, AgentDirectory.layerFromHost(getAgentDir));
-  const store = DirectoryModelStore.layer.pipe(Layer.provide(platform));
-  return DirectoryModelPreferenceService.layer(input, warn).pipe(Layer.provide(store));
+  const store = Layer.effect(DirectoryModelStore, DirectoryModelStore.make).pipe(
+    Layer.provide(platform),
+  );
+  return Layer.effect(
+    DirectoryModelPreferenceService,
+    DirectoryModelPreferenceService.make(input, warn),
+  ).pipe(Layer.provide(store));
 };

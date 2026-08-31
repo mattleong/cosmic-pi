@@ -3,15 +3,17 @@ import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { SubagentRunView } from "../src/run/model.ts";
 import { formatStartResult } from "../src/tools/format.ts";
 import {
-  SUBAGENT_CARD_DETAILS_VERSION,
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
   makeAwaitDetails,
   makeCompactToolDetails,
   makeStartDetails,
   type ProfileCandidateDetailsInput,
-  type SubagentStartEntry,
 } from "../src/tools/details.ts";
+import {
+  SUBAGENT_CARD_DETAILS_VERSION,
+  decodeCompactToolDetails,
+  decodeStartAwaitCardDetails,
+  type SubagentStartEntry,
+} from "../src/tools/details-schema.ts";
 
 const run = (index = 1, cost?: number): SubagentRunView => {
   const usageBase = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 };

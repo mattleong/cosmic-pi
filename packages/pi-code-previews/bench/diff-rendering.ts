@@ -7,6 +7,7 @@ import {
   formatDuration,
   formatMs,
   isEnabled,
+  numberedLines,
   printBenchHeader,
   runBench as runSharedBench,
   timeOnce,
@@ -271,8 +272,8 @@ function printResults(results: BenchResult[]): void {
 }
 
 function makeCases(): BenchCase[] {
-  const mediumShared = numberedWords("token", 180).join(" ");
-  const longShared = numberedWords("shared", 600).join(" ");
+  const mediumShared = numberedLines("token", 180).join(" ");
+  const longShared = numberedLines("shared", 600).join(" ");
   const unrelatedPair = unrelatedTokenPair(0, 420);
   const beforeMulti = Array.from(
     { length: 12 },
@@ -387,14 +388,10 @@ function largeCase(
   };
 }
 
-function numberedWords(prefix: string, count: number): string[] {
-  return Array.from({ length: count }, (_, index) => `${prefix}${index}`);
-}
-
 function unrelatedTokenPair(index: number, tokenCount: number) {
   return {
-    before: numberedWords(`before${index}_`, tokenCount).join(" "),
-    after: numberedWords(`after${index}_`, tokenCount).join(" "),
+    before: numberedLines(`before${index}_`, tokenCount).join(" "),
+    after: numberedLines(`after${index}_`, tokenCount).join(" "),
   };
 }
 
@@ -406,7 +403,7 @@ function codeLikePair(index: number) {
 }
 
 function veryLongSharedPair(index: number) {
-  const shared = numberedWords(`shared${index}_`, 600).join(" ");
+  const shared = numberedLines(`shared${index}_`, 600).join(" ");
   return {
     before: `${shared} oldValue ${shared}`,
     after: `${shared} newValue ${shared}`,

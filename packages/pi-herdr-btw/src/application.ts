@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
 import { makeHostHerdrBtwLinkStore, type HerdrBtwLinkStore } from "./boundary/host-link-store.ts";
 import { notifyHerdrBtw } from "./boundary/host-notifier.ts";
+import { registerHerdrBtwParentReference } from "./boundary/host-parent-reference.ts";
 import { captureHerdrBtwSession, type HerdrBtwSessionInput } from "./boundary/host-session.ts";
 import { registerHerdrBtwCommands } from "./btw/controller.ts";
 import {
@@ -16,8 +17,7 @@ import {
 } from "./btw/service.ts";
 import type { HerdrBtwError } from "./btw/errors.ts";
 import { makeHerdrBtwLayer } from "./layer.ts";
-import { registerHerdrBtwParentReference } from "./parent-link/register.ts";
-import type { HerdrBtwParentReference } from "./parent-link/reference.ts";
+import type { HerdrBtwParentReference } from "./parent-link/policy.ts";
 
 interface HerdrBtwActivation extends HerdrBtwSessionInput {
   readonly ctx: ExtensionContext;
@@ -57,16 +57,17 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
       notifyHerdrBtw(ctx, "The /herdr-btw command could not capture this Pi session.", "error");
       return slot.shutdown();
     }
+    const launchOwner = {
+      sessionId: captured.sessionId ?? "",
+      sessionPath: captured.sessionFile ?? "",
+    };
     return slot
       .start(
         {
           ...captured,
           ctx,
           parentReference: parentReferenceBridge.capture(ctx),
-          linkStore: makeHostHerdrBtwLinkStore(pi, ctx, {
-            sessionId: captured.sessionId ?? "",
-            sessionPath: captured.sessionFile ?? "",
-          }),
+          linkStore: makeHostHerdrBtwLinkStore(pi, ctx, launchOwner),
         },
         captured.signal,
       )

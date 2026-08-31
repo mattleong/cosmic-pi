@@ -55,6 +55,7 @@ const BLOCKED_ENV_KEYS = new Set([
   RUNTIME_API_KEY_ENV,
   RUNTIME_API_PROVIDER_ENV,
 ]);
+const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 export interface ChildLaunchRequest {
   readonly runId: string;
@@ -231,26 +232,20 @@ export const releaseChildProcess = (
 };
 
 function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
-  return (() => {
-    const baseResult = {
-      ...Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([key, value]) => value !== undefined && !BLOCKED_ENV_KEYS.has(key),
-        ),
+  return {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([key, value]) => value !== undefined && !BLOCKED_ENV_KEYS.has(key),
       ),
-      PI_SUBAGENT_CHILD: "1",
-      PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
-      PI_SUBAGENT_RUN_ID: request.runId,
-    };
-    const withComputedFields = request.runtimeApiKey
-      ? {
-          ...baseResult,
-          [RUNTIME_API_KEY_ENV]: Redacted.value(request.runtimeApiKey),
-          [RUNTIME_API_PROVIDER_ENV]: request.model.slice(0, request.model.indexOf("/")),
-        }
-      : baseResult;
-    return withComputedFields;
-  })();
+    ),
+    PI_SUBAGENT_CHILD: "1",
+    PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
+    PI_SUBAGENT_RUN_ID: request.runId,
+    ...(request.runtimeApiKey && {
+      [RUNTIME_API_KEY_ENV]: Redacted.value(request.runtimeApiKey),
+      [RUNTIME_API_PROVIDER_ENV]: request.model.slice(0, request.model.indexOf("/")),
+    }),
+  };
 }
 
 const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry => {
@@ -397,7 +392,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       };
       const onLine = (line: string) => {
         const bytes = Buffer.byteLength(line, "utf8") + 1;
-        const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(line);
+        const decoded = decodeUnknownJsonOption(line);
         if (Option.isSome(decoded)) offer({ type: "rpc_message", value: decoded.value }, bytes);
         else
           offer({ type: "protocol_error", message: "Subagent emitted malformed RPC JSON." }, bytes);
@@ -442,12 +437,12 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
         if (settled) return;
         settled = true;
-        const event: Extract<ChildWireEvent, { readonly type: "exit" }> = (() => {
-          const baseResult = { type: "exit" as const, exitCode };
-          const withSignal = signal ? { ...baseResult, signal } : baseResult;
-          const withStderr = { ...withSignal, stderr };
-          return withStderr;
-        })();
+        const event: Extract<ChildWireEvent, { readonly type: "exit" }> = {
+          type: "exit",
+          exitCode,
+          ...(signal && { signal }),
+          stderr,
+        };
         Queue.endUnsafe(events);
         Deferred.doneUnsafe(exited, Effect.succeed(event));
       };

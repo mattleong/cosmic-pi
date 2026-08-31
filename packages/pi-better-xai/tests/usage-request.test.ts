@@ -10,7 +10,7 @@ import {
   makeInMemoryDocuments,
   type JsonHttpTestResponse,
 } from "pi-cosmic-core/testing";
-import { readXaiAuthResult } from "../src/auth/auth.ts";
+import { readXaiCredentials } from "../src/auth/auth.ts";
 import { ModelRegistryAuth } from "../src/boundary/model-registry-auth.ts";
 import { requestXaiUsage } from "../src/usage/format.ts";
 
@@ -41,10 +41,12 @@ describe("requestXaiUsage resources", () => {
     const refreshedAccess = "refreshed-access-secret";
     const documents = makeInMemoryDocuments({
       [authPath]: {
+        other: "preserved-root-field",
         xai: {
           type: "oauth",
           access: expiredAccess,
           refresh: refreshSecret,
+          future: "preserved-entry-field",
         },
       },
     });
@@ -70,11 +72,17 @@ describe("requestXaiUsage resources", () => {
     return Effect.gen(function* () {
       const result = yield* requestXaiUsage(authPath);
       expect(result?.snapshot.monthlyUsed).toBeNull();
-      const persisted = yield* readXaiAuthResult(authPath);
-      expect(persisted._tag).toBe("Found");
-      if (persisted._tag === "Found") {
-        expect(persisted.credentials.expires).toBeGreaterThan(0);
-      }
+      const persisted = yield* readXaiCredentials(authPath);
+      expect(persisted?.expires).toBeGreaterThan(0);
+      expect(documents.updateCount).toBe(1);
+      expect(documents.documents.get(authPath)).toMatchObject({
+        other: "preserved-root-field",
+        xai: {
+          future: "preserved-entry-field",
+          access: refreshedAccess,
+          refresh: refreshSecret,
+        },
+      });
       expect(serializedSnapshot(result)).not.toContain(expiredAccess);
       expect(serializedSnapshot(result)).not.toContain(refreshSecret);
       expect(serializedSnapshot(result)).not.toContain(refreshedAccess);
@@ -173,6 +181,72 @@ describe("requestXaiUsage resources", () => {
       expect(monthlyRequests).toBe(1);
       expect(serializedSnapshot(result)).not.toContain(rejectedAccess);
     }).pipe(provideBuiltLayer(layer));
+  });
+
+  it.effect("does not overwrite credentials replaced while a rejected request is in flight", () => {
+    const rejectedAccess = "raced-rejected-access-secret";
+    const rejectedRefresh = "raced-rejected-refresh-secret";
+    const replacementAccess = "concurrent-replacement-access-secret";
+    const replacementRefresh = "concurrent-replacement-refresh-secret";
+    const documents = makeInMemoryDocuments({
+      [authPath]: {
+        xai: {
+          type: "oauth",
+          access: rejectedAccess,
+          refresh: rejectedRefresh,
+        },
+      },
+    });
+    let refreshAttempts = 0;
+    let registryLookups = 0;
+
+    return Effect.gen(function* () {
+      const monthlyStarted = yield* Deferred.make<void>();
+      const releaseMonthly = yield* Deferred.make<void>();
+      const registry = registryEffectLayer(
+        Effect.sync(() => {
+          registryLookups++;
+          return rejectedAccess;
+        }),
+      );
+      const http = jsonHttpTestLayer((request) => {
+        if (request.method === "POST") {
+          refreshAttempts++;
+          return Effect.succeed(jsonHttpRawResponse(500, "unexpected refresh"));
+        }
+        if (request.url.includes("format=credits"))
+          return Effect.succeed(jsonHttpRawResponse(200, JSON.stringify({ config: {} })));
+        return Deferred.succeed(monthlyStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseMonthly)),
+          Effect.as(jsonHttpRawResponse(401, "rejected")),
+        );
+      });
+      const layer = Layer.mergeAll(documents.layer, registry, http);
+      const fiber = yield* requestXaiUsage(authPath).pipe(
+        Effect.result,
+        provideBuiltLayer(layer),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(monthlyStarted);
+      yield* documents.service.updateObject(authPath, (document) => ({
+        ...document,
+        xai: {
+          type: "oauth",
+          access: replacementAccess,
+          refresh: replacementRefresh,
+        },
+      }));
+      yield* Deferred.succeed(releaseMonthly, undefined);
+      const result = yield* Fiber.join(fiber);
+
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure.operation).toBe("monthly");
+      expect(refreshAttempts).toBe(0);
+      expect(registryLookups).toBe(2);
+      expect(documents.documents.get(authPath)).toMatchObject({
+        xai: { access: replacementAccess, refresh: replacementRefresh },
+      });
+    });
   });
 
   it.effect("releases both concurrent HTTP resources when the usage request is interrupted", () => {

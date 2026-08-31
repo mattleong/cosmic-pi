@@ -1,19 +1,33 @@
 import * as Effect from "effect/Effect";
+import { hasControlCharacter } from "pi-cosmic-core";
 import { InvalidSubagentRequestError } from "./errors.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import type { StartSubagentRequest } from "./model.ts";
 
+export const SUBAGENT_TOOL_NAME = Object.freeze({
+  models: "subagent_models",
+  start: "subagent_start",
+  list: "subagent_list",
+  status: "subagent_status",
+  await: "subagent_await",
+  send: "subagent_send",
+  reply: "subagent_reply",
+  lifecycle: "subagent_lifecycle",
+  rename: "subagent_rename",
+  claims: "subagent_claims",
+} as const);
+
 export const SUBAGENT_TOOL_NAMES = [
-  "subagent_models",
-  "subagent_start",
-  "subagent_list",
-  "subagent_status",
-  "subagent_await",
-  "subagent_send",
-  "subagent_reply",
-  "subagent_lifecycle",
-  "subagent_rename",
-  "subagent_claims",
+  SUBAGENT_TOOL_NAME.models,
+  SUBAGENT_TOOL_NAME.start,
+  SUBAGENT_TOOL_NAME.list,
+  SUBAGENT_TOOL_NAME.status,
+  SUBAGENT_TOOL_NAME.await,
+  SUBAGENT_TOOL_NAME.send,
+  SUBAGENT_TOOL_NAME.reply,
+  SUBAGENT_TOOL_NAME.lifecycle,
+  SUBAGENT_TOOL_NAME.rename,
+  SUBAGENT_TOOL_NAME.claims,
 ] as const;
 
 /** Competing orchestrators stay disabled even when the root session has them active. */
@@ -47,20 +61,12 @@ const unrepresentableToolSnapshot = () =>
       "The root Pi active-tool list cannot be represented safely for a child process. Disable malformed or excessive tools and retry.",
   });
 
-const hasToolNameControlCharacter = (name: string): boolean => {
-  for (let index = 0; index < name.length; index += 1) {
-    const code = name.charCodeAt(index);
-    if (code < 32 || (code >= 127 && code <= 159)) return true;
-  }
-  return false;
-};
-
 const isCliRepresentableToolName = (name: string): boolean =>
   name.length > 0 &&
   name.length <= MAX_INHERITED_PI_TOOL_NAME_CHARS &&
   name === name.trim() &&
   !name.includes(",") &&
-  !hasToolNameControlCharacter(name);
+  !hasControlCharacter(name);
 
 /**
  * Capture ordinary root-session tools in active order. Raw coordinator implementations are not

@@ -79,7 +79,6 @@ export const makeAdvisorControlMailbox = (handle: () => Effect.Effect<void>) =>
   }).pipe(Effect.orDie);
 
 export class AdvisorRuntime {
-  private activeChildProjection: ActiveAdvisorChild | undefined;
   private epoch = 0;
   private options: AdvisorRuntimeStartOptions | undefined;
   private toolRounds = 0;
@@ -120,7 +119,7 @@ export class AdvisorRuntime {
     });
     this.sessionEvents = makeAdvisorSessionEvents({
       epoch: () => this.epoch,
-      activeChild: () => this.activeChildProjection,
+      activeChild: () => SynchronizedRef.getUnsafe(this.activeChild),
       activeCheckpoint: () => this.activeCheckpoint,
       invalidateForReprime: (message) => this.invalidateForReprime(message),
       recordStream: (kind, text) => {
@@ -146,11 +145,11 @@ export class AdvisorRuntime {
     });
   }
   get activeToolNames(): readonly string[] {
-    const session = this.activeChildProjection?.session;
+    const session = SynchronizedRef.getUnsafe(this.activeChild)?.session;
     return session ? projectActiveToolNamesAtHostBoundary(session) : [];
   }
   get childSession(): AgentSession | undefined {
-    return this.activeChildProjection?.session;
+    return SynchronizedRef.getUnsafe(this.activeChild)?.session;
   }
   startEffect(options: AdvisorRuntimeStartOptions) {
     return Effect.gen({ self: this }, function* () {
@@ -162,7 +161,6 @@ export class AdvisorRuntime {
           yield* this.awaitPendingStartCleanupEffect();
           const reserved = yield* SynchronizedRef.modify(this.activeChild, (current) => {
             const startEpoch = ++this.epoch;
-            if (this.activeChildProjection === current) this.activeChildProjection = undefined;
             return [{ startEpoch, previous: current } as const, undefined];
           });
           this.pendingSeed = undefined;
@@ -398,14 +396,13 @@ export class AdvisorRuntime {
       Effect.gen({ self: this }, function* () {
         const scope = yield* Scope.fork(this.resourceScope);
         const releaseState = { aborted: false };
-        let committed = false;
+        let childHandle: ActiveAdvisorChild | undefined;
         const close = Scope.close(scope, Exit.void);
         yield* Scope.addFinalizer(
           scope,
           Effect.suspend(() => stopSessionEffect(session, !releaseState.aborted, abortTimeoutMs)),
         );
         const acquire = Effect.gen({ self: this }, function* () {
-          let childHandle: ActiveAdvisorChild | undefined;
           const events = yield* makeSynchronousIngress<AdvisorChildEvent, never, never>({
             capacity: 128,
             overflow: "drop",
@@ -450,20 +447,21 @@ export class AdvisorRuntime {
               }
             }),
           );
-          const installed = yield* SynchronizedRef.modifyEffect(this.activeChild, (current) =>
-            Effect.sync(() => {
-              if (startEpoch !== this.epoch || current !== undefined)
-                return [false, current] as const;
-              this.activeChildProjection = handle;
-              committed = true;
-              return [true, handle] as const;
-            }),
-          );
+          const installed = yield* SynchronizedRef.modify(this.activeChild, (current) => {
+            const canInstall = startEpoch === this.epoch && current === undefined;
+            return [canInstall, canInstall ? handle : current] as const;
+          });
           if (!installed)
             return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
         });
         yield* Effect.interruptible(acquire).pipe(
-          Effect.onExit(() => (committed ? Effect.void : close)),
+          Effect.onExit(() =>
+            SynchronizedRef.get(this.activeChild).pipe(
+              Effect.flatMap((current) =>
+                childHandle !== undefined && current === childHandle ? Effect.void : close,
+              ),
+            ),
+          ),
         );
       }),
     );
@@ -485,7 +483,6 @@ export class AdvisorRuntime {
         if (startEpoch !== this.epoch) return;
         const active = yield* SynchronizedRef.modify(this.activeChild, (current) => {
           this.epoch++;
-          if (this.activeChildProjection === current) this.activeChildProjection = undefined;
           return [current, undefined] as const;
         });
         this.pendingSeed = undefined;
@@ -543,7 +540,6 @@ export class AdvisorRuntime {
         AdvisorForcedDetach
       >(this.activeChild, (current) => {
         if (current !== target) return [{ active: undefined, publishDiagnostic: false }, current];
-        if (this.activeChildProjection === target) this.activeChildProjection = undefined;
         return [{ active: target, publishDiagnostic: this.markResetRequired(reason) }, undefined];
       });
       if (!result.active) return;
@@ -559,7 +555,6 @@ export class AdvisorRuntime {
         yield* this.awaitPendingStartCleanupEffect();
         const active = yield* SynchronizedRef.modify(this.activeChild, (current) => {
           this.epoch++;
-          if (this.activeChildProjection === current) this.activeChildProjection = undefined;
           return [current, undefined] as const;
         });
         this.pendingSeed = undefined;

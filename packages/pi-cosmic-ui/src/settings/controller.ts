@@ -7,7 +7,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   DEFAULT_FOOTER_ORDER,
@@ -23,6 +22,7 @@ import {
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../protocol/service.ts";
 import { createSettingsListSurface } from "../manager/settings-surface.ts";
+import { decodeUnknownOrUndefined } from "../schema/decode.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
@@ -40,47 +40,38 @@ export function decodeCosmicUiSettingChange<IdInput, ValueInput>(
   value: ValueInput,
 ): CosmicUiSettingChange | undefined {
   if (!Predicate.isString(id)) return undefined;
-  const booleanValue = Option.getOrUndefined(
-    Schema.decodeUnknownOption(BooleanSettingSchema)(value),
-  );
+  const booleanValue = decodeUnknownOrUndefined(BooleanSettingSchema, value);
   if (id === "enabled")
     return booleanValue === undefined
       ? undefined
       : { _tag: "UpdateFooter", patch: { enabled: booleanValue === "true" } };
   if (id === "density") {
-    const density = Option.getOrUndefined(Schema.decodeUnknownOption(FooterDensitySchema)(value));
+    const density = decodeUnknownOrUndefined(FooterDensitySchema, value);
     return density === undefined ? undefined : { _tag: "UpdateFooter", patch: { density } };
   }
   if (id === "mediaPlacement") {
-    const mediaPlacement = Option.getOrUndefined(
-      Schema.decodeUnknownOption(MediaPlacementSchema)(value),
-    );
+    const mediaPlacement = decodeUnknownOrUndefined(MediaPlacementSchema, value);
     return mediaPlacement === undefined
       ? undefined
       : { _tag: "UpdateFooter", patch: { mediaPlacement } };
   }
   if (!id.startsWith("visible:") || booleanValue === undefined) return undefined;
-  const visibilityId = Option.getOrUndefined(
-    Schema.decodeUnknownOption(VisibilityIdSchema)(id.slice("visible:".length)),
-  );
+  const visibilityId = decodeUnknownOrUndefined(VisibilityIdSchema, id.slice("visible:".length));
   return visibilityId === undefined
     ? undefined
     : { _tag: "SetVisibility", id: visibilityId, visible: booleanValue === "true" };
 }
 
-/** Converts an update rejection into a contained host notification and a resolved recovery. */
-export function recoverSettingsUpdate(
-  update: Promise<unknown>,
-  callbacks: HostCallbackBoundaryContract,
-  notify: () => void,
-): Promise<void> {
-  return update.then(
-    () => undefined,
-    () => {
-      callbacks.invoke("notify", notify, undefined);
-    },
-  );
-}
+const projectedSettingValue = (config: ResolvedCosmicUiConfig, id: string): string | undefined => {
+  if (id === "enabled") return String(config.footer.enabled);
+  if (id === "density") return config.footer.density;
+  if (id === "mediaPlacement") return config.footer.mediaPlacement;
+  if (!id.startsWith("visible:")) return undefined;
+  const visibilityId = decodeUnknownOrUndefined(VisibilityIdSchema, id.slice("visible:".length));
+  return visibilityId === undefined
+    ? undefined
+    : String(!config.footer.hidden.includes(visibilityId));
+};
 
 export function registerSettingsCommand(
   pi: ExtensionAPI,
@@ -107,6 +98,7 @@ export function registerSettingsCommand(
       const abort = snapshotHostAbortSignal(options.callbacks, () => ctx.signal);
       const signal = abort?.signal;
       const cfg = options.config();
+      const generations = new Map<string, number>();
       const items: SettingItem[] = [
         {
           id: "enabled",
@@ -153,6 +145,28 @@ export function registerSettingsCommand(
                 onChange: (id, value, list) => {
                   const change = decodeCosmicUiSettingChange(id, value);
                   if (!change) return;
+                  const generation = (generations.get(id) ?? 0) + 1;
+                  generations.set(id, generation);
+                  const settle = (failed: boolean) => {
+                    if (generations.get(id) !== generation) return;
+                    const authoritative = hostQuery<string | undefined>(
+                      () => projectedSettingValue(options.config(), id),
+                      undefined,
+                    );
+                    if (authoritative !== undefined && generations.get(id) === generation)
+                      options.callbacks.invoke(
+                        "request-render",
+                        () => {
+                          if (generations.get(id) !== generation) return;
+                          list.updateValue(id, authoritative);
+                          options.update(ctx);
+                          tui.requestRender();
+                        },
+                        undefined,
+                      );
+                    if (failed && generations.get(id) === generation)
+                      notify("Unable to update Cosmic UI configuration.", "error");
+                  };
                   const update = CosmicUiService.use((service) =>
                     change._tag === "SetVisibility"
                       ? service.setFooterVisibility(change.id, change.visible)
@@ -163,31 +177,20 @@ export function registerSettingsCommand(
                     undefined,
                   );
                   if (!pending) {
-                    notify("Unable to update Cosmic UI configuration.", "error");
+                    settle(true);
                     return;
                   }
-                  void recoverSettingsUpdate(
-                    pending.then(() => {
-                      options.callbacks.invoke(
-                        "request-render",
-                        () => {
-                          list.updateValue(id, value);
-                          options.update(ctx);
-                          tui.requestRender();
-                        },
-                        undefined,
-                      );
-                    }),
-                    options.callbacks,
-                    () => ctx.ui.notify("Unable to update Cosmic UI configuration.", "error"),
+                  void Promise.resolve(pending).then(
+                    () => settle(false),
+                    () => settle(true),
                   );
                 },
                 onCancel: () => hostQuery(() => done(undefined), undefined),
                 matchesKeybinding: Predicate.isFunction(keybindings?.matches)
-                  ? (data, id) => keybindings.matches(data, id)
+                  ? (data, id) => hostQuery(() => keybindings.matches(data, id), false)
                   : undefined,
-                requestRender: () => tui.requestRender(),
-                dim: (text) => theme.fg("dim", text),
+                requestRender: () => hostQuery(() => tui.requestRender(), undefined),
+                dim: (text) => hostQuery(() => theme.fg("dim", text), text),
                 // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained
                 // behind this package's host-callback boundary.
                 bridge: { invoke: (callback, fallback) => hostQuery(callback, fallback) },

@@ -26,6 +26,7 @@ const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 const EVENT_CAPACITY = 512;
 const WRITE_TIMEOUT = "10 seconds";
+const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 /** Outbound frames are locally constructed protocol values serialized as one pure JSONL line. */
 const encodeOutboundFrame = (value: LocalCliOutboundFrame): string => `${JSON.stringify(value)}\n`;
@@ -158,9 +159,7 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
             maxQueuedBytes: MAX_QUEUED_BYTES,
             onLine: (line) => {
               const bytes = Buffer.byteLength(line, "utf8") + 1;
-              const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(
-                line,
-              );
+              const decoded = decodeUnknownJsonOption(line);
               if (Option.isSome(decoded)) offer({ type: "message", value: decoded.value }, bytes);
               else
                 offer(
@@ -199,12 +198,12 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
         if (settled) return;
         settled = true;
         Queue.endUnsafe(events);
-        const event: Extract<LocalCliWireEvent, { readonly type: "exit" }> = (() => {
-          const baseResult = { type: "exit" as const, exitCode };
-          const withSignal = signal ? { ...baseResult, signal } : baseResult;
-          const withStderr = { ...withSignal, stderr: readTail(stderr) };
-          return withStderr;
-        })();
+        const event: Extract<LocalCliWireEvent, { readonly type: "exit" }> = {
+          type: "exit",
+          exitCode,
+          ...(signal && { signal }),
+          stderr: readTail(stderr),
+        };
         Deferred.doneUnsafe(exited, Effect.succeed(event));
       };
       const onError = (error: Error) => {

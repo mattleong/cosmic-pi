@@ -10,16 +10,12 @@ import * as Effect from "effect/Effect";
 import {
   completeSettingsArguments,
   dispatchSettingsCommand,
+  invokeHostCallback,
   notifyAtHostBoundary,
   type HostNotificationLevel,
 } from "pi-cosmic-core";
 import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
-import {
-  hasSettingsSurface,
-  invokeHostCallback,
-  openSettingsSurfaceAtHostBoundary,
-  recoverHostUi,
-} from "../boundary/host-ui.ts";
+import { hasSettingsSurface, openSettingsSurfaceAtHostBoundary } from "../boundary/host-ui.ts";
 import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config/index.ts";
 import { XaiUsageService } from "../usage/controller.ts";
 
@@ -69,36 +65,29 @@ export function registerSettingsController(
     const before = updateDisplay ? persistedValue() : undefined;
     const revertOptimisticDisplay = () => {
       const current = persistedValue() ?? before;
-      if (updateDisplay && current !== undefined) updateDisplay(current);
+      if (updateDisplay && current !== undefined)
+        invokeHostCallback(() => updateDisplay(current), undefined);
     };
-    return run(
-      XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(
-        Effect.tap(() =>
-          recoverHostUi("settings_render", () => updateFooter(ctx)).pipe(
-            Effect.andThen(
-              recoverHostUi("settings_success", () => {
-                const current = descriptor ? descriptor.currentValue(config(ctx)) : value;
-                if (updateDisplay) updateDisplay(current);
-                else ctx.ui.notify(`${id} = ${current}`, "info");
-              }),
-            ),
-          ),
-        ),
-        Effect.catch((error) =>
-          recoverHostUi("settings_error", () => ctx.ui.notify(error.message, "error")).pipe(
-            Effect.andThen(recoverHostUi("settings_revert", revertOptimisticDisplay)),
-          ),
-        ),
-      ),
-      signal,
-    ).catch(() => {
-      notifyAtHostBoundary(ctx, "Better xAI settings are unavailable.", "warning");
-      try {
+    const update = XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(
+      Effect.result,
+    );
+    return run(update, signal).then(
+      (settlement) => {
+        if (settlement._tag === "Failure") {
+          notifyAtHostBoundary(ctx, settlement.failure.message, "error");
+          revertOptimisticDisplay();
+          return;
+        }
+        invokeHostCallback(() => updateFooter(ctx), undefined);
+        const current = persistedValue() ?? value;
+        if (updateDisplay) invokeHostCallback(() => updateDisplay(current), undefined);
+        else notifyAtHostBoundary(ctx, `${id} = ${current}`, "info");
+      },
+      () => {
+        notifyAtHostBoundary(ctx, "Better xAI settings are unavailable.", "warning");
         revertOptimisticDisplay();
-      } catch {
-        // Hostile list/render callbacks stay contained at the host boundary.
-      }
-    });
+      },
+    );
   };
 
   const openInteractiveSettings = (ctx: ExtensionContext): Promise<void> => {
@@ -118,6 +107,7 @@ export function registerSettingsController(
       values: [...(descriptor.values ?? [])],
       description: descriptor.description,
     }));
+    const pickerGenerations = new Map<string, number>();
     return openSettingsSurfaceAtHostBoundary(
       ctx,
       (tui, theme, keybindings, done) =>
@@ -130,7 +120,10 @@ export function registerSettingsController(
           // through the same display update: success shows the committed value and failure
           // restores the persisted projection value.
           onChange: (id, value, list) => {
+            const generation = (pickerGenerations.get(id) ?? 0) + 1;
+            pickerGenerations.set(id, generation);
             const show = (currentValue: string) => {
+              if (pickerGenerations.get(id) !== generation) return;
               invokeHostCallback(() => {
                 list.updateValue(id, currentValue);
                 tui.requestRender();

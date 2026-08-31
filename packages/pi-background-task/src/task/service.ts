@@ -14,9 +14,11 @@ import * as Stream from "effect/Stream";
 import {
   LocalProcess,
   type LocalProcessError,
+  type LocalProcessExit,
   type LocalProcessHandle,
 } from "../boundary/local-process.ts";
 import { BackgroundTaskConfigStore } from "../config/store.ts";
+import { BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import {
   BackgroundTaskCapacityError,
   BackgroundTaskNotFoundError,
@@ -213,15 +215,11 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     if (evictionCount <= 0) return;
     for (const evicted of completed.slice(0, evictionCount)) tasks.delete(evicted.snapshot.id);
   };
-  const completeRecord = (
-    record: TaskRecord,
-    exit: { readonly exitCode: number | null; readonly signal?: string; readonly error?: string },
-    endedAt: number,
-  ) => {
+  const completeRecord = (record: TaskRecord, exit: LocalProcessExit, endedAt: number) => {
     if (!isActiveTaskState(record.snapshot.state)) return;
     const state: BackgroundTaskState = record.terminalOutcome
       ? record.terminalOutcome
-      : exit.error || exit.exitCode !== 0
+      : exit.exitCode !== 0
         ? "failed"
         : "exited";
     record.snapshot = {
@@ -230,7 +228,6 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       endedAt,
       exitCode: exit.exitCode,
       ...(exit.signal && { signal: exit.signal }),
-      ...(exit.error && { error: exit.error }),
       logCursor: record.logs.nextCursor - 1,
       droppedLogBytes: record.logs.droppedBytes,
     };
@@ -463,6 +460,17 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             message: "Background command must not be empty.",
           });
         }
+        if (command.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars) {
+          return yield* new InvalidBackgroundCommandError({
+            message: `Background command must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars} characters.`,
+          });
+        }
+        const name = request.name?.trim();
+        if ((name?.length ?? 0) > BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars) {
+          return yield* new InvalidBackgroundCommandError({
+            message: `Background task name must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars} characters.`,
+          });
+        }
         if (
           request.timeoutSeconds !== undefined &&
           (!Number.isFinite(request.timeoutSeconds) || request.timeoutSeconds <= 0)
@@ -472,7 +480,20 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           });
         }
         const cwd = path.resolve(request.cwd);
-        const prepared = { ...request, command, cwd };
+        if (cwd.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars) {
+          return yield* new InvalidBackgroundCwdError({
+            cwd,
+            message: `Resolved background working directory must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars} characters.`,
+          });
+        }
+        const prepared: StartBackgroundTask = {
+          command,
+          cwd,
+          ...(name && { name }),
+          ...(request.timeoutSeconds !== undefined && {
+            timeoutSeconds: request.timeoutSeconds,
+          }),
+        };
         const record = yield* withLock(
           Effect.gen(function* () {
             if (admissionsClosed || !config.enabled) {
@@ -491,9 +512,21 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
                 message: `Background task capacity reached (${config.maxRunning}).`,
               });
             }
+            if (!Number.isSafeInteger(nextId)) {
+              return yield* new BackgroundTaskCapacityError({
+                limit: Number.MAX_SAFE_INTEGER,
+                message: "Background task identity capacity reached.",
+              });
+            }
+            const id = `task-${nextId}`;
+            if (id.length > BACKGROUND_TASK_FIELD_BOUNDS.maxIdChars) {
+              return yield* new BackgroundTaskCapacityError({
+                limit: Number.MAX_SAFE_INTEGER,
+                message: "Background task identity capacity reached.",
+              });
+            }
+            nextId += 1;
             const startedAt = yield* Clock.currentTimeMillis;
-            const id = `task-${nextId++}`;
-            const name = request.name?.trim();
             const created: TaskRecord = {
               snapshot: {
                 id,
@@ -555,18 +588,25 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       }),
     );
 
+  const admitRecord = (id: string): Effect.Effect<TaskRecord, BackgroundTaskNotFoundError> =>
+    withLock(
+      Effect.suspend(() => {
+        const record = tasks.get(id);
+        return record ? Effect.succeed(record) : Effect.fail(notFound(id));
+      }),
+    );
+
   const logs: BackgroundTaskServiceContract["logs"] = (request) =>
     Effect.gen(function* () {
+      const record = yield* admitRecord(request.id);
       const prepared = yield* withLock(
-        Effect.suspend(() => {
-          const record = tasks.get(request.id);
-          if (!record) return Effect.fail(notFound(request.id));
+        Effect.sync(() => {
           const slice = readLogBuffer(request.id, record.logs, record.snapshot.state, request);
           const shouldWait =
             (request.waitSeconds ?? 0) > 0 &&
             slice.events.length === 0 &&
             isActiveTaskState(record.snapshot.state);
-          return Effect.succeed({ slice, wake: shouldWait ? record.wake : undefined });
+          return { slice, wake: shouldWait ? record.wake : undefined };
         }),
       );
       if (!prepared.wake) return prepared.slice;
@@ -575,7 +615,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           Duration.seconds(Math.min(request.waitSeconds ?? 0, config.maxWaitSeconds)),
         ),
       );
-      return yield* logs({ ...request, waitSeconds: 0 });
+      return yield* withLock(
+        Effect.sync(() => readLogBuffer(request.id, record.logs, record.snapshot.state, request)),
+      );
     });
 
   const wait: BackgroundTaskServiceContract["wait"] = (request) =>
@@ -612,6 +654,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         });
       }
 
+      const record = yield* admitRecord(request.id);
       const timeoutMillis = Math.min(waitSeconds, config.maxWaitSeconds) * 1_000;
       const deadline = (yield* Clock.currentTimeMillis) + timeoutMillis;
       let scanAfterCursor = request.afterCursor ?? 0;
@@ -620,11 +663,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         string
       >;
 
-      const inspect = (): Effect.Effect<WaitInspection, BackgroundTaskNotFoundError> =>
+      const inspect = (): Effect.Effect<WaitInspection> =>
         withLock(
-          Effect.suspend((): Effect.Effect<WaitInspection, BackgroundTaskNotFoundError> => {
-            const record = tasks.get(request.id);
-            if (!record) return Effect.fail(notFound(request.id));
+          Effect.sync((): WaitInspection => {
             const slice = readLogBuffer(request.id, record.logs, record.snapshot.state, {
               afterCursor: scanAfterCursor,
             });
@@ -649,19 +690,19 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
               }
               scanAfterCursor = Math.max(scanAfterCursor, slice.nextCursor);
               if (matchCursor !== undefined) {
-                return Effect.succeed({
+                return {
                   _tag: "result",
                   result: waitResult(record.snapshot, slice, "matched", matchCursor),
-                });
+                };
               }
             }
             if (!isActiveTaskState(record.snapshot.state)) {
-              return Effect.succeed({
+              return {
                 _tag: "result",
                 result: waitResult(record.snapshot, slice, "completed"),
-              });
+              };
             }
-            return Effect.succeed({
+            return {
               _tag: "pending",
               awaitChange:
                 request.until === "exit"
@@ -669,7 +710,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
                   : Deferred.await(record.wake),
               snapshot: record.snapshot,
               slice,
-            });
+            };
           }),
         );
 
