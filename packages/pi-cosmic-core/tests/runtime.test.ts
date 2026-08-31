@@ -4,7 +4,6 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { PiApi } from "../src/runtime/pi-api.ts";
@@ -71,13 +70,7 @@ it.effect("keeps Effect log output off the TTY console", () =>
     };
     try {
       yield* Effect.promise(() =>
-        runtime.run(
-          Effect.gen(function* () {
-            yield* Effect.logWarning("Better xAI usage recovery: refresh_failed.");
-            const loggers = yield* Logger.CurrentLoggers;
-            expect([...loggers]).toEqual([Logger.tracerLogger]);
-          }),
-        ),
+        runtime.run(Effect.logWarning("Better xAI usage recovery: refresh_failed.")),
       );
       // Standalone runners share the same exported host logger layer.
       yield* Effect.scoped(

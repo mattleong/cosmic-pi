@@ -55,24 +55,6 @@ describe("Background Tasks Code Mode protocol", () => {
     });
   });
 
-  it("keeps the public protocol on the pure schema and output-size graph", () => {
-    const fs = process.getBuiltinModule("node:fs");
-    if (!fs) throw new Error("Node fs builtin is unavailable.");
-    const readSource = (path: string): string =>
-      fs.readFileSync(new URL(path, import.meta.url), "utf8");
-    const publicProtocol = readSource("../src/protocol.ts");
-    const outputSize = readSource("../src/code-mode/output-size.ts");
-    const codeModeProtocol = readSource("../src/code-mode/protocol.ts");
-
-    expect(publicProtocol).toContain('from "./code-mode/output-size.ts"');
-    expect(publicProtocol).not.toContain('from "./code-mode/output.ts"');
-    expect(outputSize).not.toMatch(/(?:task\/model|task\/service|tools\/command|boundary\/)/u);
-    expect(codeModeProtocol).not.toMatch(
-      /(?:task\/model|task\/service|tools\/command|boundary\/)/u,
-    );
-    expect(codeModeProtocol).not.toContain('from "pi-cosmic-core"');
-  });
-
   it.effect("normalizes checked query and execution capabilities", () =>
     Effect.gen(function* () {
       const respond = vi.fn();

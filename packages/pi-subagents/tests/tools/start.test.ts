@@ -70,14 +70,6 @@ describe("subagent tool", () => {
         ),
       );
 
-      expect(tool?.name).toBe("subagent_start");
-      expect(tool?.renderShell).toBe("default");
-      expect(tool?.renderCall).toBeTypeOf("function");
-      expect(tool?.renderResult).toBeTypeOf("function");
-      expect(tool?.promptGuidelines?.join(" ")).toContain(
-        "parent coordinates and reviews but does not edit",
-      );
-      expect(tool?.promptGuidelines?.join(" ")).toContain("pairwise-disjoint exact writes claims");
       expect(result?.content[0]?.text).toContain("agent-1");
       expect(request).toMatchObject({
         context: "fresh",

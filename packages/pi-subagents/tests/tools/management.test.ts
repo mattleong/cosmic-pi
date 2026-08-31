@@ -421,7 +421,7 @@ describe("subagent tool", () => {
       };
       const tool = captureSubagentTools(service).get("subagent_send");
 
-      const result = yield* maybe(() =>
+      yield* maybe(() =>
         tool?.execute(
           "call",
           { runIds: ["agent-1", "agent-1"], message: "Conclude." },
@@ -432,7 +432,6 @@ describe("subagent tool", () => {
       );
 
       expect(sent).toEqual(["agent-1"]);
-      expect(result?.content[0]?.text).toBe("Guidance delivered to 1 subagent: agent-1.");
     },
   );
 

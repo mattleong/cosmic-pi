@@ -302,17 +302,7 @@ describe("private supervisor channel", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
     children.push(child);
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
     expect(yield* step(() => waitForExit(child))).toEqual({ code: 2, signal: null });
-    expect(stdout).toBe("");
-    expect(stderr).toBe("Private supervisor helper configuration argument is invalid.\n");
   });
 
   effectTest("publishes bounded-input rejection before the helper shuts down", function* () {

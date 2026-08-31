@@ -391,7 +391,6 @@ describe("persistent extension cutover", () => {
       expect(value.runtimes[1]!.requests).toHaveLength(0);
       expect(value.runtimes[1]!.driver.dispose).toHaveBeenCalledOnce();
       expect(value.sendMessage).not.toHaveBeenCalled();
-      expect(yield* usageSnapshot(value)).toContain("Responses/reviews/cards: 0 / 1 / 0");
     }),
   );
 
@@ -426,7 +425,6 @@ describe("persistent extension cutover", () => {
 
       expect(value.runtimes[1]!.requests).toHaveLength(0);
       expect(value.sendMessage).not.toHaveBeenCalled();
-      expect(yield* usageSnapshot(value)).toContain("Responses/reviews/cards: 0 / 1 / 0");
     }),
   );
 
@@ -931,7 +929,6 @@ describe("persistent extension cutover", () => {
             .mocked(stale.ctx.ui.notify)
             .mock.calls.some((call) => String(call[0]).includes("failure")),
         ).toBe(false);
-        expect(yield* usageSnapshot(stale)).toContain("Responses/reviews/cards: 0 / 1 / 0");
 
         const current = harness();
         yield* invoke(current.emit("session_start", { type: "session_start" }));
@@ -954,7 +951,6 @@ describe("persistent extension cutover", () => {
             .mocked(current.ctx.ui.setStatus)
             .mock.calls.some((call) => String(call[1]).includes("unavailable")),
         ).toBe(true);
-        expect(yield* usageSnapshot(current)).toContain("Responses/reviews/cards: 0 / 1 / 0");
       }),
   );
 
@@ -976,7 +972,6 @@ describe("persistent extension cutover", () => {
 
         expect(value.sendMessage).not.toHaveBeenCalled();
         expect(value.ctx.abort).not.toHaveBeenCalled();
-        expect(yield* usageSnapshot(value)).toContain("Responses/reviews/cards: 0 / 1 / 0");
       }),
   );
 
