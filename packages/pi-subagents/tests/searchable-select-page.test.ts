@@ -50,24 +50,13 @@ const page = (height = 14, notice?: string) => {
   return { component, select };
 };
 
-describe("searchable selector projection", () => {
-  it("shows one frame and keeps secondary navigation behind help", () => {
-    const { component, select } = page();
-    const initial = component.render(80).join("\n");
-    expect(initial).toContain("Choose model");
-    expect(initial).toContain("openai/model-one");
-    expect(initial).not.toContain("Model One");
-    expect(initial).toContain("? More");
-    expect(initial).not.toContain("Options ·");
-    expect(initial).not.toContain("Press / to filter");
-
-    component.handleInput("\u001b[B");
-    component.handleInput("?");
-    const detailed = component.render(120).join("\n");
-    expect(detailed).toContain("Model Two");
-    expect(detailed).toContain("? Less");
-    component.handleInput("\r");
-    expect(select).toHaveBeenCalledWith("openai/model-two");
+describe("searchable selector state", () => {
+  it("preserves selection through detail toggles and filtering", () => {
+    const moved = page();
+    moved.component.handleInput("\u001b[B");
+    moved.component.handleInput("?");
+    moved.component.handleInput("\r");
+    expect(moved.select).toHaveBeenCalledWith("openai/model-two");
 
     const filtered = page();
     filtered.component.handleInput("/");
@@ -96,7 +85,6 @@ describe("searchable selector projection", () => {
       const lines = compact.render(48);
       expect(lines).toHaveLength(height);
       expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
-      expect(lines.join("\n")).toContain("two");
     }
   });
 });

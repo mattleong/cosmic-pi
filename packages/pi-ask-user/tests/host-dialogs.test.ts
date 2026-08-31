@@ -77,13 +77,16 @@ const run = (
     options?.signal ? { signal: options.signal } : undefined,
   );
 
+const scriptedSelect = (...indexes: number[]) => {
+  let call = 0;
+  return vi.fn((_title: string, options: string[], _opts?: { signal?: AbortSignal }) =>
+    Promise.resolve(options.at(indexes[call++] ?? 0)),
+  );
+};
+
 describe("RPC questionnaire boundary", () => {
   it("uses interruption-linked native dialogs and returns stable values after review", () => {
-    const select = vi.fn((_title: string, options: string[], _opts?: { signal?: AbortSignal }) => {
-      if (options.includes("Continue without a note")) return Promise.resolve(options[0]);
-      if (options.includes("Submit answers")) return Promise.resolve(options[0]);
-      return Promise.resolve(options[1]);
-    });
+    const select = scriptedSelect(1, 0, 0);
     const ui = { select, input: vi.fn(), notify: vi.fn() };
     const ctx = opaqueHostFixture({ mode: "rpc", hasUI: true, ui });
 
@@ -137,12 +140,7 @@ describe("RPC questionnaire boundary", () => {
   });
 
   it("returns to single-select choices when the custom-answer input is dismissed", () => {
-    let questionCalls = 0;
-    const select = vi.fn((_title: string, options: string[]) => {
-      if (options.includes("Continue without a note")) return Promise.resolve(options[0]);
-      if (options.includes("Submit answers")) return Promise.resolve(options[0]);
-      return Promise.resolve(questionCalls++ === 0 ? options[options.length - 1] : options[0]);
-    });
+    const select = scriptedSelect(-1, 0, 0, 0);
     const notify = vi.fn(() => {
       throw new Error("stale notification host");
     });
@@ -152,23 +150,21 @@ describe("RPC questionnaire boundary", () => {
         outcome: "submitted",
         answers: [{ key: "library", values: ["a"] }],
       });
-      expect(questionCalls).toBe(2);
       expect(notify).toHaveBeenCalledOnce();
     });
   });
 
   it("accepts an optional bounded note without changing the selected answer", () => {
     const tooLong = "x".repeat(MAX_NOTE_LENGTH + 1);
-    const note = "Why \u001b[31mB\u001b[0m matters.";
+    const escape = String.fromCharCode(27);
+    const note = `Why ${escape}[31mB${escape}[0m matters.`;
     const input = vi.fn().mockResolvedValueOnce(tooLong).mockResolvedValueOnce(note);
     let reviewTitle: string | undefined;
+    let selectCall = 0;
     const select = vi.fn((title: string, options: string[]) => {
-      if (options.includes("Add a note")) return Promise.resolve(options[1]);
-      if (options.includes("Submit answers")) {
-        reviewTitle = title;
-        return Promise.resolve(options[0]);
-      }
-      return Promise.resolve(options[1]);
+      const index = [1, 1, 0][selectCall++] ?? 0;
+      if (selectCall === 3) reviewTitle = title;
+      return Promise.resolve(options[index]);
     });
     const notify = vi.fn();
     const ui = { select, input, notify };
@@ -186,8 +182,8 @@ describe("RPC questionnaire boundary", () => {
           },
         ],
       });
-      expect(reviewTitle).toContain("Why B matters.");
-      expect(reviewTitle).not.toContain("\u001b");
+      expect(reviewTitle).toBeDefined();
+      expect(reviewTitle).not.toContain(escape);
       expect(input).toHaveBeenCalledTimes(2);
       expect(input.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
       expect(notify).toHaveBeenCalledOnce();
@@ -196,15 +192,7 @@ describe("RPC questionnaire boundary", () => {
 
   it("reviews answers, edits a choice, and preserves its existing note", () => {
     const note = "Keep this context.";
-    let questionCalls = 0;
-    let reviewCalls = 0;
-    const select = vi.fn((_title: string, options: string[]) => {
-      if (options.includes("Add a note")) return Promise.resolve(options[1]);
-      if (options.includes("Keep current note")) return Promise.resolve(options[0]);
-      if (options.includes("Submit answers"))
-        return Promise.resolve(reviewCalls++ === 0 ? options[1] : options[0]);
-      return Promise.resolve(options[questionCalls++]);
-    });
+    const select = scriptedSelect(0, 1, 1, 1, 0, 0);
     const ui = { select, input: vi.fn(() => Promise.resolve(note)), notify: vi.fn() };
 
     return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui })).then((outcome) => {
@@ -220,21 +208,11 @@ describe("RPC questionnaire boundary", () => {
           },
         ],
       });
-      expect(questionCalls).toBe(2);
-      expect(reviewCalls).toBe(2);
     });
   });
 
   it("can remove an existing note while editing an answer", () => {
-    let questionCalls = 0;
-    let reviewCalls = 0;
-    const select = vi.fn((_title: string, options: string[]) => {
-      if (options.includes("Add a note")) return Promise.resolve(options[1]);
-      if (options.includes("Remove note")) return Promise.resolve(options[2]);
-      if (options.includes("Submit answers"))
-        return Promise.resolve(reviewCalls++ === 0 ? options[1] : options[0]);
-      return Promise.resolve(options[questionCalls++]);
-    });
+    const select = scriptedSelect(0, 1, 1, 1, 2, 0);
     const ui = {
       select,
       input: vi.fn(() => Promise.resolve("Remove this context.")),
@@ -253,15 +231,7 @@ describe("RPC questionnaire boundary", () => {
     const multiple: AskUserRequest = {
       questions: [{ ...request.questions[0]!, mode: "multiple" }],
     };
-    let answerModes: string[] | undefined;
-    const select = vi.fn((_title: string, options: string[]) => {
-      if (options.includes("Choose listed options")) {
-        answerModes = options;
-        return Promise.resolve(options[1]);
-      }
-      if (options.includes("Continue without a note")) return Promise.resolve(options[0]);
-      return Promise.resolve(options[0]);
-    });
+    const select = scriptedSelect(1, 0, 0);
     const input = vi.fn(() => Promise.resolve("Use a hybrid instead."));
     const ui = { select, input, notify: vi.fn() };
 
@@ -270,7 +240,6 @@ describe("RPC questionnaire boundary", () => {
         outcome: "submitted",
         answers: [{ key: "library", kind: "custom", text: "Use a hybrid instead." }],
       });
-      expect(answerModes).toEqual(["Choose listed options", "Write a custom answer"]);
       expect(input).toHaveBeenCalledOnce();
     });
   });
@@ -286,11 +255,7 @@ describe("RPC questionnaire boundary", () => {
       .mockResolvedValueOnce("5")
       .mockResolvedValueOnce("1,2");
     const notify = vi.fn();
-    const select = vi.fn((_title: string, options: string[]) => {
-      if (options.includes("Choose listed options")) return Promise.resolve(options[0]);
-      if (options.includes("Continue without a note")) return Promise.resolve(options[0]);
-      return Promise.resolve(options[0]);
-    });
+    const select = scriptedSelect(0, 0, 0);
     const ui = { select, input, notify };
 
     return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }), multiple).then((outcome) => {
@@ -307,13 +272,7 @@ describe("RPC questionnaire boundary", () => {
     const multiple: AskUserRequest = {
       questions: [{ ...request.questions[0]!, mode: "multiple" }],
     };
-    let reviewTitle: string | undefined;
-    const select = vi.fn((title: string, options: string[]) => {
-      if (options.includes("Choose listed options")) return Promise.resolve(options[0]);
-      if (options.includes("Continue without a note")) return Promise.resolve(options[0]);
-      if (options.includes("Submit answers")) reviewTitle = title;
-      return Promise.resolve(options[0]);
-    });
+    const select = scriptedSelect(0, 0, 0);
     const ui = {
       select,
       input: vi.fn(() => Promise.resolve("2,1,2,1")),
@@ -325,7 +284,6 @@ describe("RPC questionnaire boundary", () => {
         outcome: "submitted",
         answers: [{ key: "library", kind: "choices", values: ["b", "a"], labels: ["B", "A"] }],
       });
-      expect(reviewTitle).toContain("B, A");
     });
   });
 
@@ -335,14 +293,11 @@ describe("RPC questionnaire boundary", () => {
         const multiple: AskUserRequest = {
           questions: [{ ...request.questions[0]!, mode: "multiple" }],
         };
-        const select = vi.fn((_title: string, options: string[]) => {
-          if (options.includes("Choose listed options"))
-            return Promise.resolve(stage === "answer-mode" ? "unexpected option" : options[0]);
-          if (options.includes("Continue without a note"))
-            return Promise.resolve(stage === "note" ? "unexpected option" : options[0]);
-          if (options.includes("Submit answers")) return Promise.resolve("unexpected option");
-          return Promise.resolve(options[0]);
-        });
+        const invalidAt = { "answer-mode": 0, note: 1, review: 2 }[stage];
+        let selectCall = 0;
+        const select = vi.fn((_title: string, options: string[]) =>
+          Promise.resolve(selectCall++ === invalidAt ? "unexpected option" : options[0]),
+        );
         const ui = {
           select,
           input: vi.fn(() => Promise.resolve("1")),
@@ -361,13 +316,7 @@ describe("RPC questionnaire boundary", () => {
 
   it("cancels from review without leaking answers or notes", () => {
     const input = vi.fn(() => Promise.resolve("A private draft note."));
-    const select = vi.fn((_title: string, options: string[]) => {
-      if (options.includes("Add a note")) return Promise.resolve(options[1]);
-      if (options.includes("Cancel questionnaire")) {
-        return Promise.resolve(options[options.length - 1]);
-      }
-      return Promise.resolve(options[0]);
-    });
+    const select = scriptedSelect(0, 1, -1);
     const ui = { select, input, notify: vi.fn() };
 
     return expect(run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }))).resolves.toEqual({

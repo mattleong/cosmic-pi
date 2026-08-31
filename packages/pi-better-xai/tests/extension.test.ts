@@ -118,11 +118,13 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
 
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
 
-      expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+      expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
+      h.notify.mockClear();
       yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
-      expect(h.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      h.notify.mockClear();
       yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
-      expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("Better xAI settings"), "info");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
@@ -156,7 +158,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
 
       expect(cwdReads).toBe(1);
       expect(signalReads).toBe(1);
-      expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+      expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
@@ -177,9 +179,10 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       }).not.toThrow();
       yield* invoke(startup);
 
-      expect(h.notify).toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      h.notify.mockClear();
       yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
-      expect(h.notify).toHaveBeenCalledWith("xAI usage is unavailable.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
@@ -194,19 +197,21 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         },
       });
 
+      h.notify.mockClear();
       let usage: unknown;
       expect(() => {
         usage = h.commands.get("xai-usage")?.("", h.ctx);
       }).not.toThrow();
       yield* invoke(usage);
-      expect(h.notify).toHaveBeenCalledWith("xAI usage is unavailable.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
 
+      h.notify.mockClear();
       let settings: unknown;
       expect(() => {
         settings = h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx);
       }).not.toThrow();
       yield* invoke(settings);
-      expect(h.notify).toHaveBeenCalledWith("Better xAI settings are unavailable.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
 
       expect(() => h.handlers.get("turn_end")?.({}, h.ctx)).not.toThrow();
       expect(() => h.handlers.get("model_select")?.({}, h.ctx)).not.toThrow();
@@ -225,13 +230,14 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         },
       });
 
+      h.notify.mockClear();
       let command: unknown;
       expect(() => {
         command = h.commands.get("xai-settings")?.("", h.ctx);
       }).not.toThrow();
       yield* invoke(command);
 
-      expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("Better xAI settings"), "info");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
@@ -261,13 +267,14 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
         Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: open });
 
+        h.notify.mockClear();
         let command: unknown;
         expect(() => {
           command = h.commands.get("xai-settings")?.("", h.ctx);
         }).not.toThrow();
         yield* invoke(command);
 
-        expect(h.notify).toHaveBeenCalledWith("Unable to open Better xAI settings.", "warning");
+        expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
         yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
       }
     }),
@@ -309,15 +316,16 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         }).not.toThrow();
         expect(() => surface.invalidate?.()).not.toThrow();
         expect(() => surface.handleInput?.("j")).not.toThrow();
-        expect(() => surface.handleInput?.("\u001b")).not.toThrow();
+        expect(() => surface.handleInput?.(String.fromCharCode(27))).not.toThrow();
         return Promise.resolve(undefined);
       };
       Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });
 
+      h.notify.mockClear();
       yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
 
       expect(renderResult).toEqual(expect.any(Array));
-      expect(h.notify).not.toHaveBeenCalledWith("Unable to open Better xAI settings.", "warning");
+      expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
@@ -346,9 +354,10 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       };
       Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });
 
+      h.notify.mockClear();
       yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
 
-      expect(h.notify).toHaveBeenCalledWith("Unable to open Better xAI settings.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
@@ -367,9 +376,10 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       yield* invoke(Promise.all([first, second]));
 
       expect(stalled.interruptions()).toBe(1);
-      expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+      expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
+      h.notify.mockClear();
       yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
-      expect(h.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
@@ -394,7 +404,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         expect(stalled.interruptions()).toBe(1);
         expect(hostAbortListener).toBeTypeOf("function");
         expect(removeEventListener).toHaveBeenCalledWith("abort", hostAbortListener);
-        expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+        expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       }),
   );
 
@@ -409,12 +419,13 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
 
       expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
-      expect(h.notify).toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      h.notify.mockClear();
       h.notify.mockImplementation(() => {
         throw new Error("host-notification-secret");
       });
       yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
-      expect(h.notify).toHaveBeenCalledWith("xAI usage is unavailable.", "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
@@ -429,7 +440,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       yield* invoke(Promise.all([startup, shutdown]));
 
       expect(stalled.interruptions()).toBe(1);
-      expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+      expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 });

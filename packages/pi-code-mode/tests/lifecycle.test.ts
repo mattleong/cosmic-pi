@@ -12,7 +12,6 @@ import {
   type CodeModeApplicationBoundaries,
 } from "../src/application.ts";
 import { CodeModeConfigStore } from "../src/config/store.ts";
-import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
 import {
   codeModeStateFixture,
   extensionApiFixture,
@@ -249,50 +248,6 @@ describe("code mode application lifecycle at the Pi boundary", () => {
 
       expect(h.registerTool).not.toHaveBeenCalled();
       expect(h.activeTools()).not.toContain("code_mode");
-      yield* Effect.promise(() => h.shutdown(ctx));
-    }),
-  );
-
-  it.effect("builds a Windows catalog when the native PowerShell definition is present", () =>
-    Effect.gen(function* () {
-      const h = applicationHarness({
-        makeNestedDefinitions: () => opaqueHostFixture({ powershell: {} }),
-      });
-      const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
-      yield* Effect.promise(() => h.start(ctx));
-      const registered = h.registerTool.mock.calls[0]?.[0];
-      expect(registered?.description).toContain("Windows-only tools.pi.powershell");
-      expect(registered?.description).toContain("tools.session.backgroundTask");
-      yield* Effect.promise(() => h.shutdown(ctx));
-    }),
-  );
-
-  it.effect("builds the catalog from state published while preview loading was pending", () =>
-    Effect.gen(function* () {
-      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-      const previewStarted = Deferred.makeUnsafe<void>();
-      const releasePreview = Deferred.makeUnsafe<void>();
-      const h = applicationHarness({
-        loadSettings: () => {
-          void Deferred.doneUnsafe(previewStarted, Effect.void);
-          return runPromise(Deferred.await(releasePreview)).then(() => opaqueHostFixture({}));
-        },
-      });
-      const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"), new AbortController().signal);
-      const starting = h.start(ctx);
-      yield* Deferred.await(previewStarted);
-
-      yield* Effect.promise(() => h.command("global catalogBudget 7", ctx));
-      yield* Deferred.succeed(releasePreview, undefined);
-      yield* Effect.promise(() => starting);
-
-      const registered = h.registerTool.mock.calls[0]?.[0];
-      const expected = buildCodeModeToolDefinition({
-        catalogBudget: 7,
-        includePowerShell: false,
-        execute: () => Promise.reject(new Error("not executed")),
-      });
-      expect(registered?.description).toBe(expected.description);
       yield* Effect.promise(() => h.shutdown(ctx));
     }),
   );

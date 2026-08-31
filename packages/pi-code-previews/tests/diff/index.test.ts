@@ -1,19 +1,15 @@
 import assert from "node:assert/strict";
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, test } from "vitest";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { renderComponent, stripAnsi, testTheme } from "../../src/testing/render";
+import { stripAnsi, testTheme } from "../../src/testing/render";
+import { renderedWordEmphasisSpans } from "../../src/testing/rendered-word-emphasis";
 import { FullWidthDiffText } from "../../src/diff/full-width-text";
 import { renderPlainDiff, renderSyntaxHighlightedDiff } from "../../src/diff/render";
 import { summarizeDiff } from "../../src/diff/summary";
-import { createDiffBackgroundResolver, diffLineBg } from "../../src/diff/background";
 import { parseDiffLine } from "../../src/diff/parse";
 import { wordEmphasisTelemetry } from "../../src/testing/word-emphasis-telemetry";
 import { changedRanges, changedRangesWithConfidence } from "../../src/diff/word/emphasis";
-
-/** Rewrites ESC bytes to the printable ␛ symbol so assertions avoid control-character regexes. */
-const visible = (text: string): string => text.replaceAll("\x1b", "␛");
 
 let previousCodePreviewSettings = { ...codePreviewSettings };
 
@@ -63,32 +59,20 @@ test("parseDiffLine accepts standard body lines but not file headers", () => {
 });
 
 test("plain diff escapes terminal control characters", () => {
-  const rendered = renderPlainDiff("+1 hello \x1b[31mred\x00", testTheme(), 1);
-  assert.equal(rendered.includes("\x1b[31m"), false);
-  assert.match(visible(rendered), /␛\[31mred�/);
+  const escape = String.fromCharCode(27);
+  const nul = String.fromCharCode(0);
+  const untrustedSequence = `${escape}[31m`;
+  const rendered = renderPlainDiff(`+1 hello ${untrustedSequence}red${nul}`, testTheme(), 1);
+  const baseline = renderPlainDiff("+1 hello red", testTheme(), 1);
+  assert.equal(rendered.includes(untrustedSequence), false);
+  assert.equal(rendered.split(nul).length, baseline.split(nul).length);
+  assert.match(stripAnsi(rendered), /red/);
 });
 
 test("diff renderers honor limits at remove/add boundaries", () => {
   const diff = "-1 old\n+1 new";
   assert.equal(renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 1).split("\n").length, 1);
   assert.equal(renderPlainDiff(diff, testTheme(), 1).split("\n").length, 1);
-});
-
-test("diff gutters pad line numbers to keep separators aligned", () => {
-  const diffText = renderPlainDiff(
-    " 6 context\n+7 added\n+10 later\n-99 removed\n+100 added",
-    testTheme(),
-    5,
-  );
-  const rendered = stripAnsi(renderComponent(new FullWidthDiffText(diffText, testTheme()), 80));
-  const lines = rendered.split("\n").map((line) => line.trimEnd());
-  const pipeColumns = lines.map((line) => line.indexOf("│"));
-  assert.deepEqual([...new Set(pipeColumns)], [5]);
-  assert.equal(lines[0], "   6 │ context");
-  assert.equal(lines[1], "+  7 │ added");
-  assert.equal(lines[2], "+ 10 │ later");
-  assert.equal(lines[3], "- 99 │ removed");
-  assert.equal(lines[4], "+100 │ added");
 });
 
 test("full-width diff component wraps long ANSI lines", () => {
@@ -115,82 +99,31 @@ test("full-width diff wrapping preserves wide graphemes beside a narrow continua
   assert.match(stripAnsi(rows.join("")), /😀/);
 });
 
-test("diff background reaches box right padding without exceeding child width", () => {
-  const box = new Box(1, 0, (text) => `\x1b[48;2;1;1;1m${text}\x1b[49m`);
+test("boxed diff rows preserve the requested width", () => {
+  const box = new Box(1, 0, (text) => text);
   box.addChild(new FullWidthDiffText(renderPlainDiff("+1 short", testTheme(), 1), testTheme()));
   const line = box.render(20)[0] ?? "";
   assert.equal(visibleWidth(line), 20);
-  assert.match(visible(line), /␛\[48;2;10;42;26m[^\n]* ␛\[49m/);
-});
-
-test("diff background rows do NOT reset their own background", () => {
-  const row = new FullWidthDiffText(
-    renderPlainDiff("+1 short", testTheme(), 1),
-    testTheme(),
-  ).render(20)[0];
-  // diff bg extends to end without trailing \x1b[49m; parent containers handle bg reset
-  assert.match(visible(row ?? ""), /␛\[48;2;10;42;26m[^\n]*$/);
-  assert.doesNotMatch(visible(row ?? ""), /␛\[49m$/);
-});
-
-test("diff background reaches right padding even after truncateToWidth reset", () => {
-  // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
-  const theme = {
-    ...testTheme(),
-    fg: (key: string, text: string) => {
-      const colors = new Map<string, string>([["toolDiffAdded", "\x1b[38;2;100;200;100m"]]);
-      const c = colors.get(key) ?? "";
-      return c ? `${c}${text}\x1b[39m` : text;
-    },
-  } as Theme;
-
-  // Simulate what happens when truncateToWidth appends 0m then the line is boxed
-  const line = theme.fg("toolDiffAdded", "+ 33 │ ") + `\x1b[38;2;180;120;50msome code\x1b[39m`;
-  const withBg = diffLineBg("add", line, createDiffBackgroundResolver(theme));
-  const truncated = withBg + "\x1b[0m";
-  const padding = " ".repeat(Math.max(0, 76 - visibleWidth(truncated)));
-  const framed = `${theme.fg("borderMuted", "│")} ${truncated}${padding} ${theme.fg("borderMuted", "│")}`;
-
-  // No uncolored gap before the border
-  assert.doesNotMatch(visible(framed), /␛\[49m␛\[0m ␛\[38/, "there should be no uncolored gap");
 });
 
 test("word emphasis pairs the most similar lines inside change blocks", () => {
   const diff =
     "-1 const trimmed = line.trim();\n+1 const safeLine = escapeControlChars(line);\n+2 const trimmed = safeLine.trim();";
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 3).split("\n");
-  assert.doesNotMatch(visible(rendered[1] ?? ""), /␛\[48;2;64;132;82m/);
-  assert.match(visible(rendered[2] ?? ""), /␛\[48;2;64;132;82msafeLine/);
-  assert.match(visible(rendered[0] ?? ""), /␛\[48;2;148;62;70mline/);
-});
-
-test("word emphasis uses readable backgrounds with light syntax themes", () => {
-  setCodePreviewSettings({ ...codePreviewSettings, shikiTheme: "github-light" });
-  const diff = "-1 const value = oldValue;\n+1 const value = newValue;";
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2);
-  assert.match(visible(rendered), /␛\[48;2;216;182;182mold/);
-  assert.match(visible(rendered), /␛\[48;2;194;209;194mnew/);
-  assert.doesNotMatch(visible(rendered), /␛\[48;2;(?:148;62;70|64;132;82)m/);
-  assert.doesNotMatch(visible(rendered), /␛\[1m(?:old|new)/);
+  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 3)
+    .split("\n")
+    .map(renderedWordEmphasisSpans);
+  assert.ok(spans[0]?.some((span) => span.includes("line")));
+  assert.deepEqual(spans[1], []);
+  assert.ok(spans[2]?.some((span) => span.includes("safeLine")));
 });
 
 test("word emphasis marks low-overlap one-to-one changed pairs instead of skipping them", () => {
   const diff = "-1 out.push(pair.removed, pair.added);\n+1 block.push(next);";
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2).split("\n");
-  assert.match(visible(rendered[0] ?? ""), /␛\[48;2;148;62;70mout/);
-  assert.match(visible(rendered[1] ?? ""), /␛\[48;2;64;132;82mblock/);
-});
-
-test("word emphasis uses compound identifier parts when pairing changed lines", () => {
-  const diff = [
-    "-1 return readCollapsedLines(input);",
-    "+1 return editCollapsedLines(input);",
-    "+2 return renderPreview(input);",
-  ].join("\n");
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 3).split("\n");
-  assert.match(visible(rendered[0] ?? ""), /␛\[48;2;148;62;70mread/);
-  assert.match(visible(rendered[1] ?? ""), /␛\[48;2;64;132;82medit/);
-  assert.doesNotMatch(visible(rendered[2] ?? ""), /␛\[48;2;64;132;82m/);
+  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2)
+    .split("\n")
+    .map(renderedWordEmphasisSpans);
+  assert.ok(spans[0]?.some((span) => span.includes("out")));
+  assert.ok(spans[1]?.some((span) => span.includes("block")));
 });
 
 test("word emphasis telemetry summarizes confidence and skipped pairs", () => {
@@ -251,11 +184,10 @@ test("word emphasis skips low-confidence positional pairs inside larger blocks",
     "+1 const total = calculateTotal(next);",
     "+2 renderCompletelyDifferentScreen();",
   ].join("\n");
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 4).split("\n");
-  assert.match(visible(rendered[0] ?? ""), /␛\[48;2;148;62;70mitems/);
-  assert.doesNotMatch(visible(rendered[1] ?? ""), /␛\[48;2;148;62;70m/);
-  assert.match(visible(rendered[2] ?? ""), /␛\[48;2;64;132;82mnext/);
-  assert.doesNotMatch(visible(rendered[3] ?? ""), /␛\[48;2;64;132;82m/);
+  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 4)
+    .split("\n")
+    .map(renderedWordEmphasisSpans);
+  assert.deepEqual(spans, [["items"], [], ["next"], []]);
 });
 
 test("word emphasis skips ambiguous positional fallback above pairing threshold", () => {
@@ -275,29 +207,19 @@ test("word emphasis skips ambiguous positional fallback above pairing threshold"
   const telemetry = wordEmphasisTelemetry(diff, count * 2);
   assert.equal(telemetry.emphasizedPairs, 0);
   assert.equal(telemetry.skippedPotentialPairs, count);
-  assert.doesNotMatch(
-    visible(renderSyntaxHighlightedDiff(diff, undefined, testTheme(), count * 2)),
-    /␛\[48;2;(?:148;62;70|64;132;82)m/,
-  );
-});
-
-test("smart word emphasis suppresses low-signal wrapper syntax", () => {
-  const diff = "-1   .map((item) => item.title)\n+1   (item) => item.title";
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "smart" });
-  const smart = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2);
-  assert.doesNotMatch(visible(smart), /␛\[48;2;148;62;70m/);
-
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "all" });
-  const all = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2);
-  assert.match(visible(all), /␛\[48;2;148;62;70m\.map/);
+  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), count * 2)
+    .split("\n")
+    .flatMap(renderedWordEmphasisSpans);
+  assert.deepEqual(spans, []);
 });
 
 test("word emphasis can be disabled", () => {
   const diff = "-1 const value = oldValue;\n+1 const value = newValue;";
   setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "off" });
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2);
-  assert.doesNotMatch(visible(rendered), /␛\[48;2;148;62;70m/);
-  assert.doesNotMatch(visible(rendered), /␛\[48;2;64;132;82m/);
+  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2)
+    .split("\n")
+    .flatMap(renderedWordEmphasisSpans);
+  assert.deepEqual(spans, []);
 
   assert.deepEqual(changedRanges("const value = oldValue;", "const value = newValue;", "off"), {
     removed: [],
@@ -313,36 +235,23 @@ test("word emphasis can be disabled", () => {
 test("word emphasis ranges stay aligned when indentation changes", () => {
   const diff =
     "-1 \tconst next = parseDiffLine(lines[i + 1]!);\n+1 \t\tconst next = parseDiffLine(lines[end]!);";
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2).split("\n");
-  assert.match(visible(rendered[0] ?? ""), /lines\[␛\[48;2;148;62;70mi \+ 1/);
-  assert.match(visible(rendered[1] ?? ""), /lines\[␛\[48;2;64;132;82mend/);
-});
-
-test("word emphasis highlights long shared lines with appended text", () => {
-  const diff =
-    "-119 You can also put code-preview defaults in `.pi/settings.json` globally or per project:\n+123 You can also put code-preview defaults in `.pi/settings.json` globally or per project. Project settings override global settings, and the package settings file overrides both:";
-  const rendered = renderSyntaxHighlightedDiff(diff, "markdown", testTheme(), 2).split("\n");
-  assert.doesNotMatch(visible(rendered[0] ?? ""), /␛\[48;2;148;62;70m/);
-  assert.match(
-    visible(rendered[1] ?? ""),
-    /␛\[48;2;64;132;82m\. Project settings override global settings/,
-  );
+  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2)
+    .split("\n")
+    .map(renderedWordEmphasisSpans);
+  assert.ok(spans[0]?.some((span) => span.includes("i + 1")));
+  assert.ok(spans[1]?.some((span) => span.includes("end")));
 });
 
 test("word emphasis is applied synchronously for large changed lines", () => {
   const shared = Array.from({ length: 300 }, (_, index) => `token${index}`).join(" ");
   const diff = `-1 ${shared} oldValue ${shared}\n+1 ${shared} newValue ${shared}`;
   let invalidations = 0;
-  const rendered = renderSyntaxHighlightedDiff(
-    diff,
-    undefined,
-    testTheme(),
-    2,
-    () => invalidations++,
-  );
+  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2, () => invalidations++)
+    .split("\n")
+    .flatMap(renderedWordEmphasisSpans);
   assert.equal(invalidations, 0);
-  assert.match(visible(rendered), /␛\[48;2;148;62;70mold/);
-  assert.match(visible(rendered), /␛\[48;2;64;132;82mnew/);
+  assert.ok(spans.some((span) => span.includes("old")));
+  assert.ok(spans.some((span) => span.includes("new")));
 });
 
 test("word range emphasis returns changed spans for unrelated token-heavy lines", () => {

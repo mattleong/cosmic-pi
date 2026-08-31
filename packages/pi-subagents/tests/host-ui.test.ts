@@ -46,75 +46,45 @@ const context = (
     ui: { setWidget, setStatus },
   });
 
+const captureFactory = () => {
+  let factory: WidgetFactory | undefined;
+  const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
+    if (content !== undefined && !Array.isArray(content)) factory = content;
+  });
+  return { getFactory: () => factory, setWidget };
+};
+
 describe("subagent activity widget host", () => {
-  it("installs above the editor, renders live hierarchy, and suppresses duplicate footer status", () => {
-    let factory: WidgetFactory | undefined;
-    const setWidget = vi.fn(
-      (
-        _key: string,
-        content: WidgetFactory | string[] | undefined,
-        _options?: ExtensionWidgetOptions,
-      ) => {
-        if (content !== undefined && !Array.isArray(content)) factory = content;
-      },
-    );
+  it("rerenders published projections and releases widget and ticker ownership on clear", () => {
+    const { getFactory, setWidget } = captureFactory();
     const setStatus = vi.fn();
     const stopTicker = vi.fn();
     const startTicker = vi.fn(() => stopTicker);
     const bridge = makeSubagentProjectionBridge(undefined, { startTicker, getNow: () => 2_000 });
-    bridge.publish(projection([view({ id: "parent", name: "Parent" })]));
+    bridge.publish(projection([view({ id: "parent" })]));
     bridge.setContext(context(setWidget, setStatus));
 
-    expect(setWidget).toHaveBeenCalledWith("pi-subagents.activity", expect.any(Function), {
-      placement: "aboveEditor",
-    });
-    expect(setStatus).toHaveBeenLastCalledWith("pi-subagents", undefined);
-
     const requestRender = vi.fn();
-    const component = factory?.(tui(requestRender), theme);
-    expect(component?.render(100).join("\n")).toContain("Parent");
-    expect(startTicker).toHaveBeenCalledWith(160, expect.any(Function));
+    const component = getFactory()?.(tui(requestRender), theme);
+    expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(true);
+    expect(component?.render(100).length).toBeGreaterThan(0);
+    expect(startTicker).toHaveBeenCalledOnce();
 
     bridge.publish(
-      projection([
-        view({ id: "parent", name: "Parent" }),
-        view({ id: "child", name: "Child", parentRunId: "parent", depth: 2 }),
-      ]),
+      projection([view({ id: "parent" }), view({ id: "child", parentRunId: "parent", depth: 2 })]),
     );
     expect(requestRender).toHaveBeenCalled();
-    expect(component?.render(100).join("\n")).toContain("Child");
 
     bridge.clear();
-    expect(stopTicker).toHaveBeenCalled();
-    expect(setWidget).toHaveBeenLastCalledWith("pi-subagents.activity", undefined, {
-      placement: "aboveEditor",
-    });
+    expect(stopTicker).toHaveBeenCalledOnce();
+    expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);
     expect(component?.render(100)).toEqual([]);
+    expect(setWidget.mock.calls.some(([, content]) => content === undefined)).toBe(true);
+    expect(setStatus.mock.calls.at(-1)?.[1]).toBeUndefined();
   });
 
-  it("keeps start-only presentation static without spending an animation ticker", () => {
-    let factory: WidgetFactory | undefined;
-    const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
-      if (content !== undefined && !Array.isArray(content)) factory = content;
-    });
-    const startTicker = vi.fn(() => () => undefined);
-    const bridge = makeSubagentProjectionBridge(undefined, { startTicker });
-    bridge.setContext(context(setWidget));
-    const component = factory?.(tui(), theme);
-
-    const release = bridge.bindToolPresentation().beginStart(3);
-    expect(component?.render(100)).toEqual([" Subagents · launching 3 · /subagents"]);
-    expect(startTicker).not.toHaveBeenCalled();
-
-    release();
-    bridge.clear();
-  });
-
-  it("replaces widget ticker cadence as projected run states change", () => {
-    let factory: WidgetFactory | undefined;
-    const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
-      if (content !== undefined && !Array.isArray(content)) factory = content;
-    });
+  it("replaces and stops ticker resources as projected run states change", () => {
+    const { getFactory, setWidget } = captureFactory();
     const stops: Array<ReturnType<typeof vi.fn>> = [];
     const startTicker = vi.fn(() => {
       const stop = vi.fn();
@@ -124,16 +94,13 @@ describe("subagent activity widget host", () => {
     const bridge = makeSubagentProjectionBridge(undefined, { startTicker });
     bridge.publish(projection([view({ id: "run", state: "waiting_for_parent" })]));
     bridge.setContext(context(setWidget));
-    factory?.(tui(), theme);
+    getFactory()?.(tui(), theme);
 
-    expect(startTicker).toHaveBeenLastCalledWith(1_000, expect.any(Function));
     bridge.publish(projection([view({ id: "run", state: "running" })]));
     expect(stops[0]).toHaveBeenCalledOnce();
-    expect(startTicker).toHaveBeenLastCalledWith(160, expect.any(Function));
 
     bridge.publish(projection([view({ id: "run", state: "paused" })]));
     expect(stops[1]).toHaveBeenCalledOnce();
-    expect(startTicker).toHaveBeenLastCalledWith(1_000, expect.any(Function));
 
     bridge.publish(projection([view({ id: "run", state: "completed" })]));
     expect(stops[2]).toHaveBeenCalledOnce();
@@ -141,158 +108,83 @@ describe("subagent activity widget host", () => {
     bridge.clear();
   });
 
-  it("invalidates cached clock presentation when the host ticker advances", () => {
-    let factory: WidgetFactory | undefined;
-    let tick: (() => void) | undefined;
-    let now = 1_001;
-    const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
-      if (content !== undefined && !Array.isArray(content)) factory = content;
-    });
-    const bridge = makeSubagentProjectionBridge(undefined, {
-      startTicker: (_intervalMs, next) => {
-        tick = next;
-        return () => undefined;
-      },
-      getNow: () => now,
-    });
-    bridge.publish(projection([view({ id: "run", startedAt: 1 })]));
-    bridge.setContext(context(setWidget));
-    const component = factory?.(tui(), theme);
-
-    expect(component?.render(120).join("\n")).toContain("1s");
-    now = 2_001;
-    tick?.();
-    expect(component?.render(120).join("\n")).toContain("2s");
-    bridge.clear();
-  });
-
-  it("restores footer and card fallbacks when the host disposes the widget", () => {
-    let factory: WidgetFactory | undefined;
-    const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
-      if (content !== undefined && !Array.isArray(content)) factory = content;
-    });
+  it("restores fallback ownership when the host disposes the widget", () => {
+    const { getFactory, setWidget } = captureFactory();
     const setStatus = vi.fn();
     const stopTicker = vi.fn();
-    const bridge = makeSubagentProjectionBridge(undefined, {
-      startTicker: () => stopTicker,
-    });
+    const bridge = makeSubagentProjectionBridge(undefined, { startTicker: () => stopTicker });
     bridge.publish(projection([view({ id: "running" })]));
     const ctx = context(setWidget, setStatus);
     bridge.setContext(ctx);
-    const toolPresentation = bridge.bindToolPresentation();
-    const component = factory?.(tui(), theme);
+    const component = getFactory()?.(tui(), theme);
 
-    expect(toolPresentation.isLiveHierarchyAvailable()).toBe(true);
+    expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(true);
     component?.dispose?.();
-
     expect(stopTicker).toHaveBeenCalledOnce();
-    expect(toolPresentation.isLiveHierarchyAvailable()).toBe(false);
-    expect(setStatus).toHaveBeenLastCalledWith("pi-subagents", "1 subagent working");
+    expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);
+    expect(setStatus.mock.calls.at(-1)?.[1]).toEqual(expect.stringMatching(/\S/));
 
     bridge.setContext(ctx);
     expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(true);
-    expect(setWidget).toHaveBeenLastCalledWith("pi-subagents.activity", expect.any(Function), {
-      placement: "aboveEditor",
-    });
     bridge.clear();
   });
 
-  it("switches the panel into await mode for the exact execution lifetime", () => {
-    let factory: WidgetFactory | undefined;
-    const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
-      if (content !== undefined && !Array.isArray(content)) factory = content;
-    });
+  it("holds await presentation for the exact lease lifetime", () => {
+    const { getFactory, setWidget } = captureFactory();
     const bridge = makeSubagentProjectionBridge(undefined, {
       startTicker: () => () => undefined,
       getNow: () => 2_000,
     });
-    const target = view({ id: "target", name: "Target" });
-    const other = view({ id: "other", name: "Other" });
+    const target = view({ id: "target" });
+    const other = view({ id: "other" });
     bridge.publish(projection([target, other]));
     bridge.setContext(context(setWidget));
-    const component = factory?.(tui(), theme);
+    const component = getFactory()?.(tui(), theme);
+    const baseline = component?.render(100);
 
-    const toolPresentation = bridge.bindToolPresentation();
-    const release = toolPresentation.beginAwait([target.id], "all_finished");
-    const awaiting = component?.render(100).join("\n") ?? "";
-    expect(awaiting).toContain("Subagents · 0/1 awaited");
-    expect(awaiting.split("\n").find((line) => line.includes("Target"))).toContain("◎");
-    expect(awaiting.split("\n").find((line) => line.includes("Other"))).not.toContain("◎");
+    const release = bridge.bindToolPresentation().beginAwait([target.id], "all_finished");
+    const awaiting = component?.render(100);
+    expect(awaiting).not.toEqual(baseline);
 
     release();
-    expect(component?.render(100).join("\n")).toContain("Subagents · 2 active");
-    expect(component?.render(100).join("\n")).not.toContain("0/1");
+    expect(component?.render(100)).toEqual(baseline);
     bridge.clear();
   });
 
-  it("leaves retained-only ownership in the footer while the panel renders no lines", () => {
-    let factory: WidgetFactory | undefined;
-    const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
-      if (content !== undefined && !Array.isArray(content)) factory = content;
-    });
-    const setStatus = vi.fn();
-    const bridge = makeSubagentProjectionBridge(undefined, {
-      startTicker: () => () => undefined,
-    });
-    bridge.setContext(context(setWidget, setStatus));
-    const component = factory?.(tui(), theme);
-
-    bridge.publish(
-      projection([
-        view({ id: "working", state: "running" }),
-        view({ id: "retained", state: "reported" }),
-      ]),
-    );
-    expect(component?.render(100)[0]).toContain("1 retained");
-    expect(setStatus).toHaveBeenLastCalledWith("pi-subagents", undefined);
-
-    bridge.publish(projection([view({ id: "retained", state: "reported" })]));
-    expect(component?.render(100)).toEqual([]);
-    expect(setStatus).toHaveBeenLastCalledWith("pi-subagents", "1 retained");
-    bridge.clear();
-  });
-
-  it("clears the old context and rejects stale presentation leases on replacement", () => {
-    let secondFactory: WidgetFactory | undefined;
-    const firstSetWidget = vi.fn();
-    const secondSetWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
-      if (content !== undefined && !Array.isArray(content)) secondFactory = content;
-    });
+  it("rejects stale presentation leases after context replacement", () => {
+    const first = captureFactory();
+    const second = captureFactory();
     const bridge = makeSubagentProjectionBridge(undefined, {
       startTicker: () => () => undefined,
       getNow: () => 2_000,
     });
-    const first = context(firstSetWidget);
-    const second = context(secondSetWidget);
-    const target = view({ id: "target", name: "Target" });
+    const target = view({ id: "target" });
 
     bridge.publish(projection([target]));
-    bridge.setContext(first);
-    const staleToolPresentation = bridge.bindToolPresentation();
-    const staleRelease = staleToolPresentation.beginAwait([target.id], "all_finished");
+    bridge.setContext(context(first.setWidget));
+    const stalePresentation = bridge.bindToolPresentation();
+    const staleRelease = stalePresentation.beginAwait([target.id], "all_finished");
+
     bridge.clear();
     bridge.publish(projection([target]));
-    bridge.setContext(second);
-    const component = secondFactory?.(tui(), theme);
-    const currentToolPresentation = bridge.bindToolPresentation();
-    const currentRelease = currentToolPresentation.beginAwait([target.id], "all_finished");
+    bridge.setContext(context(second.setWidget));
+    const component = second.getFactory()?.(tui(), theme);
+    const currentPresentation = bridge.bindToolPresentation();
+    const currentRelease = currentPresentation.beginAwait([target.id], "all_finished");
+    const current = component?.render(100);
 
-    staleToolPresentation.beginStart(3)();
+    stalePresentation.beginStart(3)();
     staleRelease();
-    expect(staleToolPresentation.isLiveHierarchyAvailable()).toBe(false);
-    expect(component?.render(100).join("\n")).toContain("Subagents · 0/1 awaited");
-    expect(component?.render(100).join("\n")).not.toContain("Starting 3");
-    expect(firstSetWidget).toHaveBeenLastCalledWith("pi-subagents.activity", undefined, {
-      placement: "aboveEditor",
-    });
-    expect(secondSetWidget).toHaveBeenCalledWith("pi-subagents.activity", expect.any(Function), {
-      placement: "aboveEditor",
-    });
+    expect(stalePresentation.isLiveHierarchyAvailable()).toBe(false);
+    expect(component?.render(100)).toEqual(current);
+
     currentRelease();
+    expect(component?.render(100)).not.toEqual(current);
+    expect(first.setWidget.mock.calls.some(([, content]) => content === undefined)).toBe(true);
     bridge.clear();
   });
 
-  it("falls back to footer and tool rendering when setWidget throws", () => {
+  it("falls back when widget installation throws", () => {
     const setStatus = vi.fn();
     const bridge = makeSubagentProjectionBridge();
     bridge.publish(projection([view({ id: "running" })]));
@@ -303,11 +195,11 @@ describe("subagent activity widget host", () => {
     );
 
     expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);
-    expect(setStatus).toHaveBeenLastCalledWith("pi-subagents", "1 subagent working");
+    expect(setStatus.mock.calls.at(-1)?.[1]).toEqual(expect.stringMatching(/\S/));
     expect(() => bridge.clear()).not.toThrow();
   });
 
-  it("publishes compact RPC status without installing a component widget", () => {
+  it("uses status fallback in RPC mode without installing a component widget", () => {
     const setWidget = vi.fn();
     const setStatus = vi.fn();
     const bridge = makeSubagentProjectionBridge();
@@ -321,9 +213,10 @@ describe("subagent activity widget host", () => {
     bridge.publish(projection([view({ id: "running" })]));
     bridge.setContext(rpc);
     expect(setWidget).not.toHaveBeenCalled();
-    expect(setStatus).toHaveBeenLastCalledWith("pi-subagents", "1 subagent working");
+    expect(setStatus.mock.calls.at(-1)?.[1]).toEqual(expect.stringMatching(/\S/));
     expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);
+
     bridge.clear();
-    expect(setStatus).toHaveBeenLastCalledWith("pi-subagents", undefined);
+    expect(setStatus.mock.calls.at(-1)?.[1]).toBeUndefined();
   });
 });

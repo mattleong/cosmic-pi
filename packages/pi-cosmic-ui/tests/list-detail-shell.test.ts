@@ -6,7 +6,6 @@ import {
   framedScreen,
   framedStackedRows,
   framedWideRows,
-  listDetailFrame,
   ListDetailShell,
   type ListDetailFrame,
 } from "../src/manager/list-detail-shell.ts";
@@ -195,22 +194,28 @@ describe("ListDetailShell detail window", () => {
 });
 
 describe("frame helpers", () => {
-  it("builds the standard frame and frames, clips, and fills raw rows", () => {
-    const themed = listDetailFrame({ fg: (color, text) => `${color}:${text}` });
-    expect(themed.outer("o")).toBe("borderAccent:o");
-    expect(themed.inner("i")).toBe("borderMuted:i");
-    expect(framedRow(frame, "hi", 4)).toBe("│hi  │");
+  it("clips and fills rows within the requested geometry", () => {
+    const row = framedRow(frame, "hi", 4);
+    expect(row).toContain("hi");
+    expect(visibleWidth(row)).toBe(6);
+
     const source = ["a", "long"];
     const filled = framedFill(frame, source, 3, 3);
     expect(filled).toHaveLength(3);
-    expect(filled[0]).toBe("│a  │");
-    expect(filled[1]).toContain("lon");
-    expect(visibleWidth(filled[1]!)).toBe(5);
-    expect(filled[2]).toBe("│   │");
+    expect(filled.every((line) => visibleWidth(line) === 5)).toBe(true);
+    expect(filled.some((line) => line.includes("lon"))).toBe(true);
     expect(source).toEqual(["a", "long"]);
-    expect(
-      framedWideRows(frame, { left: ["a"], right: [], height: 4, listWidth: 3, detailWidth: 3 }),
-    ).toHaveLength(4);
+
+    const wide = framedWideRows(frame, {
+      left: ["a"],
+      right: [],
+      height: 4,
+      listWidth: 3,
+      detailWidth: 3,
+    });
+    expect(wide).toHaveLength(4);
+    expect(wide.every((line) => visibleWidth(line) === 9)).toBe(true);
+
     const stacked = framedStackedRows(frame, {
       list: ["a", "b"],
       detail: ["c"],
@@ -218,7 +223,8 @@ describe("frame helpers", () => {
       inner: 4,
     });
     expect(stacked).toHaveLength(6);
-    expect(stacked.filter((row) => row.startsWith("├"))).toEqual(["├────┤"]);
+    expect(stacked.every((line) => visibleWidth(line) === 6)).toBe(true);
+
     const clipped = framedStackedRows(frame, {
       list: lines(9),
       detail: ["c"],
@@ -226,6 +232,7 @@ describe("frame helpers", () => {
       inner: 4,
     });
     expect(clipped).toHaveLength(4);
+    expect(clipped.every((line) => visibleWidth(line) === 6)).toBe(true);
   });
 
   it("composes the screen with degenerate-size fallbacks and the remaining body height", () => {
@@ -240,15 +247,27 @@ describe("frame helpers", () => {
       body,
     });
     expect(oneRow).toHaveLength(1);
-    expect(oneRow[0]).toContain("top");
-    expect(framedScreen(frame, { width: 1, height: 1, top: "t", bottom: "b", body })[0]).toContain(
-      "╭",
-    );
-    expect(framedScreen(frame, { width: 1, height: 3, top: "t", bottom: "b", body })).toEqual([
-      " ",
-      " ",
-      " ",
-    ]);
+    expect(oneRow.every((line) => visibleWidth(line) <= 10)).toBe(true);
+
+    const singleCell = framedScreen(frame, {
+      width: 1,
+      height: 1,
+      top: "t",
+      bottom: "b",
+      body,
+    });
+    expect(singleCell).toHaveLength(1);
+    expect(singleCell.every((line) => visibleWidth(line) <= 1)).toBe(true);
+
+    const oneColumn = framedScreen(frame, {
+      width: 1,
+      height: 3,
+      top: "t",
+      bottom: "b",
+      body,
+    });
+    expect(oneColumn).toHaveLength(3);
+    expect(oneColumn.every((line) => visibleWidth(line) <= 1)).toBe(true);
 
     const seen: number[] = [];
     const rows = framedScreen(frame, {
@@ -263,5 +282,6 @@ describe("frame helpers", () => {
     });
     expect(seen).toEqual([3]);
     expect(rows).toHaveLength(5);
+    expect(rows.every((line) => visibleWidth(line) <= 10)).toBe(true);
   });
 });

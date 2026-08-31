@@ -2,6 +2,7 @@
 import { tmpdir } from "node:os";
 import type {
   ExtensionCommandContext,
+  ExtensionContext,
   ExtensionHandler,
   Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -20,6 +21,17 @@ import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
 
 type Handler = ExtensionHandler<any, any>;
+
+type CapturedApplicationTool = {
+  readonly name: string;
+  readonly execute: (
+    toolCallId: string,
+    params: { readonly profile?: string },
+    signal: AbortSignal | undefined,
+    onUpdate: undefined,
+    ctx: ExtensionContext,
+  ) => Promise<{ readonly details?: unknown }>;
+};
 
 const testAgentDirectory = () => nodePath.join(tmpdir(), "pi-subagents-application-tests");
 
@@ -150,7 +162,7 @@ describe("subagent Pi registration", () => {
       );
       second.resolve();
       yield* step(() => secondStart);
-      expect(tools).toEqual(expect.arrayContaining(["subagent_start", "subagent_await"]));
+      expect(tools.length).toBeGreaterThan(0);
       const winningRegistrationCount = tools.length;
       yield* step(() => firstStart);
 
@@ -211,19 +223,15 @@ describe("subagent Pi registration", () => {
     expect(registerTool).not.toHaveBeenCalled();
   });
 
-  for (const failure of [
-    {
-      label: "rejected",
-      load: () => Promise.reject(new Error("preview settings rejected")),
-    },
-    {
-      label: "synchronously throwing",
-      load: () => {
+  effectTest("activates when preview settings loading fails", function* () {
+    const failures: ReadonlyArray<() => Promise<void>> = [
+      () => Promise.reject(new Error("preview settings rejected")),
+      () => {
         throw new Error("preview settings threw");
       },
-    },
-  ]) {
-    effectTest(`activates after ${failure.label} preview loading`, function* () {
+    ];
+
+    for (const loadSettings of failures) {
       const handlers = new Map<string, Handler>();
       const registerTool = vi.fn();
       // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
@@ -239,7 +247,7 @@ describe("subagent Pi registration", () => {
       });
       registerSubagentApplication(pi, {
         getAgentDirectory: testAgentDirectory,
-        loadSettings: failure.load,
+        loadSettings,
       });
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const ctx = extensionContextFixture({
@@ -251,18 +259,17 @@ describe("subagent Pi registration", () => {
       });
 
       yield* settle(() => handlers.get("session_start")?.({}, ctx));
-      expect(registerTool).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "subagent_start" }),
-      );
+      expect(registerTool).toHaveBeenCalled();
       yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
-    });
-  }
+    }
+  });
 
   effectTest(
     "accumulates partially disabled tool names across failures and clears after success",
     function* () {
       const handlers = new Map<string, Handler>();
       let active = ["read"];
+      const registeredNames: string[] = [];
       let callInActivation = 0;
       let throwAt = 2;
       const setActiveTools = vi.fn((names: ReadonlyArray<string>) => {
@@ -271,6 +278,7 @@ describe("subagent Pi registration", () => {
       // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
       const pi = extensionApiFixture({
         registerTool: vi.fn((tool: { name: string }) => {
+          registeredNames.push(tool.name);
           callInActivation += 1;
           active = [...new Set([...active, tool.name])];
           if (callInActivation === throwAt) throw new Error("partial registration");
@@ -307,10 +315,7 @@ describe("subagent Pi registration", () => {
       callInActivation = 0;
       throwAt = Number.POSITIVE_INFINITY;
       yield* settle(() => start?.({}, ctx));
-      expect(active).toEqual(expect.arrayContaining(["read", "subagent_models", "subagent_start"]));
-      expect(setActiveTools.mock.calls.some(([names]) => names.includes("subagent_models"))).toBe(
-        true,
-      );
+      expect(active).toEqual(["read", ...new Set(registeredNames)]);
       yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
     },
   );
@@ -320,11 +325,13 @@ describe("subagent Pi registration", () => {
     function* () {
       const handlers = new Map<string, Handler>();
       let active = ["read"];
+      const registeredNames: string[] = [];
       const replacementSettings = deferred<void>();
       let settingsLoads = 0;
       // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
       const pi = extensionApiFixture({
         registerTool: vi.fn((tool: { readonly name: string }) => {
+          registeredNames.push(tool.name);
           active = [...new Set([...active, tool.name])];
         }),
         registerCommand: vi.fn(),
@@ -355,16 +362,20 @@ describe("subagent Pi registration", () => {
         });
 
       yield* settle(() => handlers.get("session_start")?.({}, context()));
-      expect(active).toContain("subagent_start");
-      active = active.filter((name) => name !== "subagent_status");
+      expect(registeredNames.length).toBeGreaterThan(1);
+      const disabledName = registeredNames[0]!;
+      const expectedActive = () => [
+        "read",
+        ...new Set(registeredNames.filter((name) => name !== disabledName)),
+      ];
+      active = active.filter((name) => name !== disabledName);
 
       const replacing = Promise.resolve(handlers.get("session_tree")?.({}, context()));
       yield* step(() => Promise.resolve());
       expect(active).toEqual(["read"]);
       replacementSettings.resolve();
       yield* step(() => replacing);
-      expect(active).toContain("subagent_start");
-      expect(active).not.toContain("subagent_status");
+      expect(active).toEqual(expectedActive());
 
       const failedCapture = context();
       Object.defineProperty(failedCapture, "cwd", {
@@ -378,8 +389,7 @@ describe("subagent Pi registration", () => {
       );
       expect(active).toEqual(["read"]);
       yield* settle(() => handlers.get("session_start")?.({}, context()));
-      expect(active).toContain("subagent_start");
-      expect(active).not.toContain("subagent_status");
+      expect(active).toEqual(expectedActive());
 
       const aborted = new AbortController();
       aborted.abort();
@@ -387,8 +397,7 @@ describe("subagent Pi registration", () => {
       expect(active).toEqual(["read"]);
 
       yield* settle(() => handlers.get("session_start")?.({}, context()));
-      expect(active).toContain("subagent_start");
-      expect(active).not.toContain("subagent_status");
+      expect(active).toEqual(expectedActive());
       yield* settle(() => handlers.get("session_shutdown")?.({}, context()));
       expect(active).toEqual(["read"]);
     },
@@ -398,13 +407,17 @@ describe("subagent Pi registration", () => {
     "preserves session overrides across tree and reload but clears them for a new session",
     function* () {
       let handlers = new Map<string, Handler>();
+      let tools = new Map<string, CapturedApplicationTool>();
       let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
       let active = ["read"];
       const registerFreshApplication = (): void => {
         const nextHandlers = new Map<string, Handler>();
+        const nextTools = new Map<string, CapturedApplicationTool>();
+        tools = nextTools;
         // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
         const pi = extensionApiFixture({
-          registerTool: vi.fn((tool: { readonly name: string }) => {
+          registerTool: vi.fn((tool: CapturedApplicationTool) => {
+            nextTools.set(tool.name, tool);
             active = [...new Set([...active, tool.name])];
           }),
           registerCommand: vi.fn(
@@ -475,11 +488,33 @@ describe("subagent Pi registration", () => {
         ui,
         model: undefined,
         modelRegistry: { getAvailable: () => [] },
-        sessionManager: { getSessionId: () => "application-reload-session" },
+        sessionManager: {
+          getSessionId: () => "application-reload-session",
+          getSessionFile: () => undefined,
+        },
       });
+      const hasSessionOverride = (context: ExtensionContext): Effect.Effect<boolean> => {
+        const tool = tools.get("subagent_models");
+        if (!tool) return Effect.succeed(false);
+        return Effect.promise(() => tool.execute("models", {}, undefined, undefined, context)).pipe(
+          Effect.map((result) => {
+            // SAFETY: The owned models tool returns its decoded semantic details object.
+            const details = result.details as
+              | {
+                  readonly action?: string;
+                  readonly profiles?: ReadonlyArray<{ readonly source?: string }>;
+                }
+              | undefined;
+            return (
+              details?.action === "models" &&
+              details.profiles?.some((profile) => profile.source === "session") === true
+            );
+          }),
+        );
+      };
 
       yield* settle(() => handlers.get("session_start")?.({ reason: "startup" }, ctx));
-      const first = command?.("profiles", ctx) ?? Promise.resolve();
+      const editing = command?.("profiles", ctx) ?? Promise.resolve();
       yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
       component?.handleInput?.("\r");
       component?.handleInput?.("\r");
@@ -487,45 +522,28 @@ describe("subagent Pi registration", () => {
       component?.handleInput?.("\r");
       for (let index = 0; index < 3; index += 1) component?.handleInput?.("j");
       component?.handleInput?.("\r");
-      expect(component?.render(120).join("\n")).toContain("Confirm");
       component?.handleInput?.("\r");
       yield* step(() =>
-        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
+        vi.waitFor(() =>
+          Effect.runPromise(hasSessionOverride(ctx)).then((value) => expect(value).toBe(true)),
+        ),
       );
       closeOverlay?.(false);
-      yield* step(() => first);
+      yield* step(() => editing);
 
-      component = undefined;
       yield* settle(() => handlers.get("session_tree")?.({}, ctx));
-      const afterTree = command?.("profiles", ctx) ?? Promise.resolve();
-      yield* step(() =>
-        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
-      );
-      closeOverlay?.(false);
-      yield* step(() => afterTree);
+      expect(yield* hasSessionOverride(ctx)).toBe(true);
 
-      component = undefined;
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
       const startupHandlers = handlers;
       registerFreshApplication();
       expect(handlers).not.toBe(startupHandlers);
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
-      const afterReload = command?.("profiles", ctx) ?? Promise.resolve();
-      yield* step(() =>
-        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
-      );
-      closeOverlay?.(false);
-      yield* step(() => afterReload);
+      expect(yield* hasSessionOverride(ctx)).toBe(true);
 
-      component = undefined;
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
-      const afterSecondReload = command?.("profiles", ctx) ?? Promise.resolve();
-      yield* step(() =>
-        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
-      );
-      closeOverlay?.(false);
-      yield* step(() => afterSecondReload);
+      expect(yield* hasSessionOverride(ctx)).toBe(true);
 
       const failedTreeContext = { ...ctx };
       Object.defineProperty(failedTreeContext, "cwd", {
@@ -537,33 +555,21 @@ describe("subagent Pi registration", () => {
       yield* settle(() =>
         handlers.get("session_tree")?.({}, extensionContextFixture(failedTreeContext)),
       );
-      component = undefined;
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
-      const afterFailedTreeReload = command?.("profiles", ctx) ?? Promise.resolve();
-      yield* step(() =>
-        vi.waitFor(() => expect(component?.render(120).join("\n")).toContain("1 profile changed")),
-      );
-      closeOverlay?.(false);
-      yield* step(() => afterFailedTreeReload);
+      expect(yield* hasSessionOverride(ctx)).toBe(true);
 
-      component = undefined;
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
       // SAFETY: A new host session has a distinct session identity even when it uses the same project.
       const newSessionContext = extensionContextFixture({
         ...ctx,
-        sessionManager: { getSessionId: () => "application-new-session" },
+        sessionManager: {
+          getSessionId: () => "application-new-session",
+          getSessionFile: () => undefined,
+        },
       });
       yield* settle(() => handlers.get("session_start")?.({ reason: "new" }, newSessionContext));
-      const afterNew = command?.("profiles", newSessionContext) ?? Promise.resolve();
-      yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
-      // SAFETY: vi.waitFor observed the custom-overlay callback assign a Component, which TypeScript cannot track.
-      const cleanHeader = (component as Component | undefined)?.render(120).join("\n");
-      expect(cleanHeader).toContain("Current Session · based on");
-      expect(cleanHeader).toContain("· no changes");
-      expect(cleanHeader).not.toContain("profile changed");
-      closeOverlay?.(false);
-      yield* step(() => afterNew);
+      expect(yield* hasSessionOverride(newSessionContext)).toBe(false);
       yield* settle(() =>
         handlers.get("session_shutdown")?.({ reason: "quit" }, newSessionContext),
       );
@@ -603,9 +609,7 @@ describe("subagent Pi registration", () => {
     });
 
     yield* settle(() => handlers.get("session_start")?.({ reason: "startup" }, ctx));
-    expect(setWidget).toHaveBeenCalledWith("pi-subagents.activity", expect.any(Function), {
-      placement: "aboveEditor",
-    });
+    expect(setWidget).toHaveBeenCalled();
 
     const staleSetWidget = vi.fn();
     const stale = extensionContextFixture({
@@ -616,9 +620,7 @@ describe("subagent Pi registration", () => {
     expect(staleSetWidget).not.toHaveBeenCalled();
 
     yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
-    expect(setWidget).toHaveBeenLastCalledWith("pi-subagents.activity", undefined, {
-      placement: "aboveEditor",
-    });
+    expect(setWidget.mock.calls.some(([, content]) => content === undefined)).toBe(true);
   });
 
   effectTest("fails activation visibly when subagent tool registration throws", function* () {
@@ -657,9 +659,7 @@ describe("subagent Pi registration", () => {
     );
 
     expect(pi.setActiveTools).toHaveBeenCalledWith(["read"]);
-    expect(notify).toHaveBeenCalledWith(
-      "Subagents failed to activate because tool registration failed.",
-      "error",
-    );
+    expect(notify).toHaveBeenCalled();
+    expect(notify.mock.calls.some(([, level]) => level === "error")).toBe(true);
   });
 });

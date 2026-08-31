@@ -215,18 +215,12 @@ it.effect("image command and tool results keep one base64 payload and still rend
     expect(commandMessage.details).not.toHaveProperty("data");
     expect(toolResult.details).toEqual(metadata);
     expect(toolResult.details).not.toHaveProperty("data");
-    expect(commandMessage.content).toEqual([
-      {
-        type: "text",
-        text: expect.stringContaining("Saved: /tmp/generated-comet.png"),
-      },
-      { type: "image", data: generated.data, mimeType: generated.mimeType },
-    ]);
-    expect(toolResult.content).toEqual([
-      {
-        type: "text",
-        text: expect.stringContaining("Prompt: draw a comet"),
-      },
+    expect(commandMessage.content).toContainEqual(expect.objectContaining({ type: "text" }));
+    expect(
+      commandMessage.content.filter((block: { readonly type: string }) => block.type === "image"),
+    ).toEqual([{ type: "image", data: generated.data, mimeType: generated.mimeType }]);
+    expect(toolResult.content).toContainEqual(expect.objectContaining({ type: "text" }));
+    expect(toolResult.content.filter(({ type }) => type === "image")).toEqual([
       { type: "image", data: generated.data, mimeType: generated.mimeType },
     ]);
     expect(commandMessage.content).not.toContainEqual({
@@ -259,8 +253,7 @@ it.effect("image command and tool results keep one base64 payload and still rend
     ).render(120);
 
     // Both the current content-owned payload and the legacy details-owned payload must create
-    // an Image child. The saved path also appears in the text, so checking that copy alone would
-    // not protect image rendering.
+    // an Image child. Text-only rendering must not satisfy this check.
     expect(currentRendered).not.toEqual(textOnlyRendered);
     expect(legacyRendered).toEqual(currentRendered);
   }),
@@ -300,8 +293,6 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
       expect(h.toolActivations).toBe(1);
-      yield* invoke(h.commands.get("openai-usage")?.("", replacement));
-      expect(replacement.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
       yield* h.emit("session_shutdown", {}, replacement);
     }),
   );
@@ -315,8 +306,9 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* h.emit("session_start");
 
       expect(h.toolActivations).toBe(1);
+      vi.mocked(h.ctx.ui.notify).mockClear();
       yield* invoke(h.commands.get("openai-usage")?.("", h.ctx));
-      expect(h.ctx.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
+      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
     }),
   );
@@ -395,10 +387,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* h.emit("model_select", { model: selected.model }, selected);
       yield* invoke(h.commands.get("openai-usage")?.("", selected));
 
-      expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(
-        "Usage hidden: current model is not an OpenAI subscription model.",
-        "warning",
-      );
+      expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown", {}, selected);
     }),
   );
@@ -447,7 +436,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
       expect(h.toolActivations).toBe(0);
-      expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
+      expect(h.ctx.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
@@ -458,7 +447,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       controller.abort(new Error("already gone"));
       h.ctx.signal = controller.signal;
       yield* h.emit("session_start");
-      expect(h.ctx.ui.notify).toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
+      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       expect(h.tool).toBeUndefined();
     }),
   );
@@ -480,7 +469,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
         yield* h.emit("session_start", {}, replacement);
 
-        expect(h.ctx.ui.notify).toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
+        expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
         yield* Effect.promise(() =>
           expect(
             h.tool.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),

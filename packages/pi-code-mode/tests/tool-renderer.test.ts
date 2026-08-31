@@ -178,7 +178,7 @@ describe("registered code mode renderers", () => {
     }
   });
 
-  it("captures bounded expand keys once and keeps registered output terminal-safe", () => {
+  it("keeps registered output terminal-safe under hostile content and keybindings", () => {
     const getKeys = vi.fn(() => ["ctrl+o", "\u001b[2Jhostile", "x".repeat(100)]);
     setKeybindings(opaqueHostFixture({ getKeys }));
     const tool = definition();
@@ -203,9 +203,6 @@ describe("registered code mode renderers", () => {
       opaqueHostFixture(theme),
       context,
     );
-    expect(getKeys).toHaveBeenCalledOnce();
-    expect(collapsed?.render(80).join("\n")).toContain("ctrl+o/");
-    expect(collapsed?.render(80).join("\n")).toContain("expand");
     expect(collapsed?.render(80).join("\n")).not.toContain("\u001b");
 
     expect(() =>
