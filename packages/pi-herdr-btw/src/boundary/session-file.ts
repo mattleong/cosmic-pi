@@ -30,10 +30,7 @@ const SessionHeaderSchema = Schema.Struct({
 });
 const SessionHeaderFromJson = Schema.fromJsonString(SessionHeaderSchema);
 
-export interface SessionHeaderFacts {
-  readonly id: string;
-  readonly parentSession?: string | undefined;
-}
+export type SessionHeaderFacts = Pick<typeof SessionHeaderSchema.Type, "id" | "parentSession">;
 
 export type SessionHeaderProbe =
   | { readonly _tag: "valid"; readonly header: SessionHeaderFacts }
@@ -82,10 +79,6 @@ const withRegularSessionDescriptor = <A>(
       }
   }
 };
-
-/** Checks one bounded absolute session path without following a symlink. */
-export const isRegularSessionFile = (path: string): boolean =>
-  withRegularSessionDescriptor(path, () => true) === true;
 
 /**
  * Compares two regular session files by descriptor identity. Paths are bounded

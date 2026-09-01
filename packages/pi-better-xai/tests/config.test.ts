@@ -2,9 +2,9 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { provideBuiltLayer, type JsonObject } from "pi-cosmic-core";
+import { provideBuiltLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
-import { InvalidSettingError, decodeSettingUpdate } from "../src/config/options.ts";
+import { decodeSettingUpdate } from "../src/config/options.ts";
 import { resolveConfig } from "../src/config/store.ts";
 
 describe("xAI configuration", () => {

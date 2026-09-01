@@ -15,7 +15,6 @@ import {
   summarizeAdvisorReview,
 } from "../../checkpoint/ledger.ts";
 import { createAdvisorEmissionGuardState } from "../../review/emission-guard.ts";
-import type { ResolvedAdvisorConfig } from "../../config/options.ts";
 import { classifyFailure } from "../../domain/runtime-error-classifier.ts";
 import * as Scope from "effect/Scope";
 import { makeAdvisorReviewQueue, type AdvisorReviewQueue } from "../../queue/review-queue.ts";
@@ -30,20 +29,13 @@ import {
 import { emptyAdvisorRoutingState, sanitizeAdvisorRoutingState } from "../../review/routing.ts";
 import type { AdvisorUsageTelemetry } from "../../runtime/client.ts";
 import type { AdvisorRuntimeServiceContract } from "../../runtime/runtime.ts";
-import { AdvisorExtensionError, extensionError, type ParentAnchor } from "../controller.ts";
+import { AdvisorExtensionError, extensionError } from "../controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
+import type { HostNotify, SessionIdentity, StateRead, StateWrite } from "./deps.ts";
 import type { SessionRefs } from "./session-refs.ts";
 
-export interface RuntimeDeps {
+export interface RuntimeDeps extends StateRead, StateWrite, HostNotify, SessionIdentity {
   readonly refs: SessionRefs;
-  readonly getState: () => AdvisorApplicationState;
-  readonly updateApplicationState: (
-    update: (state: AdvisorApplicationState) => AdvisorApplicationState,
-  ) => void;
-  readonly updateMetrics: (
-    update: (metrics: AdvisorApplicationState["metrics"]) => AdvisorApplicationState["metrics"],
-  ) => void;
-  readonly currentConfig: () => ResolvedAdvisorConfig;
   readonly advanceDomainCounter: (key: "epoch" | "parentTurnId") => number;
   readonly clearPersistentTrajectory: () => void;
   readonly clearPendingRecovery: () => void;
@@ -60,15 +52,8 @@ export interface RuntimeDeps {
   };
   readonly productionRuntimeService: AdvisorRuntimeServiceContract;
   readonly queueScope: Scope.Scope;
-  readonly notifyBestEffort: (
-    ctx: Pick<ExtensionContext, "ui">,
-    message: string,
-    level: "info" | "warning" | "error",
-  ) => void;
   readonly seedFromMessages: (messages: readonly unknown[]) => string;
   readonly activeSeed: (ctx: ExtensionContext) => string;
-  readonly fingerprint: () => string;
-  readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
   readonly recordUsage: (
     target: AdvisorApplicationState["metrics"],
     usage: AdvisorUsageTelemetry,

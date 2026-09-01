@@ -15,7 +15,7 @@ import { countLabel, formatBytes } from "../../shared/helpers";
 import { getObjectValue } from "../../shared/helpers";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { resolvePreviewLanguage } from "../../syntax/language";
-import { normalizeShikiLanguage } from "../../syntax/render";
+import { normalizePreviewLanguageAlias } from "../../syntax/language";
 import { getPathArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
@@ -233,7 +233,7 @@ function formatWriteCallHeader(
   text += metadata(theme, [
     formatBytes(Buffer.byteLength(content, "utf8")),
     countLabel(lineCount, "line"),
-    lang ? normalizeShikiLanguage(lang) : undefined,
+    lang ? normalizePreviewLanguageAlias(lang) : undefined,
   ]);
   return text;
 }

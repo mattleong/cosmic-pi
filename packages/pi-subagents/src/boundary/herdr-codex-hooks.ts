@@ -9,6 +9,7 @@ import {
   type NdjsonRpcSession,
   type RpcSessionError,
 } from "./rpc-session.ts";
+import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 const CODEX_EXECUTABLE = "codex";
 const CALL_TIMEOUT_MILLIS = 10_000;
@@ -109,7 +110,6 @@ interface TrustInput {
   readonly command: string;
 }
 
-const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const decodeRpcSuccessOption = Schema.decodeUnknownOption(RpcSuccessSchema);
 const decodeRpcFailureOption = Schema.decodeUnknownOption(RpcFailureSchema);
 const decodeHooksListResultOption = Schema.decodeUnknownOption(HooksListResultSchema);

@@ -8,7 +8,7 @@ import {
 import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/config/state";
 import { acquireProjectionOwnership } from "../../../../src/shared/projection-ownership";
 import { clearSyntaxProjection, publishSyntaxProjection } from "../../../../src/syntax/projection";
-import { cloneCodePreviewSettingsForTest, testTheme } from "../../../../src/testing/render";
+import { cloneCodePreviewSettingsForTest, testTheme } from "../../../../tests/support/render";
 
 const syntaxOwner = acquireProjectionOwnership("preview-cache-key-test");
 let previousCodePreviewSettings = cloneCodePreviewSettingsForTest();

@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import { nodeFsConstants as constants, nodeFsPromises as fs } from "./node-builtins.ts";
 import { isStrictlyInsidePath } from "./paths.ts";
 
-export class SafeFileError extends Schema.TaggedError<SafeFileError>()("SafeFileError", {
+class SafeFileError extends Schema.TaggedError<SafeFileError>()("SafeFileError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

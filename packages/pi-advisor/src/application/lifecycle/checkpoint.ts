@@ -1,69 +1,58 @@
 /** Checkpoint request and catch-up wait controls. */
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import type * as Scope from "effect/Scope";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { CheckpointOrchestratorContract } from "../../checkpoint/orchestrator.ts";
 import {
   captureAdvisorAbortInputAtHostBoundary,
   registerAdvisorAbortListenerAtHostBoundary,
   type AdvisorHostContextError,
 } from "../../boundary/host-context.ts";
-import { ADVISOR_OPERATION_TIMEOUT_MS, type ResolvedAdvisorConfig } from "../../config/options.ts";
+import { ADVISOR_OPERATION_TIMEOUT_MS } from "../../config/options.ts";
 import { classifyFailure } from "../../domain/runtime-error-classifier.ts";
 import type { FailureLoggerContract } from "../../logging/logger.ts";
 import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
 import { applyBlockerVerification, isVerificationCandidate } from "../../review/finding-gates.ts";
-import type { AdvisorReviewFocus } from "../../review/schema.ts";
 import {
   awaitAdvisorCatchUpEffect,
   type AdvisorCheckpointHandle,
   type CheckpointSettlement,
   type ParentAnchor,
-  type ReviewPhase,
-  type ReviewSource,
 } from "../controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
+import type {
+  CheckpointOrchestration,
+  CheckpointRequestOptions,
+  HostNotify,
+  LedgerPersistence,
+  RuntimeControls,
+  SessionIdentity,
+  StateRead,
+  StateWrite,
+} from "./deps.ts";
 import type { DeliverFn } from "./delivery.ts";
+import type { SessionRefs } from "./session-refs.ts";
 import { parentHasPendingMessages, parentSignalAborted } from "./parent-session.ts";
 
-export interface CheckpointRefs {
-  queue: AdvisorReviewQueue | undefined;
-  runtimeCursor: { anchor: ParentAnchor; fingerprint: string } | undefined;
-  checkpointId: number;
-  latestStateSummary: string;
-  latestDurableSummary: ReturnType<typeof summarizeAdvisorReview>;
-}
+export type CheckpointRefs = Pick<
+  SessionRefs,
+  "queue" | "runtimeCursor" | "checkpointId" | "latestStateSummary" | "latestDurableSummary"
+>;
 
-export interface CheckpointDeps {
+export interface CheckpointDeps
+  extends
+    StateRead,
+    StateWrite,
+    HostNotify,
+    LedgerPersistence,
+    RuntimeControls,
+    CheckpointOrchestration,
+    SessionIdentity {
   readonly refs: CheckpointRefs;
-  readonly getState: () => AdvisorApplicationState;
-  readonly updateApplicationState: (
-    update: (state: AdvisorApplicationState) => AdvisorApplicationState,
-  ) => void;
-  readonly updateMetrics: (
-    update: (metrics: AdvisorApplicationState["metrics"]) => AdvisorApplicationState["metrics"],
-  ) => void;
-  readonly currentConfig: () => ResolvedAdvisorConfig;
-  readonly cancelRequest: () => void;
-  readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
-  readonly persistLedger: (anchor: ParentAnchor) => void;
-  readonly notifyBestEffort: CheckpointNotify;
   readonly setAdvisorStatus: (ctx: ExtensionContext, text?: string) => void;
   readonly failureLogger: FailureLoggerContract;
-  readonly applicationScope: Scope.Scope;
-  readonly checkpointOrchestrator: CheckpointOrchestratorContract;
   readonly now: () => number;
-  readonly startRuntimeEffect: (
-    ctx: ExtensionContext,
-    restoration?: "preserve-live" | "restore-branch",
-    allowDisabled?: boolean,
-  ) => Effect.Effect<number | undefined>;
-  readonly stopRuntimeEffect: () => Effect.Effect<void>;
   readonly deliver: DeliverFn;
-  readonly fingerprint: () => string;
-  readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
   readonly lifecycleScope: (ctx: ExtensionContext) => string;
   readonly branchContains: (ctx: ExtensionContext, anchor: ParentAnchor) => boolean;
   readonly recordReviewDuration: (
@@ -82,22 +71,10 @@ interface CheckpointOwnerGeneration {
   readonly queue: AdvisorReviewQueue;
 }
 
-type CheckpointNotify = (
-  ctx: Pick<ExtensionContext, "ui">,
-  message: string,
-  level: "info" | "warning" | "error",
-) => void;
-
 export const makeCheckpointControls = (d: CheckpointDeps) => {
-  const requestCheckpoint = (options: {
-    ctx: ExtensionContext;
-    focus: AdvisorReviewFocus;
-    phase: ReviewPhase;
-    source: ReviewSource;
-    requiresEnabled: boolean;
-    trajectoryId?: number;
-    abortOnBlocker?: boolean;
-  }): AdvisorCheckpointHandle | undefined => {
+  const requestCheckpoint = (
+    options: CheckpointRequestOptions,
+  ): AdvisorCheckpointHandle | undefined => {
     const abortCapture = captureAdvisorAbortInputAtHostBoundary(options.ctx);
     if (!abortCapture.ok) return undefined;
     const requestAbortInput = abortCapture.input;

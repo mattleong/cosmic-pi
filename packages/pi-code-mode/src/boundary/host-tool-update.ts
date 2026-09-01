@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 import type { CodeModeToolDetails } from "../tools/format.ts";
 
 /** Pi's TUI renders at most once per 16 ms frame; match that cadence at the host boundary. */
-export const CODE_MODE_PROGRESS_FRAME_INTERVAL_MS = 16;
+const CODE_MODE_PROGRESS_FRAME_INTERVAL_MS = 16;
 
 export type HostToolUpdateScheduler = (delayMs: number, callback: () => void) => () => void;
 

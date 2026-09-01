@@ -1,5 +1,5 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-import { evaluateWordEmphasisAccuracy } from "../src/testing/word-emphasis-accuracy";
+import { evaluateWordEmphasisAccuracy } from "../tests/support/word-emphasis-accuracy";
 import { benchLog, benchTable } from "./helpers";
 
 const report = await evaluateWordEmphasisAccuracy();

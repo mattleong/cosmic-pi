@@ -25,7 +25,7 @@ it.effect("removes the released child when replacement acquisition fails", () =>
     expect(result._tag).toBe("Failure");
     expect(releases).toBe(1);
 
-    yield* resources.stopChild;
+    yield* resources.stopChild();
     expect(releases).toBe(1);
   }),
 );
@@ -56,8 +56,8 @@ it.effect("serializes replacement and releases each installed child exactly once
     expect(released).toEqual([]);
     yield* Deferred.succeed(allowRelease, undefined);
     expect(yield* Fiber.join(replacement)).toBe("second");
-    yield* resources.stopChild;
-    yield* resources.stopChild;
+    yield* resources.stopChild();
+    yield* resources.stopChild();
     expect(released).toEqual(["first", "second"]);
   }),
 );
@@ -85,7 +85,7 @@ it.effect(
       yield* Deferred.await(acquireStarted);
       expect(releaseAttempts).toBe(1);
       yield* Fiber.interrupt(replacement);
-      yield* resources.stopChild;
+      yield* resources.stopChild();
       expect(releaseAttempts).toBe(1);
     }),
 );
@@ -106,7 +106,9 @@ it.effect("finishes an interrupted stop and does not release the child again", (
         releaseCompletions += 1;
       }),
     );
-    const stopping = yield* resources.stopChild.pipe(Effect.forkChild({ startImmediately: true }));
+    const stopping = yield* resources
+      .stopChild()
+      .pipe(Effect.forkChild({ startImmediately: true }));
 
     yield* Deferred.await(releaseStarted);
     const interrupting = yield* Fiber.interrupt(stopping).pipe(
@@ -114,7 +116,7 @@ it.effect("finishes an interrupted stop and does not release the child again", (
     );
     yield* Deferred.succeed(allowRelease, undefined);
     yield* Fiber.join(interrupting);
-    yield* resources.stopChild;
+    yield* resources.stopChild();
 
     expect(releaseAttempts).toBe(1);
     expect(releaseCompletions).toBe(1);

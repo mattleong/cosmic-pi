@@ -61,11 +61,7 @@ function showTaskStatus(
       notifyAtHostBoundary(ctx, formatEffectiveSettings(config), "info");
     })
     .catch((failure) =>
-      notifyActionFailure(
-        ctx,
-        "show effective background task settings",
-        failure instanceof Error ? failure : undefined,
-      ),
+      notifyActionFailure(ctx, "show effective background task settings", failure),
     );
 }
 
@@ -99,22 +95,12 @@ function openTaskManager(
         stop: (id) =>
           void actions
             .stop(id)
-            .catch((failure) =>
-              notifyActionFailure(
-                ctx,
-                "stop background task",
-                failure instanceof Error ? failure : undefined,
-              ),
-            ),
+            .catch((failure) => notifyActionFailure(ctx, "stop background task", failure)),
         clear: () =>
           void actions
             .clear()
             .catch((failure) =>
-              notifyActionFailure(
-                ctx,
-                "clear completed background tasks",
-                failure instanceof Error ? failure : undefined,
-              ),
+              notifyActionFailure(ctx, "clear completed background tasks", failure),
             ),
       });
       const unsubscribe = bridge.subscribe(() => {

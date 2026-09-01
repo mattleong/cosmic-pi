@@ -2,8 +2,8 @@ import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { nodePlatformLayer, type JsonObject } from "pi-cosmic-core";
-import { InvalidSettingError, prepareSettingUpdate } from "../src/config/options.ts";
+import { nodePlatformLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
+import { prepareSettingUpdate } from "../src/config/options.ts";
 import type { ConfigFile } from "../src/config/schema.ts";
 import {
   configPaths,

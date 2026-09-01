@@ -28,13 +28,6 @@ const SUBCOMMAND_DESCRIPTIONS = {
   usage: "Show advisor usage and outcomes",
 } satisfies Readonly<Record<(typeof SUBCOMMANDS)[number], string>>;
 
-interface AdvisorCommandSession {
-  readonly snapshot: AdvisorCommandSnapshot;
-  readonly configPath: string;
-  readonly persist: AdvisorCommandState["persist"];
-  readonly actions: AdvisorCommandActions;
-}
-
 export const completeAdvisorCommandArguments = (prefix: string) =>
   completeSettingsArguments(
     prefix,
@@ -54,25 +47,19 @@ export function handleAdvisorCommand(
 ): Effect.Effect<void, PiCommandError> {
   return Effect.suspend(() => {
     const snapshot = state.snapshot;
-    const session: AdvisorCommandSession = {
-      snapshot,
-      configPath: snapshot.config.configPath,
-      persist: state.persist,
-      actions,
-    };
     const command = args.trim().toLowerCase();
-    if (!command) return openAdvisorDashboard(ctx, session);
+    if (!command) return openAdvisorDashboard(ctx, state, actions);
     if (command === "review")
-      return requestReview(ctx, session, advisorModelReady(ctx, snapshot.config));
-    if (command === "fix") return applyCardAction(ctx, session, "fix");
-    if (command === "dismiss") return applyCardAction(ctx, session, "dismiss");
-    if (command === "cancel") return cancelReview(ctx, session);
+      return requestReview(ctx, actions, advisorModelReady(ctx, snapshot.config));
+    if (command === "fix") return applyCardAction(ctx, actions, "fix");
+    if (command === "dismiss") return applyCardAction(ctx, actions, "dismiss");
+    if (command === "cancel") return cancelReview(ctx, actions);
     if (command === "on") {
-      if (!advisorModelReady(ctx, snapshot.config)) return openAdvisorSetup(ctx, session);
-      return setAdvisorEnabled(ctx, session, true);
+      if (!advisorModelReady(ctx, snapshot.config)) return openAdvisorSetup(ctx, state);
+      return setAdvisorEnabled(ctx, state, true);
     }
-    if (command === "off") return setAdvisorEnabled(ctx, session, false);
-    if (command === "setup") return openAdvisorSetup(ctx, session);
+    if (command === "off") return setAdvisorEnabled(ctx, state, false);
+    if (command === "setup") return openAdvisorSetup(ctx, state);
     if (command === "usage") return Effect.sync(() => showAdvisorUsage(ctx, snapshot.metrics));
     return Effect.sync(() => ctx.ui.notify(`Usage: /advisor [${SUBCOMMANDS.join("|")}]`, "error"));
   });
@@ -80,10 +67,11 @@ export function handleAdvisorCommand(
 
 function openAdvisorDashboard(
   ctx: ExtensionCommandContext,
-  session: AdvisorCommandSession,
+  state: AdvisorCommandState,
+  actions: AdvisorCommandActions,
 ): Effect.Effect<void, PiCommandError> {
   return Effect.suspend(() => {
-    const { snapshot } = session;
+    const { snapshot } = state;
     if (ctx.mode !== "tui") {
       showAdvisorStatus(ctx, snapshot);
       return Effect.void;
@@ -109,13 +97,13 @@ function openAdvisorDashboard(
     ).pipe(
       Effect.flatMap((choice) => {
         if (choice === "Set up Advisor" || choice === "Change model")
-          return openAdvisorSetup(ctx, session);
-        if (choice === "Review last") return requestReview(ctx, session, modelReady);
-        if (choice === "Fix last") return applyCardAction(ctx, session, "fix");
-        if (choice === "Dismiss last") return applyCardAction(ctx, session, "dismiss");
-        if (choice === "Cancel review") return cancelReview(ctx, session);
-        if (choice === "Turn on") return setAdvisorEnabled(ctx, session, true);
-        if (choice === "Turn off") return setAdvisorEnabled(ctx, session, false);
+          return openAdvisorSetup(ctx, state);
+        if (choice === "Review last") return requestReview(ctx, actions, modelReady);
+        if (choice === "Fix last") return applyCardAction(ctx, actions, "fix");
+        if (choice === "Dismiss last") return applyCardAction(ctx, actions, "dismiss");
+        if (choice === "Cancel review") return cancelReview(ctx, actions);
+        if (choice === "Turn on") return setAdvisorEnabled(ctx, state, true);
+        if (choice === "Turn off") return setAdvisorEnabled(ctx, state, false);
         if (choice === "Usage") return Effect.sync(() => showAdvisorUsage(ctx, snapshot.metrics));
         return Effect.void;
       }),
@@ -126,7 +114,7 @@ function openAdvisorDashboard(
 /** Setup always opens when explicitly requested. One persistence patch commits each choice atomically. */
 function openAdvisorSetup(
   ctx: ExtensionCommandContext,
-  session: AdvisorCommandSession,
+  state: AdvisorCommandState,
 ): Effect.Effect<void, PiCommandError> {
   if (ctx.mode !== "tui")
     return Effect.sync(() =>
@@ -136,8 +124,8 @@ function openAdvisorSetup(
     Effect.flatMap((selected) => {
       if (!selected) return Effect.void;
       if (selected.type === "not-now")
-        return updateConfig(ctx, session, { setupDismissed: true }).pipe(Effect.asVoid);
-      return updateConfig(ctx, session, {
+        return updateConfig(ctx, state, { setupDismissed: true }).pipe(Effect.asVoid);
+      return updateConfig(ctx, state, {
         provider: selected.provider,
         model: selected.model,
         enabled: true,
@@ -149,7 +137,7 @@ function openAdvisorSetup(
 
 function requestReview(
   ctx: ExtensionCommandContext,
-  session: AdvisorCommandSession,
+  actions: AdvisorCommandActions,
   modelReady: boolean,
 ): Effect.Effect<void> {
   if (!modelReady)
@@ -159,7 +147,7 @@ function requestReview(
         "warning",
       ),
     );
-  return session.actions.reviewLast(ctx).pipe(
+  return actions.reviewLast(ctx).pipe(
     Effect.tap((result) =>
       Effect.sync(() =>
         ctx.ui.notify(reviewRequestMessage(result), result === "started" ? "info" : "warning"),
@@ -171,21 +159,20 @@ function requestReview(
 
 function applyCardAction(
   ctx: ExtensionCommandContext,
-  session: AdvisorCommandSession,
+  actions: AdvisorCommandActions,
   action: "fix" | "dismiss",
 ): Effect.Effect<void> {
   return Effect.sync(() => {
-    const result =
-      action === "fix" ? session.actions.fixLast(ctx) : session.actions.dismissLast(ctx);
+    const result = action === "fix" ? actions.fixLast(ctx) : actions.dismissLast(ctx);
     notifyCardAction(ctx, result, action === "fix" ? "fixed" : "dismissed");
   });
 }
 
 function cancelReview(
   ctx: ExtensionCommandContext,
-  session: AdvisorCommandSession,
+  actions: AdvisorCommandActions,
 ): Effect.Effect<void> {
-  return session.actions.cancel(ctx).pipe(
+  return actions.cancel(ctx).pipe(
     Effect.tap((cancelled) =>
       Effect.sync(() =>
         ctx.ui.notify(
@@ -200,10 +187,10 @@ function cancelReview(
 
 function setAdvisorEnabled(
   ctx: ExtensionCommandContext,
-  session: AdvisorCommandSession,
+  state: AdvisorCommandState,
   enabled: boolean,
 ): Effect.Effect<void> {
-  return updateConfig(ctx, session, { enabled }).pipe(
+  return updateConfig(ctx, state, { enabled }).pipe(
     Effect.tap((updated) =>
       updated
         ? Effect.sync(() => ctx.ui.notify(enabled ? "Advisor is on." : "Advisor is off.", "info"))
@@ -215,10 +202,10 @@ function setAdvisorEnabled(
 
 function updateConfig(
   ctx: ExtensionCommandContext,
-  session: AdvisorCommandSession,
+  state: AdvisorCommandState,
   patch: AdvisorConfigPatch,
 ): Effect.Effect<boolean> {
-  return session.persist(patch, session.configPath).pipe(
+  return state.persist(patch, state.snapshot.config.configPath).pipe(
     Effect.as(true),
     Effect.catch((error) =>
       Effect.sync(() => {

@@ -20,8 +20,10 @@ import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "
 import { randomUUID } from "node:crypto";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { nodeFsConstants as constants, nodeFsPromises, nodePath } from "./node-builtins.ts";
+import { decodeUnknownJsonOption } from "./wire-shared.ts";
 import {
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
+  MAX_SUPERVISOR_CONFIG_BYTES,
   SUPERVISOR_CHANNEL_VERSION,
   SupervisorChannelConfigSchema,
   SupervisorChannelIdSchema,
@@ -78,7 +80,6 @@ class HelperStartupFailure extends Data.TaggedError("HelperStartupFailure")<{
 
 const startupFailure = (diagnostic: string) => new HelperStartupFailure({ diagnostic });
 const SERVER_VERSION = "3.0.0";
-const MAX_CONFIG_BYTES = 4 * 1024;
 const MAX_LINE_BYTES = MAX_SUPERVISOR_CHANNEL_LINE_BYTES;
 const MAX_QUEUED_INPUT_BYTES = 2 * MAX_LINE_BYTES;
 const MAX_ID_CHARS = 256;
@@ -203,7 +204,6 @@ const decodeConfigJsonOption = Schema.decodeUnknownOption(
   Schema.fromJsonString(SupervisorChannelConfigSchema),
   { onExcessProperty: "error" },
 );
-const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 const readConfig = (path: string): Effect.Effect<SupervisorChannelConfig, HelperConfigError> =>
   Effect.gen(function* () {
@@ -229,14 +229,14 @@ const readConfig = (path: string): Effect.Effect<SupervisorChannelConfig, Helper
             try: () => handle.stat(),
             catch: () => helperConfigError("unsafe-config-file"),
           });
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_CONFIG_BYTES)
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SUPERVISOR_CONFIG_BYTES)
             return yield* helperConfigError("unsafe-config-file");
           if ((stat.mode & 0o077) !== 0) return yield* helperConfigError("unsafe-config-mode");
           const source = yield* Effect.tryPromise({
             try: () => handle.readFile({ encoding: "utf8" }),
             catch: () => helperConfigError("invalid-config"),
           });
-          if (Buffer.byteLength(source, "utf8") > MAX_CONFIG_BYTES)
+          if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
             return yield* helperConfigError("oversized-config");
           const decoded = decodeConfigJsonOption(source);
           if (Option.isNone(decoded)) return yield* helperConfigError("invalid-config");

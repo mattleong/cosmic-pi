@@ -52,7 +52,7 @@ export const BackgroundTaskParameters = Type.Object({
   contains: Type.Optional(
     Type.String({
       minLength: 1,
-      maxLength: 256,
+      maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars,
       description: "Literal output text required when waiting for output",
     }),
   ),
@@ -62,14 +62,14 @@ export const BackgroundTaskParameters = Type.Object({
   tailLines: Type.Optional(
     Type.Integer({
       minimum: 1,
-      maximum: 2000,
+      maximum: BACKGROUND_TASK_FIELD_BOUNDS.maxTailLines,
       description: "Tail lines when no cursor is supplied",
     }),
   ),
   waitSeconds: Type.Optional(
     Type.Number({
       minimum: 0,
-      maximum: 120,
+      maximum: BACKGROUND_TASK_FIELD_BOUNDS.maxWaitSeconds,
       description: "Long-poll duration for logs or wait; wait defaults to configured maximum",
     }),
   ),

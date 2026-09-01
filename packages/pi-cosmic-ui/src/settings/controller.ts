@@ -27,7 +27,7 @@ import { decodeUnknownOrUndefined } from "../schema/decode.ts";
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
 
-export type CosmicUiSettingChange =
+type CosmicUiSettingChange =
   | {
       readonly _tag: "UpdateFooter";
       readonly patch: Partial<ResolvedCosmicUiConfig["footer"]>;
@@ -35,7 +35,7 @@ export type CosmicUiSettingChange =
   | { readonly _tag: "SetVisibility"; readonly id: string; readonly visible: boolean };
 
 /** Decodes the third-party SettingsList callback into a closed set of valid updates. */
-export function decodeCosmicUiSettingChange<IdInput, ValueInput>(
+function decodeCosmicUiSettingChange<IdInput, ValueInput>(
   id: IdInput,
   value: ValueInput,
 ): CosmicUiSettingChange | undefined {

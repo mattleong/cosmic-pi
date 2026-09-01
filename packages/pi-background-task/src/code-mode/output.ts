@@ -1,15 +1,10 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type {
-  BackgroundTaskSnapshot,
-  BackgroundTaskWaitResult,
-  StartBackgroundTask,
-} from "../task/model.ts";
+import type { BackgroundTaskSnapshot, StartBackgroundTask } from "../task/model.ts";
 import {
   backgroundTaskStartCommandResult,
   type BackgroundTaskCommandResult,
 } from "../tools/command.ts";
-import { backgroundTaskCodeModeOutputFits } from "./output-size.ts";
 import {
   BACKGROUND_TASK_CODE_MODE_BOUNDS,
   BackgroundTaskCodeModeOutputSchema,
@@ -55,6 +50,15 @@ export const backgroundTaskCodeModeStartOutputFits = (
   maxTextBytes: number,
   maxOutputBytes: number,
 ): boolean => {
+  // The service re-validates these bounds before admitting a start; refusing oversized request
+  // fields here keeps that guarantee on the envelope path regardless of the exact byte measure.
+  if (
+    request.command.length > BACKGROUND_TASK_CODE_MODE_BOUNDS.maxCommandChars ||
+    request.cwd.length > BACKGROUND_TASK_CODE_MODE_BOUNDS.maxPathChars ||
+    (request.name?.length ?? 0) > BACKGROUND_TASK_CODE_MODE_BOUNDS.maxNameChars
+  ) {
+    return false;
+  }
   const snapshot: BackgroundTaskSnapshot = {
     id: `task-${"9".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxIdChars - "task-".length)}`,
     ...(request.name && { name: request.name }),
@@ -75,37 +79,32 @@ export const backgroundTaskCodeModeStartOutputFits = (
   );
 };
 
-const freezeSnapshot = (snapshot: BackgroundTaskSnapshot): void => {
-  Object.freeze(snapshot);
-};
-
-const freezeWait = (wait: BackgroundTaskWaitResult): void => {
-  freezeSnapshot(wait.snapshot);
-  Object.freeze(wait);
-};
-
-const freezeOutput = (output: BackgroundTaskCodeModeOutput): BackgroundTaskCodeModeOutput => {
-  switch (output.action) {
-    case "start":
-    case "status":
-    case "stop":
-      freezeSnapshot(output.snapshot);
-      break;
-    case "list":
-    case "stop_all":
-      for (const snapshot of output.tasks) freezeSnapshot(snapshot);
-      Object.freeze(output.tasks);
-      break;
-    case "logs":
-      Object.freeze(output.logs);
-      break;
-    case "wait":
-      freezeWait(output.wait);
-      break;
-    case "clear":
-      break;
+/** Shared provider and consumer aggregate bound, measured with exact serialized JSON size. */
+export const backgroundTaskCodeModeOutputFits = (
+  output: BackgroundTaskCodeModeOutput,
+  maxOutputBytes: number,
+): boolean => {
+  const limit = Number.isSafeInteger(maxOutputBytes) && maxOutputBytes >= 0 ? maxOutputBytes : 0;
+  try {
+    return Buffer.byteLength(JSON.stringify(output)) <= limit;
+  } catch {
+    // Cyclic or non-JSON-representable hostile payloads are refused, never accepted.
+    return false;
   }
-  return Object.freeze(output);
+};
+
+/**
+ * Recursively freezes a detached, acyclic, function-free decoded value, including nested payload
+ * leaves such as `logs` metadata or `wait` snapshots.
+ */
+const deepFreeze = <T>(value: T): void => {
+  if (Array.isArray(value)) {
+    for (const child of value) deepFreeze(child);
+  } else if (value !== null && value instanceof Object) {
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  // SAFETY: freezing a primitive leaf is a no-op; containers are schema-produced plain data.
+  Object.freeze(value as object);
 };
 
 const decodeOutput = Schema.decodeUnknownOption(BackgroundTaskCodeModeOutputSchema);
@@ -124,5 +123,7 @@ export const projectBackgroundTaskCodeModeOutput = (
     return { _tag: "Refused" };
   }
   const decoded = Option.getOrUndefined(decodeOutput(borrowed));
-  return decoded ? { _tag: "Accepted", output: freezeOutput(decoded) } : { _tag: "Refused" };
+  if (!decoded) return { _tag: "Refused" };
+  deepFreeze(decoded);
+  return { _tag: "Accepted", output: decoded };
 };

@@ -99,6 +99,13 @@ export const sanitizeDiagnosticText = (value: string, limit: number): string => 
 export const sanitizeOutputText = (value: string, limit: number): string =>
   clipText(stripTerminalControls(value), limit);
 
+export const boundedAsciiOr = (value: string, maximum: number, fallback: string): string => {
+  const cleaned = stripTerminalControls(value).trim();
+  return cleaned.length > 0 && cleaned.length <= maximum && /^[\x20-\x7e]+$/.test(cleaned)
+    ? cleaned
+    : fallback;
+};
+
 const isValidUsage = (usage: SubagentUsage): boolean =>
   [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(
     (value) => Number.isSafeInteger(value) && value >= 0,

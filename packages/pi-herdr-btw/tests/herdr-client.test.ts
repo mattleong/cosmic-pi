@@ -267,7 +267,7 @@ it.effect("fails closed when either output stream exceeds its byte bound", () =>
       const processRunner: HerdrProcessRunner = (request) =>
         Effect.sync(() => {
           limits = [request.stdoutLimitBytes, request.stderrLimitBytes];
-          return { ...success('{"protocol":19}'), [stream]: "123456789" };
+          return { ...success('{"protocol":19}'), [stream]: "123456789", overflowed: true };
         });
       const client = makeHerdrClient({}, { processRunner, maximumOutputBytes: 8 });
 

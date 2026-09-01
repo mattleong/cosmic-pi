@@ -2,12 +2,8 @@ import { EventEmitter } from "node:events";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import {
-  awaitProcessClose,
-  provideNodeProcess,
-  runBoundedProcessScoped,
-  type ProcessCloseSource,
-} from "../index.ts";
+import { awaitProcessClose, provideNodeProcess, type ProcessCloseSource } from "../index.ts";
+import { runBoundedProcessScoped } from "../src/platform/process.ts";
 
 it.live("runs a bounded one-shot process", () =>
   Effect.gen(function* () {

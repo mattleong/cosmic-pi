@@ -15,8 +15,6 @@ import {
   isOutcomeUncertain,
   processError,
   SubagentProcessError,
-  SubagentProtocolError,
-  UnsupportedSubagentCapabilityError,
   type SubagentError,
 } from "../run/errors.ts";
 import type { SubagentUsage } from "../run/model.ts";
@@ -44,18 +42,22 @@ import {
   type BackendLaunchRequest,
 } from "./model.ts";
 import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
+import {
+  correlatedRequest,
+  protocolError,
+  unsupported as unsupportedCapability,
+} from "./driver-shared.ts";
 import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
 
 const EVENT_CAPACITY = 512;
 const RPC_TIMEOUT = "10 seconds";
 
-const protocolError = (message: string) => new SubagentProtocolError({ message });
 const unsupported = (capability: string) =>
-  new UnsupportedSubagentCapabilityError({
-    backend: "local/codex",
+  unsupportedCapability(
+    "local/codex",
     capability,
-    message: `Local Codex app-server does not expose ${capability} in the hardened protocol subset.`,
-  });
+    `Local Codex app-server does not expose ${capability} in the hardened protocol subset.`,
+  );
 
 interface PendingResponse {
   readonly method: CodexRequest["method"];
@@ -472,40 +474,37 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   );
 
   const rpc = (makeRequest: (id: string) => CodexRequest): Effect.Effect<unknown, SubagentError> =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
+    correlatedRequest({
+      timeout: RPC_TIMEOUT,
+      register: (deferred) => {
         const request = makeRequest(`codex-${nextRequestId++}`);
-        const deferred = Deferred.makeUnsafe<unknown, SubagentError>();
         responses.set(request.id, { method: request.method, deferred });
-        return { request, deferred };
-      }),
-      ({ request: frame, deferred }) =>
-        child.send(frame).pipe(
-          Effect.mapError((error) =>
-            error.code === "transport_outcome_uncertain"
-              ? processError(
-                  `execute ${frame.method}`,
-                  outcomeCode(frame.method),
-                  `${frame.method} may already have applied; inspect status before retrying. (${error.message})`,
-                )
-              : error,
-          ),
-          Effect.andThen(Deferred.await(deferred)),
-          Effect.timeoutOption(RPC_TIMEOUT),
-          Effect.flatMap((outcome) =>
-            Option.isSome(outcome)
-              ? Effect.succeed(outcome.value)
-              : Effect.fail(
-                  processError(
+        return {
+          frame: request,
+          unregister: Effect.sync(() => void responses.delete(request.id)),
+        };
+      },
+      send: (frame) =>
+        child
+          .send(frame)
+          .pipe(
+            Effect.mapError((error) =>
+              error.code === "transport_outcome_uncertain"
+                ? processError(
                     `execute ${frame.method}`,
                     outcomeCode(frame.method),
-                    `${frame.method} was sent but no correlated response arrived; it will not be retried automatically.`,
-                  ),
-                ),
+                    `${frame.method} may already have applied; inspect status before retrying. (${error.message})`,
+                  )
+                : error,
+            ),
           ),
+      timeoutError: (frame) =>
+        processError(
+          `execute ${frame.method}`,
+          outcomeCode(frame.method),
+          `${frame.method} was sent but no correlated response arrived; it will not be retried automatically.`,
         ),
-      ({ request: frame }) => Effect.sync(() => void responses.delete(frame.id)),
-    );
+    });
 
   const initialize = Effect.gen(function* () {
     yield* rpc(initializeRequest).pipe(

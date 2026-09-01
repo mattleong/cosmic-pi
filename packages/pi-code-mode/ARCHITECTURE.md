@@ -22,8 +22,8 @@ Only runtime source plus its README, legal, and provenance documents ship.
 - `src/settings/` owns command dispatch, completions, list behavior, custom integer flow, and
   notifications. `src/boundary/host-ui.ts` is the Promise and callback adapter for Pi dialogs.
 - `src/tools/` owns the reviewed guest catalog, execution admission, UTF-8 limits, progress state,
-  result formatting, failure-detail retention, tool registration, active-list reconciliation,
-  and renderer ticker cleanup. Its Background Tasks leaf imports the producer-owned v1 input and
+  result formatting, failure-detail retention, tool registration, and active-list reconciliation.
+  Its Background Tasks leaf imports the producer-owned v1 input and
   output codecs instead of declaring a second protocol shape.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
   legacy details, ignores malformed rows, and retains valid explicit totals. `tool-renderer.ts`
@@ -31,7 +31,8 @@ Only runtime source plus its README, legal, and provenance documents ship.
   changing model-visible text.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
   Windows PowerShell, the explicit Background Tasks protocol client, the guarded progress
-  publisher, Pi dialog adapters, and the process-memory deactivation handoff. Foreign Promise
+  publisher, the hostile renderer-ticker adapter, Pi dialog adapters, and the process-memory
+  deactivation handoff. Foreign Promise
   adapters use function-form `Effect.tryPromise`; they format `Cause.UnknownError.cause` through
   the hostile-safe rejection formatter before returning a model-visible tool failure.
 - `tests/` covers configuration, atomic commits, lifecycle races, dialogs, adapters, limits,

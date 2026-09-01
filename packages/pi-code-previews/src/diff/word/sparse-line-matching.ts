@@ -30,21 +30,6 @@ type ScoredSparseChangedLinePairCandidate = SparseChangedLinePairCandidate & {
 
 type ChangedLineScoreAt = (removedPosition: number, addedPosition: number) => number;
 
-export type SparseLineMatchingPolicy = {
-  minPositionalFallbackPairScore: number;
-  minChangedLinePairScore: number;
-  competingChangedLineScoreAt: (
-    removedLength: number,
-    addedLength: number,
-    removedPosition: number,
-    addedPosition: number,
-    scoreAt: ChangedLineScoreAt,
-  ) => number;
-  isAmbiguousChangedLinePairScore: (score: number, competingScore: number) => boolean;
-  isReciprocalBestChangedLinePair: (score: number, competingScore: number) => boolean;
-  linePairConfidence: (score: number, competingScore: number) => WordChangeConfidence;
-};
-
 export type TopTwoCandidateValues = { best: number; second: number };
 
 const MAX_POSITIONAL_FALLBACK_AMBIGUITY_CELLS = 10_000;
@@ -55,10 +40,70 @@ const MIN_SPARSE_RARE_FEATURE_COUNT = 2;
 const MIN_SPARSE_EVIDENCE_MARGIN = 1;
 const MIN_SPARSE_EVIDENCE_RATIO = 0.9;
 
+export const MIN_CHANGED_LINE_PAIR_SCORE = 0.45;
+export const MIN_POSITIONAL_FALLBACK_PAIR_SCORE = 0.28;
+export const MIN_HIGH_CONFIDENCE_CROSSING_PAIR_SCORE = 0.72;
+const CHANGED_LINE_PAIR_AMBIGUITY_MARGIN = 0.06;
+const CHANGED_LINE_PAIR_AMBIGUITY_RATIO = 0.92;
+const HIGH_CONFIDENCE_CROSSING_PAIR_MARGIN = 0.12;
+const HIGH_CONFIDENCE_CROSSING_PAIR_RATIO = 0.85;
+
+export function competingChangedLineScoreAt(
+  removedLength: number,
+  addedLength: number,
+  removedPosition: number,
+  addedPosition: number,
+  scoreAt: ChangedLineScoreAt,
+  usedRemoved?: ReadonlySet<number>,
+  usedAdded?: ReadonlySet<number>,
+): number {
+  let competingScore = 0;
+  for (
+    let candidateAddedPosition = 0;
+    candidateAddedPosition < addedLength;
+    candidateAddedPosition++
+  ) {
+    if (candidateAddedPosition === addedPosition || usedAdded?.has(candidateAddedPosition))
+      continue;
+    competingScore = Math.max(competingScore, scoreAt(removedPosition, candidateAddedPosition));
+  }
+  for (
+    let candidateRemovedPosition = 0;
+    candidateRemovedPosition < removedLength;
+    candidateRemovedPosition++
+  ) {
+    if (candidateRemovedPosition === removedPosition || usedRemoved?.has(candidateRemovedPosition))
+      continue;
+    competingScore = Math.max(competingScore, scoreAt(candidateRemovedPosition, addedPosition));
+  }
+  return competingScore;
+}
+
+export function isAmbiguousChangedLinePairScore(score: number, competingScore: number): boolean {
+  return (
+    competingScore >= MIN_POSITIONAL_FALLBACK_PAIR_SCORE &&
+    (score - competingScore <= CHANGED_LINE_PAIR_AMBIGUITY_MARGIN ||
+      competingScore >= score * CHANGED_LINE_PAIR_AMBIGUITY_RATIO)
+  );
+}
+
+export function isReciprocalBestChangedLinePair(score: number, competingScore: number): boolean {
+  return score > competingScore && !isAmbiguousChangedLinePairScore(score, competingScore);
+}
+
+export function linePairConfidence(score: number, competingScore: number): WordChangeConfidence {
+  if (
+    score >= MIN_HIGH_CONFIDENCE_CROSSING_PAIR_SCORE &&
+    score - competingScore >= HIGH_CONFIDENCE_CROSSING_PAIR_MARGIN &&
+    competingScore <= score * HIGH_CONFIDENCE_CROSSING_PAIR_RATIO
+  )
+    return "high";
+  return "medium";
+}
+
 export function matchChangedLinesSparse(
   removed: Array<IndexedChangedLine<RemovedDiffLine>>,
   added: Array<IndexedChangedLine<AddedDiffLine>>,
-  policy: SparseLineMatchingPolicy,
 ): SparseChangedLinePair[] {
   const similarityDocuments = changedLineSimilarityDocuments(removed, added);
   const tokenWeight = similarityTokenWeight(similarityDocuments);
@@ -95,7 +140,7 @@ export function matchChangedLinesSparse(
   };
 
   const sparseCandidates = sparseChangedLinePairCandidates(similarityDocuments, tokenWeight);
-  const pairs = sparseChangedLineAnchors(removed, added, sparseCandidates, scoreAt, policy);
+  const pairs = sparseChangedLineAnchors(removed, added, sparseCandidates, scoreAt);
   const positions = changedLinePositions(removed, added);
   const usedRemoved = new Set<number>();
   const usedAdded = new Set<number>();
@@ -109,14 +154,14 @@ export function matchChangedLinesSparse(
   for (let index = 0; index < Math.min(removed.length, added.length); index++) {
     if (usedRemoved.has(index) || usedAdded.has(index)) continue;
     const score = scoreAt(index, index);
-    if (score < policy.minPositionalFallbackPairScore) continue;
+    if (score < MIN_POSITIONAL_FALLBACK_PAIR_SCORE) continue;
     const removedLine = changedLineAt(removed, index);
     const addedLine = changedLineAt(added, index);
     if (hasUniqueSharedSimilarityFeature(removedLine, addedLine, similarityDocuments)) {
       pairs.push({
         removedIndex: removedLine.index,
         addedIndex: addedLine.index,
-        confidence: policy.linePairConfidence(score, 0),
+        confidence: linePairConfidence(score, 0),
       });
       usedRemoved.add(index);
       usedAdded.add(index);
@@ -124,18 +169,18 @@ export function matchChangedLinesSparse(
     }
     if (!canCheckAmbiguity) continue;
 
-    const competingScore = policy.competingChangedLineScoreAt(
+    const competingScore = competingChangedLineScoreAt(
       removed.length,
       added.length,
       index,
       index,
       scoreAt,
     );
-    if (policy.isAmbiguousChangedLinePairScore(score, competingScore)) continue;
+    if (isAmbiguousChangedLinePairScore(score, competingScore)) continue;
     pairs.push({
       removedIndex: removedLine.index,
       addedIndex: addedLine.index,
-      confidence: policy.linePairConfidence(score, competingScore),
+      confidence: linePairConfidence(score, competingScore),
     });
     usedRemoved.add(index);
     usedAdded.add(index);
@@ -315,7 +360,6 @@ function sparseChangedLineAnchors(
   added: Array<IndexedChangedLine<AddedDiffLine>>,
   sparseCandidates: SparseChangedLinePairCandidate[],
   scoreAt: ChangedLineScoreAt,
-  policy: SparseLineMatchingPolicy,
 ): SparseChangedLinePair[] {
   const scoredCandidates: ScoredSparseChangedLinePairCandidate[] = sparseCandidates
     .map((candidate) => ({
@@ -338,7 +382,7 @@ function sparseChangedLineAnchors(
   const pairs: SparseChangedLinePair[] = [];
 
   for (const candidate of scoredCandidates) {
-    if (candidate.score < policy.minChangedLinePairScore) continue;
+    if (candidate.score < MIN_CHANGED_LINE_PAIR_SCORE) continue;
     if (usedRemoved.has(candidate.removedPosition) || usedAdded.has(candidate.addedPosition))
       continue;
     if (!hasStrongSparseEvidence(candidate)) continue;
@@ -347,13 +391,13 @@ function sparseChangedLineAnchors(
       competingCandidateValue(addedScores.get(candidate.addedPosition), candidate.score),
       sparsePositionalCompetingScore(candidate, removed.length, added.length, scoreAt),
     );
-    if (!policy.isReciprocalBestChangedLinePair(candidate.score, competingScore)) continue;
+    if (!isReciprocalBestChangedLinePair(candidate.score, competingScore)) continue;
     usedRemoved.add(candidate.removedPosition);
     usedAdded.add(candidate.addedPosition);
     pairs.push({
       removedIndex: changedLineAt(removed, candidate.removedPosition).index,
       addedIndex: changedLineAt(added, candidate.addedPosition).index,
-      confidence: policy.linePairConfidence(candidate.score, competingScore),
+      confidence: linePairConfidence(candidate.score, competingScore),
     });
   }
   return pairs;

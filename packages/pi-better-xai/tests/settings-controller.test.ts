@@ -12,7 +12,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import { beforeAll, describe, vi } from "vitest";
-import { InvalidSettingError, type ResolvedConfig } from "../src/config/index.ts";
+import { InvalidSettingError } from "pi-cosmic-core";
+import type { ResolvedConfig } from "../src/config/schema.ts";
 import { registerSettingsController } from "../src/settings/controller.ts";
 
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];

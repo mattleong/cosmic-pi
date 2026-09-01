@@ -59,11 +59,12 @@ export function normalizeSettingsWithDiagnostics<DataInput>(
   };
 }
 
-function parseUiSettingValue<K extends keyof CodePreviewSettings>(
-  current: CodePreviewSettings,
+function parseAndApplyUiSetting<K extends keyof CodePreviewSettings>(
+  settings: CodePreviewSettings,
   key: K,
   value: string,
 ): CodePreviewSettings[K] | undefined {
+  const current = settings;
   const currentValue = current[key];
   let candidate: unknown = value;
   if (key === "tools") {
@@ -78,15 +79,9 @@ function parseUiSettingValue<K extends keyof CodePreviewSettings>(
   }
   const decoded = Schema.decodeUnknownOption(CodePreviewSettingsSchema.fields[key])(candidate);
   // SAFETY: The selected authoritative field schema corresponds to the requested settings key.
-  return Option.isSome(decoded) ? (decoded.value as CodePreviewSettings[K]) : undefined;
-}
-
-function setSetting<K extends keyof CodePreviewSettings>(
-  settings: CodePreviewSettings,
-  key: K,
-  value: CodePreviewSettings[K],
-): void {
-  settings[key] = value;
+  const parsed = Option.isSome(decoded) ? (decoded.value as CodePreviewSettings[K]) : undefined;
+  if (parsed !== undefined) settings[key] = parsed;
+  return parsed;
 }
 
 export function updateSetting(
@@ -101,8 +96,7 @@ export function updateSetting(
   if (Object.hasOwn(CodePreviewSettingsSchema.fields, id)) {
     // SAFETY: The own-property check narrows id to a field in the authoritative settings schema.
     const key = id as keyof CodePreviewSettings;
-    const parsed = parseUiSettingValue(current, key, value);
-    if (parsed !== undefined) setSetting(next, key, parsed);
+    parseAndApplyUiSetting(next, key, value);
   } else {
     const tool = parseToolToggleId(id);
     if (tool) next.tools = updateToolToggle(current.tools, tool, value);

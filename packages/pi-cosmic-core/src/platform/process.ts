@@ -181,7 +181,7 @@ export const confirmEffectProcessClose = (
  * Runs a bounded one-shot process under Effect scope ownership. Output overflow
  * and deadlines terminate the process before returning their structured result.
  */
-export const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
+const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   request: BoundedProcessRequest,
 ) {
   const stdout: OutputCollector = { chunks: [], size: 0 };

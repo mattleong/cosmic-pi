@@ -15,10 +15,7 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { nestedCodePreviewSettings } from "../../src/config/document-store";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { loadCodePreviewSettings } from "../../index";
-import {
-  cleanupTestTempDirectories,
-  createTestTempDirectory,
-} from "../../src/testing/temp-directories";
+import { cleanupTestTempDirectories, createTestTempDirectory } from "../support/temp-directories";
 import { runOneShotSettingsEffect } from "../../src/boundary/settings-one-shot";
 import {
   CodePreviewSettingsService,

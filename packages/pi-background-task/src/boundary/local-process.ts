@@ -65,7 +65,11 @@ export interface LocalProcessHandle {
 
 export class LocalProcessError extends Schema.TaggedError<LocalProcessError>()(
   "LocalProcessError",
-  { operation: Schema.String, message: Schema.String },
+  {
+    operation: Schema.String,
+    reason: Schema.Literals(["cwd", "spawn", "terminate"]),
+    message: Schema.String,
+  },
 ) {}
 
 export interface LocalProcessContract {
@@ -77,6 +81,12 @@ export interface LocalProcessContract {
 const processError = <ErrorInput>(operation: string, _error: ErrorInput) =>
   new LocalProcessError({
     operation,
+    reason:
+      operation === "inspect working directory"
+        ? "cwd"
+        : operation === "spawn"
+          ? "spawn"
+          : "terminate",
     message: `Unable to ${operation} local process.`,
   });
 
@@ -198,6 +208,7 @@ const verifyCwd = (cwd: string) =>
         : Effect.fail(
             new LocalProcessError({
               operation: "inspect working directory",
+              reason: "cwd",
               message: `Working directory is not a directory: ${cwd}`,
             }),
           ),

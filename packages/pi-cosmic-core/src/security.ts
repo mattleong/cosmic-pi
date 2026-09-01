@@ -1,4 +1,5 @@
 import * as Encoding from "effect/Encoding";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -129,6 +130,25 @@ export function decodeJwtPayloadText(token: string): string | undefined {
   const payload = token.split(".")[1];
   return payload ? Result.getOrUndefined(Encoding.decodeBase64UrlString(payload)) : undefined;
 }
+
+/**
+ * Decodes one JWT payload claim set, returning `undefined` for a missing or invalid payload.
+ * `payloadSchema` is a from-string schema over the JSON payload text (for example
+ * `Schema.fromJsonString(JwtPayloadSchema)`); Redacted token wrapping stays at the call site.
+ */
+export const extractJwtClaim = <S extends Schema.ConstraintDecoder<unknown>>(
+  token: string | undefined,
+  payloadSchema: S,
+): S["Type"] | undefined => {
+  if (token === undefined) return undefined;
+  const source = decodeJwtPayloadText(token);
+  if (source === undefined) return undefined;
+  return Option.getOrUndefined(Schema.decodeUnknownOption(payloadSchema)(source));
+};
+
+/** Redacted OAuth-token field schema shared by provider auth documents. */
+export const redactedTokenSchema = (label: string) =>
+  Schema.RedactedFromValue(Schema.Trim.check(Schema.isMinLength(1)), { label });
 
 export function maskIdentifier(value: string | undefined): string | undefined {
   const trimmed = value?.trim();

@@ -9,11 +9,11 @@ import type {
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as codePreviews from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { brailleSpinnerFrame, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
+  decodeOption,
   describeNestedActivity,
   MAX_INTENT_LENGTH,
   truncateDisplay,
@@ -23,11 +23,11 @@ import { codeModeOutputText, projectStructuredCodeModeOutput } from "./result-ou
 import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-render-details.ts";
 
 /** Neutral headline when the model provided no usable intent. */
-export const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
+const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
 
-export const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum;
+const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum;
 
-export const describeCodeModeIntent = <Intent>(intent: Intent): string => {
+const describeCodeModeIntent = <Intent>(intent: Intent): string => {
   if (!Predicate.isString(intent)) return CODE_MODE_FALLBACK_INTENT;
   const sanitized = sanitizeTerminalLine(intent);
   if (sanitized.length === 0) return CODE_MODE_FALLBACK_INTENT;
@@ -43,32 +43,24 @@ const CodeModeArgumentsInputSchema = Schema.Struct({
   code: Schema.optional(Schema.Unknown),
 });
 
-const decodeInput = <S extends Schema.ConstraintDecoder<unknown>, Value>(
-  schema: S,
-  value: Value,
-): S["Type"] | undefined => {
-  const decoded = Schema.decodeUnknownOption(schema)(value);
-  return Option.isSome(decoded) ? decoded.value : undefined;
-};
-
 const textContentOf = (result: AgentToolResult<unknown>): string => {
   const content: unknown = result.content;
   if (!Array.isArray(content)) return "";
   return content
     .flatMap((part) => {
-      const record = decodeInput(TextContentPartInputSchema, part);
+      const record = decodeOption(TextContentPartInputSchema, part);
       return record === undefined ? [] : [record.text];
     })
     .join("\n");
 };
 
 const intentHeadline = <Args>(args: Args, theme: Theme): string => {
-  const intent = describeCodeModeIntent(decodeInput(CodeModeArgumentsInputSchema, args)?.intent);
+  const intent = describeCodeModeIntent(decodeOption(CodeModeArgumentsInputSchema, args)?.intent);
   return `${theme.fg("toolTitle", theme.bold("Code Mode"))} ${theme.fg("dim", `· ${intent}`)}`;
 };
 
 const sourceOf = <Args>(args: Args): string | undefined => {
-  const code = decodeInput(CodeModeArgumentsInputSchema, args)?.code;
+  const code = decodeOption(CodeModeArgumentsInputSchema, args)?.code;
   return Predicate.isString(code) ? code : undefined;
 };
 
@@ -114,23 +106,17 @@ const ACTIVITY_SYMBOLS = {
   cancelled: { symbol: managerStateGlyph("stopped"), color: "muted" },
 } as const;
 
-export const formatCallDuration = (durationMs: number): string =>
+const formatCallDuration = (durationMs: number): string =>
   durationMs < 1_000
     ? `${durationMs}ms`
     : durationMs < 10_000
       ? `${(durationMs / 1_000).toFixed(1)}s`
       : `${Math.round(durationMs / 1_000)}s`;
 
-type ToolIconLookup = (tool: string) => string | undefined;
-
-export const nestedToolIcon = (
-  tool: string,
-  lookup: ToolIconLookup | null | undefined = codePreviews.getCodePreviewToolIcon,
-): string | undefined => {
-  if (!tool.startsWith("pi.") || !Predicate.isFunction(lookup)) return undefined;
+const nestedToolIcon = (tool: string): string | undefined => {
+  if (!tool.startsWith("pi.")) return undefined;
   try {
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const icon = (lookup as ToolIconLookup)(tool.slice("pi.".length));
+    const icon = codePreviews.getCodePreviewToolIcon(tool.slice("pi.".length));
     if (!Predicate.isString(icon)) return undefined;
     const sanitized = truncateDisplay(sanitizeTerminalLine(icon), 8);
     return sanitized.length === 0 ? undefined : sanitized;

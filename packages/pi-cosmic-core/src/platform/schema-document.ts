@@ -4,14 +4,11 @@ import * as Schema from "effect/Schema";
 import type * as SchemaIssue from "effect/SchemaIssue";
 import { JsonDocumentStore, type JsonObject } from "./json-document.ts";
 
-export class SchemaDocumentError extends Schema.TaggedError<SchemaDocumentError>()(
-  "SchemaDocumentError",
-  {
-    operation: Schema.String,
-    path: Schema.String,
-    message: Schema.String,
-  },
-) {}
+class SchemaDocumentError extends Schema.TaggedError<SchemaDocumentError>()("SchemaDocumentError", {
+  operation: Schema.String,
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 
 export interface DecodedDocument<A> {
   readonly value: A;

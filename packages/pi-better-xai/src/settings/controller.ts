@@ -13,10 +13,12 @@ import {
   invokeHostCallback,
   notifyAtHostBoundary,
   type HostNotificationLevel,
+  type CapturedHostSignal,
 } from "pi-cosmic-core";
 import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
 import { hasSettingsSurface, openSettingsSurfaceAtHostBoundary } from "../boundary/host-ui.ts";
-import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config/index.ts";
+import { SETTINGS_OPTION_DESCRIPTORS } from "../config/options.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import { XaiUsageService } from "../usage/controller.ts";
 
 export function registerSettingsController(
@@ -25,11 +27,7 @@ export function registerSettingsController(
     config(ctx: ExtensionContext): ResolvedConfig;
     updateFooter(ctx: ExtensionContext): void;
     formatDebugStatus(ctx: ExtensionContext): string;
-    captureSignal(
-      ctx: ExtensionContext,
-    ):
-      | { readonly _tag: "Captured"; readonly signal: AbortSignal | undefined }
-      | { readonly _tag: "Unavailable" };
+    captureSignal(ctx: ExtensionContext): CapturedHostSignal;
     run<A, E>(effect: Effect.Effect<A, E, XaiUsageService>, signal?: AbortSignal): Promise<A>;
   },
 ): void {

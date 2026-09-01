@@ -39,15 +39,14 @@ const INHERIT_VALUE = "inherit";
 const signalAborted = (signal: AbortSignal | undefined): boolean =>
   invokeHostCallback(() => signal?.aborted === true, true);
 /** Interactive-list sentinel that prompts for any in-bounds integer via `ctx.ui.input`. */
-export const CUSTOM_VALUE = "custom…";
+const CUSTOM_VALUE = "custom…";
 
-export const CODE_MODE_UNTRUSTED_NOTICE =
+const CODE_MODE_UNTRUSTED_NOTICE =
   "This project is not trusted: global settings can be edited, but Code Mode remains " +
   "unavailable in this project until the project is trusted.";
 
-// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 const COMPLETION_DESCRIPTORS = CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => ({
-  id: descriptor.id as string,
+  id: descriptor.id,
   description: descriptor.description,
   values: [...descriptor.values, INHERIT_VALUE],
 }));

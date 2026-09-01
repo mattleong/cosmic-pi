@@ -23,7 +23,7 @@ type MutableCodeModeProvenance = {
   -readonly [Field in CodeModeFieldId]: CodeModeFieldProvenance;
 };
 
-export interface CodeModeResolution {
+interface CodeModeResolution {
   readonly config: CodeModeConfig;
   readonly provenance: CodeModeProvenance;
 }
@@ -45,15 +45,11 @@ export function resolveCodeModeConfig(
   const config: MutableCodeModeConfig = {
     ...DEFAULT_CODE_MODE_CONFIG,
   };
-  const provenance: MutableCodeModeProvenance = {
-    enabled: "default",
-    timeoutMs: "default",
-    maxToolCalls: "default",
-    maxOutputBytes: "default",
-    maxSourceBytes: "default",
-    maxCumulativeChildOutputBytes: "default",
-    catalogBudget: "default",
-  };
+  // SAFETY: The seed derives every id from the same authoritative CODE_MODE_FIELD_IDS, so the
+  // widened record matches the per-field provenance keys exactly.
+  const provenance: MutableCodeModeProvenance = Object.fromEntries(
+    CODE_MODE_FIELD_IDS.map((field) => [field, "default" as const]),
+  ) as MutableCodeModeProvenance;
   const setConfigField = <Field extends CodeModeFieldId>(
     field: Field,
     value: CodeModeConfig[Field],
@@ -87,13 +83,13 @@ interface CodeModeSettingDescriptorBase {
   ) => Result.Result<boolean | number, InvalidCodeModeSettingError>;
 }
 
-export interface CodeModeBooleanSettingDescriptor extends CodeModeSettingDescriptorBase {
+interface CodeModeBooleanSettingDescriptor extends CodeModeSettingDescriptorBase {
   readonly kind: "boolean";
   readonly id: CodeModeFieldId;
 }
 
 /** Integer settings accept any in-bounds value, not only the presets. */
-export interface CodeModeIntegerSettingDescriptor extends CodeModeSettingDescriptorBase {
+interface CodeModeIntegerSettingDescriptor extends CodeModeSettingDescriptorBase {
   readonly kind: "integer";
   readonly id: CodeModeIntegerFieldId;
 }

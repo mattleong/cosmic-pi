@@ -1,10 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-export class TestPollingTimeout extends Schema.TaggedError<TestPollingTimeout>()(
-  "TestPollingTimeout",
-  { attempts: Schema.Number },
-) {}
+class TestPollingTimeout extends Schema.TaggedError<TestPollingTimeout>()("TestPollingTimeout", {
+  attempts: Schema.Number,
+}) {}
 
 /** Deterministic bounded polling for tests whose scoped worker advances via Effect yields. */
 export const yieldUntil = (

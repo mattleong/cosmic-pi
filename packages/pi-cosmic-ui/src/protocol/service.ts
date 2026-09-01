@@ -115,7 +115,9 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
             return Effect.succeed([undefined, next] as const);
           })
           .pipe(Effect.orDie);
-      const notifyChanged = Effect.try(options.onChange).pipe(Effect.ignore);
+      // `onChange` is total by construction (invoke-wrapped render requests), so a throw
+      // would be a violated invariant, not an expected failure.
+      const notifyChanged = Effect.sync(options.onChange);
       let lastKnownCwd = options.cwd;
       const currentCwd = () =>
         callbacks.invoke(

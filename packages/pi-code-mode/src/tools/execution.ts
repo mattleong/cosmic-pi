@@ -15,7 +15,6 @@ import * as Effect from "effect/Effect";
 import { CodeMode, type CodeModeResult } from "../boundary/codemode-runtime.ts";
 import { makeBackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import {
-  hasNestedPowerShell,
   makeNestedPiToolDispatch,
   type NestedPiToolDefinitions,
 } from "../boundary/host-builtin-tools.ts";
@@ -166,6 +165,7 @@ export const makeCodeModeToolExecute =
       // runtime JS module. Older runtime instances emit only the legacy start/end hooks. Their
       // negative execution-local IDs remain disjoint from modern non-negative lifecycle IDs.
       const counts = emptyCounts();
+      const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
       const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
       const publishNow = () => publisher.publishNow(progressResult(snapshotCalls(calls), counts));
       const trackQueued = (entry: MutableCallEntry): boolean => {
@@ -190,7 +190,6 @@ export const makeCodeModeToolExecute =
         throw new Error(clampModelVisibleText(sourceRefusal, config.maxOutputBytes));
       }
 
-      const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
       const attempt = (): Promise<AgentToolResult<CodeModeToolDetails>> => {
         // Give the host one leading-edge snapshot before interpreter work begins. Row admission
         // and enriched running labels publish synchronously into Pi's next frame; status-only
@@ -213,7 +212,7 @@ export const makeCodeModeToolExecute =
         const execution = (environment.executeCodeMode ?? CodeMode.execute)({
           code: params.code,
           tools: makeExecutionGuestTools(dispatch, dispatchBackgroundTask, budget, {
-            includePowerShell: hasNestedPowerShell(environment.definitions),
+            includePowerShell: environment.definitions.powershell !== undefined,
           }),
           limits: {
             timeoutMs: config.timeoutMs,

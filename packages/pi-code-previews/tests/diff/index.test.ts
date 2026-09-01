@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, test } from "vitest";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { stripAnsi, testTheme } from "../../src/testing/render";
-import { renderedWordEmphasisSpans } from "../../src/testing/rendered-word-emphasis";
+import { stripAnsi, testTheme } from "../support/render";
+import { renderedWordEmphasisSpans } from "../support/rendered-word-emphasis";
 import { FullWidthDiffText } from "../../src/diff/full-width-text";
 import { renderPlainDiff, renderSyntaxHighlightedDiff } from "../../src/diff/render";
 import { summarizeDiff } from "../../src/diff/summary";
 import { parseDiffLine } from "../../src/diff/parse";
-import { wordEmphasisTelemetry } from "../../src/testing/word-emphasis-telemetry";
+import { wordEmphasisTelemetry } from "../support/word-emphasis-telemetry";
 import { changedRanges, changedRangesWithConfidence } from "../../src/diff/word/emphasis";
 
 let previousCodePreviewSettings = { ...codePreviewSettings };

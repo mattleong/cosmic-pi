@@ -59,11 +59,13 @@ export function isOpenAISubscriptionModel(
   );
 }
 
+export const HIDDEN_USAGE_STATUS_TEXT =
+  "Usage hidden: current model is not an OpenAI subscription model.";
+
 interface OpenAIUsageDecision {
   readonly eligible: boolean;
   readonly clear: boolean;
-  readonly hiddenStatusText: string;
-  readonly unavailableStatusText: string | undefined;
+  readonly statusTexts: UsageEligibilityStatusTexts;
 }
 
 function openAIUsageDecision(
@@ -77,25 +79,19 @@ function openAIUsageDecision(
     return {
       eligible,
       clear: clearUsageRequested || !scopeMatches,
-      hiddenStatusText: "Usage hidden: current model is not an OpenAI subscription model.",
-      unavailableStatusText: undefined,
+      statusTexts: { hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT },
     };
   } catch {
     return {
       eligible: false,
       clear: true,
-      hiddenStatusText: "Usage unavailable.",
-      unavailableStatusText: "Usage unavailable.",
+      statusTexts: {
+        hiddenStatusText: "Usage unavailable.",
+        unavailableStatusText: "Usage unavailable.",
+      },
     };
   }
 }
-
-const eligibilityStatusTexts = (decision: OpenAIUsageDecision): UsageEligibilityStatusTexts => {
-  const texts: UsageEligibilityStatusTexts = { hiddenStatusText: decision.hiddenStatusText };
-  if (decision.unavailableStatusText !== undefined)
-    texts.unavailableStatusText = decision.unavailableStatusText;
-  return texts;
-};
 
 export function synchronizedProjection(
   state: OpenAIProjection,
@@ -103,12 +99,7 @@ export function synchronizedProjection(
   clearUsage: boolean,
 ): OpenAIProjection {
   const decision = openAIUsageDecision(state, ctx, clearUsage);
-  return withUsageEligibility(
-    state,
-    decision.eligible,
-    decision.clear,
-    eligibilityStatusTexts(decision),
-  );
+  return withUsageEligibility(state, decision.eligible, decision.clear, decision.statusTexts);
 }
 
 export function synchronizeProjectionContext(
@@ -121,7 +112,7 @@ export function synchronizeProjectionContext(
     return {
       eligible: decision.eligible,
       clearUsage: decision.clear,
-      statusTexts: eligibilityStatusTexts(decision),
+      statusTexts: decision.statusTexts,
     };
   });
 }

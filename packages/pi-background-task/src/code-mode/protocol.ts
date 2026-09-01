@@ -9,9 +9,9 @@ export const BACKGROUND_TASK_CODE_MODE_QUERY = "pi-background-task:v1:code-mode:
 /** Structural limits of the v1 Code Mode request and response codecs. */
 export const BACKGROUND_TASK_CODE_MODE_BOUNDS = Object.freeze({
   minTimeoutSeconds: 0.001,
-  maxContainsChars: 256,
-  maxTailLines: 2_000,
-  maxWaitSeconds: 120,
+  maxContainsChars: BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars,
+  maxTailLines: BACKGROUND_TASK_FIELD_BOUNDS.maxTailLines,
+  maxWaitSeconds: BACKGROUND_TASK_FIELD_BOUNDS.maxWaitSeconds,
   maxTextChars: 65_536,
   maxIdChars: BACKGROUND_TASK_FIELD_BOUNDS.maxIdChars,
   maxNameChars: BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars,

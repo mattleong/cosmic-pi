@@ -209,6 +209,3 @@ export function plainHighlightedText(text: string, theme: Theme): string[] {
     .split("\n")
     .map((line) => theme.fg("toolOutput", escapeControlChars(line)));
 }
-export function normalizeShikiLanguage(lang: string): string {
-  return normalizePreviewLanguageAlias(lang);
-}

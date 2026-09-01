@@ -16,7 +16,6 @@ import {
   isOutcomeUncertain,
   processError,
   SubagentProcessError,
-  UnsupportedSubagentCapabilityError,
   type SubagentError,
 } from "../run/errors.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
@@ -38,6 +37,7 @@ import {
   type UsageComponents,
 } from "./local-claude-correlation.ts";
 import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
+import { correlatedRequest, unsupported as unsupportedCapability } from "./driver-shared.ts";
 import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
 import {
   CLAUDE_INTERRUPT_MARKER,
@@ -73,11 +73,11 @@ const CLAUDE_NATIVE_AGENT_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 const unsupported = (capability: string) =>
-  new UnsupportedSubagentCapabilityError({
-    backend: "local/claude",
+  unsupportedCapability(
+    "local/claude",
     capability,
-    message: `Local Claude Code does not provide a confirmable ${capability} operation.`,
-  });
+    `Local Claude Code does not provide a confirmable ${capability} operation.`,
+  );
 
 interface PendingUserReplay {
   readonly uuid: string;
@@ -741,40 +741,37 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     operation: string,
     makeFrame: (requestId: string) => ClaudeControlRequestFrame,
   ): Effect.Effect<unknown, SubagentError> =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
+    correlatedRequest({
+      timeout: CONTROL_TIMEOUT,
+      register: (deferred) => {
         const requestId = `${operation}-${nextControlId++}`;
-        const deferred = Deferred.makeUnsafe<unknown, SubagentError>();
         controlResponses.set(requestId, { operation, deferred });
-        return { requestId, deferred };
-      }),
-      ({ requestId, deferred }) =>
-        child.send(makeFrame(requestId)).pipe(
-          Effect.mapError((error) =>
-            error.code === "transport_outcome_uncertain"
-              ? processError(
-                  operation,
-                  `${operation}_outcome_uncertain`,
-                  `Claude ${operation} may already have applied; it will not be retried. (${error.message})`,
-                )
-              : error,
-          ),
-          Effect.andThen(Deferred.await(deferred)),
-          Effect.timeoutOption(CONTROL_TIMEOUT),
-          Effect.flatMap((outcome) =>
-            Option.isSome(outcome)
-              ? Effect.succeed(outcome.value)
-              : Effect.fail(
-                  processError(
+        return {
+          frame: makeFrame(requestId),
+          unregister: Effect.sync(() => void controlResponses.delete(requestId)),
+        };
+      },
+      send: (frame) =>
+        child
+          .send(frame)
+          .pipe(
+            Effect.mapError((error) =>
+              error.code === "transport_outcome_uncertain"
+                ? processError(
                     operation,
                     `${operation}_outcome_uncertain`,
-                    `Claude ${operation} was sent but no correlated native response arrived; it will not be retried.`,
-                  ),
-                ),
+                    `Claude ${operation} may already have applied; it will not be retried. (${error.message})`,
+                  )
+                : error,
+            ),
           ),
+      timeoutError: () =>
+        processError(
+          operation,
+          `${operation}_outcome_uncertain`,
+          `Claude ${operation} was sent but no correlated native response arrived; it will not be retried.`,
         ),
-      ({ requestId }) => Effect.sync(() => void controlResponses.delete(requestId)),
-    );
+    });
 
   const initialize = Effect.gen(function* () {
     if (initializationStarted)

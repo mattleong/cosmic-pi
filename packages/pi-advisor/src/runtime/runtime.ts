@@ -11,7 +11,6 @@ export {
   MAX_ADVISOR_CHECKPOINT_ID_CHARS,
   MAX_ADVISOR_TOOL_ROUNDS,
   MAX_ADVISOR_STREAM_CHARS,
-  DEFAULT_ADVISOR_SESSION_ABORT_TIMEOUT_MS,
   AdvisorCheckpointSchema,
   AdvisorRuntimeResetRequiredError,
   type AdvisorCheckpoint,
@@ -27,13 +26,11 @@ export { parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
 export {
   AdvisorRuntime,
   makeAdvisorControlMailbox,
-  makeAdvisorRuntimeOperations,
   type AdvisorRuntimeOperations,
-  type ManagedAdvisorRuntimeOperations,
 } from "./session-runtime.ts";
 export { NoDiscoveryAdvisorResourceLoader } from "./resource-loader.ts";
 
-export interface AdvisorRuntimeServiceContract extends AdvisorRuntimeOperations {}
+export type AdvisorRuntimeServiceContract = AdvisorRuntimeOperations;
 
 export class AdvisorRuntimeService extends Context.Service<
   AdvisorRuntimeService,

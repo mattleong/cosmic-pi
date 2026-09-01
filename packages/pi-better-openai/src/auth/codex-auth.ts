@@ -6,14 +6,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { decodeJwtPayloadText, readSchemaDocument } from "pi-cosmic-core";
+import { extractJwtClaim, readSchemaDocument, redactedTokenSchema } from "pi-cosmic-core";
 
 const CodexAuthDocumentSchema = Schema.Struct({
   "openai-codex": Schema.optional(Schema.Unknown),
 });
-const redactedAccessToken = Schema.RedactedFromValue(Schema.Trim.check(Schema.isMinLength(1)), {
-  label: "OpenAI Codex access token",
-});
+const redactedAccessToken = redactedTokenSchema("OpenAI Codex access token");
 const CodexAuthEntrySchema = Schema.Struct({
   type: Schema.Literal("oauth"),
   access: redactedAccessToken,
@@ -34,7 +32,6 @@ const JwtPayloadSchema = Schema.Struct({
 });
 const RegistryCredentialsFromJsonSchema = Schema.fromJsonString(RegistryCredentialsSchema);
 const JwtPayloadFromJsonSchema = Schema.fromJsonString(JwtPayloadSchema);
-const decodeJwtPayload = Option.liftThrowable(decodeJwtPayloadText);
 
 export class CodexAuthError extends Schema.TaggedError<CodexAuthError>()("CodexAuthError", {
   operation: Schema.String,
@@ -51,11 +48,7 @@ export type CodexCredentialsWithSource = CodexCredentials & {
   readonly source: "modelRegistry" | "authFile";
 };
 export function extractAccountIdFromJwt(token: string): string | undefined {
-  const source = Option.getOrUndefined(decodeJwtPayload(token));
-  if (!source) return undefined;
-  const decoded = Option.getOrUndefined(
-    Schema.decodeUnknownOption(JwtPayloadFromJsonSchema)(source),
-  );
+  const decoded = extractJwtClaim(token, JwtPayloadFromJsonSchema);
   return decoded?.["https://api.openai.com/auth"]?.chatgpt_account_id?.trim() || undefined;
 }
 export function parseCodexRegistryCredentials(

@@ -10,12 +10,16 @@ import {
   type Component,
   type SettingItem,
 } from "@earendil-works/pi-tui";
-import type { SettingsOptionDescriptor } from "../../config/options.ts";
-import type { ResolvedConfig } from "../../config/schema.ts";
+import type { SettingsOptionDescriptor } from "pi-cosmic-core";
 
-export function settingItemsFromDescriptors(
-  descriptors: readonly SettingsOptionDescriptor[],
-  cfg: ResolvedConfig,
+export function settingItemsFromDescriptors<Config>(
+  descriptors: ReadonlyArray<
+    Pick<
+      SettingsOptionDescriptor<Config>,
+      "id" | "label" | "description" | "currentValue" | "values"
+    >
+  >,
+  cfg: Config,
 ): SettingItem[] {
   return descriptors.map((descriptor) => {
     const item: SettingItem = {

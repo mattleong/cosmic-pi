@@ -8,7 +8,7 @@ import {
   type UsageProjectionBase,
 } from "pi-cosmic-core";
 import { isUsingOAuthAtHostBoundary } from "../boundary/model-registry-auth.ts";
-import type { ResolvedConfig } from "../config/index.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import type { UsageSnapshot } from "./format.ts";
 
 export const HIDDEN_USAGE_STATUS_TEXT =

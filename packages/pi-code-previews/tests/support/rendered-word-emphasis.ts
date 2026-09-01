@@ -1,4 +1,4 @@
-import { matchSgrSequence } from "../shared/terminal-text";
+import { matchSgrSequence } from "../../src/shared/terminal-text";
 
 type RenderedWordEmphasis = {
   content: string;

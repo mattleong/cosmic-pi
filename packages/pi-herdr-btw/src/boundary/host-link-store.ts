@@ -64,25 +64,26 @@ export const makeHostHerdrBtwLinkStore = (
   options: HostHerdrBtwLinkStoreOptions = {},
 ): HerdrBtwLinkStore => {
   const probe = options.probeSessionHeader ?? probeSessionHeader;
+  // Fail-closed owner revalidation shared by restore and record: the captured owner must still
+  // match the live extension context and carry the owner header before either operation proceeds.
+  const revalidateOwner = (): boolean => {
+    try {
+      return isSameOwner(capturedOwner, readOwner(ctx)) && hasOwnerHeader(capturedOwner, probe);
+    } catch {
+      return false;
+    }
+  };
   return {
     restore: () => {
       try {
-        const currentOwner = readOwner(ctx);
-        if (!isSameOwner(capturedOwner, currentOwner) || !hasOwnerHeader(capturedOwner, probe))
-          return { _tag: "malformed" };
+        if (!revalidateOwner()) return { _tag: "malformed" };
         return restoreHerdrBtwLink(ctx.sessionManager.getEntries(), capturedOwner);
       } catch {
         return { _tag: "malformed" };
       }
     },
     record: (link) => {
-      try {
-        const currentOwner = readOwner(ctx);
-        if (!isSameOwner(capturedOwner, currentOwner) || !hasOwnerHeader(capturedOwner, probe))
-          return "refused";
-      } catch {
-        return "refused";
-      }
+      if (!revalidateOwner()) return "refused";
 
       try {
         pi.appendEntry(HERDR_BTW_LINK_ENTRY_TYPE, {

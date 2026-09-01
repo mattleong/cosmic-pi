@@ -1,15 +1,14 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-import { collectChangedDiffBlock } from "../diff/changed-blocks";
-import { renderSyntaxHighlightedDiff } from "../diff/render";
-import { isChangedDiffLine, parseDiffLine } from "../diff/parse";
-import { analyzeChangedLineBlock } from "../diff/word/change-block";
-import { shouldEmphasizeChangedPair } from "../diff/word/emphasis";
+import { renderSyntaxHighlightedDiff } from "../../src/diff/render";
+import { collectChangedDiffBlock, isChangedDiffLine, parseDiffLine } from "../../src/diff/parse";
+import { analyzeChangedLineBlock } from "../../src/diff/word/change-block";
+import { shouldEmphasizeChangedPair } from "../../src/diff/word/emphasis";
 import {
   wordEmphasisAccuracyCases,
   type WordEmphasisAccuracyCase,
-} from "../diff/word/fixtures/emphasis-accuracy";
-import { codePreviewSettings, setCodePreviewSettings } from "../config/state";
-import { initializeShiki } from "../syntax/shiki";
+} from "./word-fixtures/emphasis-accuracy";
+import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
+import { initializeShiki } from "../../src/syntax/shiki";
 import { testTheme } from "./render";
 import { parseRenderedWordEmphasis } from "./rendered-word-emphasis";
 

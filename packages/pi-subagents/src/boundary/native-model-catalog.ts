@@ -28,6 +28,7 @@ import {
   sanitizeLocalCliEnvironment,
 } from "./local-cli-harness.ts";
 import type { LocalCliRuntime } from "./local-cli-process.ts";
+import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 const MAX_OUTPUT_BYTES = 512 * 1024;
 const MAX_SELECTOR_CHARS = 256;
@@ -141,7 +142,6 @@ const CodexCatalogResponse = Schema.Struct({
   }),
 });
 
-const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const decodeClaudeCatalogCorrelatedFrameOption = Schema.decodeUnknownOption(
   ClaudeCatalogCorrelatedFrame,
 );

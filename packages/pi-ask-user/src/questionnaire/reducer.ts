@@ -116,14 +116,11 @@ export function finalizeAskUserAnswer(
 
 export function submitQuestionnaire(state: QuestionnaireState): AskUserOutcome | undefined {
   if (!isQuestionnaireComplete(state)) return undefined;
-  const answers: AskUserAnswer[] = [];
-  state.drafts.forEach((draft, index) => {
+  const answers = state.drafts.flatMap((draft, index) => {
     const answer = draft.answer;
     const question = state.request.questions[index];
-    if (!answer || !question) return;
-    answers.push(
-      finalizeAskUserAnswer(question, draft.note ? { ...answer, note: draft.note } : answer),
-    );
+    if (!answer || !question) return [];
+    return [finalizeAskUserAnswer(question, draft.note ? { ...answer, note: draft.note } : answer)];
   });
   return { outcome: "submitted", answers };
 }

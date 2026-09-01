@@ -139,14 +139,11 @@ export function registerSettingsController(
         return ctx.ui
           .custom((tui, theme, keyboard, done) => {
             let outerList: SettingsList | undefined;
-            const fastItems = (): SettingItem[] => [
-              {
-                ...fastEnabledDescriptor,
-                currentValue: fastEnabledDescriptor.currentValue(cfg),
-                values: [...fastEnabledDescriptor.values],
-              },
-              ...settingItemsFromDescriptors(FAST_SETTING_DESCRIPTORS, cfg),
-            ];
+            const fastItems = (): SettingItem[] =>
+              settingItemsFromDescriptors(
+                [fastEnabledDescriptor, ...FAST_SETTING_DESCRIPTORS],
+                cfg,
+              );
             const diagnosticItems = (): SettingItem[] => [
               {
                 id: "diagnostics",

@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 
-export interface RuntimeApiCredentials {
+interface RuntimeApiCredentials {
   readonly apiKey?: string | undefined;
   readonly provider?: string | undefined;
 }

@@ -8,7 +8,7 @@ import { metadata, previewFooter } from "../../preview/format";
 import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { resolvePreviewLanguage } from "../../syntax/language";
-import { normalizeShikiLanguage } from "../../syntax/render";
+import { normalizePreviewLanguageAlias } from "../../syntax/language";
 import { getPathArg, getReadStartLine } from "../data/args";
 import { getTextContent, isTruncated, splitReadContinuationNotice } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
@@ -29,7 +29,7 @@ export function createReadPreviewTool(cwd: string, options?: ReadToolOptions) {
         const end = Predicate.isNumber(args.limit) ? start + args.limit - 1 : undefined;
         text += theme.fg("warning", `:${start}${end ? `-${end}` : ""}`);
       }
-      text += metadata(theme, [lang ? normalizeShikiLanguage(lang) : undefined]);
+      text += metadata(theme, [lang ? normalizePreviewLanguageAlias(lang) : undefined]);
       return new Text(text, 0, 0);
     },
 

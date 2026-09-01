@@ -17,8 +17,8 @@
   and the public `pi-code-previews` cooperative shell decorates the registered tool.
 - `src/code-mode/` and the public `src/protocol.ts` re-export own the versioned plain-data query
   contract for `tools.session.backgroundTask`, including the exact v1 Effect input/output codecs
-  and their structural bounds. `output-size.ts` estimates JSON size using only the plain protocol
-  types; the public protocol does not import package-local task models, services, commands, or
+  and their structural bounds. `output.ts` measures the exact serialized JSON size of the plain
+  protocol types; the public protocol does not import package-local task models, services, commands, or
   process adapters. The package-local start-envelope check accounts for normalized request fields,
   generated identity, and immediate terminal metadata. Schema decoding then validates numeric
   metadata and creates a detached, frozen value with undeclared keys removed.
@@ -44,7 +44,7 @@ normalization also reject empty or oversized session ids. For nested `start`, th
 trims command and name and resolves cwd, then the provider checks a conservative
 full successful result before `BackgroundTaskService.start`. Failure cannot allocate an id, insert
 a registry record, fork a monitor, or acquire a process. After execution, the provider still bounds
-display text, applies collection limits, and estimates the structured JSON size before schema
+display text, applies collection limits, and measures the exact serialized JSON size before schema
 decoding allocates the detached result. The producer-owned output codec rejects invalid metadata,
 removes undeclared keys, and the provider freezes the accepted value before returning it.
 

@@ -1,9 +1,9 @@
 // Test/benchmark boundary intentionally exercises native Pi APIs behind Effect timers.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { type CodePreviewSettings } from "../config/schema";
-import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
-export { stripAnsi } from "../shared/terminal-text";
+import { type CodePreviewSettings } from "../../src/config/schema";
+import { cloneCodePreviewSettings, codePreviewSettings } from "../../src/config/state";
+export { stripAnsi } from "../../src/shared/terminal-text";
 
 export function renderComponent(component: Component, width = 100): string {
   return component.render(width).join("\n");

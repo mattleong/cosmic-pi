@@ -184,14 +184,6 @@ export function captureAdvisorSessionInputAtHostBoundary(
   }
 }
 
-export const captureAdvisorSessionInputEffect = (
-  ctx: ExtensionContext,
-): Effect.Effect<AdvisorSessionInput, AdvisorHostContextError> =>
-  Effect.suspend(() => {
-    const result = captureAdvisorSessionInputAtHostBoundary(ctx);
-    return result.ok ? Effect.succeed(result.input) : Effect.fail(result.error);
-  });
-
 /** Captures the current Pi run signal; unlike session metadata this capability is turn-dynamic. */
 export function captureAdvisorAbortInputAtHostBoundary(
   ctx: Pick<ExtensionContext, "signal">,

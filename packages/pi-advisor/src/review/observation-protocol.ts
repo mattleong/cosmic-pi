@@ -106,8 +106,6 @@ export type AdvisorObservationInput = AdvisorObservation extends infer Record
   : never;
 
 export interface ObservationBatch {
-  epoch: number;
-  firstSequence: number;
   lastSequence: number;
   observations: AdvisorObservation[];
   rendered: string;
@@ -234,8 +232,6 @@ export class AdvisorObservationBuffer {
     const last = observations.at(-1);
     if (!first || !last) return undefined;
     return {
-      epoch: this.epoch,
-      firstSequence: first.sequence,
       lastSequence: last.sequence,
       observations,
       rendered: renderObservations(observations),

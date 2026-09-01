@@ -6,6 +6,7 @@ import {
   isKeyRepeat,
   Key,
   matchesKey,
+  type KeyId,
   type OverlayHandle,
   type TUI,
 } from "@earendil-works/pi-tui";
@@ -25,6 +26,7 @@ import type {
   QuestionnaireState,
 } from "../questionnaire/model.ts";
 import {
+  MAX_CHOICES,
   MAX_CUSTOM_ANSWER_LENGTH,
   MAX_NOTE_LENGTH,
   type AskUserQuestion,
@@ -33,7 +35,11 @@ import {
 import { PreviewPane } from "./preview-pane.ts";
 import { type DialogInputMode, renderQuestionnaireView } from "./render.ts";
 
-const CHOICE_SHORTCUTS = ["1", "2", "3", "4"] as const;
+const CHOICE_SHORTCUTS: readonly KeyId[] = Array.from(
+  { length: MAX_CHOICES },
+  // SAFETY: i + 1 ranges over 1..MAX_CHOICES (4), always a single digit, which is a valid KeyId.
+  (_, i) => String(i + 1) as KeyId,
+);
 
 const DIALOG_SHORTCUTS = new Set(["b", "n"]);
 

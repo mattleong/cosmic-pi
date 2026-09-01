@@ -1,18 +1,19 @@
-import * as Predicate from "effect/Predicate";
-
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
   type JsonObject,
+  InvalidSettingError,
   makeUsageRefreshController,
-  sanitizeDiagnosticError,
+  timedDiagnosticResult,
 } from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
-import { prepareSettingUpdate, type InvalidSettingError } from "../config/options.ts";
+import { prepareSettingUpdate } from "../config/options.ts";
+import { HIDDEN_USAGE_STATUS_TEXT } from "./projection.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
 import {
   modifyConfig,
@@ -73,7 +74,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         agentDir: options.agentDir,
         projectTrusted: options.projectTrusted,
         initialProjection,
-        hiddenStatusText: "Usage hidden: current model is not an OpenAI subscription model.",
+        hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
         missingCredentialsMessage: (authPath) =>
           `Missing openai-codex OAuth credentials in ${authPath}. Run /login openai-codex.`,
         clearAuthPatch: { authFound: false, authSource: undefined, accountId: undefined },
@@ -85,18 +86,12 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         refreshKeyScope: (ctx) => usageScopeForModel(ctx.model?.id),
         fetchOutcome: ({ ctx, authPath }) =>
           Effect.gen(function* () {
-            const authAttempt = yield* getCodexCredentials(authPath, ctx).pipe(
-              Effect.timeout("10 seconds"),
-              Effect.result,
+            const authAttempt = yield* timedDiagnosticResult(
+              getCodexCredentials(authPath, ctx),
+              "Codex credential lookup timed out.",
             );
-            if (authAttempt._tag === "Failure")
-              return {
-                _tag: "Failure",
-                message:
-                  authAttempt.failure._tag === "CodexAuthError"
-                    ? sanitizeDiagnosticError(authAttempt.failure.message)
-                    : "Codex credential lookup timed out.",
-              } as const;
+            if (Result.isFailure(authAttempt))
+              return { _tag: "Failure", message: authAttempt.failure } as const;
             const credentials = authAttempt.success;
             if (credentials === undefined) return { _tag: "Missing" } as const;
             const authPatch = {
@@ -104,18 +99,14 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
               authSource: credentials.source,
               accountId: credentials.accountId,
             } as const;
-            const usage = yield* requestCodexUsageWithCredentials(credentials, ctx.model?.id).pipe(
-              Effect.timeout("10 seconds"),
-              Effect.result,
+            const usage = yield* timedDiagnosticResult(
+              requestCodexUsageWithCredentials(credentials, ctx.model?.id),
+              "Codex usage request timed out.",
             );
-            if (usage._tag === "Failure")
+            if (Result.isFailure(usage))
               return {
                 _tag: "Failure",
-                message: sanitizeDiagnosticError(
-                  Predicate.isString(usage.failure.message)
-                    ? usage.failure.message
-                    : "Codex usage request timed out.",
-                ),
+                message: usage.failure,
                 patch: authPatch,
               } as const;
             return {
@@ -132,7 +123,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
       const persistFastWithRequirements = Effect.fn("OpenAIUsage.persistFast")(function* (
         active: boolean,
         desiredActive: boolean,
-        afterCommit: Effect.Effect<void> = Effect.void,
+        afterCommit: Effect.Effect<void>,
       ) {
         yield* controller.withSettingsPermit(
           Effect.gen(function* () {

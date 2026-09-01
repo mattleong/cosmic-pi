@@ -10,7 +10,7 @@ import {
   type CodePreviewSessionCapability,
 } from "../../src/application/capability";
 import { previewScheduleEffect } from "../../src/application/scheduler";
-import { testTheme } from "../../src/testing/render";
+import { testTheme } from "../support/render";
 import { cachedDeferredPreview } from "../../src/tools/renderers/shared/cache";
 import { eventLoopTurn } from "../support/effect-test";
 

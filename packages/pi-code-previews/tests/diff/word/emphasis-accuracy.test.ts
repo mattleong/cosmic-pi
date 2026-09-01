@@ -1,8 +1,8 @@
 // The labeled corpus evaluation is a Promise-shaped shared testing boundary.
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { evaluateWordEmphasisAccuracy } from "../../../src/testing/word-emphasis-accuracy";
-import { wordEmphasisAccuracyCases } from "../../../src/diff/word/fixtures/emphasis-accuracy";
+import { evaluateWordEmphasisAccuracy } from "../../support/word-emphasis-accuracy";
+import { wordEmphasisAccuracyCases } from "../../support/word-fixtures/emphasis-accuracy";
 
 test("labeled word-emphasis corpus preserves exact spans and line pairs", () =>
   evaluateWordEmphasisAccuracy().then((report) => {

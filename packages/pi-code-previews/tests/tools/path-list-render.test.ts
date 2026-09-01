@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { renderComponent, testTheme } from "../../src/testing/render";
+import { renderComponent, testTheme } from "../support/render";
 import {
   renderPathListResult,
   type PathListResultConfig,

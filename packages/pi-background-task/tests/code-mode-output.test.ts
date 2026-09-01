@@ -23,7 +23,12 @@ describe("Background Tasks Code Mode output projection", () => {
       details: { action: "list", tasks: [] },
     };
     expect(projectBackgroundTaskCodeModeOutput(result, 0)).toEqual({ _tag: "Refused" });
-    expect(projectBackgroundTaskCodeModeOutput(result, 128)).toEqual({ _tag: "Refused" });
+    // Exact sizing accepts any output that genuinely fits; the old fixed-slack estimator
+    // conservatively refused the ~768-byte boundary window (approved Round-1 delta).
+    expect(projectBackgroundTaskCodeModeOutput(result, 128)).toEqual({
+      _tag: "Accepted",
+      output: { action: "list", text: "No background tasks.", tasks: [] },
+    });
   });
 
   it("bounds successful starts without reserving impossible process-exit error text", () => {

@@ -10,7 +10,7 @@ import { BorderedToolCall } from "../../src/preview/bordered-tool-call";
 import { createCodePreviewToolShell } from "../../src/preview/tool-shell";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { renderComponent, testTheme } from "../../src/testing/render";
+import { renderComponent, testTheme } from "../support/render";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import type { ToolRenderContext } from "../../src/tools/renderers/shared/types";
 

@@ -5,7 +5,7 @@ import { expandPreviewTabs } from "../shared/helpers";
 import { escapeControlChars } from "../shared/terminal-text";
 import { splitLinesLimited } from "../shared/text-lines";
 import { renderWithShiki } from "../syntax/render";
-import { collectChangedDiffBlock } from "./changed-blocks";
+import { collectChangedDiffBlock } from "./parse";
 import { changedLineEmphasis, emphasizeChangedSpans } from "./word/line-emphasis";
 import {
   DIFF_ADD_MARKER,

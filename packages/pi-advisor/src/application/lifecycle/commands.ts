@@ -1,22 +1,20 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import type * as Scope from "effect/Scope";
 import {
   appendAdvisorReviewActionAtHostBoundary,
   latestOpenAdvisorReviewCardAtHostBoundary,
   sendCompactAdvisorGuidanceAtHostBoundary,
 } from "../../boundary/host-review-cards.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
-import type { CheckpointOrchestratorContract } from "../../checkpoint/orchestrator.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
 import { incrementBounded } from "../../domain/metrics.ts";
 import type { AdvisorCommandActions } from "../../settings/controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
+import type { CheckpointOrchestration, HostApi } from "./deps.ts";
 import type { EventsDeps } from "./events/types.ts";
 import type { SessionRefs } from "./session-refs.ts";
 
-export interface CommandWorkflowDeps {
-  readonly pi: ExtensionAPI;
+export interface CommandWorkflowDeps extends HostApi, CheckpointOrchestration {
   readonly refs: SessionRefs;
   readonly getState: () => AdvisorApplicationState;
   readonly updateMetrics: (
@@ -25,8 +23,6 @@ export interface CommandWorkflowDeps {
   readonly cancelRequest: () => void;
   readonly commitConfig: (config: ResolvedAdvisorConfig) => void;
   readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
-  readonly applicationScope: Scope.Scope;
-  readonly checkpointOrchestrator: CheckpointOrchestratorContract;
   readonly startRuntimeEffect: EventsDeps["startRuntimeEffect"];
   readonly runWithExplicitRuntimeEffect: EventsDeps["runWithExplicitRuntimeEffect"];
   readonly requestCheckpoint: EventsDeps["requestCheckpoint"];

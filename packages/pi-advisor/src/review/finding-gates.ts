@@ -68,11 +68,9 @@ export function gateAdvisorFinding(finding: AdvisorFinding): AdvisorFindingGateD
 
 export function gateAdvisorFindings(findings: readonly AdvisorFinding[]) {
   const actionable: AdvisorFinding[] = [];
-  let suppressed = 0;
   for (const finding of findings) {
     const decision = gateAdvisorFinding(finding);
-    if (!decision.actionable) suppressed += 1;
-    else actionable.push(decision.finding);
+    if (decision.actionable) actionable.push(decision.finding);
   }
-  return { actionable, suppressed };
+  return { actionable };
 }

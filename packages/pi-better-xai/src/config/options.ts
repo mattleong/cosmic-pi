@@ -1,27 +1,13 @@
-import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
-import { sectionSettingValue } from "pi-cosmic-core";
+import {
+  BooleanFromJsonSchema,
+  decodeSettingUpdate as makeDecodeSettingUpdate,
+  FiniteNumberFromJsonSchema,
+  type SettingsOptionDescriptor,
+} from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
-import { FiniteNumberSchema, FOOTER_MODES, FooterModeSchema } from "./schema.ts";
+import { FOOTER_MODES, FooterModeSchema } from "./schema.ts";
 
-export class InvalidSettingError extends Schema.TaggedError<InvalidSettingError>()(
-  "InvalidSettingError",
-  { id: Schema.String, message: Schema.String },
-) {}
-
-export type SettingsOptionDescriptor = {
-  id: string;
-  label: string;
-  description: string;
-  values?: readonly string[];
-  decoder: Schema.Decoder<boolean | number | string>;
-  currentValue(cfg: ResolvedConfig): string;
-};
-
-const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
-const FiniteNumberFromJsonSchema = Schema.fromJsonString(FiniteNumberSchema);
-
-export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "usage.enabled",
     label: "Usage display",
@@ -64,24 +50,5 @@ export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = 
     decoder: FooterModeSchema,
   },
 ];
-const SETTINGS_OPTION_BY_ID = new Map(
-  SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
-);
 
-export const decodeSettingUpdate = Effect.fn("XaiConfig.decodeSettingUpdate")(function* (
-  id: string,
-  rawValue: string,
-) {
-  const descriptor = SETTINGS_OPTION_BY_ID.get(id);
-  if (!descriptor)
-    return yield* new InvalidSettingError({ id, message: `Unknown setting: ${id}.` });
-  const parsedValue = yield* Schema.decodeUnknownEffect(descriptor.decoder)(rawValue).pipe(
-    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
-  );
-  const separator = descriptor.id.indexOf(".");
-  return sectionSettingValue(
-    descriptor.id.slice(0, separator),
-    descriptor.id.slice(separator + 1),
-    parsedValue,
-  );
-});
+export const decodeSettingUpdate = makeDecodeSettingUpdate(SETTINGS_OPTION_DESCRIPTORS);

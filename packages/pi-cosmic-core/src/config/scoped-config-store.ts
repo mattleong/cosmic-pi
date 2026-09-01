@@ -106,17 +106,13 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
   const { basename, decode, defaultDocument, errorFactory, resolve, spanPrefix } = options;
 
   const configPaths = Effect.fn(`${spanPrefix}.configPaths`)((cwd: string, agentDir: string) =>
-    scopedDocumentPaths(
-      cwd,
-      agentDir,
-      options.extensionsDirectory === undefined
-        ? { projectConfigDirectory: options.projectConfigDirectory, basename }
-        : {
-            projectConfigDirectory: options.projectConfigDirectory,
-            basename,
-            extensionsDirectory: options.extensionsDirectory,
-          },
-    ),
+    scopedDocumentPaths(cwd, agentDir, {
+      basename,
+      projectConfigDirectory: options.projectConfigDirectory,
+      ...(options.extensionsDirectory !== undefined && {
+        extensionsDirectory: options.extensionsDirectory,
+      }),
+    }),
   );
 
   const readRawConfig = Effect.fn(`${spanPrefix}.readRawConfig`)((path: string) =>

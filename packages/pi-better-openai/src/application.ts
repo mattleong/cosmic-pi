@@ -213,6 +213,25 @@ export function betterOpenAIWithDependencies(
     type: "boolean",
     default: false,
   });
+  const runHostCommand = <A>(
+    effect: Effect.Effect<A, { readonly message: string }, OpenAIApplication>,
+    operation: "fast mode" | "usage",
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+  ) =>
+    run(
+      containCommandFailure(
+        effect,
+        operation,
+        ctx,
+        (error) => `OpenAI ${operation} is unavailable: ${sanitizeDiagnosticError(error.message)}.`,
+      ),
+      signal,
+    ).catch(() => {
+      if (!signal?.aborted)
+        safeHostUi(() => ctx.ui.notify(`OpenAI ${operation} is unavailable.`, "warning"));
+    });
+
   pi.registerCommand(FAST_ID, {
     description: "Toggle OpenAI fast mode",
     handler: (args, ctx) => {
@@ -241,19 +260,7 @@ export function betterOpenAIWithDependencies(
           }),
         ),
       );
-      return run(
-        containCommandFailure(
-          update,
-          "fast mode",
-          ctx,
-          (error: { readonly message: string }) =>
-            `OpenAI fast mode is unavailable: ${sanitizeDiagnosticError(error.message)}.`,
-        ),
-        signal,
-      ).catch(() => {
-        if (!signal?.aborted)
-          safeHostUi(() => ctx.ui.notify("OpenAI fast mode is unavailable.", "warning"));
-      });
+      return runHostCommand(update, "fast mode", ctx, signal);
     },
   });
   pi.registerCommand("openai-usage", {
@@ -264,19 +271,7 @@ export function betterOpenAIWithDependencies(
       const refresh = OpenAIUsageService.use((service) =>
         service.refresh({ notify: true, force: true }),
       );
-      return run(
-        containCommandFailure(
-          refresh,
-          "usage",
-          ctx,
-          (error: { readonly message: string }) =>
-            `OpenAI usage is unavailable: ${sanitizeDiagnosticError(error.message)}.`,
-        ),
-        signal,
-      ).catch(() => {
-        if (!signal?.aborted)
-          safeHostUi(() => ctx.ui.notify("OpenAI usage is unavailable.", "warning"));
-      });
+      return runHostCommand(refresh, "usage", ctx, signal);
     },
   });
   const formatDebugStatus = (ctx: ExtensionContext) => {

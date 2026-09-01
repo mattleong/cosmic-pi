@@ -13,7 +13,6 @@ import {
   isOutcomeUncertain,
   processError,
   SubagentProcessError,
-  UnsupportedSubagentCapabilityError,
   type SubagentError,
 } from "../run/errors.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
@@ -22,6 +21,7 @@ import {
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../supervisor/mcp-contract.ts";
 import { herdrAssignmentEpochLine } from "./herdr-assignment.ts";
+import { unsupported as unsupportedCapability } from "./driver-shared.ts";
 import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
 
 const EVENT_CAPACITY = 256;
@@ -32,11 +32,11 @@ const PROMPT_EVIDENCE_POLLS = 10;
 const UNKNOWN_STATUS_POLLS = 20;
 
 const unsupported = (runtime: SubagentRuntime, capability: string) =>
-  new UnsupportedSubagentCapabilityError({
-    backend: `herdr/${runtime}`,
+  unsupportedCapability(
+    `herdr/${runtime}`,
     capability,
-    message: `The supported Herdr CLI contract does not provide a confirmable ${capability} outcome for ${runtime}.`,
-  });
+    `The supported Herdr CLI contract does not provide a confirmable ${capability} outcome for ${runtime}.`,
+  );
 
 /** Fixed supervisor/report contract shared by all three Herdr native harnesses. */
 export const withHerdrSupervisorInstructions = (

@@ -11,6 +11,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 import {
   FullScreenKeymap,
   pageSteps,
@@ -53,12 +54,6 @@ export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOpti
   readonly select: (value: A) => void;
   readonly cancel: () => void;
 }
-
-const padToWidth = (text: string, width: number): string => {
-  const safeWidth = Math.max(0, width);
-  const truncated = truncateToWidth(text, safeWidth, "");
-  return truncated + " ".repeat(Math.max(0, safeWidth - visibleWidth(truncated)));
-};
 
 export type SearchableSelectMotion =
   | "up"
@@ -377,7 +372,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       .slice(0, bodyHeight)
       .map(
         (line) =>
-          `${theme.fg("borderAccent", "│")}${padToWidth(line, inner)}${theme.fg("borderAccent", "│")}`,
+          `${theme.fg("borderAccent", "│")}${padListDetailRow(line, inner)}${theme.fg("borderAccent", "│")}`,
       );
     while (framed.length < bodyHeight)
       framed.push(

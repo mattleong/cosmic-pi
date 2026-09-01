@@ -89,6 +89,7 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
                   return Effect.fail(
                     new LocalProcessError({
                       operation: "terminate process tree",
+                      reason: "terminate",
                       message: "Fixture termination failed.",
                     }),
                   );

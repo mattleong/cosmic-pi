@@ -45,11 +45,6 @@ export interface NestedPiToolDefinitions {
 
 export type PiGuestToolName = keyof NestedPiToolDefinitions;
 
-export const hasNestedPowerShell = (
-  definitions: NestedPiToolDefinitions,
-): definitions is NestedPiToolDefinitions & { readonly powershell: AnyToolDefinition } =>
-  definitions.powershell !== undefined;
-
 /** Live factory: current built-in definitions bound to the session working directory. */
 export const makeNestedPiToolDefinitions = (
   cwd: string,

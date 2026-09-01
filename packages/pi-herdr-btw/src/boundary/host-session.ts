@@ -1,7 +1,6 @@
 // Pi session and inherited Herdr process state are captured at the host boundary.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureSessionHost } from "pi-cosmic-core";
-import { selectHerdrEnvironment } from "./herdr-client.ts";
 
 export interface HerdrBtwSessionInput {
   readonly cwd: string;
@@ -29,7 +28,7 @@ export const captureHerdrBtwSession = (
       sessionFile: ctx.sessionManager.getSessionFile(),
       sessionId: ctx.sessionManager.getSessionId(),
       sessionDir: ctx.sessionManager.getSessionDir(),
-      environment: selectHerdrEnvironment(process.env),
+      environment: process.env,
     };
   } catch {
     return undefined;

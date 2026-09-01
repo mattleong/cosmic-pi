@@ -101,9 +101,8 @@ export const makeAdvisorApplicationStateStore = (initial: AdvisorApplicationStat
   let current = initial;
   return {
     get: () => current,
-    transition: (update: (state: AdvisorApplicationState) => AdvisorApplicationState) => {
+    transition: (update: (state: AdvisorApplicationState) => AdvisorApplicationState): void => {
       current = update(current);
-      return current;
     },
   };
 };

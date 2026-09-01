@@ -17,28 +17,16 @@ export {
   type PiSessionRuntimeHooks,
   type PiSessionRuntimeSlot,
 } from "./src/runtime/session-runtime.ts";
-export {
-  mergeRefreshRequest,
-  type RefreshRequest,
-} from "./src/coordination/refresh-coordinator.ts";
+export { type RefreshRequest } from "./src/coordination/refresh-coordinator.ts";
 export {
   makeSubscriptionRefresh,
   type SubscriptionRefresh,
   type SubscriptionRefreshOptions,
 } from "./src/coordination/subscription-refresh.ts";
-export { JsonDocumentError, JsonHttpError, StreamingHttpError } from "./src/platform/errors.ts";
-export { AgentDirectory, AgentDirectoryError } from "./src/platform/agent-directory.ts";
-export {
-  SafeFile,
-  SafeFileError,
-  type SafeFileResult,
-  type SafeFileContract,
-} from "./src/platform/safe-file.ts";
-export {
-  readSchemaDocument,
-  SchemaDocumentError,
-  type DecodedDocument,
-} from "./src/platform/schema-document.ts";
+export { JsonDocumentError, StreamingHttpError } from "./src/platform/errors.ts";
+export { AgentDirectory } from "./src/platform/agent-directory.ts";
+export { SafeFile, type SafeFileResult, type SafeFileContract } from "./src/platform/safe-file.ts";
+export { readSchemaDocument, type DecodedDocument } from "./src/platform/schema-document.ts";
 export {
   type AtomicJsonDocumentStoreContract,
   isJsonObject,
@@ -52,7 +40,6 @@ export {
   abbreviateHomePath,
   isContainedPath,
   isContainedPathWith,
-  isStrictlyInsidePath,
   isStrictlyInsidePathWith,
   type PathContainmentAdapter,
 } from "./src/platform/paths.ts";
@@ -88,11 +75,8 @@ export {
 } from "./src/config/scoped-store.ts";
 export {
   makeConfigDocumentErrorFactory,
-  modifyJsonObject,
   readConfigOrWarn,
   readOptionalJsonObject,
-  readRawJsonObject,
-  writeJsonObject,
   type ConfigDocumentErrorFactory,
 } from "./src/config/document-ops.ts";
 export {
@@ -132,6 +116,7 @@ export {
 export {
   formatUsageDebugReport,
   makeUsageRefreshController,
+  timedDiagnosticResult,
   type UsageControllerConfig,
   type UsageControllerConfigFields,
   type UsageControllerStore,
@@ -185,9 +170,7 @@ export {
   effectProcessExit,
   nodeProcessLayer,
   provideNodeProcess,
-  runBoundedProcess,
   runBoundedProcessNode,
-  runBoundedProcessScoped,
   type BoundedProcessRequest,
   type BoundedProcessResult,
   type EffectProcessExit,
@@ -196,9 +179,11 @@ export { awaitProcessClose, type ProcessCloseSource } from "./src/platform/proce
 export { synchronousNow } from "./src/platform/native-clock.ts";
 export {
   decodeJwtPayloadText,
+  extractJwtClaim,
   hasControlCharacter,
   maskIdentifier,
   redactDiagnosticValue,
+  redactedTokenSchema,
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
@@ -213,10 +198,15 @@ export {
   type TerminalStyledFragment,
 } from "./src/security/terminal-styled.ts";
 export {
+  BooleanFromJsonSchema,
   completeSettingsArguments,
+  decodeSettingUpdate,
+  FiniteNumberFromJsonSchema,
+  InvalidSettingError,
   sectionSettingValue,
   type SettingsCompletionChoice,
   type SettingsCompletionDescriptor,
+  type SettingsOptionDescriptor,
 } from "./src/settings-completion.ts";
 export {
   dispatchSettingsCommand,
@@ -227,8 +217,6 @@ export {
   clampPercent,
   formatCompactReset,
   formatPercent,
-  formatResetCountdown,
-  formatTimestampOrNever,
   formatTokens,
   formatWindowedUsageLine,
   remainingResetSeconds,

@@ -185,6 +185,18 @@ export const waitForAvailableShell = (
     });
   });
 
+/**
+ * Fail-closed parent/child file-distinctness: the child path must differ textually AND compare
+ * distinct (an unavailable identity never counts as distinct).
+ */
+export const isDistinctChildSessionPath = (
+  childPath: string,
+  parentSessionFile: string,
+  compareSessionFileIdentity: SessionFileIdentityComparator,
+): boolean =>
+  childPath !== parentSessionFile &&
+  compareSessionFileIdentity(childPath, parentSessionFile) === "distinct";
+
 export const validateStartedAgent = (
   agent: HerdrPane,
   pane: HerdrPane,
@@ -202,9 +214,11 @@ export const validateStartedAgent = (
     childSession.kind === "path";
   const childMatchesLaunch =
     hasPathEvidence && compareSessionFileIdentity(childSession.value, expectedChildPath) === "same";
-  const childDiffersFromParent =
-    expectedChildPath !== parentSessionFile &&
-    compareSessionFileIdentity(expectedChildPath, parentSessionFile) === "distinct";
+  const childDiffersFromParent = isDistinctChildSessionPath(
+    expectedChildPath,
+    parentSessionFile,
+    compareSessionFileIdentity,
+  );
 
   if (
     agent.pane_id !== pane.pane_id ||
@@ -248,7 +262,7 @@ const linkedAgentSessionIdentity = (
 };
 
 /** Matches stable Herdr metadata to the recorded child filesystem identity. */
-export const hasLinkedAgentSessionIdentity = (
+const hasLinkedAgentSessionIdentity = (
   agent: HerdrPane,
   childSessionId: string,
   childSessionPath: string,

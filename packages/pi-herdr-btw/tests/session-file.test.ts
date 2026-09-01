@@ -6,7 +6,6 @@ import {
   compareSessionFileIdentity,
   createBlankChildSessionFile,
   createChildSessionId,
-  isRegularSessionFile,
   probeSessionHeader,
 } from "../src/boundary/session-file.ts";
 
@@ -56,7 +55,6 @@ describe("session-file validation", () => {
       }),
       `${JSON.stringify({ type: "message", id: "m1", parentId: null })}\n`,
     );
-    expect(isRegularSessionFile(path)).toBe(true);
     expect(probeSessionHeader(path)).toEqual({
       _tag: "valid",
       header: { id: "child-id-1", parentSession: PARENT_FILE },
@@ -74,7 +72,7 @@ describe("session-file validation", () => {
     });
   });
 
-  it("rejects missing files, directories, and symlinks through the shared regular-file check", () => {
+  it("rejects missing files, directories, and symlinks", () => {
     const missing = join(dir, "missing.jsonl");
     const nested = join(dir, "a-directory");
     mkdirSync(nested);
@@ -86,7 +84,6 @@ describe("session-file validation", () => {
     symlinkSync(target, link);
 
     for (const path of [missing, nested, link]) {
-      expect(isRegularSessionFile(path)).toBe(false);
       expect(probeSessionHeader(path)).toEqual({ _tag: "invalid" });
     }
   });
@@ -113,7 +110,6 @@ describe("session-file validation", () => {
 
   it("rejects relative and control-character paths without touching the filesystem", () => {
     for (const path of ["relative/session.jsonl", `${dir}/bad\npath.jsonl`, ""]) {
-      expect(isRegularSessionFile(path)).toBe(false);
       expect(probeSessionHeader(path)).toEqual({ _tag: "invalid" });
     }
   });

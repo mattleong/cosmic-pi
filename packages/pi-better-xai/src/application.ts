@@ -16,7 +16,7 @@ import {
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
-import type { ResolvedConfig } from "./config/index.ts";
+import type { ResolvedConfig } from "./config/schema.ts";
 import { createFooterController } from "./footer/controller.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import {
@@ -79,7 +79,7 @@ export function registerBetterXaiApplication(
         pi,
         makeXaiApplicationLayer(input, {
           projection,
-          onChange: (context) => updateFooter(MutableRef.get(context)),
+          onChange: () => updateFooter(MutableRef.get(input.context)),
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-xai" },
       ),

@@ -1,34 +1,28 @@
-import * as Predicate from "effect/Predicate";
-
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
+  InvalidSettingError,
   makeUsageRefreshController,
-  sanitizeDiagnosticError,
-  withUsageEligibility,
+  timedDiagnosticResult,
   type UsageFetchOutcome,
 } from "pi-cosmic-core";
 import { ModelRegistryAuth } from "../boundary/model-registry-auth.ts";
+import { decodeSettingUpdate } from "../config/options.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import {
-  decodeSettingUpdate,
   modifyConfig,
   readRawConfig,
   resolveCommittedConfig,
   resolveConfig,
-  type InvalidSettingError,
-  type ResolvedConfig,
   type XaiConfigError,
-} from "../config/index.ts";
-import {
-  formatUsageDetails,
-  formatUsageSnapshot,
-  requestXaiUsage,
-  type UsageSnapshot,
-} from "./format.ts";
+} from "../config/store.ts";
+import { requestXaiUsage } from "./request.ts";
+import { formatUsageDetails, formatUsageSnapshot, type UsageSnapshot } from "./format.ts";
 import {
   HIDDEN_USAGE_STATUS_TEXT,
   initialXaiProjection,
@@ -98,38 +92,20 @@ export class XaiUsageService extends Context.Service<XaiUsageService>()(
         store: { resolveConfig, readRawConfig, resolveCommittedConfig, modifyConfig },
         decodeSettingUpdate,
         eligibility: subscriptionEligibility,
-        synchronizeState: (current, ctx, clearUsage) =>
-          (current.config
-            ? subscriptionEligibility(ctx, current.config)
-            : Effect.succeed(false)
-          ).pipe(
-            Effect.map((eligible) =>
-              withUsageEligibility(current, eligible, clearUsage, {
-                hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
-              }),
-            ),
-          ),
         fetchOutcome: ({ authPath }) =>
-          requestUsage(authPath).pipe(
-            Effect.timeout("10 seconds"),
-            Effect.result,
-            Effect.map((result): UsageFetchOutcome<UsageSnapshot, Partial<XaiProjection>> => {
-              if (result._tag === "Failure")
-                return {
-                  _tag: "Failure",
-                  message: sanitizeDiagnosticError(
-                    Predicate.isString(result.failure.message)
-                      ? result.failure.message
-                      : "xAI usage request timed out.",
-                  ),
-                };
-              if (!result.success) return { _tag: "Missing" };
-              return {
-                _tag: "Success",
-                snapshot: result.success.snapshot,
-                patch: { authFound: true, teamId: result.success.teamId },
-              };
-            }),
+          timedDiagnosticResult(requestUsage(authPath), "xAI usage request timed out.").pipe(
+            Effect.map(
+              (result): UsageFetchOutcome<UsageSnapshot, Partial<XaiProjection>> =>
+                Result.isFailure(result)
+                  ? { _tag: "Failure", message: result.failure }
+                  : !result.success
+                    ? { _tag: "Missing" }
+                    : {
+                        _tag: "Success",
+                        snapshot: result.success.snapshot,
+                        patch: { authFound: true, teamId: result.success.teamId },
+                      },
+            ),
           ),
         formatStatusLine: (snapshot, cfg, fetchedAt) =>
           formatUsageSnapshot(snapshot, cfg.usage, fetchedAt),

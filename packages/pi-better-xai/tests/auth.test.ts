@@ -15,7 +15,7 @@ import {
   makeInMemoryDocuments,
 } from "pi-cosmic-core/testing";
 import { extractTeamIdFromJwt, getXaiCredentials, readXaiCredentials } from "../src/auth/auth.ts";
-import { ModelRegistryAuth } from "../src/boundary/model-registry-auth.ts";
+import { registryLayer, serializedSnapshot } from "./support/fixtures.ts";
 
 type JwtFixturePayload = { readonly team_id?: string | number };
 
@@ -27,17 +27,6 @@ const jwt = (teamId: string) => jwtPayload({ team_id: teamId });
 
 // Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
 // runtime values (tagged errors, redacted credentials) for secret fragments.
-const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
-
-const registryLayer = (token?: string) =>
-  Layer.succeed(
-    ModelRegistryAuth,
-    ModelRegistryAuth.of({
-      getApiKey: Effect.succeed(token),
-      isUsingOAuth: () => Effect.succeed(true),
-    }),
-  );
-
 describe("xAI authentication", () => {
   it("extracts trimmed team metadata and ignores invalid, missing, or blank claims", () => {
     const invalidJson = `header.${Buffer.from("{").toString("base64url")}.signature`;

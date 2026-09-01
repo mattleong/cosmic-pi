@@ -1,6 +1,10 @@
-import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { sectionSettingValue, type JsonObject } from "pi-cosmic-core";
+import {
+  BooleanFromJsonSchema,
+  decodeSettingUpdate,
+  FiniteNumberFromJsonSchema,
+  type SettingsOptionDescriptor,
+} from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
 import {
   FOOTER_MODES,
@@ -11,28 +15,13 @@ import {
   ImageSaveModeSchema,
 } from "./schema.ts";
 
-export class InvalidSettingError extends Schema.TaggedError<InvalidSettingError>()(
-  "InvalidSettingError",
-  { id: Schema.String, message: Schema.String },
-) {}
-export type SettingsOptionDescriptor = {
-  id: string;
-  label: string;
-  description: string;
-  values?: readonly string[];
-  decoder: Schema.Decoder<boolean | number | string>;
-  currentValue(cfg: ResolvedConfig): string;
-};
-
-const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
-const FiniteNumberFromJsonSchema = Schema.fromJsonString(Schema.Number.check(Schema.isFinite()));
 const NonBlankStringSchema = Schema.String.check(
   Schema.makeFilter((value: string) => value.trim().length > 0, {
     identifier: "NonBlankSettingString",
   }),
 );
 
-export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "persistState",
     label: "Persist fast state",
@@ -42,7 +31,7 @@ export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     decoder: BooleanFromJsonSchema,
   },
 ];
-export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "compaction.enabled",
     label: "OpenAI compaction",
@@ -53,7 +42,7 @@ export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[]
     decoder: BooleanFromJsonSchema,
   },
 ];
-export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "footer.mode",
     label: "Footer mode",
@@ -64,7 +53,7 @@ export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     decoder: FooterModeSchema,
   },
 ];
-export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "usage.enabled",
     label: "Usage display",
@@ -98,7 +87,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     decoder: BooleanFromJsonSchema,
   },
 ];
-export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "image.enabled",
     label: "Image tool",
@@ -140,32 +129,12 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     decoder: FiniteNumberFromJsonSchema,
   },
 ];
-export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   ...FAST_SETTING_DESCRIPTORS,
   ...COMPACTION_SETTING_DESCRIPTORS,
   ...FOOTER_SETTING_DESCRIPTORS,
   ...USAGE_SETTING_DESCRIPTORS,
   ...IMAGE_SETTING_DESCRIPTORS,
 ];
-const SETTINGS_OPTION_BY_ID = new Map(
-  SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
-);
-export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate")(function* (
-  id: string,
-  rawValue: string,
-) {
-  const descriptor = SETTINGS_OPTION_BY_ID.get(id);
-  if (!descriptor)
-    return yield* new InvalidSettingError({ id, message: `Unknown setting: ${id}.` });
-  const parsedValue = yield* Schema.decodeUnknownEffect(descriptor.decoder)(rawValue).pipe(
-    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
-  );
-  const separator = descriptor.id.indexOf(".");
-  if (separator < 0)
-    return (current: JsonObject): JsonObject => ({ ...current, [descriptor.id]: parsedValue });
-  return sectionSettingValue(
-    descriptor.id.slice(0, separator),
-    descriptor.id.slice(separator + 1),
-    parsedValue,
-  );
-});
+
+export const prepareSettingUpdate = decodeSettingUpdate(SETTINGS_OPTION_DESCRIPTORS);

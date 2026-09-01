@@ -5,6 +5,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
 import * as Tracer from "effect/Tracer";
 import { mergeRefreshRequest, type RefreshRequest } from "./coordination/refresh-coordinator.ts";
@@ -19,9 +21,9 @@ import {
 import { JsonHttpClient } from "./platform/json-http.ts";
 import { invokeHostCallback } from "./host-session.ts";
 import { makeFrozenProjection } from "./projection.ts";
-import { maskIdentifier } from "./security.ts";
+import { maskIdentifier, sanitizeDiagnosticError } from "./security.ts";
 import { formatTimestampOrNever } from "./subscription-format.ts";
-import type { UsageProjectionBase } from "./usage-projection.ts";
+import { withUsageEligibility, type UsageProjectionBase } from "./usage-projection.ts";
 
 /** Usage configuration fields the shared controller relies on. */
 export interface UsageControllerConfigFields {
@@ -129,7 +131,7 @@ export interface UsageRefreshControllerOptions<
     cfg: Resolved,
   ) => Effect.Effect<boolean, never, UsageProviderRequirements | R>;
   /** Applies context eligibility (and provider clearing rules) to the projection. */
-  readonly synchronizeState: (
+  readonly synchronizeState?: (
     current: P,
     ctx: ExtensionContext,
     clearUsage: boolean,
@@ -238,23 +240,29 @@ export const makeUsageRefreshController = <
         .pipe(Effect.orDie);
     // Best-effort host UI adapter: a failing host callback is logged, never propagated.
     const notifyHost = <Result>(operation: string, action: () => Result) =>
-      Effect.suspend(() => {
-        try {
-          action();
-          return Effect.void;
-        } catch {
-          return Effect.logWarning(`${logLabel} UI recovery: ${operation}_failed.`);
-        }
-      }).pipe(Effect.asVoid);
+      Effect.try(action).pipe(
+        Effect.catch(() => Effect.logWarning(`${logLabel} UI recovery: ${operation}_failed.`)),
+        Effect.asVoid,
+      );
     const notifyChanged = notifyHost("render", onChange);
     const notifyUser = (message: string, level: "info" | "warning") =>
       notifyHost("notify", () => MutableRef.get(context).ui.notify(message, level));
+    const synchronizeState =
+      options.synchronizeState ??
+      ((current: P, ctx: ExtensionContext, clearUsage: boolean) =>
+        (current.config ? options.eligibility(ctx, current.config) : Effect.succeed(false)).pipe(
+          Effect.map((eligible) =>
+            withUsageEligibility(current, eligible, clearUsage, {
+              hiddenStatusText: options.hiddenStatusText,
+            }),
+          ),
+        ));
     const synchronize = (clearUsage = false) =>
       state
         .transition((current) =>
-          options
-            .synchronizeState(current, MutableRef.get(context), clearUsage)
-            .pipe(Effect.map((next) => [undefined, next] as const)),
+          synchronizeState(current, MutableRef.get(context), clearUsage).pipe(
+            Effect.map((next) => [undefined, next] as const),
+          ),
         )
         .pipe(Effect.orDie, Effect.asVoid);
     yield* synchronize(true);
@@ -477,3 +485,27 @@ export function formatUsageDebugReport(report: UsageDebugReport): string {
     `Auth file: ${report.authPath ?? "unknown"}`,
   ].join("\n");
 }
+
+/**
+ * Runs one provider diagnostic effect with a bounded 10-second deadline (the shared provider
+ * convention) and maps both failures and timeouts onto a sanitized string, so callers only
+ * branch on `Result<A, string>`: `Failure` messages are diagnostics, `Success` carries the
+ * provider value. Timeout failures carry no message, so `timeoutMessage` is the fallback text.
+ */
+export const timedDiagnosticResult = <A, E extends { readonly message?: string | undefined }, R>(
+  effect: Effect.Effect<A, E, R>,
+  timeoutMessage: string,
+): Effect.Effect<Result.Result<A, string>, never, R> =>
+  effect.pipe(
+    Effect.timeout("10 seconds"),
+    Effect.result,
+    Effect.map((result) =>
+      result._tag === "Success"
+        ? Result.succeed(result.success)
+        : Result.fail(
+            sanitizeDiagnosticError(
+              Predicate.isString(result.failure.message) ? result.failure.message : timeoutMessage,
+            ),
+          ),
+    ),
+  );

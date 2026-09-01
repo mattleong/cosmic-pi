@@ -92,8 +92,8 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             );
           const active = findActiveOpenAICompactionCheckpoint(current.branch, model);
           const input =
-            active && rawInput.length >= active.checkpoint.rawInputCount
-              ? [...active.checkpoint.output, ...rawInput.slice(active.checkpoint.rawInputCount)]
+            active && rawInput.length >= active.rawInputCount
+              ? [...active.output, ...rawInput.slice(active.rawInputCount)]
               : rawInput;
           const customInstructions = event.customInstructions?.trim();
           const instructions = [
@@ -125,29 +125,24 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             details: { type: OPENAI_COMPACTION_DETAILS_TYPE, checkpoint },
           } satisfies CompactionResult;
         });
+        const readBranch = Effect.fn("OpenAICompaction.readBranch")(function* () {
+          return yield* Effect.try({
+            try: () => MutableRef.get(options.context).sessionManager.getBranch(),
+            catch: () =>
+              compactionError("context", "Unable to read the current Pi session branch."),
+          });
+        });
         const filterContext = Effect.fn("OpenAICompaction.filterContext")(function* (
           messages: ContextEvent["messages"],
         ) {
           const config = MutableRef.get(options.projection).config;
           if (!config?.compaction.enabled) return undefined;
-          const branch = yield* Effect.try({
-            try: () => MutableRef.get(options.context).sessionManager.getBranch(),
-            catch: () =>
-              compactionError("context", "Unable to read the current Pi session branch."),
-          });
-          let latestCompaction: (typeof branch)[number] | undefined;
-          for (let index = branch.length - 1; index >= 0; index--) {
-            const entry = branch[index];
-            if (entry?.type === "compaction") {
-              latestCompaction = entry;
-              break;
-            }
-          }
-          if (
-            !latestCompaction ||
-            latestCompaction.type !== "compaction" ||
-            !decodeOpenAICompactionDetails(latestCompaction.details)
-          )
+          const branch = yield* readBranch();
+          const latestCompaction = branch.findLast(
+            (entry): entry is Extract<(typeof branch)[number], { type: "compaction" }> =>
+              entry?.type === "compaction",
+          );
+          if (!latestCompaction || !decodeOpenAICompactionDetails(latestCompaction.details))
             return undefined;
           const summaryIndex = messages.findIndex(
             (message) =>
@@ -170,7 +165,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
           });
           if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
           const active = findActiveOpenAICompactionCheckpoint(current.branch, current.model);
-          return active ? injectOpenAICompactionCheckpoint(payload, active.checkpoint) : undefined;
+          return active ? injectOpenAICompactionCheckpoint(payload, active) : undefined;
         });
         return { compact, filterContext, inject };
       }),

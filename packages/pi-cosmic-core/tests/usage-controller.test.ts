@@ -149,3 +149,74 @@ it.effect(
     });
   },
 );
+
+it.effect("composes the default synchronizeState from eligibility and hiddenStatusText", () => {
+  const memory = makeInMemoryDocuments();
+  const constructionLayer = Layer.mergeAll(
+    Path.layer,
+    memory.layer,
+    AgentDirectory.layer("/agent"),
+    Layer.succeed(
+      JsonHttpClient,
+      JsonHttpClient.of({
+        request: () => Effect.die("unused HTTP request"),
+        requestJson: () => Effect.die("unused HTTP request"),
+      }),
+    ),
+  );
+  const config: TestConfig = {
+    configPath: "/agent/extensions/test.json",
+    projectConfigPath: "/project/.pi/extensions/test.json",
+    globalConfigPath: "/agent/extensions/test.json",
+    projectConfigExists: false,
+    globalConfigExists: true,
+    usage: {
+      enabled: true,
+      refreshIntervalMs: 60_000,
+      showOnlyOnSubscriptionModels: true,
+    },
+  };
+  // SAFETY: This minimal host fixture is only observed by callbacks that ignore its fields.
+  const context = MutableRef.make({ hasUI: true } as ExtensionContext);
+  const projection = MutableRef.make<TestProjection>(initialUsageProjection<TestConfig, never>());
+
+  return Effect.gen(function* () {
+    yield* makeUsageRefreshController<TestProjection, TestConfig, never, never, never, never>({
+      spanPrefix: "test.usage",
+      logLabel: "Test",
+      context,
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+      initialProjection: () => initialUsageProjection<TestConfig, never>(),
+      hiddenStatusText: "hidden: model not eligible for usage display",
+      missingCredentialsMessage: () => "credentials missing",
+      clearAuthPatch: { authFound: false },
+      store: {
+        resolveConfig: () => Effect.succeed(config),
+        readRawConfig: () => Effect.succeed({}),
+        resolveCommittedConfig: (current) => current,
+        modifyConfig: () => Effect.die("unused config mutation"),
+      },
+      decodeSettingUpdate: () => Effect.die("unused setting update"),
+      eligibility: () => Effect.succeed(false),
+      fetchOutcome: () => Effect.die("unused fetch"),
+      formatStatusLine: () => "",
+      formatStatusText: () => "",
+      dependencies: Context.empty(),
+    }).pipe(provideBuiltLayer(constructionLayer));
+
+    // Construction-time synchronize(true) applied the default synchronizeState path.
+    expect(MutableRef.get(projection)).toMatchObject({
+      config,
+      authPath: "/agent/auth.json",
+      eligible: false,
+      snapshot: undefined,
+      statusLine: undefined,
+      error: undefined,
+      statusText: "hidden: model not eligible for usage display",
+    });
+  });
+});

@@ -1,4 +1,6 @@
 /** Pure slash-command argument completion shared by extension settings surfaces. */
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
 
 export interface SettingsCompletionDescriptor {
@@ -64,3 +66,45 @@ export const sectionSettingValue =
     const sectionObject: JsonObject = isJsonObject(existing) ? existing : {};
     return { ...current, [section]: { ...sectionObject, [key]: value } };
   };
+
+/** Shared settings error for unknown setting ids and values that fail their decoder. */
+export class InvalidSettingError extends Schema.TaggedError<InvalidSettingError>()(
+  "InvalidSettingError",
+  { id: Schema.String, message: Schema.String },
+) {}
+
+/** One user-facing settings option: presentation metadata plus a wire decoder. */
+export interface SettingsOptionDescriptor<Config = unknown> {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly values?: readonly string[] | undefined;
+  readonly decoder: Schema.Decoder<boolean | number | string>;
+  readonly currentValue: (config: Config) => string;
+}
+
+export const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
+export const FiniteNumberFromJsonSchema = Schema.fromJsonString(
+  Schema.Number.check(Schema.isFinite()),
+);
+
+/**
+ * Builds the shared settings-update decoder over a package's descriptors: unknown ids and values
+ * that fail their decoder fail with `InvalidSettingError`, while a known id yields a document
+ * patch assigning the decoded value to its top-level key or its dotted section.
+ */
+export const decodeSettingUpdate = <Config>(
+  descriptors: ReadonlyArray<Pick<SettingsOptionDescriptor<Config>, "id" | "decoder">>,
+) =>
+  Effect.fn("Settings.decodeSettingUpdate")(function* (id: string, rawValue: string) {
+    const descriptor = descriptors.find((entry) => entry.id === id);
+    if (!descriptor)
+      return yield* new InvalidSettingError({ id, message: `Unknown setting: ${id}.` });
+    const parsedValue = yield* Schema.decodeUnknownEffect(descriptor.decoder)(rawValue).pipe(
+      Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
+    );
+    const separator = id.indexOf(".");
+    if (separator < 0)
+      return (current: JsonObject): JsonObject => ({ ...current, [id]: parsedValue });
+    return sectionSettingValue(id.slice(0, separator), id.slice(separator + 1), parsedValue);
+  });

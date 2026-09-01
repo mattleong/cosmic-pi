@@ -19,7 +19,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
-import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import {
   PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
@@ -30,6 +29,7 @@ import type { RuntimeApiKey } from "../run/model.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
 import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
+import { decodeUnknownJsonOption } from "./wire-shared.ts";
 import type {
   LocalPiContact,
   LocalPiParentControl,
@@ -55,7 +55,6 @@ const BLOCKED_ENV_KEYS = new Set([
   RUNTIME_API_KEY_ENV,
   RUNTIME_API_PROVIDER_ENV,
 ]);
-const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 export interface ChildLaunchRequest {
   readonly runId: string;

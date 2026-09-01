@@ -74,29 +74,6 @@ export const renderSubagentStartCall = (
   return container;
 };
 
-export const renderStartFailures = (
-  failures: ReadonlyArray<SubagentStartFailure>,
-  expanded: boolean,
-  theme: Theme,
-): string =>
-  failures
-    .map((failure) => {
-      const name = sanitizeTerminalLine(failure.name ?? `start #${failure.index + 1}`);
-      const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-      const summary = `${theme.fg("error", `${managerStateGlyph("failed")} ${name}`)} · ${theme.fg("error", `failed to start${code}`)}`;
-      const raw = sanitizeTerminalLine(failure.message);
-      const detail = clipWithMarker(raw, expanded ? 2_048 : 240, "… [truncated]");
-      const admitted = failure.admittedRun;
-      const recovery = admitted
-        ? failedStartRecoveryAction(admitted)
-        : failureRecovery(failure.code, failure.message, "start");
-      const admittedLine = admitted
-        ? `\n${theme.fg("dim", formatFailedStartRecovery(admitted))}`
-        : "";
-      return `${summary}\n${theme.fg("dim", detail)}${admittedLine}\n${theme.fg("accent", `Next: ${recovery}`)}`;
-    })
-    .join("\n");
-
 type SelectedStartEntry = Extract<SubagentStartEntry, { readonly routeStatus: "selected" }>;
 
 const selectedRoute = (entry: SubagentStartEntry): entry is SelectedStartEntry =>

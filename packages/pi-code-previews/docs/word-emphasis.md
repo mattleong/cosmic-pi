@@ -72,7 +72,7 @@ The output includes the emphasized spans per rendered diff line and telemetry su
 Word-emphasis accuracy is guarded by a golden corpus in:
 
 ```text
-src/diff/word/fixtures/emphasis-golden.ts
+tests/support/word-fixtures/emphasis-golden.ts
 ```
 
 The test runner renders each diff and compares the extracted emphasized spans:

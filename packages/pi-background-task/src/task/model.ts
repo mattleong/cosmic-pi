@@ -114,8 +114,6 @@ export const countTaskStates = (
   return { active, failed };
 };
 
-export const emptyProjection = (): BackgroundTaskProjection => ({ tasks: [] });
-
 /** Active tasks first, then most recently started. Shared by snapshot and view ordering. */
 export function sortTasksByActivity<A extends Pick<BackgroundTaskSnapshot, "state" | "startedAt">>(
   tasks: ReadonlyArray<A>,

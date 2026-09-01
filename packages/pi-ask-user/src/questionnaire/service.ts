@@ -11,12 +11,6 @@ export type AskUserHost = (
   request: AskUserRequest,
 ) => Effect.Effect<AskUserOutcome, AskUserHostError>;
 
-interface AskUserServiceContract {
-  readonly ask: (
-    request: AskUserRequest,
-  ) => Effect.Effect<AskUserOutcome, AskUserValidationError | AskUserHostError>;
-}
-
 const makeService = Effect.fn("AskUserService.make")(function* (host: AskUserHost) {
   const lock = yield* Semaphore.make(1);
   const ask = Effect.fn("AskUserService.ask")(function* (request: AskUserRequest) {
@@ -25,12 +19,17 @@ const makeService = Effect.fn("AskUserService.make")(function* (host: AskUserHos
     if (validationError) return yield* validationError;
     return yield* lock.withPermit(host(normalized));
   });
-  return { ask } satisfies AskUserServiceContract;
+  return { ask };
 });
 
-export class AskUserService extends Context.Service<AskUserService, AskUserServiceContract>()(
-  "pi-ask-user/questionnaire/service/AskUserService",
-) {
+export class AskUserService extends Context.Service<
+  AskUserService,
+  {
+    readonly ask: (
+      request: AskUserRequest,
+    ) => Effect.Effect<AskUserOutcome, AskUserValidationError | AskUserHostError>;
+  }
+>()("pi-ask-user/questionnaire/service/AskUserService") {
   static layer(host: AskUserHost): Layer.Layer<AskUserService> {
     return Layer.effect(this, makeService(host));
   }

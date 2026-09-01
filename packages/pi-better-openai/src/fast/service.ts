@@ -3,8 +3,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import * as Ref from "effect/Ref";
-import * as Semaphore from "effect/Semaphore";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { freezeSnapshot, makeSynchronousIngress } from "pi-cosmic-core";
 import type { ResolvedConfig } from "../config/schema.ts";
 import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
@@ -30,31 +29,28 @@ export class FastModeService extends Context.Service<FastModeService>()(
       Effect.gen(function* () {
         const usage = yield* OpenAIUsageService;
         const initialState = initialFastSnapshot();
-        const state = yield* Ref.make(initialState);
-        const transitionLock = yield* Semaphore.make(1);
-        const commitState = (snapshot: FastSnapshot) =>
-          Ref.set(state, snapshot).pipe(
-            Effect.andThen(Effect.sync(() => MutableRef.set(options.projection, snapshot))),
-          );
+        const state = yield* SynchronizedRef.make(initialState);
         yield* Effect.sync(() => MutableRef.set(options.projection, initialState));
         const commitInMemory = (update: (current: FastSnapshot) => FastSnapshot) =>
-          transitionLock.withPermit(
-            Effect.gen(function* () {
-              const snapshot = freezeSnapshot(update(yield* Ref.get(state)));
-              yield* Effect.uninterruptible(commitState(snapshot));
+          SynchronizedRef.updateEffect(state, (current) =>
+            Effect.sync(() => {
+              const snapshot = freezeSnapshot(update(current));
+              MutableRef.set(options.projection, snapshot);
+              return snapshot;
             }),
           );
         const persistTransition = (update: (current: FastSnapshot) => FastSnapshot) =>
-          transitionLock.withPermit(
-            Effect.gen(function* () {
-              const snapshot = freezeSnapshot(update(yield* Ref.get(state)));
-              yield* usage.persistFast(
+          SynchronizedRef.updateEffect(state, (current) => {
+            const snapshot = freezeSnapshot(update(current));
+            return Effect.as(
+              usage.persistFast(
                 snapshot.active,
                 snapshot.desiredActive,
-                commitState(snapshot),
-              );
-            }),
-          );
+                Effect.sync(() => MutableRef.set(options.projection, snapshot)),
+              ),
+              snapshot,
+            );
+          });
         const ingress = yield* makeSynchronousIngress({
           capacity: 16,
           overflow: "coalesce-latest",

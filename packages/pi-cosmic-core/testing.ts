@@ -16,4 +16,4 @@ export {
   type LifecycleProbe,
   type StreamingHttpTestRequest,
 } from "./src/testing/layers.ts";
-export { TestPollingTimeout, yieldUntil } from "./src/testing/polling.ts";
+export { yieldUntil } from "./src/testing/polling.ts";

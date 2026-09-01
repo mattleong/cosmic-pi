@@ -46,7 +46,7 @@ export const clampModelVisibleText = (text: string, maxOutputBytes: number): str
   return `${utf8Truncate(text, maxOutputBytes - markerBytes)}${marker}`;
 };
 
-export type CumulativeOutputAdmission =
+type CumulativeOutputAdmission =
   | { readonly admitted: true }
   | { readonly admitted: false; readonly message: string };
 

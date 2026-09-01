@@ -9,6 +9,7 @@ import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import {
   hasObjectRuntimeType,
+  invokeHostCallback,
   makeSynchronousIngress,
   type SynchronousIngress,
 } from "pi-cosmic-core";
@@ -200,7 +201,9 @@ class AdvisorReviewQueueImpl implements AdvisorReviewQueue {
           : [...decision.queued];
         for (const entry of entries) this.observations.releaseBarrier(entry.target);
         if (decision.active)
-          isolate(() => this.options.onCheckpointSettled?.(decision.active!.request));
+          invokeHostCallback(() => {
+            this.options.onCheckpointSettled?.(decision.active!.request);
+          }, undefined);
 
         const error = new AdvisorQueueDisposedError({
           message: "Advisor review queue was disposed.",
@@ -268,7 +271,9 @@ class AdvisorReviewQueueImpl implements AdvisorReviewQueue {
         yield* Deferred.await(decision.wake);
         return;
       }
-      isolate(() => this.options.onCheckpointStart?.(decision.entry.request));
+      invokeHostCallback(() => {
+        this.options.onCheckpointStart?.(decision.entry.request);
+      }, undefined);
       yield* this.consume(decision.entry);
     });
   }
@@ -395,7 +400,9 @@ class AdvisorReviewQueueImpl implements AdvisorReviewQueue {
 
         if (commitEvidence) this.observations.commitThrough(entry.target);
         else this.observations.releaseBarrier(entry.target);
-        isolate(() => this.options.onCheckpointSettled?.(entry.request));
+        invokeHostCallback(() => {
+          this.options.onCheckpointSettled?.(entry.request);
+        }, undefined);
         if (decision.wake) yield* Deferred.succeed(decision.wake, undefined);
 
         if (completion._tag === "Success")
@@ -438,7 +445,9 @@ class AdvisorReviewQueueImpl implements AdvisorReviewQueue {
       }
 
       this.observations.releaseBarrier(decision.entry.target);
-      isolate(() => this.options.onCheckpointSettled?.(decision.entry.request));
+      invokeHostCallback(() => {
+        this.options.onCheckpointSettled?.(decision.entry.request);
+      }, undefined);
       yield* this.startCheckpointWorker();
       yield* Deferred.fail(decision.entry.done, error);
     });
@@ -491,14 +500,6 @@ function failureMessage<ErrorInput>(error: ErrorInput, fallback: string): string
     Predicate.isString(error.message)
     ? error.message
     : fallback;
-}
-
-function isolate(action: () => void): void {
-  try {
-    action();
-  } catch {
-    // Queue lifecycle callbacks cannot own worker settlement.
-  }
 }
 
 function renderPreviouslyProcessed(target: number): string {

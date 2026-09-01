@@ -20,6 +20,7 @@ import {
   loadSettingsSaveContextEffect,
   saveSettingsStateEffect,
   type LoadSettingsOptions,
+  type SettingsDocumentDependencies,
   type SettingsSaveContext,
 } from "./document-store";
 import { CodePreviewEnvironmentService } from "./env";
@@ -54,17 +55,18 @@ export class CodePreviewSettingsService extends Context.Service<
       const agentDirectory = yield* AgentDirectory;
       const documents = yield* JsonDocumentStore;
       const path = yield* Path.Path;
-      const dependencies = Context.make(CodePreviewEnvironmentService, environment).pipe(
-        Context.add(AgentDirectory, agentDirectory),
-        Context.add(JsonDocumentStore, documents),
-        Context.add(Path.Path, path),
-      );
+      const deps: SettingsDocumentDependencies = {
+        path,
+        agentDir: agentDirectory,
+        documents,
+        environment,
+      };
       // The Ref starts private. Layer construction must not publish settings from an unstarted runtime.
       const state = yield* Ref.make(
         freezeSnapshot(defaultSettingsSaveContext(environment.defaults)),
       );
       const readFromDisk = (options: LoadSettingsOptions) =>
-        loadSettingsSaveContextEffect(options).pipe(Effect.provide(dependencies));
+        loadSettingsSaveContextEffect(deps, options);
 
       const load = (admission: SettingsAdmission, options: LoadSettingsOptions = {}) =>
         withSettingsCoordinator(admission, (coordinator) =>
@@ -92,7 +94,7 @@ export class CodePreviewSettingsService extends Context.Service<
               current = freezeSnapshot(yield* readFromDisk(options.rehydrate));
               yield* Ref.set(state, current);
             }
-            yield* saveSettingsStateEffect(settings, current, (nextContext) => {
+            yield* saveSettingsStateEffect(deps, settings, current, (nextContext) => {
               // Preflight the complete plain state before rename. afterCommit already holds the
               // coordinator and document locks, so it must not reacquire either one.
               const committed = freezeSnapshot<SettingsSaveContext>(nextContext);
@@ -103,7 +105,7 @@ export class CodePreviewSettingsService extends Context.Service<
                   }),
                 ),
               );
-            }).pipe(Effect.provide(dependencies));
+            });
           }),
         );
 

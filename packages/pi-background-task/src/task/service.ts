@@ -118,7 +118,6 @@ const waitResult = (
 
 /** Output chunks coalesce into at most one projection publish per interval. */
 const OUTPUT_PUBLISH_INTERVAL_MILLIS = 1_000;
-const MAX_WAIT_PATTERN_CHARS = 256;
 
 const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   options: BackgroundTaskServiceOptions,
@@ -319,8 +318,10 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         const stopPhase = Effect.gen(function* () {
           const handle = Option.getOrUndefined(
             yield* Deferred.await(prepared.record.handleReady).pipe(
-              Effect.timeout("5 seconds"),
-              Effect.option,
+              Effect.timeoutOption("5 seconds"),
+              // A spawn failure already settles the handle deferred's consumer elsewhere;
+              // a failed wait still reads as "no handle" exactly as the previous idiom did.
+              Effect.catch(() => Effect.succeedNone),
             ),
           );
           if (!handle) return;
@@ -555,7 +556,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         return yield* restore(Deferred.await(record.handleReady)).pipe(
           Effect.andThen(Effect.sync(() => record.snapshot)),
           Effect.mapError((error) =>
-            error.operation === "inspect working directory"
+            error.reason === "cwd"
               ? new InvalidBackgroundCwdError({ cwd, message: error.message })
               : new BackgroundSpawnError({ message: error.message }),
           ),
@@ -581,12 +582,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     );
 
   const status: BackgroundTaskServiceContract["status"] = (id) =>
-    withLock(
-      Effect.suspend(() => {
-        const record = tasks.get(id);
-        return record ? Effect.succeed(record.snapshot) : Effect.fail(notFound(id));
-      }),
-    );
+    Effect.map(admitRecord(id), (record) => record.snapshot);
 
   const admitRecord = (id: string): Effect.Effect<TaskRecord, BackgroundTaskNotFoundError> =>
     withLock(
@@ -647,10 +643,12 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       }
       if (
         request.until === "output" &&
-        (!contains || contains.length > MAX_WAIT_PATTERN_CHARS || contains.includes("\0"))
+        (!contains ||
+          contains.length > BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars ||
+          contains.includes("\0"))
       ) {
         return yield* new InvalidBackgroundCommandError({
-          message: `Output waits require a non-empty contains value of at most ${MAX_WAIT_PATTERN_CHARS} characters with no NUL byte.`,
+          message: `Output waits require a non-empty contains value of at most ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars} characters with no NUL byte.`,
         });
       }
 

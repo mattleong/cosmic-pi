@@ -34,6 +34,7 @@ import {
   type RpcResponse,
 } from "./local-pi-protocol.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "../run/state.ts";
+import { correlatedRequest, protocolError } from "./driver-shared.ts";
 import {
   toBackendExit,
   type BackendDriver,
@@ -45,7 +46,6 @@ import {
 const RPC_TIMEOUT = "10 seconds";
 const EVENT_CAPACITY = 512;
 
-const protocolError = (message: string) => new SubagentProtocolError({ message });
 const noBackendEvent: Effect.Effect<BackendEvent | undefined> = Effect.as(Effect.void, undefined);
 const usageFromRpc = (usage: ReturnType<typeof decodeRpcUsageOption>): SubagentUsage =>
   (() => {
@@ -237,57 +237,47 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   };
 
   const rpc = <A extends RpcCommand>(command: A): Effect.Effect<RpcResponse, SubagentError> =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
+    correlatedRequest({
+      timeout: RPC_TIMEOUT,
+      register: (deferred) => {
         const id = `backend-rpc-${nextRpcId++}`;
-        const response = Deferred.makeUnsafe<RpcResponse, SubagentError>();
-        responses.set(id, { command: command.type, deferred: response });
-        return { id, response };
-      }),
-      ({ id, response }) =>
-        Effect.raceFirst(
-          child.send({ ...command, id }).pipe(
-            Effect.mapError((error) => mapTransportUncertainty(command, error)),
-            Effect.andThen(Deferred.await(response)),
-          ),
-          Deferred.await(response),
-        ).pipe(
-          Effect.timeoutOption(RPC_TIMEOUT),
-          Effect.flatMap((outcome) =>
-            Option.isSome(outcome)
-              ? Effect.succeed(outcome.value)
-              : Effect.fail(
-                  new SubagentProcessError({
-                    operation: "await RPC response from",
-                    code: rpcOutcomeCode(command.type),
-                    message:
-                      command.type === "clear_queue"
-                        ? "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent. Inspect subagent status before retrying interrupt."
-                        : `Subagent did not answer ${command.type}; the command may already have applied. Inspect subagent status before retrying.`,
-                  }),
-                ),
-          ),
-          Effect.flatMap((response) =>
-            response.success
-              ? Effect.succeed(response)
-              : Effect.fail(
-                  new SubagentProcessError({
-                    operation: `execute ${command.type} in`,
-                    message: sanitizeDiagnosticText(
-                      command.type === "clear_queue"
-                        ? `${response.error ?? "Subagent RPC command clear_queue failed."} Abort was not sent.`
-                        : (response.error ?? `Subagent RPC command ${command.type} failed.`),
-                      MAX_ERROR_CHARS,
-                    ),
-                  }),
-                ),
-          ),
-        ),
-      ({ id }) =>
-        Effect.sync(() => {
-          responses.delete(id);
+        responses.set(id, { command: command.type, deferred });
+        return {
+          frame: id,
+          unregister: Effect.sync(() => {
+            responses.delete(id);
+          }),
+        };
+      },
+      send: (id) =>
+        child
+          .send({ ...command, id })
+          .pipe(Effect.mapError((error) => mapTransportUncertainty(command, error))),
+      timeoutError: () =>
+        new SubagentProcessError({
+          operation: "await RPC response from",
+          code: rpcOutcomeCode(command.type),
+          message:
+            command.type === "clear_queue"
+              ? "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent. Inspect subagent status before retrying interrupt."
+              : `Subagent did not answer ${command.type}; the command may already have applied. Inspect subagent status before retrying.`,
         }),
-    );
+      awaitEarlyResponse: true,
+      decode: (response) =>
+        response.success
+          ? Effect.succeed(response)
+          : Effect.fail(
+              new SubagentProcessError({
+                operation: `execute ${command.type} in`,
+                message: sanitizeDiagnosticText(
+                  command.type === "clear_queue"
+                    ? `${response.error ?? "Subagent RPC command clear_queue failed."} Abort was not sent.`
+                    : (response.error ?? `Subagent RPC command ${command.type} failed.`),
+                  MAX_ERROR_CHARS,
+                ),
+              }),
+            ),
+    });
 
   const offerEvent = (raw: ChildWireEvent, event: BackendEvent) =>
     Effect.suspend(() => {

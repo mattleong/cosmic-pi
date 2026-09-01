@@ -22,8 +22,6 @@
   "files": [
     "index.ts",
     "src/**/*.ts",
-    "!src/**/fixtures/**",
-    "!src/testing/**",
     "docs",
     "README.md",
     "LICENSE"

@@ -7,7 +7,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
 import type {
   CodexInitializedNotification,
   CodexRequest,
@@ -20,13 +19,13 @@ import { processCauseError, SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { releaseChildProcess } from "./child-process.ts";
 import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
+import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 const EVENT_CAPACITY = 512;
 const WRITE_TIMEOUT = "10 seconds";
-const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 /** Outbound frames are locally constructed protocol values serialized as one pure JSONL line. */
 const encodeOutboundFrame = (value: LocalCliOutboundFrame): string => `${JSON.stringify(value)}\n`;

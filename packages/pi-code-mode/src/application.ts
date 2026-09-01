@@ -18,7 +18,6 @@ import {
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import {
-  hasNestedPowerShell,
   makeNestedPiToolDefinitions,
   type NestedPiToolDefinitions,
 } from "./boundary/host-builtin-tools.ts";
@@ -154,7 +153,7 @@ export function registerCodeModeApplication(
         wrapped = boundaries.wrapTool(
           buildCodeModeToolDefinition({
             catalogBudget: state.config.catalogBudget,
-            includePowerShell: hasNestedPowerShell(definitions),
+            includePowerShell: definitions.powershell !== undefined,
             execute: makeCodeModeToolExecute({
               isCurrent,
               getState: () => MutableRef.get(stateRef),

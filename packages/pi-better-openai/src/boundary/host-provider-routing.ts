@@ -15,12 +15,9 @@ export function applyFastRoutingHeaders(
   if (hint) headers[CODEX_FAST_ROUTING_HEADER] = hint;
 }
 
-export function resetOpenAICodexTransport(
-  ctx: ExtensionContext,
-  closeSessions: (sessionId?: string) => void = closeOpenAICodexWebSocketSessions,
-): void {
+export function resetOpenAICodexTransport(ctx: ExtensionContext): void {
   try {
-    closeSessions(ctx.sessionManager.getSessionId());
+    closeOpenAICodexWebSocketSessions(ctx.sessionManager.getSessionId());
   } catch {
     // Provider transport cleanup is best effort at this Pi host boundary.
   }

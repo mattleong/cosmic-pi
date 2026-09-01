@@ -1,8 +1,7 @@
 /** Pure, presentation-only projection of successful structured Code Mode output. */
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
-import { truncateDisplay } from "../tools/format.ts";
+import { decodeOption, truncateDisplay } from "../tools/format.ts";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 
 /** Avoid materializing hostile persisted objects with an unreasonable number of UI sections. */
@@ -57,11 +56,8 @@ export function projectStructuredCodeModeOutput(
 ): ReadonlyArray<CodeModeOutputField> | undefined {
   const split = splitStructuredOutput(text);
   if (split === undefined) return undefined;
-  const decoded = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.String))(
-    split.parsed,
-  );
-  if (Option.isNone(decoded)) return undefined;
-  const record = decoded.value;
+  const record = decodeOption(Schema.Record(Schema.String, Schema.String), split.parsed);
+  if (record === undefined) return undefined;
   const entries = Object.entries(record);
   if (
     entries.length === 0 ||

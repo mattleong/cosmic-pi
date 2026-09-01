@@ -49,8 +49,8 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
           });
 
         /** Recover any failure into `undefined` after one warning per key. */
-        const recovered = <Value, Error>(
-          effect: Effect.Effect<Value, Error>,
+        const recovered = <Value, E>(
+          effect: Effect.Effect<Value, E>,
           key: string,
           message: string,
         ): Effect.Effect<Value | undefined> =>
@@ -64,9 +64,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
         });
 
         const write = (identified: DirectoryIdentity, preference: DirectoryModelPreference) =>
-          store
-            .write(identified, preference)
-            .pipe(Effect.catch(() => warnOnce("write", WRITE_WARNING)));
+          recovered(store.write(identified, preference), "write", WRITE_WARNING);
 
         // Snapshot the live session model and Pi's thinking level at serialized capture time
         // so a delayed host event re-persists the current state instead of a stale one.

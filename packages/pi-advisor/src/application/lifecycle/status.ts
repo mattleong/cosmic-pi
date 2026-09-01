@@ -3,7 +3,6 @@ import {
   advisorStatusIsAnimatedAtHostBoundary,
   setAdvisorStatusAtHostBoundary,
 } from "../../boundary/host-status.ts";
-import type { ResolvedAdvisorConfig } from "../../config/options.ts";
 import type { AdvisorStatusServiceContract } from "../../status/service.ts";
 import {
   STATUS_KEY,
@@ -14,9 +13,8 @@ import {
 
 export const makeLifecycleStatusControls = (options: {
   readonly statusService: AdvisorStatusServiceContract;
-  readonly currentConfig: () => ResolvedAdvisorConfig;
 }) => {
-  const { statusService, currentConfig } = options;
+  const { statusService } = options;
 
   const stopStatusSpinner = (): void => {
     statusService.clear();
@@ -29,7 +27,6 @@ export const makeLifecycleStatusControls = (options: {
 
   const renderReviewStatus = (ctx: ExtensionContext, frameIndex: number): void => {
     try {
-      currentConfig();
       const frame =
         STATUS_SPINNER_FRAMES[frameIndex % STATUS_SPINNER_FRAMES.length] ??
         STATUS_SPINNER_FRAMES[0];

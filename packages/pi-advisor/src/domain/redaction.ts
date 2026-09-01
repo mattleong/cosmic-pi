@@ -16,11 +16,6 @@ const SENSITIVE_KEY_PATTERN =
 const SENSITIVE_ASSIGNMENT_PATTERN =
   /(["']?)\b(?=[A-Za-z\d_-]*(?:api|key|access|refresh|auth|authorization|password|passwd|secret|token|client|private))([A-Za-z][A-Za-z\d_-]*)(["']?)(\s*[:=]\s*)((?:Bearer\s+)?)(?:(["'])([^"'\r\n]*)\6|[^\s,;}"'\]]+)/gi;
 
-/** Snapshot unknown input, then apply the central recursive credential policy. */
-export function redactObservationValue<ValueInput>(value: ValueInput): Schema.MutableJson {
-  return redactObservationSnapshot(snapshotData(value));
-}
-
 /** Redact an owner-produced safe-data snapshot without walking the source value again. */
 export function redactObservationSnapshot(
   value: Schema.MutableJson | undefined,

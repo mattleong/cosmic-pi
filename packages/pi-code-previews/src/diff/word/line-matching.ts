@@ -15,8 +15,14 @@ import {
 } from "./changed-line";
 import {
   competingCandidateValue,
+  competingChangedLineScoreAt,
+  isAmbiguousChangedLinePairScore,
+  isReciprocalBestChangedLinePair,
+  linePairConfidence,
   matchChangedLinesSparse,
-  type SparseLineMatchingPolicy,
+  MIN_CHANGED_LINE_PAIR_SCORE,
+  MIN_HIGH_CONFIDENCE_CROSSING_PAIR_SCORE,
+  MIN_POSITIONAL_FALLBACK_PAIR_SCORE,
   type TopTwoCandidateValues,
 } from "./sparse-line-matching";
 
@@ -34,7 +40,6 @@ type ChangedLinePairCandidate = {
 
 type ChangedLinePositionPair = [removedPosition: number, addedPosition: number];
 type ChangedLineIndexPair = [removedIndex: number, addedIndex: number];
-type ChangedLineScoreAt = (removedPosition: number, addedPosition: number) => number;
 
 export function matchChangedLines(
   removed: Array<IndexedChangedLine<RemovedDiffLine>>,
@@ -42,7 +47,7 @@ export function matchChangedLines(
 ): ChangedLinePair[] {
   if (removed.length === 0 || added.length === 0) return [];
   if (removed.length * added.length > MAX_CHANGED_LINE_PAIR_CELLS)
-    return matchChangedLinesSparse(removed, added, SPARSE_LINE_MATCHING_POLICY);
+    return matchChangedLinesSparse(removed, added);
   const similarityDocuments = changedLineSimilarityDocuments(removed, added);
   const tokenWeight = similarityTokenWeight(similarityDocuments);
   const { removedFeatures, addedFeatures } = similarityDocuments;
@@ -89,23 +94,7 @@ export function matchChangedLines(
   return addCrossingPairs(removed, added, scores, positions, confidentPairs);
 }
 
-const MIN_CHANGED_LINE_PAIR_SCORE = 0.45;
-const MIN_POSITIONAL_FALLBACK_PAIR_SCORE = 0.28;
-const CHANGED_LINE_PAIR_AMBIGUITY_MARGIN = 0.06;
-const CHANGED_LINE_PAIR_AMBIGUITY_RATIO = 0.92;
-const MIN_HIGH_CONFIDENCE_CROSSING_PAIR_SCORE = 0.72;
-const HIGH_CONFIDENCE_CROSSING_PAIR_MARGIN = 0.12;
-const HIGH_CONFIDENCE_CROSSING_PAIR_RATIO = 0.85;
 const MAX_CHANGED_LINE_PAIR_CELLS = 1024;
-
-const SPARSE_LINE_MATCHING_POLICY: SparseLineMatchingPolicy = {
-  minPositionalFallbackPairScore: MIN_POSITIONAL_FALLBACK_PAIR_SCORE,
-  minChangedLinePairScore: MIN_CHANGED_LINE_PAIR_SCORE,
-  competingChangedLineScoreAt,
-  isAmbiguousChangedLinePairScore,
-  isReciprocalBestChangedLinePair,
-  linePairConfidence,
-};
 
 function confidentChangedLinePairs(
   positions: ChangedLinePositions,
@@ -146,59 +135,6 @@ function competingChangedLineScore(
     usedRemoved,
     usedAdded,
   );
-}
-
-function competingChangedLineScoreAt(
-  removedLength: number,
-  addedLength: number,
-  removedPosition: number,
-  addedPosition: number,
-  scoreAt: ChangedLineScoreAt,
-  usedRemoved?: ReadonlySet<number>,
-  usedAdded?: ReadonlySet<number>,
-): number {
-  let competingScore = 0;
-  for (
-    let candidateAddedPosition = 0;
-    candidateAddedPosition < addedLength;
-    candidateAddedPosition++
-  ) {
-    if (candidateAddedPosition === addedPosition || usedAdded?.has(candidateAddedPosition))
-      continue;
-    competingScore = Math.max(competingScore, scoreAt(removedPosition, candidateAddedPosition));
-  }
-  for (
-    let candidateRemovedPosition = 0;
-    candidateRemovedPosition < removedLength;
-    candidateRemovedPosition++
-  ) {
-    if (candidateRemovedPosition === removedPosition || usedRemoved?.has(candidateRemovedPosition))
-      continue;
-    competingScore = Math.max(competingScore, scoreAt(candidateRemovedPosition, addedPosition));
-  }
-  return competingScore;
-}
-
-function isAmbiguousChangedLinePairScore(score: number, competingScore: number): boolean {
-  return (
-    competingScore >= MIN_POSITIONAL_FALLBACK_PAIR_SCORE &&
-    (score - competingScore <= CHANGED_LINE_PAIR_AMBIGUITY_MARGIN ||
-      competingScore >= score * CHANGED_LINE_PAIR_AMBIGUITY_RATIO)
-  );
-}
-
-function isReciprocalBestChangedLinePair(score: number, competingScore: number): boolean {
-  return score > competingScore && !isAmbiguousChangedLinePairScore(score, competingScore);
-}
-
-function linePairConfidence(score: number, competingScore: number): WordChangeConfidence {
-  if (
-    score >= MIN_HIGH_CONFIDENCE_CROSSING_PAIR_SCORE &&
-    score - competingScore >= HIGH_CONFIDENCE_CROSSING_PAIR_MARGIN &&
-    competingScore <= score * HIGH_CONFIDENCE_CROSSING_PAIR_RATIO
-  )
-    return "high";
-  return "medium";
 }
 
 function addCrossingPairs(

@@ -30,12 +30,7 @@ import {
 } from "./render-management.ts";
 import { formatAwaitSummary, renderAwaitProgressComponent } from "./render-await.ts";
 import { aggregateRunUsage, renderResponsiveRunRows } from "./render-run-rows.ts";
-import {
-  renderStartFailures,
-  renderStartProgressComponent,
-  renderStartReceiptComponent,
-} from "./render-start.ts";
-import type { SubagentStartFailure } from "./model.ts";
+import { renderStartProgressComponent, renderStartReceiptComponent } from "./render-start.ts";
 
 interface RunOverviewHierarchy {
   readonly awaitedRunIds?: ReadonlySet<string> | undefined;
@@ -223,18 +218,11 @@ interface RunOverviewOptions {
 
 class RunOverviewComponent implements Component {
   private readonly runs: ReadonlyArray<SubagentRunCard>;
-  private readonly failures: ReadonlyArray<SubagentStartFailure>;
   private readonly theme: Theme;
   private readonly options: RunOverviewOptions;
 
-  constructor(
-    runs: ReadonlyArray<SubagentRunCard>,
-    failures: ReadonlyArray<SubagentStartFailure>,
-    theme: Theme,
-    options: RunOverviewOptions,
-  ) {
+  constructor(runs: ReadonlyArray<SubagentRunCard>, theme: Theme, options: RunOverviewOptions) {
     this.runs = runs;
-    this.failures = failures;
     this.theme = theme;
     this.options = options;
   }
@@ -281,10 +269,6 @@ class RunOverviewComponent implements Component {
             expandedRunDiagnostics(run, safeWidth, this.theme, !isAwaitHierarchy),
           )
         : []),
-      ...renderStartFailures(this.failures, this.options.expanded, this.theme)
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => truncateToWidth(line, safeWidth)),
       ...outcomeRuns
         .filter(
           (run) =>
@@ -346,11 +330,7 @@ class RunOverviewComponent implements Component {
               safeWidth,
             ),
           ]
-        : this.options.showReportAffordance !== false &&
-            this.failures.length > 0 &&
-            !this.options.expanded
-          ? [renderExpansionAffordance("failure details", false, this.theme)]
-          : []),
+        : []),
     ];
   }
 
@@ -363,13 +343,12 @@ class RunOverviewComponent implements Component {
 export const renderStartAwaitOverviewComponent = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
-  failures: ReadonlyArray<SubagentStartFailure> = [],
   banner?: SemanticOutcomeBanner,
   hierarchy?: RunOverviewHierarchy,
   reportRuns: ReadonlyArray<SubagentRunCard> = runs,
   showRunRows = true,
 ): Component =>
-  new RunOverviewComponent(runs, failures, theme, {
+  new RunOverviewComponent(runs, theme, {
     expanded: false,
     reportSections: expandedRunReportSections(reportRuns),
     banner,
@@ -405,7 +384,6 @@ const appendReportSections = (
 export const renderExpandedStartAwaitResult = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
-  failures: ReadonlyArray<SubagentStartFailure> = [],
   banner?: SemanticOutcomeBanner,
   showReportOutcomes = true,
   hierarchy?: RunOverviewHierarchy,
@@ -416,7 +394,7 @@ export const renderExpandedStartAwaitResult = (
   const sections = showReportOutcomes ? expandedRunReportSections(reportRuns) : [];
   if (!reportsFirst) {
     container.addChild(
-      new RunOverviewComponent(runs, failures, theme, {
+      new RunOverviewComponent(runs, theme, {
         expanded: true,
         reportSections: sections,
         banner,
@@ -429,7 +407,7 @@ export const renderExpandedStartAwaitResult = (
   }
 
   container.addChild(
-    new RunOverviewComponent(runs, [], theme, {
+    new RunOverviewComponent(runs, theme, {
       expanded: false,
       reportSections: [],
       banner,
@@ -446,7 +424,7 @@ export const renderExpandedStartAwaitResult = (
     container.addChild(new Text(theme.fg("muted", "Run outcomes"), 0, 0));
   }
   container.addChild(
-    new RunOverviewComponent(runs, failures, theme, {
+    new RunOverviewComponent(runs, theme, {
       expanded: true,
       reportSections: [],
       showReportOutcomes,
@@ -632,7 +610,6 @@ export const renderSubagentResult = (
       const rendered = renderExpandedStartAwaitResult(
         details.cards,
         theme,
-        [],
         banner,
         true,
         hierarchy,
@@ -645,7 +622,6 @@ export const renderSubagentResult = (
     return renderStartAwaitOverviewComponent(
       details.cards,
       theme,
-      [],
       banner,
       hierarchy,
       targets,
@@ -663,8 +639,8 @@ export const renderSubagentResult = (
       theme,
       (cards, isExpanded, banner, showReports) =>
         isExpanded
-          ? renderExpandedStartAwaitResult(cards, theme, [], banner, showReports, hierarchy)
-          : new RunOverviewComponent(cards, [], theme, {
+          ? renderExpandedStartAwaitResult(cards, theme, banner, showReports, hierarchy)
+          : new RunOverviewComponent(cards, theme, {
               expanded: false,
               reportSections: showReports ? expandedRunReportSections(cards) : [],
               banner,

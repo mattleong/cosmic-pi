@@ -13,6 +13,7 @@ import {
   SUPERVISOR_MCP_PROXY_TOOL_NAME,
   type SupervisorMcpToolArgumentsByName,
 } from "../supervisor/mcp-contract.ts";
+import { decodeUnknownJsonOption } from "./wire-shared.ts";
 import {
   makeNdjsonRpcSession,
   type InboundClassification,
@@ -112,7 +113,6 @@ type BridgeReply =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "notification"; readonly message: string };
 
-const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const decodeBridgeNotificationOption = Schema.decodeUnknownOption(BridgeNotification);
 const decodeBridgeResponseDiscriminantOption = Schema.decodeUnknownOption(
   BridgeResponseDiscriminant,

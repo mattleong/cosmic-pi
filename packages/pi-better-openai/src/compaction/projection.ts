@@ -18,11 +18,6 @@ import {
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const JsonObjectArraySchema = Schema.Array(Schema.Record(Schema.String, Schema.Json));
 
-export interface ActiveOpenAICompactionCheckpoint {
-  readonly checkpoint: OpenAICompactionCheckpoint;
-  readonly entryIndex: number;
-}
-
 export function isEligibleOpenAICompactionModel(
   model: Model<Api> | null | undefined,
 ): model is Model<"openai-responses"> {
@@ -33,21 +28,21 @@ export function isEligibleOpenAICompactionModel(
 export function findActiveOpenAICompactionCheckpoint(
   branch: readonly SessionEntry[],
   model: Model<Api>,
-): ActiveOpenAICompactionCheckpoint | undefined {
-  for (let index = branch.length - 1; index >= 0; index--) {
-    const entry = branch[index];
-    if (!entry || entry.type !== "compaction") continue;
-    const details = decodeOpenAICompactionDetails(entry.details);
-    if (!details) return undefined;
-    const checkpoint = details.checkpoint;
-    if (
-      checkpoint.provider === model.provider &&
-      checkpoint.api === model.api &&
-      checkpoint.model === model.id
-    )
-      return { checkpoint, entryIndex: index };
-    return undefined;
-  }
+): OpenAICompactionCheckpoint | undefined {
+  const latest = branch.findLast(
+    (candidate): candidate is Extract<SessionEntry, { type: "compaction" }> =>
+      candidate?.type === "compaction",
+  );
+  if (!latest) return undefined;
+  const details = decodeOpenAICompactionDetails(latest.details);
+  if (!details) return undefined;
+  const checkpoint = details.checkpoint;
+  if (
+    checkpoint.provider === model.provider &&
+    checkpoint.api === model.api &&
+    checkpoint.model === model.id
+  )
+    return checkpoint;
   return undefined;
 }
 

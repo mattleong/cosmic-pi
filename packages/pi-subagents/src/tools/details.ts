@@ -21,6 +21,7 @@ import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
   MAX_NAME_CHARS,
+  boundedAsciiOr,
   safeTextPrefix,
   sanitizeName,
 } from "../run/state.ts";
@@ -32,6 +33,12 @@ import {
   SUBAGENT_CARD_DETAILS_VERSION,
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
+  MAX_ACTION_FAILURE_CODE_CHARS,
+  MAX_ACTION_FAILURE_ID_CHARS,
+  MAX_ACTION_FAILURE_MESSAGE_CHARS,
+  MAX_FAILURE_CODE_CHARS,
+  MAX_FAILURE_MESSAGE_CHARS,
+  MAX_PROFILE_CHARS,
   type CompactSubagentToolDetails,
   type CompactToolActionFailure,
   type SubagentAwaitDetails,
@@ -41,13 +48,6 @@ import {
   type SubagentStartDetails,
   type SubagentStartEntry,
 } from "./details-schema.ts";
-
-const MAX_PROFILE_CHARS = 64;
-const MAX_ACTION_FAILURE_ID_CHARS = 128;
-const MAX_ACTION_FAILURE_CODE_CHARS = 64;
-const MAX_ACTION_FAILURE_MESSAGE_CHARS = 256;
-const MAX_FAILURE_CODE_CHARS = 128;
-const MAX_FAILURE_MESSAGE_CHARS = 512;
 
 type DetailDensity = "full" | "compact" | "minimal";
 type RunDetailsAction =
@@ -433,13 +433,6 @@ const profileLimits = (density: DetailDensity) =>
     : density === "compact"
       ? { description: 256, model: MAX_PROFILE_MODEL_SELECTOR_CHARS, reason: 256 }
       : { description: 48, model: 24, reason: 24 };
-const boundedAsciiOr = (value: string, maximum: number, fallback: string): string => {
-  const cleaned = stripTerminalControls(value).trim();
-  return cleaned.length > 0 && cleaned.length <= maximum && /^[\x20-\x7e]+$/.test(cleaned)
-    ? cleaned
-    : fallback;
-};
-
 /** Explicit privacy projection for persisted profile-route discovery. */
 export const projectSubagentProfileRoutes = (
   profiles: ReadonlyArray<ProfileRouteDetailsInput>,

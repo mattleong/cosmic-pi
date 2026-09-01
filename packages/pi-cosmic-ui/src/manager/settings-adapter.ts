@@ -153,6 +153,12 @@ export class VimSettingsAdapter implements Component, Focusable {
       bridge.submenuComponent.focused = this._focused;
   }
 
+  private forwardSelection(data: string, action: FullScreenAction): string | undefined {
+    const id = selectionIdForAction(action);
+    const configured = id && this.options.matchesKeybinding?.(data, id);
+    return configured ? data : translatedSettingsInput(action);
+  }
+
   handleInput(data: string): void {
     const resolution = this.keymap.resolve(data, {
       mode: this.mode,
@@ -169,10 +175,7 @@ export class VimSettingsAdapter implements Component, Focusable {
         bridge.searchInput?.setValue("");
         bridge.applyFilter?.("");
       } else if (resolution?._tag === "Action") {
-        const id = selectionIdForAction(resolution.action);
-        const configured = id && this.options.matchesKeybinding?.(data, id);
-        const translated = configured ? data : translatedSettingsInput(resolution.action);
-        this.child.handleInput?.(translated ?? data);
+        this.child.handleInput?.(this.forwardSelection(data, resolution.action) ?? data);
         if (resolution.action === "confirm") {
           this.mode = "navigation";
           this.keymap.resetChord();
@@ -197,9 +200,7 @@ export class VimSettingsAdapter implements Component, Focusable {
       this.options.requestRender?.();
       return;
     }
-    const id = selectionIdForAction(resolution.action);
-    const configured = id && this.options.matchesKeybinding?.(data, id);
-    const translated = configured ? data : translatedSettingsInput(resolution.action);
+    const translated = this.forwardSelection(data, resolution.action);
     if (translated !== undefined) this.child.handleInput?.(translated);
     this.syncChildFocus();
     this.options.requestRender?.();

@@ -59,6 +59,15 @@ const ActivityInputSchema = Schema.Struct({
 type ActivityInput = typeof ActivityInputSchema.Type;
 type ActivityField = keyof ActivityInput;
 
+/** Tolerant schema decode of one unknown value; malformed input yields undefined, never a throw. */
+export const decodeOption = <S extends Schema.ConstraintDecoder<unknown>, Value>(
+  schema: S,
+  value: Value,
+): S["Type"] | undefined => {
+  const decoded = Schema.decodeUnknownOption(schema)(value);
+  return Option.isSome(decoded) ? decoded.value : undefined;
+};
+
 /** One sanitized bounded field read from a schema-decoded nested-call input, if present. */
 const activityField = (input: ActivityInput, key: ActivityField): string | undefined => {
   const value = input[key];
@@ -74,8 +83,7 @@ const activityField = (input: ActivityInput, key: ActivityField): string | undef
  */
 export const describeNestedActivity = <Name, Input>(name: Name, input: Input): string => {
   const toolName = Predicate.isString(name) ? name : "";
-  const decoded = Schema.decodeUnknownOption(ActivityInputSchema)(input);
-  const activityInput: ActivityInput = Option.isSome(decoded) ? decoded.value : {};
+  const activityInput = decodeOption(ActivityInputSchema, input) ?? {};
   const at = (fallback: string) => activityField(activityInput, "path") ?? fallback;
   switch (toolName) {
     case "pi.read":
@@ -164,7 +172,7 @@ export const countCallEntries = (calls: ReadonlyArray<CodeModeCallEntry>): CodeM
  * Keep active/problem rows plus the most recent successes, then restore chronological order.
  * Every returned row is an owned shallow copy, including on the unbounded fast path.
  */
-export const boundedCallEntries = (
+const boundedCallEntries = (
   calls: ReadonlyArray<CodeModeCallEntry>,
 ): ReadonlyArray<CodeModeCallEntry> => {
   if (calls.length <= MAX_PROGRESS_ENTRIES) return calls.map((call) => ({ ...call }));

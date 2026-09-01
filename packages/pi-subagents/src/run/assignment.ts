@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import { isOutcomeUncertain, type SubagentError, SubagentProcessError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
-import type { AssignmentActivationReplay } from "./report-lifecycle.ts";
+import type { AssignmentActivationReplay } from "./settlement.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
 import { setRunWarning } from "./warnings.ts";

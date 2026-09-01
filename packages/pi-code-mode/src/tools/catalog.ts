@@ -100,7 +100,7 @@ const GUEST_TOOL_INPUTS = {
   ls: LsInput,
 } as const;
 
-const guestTool = <Name extends PiGuestToolName>(name: Name, invoke: NestedPiToolDispatch) =>
+const guestTool = (name: PiGuestToolName, invoke: NestedPiToolDispatch) =>
   Tool.make({
     description: GUEST_TOOL_DESCRIPTIONS[name],
     input: GUEST_TOOL_INPUTS[name],
@@ -125,7 +125,7 @@ export interface CodeModeCatalogOptions {
 }
 
 /** The tool tree exposed to programs; every leaf validates input with Effect Schema. */
-export const makeCodeModeGuestTools = (
+const makeCodeModeGuestTools = (
   invokePi: NestedPiToolDispatch,
   invokeBackgroundTask: BackgroundTaskDispatch,
   options: CodeModeCatalogOptions,

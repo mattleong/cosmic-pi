@@ -1,9 +1,9 @@
 /** Pure defensive normalization of current and legacy `code_mode` render details. */
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   countCallEntries,
+  decodeOption,
   MAX_PROGRESS_ENTRIES,
   type CodeModeCallCounts,
   type CodeModeCallEntry,
@@ -43,19 +43,11 @@ const CallCountsInputSchema = Schema.Struct({
   cancelled: NonNegativeIntegerSchema,
 });
 
-const decodeInput = <S extends Schema.ConstraintDecoder<unknown>, Value>(
-  schema: S,
-  value: Value,
-): S["Type"] | undefined => {
-  const decoded = Schema.decodeUnknownOption(schema)(value);
-  return Option.isSome(decoded) ? decoded.value : undefined;
-};
-
 const nonNegativeInteger = <Value>(value: Value): number | undefined =>
-  decodeInput(NonNegativeIntegerSchema, value);
+  decodeOption(NonNegativeIntegerSchema, value);
 
 const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => {
-  const entry = decodeInput(CallEntryInputSchema, value);
+  const entry = decodeOption(CallEntryInputSchema, value);
   if (entry === undefined) return undefined;
   const activity = Predicate.isString(entry.activity) ? entry.activity : undefined;
   const durationMs = nonNegativeInteger(entry.durationMs);
@@ -63,14 +55,16 @@ const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => 
     tool: Predicate.isString(entry.tool) ? entry.tool : "",
     status: entry.status,
   };
-  if (activity !== undefined && durationMs !== undefined) return { ...base, activity, durationMs };
-  if (activity !== undefined) return { ...base, activity };
-  return durationMs === undefined ? base : { ...base, durationMs };
+  return {
+    ...base,
+    ...(activity !== undefined && { activity }),
+    ...(durationMs !== undefined && { durationMs }),
+  };
 };
 
 /** Decodes at most the visible row bound while preserving valid exact or legacy totals. */
 export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeModeRenderDetails => {
-  const record = decodeInput(RenderDetailsInputSchema, details) ?? {};
+  const record = decodeOption(RenderDetailsInputSchema, details) ?? {};
   const rawCalls = Array.isArray(record.toolCalls) ? record.toolCalls : [];
   const inspectedCalls = rawCalls.slice(0, MAX_PROGRESS_ENTRIES);
   const toolCalls = inspectedCalls.flatMap((entry) => {
@@ -79,7 +73,7 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
   });
   const legacyArrayTotal = toolCalls.length === inspectedCalls.length ? rawCalls.length : 0;
   const suppliedTotal = nonNegativeInteger(record.totalToolCalls) ?? 0;
-  const rawCounts = decodeInput(CallCountsInputSchema, record.counts);
+  const rawCounts = decodeOption(CallCountsInputSchema, record.counts);
   const hasExactCounts = rawCounts !== undefined;
   const visible = countCallEntries(toolCalls);
   const { total: visibleTotal, ...visibleCounts } = visible;

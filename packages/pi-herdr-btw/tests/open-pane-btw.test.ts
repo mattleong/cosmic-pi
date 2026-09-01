@@ -1,22 +1,16 @@
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { expect } from "vitest";
-import {
-  HerdrClient,
-  type HerdrClientContract,
-  type HerdrStartSideSessionInput,
-} from "../src/boundary/herdr-client.ts";
-import type { HerdrBtwLinkStore } from "../src/boundary/host-link-store.ts";
-import type { HerdrBtwSessionInput } from "../src/boundary/host-session.ts";
-import type { SessionFileIdentityComparator } from "../src/boundary/session-file.ts";
-import type { HerdrBtwLink } from "../src/btw/link.ts";
+import { HerdrClient, type HerdrStartSideSessionInput } from "../src/boundary/herdr-client.ts";
 import { makeAgentName, parentBtwDisplayName, selectSplitDirection } from "../src/btw/policy.ts";
 import { makeHerdrBtwService } from "../src/btw/service.ts";
 import {
-  makeHerdrBtwCallRecorder,
+  makeServiceFixture,
   operationInputs,
   operationNames,
   withShellReadiness,
+  type HerdrBtwFixtureOptions,
+  aliasIdentity,
 } from "./fixtures/herdr-btw-harness.ts";
 
 const SESSION_FILE = "/sessions/parent.jsonl";
@@ -26,163 +20,13 @@ const CHILD_FILE = "/sessions/child.jsonl";
 const CHILD_ALIAS = "/sessions/aliases/../child.jsonl";
 const CWD = "/project";
 
-interface FixtureOptions {
-  readonly width?: number;
-  readonly protocol?: number;
-  readonly integrationCurrent?: boolean;
-  readonly layoutWorkspaceId?: string;
-  readonly splitTabId?: string;
-  readonly startedSession?: string;
-  readonly startedSessionKind?: "id" | "path";
-  readonly startedIdentityAvailable?: boolean;
-  readonly startedTerminalId?: string;
-  readonly compareSessionFileIdentity?: SessionFileIdentityComparator;
-  readonly shellReadyAfter?: number;
-  readonly shellReadiness?: ReadonlyArray<boolean>;
-  readonly failOperation?: string;
-}
-
-const fixture = (options: FixtureOptions = {}) => {
-  const { calls, run } = makeHerdrBtwCallRecorder(options.failOperation);
-  let shellInspections = 0;
-  let startedAgentName: string | undefined;
-  const parentPane = {
-    pane_id: "w1:p1",
-    terminal_id: "term-parent",
-    workspace_id: "w1",
-    tab_id: "w1:t1",
-  };
-  const btwPane = {
-    pane_id: "w1:p2",
-    terminal_id: "term-btw",
-    workspace_id: "w1",
-    tab_id: options.splitTabId ?? "w1:t1",
-  };
-  const startedAgentSnapshot = (agentName: string) => {
-    const agent = {
-      ...btwPane,
-      terminal_id: options.startedTerminalId ?? btwPane.terminal_id,
-      agent: "pi",
-      name: agentName,
-    };
-    if (options.startedIdentityAvailable === false) return agent;
-    return {
-      ...agent,
-      agent_session: {
-        source: "herdr:pi",
-        agent: "pi",
-        kind: options.startedSessionKind ?? "path",
-        value: options.startedSession ?? CHILD_FILE,
-      },
-    };
-  };
-
-  const client = HerdrClient.of({
-    inspectProtocol: () => run("inspect protocol", undefined, () => options.protocol ?? 19),
-    inspectPiIntegration: () =>
-      run("inspect Pi integration", undefined, () => options.integrationCurrent ?? true),
-    resolveCallingPane: () => run("resolve calling pane", undefined, () => parentPane),
-    inspectPaneLayout: (paneId) =>
-      run("inspect calling pane layout", { paneId }, () => ({
-        workspace_id: options.layoutWorkspaceId ?? "w1",
-        tab_id: "w1:t1",
-        area: { width: options.width ?? 160, height: 40 },
-      })),
-    splitPane: (input) => run("split BTW pane", input, () => btwPane),
-    inspectPaneProcessInfo: (paneId) =>
-      run("inspect BTW pane shell", { paneId }, () => {
-        shellInspections += 1;
-        const ready =
-          options.shellReadiness?.[shellInspections - 1] ??
-          shellInspections >= (options.shellReadyAfter ?? 1);
-        return ready
-          ? {
-              pane_id: btwPane.pane_id,
-              shell_pid: 4242,
-              foreground_process_group_id: 4242,
-              foreground_processes: [{ pid: 4242, name: "zsh" }],
-            }
-          : { pane_id: btwPane.pane_id };
-      }),
-    startSideSessionPi: (input) =>
-      run("start side-session Pi", input, () => {
-        startedAgentName = input.agentName;
-        return startedAgentSnapshot(input.agentName);
-      }),
-    inspectLiveAgents: () =>
-      run("inspect live agents", undefined, () =>
-        startedAgentName === undefined
-          ? []
-          : [
-              {
-                ...btwPane,
-                agent: "pi",
-                name: startedAgentName,
-                agent_session: {
-                  source: "herdr:pi",
-                  agent: "pi",
-                  kind: "path" as const,
-                  value: CHILD_FILE,
-                },
-              },
-            ],
-      ),
-    promptSideSessionPi: (agentName, prompt) =>
-      run("prompt side-session Pi", { agentName, prompt }, () => undefined),
-    focusSideSessionPi: (agentName) => run("focus side-session Pi", { agentName }, () => undefined),
-  } satisfies HerdrClientContract);
-
-  const input: HerdrBtwSessionInput = {
-    environment: {
-      HERDR_ENV: "1",
-      HERDR_PANE_ID: "w1:p1",
-      HERDR_TAB_ID: "w1:t1",
-      HERDR_WORKSPACE_ID: "w1",
-    },
-    cwd: CWD,
-    sessionFile: SESSION_FILE,
-    sessionId: SESSION_ID,
-    sessionDir: "/sessions",
-  };
-  const recordedLinks: HerdrBtwLink[] = [];
-  const linkStore: HerdrBtwLinkStore = {
-    restore: () => {
-      const link = recordedLinks.at(-1);
-      return link === undefined ? { _tag: "none" } : { _tag: "restored", link };
-    },
-    record: (link) => {
-      recordedLinks.push({
-        version: 1,
-        parentSessionId: SESSION_ID,
-        parentSessionPath: SESSION_FILE,
-        ...link,
-      });
-      return "recorded";
-    },
-  };
-  const serviceOptions = {
-    probeSessionHeader: (path: string) => {
-      if (path === SESSION_FILE) return { _tag: "valid", header: { id: SESSION_ID } } as const;
-      return path === CHILD_FILE
-        ? ({ _tag: "valid", header: { id: CHILD_ID } } as const)
-        : ({ _tag: "invalid" } as const);
-    },
-    compareSessionFileIdentity:
-      options.compareSessionFileIdentity ??
-      ((leftPath: string, rightPath: string) =>
-        leftPath === rightPath ? ("same" as const) : ("distinct" as const)),
-    createChildSessionId: () => CHILD_ID,
-    createBlankChildSessionFile: () =>
-      Effect.succeed({ _tag: "created" as const, path: CHILD_FILE }),
-  };
-  const makeService = makeHerdrBtwService(input, linkStore, serviceOptions).pipe(
-    Effect.provideService(HerdrClient, client),
-  );
-  const open = (prompt?: string | undefined) =>
-    Effect.flatMap(makeService, (service) => service.open(prompt));
-
-  return { calls, client, input, linkStore, makeService, open, recordedLinks, serviceOptions };
-};
+const fixture = (options: HerdrBtwFixtureOptions = {}) =>
+  makeServiceFixture({
+    protocol: 19,
+    createdChildId: CHILD_ID,
+    createdChildFile: CHILD_FILE,
+    ...options,
+  });
 
 describe("herdr-btw policy", () => {
   it("uses a right split only when the current pane is wide", () => {
@@ -308,12 +152,7 @@ describe("herdr-btw workflow", () => {
     Effect.gen(function* () {
       const test = fixture({
         startedSession: CHILD_ALIAS,
-        compareSessionFileIdentity: (leftPath, rightPath) =>
-          [leftPath, rightPath].every((path) => path === CHILD_FILE || path === CHILD_ALIAS)
-            ? "same"
-            : leftPath === rightPath
-              ? "same"
-              : "distinct",
+        compareSessionFileIdentity: aliasIdentity([CHILD_FILE, CHILD_ALIAS]),
       });
 
       expect(yield* withShellReadiness(test.open())).toMatchObject({ mode: "created" });
@@ -389,8 +228,7 @@ describe("herdr-btw workflow", () => {
     Effect.gen(function* () {
       const test = fixture();
       const service = yield* makeHerdrBtwService(
-        { ...test.input, environment: { HERDR_ENV: "1" } },
-        test.linkStore,
+        { ...test.input, environment: { HERDR_ENV: "1" }, linkStore: test.linkStore },
         test.serviceOptions,
       ).pipe(Effect.provideService(HerdrClient, test.client));
       const result = yield* Effect.result(service.open());
@@ -408,11 +246,14 @@ describe("herdr-btw workflow", () => {
         { _tag: "valid" as const, header: { id: "another-parent" } },
       ]) {
         const test = fixture();
-        const service = yield* makeHerdrBtwService(test.input, test.linkStore, {
-          ...test.serviceOptions,
-          probeSessionHeader: (path) =>
-            path === SESSION_FILE ? parentProbe : test.serviceOptions.probeSessionHeader(path),
-        }).pipe(Effect.provideService(HerdrClient, test.client));
+        const service = yield* makeHerdrBtwService(
+          { ...test.input, linkStore: test.linkStore },
+          {
+            ...test.serviceOptions,
+            probeSessionHeader: (path) =>
+              path === SESSION_FILE ? parentProbe : test.serviceOptions.probeSessionHeader(path),
+          },
+        ).pipe(Effect.provideService(HerdrClient, test.client));
         const result = yield* Effect.result(service.open());
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure")
@@ -537,12 +378,7 @@ describe("herdr-btw workflow", () => {
     Effect.gen(function* () {
       for (const result of ["same", "unavailable"] as const) {
         const test = fixture({
-          compareSessionFileIdentity: (leftPath, rightPath) =>
-            [leftPath, rightPath].every((path) => path === CHILD_FILE || path === SESSION_FILE)
-              ? result
-              : leftPath === rightPath
-                ? "same"
-                : "distinct",
+          compareSessionFileIdentity: aliasIdentity([CHILD_FILE, SESSION_FILE], result),
         });
         const outcome = yield* Effect.result(withShellReadiness(test.open()));
 

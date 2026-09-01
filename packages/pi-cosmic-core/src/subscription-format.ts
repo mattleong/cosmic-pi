@@ -3,7 +3,7 @@ import * as Predicate from "effect/Predicate";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
-export function formatResetCountdown(seconds: number | null): string | null {
+function formatResetCountdown(seconds: number | null): string | null {
   if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds)) return null;
   const total = Math.max(0, Math.round(seconds));
   const days = Math.floor(total / 86_400);

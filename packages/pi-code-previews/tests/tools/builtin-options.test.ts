@@ -1,10 +1,7 @@
 // Explicit test entry-point Effects drive real settings files and env boundaries.
 import assert from "node:assert/strict";
 import { afterEach } from "vitest";
-import {
-  cleanupTestTempDirectories,
-  createTestTempDirectory,
-} from "../../src/testing/temp-directories";
+import { cleanupTestTempDirectories, createTestTempDirectory } from "../support/temp-directories";
 import { getBuiltinToolOptions } from "../../src/tools/builtin-options";
 import { effectTest, step } from "../support/effect-test";
 

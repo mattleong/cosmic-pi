@@ -7,7 +7,7 @@ export interface AdvisorResourceStateService {
     acquire: Effect.Effect<A, E, R>,
     release: (value: A) => Effect.Effect<void>,
   ) => Effect.Effect<A, E, R>;
-  readonly stopChild: Effect.Effect<void>;
+  readonly stopChild: () => Effect.Effect<void>;
 }
 
 /** Effect-owned resource authority. Resource handles never enter AdvisorApplicationState. */
@@ -16,7 +16,7 @@ export const makeAdvisorResourceState = (): Effect.Effect<AdvisorResourceStateSe
     const state = yield* SynchronizedRef.make<Effect.Effect<void> | undefined>(undefined);
     const lifecycleLock = yield* Semaphore.make(1);
     const detachChild = SynchronizedRef.getAndSet(state, undefined);
-    const stopChild = lifecycleLock.withPermits(1)(
+    const stopChildEffect = lifecycleLock.withPermits(1)(
       Effect.uninterruptible(
         Effect.gen(function* () {
           const current = yield* detachChild;
@@ -40,5 +40,5 @@ export const makeAdvisorResourceState = (): Effect.Effect<AdvisorResourceStateSe
           }),
         ),
       );
-    return { replaceChild, stopChild };
+    return { replaceChild, stopChild: () => stopChildEffect };
   });

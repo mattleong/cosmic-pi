@@ -252,8 +252,9 @@ service, the shared executor trims the command and name, resolves cwd, and check
 successful-start envelope against that allowance. The envelope includes the largest generated id,
 PID and numeric metadata, plus the fields possible when a process exits before `start` returns.
 A refusal therefore happens before id allocation, registry insertion, monitor creation, or process
-acquisition. The provider also bounds text while formatting and estimates aggregate structured JSON
-size without allocating a JSON copy after execution. This second check remains a defense for every
+acquisition. The provider also bounds text while formatting and measures the exact serialized JSON
+size with `JSON.stringify` after execution; the output is already fully in memory, so the transient
+serialized copy is acceptable. This second check remains a defense for every
 action. Only output that fits reaches the producer-owned output Schema, which validates numeric
 metadata, removes undeclared keys, and creates the detached value. The provider freezes that
 accepted value. No service, Layer, runtime, Ref, or scope crosses the protocol. A Code Mode timeout or cancellation

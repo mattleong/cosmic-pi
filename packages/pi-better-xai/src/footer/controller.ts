@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type * as MutableRef from "effect/MutableRef";
 import { createFooterPresenter } from "pi-cosmic-core";
-import type { ResolvedConfig } from "../config/index.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import { visibleStatusLine, type XaiProjection } from "../usage/projection.ts";
 
 const STATUS_KEY = "better-xai";

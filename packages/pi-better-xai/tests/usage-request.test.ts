@@ -11,25 +11,10 @@ import {
   type JsonHttpTestResponse,
 } from "pi-cosmic-core/testing";
 import { readXaiCredentials } from "../src/auth/auth.ts";
-import { ModelRegistryAuth } from "../src/boundary/model-registry-auth.ts";
-import { requestXaiUsage } from "../src/usage/format.ts";
+import { registryEffectLayer, registryLayer, serializedSnapshot } from "./support/fixtures.ts";
+import { requestXaiUsage } from "../src/usage/request.ts";
 
 const authPath = "/agent/auth.json";
-
-// Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
-// runtime values (tagged errors, redacted credentials) for secret fragments.
-const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
-
-const registryEffectLayer = (getApiKey: Effect.Effect<string | undefined>) =>
-  Layer.succeed(
-    ModelRegistryAuth,
-    ModelRegistryAuth.of({
-      getApiKey,
-      isUsingOAuth: () => Effect.succeed(true),
-    }),
-  );
-
-const registryLayer = (token?: string) => registryEffectLayer(Effect.succeed(token));
 
 const provideRequest = (http: ReturnType<typeof jsonHttpTestLayer>) =>
   Layer.mergeAll(makeInMemoryDocuments().layer, registryLayer("registry-owned-test-token"), http);

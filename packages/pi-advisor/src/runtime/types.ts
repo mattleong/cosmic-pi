@@ -21,7 +21,6 @@ export const MAX_ADVISOR_CHECKPOINT_CHARS = 64_000;
 export const MAX_ADVISOR_CHECKPOINT_ID_CHARS = 256;
 export const MAX_ADVISOR_TOOL_ROUNDS = 12;
 export const MAX_ADVISOR_STREAM_CHARS = 128_000;
-export const DEFAULT_ADVISOR_SESSION_ABORT_TIMEOUT_MS = 30_000;
 export const ADVISOR_STATE_SUMMARY_SIZE_FILTER_IDENTIFIER =
   "pi-advisor/checkpoint/state-summary-size";
 

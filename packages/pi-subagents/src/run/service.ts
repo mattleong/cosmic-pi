@@ -41,7 +41,6 @@ import { makeRunProcessLifecycle } from "./process-lifecycle.ts";
 import { makeRunRecordCleanup } from "./record-cleanup.ts";
 import { makeRunResume } from "./resume.ts";
 import { makeRunRetry, type SubagentRetryClaim } from "./retry.ts";
-import { makeRunReportLifecycle } from "./report-lifecycle.ts";
 import { makeRunSettlement } from "./settlement.ts";
 import {
   hasSubagentCapability,
@@ -53,7 +52,7 @@ import {
   type SubagentProjection,
   type SubagentRunView,
 } from "./model.ts";
-import { sortRuns } from "./projection.ts";
+import { emptyProjection, sortRuns } from "./projection.ts";
 import { sanitizeOutputText, snapshotView } from "./state.ts";
 import { descendantRunIds, isRunInSubtree, projectRunTree, runDepth } from "./tree.ts";
 import { encodeSubagentProxyPayload } from "../tools/proxy-protocol.ts";
@@ -227,15 +226,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const writerPools = new Map<string, WriterPoolEntry>();
   const proxyCancellations = new Map<string, Deferred.Deferred<void>>();
   let service!: SubagentServiceContract;
+  const initial = emptyProjection();
   const initialProjection: SubagentProjection = Object.freeze({
-    revision: 0,
-    root: Object.freeze({
-      id: "root",
-      depth: 0,
-      directChildCount: 0,
-      descendantCount: 0,
-    }),
-    runs: Object.freeze([]),
+    revision: initial.revision,
+    root: Object.freeze(initial.root),
+    runs: Object.freeze(initial.runs),
   });
   const projectionRef = yield* SubscriptionRef.make(initialProjection);
   const runtimeNamespace = allocateRuntimeNamespace();
@@ -486,28 +481,23 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   let renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
   let containWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
 
-  const { mutateEventView, mergeLateUsage, pauseFromEvent, failPendingResponses, settle, failRun } =
-    makeRunSettlement({
-      ownerScope,
-      withLock,
-      publish,
-      delivery,
-      closeRecordScope,
-      sendPeerNotices: (changedId) => sendPeerNotices(changedId),
-    });
-
   const {
+    mutateEventView,
+    mergeLateUsage,
+    failPendingResponses,
+    settle,
+    failRun,
     activateAssignmentLocked,
     replayAssignmentActivation,
     acceptBackendReport,
     runStartedFromBackend,
     runSettledFromBackend,
-  } = makeRunReportLifecycle({
+  } = makeRunSettlement({
+    ownerScope,
     withLock,
     publish,
     delivery,
-    settle,
-    pauseFromEvent,
+    closeRecordScope,
     sendPeerNotices: (changedId) => sendPeerNotices(changedId),
   });
 

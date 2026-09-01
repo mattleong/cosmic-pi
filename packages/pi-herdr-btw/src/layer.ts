@@ -10,6 +10,6 @@ export interface HerdrBtwLayerInput extends HerdrBtwSessionInput {
 
 /** Session-scoped composition root for the BTW command service. */
 export const makeHerdrBtwLayer = (input: HerdrBtwLayerInput) =>
-  Layer.effect(HerdrBtwService, makeHerdrBtwService(input, input.linkStore)).pipe(
+  Layer.effect(HerdrBtwService, makeHerdrBtwService(input)).pipe(
     Layer.provide(HerdrClient.layer(input.environment)),
   );

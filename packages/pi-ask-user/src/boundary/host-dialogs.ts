@@ -31,9 +31,8 @@ const notifyBestEffort = (
 /** Adapts one Promise-shaped Pi dialog call; interruption aborts the forwarded signal. */
 const dialogCall = <A>(
   run: (signal: AbortSignal) => Promise<A>,
-  operation = "open",
 ): Effect.Effect<A, AskUserHostError> =>
-  Effect.tryPromise({ try: run, catch: () => hostError(operation) });
+  Effect.tryPromise({ try: run, catch: () => hostError("open") });
 
 const boundedInput = (
   ui: ExtensionUIContext,

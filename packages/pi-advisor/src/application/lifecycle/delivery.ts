@@ -1,5 +1,5 @@
 /** Review delivery transaction for one advisor session. */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   abortAdvisorParentAtHostBoundary,
   type AdvisorAbortInput,
@@ -37,10 +37,10 @@ import {
 } from "../../review/routing.ts";
 import { advisorActiveToolCount } from "../../review/trajectory.ts";
 import { incrementBounded } from "../../domain/metrics.ts";
-import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import type { AdvisorCheckpoint } from "../../runtime/runtime.ts";
 import type { ReviewPhase, ReviewSource } from "../controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
+import type { HostApi, HostNotify, InterventionIngress, StateWrite } from "./deps.ts";
 import { parentIsIdle, parentSignalAborted } from "./parent-session.ts";
 
 export type DeliverFn = (
@@ -54,22 +54,8 @@ export type DeliverFn = (
   trajectoryId?: number,
 ) => AdvisorRoute;
 
-export interface DeliveryDeps {
-  readonly pi: ExtensionAPI;
+export interface DeliveryDeps extends HostApi, StateWrite, HostNotify, InterventionIngress {
   readonly getState: () => AdvisorApplicationState;
-  readonly updateApplicationState: (
-    update: (state: AdvisorApplicationState) => AdvisorApplicationState,
-  ) => void;
-  readonly updateMetrics: (
-    update: (metrics: AdvisorApplicationState["metrics"]) => AdvisorApplicationState["metrics"],
-  ) => void;
-  readonly ingest: (input: Parameters<AdvisorReviewQueue["ingest"]>[1]) => void;
-  readonly recordReceipt: (ids: readonly string[]) => void;
-  readonly notifyBestEffort: (
-    ctx: Pick<ExtensionContext, "ui">,
-    message: string,
-    level: "info" | "warning" | "error",
-  ) => void;
 }
 
 export const makeDeliver =

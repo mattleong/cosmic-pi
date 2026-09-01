@@ -1,8 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
-  AgentDirectory,
   isJsonObject,
   JsonDocumentError,
   JsonDocumentStore,
@@ -14,6 +12,7 @@ import { CODE_PREVIEW_SETTING_KEYS, CodePreviewSettingsSchema } from "./schema";
 import { cloneCodePreviewSettings } from "./state";
 import type { CodePreviewSettings } from "./schema";
 import { normalizeSettingsWithDiagnostics } from "./values";
+import type * as Path from "effect/Path";
 
 export type SettingsSaveContext = {
   readonly baseline: CodePreviewSettings;
@@ -25,12 +24,20 @@ export type LoadSettingsOptions = {
   projectTrusted?: boolean;
 };
 
+export type SettingsDocumentDependencies = {
+  readonly path: Path.Path;
+  readonly agentDir: string;
+  readonly documents: JsonDocumentStore["Service"];
+  readonly environment: CodePreviewEnvironmentService["Service"];
+};
+
 const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
+  deps: SettingsDocumentDependencies,
   settingsPath: string,
   extract: (document: JsonObject) => JsonObject,
   fallback: CodePreviewSettings,
 ) {
-  const documents = yield* JsonDocumentStore;
+  const documents = deps.documents;
   const document = yield* documents
     .readObject(settingsPath)
     .pipe(
@@ -55,10 +62,10 @@ const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
  * trusted-project `settings.json` baselines, then the flat package `code-previews.json`.
  */
 export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.loadSaveContext")(
-  function* (options: LoadSettingsOptions = {}) {
-    const path = yield* Path.Path;
-    const agentDir = yield* AgentDirectory;
-    const environment = yield* CodePreviewEnvironmentService;
+  function* (deps: SettingsDocumentDependencies, options: LoadSettingsOptions = {}) {
+    const path = deps.path;
+    const agentDir = deps.agentDir;
+    const environment = deps.environment;
     const settingsPath = path.join(agentDir, "code-previews.json");
     const projectCwd = options.projectCwd ?? process.cwd();
     let effective = cloneCodePreviewSettings(environment.defaults);
@@ -67,11 +74,12 @@ export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.load
       ...(options.projectTrusted ? [path.join(projectCwd, ".pi", "settings.json")] : []),
     ];
     for (const candidate of baselinePaths) {
-      const next = yield* loadSettingsFile(candidate, nestedCodePreviewSettings, effective);
+      const next = yield* loadSettingsFile(deps, candidate, nestedCodePreviewSettings, effective);
       if (next) effective = next;
     }
     const baseline = cloneCodePreviewSettings(effective);
     const globalSettings = yield* loadSettingsFile(
+      deps,
       settingsPath,
       flatCodePreviewSettings,
       effective,
@@ -85,13 +93,14 @@ export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.load
 );
 
 export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState")(function* (
+  deps: SettingsDocumentDependencies,
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
   afterCommit: (context: SettingsSaveContext) => Effect.Effect<void>,
 ) {
-  const path = yield* Path.Path;
-  const agentDir = yield* AgentDirectory;
-  const documents = yield* JsonDocumentStore;
+  const path = deps.path;
+  const agentDir = deps.agentDir;
+  const documents = deps.documents;
   const settingsPath = path.join(agentDir, "code-previews.json");
   const committedSettings = yield* Schema.decodeUnknownEffect(CodePreviewSettingsSchema)(
     settings,

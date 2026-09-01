@@ -23,7 +23,7 @@ interface WorkingTimerState {
   readonly waiting: boolean;
 }
 
-export function formatWorkingElapsed(milliseconds: number): string {
+function formatWorkingElapsed(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000));
   const seconds = totalSeconds % 60;
   const totalMinutes = Math.floor(totalSeconds / 60);
@@ -34,7 +34,7 @@ export function formatWorkingElapsed(milliseconds: number): string {
   return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
 }
 
-export function estimateTokensPerSecond(
+function estimateTokensPerSecond(
   outputCharacters: number,
   milliseconds: number,
 ): number | undefined {
@@ -43,7 +43,7 @@ export function estimateTokensPerSecond(
   return estimatedTokens / (milliseconds / 1_000);
 }
 
-export const formatWorkingMessage = (
+const formatWorkingMessage = (
   milliseconds: number,
   outputCharacters = 0,
   outputMilliseconds = milliseconds,
@@ -165,39 +165,32 @@ export class WorkingTimerService extends Context.Service<
             Effect.flatMap((active) => (active ? ticker(generation) : Effect.void)),
           );
 
-        const start = Effect.sync(() => {
-          pendingOutputCharacters = 0;
-        }).pipe(
-          Effect.andThen(
-            SynchronizedRef.modifyEffect(state, (current) =>
-              Clock.currentTimeMillis.pipe(
-                Effect.flatMap((startedAt) =>
-                  setHostMessage(current.waiting ? WAITING_MESSAGE : formatWorkingMessage(0)).pipe(
-                    Effect.map((result) => ({ result, startedAt })),
-                  ),
-                ),
-                Effect.map(({ result, startedAt }) => {
-                  const active = result !== "unavailable";
-                  const next: WorkingTimerState = {
-                    generation: current.generation + 1,
-                    activeWorkStartedAt: active && !current.waiting ? startedAt : undefined,
-                    elapsedMilliseconds: 0,
-                    outputActiveStartedAt: undefined,
-                    outputMilliseconds: 0,
-                    outputCharacters: 0,
-                    active,
-                    waiting: current.waiting,
-                  };
-                  return [active ? next.generation : undefined, next] as const;
-                }),
-              ),
-            ),
-          ),
-          Effect.flatMap((generation) =>
-            generation === undefined ? Effect.void : Effect.forkIn(ticker(generation), scope),
-          ),
-          Effect.asVoid,
-        );
+        const start: Effect.Effect<void> = Effect.gen(function* () {
+          yield* Effect.sync(() => {
+            pendingOutputCharacters = 0;
+          });
+          const generation = yield* SynchronizedRef.modifyEffect(state, (current) =>
+            Effect.gen(function* () {
+              const startedAt = yield* Clock.currentTimeMillis;
+              const result = yield* setHostMessage(
+                current.waiting ? WAITING_MESSAGE : formatWorkingMessage(0),
+              );
+              const active = result !== "unavailable";
+              const next: WorkingTimerState = {
+                generation: current.generation + 1,
+                activeWorkStartedAt: active && !current.waiting ? startedAt : undefined,
+                elapsedMilliseconds: 0,
+                outputActiveStartedAt: undefined,
+                outputMilliseconds: 0,
+                outputCharacters: 0,
+                active,
+                waiting: current.waiting,
+              };
+              return [active ? next.generation : undefined, next] as const;
+            }),
+          );
+          if (generation !== undefined) yield* Effect.forkIn(ticker(generation), scope);
+        });
 
         const noteOutputCharacters = (characters: number): void => {
           const increment = Math.max(0, Math.floor(characters));
@@ -206,74 +199,63 @@ export class WorkingTimerService extends Context.Service<
           pendingOutputCharacters += increment;
         };
 
-        const pauseOutput = drainOutputCharacters.pipe(
-          Effect.andThen(
-            SynchronizedRef.modifyEffect(state, (current) => {
-              if (!current.active || current.waiting || current.outputActiveStartedAt === undefined)
-                return Effect.succeed([undefined, current] as const);
-              const outputActiveStartedAt = current.outputActiveStartedAt;
-              return Clock.currentTimeMillis.pipe(
-                Effect.map(
-                  (now) =>
-                    [
-                      undefined,
-                      {
-                        ...current,
-                        outputActiveStartedAt: undefined,
-                        outputMilliseconds:
-                          current.outputMilliseconds + (now - outputActiveStartedAt),
-                      },
-                    ] as const,
-                ),
-              );
-            }),
-          ),
-        );
+        const pauseOutput: Effect.Effect<void> = Effect.gen(function* () {
+          yield* drainOutputCharacters;
+          yield* SynchronizedRef.modifyEffect(state, (current) => {
+            if (!current.active || current.waiting || current.outputActiveStartedAt === undefined)
+              return Effect.succeed([undefined, current] as const);
+            const outputActiveStartedAt = current.outputActiveStartedAt;
+            return Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis;
+              return [
+                undefined,
+                {
+                  ...current,
+                  outputActiveStartedAt: undefined,
+                  outputMilliseconds: current.outputMilliseconds + (now - outputActiveStartedAt),
+                },
+              ] as const;
+            });
+          });
+        });
 
-        const waitForUser = Effect.sync(() => {
-          promptWaiting = true;
-        }).pipe(
-          Effect.andThen(drainOutputCharacters),
-          Effect.andThen(
-            SynchronizedRef.modifyEffect(state, (current) => {
-              if (current.waiting) return Effect.succeed([undefined, current] as const);
-              return Clock.currentTimeMillis.pipe(
-                Effect.flatMap((now) =>
-                  setHostMessage(WAITING_MESSAGE).pipe(Effect.map((result) => ({ result, now }))),
-                ),
-                Effect.map(
-                  ({ result, now }) =>
-                    [
-                      undefined,
-                      {
-                        ...current,
-                        activeWorkStartedAt: undefined,
-                        elapsedMilliseconds: current.active
-                          ? elapsedAt(current, now)
-                          : current.elapsedMilliseconds,
-                        outputActiveStartedAt: undefined,
-                        outputMilliseconds: current.active
-                          ? outputElapsedAt(current, now)
-                          : current.outputMilliseconds,
-                        active: activeAfterWrite(current.active, result),
-                        waiting: true,
-                      },
-                    ] as const,
-                ),
-              );
-            }),
-          ),
-        );
+        const waitForUser: Effect.Effect<void> = Effect.gen(function* () {
+          yield* Effect.sync(() => {
+            promptWaiting = true;
+          });
+          yield* drainOutputCharacters;
+          yield* SynchronizedRef.modifyEffect(state, (current) => {
+            if (current.waiting) return Effect.succeed([undefined, current] as const);
+            return Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis;
+              const result = yield* setHostMessage(WAITING_MESSAGE);
+              return [
+                undefined,
+                {
+                  ...current,
+                  activeWorkStartedAt: undefined,
+                  elapsedMilliseconds: current.active
+                    ? elapsedAt(current, now)
+                    : current.elapsedMilliseconds,
+                  outputActiveStartedAt: undefined,
+                  outputMilliseconds: current.active
+                    ? outputElapsedAt(current, now)
+                    : current.outputMilliseconds,
+                  active: activeAfterWrite(current.active, result),
+                  waiting: true,
+                },
+              ] as const;
+            });
+          });
+        });
 
-        const resumeFromUser = SynchronizedRef.modifyEffect(state, (current) => {
-          if (!current.waiting) return Effect.succeed([undefined, current] as const);
-          return Clock.currentTimeMillis.pipe(
-            Effect.flatMap((now) =>
-              setHostMessage(workingMessageAt(current, now)).pipe(
-                Effect.map((result) => ({ result, now })),
-              ),
-            ),
-            Effect.map(({ result, now }) => {
+        const resumeFromUser: Effect.Effect<void> = SynchronizedRef.modifyEffect(
+          state,
+          (current) => {
+            if (!current.waiting) return Effect.succeed([undefined, current] as const);
+            return Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis;
+              const result = yield* setHostMessage(workingMessageAt(current, now));
               const active = activeAfterWrite(current.active, result);
               return [
                 undefined,
@@ -284,9 +266,9 @@ export class WorkingTimerService extends Context.Service<
                   waiting: false,
                 },
               ] as const;
-            }),
-          );
-        }).pipe(
+            });
+          },
+        ).pipe(
           Effect.ensuring(
             Effect.sync(() => {
               promptWaiting = false;
@@ -294,28 +276,27 @@ export class WorkingTimerService extends Context.Service<
           ),
         );
 
-        const stop = Effect.sync(() => {
-          pendingOutputCharacters = 0;
-          promptWaiting = false;
-        }).pipe(
-          Effect.andThen(
-            SynchronizedRef.modifyEffect(state, (current) =>
-              setHostMessage().pipe(
-                Effect.as([
-                  undefined,
-                  {
-                    ...current,
-                    generation: current.generation + 1,
-                    activeWorkStartedAt: undefined,
-                    outputActiveStartedAt: undefined,
-                    active: false,
-                    waiting: false,
-                  },
-                ] as const),
-              ),
+        const stop: Effect.Effect<void> = Effect.gen(function* () {
+          yield* Effect.sync(() => {
+            pendingOutputCharacters = 0;
+            promptWaiting = false;
+          });
+          yield* SynchronizedRef.modifyEffect(state, (current) =>
+            setHostMessage().pipe(
+              Effect.as([
+                undefined,
+                {
+                  ...current,
+                  generation: current.generation + 1,
+                  activeWorkStartedAt: undefined,
+                  outputActiveStartedAt: undefined,
+                  active: false,
+                  waiting: false,
+                },
+              ] as const),
             ),
-          ),
-        );
+          );
+        });
 
         yield* Effect.addFinalizer(() => stop);
         return WorkingTimerService.of({

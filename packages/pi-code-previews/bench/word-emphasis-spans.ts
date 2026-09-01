@@ -2,8 +2,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
-import { renderedWordEmphasisSpans } from "../src/testing/rendered-word-emphasis";
-import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";
+import { renderedWordEmphasisSpans } from "../tests/support/rendered-word-emphasis";
+import { wordEmphasisTelemetry } from "../tests/support/word-emphasis-telemetry";
 import { benchLog } from "./helpers";
 
 // Raw Node builtin access: the Effect FileSystem service cannot read the stdin descriptor.

@@ -4,7 +4,7 @@ import {
   makeProjectionBridge as makeHostProjectionBridge,
   type ProjectionBridge,
 } from "pi-cosmic-ui/boundary/host-status";
-import { emptyProjection, footerStatus, type BackgroundTaskProjection } from "../task/model.ts";
+import { footerStatus, type BackgroundTaskProjection } from "../task/model.ts";
 
 const STATUS_KEY = "pi-background-task";
 
@@ -15,7 +15,7 @@ export function makeProjectionBridge(
 ): BackgroundTaskProjectionBridge {
   return makeHostProjectionBridge({
     statusKey: STATUS_KEY,
-    emptyProjection,
+    emptyProjection: (): BackgroundTaskProjection => ({ tasks: [] }),
     footerStatus,
     footerPlacement: makeFooterStatusDeclaration({
       events,

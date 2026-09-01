@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AddedDiffLine, RemovedDiffLine } from "../../../src/diff/parse";
 import { indexedChangedLine, type IndexedChangedLine } from "../../../src/diff/word/changed-line";
-import { profileLine, profilePlacement } from "../../../src/diff/word/fixtures/profile-lines";
+import { profileLine, profilePlacement } from "../../support/word-fixtures/profile-lines";
 import { matchChangedLines, type ChangedLinePair } from "../../../src/diff/word/line-matching";
 
 test("line matching recovers a 33-line reversal above the full-matrix cutoff", () => {

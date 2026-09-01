@@ -9,7 +9,7 @@ import {
 } from "../src/application/controller.ts";
 import { advisorControllerApplicationLayer } from "../src/application/lifecycle/layer.ts";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
-import { captureAdvisorSessionInputEffect } from "../src/boundary/host-context.ts";
+import { captureAdvisorSessionInputAtHostBoundary } from "../src/boundary/host-context.ts";
 import { failureLoggerLayer } from "../src/logging/logger.ts";
 import { AdvisorModelError } from "../src/runtime/client.ts";
 import { AdvisorRuntimeService } from "../src/runtime/runtime.ts";
@@ -94,7 +94,9 @@ describe("AdvisorController", () => {
       Effect.gen(function* () {
         const context = yield* Layer.build(application);
         const controller = Context.get(context, AdvisorController);
-        const input = yield* captureAdvisorSessionInputEffect(ctx);
+        const captured = captureAdvisorSessionInputAtHostBoundary(ctx);
+        if (!captured.ok) return yield* captured.error;
+        const input = captured.input;
         yield* controller.sessionInitialize(input);
         expect(starts).toBe(1);
         expect(models).toEqual(["model"]);

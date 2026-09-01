@@ -6,7 +6,7 @@ import {
   injectVisibleRanges,
   wrapAnsiToWidth,
 } from "../../src/shared/terminal-text";
-import { stripAnsi } from "../../src/testing/render";
+import { stripAnsi } from "../support/render";
 
 test("terminal text escapes C0, DEL, and C1 control characters", () => {
   const escaped = escapeControlChars("safe\x00\x1b\x7f\x80\x9btext\t\n");

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { expect as vitestExpect, it as vitestIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import type { JsonObject } from "../src/platform/json-document.ts";
-import { completeSettingsArguments, sectionSettingValue } from "../src/settings-completion.ts";
+import {
+  BooleanFromJsonSchema,
+  completeSettingsArguments,
+  decodeSettingUpdate,
+  FiniteNumberFromJsonSchema,
+  InvalidSettingError,
+  sectionSettingValue,
+} from "../src/settings-completion.ts";
 
 describe("sectionSettingValue", () => {
   it("creates a missing section without disturbing sibling keys", () => {
@@ -28,6 +37,53 @@ describe("sectionSettingValue", () => {
       footer: { mode: "status" },
     });
   });
+});
+
+describe("decodeSettingUpdate", () => {
+  const decodeSetting = decodeSettingUpdate<{ compact: boolean }>([
+    { id: "usage.enabled", decoder: BooleanFromJsonSchema },
+    { id: "usage.refreshIntervalMs", decoder: FiniteNumberFromJsonSchema },
+    { id: "compact", decoder: BooleanFromJsonSchema },
+  ]);
+
+  vitestIt.effect("fails an unknown id with an InvalidSettingError", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(decodeSetting("nope", "true"));
+      vitestExpect(error).toBeInstanceOf(InvalidSettingError);
+      vitestExpect(error.id).toBe("nope");
+      vitestExpect(error.message).toBe("Unknown setting: nope.");
+    }),
+  );
+
+  vitestIt.effect("fails an undecodable value with an InvalidSettingError", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(decodeSetting("usage.enabled", "not-json"));
+      vitestExpect(error).toBeInstanceOf(InvalidSettingError);
+      vitestExpect(error.id).toBe("usage.enabled");
+      vitestExpect(error.message).toBe("Invalid value for usage.enabled.");
+    }),
+  );
+
+  vitestIt.effect("patches a dotted id into its section", () =>
+    Effect.gen(function* () {
+      const patch = yield* decodeSetting("usage.enabled", "true");
+      const current: JsonObject = { other: "kept", usage: { enabled: false, stale: 1 } };
+      vitestExpect(patch(current)).toEqual({
+        other: "kept",
+        usage: { enabled: true, stale: 1 },
+      });
+    }),
+  );
+
+  vitestIt.effect("patches a separator-less id at the top level", () =>
+    Effect.gen(function* () {
+      const patch = yield* decodeSetting("compact", "true");
+      vitestExpect(patch({ footer: { mode: "status" } })).toEqual({
+        footer: { mode: "status" },
+        compact: true,
+      });
+    }),
+  );
 });
 
 describe("completeSettingsArguments", () => {

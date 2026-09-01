@@ -267,13 +267,7 @@ const makeHerdrCommandRunner = (
     }).pipe(
       Effect.mapError((failure) => herdrTransportFailure(request, failure)),
       Effect.flatMap((output) => {
-        if (
-          output.overflowed ||
-          output.timedOut ||
-          output.cleanupUnconfirmed ||
-          Buffer.byteLength(output.stdout, "utf8") > maximumOutputBytes ||
-          Buffer.byteLength(output.stderr, "utf8") > maximumOutputBytes
-        )
+        if (output.overflowed || output.timedOut || output.cleanupUnconfirmed)
           return Effect.fail(herdrTransportFailure(request));
         if (output.code !== 0) {
           const killedBySignal = output.code === null && output.signal !== null;

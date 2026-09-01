@@ -1,14 +1,14 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import {
-  decodeJwtPayloadText,
+  extractJwtClaim,
   isJsonObject,
   JsonDocumentStore,
   JsonHttpClient,
   readSchemaDocument,
+  redactedTokenSchema,
   type JsonObject,
 } from "pi-cosmic-core";
 import { ModelRegistryAuth } from "../boundary/model-registry-auth.ts";
@@ -24,8 +24,7 @@ const PositiveIntegerSchema = Schema.Number.check(
   Schema.isGreaterThan(0),
 );
 const XaiAuthDocumentSchema = Schema.Struct({ xai: Schema.optional(Schema.Unknown) });
-const redactedToken = (label: string) =>
-  Schema.RedactedFromValue(Schema.Trim.check(Schema.isMinLength(1)), { label });
+const redactedToken = redactedTokenSchema;
 const XaiAuthEntrySchema = Schema.Struct({
   type: Schema.Literal("oauth"),
   access: redactedToken("xAI access token"),
@@ -43,7 +42,6 @@ const JwtPayloadSchema = Schema.Struct({
   team_id: Schema.optional(Schema.String),
 });
 const JwtPayloadFromJsonSchema = Schema.fromJsonString(JwtPayloadSchema);
-const decodeJwtPayload = Option.liftThrowable(decodeJwtPayloadText);
 
 export interface XaiCredentials {
   readonly accessToken: Redacted.Redacted<string>;
@@ -65,13 +63,11 @@ export class XaiAuthError extends Schema.TaggedError<XaiAuthError>()("XaiAuthErr
   message: Schema.String,
 }) {}
 
+const withTeamId = <C extends XaiCredentials>(credentials: C, teamId: string | undefined): C =>
+  teamId === undefined ? credentials : { ...credentials, teamId };
+
 export function extractTeamIdFromJwt(token: string): string | undefined {
-  const source = Option.getOrUndefined(decodeJwtPayload(token));
-  if (!source) return undefined;
-  const decoded = Option.getOrUndefined(
-    Schema.decodeUnknownOption(JwtPayloadFromJsonSchema)(source),
-  );
-  return decoded?.team_id?.trim() || undefined;
+  return extractJwtClaim(token, JwtPayloadFromJsonSchema)?.team_id?.trim() || undefined;
 }
 
 const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function* <Entry>(
@@ -91,7 +87,7 @@ const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function*
   const withRefreshToken =
     refreshToken === undefined ? credentials : { ...credentials, refreshToken };
   const withExpires = expires === undefined ? withRefreshToken : { ...withRefreshToken, expires };
-  return teamId === undefined ? withExpires : { ...withExpires, teamId };
+  return withTeamId(withExpires, teamId);
 });
 
 export const readXaiCredentials = Effect.fn("XaiAuth.readXaiCredentials")(function* (
@@ -207,7 +203,7 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
     expires,
   };
   const teamId = extractTeamIdFromJwt(Redacted.value(accessToken));
-  const refreshed = teamId === undefined ? credentials : { ...credentials, teamId };
+  const refreshed = withTeamId(credentials, teamId);
   return yield* commitXaiRefresh(authPath, captured, refreshed);
 });
 
@@ -225,7 +221,7 @@ const getModelRegistryXaiCredentials = Effect.fn("XaiAuth.getModelRegistryXaiCre
     const registryCredentials: XaiCredentials = {
       accessToken: Redacted.make(registryAccess, { label: "xAI access token" }),
     };
-    return teamId ? { ...registryCredentials, teamId } : registryCredentials;
+    return withTeamId(registryCredentials, teamId);
   },
 );
 
@@ -235,22 +231,20 @@ const hasDifferentAccessToken = (
 ): boolean => Redacted.value(credentials.accessToken) !== Redacted.value(rejectedAccessToken);
 
 /** Refresh a file-owned credential only when it matches the provider-rejected token. */
-export const refreshRejectedXaiCredentials = Effect.fn("XaiAuth.refreshRejectedXaiCredentials")(
-  function* (authPath: string, rejectedAccessToken: Redacted.Redacted<string>) {
-    const current = yield* readXaiCredentials(authPath).pipe(
-      Effect.catchIf(
-        (error) => error.operation === "decode",
-        () => Effect.succeed(null),
-      ),
-    );
-    if (
-      !hasRefreshToken(current) ||
-      Redacted.value(current.accessToken) !== Redacted.value(rejectedAccessToken)
-    )
-      return undefined;
-    return yield* refreshXaiToken(authPath, current);
-  },
-);
+const refreshRejectedXaiCredentials = Effect.fn("XaiAuth.refreshRejectedXaiCredentials")(function* (
+  authPath: string,
+  rejectedAccessToken: Redacted.Redacted<string>,
+) {
+  const current = yield* readXaiCredentials(authPath).pipe(
+    Effect.catchIf(
+      (error) => error.operation === "decode",
+      () => Effect.succeed(null),
+    ),
+  );
+  if (!hasRefreshToken(current) || hasDifferentAccessToken(current, rejectedAccessToken))
+    return undefined;
+  return yield* refreshXaiToken(authPath, current);
+});
 
 /** Resolve at most one replacement for a provider-rejected credential. */
 export const recoverRejectedXaiCredentials = Effect.fn("XaiAuth.recoverRejectedXaiCredentials")(
