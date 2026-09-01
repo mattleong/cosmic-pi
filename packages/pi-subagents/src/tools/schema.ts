@@ -143,38 +143,17 @@ export const ReplyParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const LifecycleParameters = Type.Union([
-  Type.Object(
-    {
-      action: Type.Literal("resume", {
-        description: "Resume a run that advertises the resume capability.",
-      }),
-      runIds: RunIdsParameters,
-      message: Type.Optional(MessageParameters),
-    },
-    strictObjectOptions,
-  ),
-  Type.Object(
-    {
-      action: StringEnum(["interrupt", "stop"] as const, {
-        description:
-          "Interrupt requires the interrupt capability; stop is always available for active runs.",
-      }),
-      runIds: RunIdsParameters,
-    },
-    strictObjectOptions,
-  ),
-  Type.Object(
-    {
-      action: Type.Literal("retry", {
-        description:
-          "Continue failed runs on the next candidate in their immutable launch-time profile route.",
-      }),
-      runIds: RunIdsParameters,
-    },
-    strictObjectOptions,
-  ),
-]);
+export const LifecycleParameters = Type.Object(
+  {
+    action: StringEnum(["resume", "interrupt", "stop", "retry"] as const, {
+      description:
+        "resume requires the resume capability; interrupt requires the interrupt capability; stop is always available for active runs; retry continues failed runs on the next candidate in their immutable launch-time profile route.",
+    }),
+    runIds: RunIdsParameters,
+    message: Type.Optional(MessageParameters),
+  },
+  strictObjectOptions,
+);
 
 export const RenameParameters = Type.Object(
   {
@@ -197,30 +176,48 @@ const WritePathsParameters = Type.Array(
   { minItems: 1, maxItems: MAX_WRITE_CLAIMS, uniqueItems: true },
 );
 
-export const ClaimsParameters = Type.Union([
-  Type.Object(
-    {
-      action: Type.Literal("list"),
-      runIds: RunIdsParameters,
-    },
-    strictObjectOptions,
-  ),
-  Type.Object(
-    {
-      action: StringEnum(["grant", "revoke"] as const),
-      runId: RunIdParameter,
-      paths: WritePathsParameters,
-    },
-    strictObjectOptions,
-  ),
-  Type.Object(
-    {
-      action: Type.Literal("resume_admission"),
-      runId: RunIdParameter,
-    },
-    strictObjectOptions,
-  ),
-]);
+export const ClaimsParameters = Type.Object(
+  {
+    action: StringEnum(["list", "grant", "revoke", "resume_admission"] as const, {
+      description:
+        "list takes runIds; grant and revoke take runId plus a non-empty paths array; resume_admission takes runId only.",
+    }),
+    runIds: Type.Optional(RunIdsParameters),
+    runId: Type.Optional(RunIdParameter),
+    paths: Type.Optional(WritePathsParameters),
+  },
+  strictObjectOptions,
+);
+
+/**
+ * Per-action field requirements the flattened claims schema cannot express as one object:
+ * which fields each action requires and which cross-field combinations it rejects. Returns the
+ * error message, or undefined when the operation is well-formed for its action.
+ */
+export const claimsOperationError = (operation: SubagentClaimsInput): string | undefined => {
+  switch (operation.action) {
+    case "list":
+      if (operation.runIds === undefined) return 'subagent_claims action="list" requires runIds.';
+      if (operation.runId !== undefined || operation.paths !== undefined)
+        return 'subagent_claims action="list" takes runIds only.';
+      return undefined;
+    case "grant":
+    case "revoke":
+      if (operation.runId === undefined)
+        return `subagent_claims action="${operation.action}" requires runId.`;
+      if (operation.paths === undefined || operation.paths.length === 0)
+        return `subagent_claims action="${operation.action}" requires a non-empty paths array.`;
+      if (operation.runIds !== undefined)
+        return `subagent_claims action="${operation.action}" takes runId and paths only.`;
+      return undefined;
+    case "resume_admission":
+      if (operation.runId === undefined)
+        return 'subagent_claims action="resume_admission" requires runId.';
+      if (operation.runIds !== undefined || operation.paths !== undefined)
+        return 'subagent_claims action="resume_admission" takes runId only.';
+      return undefined;
+  }
+};
 
 export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentModelsInput = Static<typeof ModelsParameters>;

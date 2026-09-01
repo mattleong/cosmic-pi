@@ -259,8 +259,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
             ? "Resume writer admission"
             : `${args.action === "grant" ? "Grant" : "Revoke"} writer claims`,
         args.action === "list"
-          ? args.runIds.join(", ")
-          : `${args.runId}${"paths" in args ? ` · ${args.paths.join(", ")}` : ""}`,
+          ? (args.runIds ?? []).join(", ")
+          : `${args.runId ?? ""}${args.paths !== undefined ? ` · ${args.paths.join(", ")}` : ""}`,
         theme,
       ),
     renderResult: sharedRenderResult,

@@ -70,6 +70,7 @@ import type {
   SubagentStartResolvedRoute,
 } from "./model.ts";
 import type { SubagentModelsInput, SubagentStartSpec, SubagentToolInput } from "./schema.ts";
+import { claimsOperationError } from "./schema.ts";
 
 export interface SubagentToolRuntime {
   readonly environment: SubagentSessionEnvironment;
@@ -739,18 +740,21 @@ export const executeSubagentActionEffect = (
       case "interrupt":
       case "resume":
       case "stop": {
-        if (input.action !== "resume" && "message" in input && input.message !== undefined)
+        if (input.action !== "resume" && input.message !== undefined)
           return yield* new InvalidSubagentRequestError({
             code: "lifecycle_message_invalid",
             message: 'subagent_lifecycle message is valid only when action="resume".',
           });
         const ids = yield* requiredTargetIds(input.action, input.runIds);
         yield* authorize(ids);
+        // Property narrowing does not survive the forEach closure boundary, so hoist the
+        // case-group-narrowed action before the callback.
+        const lifecycleAction = input.action;
         const outcomes = yield* Effect.forEach(
           ids,
           (id) => {
             const operation = (() => {
-              switch (input.action) {
+              switch (lifecycleAction) {
                 case "interrupt":
                   return service.interrupt(id);
                 case "resume":
@@ -773,15 +777,23 @@ export const executeSubagentActionEffect = (
       }
       case "claims": {
         const operation = input.operation;
+        const operationError = claimsOperationError(operation);
+        if (operationError !== undefined)
+          return yield* new InvalidSubagentRequestError({
+            code: "claims_input_invalid",
+            message: operationError,
+          });
         if (operation.action === "list")
-          return yield* finishStatus(yield* requiredTargetIds(input.action, operation.runIds));
-        const id = yield* requiredRunId(input.action, operation.runId);
+          return yield* finishStatus(
+            yield* requiredTargetIds(input.action, operation.runIds ?? []),
+          );
+        const id = yield* requiredRunId(input.action, operation.runId ?? "");
         yield* authorize([id]);
         const effect =
           operation.action === "grant"
-            ? service.grantWriteClaims(id, operation.paths)
+            ? service.grantWriteClaims(id, operation.paths ?? [])
             : operation.action === "revoke"
-              ? service.revokeWriteClaims(id, operation.paths)
+              ? service.revokeWriteClaims(id, operation.paths ?? [])
               : service.resumeWriterAdmission(id);
         const outcome = yield* effect.pipe(matchActionOutcome(id));
         return singleOutcome(outcome);

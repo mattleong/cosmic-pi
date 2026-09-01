@@ -7,6 +7,7 @@ import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   AwaitParameters,
+  claimsOperationError,
   ClaimsParameters,
   LifecycleParameters,
   ListParameters,
@@ -141,7 +142,8 @@ export const decodeSubagentProxyRequest = (
         ? { ...args, action: "reply" }
         : invalid("Nested subagent_reply arguments failed strict validation.");
     case SUBAGENT_TOOL_NAME.lifecycle:
-      return Check(LifecycleParameters, args)
+      return Check(LifecycleParameters, args) &&
+        (args.action === "resume" || args.message === undefined)
         ? args
         : invalid("Nested subagent_lifecycle arguments failed strict validation.");
     case SUBAGENT_TOOL_NAME.rename:
@@ -149,7 +151,7 @@ export const decodeSubagentProxyRequest = (
         ? { ...args, action: "rename" }
         : invalid("Nested subagent_rename arguments failed strict validation.");
     case SUBAGENT_TOOL_NAME.claims:
-      return Check(ClaimsParameters, args)
+      return Check(ClaimsParameters, args) && claimsOperationError(args) === undefined
         ? { action: "claims", operation: args }
         : invalid("Nested subagent_claims arguments failed strict validation.");
     default:
