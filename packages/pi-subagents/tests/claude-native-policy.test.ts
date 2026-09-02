@@ -25,6 +25,7 @@ describe("Claude native-agent policy", () => {
       const writerPolicy =
         writeIntent === "writer" ? { cwd: "/repo", scopedEditRule: "Edit(//repo/**)" } : undefined;
       const settings = claudeSettings(launch(writeIntent), writerPolicy);
+      expect(settings.crossSessionInbound).toBe("refuse");
       for (const tool of CLAUDE_NATIVE_AGENT_TOOLS) {
         expect(settings.permissions.allow).toContain(tool);
         expect(settings.permissions.deny).not.toContain(tool);

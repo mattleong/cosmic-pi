@@ -129,6 +129,7 @@ export interface ClaudeSandboxSettings {
 export interface ClaudeSettings {
   readonly permissions: ClaudePermissionSettings;
   readonly sandbox: ClaudeSandboxSettings;
+  readonly crossSessionInbound: "refuse";
   readonly enableAllProjectMcpServers: false;
 }
 
@@ -158,6 +159,7 @@ export const claudeSettings = (
       allowLocalBinding: false,
     },
   },
+  crossSessionInbound: "refuse",
   enableAllProjectMcpServers: false,
 });
 

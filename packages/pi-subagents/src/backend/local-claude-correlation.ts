@@ -5,6 +5,7 @@
  * and initialization; this module only tracks what was sent and which native
  * result each issued input owns.
  */
+import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 
 /** Cumulative native usage components tracked for monotone delta accounting. */
 export interface UsageComponents {
@@ -79,8 +80,73 @@ const INTERNAL_REPLAY_ORIGINS: ReadonlySet<string> = new Set([
   "auto-continuation",
 ]);
 
-export const isInternalReplayOrigin = (originKind: string | undefined): boolean =>
-  INTERNAL_REPLAY_ORIGINS.has(originKind ?? "");
+/**
+ * Subkinds identify externally delivered task notifications such as peer
+ * messages and scheduled triggers. Only an unqualified internal origin may
+ * join the active assignment.
+ */
+export const isInternalReplayOrigin = (
+  originKind: string | undefined,
+  originSubkind: string | undefined,
+): boolean => originSubkind === undefined && INTERNAL_REPLAY_ORIGINS.has(originKind ?? "");
+
+const DIAGNOSTIC_ORIGINS: ReadonlySet<string> = new Set([
+  "human",
+  "plugin",
+  "channel",
+  "task-notification",
+  "peer",
+  "coordinator",
+  "unclassified",
+  "observer",
+  "auto-continuation",
+  "observer-activity",
+  "slack-ping",
+]);
+const DIAGNOSTIC_ORIGIN_SUBKINDS: ReadonlySet<string> = new Set([
+  "scheduled-trigger",
+  "peer-send-message",
+  "projects-relay",
+]);
+
+type ClaudeUserProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "user" }>;
+
+export const isSameClaudeSession = (
+  eventSessionId: string | undefined,
+  nativeSessionId: string | undefined,
+): boolean =>
+  eventSessionId === undefined ||
+  nativeSessionId === undefined ||
+  eventSessionId === nativeSessionId;
+
+const diagnosticOrigin = (value: string | undefined, known: ReadonlySet<string>): string =>
+  value === undefined ? "absent" : known.has(value) ? value : "other";
+
+/** Fixed-field diagnostics that never retain message text or correlation IDs. */
+export const uncorrelatedClaudeUserMessage = (
+  event: ClaudeUserProtocolEvent,
+  nativeSessionId: string | undefined,
+): string => {
+  const session =
+    event.sessionId === undefined
+      ? "absent"
+      : nativeSessionId === undefined
+        ? "uninitialized"
+        : event.sessionId === nativeSessionId
+          ? "match"
+          : "mismatch";
+  return [
+    "Claude replayed an uncorrelated stream-input message.",
+    `[uuid=${event.uuid === undefined ? "absent" : "present"}`,
+    `session=${session}`,
+    `replay=${event.isReplay}`,
+    `synthetic=${event.isSynthetic}`,
+    `origin=${diagnosticOrigin(event.originKind, DIAGNOSTIC_ORIGINS)}`,
+    `subkind=${diagnosticOrigin(event.originSubkind, DIAGNOSTIC_ORIGIN_SUBKINDS)}`,
+    `parent-tool=${event.parentToolUseId === undefined ? "absent" : "present"}`,
+    `tool-results=${event.toolResults.length === 0 ? "none" : "present"}]`,
+  ].join("; ");
+};
 
 /** Correlates a native result to the exact user input that started its query. */
 export interface ResultExpectation {
@@ -110,6 +176,7 @@ export interface ClaudeResultCorrelation {
   readonly take: (
     userMessageUuid: string | undefined,
     originKind: string | undefined,
+    originSubkind: string | undefined,
   ) => ResultExpectation | undefined;
   /** Drops every confirmed UUID and owned expectation (transport shutdown). */
   readonly clear: () => void;
@@ -147,6 +214,7 @@ export const makeClaudeResultCorrelation = (): ClaudeResultCorrelation => {
   const take = (
     userMessageUuid: string | undefined,
     originKind: string | undefined,
+    originSubkind: string | undefined,
   ): ResultExpectation | undefined => {
     if (userMessageUuid !== undefined) {
       const expectation = resultExpectations.get(userMessageUuid);
@@ -156,9 +224,9 @@ export const makeClaudeResultCorrelation = (): ClaudeResultCorrelation => {
       if (index >= 0) resultOrder.splice(index, 1);
       return expectation;
     }
-    const index = isInternalReplayOrigin(originKind)
+    const index = isInternalReplayOrigin(originKind, originSubkind)
       ? resultOrder.findIndex((candidate) => candidate.kind === "synthetic")
-      : 0;
+      : resultOrder.findIndex((candidate) => candidate.kind !== "synthetic");
     if (index < 0) return undefined;
     const [expectation] = resultOrder.splice(index, 1);
     if (expectation) resultExpectations.delete(expectation.uuid);

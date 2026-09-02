@@ -36,10 +36,15 @@ const Usage = Schema.Struct({
   cache_creation_input_tokens: Schema.optional(Token),
 });
 const Cost = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
-const MessageOrigin = Schema.Struct({ kind: Name });
+const MessageOrigin = Schema.Struct({
+  kind: Name,
+  subkind: Schema.optional(Name),
+});
+const ParentToolUseId = Schema.Union([Schema.Null, Id]);
 const Assistant = Schema.Struct({
   type: Schema.Literal("assistant"),
   session_id: Schema.optional(Id),
+  parent_tool_use_id: Schema.optional(ParentToolUseId),
   message: Schema.Struct({
     id: Schema.optional(Id),
     role: Schema.Literal("assistant"),
@@ -51,6 +56,7 @@ const User = Schema.Struct({
   type: Schema.Literal("user"),
   uuid: Schema.optional(Id),
   session_id: Schema.optional(Id),
+  parent_tool_use_id: Schema.optional(ParentToolUseId),
   isSynthetic: Schema.optional(Schema.Boolean),
   isReplay: Schema.optional(Schema.Boolean),
   origin: Schema.optional(MessageOrigin),
@@ -127,6 +133,15 @@ const McpStatusControlResponse = Schema.Struct({
 });
 const Discriminant = Schema.Struct({ type: Schema.optional(Schema.String) });
 
+export type ClaudeInboundFrame =
+  | typeof Assistant.Type
+  | typeof User.Type
+  | typeof SystemInit.Type
+  | typeof SystemEvent.Type
+  | typeof StreamEvent.Type
+  | typeof Result.Type
+  | typeof ControlResponse.Type;
+
 export type ClaudeProtocolEvent =
   | {
       readonly type: "init";
@@ -143,7 +158,9 @@ export type ClaudeProtocolEvent =
       readonly toolResults: ReadonlyArray<{ readonly id: string; readonly isError: boolean }>;
       readonly uuid?: string | undefined;
       readonly sessionId?: string | undefined;
+      readonly parentToolUseId?: string | undefined;
       readonly originKind?: string | undefined;
+      readonly originSubkind?: string | undefined;
       readonly isSynthetic: boolean;
       readonly isReplay: boolean;
     }
@@ -151,6 +168,7 @@ export type ClaudeProtocolEvent =
       readonly type: "assistant";
       readonly text?: string | undefined;
       readonly messageId?: string | undefined;
+      readonly parentToolUseId?: string | undefined;
       readonly tools: ReadonlyArray<{
         readonly id: string;
         readonly name: string;
@@ -168,6 +186,7 @@ export type ClaudeProtocolEvent =
       readonly sessionId?: string | undefined;
       readonly userMessageUuid?: string | undefined;
       readonly originKind?: string | undefined;
+      readonly originSubkind?: string | undefined;
       /** As-reported cumulative usage for the whole query, when present. */
       readonly usage?: SubagentUsage | undefined;
       /** Known cumulative client-side cost estimate in USD, when present. */
@@ -260,11 +279,17 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
           const withSessionId = event.session_id
             ? { ...withUuid, sessionId: event.session_id }
             : withUuid;
-          const withOriginKind = event.origin
-            ? { ...withSessionId, originKind: event.origin.kind }
+          const withParentToolUseId = event.parent_tool_use_id
+            ? { ...withSessionId, parentToolUseId: event.parent_tool_use_id }
             : withSessionId;
+          const withOriginKind = event.origin
+            ? { ...withParentToolUseId, originKind: event.origin.kind }
+            : withParentToolUseId;
+          const withOriginSubkind = event.origin?.subkind
+            ? { ...withOriginKind, originSubkind: event.origin.subkind }
+            : withOriginKind;
           const withIsSyntheticAndIsReplay = {
-            ...withOriginKind,
+            ...withOriginSubkind,
             isSynthetic: event.isSynthetic === true,
             isReplay: event.isReplay === true,
           };
@@ -287,8 +312,11 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
           const withMessageId = event.message.id
             ? { ...withText, messageId: event.message.id }
             : withText;
+          const withParentToolUseId = event.parent_tool_use_id
+            ? { ...withMessageId, parentToolUseId: event.parent_tool_use_id }
+            : withMessageId;
           const withToolsAndUsage = {
-            ...withMessageId,
+            ...withParentToolUseId,
             tools,
             usage: usageFromNative(event.message.usage),
           };
@@ -324,9 +352,12 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
           const withOriginKind = event.origin
             ? { ...withUserMessageUuid, originKind: event.origin.kind }
             : withUserMessageUuid;
-          const withUsage = event.usage
-            ? { ...withOriginKind, usage: usageFromNative(event.usage) }
+          const withOriginSubkind = event.origin?.subkind
+            ? { ...withOriginKind, originSubkind: event.origin.subkind }
             : withOriginKind;
+          const withUsage = event.usage
+            ? { ...withOriginSubkind, usage: usageFromNative(event.usage) }
+            : withOriginSubkind;
           const withTotalCostUsd =
             event.total_cost_usd === undefined
               ? withUsage

@@ -31,7 +31,9 @@ import {
   componentwiseMax,
   cumulativeUsageDelta,
   isInternalReplayOrigin,
+  isSameClaudeSession,
   makeClaudeResultCorrelation,
+  uncorrelatedClaudeUserMessage,
   usageComponentsTotal,
   zeroUsageComponents,
   type UsageComponents,
@@ -50,6 +52,7 @@ import {
   decodeClaudeProtocolEvent,
   type ClaudeControlRequestFrame,
   type ClaudeNativeInitialization,
+  type ClaudeProtocolEvent,
 } from "./local-claude-protocol.ts";
 import {
   SUPERVISOR_MCP_REGISTRATION,
@@ -71,6 +74,8 @@ const CLAUDE_NATIVE_AGENT_TOOLS: ReadonlySet<string> = new Set([
   "TaskStop",
   "SendMessage",
 ]);
+
+type ClaudeUserProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "user" }>;
 
 const unsupported = (capability: string) =>
   unsupportedCapability(
@@ -226,6 +231,42 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     );
   };
 
+  const handleToolResults = (
+    toolResults: ClaudeUserProtocolEvent["toolResults"],
+    raw: LocalCliWireEvent,
+  ) =>
+    Effect.gen(function* () {
+      for (const [index, result] of toolResults.entries()) {
+        const nativeName = nativeToolNames.get(result.id);
+        nativeToolNames.delete(result.id);
+        if (nativeName) {
+          yield* offer(
+            {
+              type: "native_agent_activity",
+              assignmentEpoch,
+              activityId: result.id,
+              kind: nativeName,
+              state: result.isError ? "failed" : "completed",
+            },
+            index === toolResults.length - 1 ? raw : undefined,
+          );
+          continue;
+        }
+        const name = toolNames.get(result.id) ?? "ClaudeTool";
+        toolNames.delete(result.id);
+        yield* offer(
+          {
+            type: "tool_finished",
+            assignmentEpoch,
+            toolCallId: result.id,
+            toolName: name,
+            isError: result.isError,
+          },
+          index === toolResults.length - 1 ? raw : undefined,
+        );
+      }
+    });
+
   const consumeRaw = (raw: LocalCliWireEvent): Effect.Effect<void> => {
     if (raw.type === "protocol_error")
       return offer({ type: "protocol_error", message: raw.message }, raw);
@@ -247,6 +288,24 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
           case "activity":
             return offer({ type: "activity", assignmentEpoch }, raw);
           case "user": {
+            const sameSession = isSameClaudeSession(event.sessionId, nativeSessionId);
+            if (event.parentToolUseId !== undefined) {
+              if (assignmentEpoch <= 0 || !sameSession)
+                return offer(
+                  {
+                    type: "protocol_error",
+                    message: uncorrelatedClaudeUserMessage(event, nativeSessionId),
+                  },
+                  raw,
+                );
+              // --forward-subagent-text emits nested assistant/user frames with
+              // parent_tool_use_id. Text-only user frames are activity, while
+              // their tool results retain the nested tool lifecycle used by
+              // write-claim observation.
+              return event.toolResults.length > 0
+                ? handleToolResults(event.toolResults, raw)
+                : offer({ type: "activity", assignmentEpoch }, raw);
+            }
             const pending = pendingUserReplay;
             // Exact UUID correlation only; the pinned protocol replays the
             // caller-supplied input uuid, so no text matching is consulted.
@@ -255,9 +314,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
               event.isReplay &&
               event.uuid !== undefined &&
               event.uuid === pending.uuid &&
-              (event.sessionId === undefined ||
-                nativeSessionId === undefined ||
-                event.sessionId === nativeSessionId)
+              sameSession
             ) {
               pendingUserReplay = undefined;
               correlation.rememberSentUuid(pending.uuid);
@@ -282,9 +339,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
               event.text === CLAUDE_INTERRUPT_MARKER &&
               event.toolResults.length === 0 &&
               event.uuid === undefined &&
-              (event.sessionId === undefined ||
-                nativeSessionId === undefined ||
-                event.sessionId === nativeSessionId)
+              sameSession
             ) {
               interrupt.markerSeen = true;
               if (interrupt.resultSeen) {
@@ -298,18 +353,20 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
               return Effect.void;
             }
             if (
-              event.uuid !== undefined &&
-              !correlation.hasSentUuid(event.uuid) &&
-              isInternalReplayOrigin(event.originKind) &&
-              assignmentEpoch > 0
+              (event.uuid === undefined || !correlation.hasSentUuid(event.uuid)) &&
+              event.isSynthetic &&
+              isInternalReplayOrigin(event.originKind, event.originSubkind) &&
+              assignmentEpoch > 0 &&
+              sameSession
             ) {
-              // Claude-owned task notifications/auto-continuations are causal
-              // subturns of the active assignment, not foreign parent input.
-              // Their required UUID owns only their synthetic result lifecycle.
-              correlation.rememberSentUuid(event.uuid);
+              // Claude-owned task notifications and auto-continuations are
+              // causal subturns of the active assignment. Older frames may omit
+              // their UUID, so a private identity owns only the result FIFO.
+              const syntheticUuid = event.uuid ?? `synthetic:${randomUUID()}`;
+              if (event.uuid !== undefined) correlation.rememberSentUuid(event.uuid);
               correlation.register(
                 {
-                  uuid: event.uuid,
+                  uuid: syntheticUuid,
                   kind: "synthetic",
                   epoch: assignmentEpoch,
                 },
@@ -317,44 +374,13 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
               );
               return offer({ type: "activity", assignmentEpoch }, raw);
             }
-            if (event.toolResults.length > 0)
-              return Effect.gen(function* () {
-                for (const [index, result] of event.toolResults.entries()) {
-                  const nativeName = nativeToolNames.get(result.id);
-                  nativeToolNames.delete(result.id);
-                  if (nativeName) {
-                    yield* offer(
-                      {
-                        type: "native_agent_activity",
-                        assignmentEpoch,
-                        activityId: result.id,
-                        kind: nativeName,
-                        state: result.isError ? "failed" : "completed",
-                      },
-                      index === event.toolResults.length - 1 ? raw : undefined,
-                    );
-                    continue;
-                  }
-                  const name = toolNames.get(result.id) ?? "ClaudeTool";
-                  toolNames.delete(result.id);
-                  yield* offer(
-                    {
-                      type: "tool_finished",
-                      assignmentEpoch,
-                      toolCallId: result.id,
-                      toolName: name,
-                      isError: result.isError,
-                    },
-                    index === event.toolResults.length - 1 ? raw : undefined,
-                  );
-                }
-              });
+            if (event.toolResults.length > 0) return handleToolResults(event.toolResults, raw);
             // A delayed or duplicate replay of an input this handle already
             // confirmed is safely acknowledged without further effect.
             if (
               event.uuid !== undefined &&
               correlation.hasSentUuid(event.uuid) &&
-              (event.isReplay || isInternalReplayOrigin(event.originKind))
+              (event.isReplay || isInternalReplayOrigin(event.originKind, event.originSubkind))
             ) {
               child.acknowledge(raw);
               return Effect.void;
@@ -362,7 +388,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             return offer(
               {
                 type: "protocol_error",
-                message: "Claude replayed an uncorrelated stream-input message.",
+                message: uncorrelatedClaudeUserMessage(event, nativeSessionId),
               },
               raw,
             );
@@ -456,7 +482,11 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             // Correlate to the exact originating input: the native
             // user_message_uuid when reported, otherwise the owned issue-order
             // FIFO for a pinned protocol frame that legitimately omits it.
-            const expectation = correlation.take(event.userMessageUuid, event.originKind);
+            const expectation = correlation.take(
+              event.userMessageUuid,
+              event.originKind,
+              event.originSubkind,
+            );
             // Result-level cumulative usage/cost reconciliation: emit only the
             // nonnegative remainder over already-accounted assistant deltas so
             // nothing is double-counted, and surface the known cost estimate.
