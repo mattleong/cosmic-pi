@@ -170,9 +170,8 @@ export const requestCooperativeAbort = (
 ): Effect.Effect<void> =>
   send({ type: "abort" }).pipe(
     Effect.interruptible,
-    Effect.timeoutOption("250 millis"),
+    Effect.timeoutOrElse({ duration: "250 millis", orElse: () => Effect.void }),
     Effect.catch(() => Effect.void),
-    Effect.asVoid,
   );
 
 export interface ChildProcessReleaseOperations {

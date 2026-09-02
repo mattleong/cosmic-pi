@@ -3,46 +3,15 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { BackendEvent, BackendHandle } from "../backend/model.ts";
+import type { BackendEvent, BackendHandle, BackendStartupState } from "../backend/model.ts";
 import type { RunRecord } from "./internal.ts";
 import type { SubagentError } from "./errors.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "./errors.ts";
-import { hasSubagentCapability, isActiveRunState, isTerminalRunState } from "./model.ts";
-import { peerNoticeText } from "./coordination.ts";
+import { isTerminalRunState } from "./model.ts";
 
-export interface RunProcessLifecycleDependencies {
-  readonly ownerScope: Scope.Scope;
-  readonly records: ReadonlyMap<string, RunRecord>;
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: Effect.Effect<void>;
-  readonly handleBackendEvent: (
-    record: RunRecord,
-    event: BackendEvent,
-  ) => Effect.Effect<void, SubagentError>;
-  /** Must durably confirm writer spawn-started evidence before a driver spawn is invoked. */
-  readonly prepareBackendSpawn: (record: RunRecord) => Effect.Effect<void, SubagentError>;
-  readonly markCleanupPending: (record: RunRecord) => Effect.Effect<void>;
-  readonly closeExitedScope: (record: RunRecord, scope: Scope.Closeable) => Effect.Effect<void>;
-  readonly failRun: (
-    record: RunRecord,
-    message: string,
-    pendingError?: SubagentError,
-  ) => Effect.Effect<unknown>;
-}
+type WithRunLock = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 
-export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDependencies) {
-  const {
-    ownerScope,
-    records,
-    withLock,
-    publish,
-    handleBackendEvent,
-    prepareBackendSpawn,
-    markCleanupPending,
-    closeExitedScope,
-    failRun,
-  } = dependencies;
-
+export function makeRunProcessControls(withLock: WithRunLock) {
   const runControl = <A>(
     record: RunRecord,
     use: (handle: BackendHandle) => Effect.Effect<A, SubagentError>,
@@ -68,26 +37,50 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
       return yield* Fiber.join(transport);
     });
 
-  const sendPeerNotices = (changedId: string) => {
-    const recipients = [...records.values()].flatMap((record) => {
-      const process = record.process;
-      return process &&
-        isActiveRunState(record.view.state) &&
-        hasSubagentCapability(record.view, "peer-notice")
-        ? [{ record, process }]
-        : [];
-    });
-    return Effect.forEach(
-      recipients,
-      ({ record, process }) =>
-        process.controls.notifyPeers(peerNoticeText(records.values(), record.view.id)).pipe(
-          Effect.timeoutOption("1 second"),
-          Effect.catch(() => Effect.void),
-          Effect.asVoid,
-        ),
-      { concurrency: 8, discard: true },
-    ).pipe(Effect.annotateLogs("changedRunId", changedId), Effect.asVoid);
+  return {
+    initialize: (record: RunRecord) => runControl(record, (process) => process.controls.initialize),
+    startPrompt: (record: RunRecord, message: string, assignmentEpoch: number) =>
+      runControl(record, (process) => process.controls.start(message, assignmentEpoch)),
+    steer: (record: RunRecord, message: string) =>
+      runControl(record, (process) => process.controls.steer(message)),
+    interrupt: (record: RunRecord) => runControl(record, (process) => process.controls.interrupt),
+    renameDisplay: (record: RunRecord, name: string) =>
+      runControl(record, (process) => process.controls.renameDisplay(name)),
   };
+}
+
+export interface RunProcessInitializerDependencies {
+  readonly ownerScope: Scope.Scope;
+  readonly withLock: WithRunLock;
+  readonly publish: Effect.Effect<void>;
+  readonly initialize: (record: RunRecord) => Effect.Effect<BackendStartupState, SubagentError>;
+  readonly handleBackendEvent: (
+    record: RunRecord,
+    event: BackendEvent,
+  ) => Effect.Effect<void, SubagentError>;
+  /** Must durably confirm writer spawn-started evidence before a driver spawn is invoked. */
+  readonly prepareBackendSpawn: (record: RunRecord) => Effect.Effect<void, SubagentError>;
+  readonly markCleanupPending: (record: RunRecord) => Effect.Effect<void>;
+  readonly closeExitedScope: (record: RunRecord, scope: Scope.Closeable) => Effect.Effect<void>;
+  readonly failRun: (
+    record: RunRecord,
+    message: string,
+    pendingError?: SubagentError,
+  ) => Effect.Effect<unknown>;
+}
+
+export function makeRunProcessInitializer(dependencies: RunProcessInitializerDependencies) {
+  const {
+    ownerScope,
+    withLock,
+    publish,
+    initialize,
+    handleBackendEvent,
+    prepareBackendSpawn,
+    markCleanupPending,
+    closeExitedScope,
+    failRun,
+  } = dependencies;
 
   const installProcess = (record: RunRecord) => {
     const scope = record.scope;
@@ -136,12 +129,10 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
           )
             return false;
           record.process = process;
-          record.view = (() => {
-            const baseResult = { ...record.view };
-            const withPid =
-              process.pid === undefined ? baseResult : { ...baseResult, pid: process.pid };
-            return withPid;
-          })();
+          record.view = {
+            ...record.view,
+            ...(process.pid !== undefined && { pid: process.pid }),
+          };
           yield* publish;
           return true;
         }),
@@ -201,20 +192,5 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
     });
   };
 
-  const initializeProcess = (record: RunRecord) =>
-    installProcess(record).pipe(
-      Effect.andThen(runControl(record, (process) => process.controls.initialize)),
-    );
-
-  return {
-    initializeProcess,
-    sendPeerNotices,
-    startPrompt: (record: RunRecord, message: string, assignmentEpoch: number) =>
-      runControl(record, (process) => process.controls.start(message, assignmentEpoch)),
-    steer: (record: RunRecord, message: string) =>
-      runControl(record, (process) => process.controls.steer(message)),
-    interrupt: (record: RunRecord) => runControl(record, (process) => process.controls.interrupt),
-    renameDisplay: (record: RunRecord, name: string) =>
-      runControl(record, (process) => process.controls.renameDisplay(name)),
-  };
+  return (record: RunRecord) => installProcess(record).pipe(Effect.andThen(initialize(record)));
 }

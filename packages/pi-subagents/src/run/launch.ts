@@ -89,11 +89,9 @@ export interface RunLaunchDependencies {
     operation: "start" | "resume",
     attemptToken: string,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
-  /** Late-bound process-lifecycle initializer; resolved at call time. */
   readonly initializeProcess: (
     record: RunRecord,
   ) => Effect.Effect<BackendStartupState, SubagentError>;
-  /** Late-bound process-lifecycle peer notifier; resolved at call time. */
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
 }
 
@@ -337,152 +335,113 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               }
               writerPool.members.set(id, writeClaims);
             }
-            const view: SubagentRunView = (() => {
-              const baseResult = { id, name, task: request.task.trim() };
-              const withProfile = request.profile
-                ? { ...baseResult, profile: request.profile }
-                : baseResult;
-              const withPredecessorRunId = request.supersedes
-                ? { ...withProfile, predecessorRunId: request.supersedes.runId }
-                : withProfile;
-              const remainingCandidateCount = request.routeContinuation
-                ? Math.max(
-                    0,
-                    request.routeContinuation.candidates.length -
-                      request.routeContinuation.selectedCandidateIndex -
-                      1,
-                  )
-                : undefined;
-              const withRemainingCandidateCount =
-                remainingCandidateCount === undefined
-                  ? withPredecessorRunId
-                  : { ...withPredecessorRunId, remainingCandidateCount };
-              const withSelectionAndWriteIntent = {
-                ...withRemainingCandidateCount,
-                parentRunId,
-                depth: (parent?.view.depth ?? 0) + 1,
-                selection: request.selection ?? {
-                  source: "profile-candidate",
-                  host: request.host,
-                  runtime: request.runtime,
-                  closeOnReport: request.closeOnReport,
-                  reason: "Profile route selection.",
-                  skippedCandidates: [],
-                },
-                cwd: canonicalWriterCwd?.path ?? request.cwd,
-                state: "starting" as const,
-                context: request.context,
-                writeIntent: request.writeIntent,
-              };
-              const withWriteClaims =
-                writeClaims === undefined
-                  ? withSelectionAndWriteIntent
-                  : {
-                      ...withSelectionAndWriteIntent,
-                      writeClaims,
-                      writeAudit: {
-                        observedFileWrites: [],
-                        violations: [],
-                        bashWriteHints: 0,
-                      },
-                    };
-              return {
-                ...withWriteClaims,
-                openaiFastMode: request.openaiFastMode,
+            const remainingCandidateCount = request.routeContinuation
+              ? Math.max(
+                  0,
+                  request.routeContinuation.candidates.length -
+                    request.routeContinuation.selectedCandidateIndex -
+                    1,
+                )
+              : undefined;
+            const view: SubagentRunView = {
+              id,
+              name,
+              task: request.task.trim(),
+              ...(request.profile && { profile: request.profile }),
+              ...(request.supersedes && { predecessorRunId: request.supersedes.runId }),
+              ...(remainingCandidateCount !== undefined && { remainingCandidateCount }),
+              parentRunId,
+              depth: (parent?.view.depth ?? 0) + 1,
+              selection: request.selection ?? {
+                source: "profile-candidate",
                 host: request.host,
                 runtime: request.runtime,
                 closeOnReport: request.closeOnReport,
-                reportGeneration: 0,
-                capabilities: driver.capabilities,
-                model: request.model,
-                effort: request.effort,
-                startedAt: now,
-                lastActivityAt: now,
-                sessionEvents: [],
-                usage: emptyUsage(),
-              };
-            })();
-            const launch: BackendLaunchRequest = (() => {
-              const baseResult = {
-                runId: id,
-                name,
-                closeOnReport: request.closeOnReport,
-                cwd: canonicalWriterCwd?.path ?? request.cwd,
-                context: request.context,
-                writeIntent: request.writeIntent,
-                openaiFastMode: request.openaiFastMode,
-                model: request.model,
-                effort: request.effort,
-              };
-              const withRuntimeApiKey = request.runtimeApiKey
-                ? { ...baseResult, runtimeApiKey: request.runtimeApiKey }
-                : baseResult;
-              const withActiveToolsAndAdditionalFields = {
-                ...withRuntimeApiKey,
-                activeTools: request.activeTools,
-                projectTrusted: request.projectTrusted,
-                parentSessionId: request.parentSessionId,
-              };
-              const withParentSessionFile = request.parentSessionFile
-                ? {
-                    ...withActiveToolsAndAdditionalFields,
-                    parentSessionFile: request.parentSessionFile,
-                  }
-                : withActiveToolsAndAdditionalFields;
-              const withParentLeafId = request.parentLeafId
-                ? { ...withParentSessionFile, parentLeafId: request.parentLeafId }
-                : withParentSessionFile;
-              const withSystemPrompt = {
-                ...withParentLeafId,
-                systemPrompt: childSystemPrompt(
-                  writeClaims === undefined ? request : { ...request, writes: writeClaims },
-                ),
-              };
-              return withSystemPrompt;
-            })();
-            const record: RunRecord = (() => {
-              const baseResult = {
-                view,
-                scope,
-                driver,
-                launch,
-                activeTools: new Map(),
-                nativeAgents: new Map(),
-                nativeAgentTotal: 0,
-                cleanupSettlement,
-                cleanupDisposition: "pending" as const,
-                routeContinuation: request.routeContinuation,
-                retryExhausted: false,
-                pauseRequested: false,
-                stoppedByParent: false,
-                cleanupPending: false,
-                runStateReclaimState: "pending" as const,
-                writeViolationContainmentStarted: false,
-              };
-              const withCanonicalWriterCwd = canonicalWriterCwd
-                ? { ...baseResult, canonicalWriterCwd, writerPool }
-                : baseResult;
-              const withInitializationPendingAndAdditionalFields = {
-                ...withCanonicalWriterCwd,
-                initializationPending: true,
-                initializationSettled,
-                notificationGeneration: 0,
-                completionGeneration: 0,
-                warningSlots: emptyRunWarningSlots(),
-                completionGenerations: new Map(),
-                completionClaims: new Map(),
-                assignment: {
-                  epoch: 1,
-                  phase: "preparing" as const,
-                  attemptToken: assignmentAttemptToken,
-                  startedObserved: false,
-                  outcomeUncertain: false,
-                  pendingRunSettled: false,
+                reason: "Profile route selection.",
+                skippedCandidates: [],
+              },
+              cwd: canonicalWriterCwd?.path ?? request.cwd,
+              state: "starting",
+              context: request.context,
+              writeIntent: request.writeIntent,
+              ...(writeClaims !== undefined && {
+                writeClaims,
+                writeAudit: {
+                  observedFileWrites: [],
+                  violations: [],
+                  bashWriteHints: 0,
                 },
-                nextAssignmentEpoch: 2,
-              };
-              return withInitializationPendingAndAdditionalFields;
-            })();
+              }),
+              openaiFastMode: request.openaiFastMode,
+              host: request.host,
+              runtime: request.runtime,
+              closeOnReport: request.closeOnReport,
+              reportGeneration: 0,
+              capabilities: driver.capabilities,
+              model: request.model,
+              effort: request.effort,
+              startedAt: now,
+              lastActivityAt: now,
+              sessionEvents: [],
+              usage: emptyUsage(),
+            };
+            const launch: BackendLaunchRequest = {
+              runId: id,
+              name,
+              closeOnReport: request.closeOnReport,
+              cwd: canonicalWriterCwd?.path ?? request.cwd,
+              context: request.context,
+              writeIntent: request.writeIntent,
+              openaiFastMode: request.openaiFastMode,
+              model: request.model,
+              effort: request.effort,
+              ...(request.runtimeApiKey && { runtimeApiKey: request.runtimeApiKey }),
+              activeTools: request.activeTools,
+              projectTrusted: request.projectTrusted,
+              parentSessionId: request.parentSessionId,
+              ...(request.parentSessionFile && {
+                parentSessionFile: request.parentSessionFile,
+              }),
+              ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
+              systemPrompt: childSystemPrompt(
+                writeClaims === undefined ? request : { ...request, writes: writeClaims },
+              ),
+            };
+            const record: RunRecord = {
+              view,
+              scope,
+              driver,
+              launch,
+              activeTools: new Map(),
+              nativeAgents: new Map(),
+              nativeAgentTotal: 0,
+              cleanupSettlement,
+              cleanupDisposition: "pending",
+              routeContinuation: request.routeContinuation,
+              retryExhausted: false,
+              pauseRequested: false,
+              stoppedByParent: false,
+              cleanupPending: false,
+              runStateReclaimState: "pending",
+              writeViolationContainmentStarted: false,
+              ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
+              initializationPending: true,
+              initializationSettled,
+              notificationGeneration: 0,
+              completionGeneration: 0,
+              warningSlots: emptyRunWarningSlots(),
+              completionGenerations: new Map(),
+              completionClaims: new Map(),
+              assignment: {
+                epoch: 1,
+                phase: "preparing",
+                attemptToken: assignmentAttemptToken,
+                startedObserved: false,
+                outcomeUncertain: false,
+                pendingRunSettled: false,
+              },
+              nextAssignmentEpoch: 2,
+            };
             if (predecessor) {
               predecessor.retryClaim = undefined;
               predecessor.view = { ...predecessor.view, supersededByRunId: id };
@@ -625,19 +584,14 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               reserved.resumeToken = state.resumeToken;
               const pendingSettlement = reserved.pendingInitializationSettlement;
               reserved.pendingInitializationSettlement = undefined;
-              reserved.view = (() => {
-                const baseResult = {
-                  ...reserved.view,
-                  effort: state.effort,
-                  model: resolvedModel,
-                  lastActivityAt: startedAt,
-                  sessionId: state.sessionId,
-                };
-                const withSessionFile = state.sessionFile
-                  ? { ...baseResult, sessionFile: state.sessionFile }
-                  : baseResult;
-                return withSessionFile;
-              })();
+              reserved.view = {
+                ...reserved.view,
+                effort: state.effort,
+                model: resolvedModel,
+                lastActivityAt: startedAt,
+                sessionId: state.sessionId,
+                ...(state.sessionFile && { sessionFile: state.sessionFile }),
+              };
               yield* publish;
               return {
                 view: snapshotView(reserved.view),

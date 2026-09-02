@@ -37,6 +37,10 @@ import { SubagentService, type SubagentServiceOptions } from "../../../src/run/s
 
 type RpcWireValue = Extract<ChildWireEvent, { readonly type: "rpc_message" }>["value"];
 type IpcWireValue = Extract<ChildWireEvent, { readonly type: "parent_contact" }>["value"];
+type AcknowledgedIpcControlType = Extract<
+  LocalPiParentControl,
+  { readonly type: "parent_reply" | "proxy_notification" | "turn_input_barrier" }
+>["type"];
 
 export interface FakeChildControl {
   readonly launch: ChildLaunchRequest;
@@ -55,6 +59,7 @@ export interface FakeChildControl {
     type: LocalPiParentControl["type"],
     gate: Deferred.Deferred<void, never>,
   ) => void;
+  readonly ackNextIpcBeforeSendSettles: (type: AcknowledgedIpcControlType) => void;
   readonly gateRelease: (gate: Deferred.Deferred<void, never>) => void;
   readonly beforeNextResponse: (type: RpcCommand["type"], value: RpcWireValue) => void;
   readonly offer: (value: RpcWireValue) => void;
@@ -147,6 +152,7 @@ export function fakeChildLayer(
             readonly type: LocalPiParentControl["type"] | undefined;
             readonly gate: Deferred.Deferred<void, never>;
           }> = [];
+          const earlyIpcAcks: AcknowledgedIpcControlType[] = [];
           const beforeResponses: Array<{
             readonly type: RpcCommand["type"];
             readonly value: unknown;
@@ -178,6 +184,9 @@ export function fakeChildLayer(
           ) => {
             ipcGates.push({ type, gate });
           };
+          const ackNextIpcBeforeSendSettles = (type: AcknowledgedIpcControlType) => {
+            earlyIpcAcks.push(type);
+          };
           const gateRelease = (gate: Deferred.Deferred<void, never>) => {
             releaseGate = gate;
           };
@@ -188,6 +197,31 @@ export function fakeChildLayer(
             Queue.offerUnsafe(events, { type: "rpc_message", value });
           const offerIpc = (value: IpcWireValue) =>
             Queue.offerUnsafe(events, { type: "parent_contact", value });
+          const emitNormalIpcAck = (message: LocalPiParentControl) => {
+            if (message.type === "parent_reply") {
+              const ok = rejectedParentReplies === 0;
+              if (!ok) rejectedParentReplies -= 1;
+              offerIpc({
+                channel: "pi-subagents",
+                type: "parent_reply_ack",
+                requestId: message.ackId,
+                ok,
+              });
+            }
+            if (message.type === "proxy_notification")
+              offerIpc({
+                channel: "pi-subagents",
+                type: "proxy_notification_ack",
+                requestId: message.requestId,
+                ok: true,
+              });
+            if (message.type === "turn_input_barrier")
+              offerIpc({
+                channel: "pi-subagents",
+                type: "turn_input_barrier_ack",
+                requestId: message.requestId,
+              });
+          };
           const offerProtocolError = (message: string) =>
             Queue.offerUnsafe(events, { type: "protocol_error", message });
           const exit = (exitCode: number | null = 0) => {
@@ -298,34 +332,18 @@ export function fakeChildLayer(
                     code: ipcFailure,
                     message: "Fixture IPC outcome.",
                   });
+                const earlyAckIndex = earlyIpcAcks.findIndex((type) => type === message.type);
+                const ackBeforeSendSettles = earlyAckIndex >= 0;
+                if (ackBeforeSendSettles) {
+                  earlyIpcAcks.splice(earlyAckIndex, 1);
+                  emitNormalIpcAck(message);
+                }
                 const gateIndex = ipcGates.findIndex(
                   (candidate) => candidate.type === undefined || candidate.type === message.type,
                 );
                 const gate = gateIndex >= 0 ? ipcGates.splice(gateIndex, 1)[0]?.gate : undefined;
                 if (gate) yield* Deferred.await(gate);
-                if (message.type === "parent_reply") {
-                  const ok = rejectedParentReplies === 0;
-                  if (!ok) rejectedParentReplies -= 1;
-                  offerIpc({
-                    channel: "pi-subagents",
-                    type: "parent_reply_ack",
-                    requestId: message.ackId,
-                    ok,
-                  });
-                }
-                if (message.type === "proxy_notification")
-                  offerIpc({
-                    channel: "pi-subagents",
-                    type: "proxy_notification_ack",
-                    requestId: message.requestId,
-                    ok: true,
-                  });
-                if (message.type === "turn_input_barrier")
-                  offerIpc({
-                    channel: "pi-subagents",
-                    type: "turn_input_barrier_ack",
-                    requestId: message.requestId,
-                  });
+                if (!ackBeforeSendSettles) emitNormalIpcAck(message);
               }),
             terminate: (mode) => Effect.sync(() => void terminations.push(mode)),
           };
@@ -343,6 +361,7 @@ export function fakeChildLayer(
             gateNextSend,
             gateNextIpc,
             gateNextIpcType,
+            ackNextIpcBeforeSendSettles,
             gateRelease,
             beforeNextResponse,
             offer,

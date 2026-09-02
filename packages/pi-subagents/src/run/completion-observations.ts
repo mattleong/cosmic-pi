@@ -77,22 +77,16 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       unresolved &&
       claimToken !== undefined &&
       completionClaimOwner(record, generation) === claimToken;
-    return (() => {
-      const baseResult = {
-        run: owns ? view : redactCompletionReport(view),
-      };
-      const withCompletionReceipt = owns
-        ? {
-            ...baseResult,
-            completionReceipt: {
-              id: record.view.id,
-              generation,
-              claimToken,
-            },
-          }
-        : baseResult;
-      return withCompletionReceipt;
-    })();
+    return {
+      run: owns ? view : redactCompletionReport(view),
+      ...(owns && {
+        completionReceipt: {
+          id: record.view.id,
+          generation,
+          claimToken,
+        },
+      }),
+    };
   };
 
   const consumeCompletions: SubagentServiceContract["consumeCompletions"] = (receipts) =>

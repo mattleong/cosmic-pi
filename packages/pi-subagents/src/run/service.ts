@@ -9,11 +9,7 @@ import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type {
-  BackendProxyRequest,
-  BackendProxyResult,
-  BackendStartupState,
-} from "../backend/model.ts";
+import type { BackendProxyRequest, BackendProxyResult } from "../backend/model.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type {
@@ -32,12 +28,13 @@ import {
 } from "./errors.ts";
 import { makeRunAssignment } from "./assignment.ts";
 import { makeRunCompletionObservations } from "./completion-observations.ts";
+import { makeRunPeerNotifier } from "./coordination.ts";
 import { makeRunControls } from "./control.ts";
 import { makeRunEventHandler } from "./events.ts";
 import { makeRunLaunch } from "./launch.ts";
 import type { RunRecord } from "./internal.ts";
 import { makeRunNotificationDelivery } from "./notification-delivery.ts";
-import { makeRunProcessLifecycle } from "./process-lifecycle.ts";
+import { makeRunProcessControls, makeRunProcessInitializer } from "./process-lifecycle.ts";
 import { makeRunRecordCleanup } from "./record-cleanup.ts";
 import { makeRunResume } from "./resume.ts";
 import { makeRunRetry, type SubagentRetryClaim } from "./retry.ts";
@@ -225,7 +222,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const records = new Map<string, RunRecord>();
   const writerPools = new Map<string, WriterPoolEntry>();
   const proxyCancellations = new Map<string, Deferred.Deferred<void>>();
-  let service!: SubagentServiceContract;
   const initial = emptyProjection();
   const initialProjection: SubagentProjection = Object.freeze({
     revision: initial.revision,
@@ -469,37 +465,147 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeExitedScope,
   } = makeRunRecordCleanup({ withLock, publish, writerLeases, writerPools });
 
-  let sendPeerNotices: (changedId: string) => Effect.Effect<void>;
-  let initializeProcess: (record: RunRecord) => Effect.Effect<BackendStartupState, SubagentError>;
-  let startPrompt: (
-    record: RunRecord,
-    message: string,
-    assignmentEpoch: number,
-  ) => Effect.Effect<void, SubagentError>;
-  let steerBackend: (record: RunRecord, message: string) => Effect.Effect<void, SubagentError>;
-  let interruptBackend: (record: RunRecord) => Effect.Effect<void, SubagentError>;
-  let renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
-  let containWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
+  const sendPeerNotices = makeRunPeerNotifier(records);
 
-  const {
-    mutateEventView,
-    mergeLateUsage,
-    failPendingResponses,
-    settle,
-    failRun,
-    activateAssignmentLocked,
-    replayAssignmentActivation,
-    acceptBackendReport,
-    runStartedFromBackend,
-    runSettledFromBackend,
-  } = makeRunSettlement({
+  const settlement = makeRunSettlement({
     ownerScope,
     withLock,
     publish,
     delivery,
     closeRecordScope,
-    sendPeerNotices: (changedId) => sendPeerNotices(changedId),
+    sendPeerNotices,
   });
+
+  const processControls = makeRunProcessControls(withLock);
+
+  const assignment = makeRunAssignment({
+    withLock,
+    publish,
+    startPrompt: processControls.startPrompt,
+    activateAssignmentLocked: settlement.activateAssignmentLocked,
+    replayAssignmentActivation: settlement.replayAssignmentActivation,
+  });
+
+  const controls = makeRunControls({
+    ownerScope,
+    withLock,
+    requireRecord,
+    requireCapability,
+    steerBackend: processControls.steer,
+    beginAssignmentBackend: (record, message, attemptToken) =>
+      assignment.submitPrompt(record, message, "resume", attemptToken),
+    allocateAssignmentAttemptToken,
+    retainUncertainAssignment: assignment.retainUncertainAssignment,
+    interruptBackend: processControls.interrupt,
+    admitTurnInput,
+    releaseTurnInput,
+    claimTurnInputDrain,
+    renameBackend: processControls.renameDisplay,
+    publish,
+    sendPeerNotices,
+    failPendingResponses: settlement.failPendingResponses,
+    closeRecordScope,
+    settle: settlement.settle,
+  });
+
+  const stop: SubagentServiceContract["stop"] = (id) =>
+    Effect.gen(function* () {
+      const orderedIds = yield* withLock(
+        Effect.gen(function* () {
+          const root = yield* requireRecord(id);
+          const descendants = descendantRunIds(records, id);
+          const ordered = [...descendants, root.view.id].sort(
+            (left, right) =>
+              runDepth(records.get(right)?.view ?? root.view) -
+              runDepth(records.get(left)?.view ?? root.view),
+          );
+          for (const targetId of ordered) {
+            const target = records.get(targetId);
+            if (target) target.stoppedByParent = true;
+          }
+          return ordered;
+        }),
+      );
+      let selected: SubagentRunView | undefined;
+      let firstError: SubagentError | undefined;
+      for (const targetId of orderedIds) {
+        const outcome = yield* controls.stop(targetId).pipe(
+          Effect.match({
+            onFailure: (error) => ({ error }),
+            onSuccess: (run) => ({ run }),
+          }),
+        );
+        if ("error" in outcome) firstError ??= outcome.error;
+        else if (targetId === id) selected = outcome.run;
+      }
+      if (firstError) return yield* firstError;
+      return selected ?? snapshotView((yield* requireRecord(id)).view);
+    });
+
+  // Do not publish a pool pause without admitting its containment fiber to the service scope.
+  const containWriteClaimViolation = (record: RunRecord, message: string) =>
+    Effect.uninterruptible(
+      withLock(
+        Effect.gen(function* () {
+          if (record.writeViolationContainmentStarted) return false;
+          const pool = record.writerPool;
+          if (!pool) return false;
+          record.writeViolationContainmentStarted = true;
+          pool.admissionPaused = true;
+          pool.violationRunIds.add(record.view.id);
+          pool.pauseReason = message;
+          for (const memberId of pool.members.keys()) {
+            const member = records.get(memberId);
+            if (!member) continue;
+            member.view = {
+              ...member.view,
+              writeAdmissionPaused: true,
+              writeViolationOffender: pool.violationRunIds.has(memberId) ? true : undefined,
+            };
+          }
+          yield* publish;
+          const resumableInterrupt =
+            hasSubagentCapability(record.view, "interrupt") &&
+            hasSubagentCapability(record.view, "resume");
+          if (
+            resumableInterrupt &&
+            (record.view.state === "running" || record.view.state === "waiting_for_parent")
+          )
+            return "interrupt" as const;
+          return isActiveRunState(record.view.state) &&
+            record.view.state !== "paused" &&
+            record.view.state !== "stopping"
+            ? ("stop" as const)
+            : undefined;
+        }),
+      ).pipe(
+        Effect.flatMap((containmentAction) => {
+          if (!containmentAction) return Effect.void;
+          const stopAfterFailure = (interruptError?: SubagentError) =>
+            stop(record.view.id).pipe(
+              Effect.asVoid,
+              Effect.catch((stopError) =>
+                Effect.logWarning(
+                  interruptError
+                    ? `Could not contain write-claim violation after interrupt and stop failed: ${stopError.message}`
+                    : `Could not contain write-claim violation because stop failed: ${stopError.message}`,
+                ).pipe(Effect.annotateLogs("runId", record.view.id)),
+              ),
+            );
+          const containment =
+            containmentAction === "interrupt"
+              ? controls.interrupt(record.view.id).pipe(
+                  Effect.asVoid,
+                  Effect.catch((interruptError) => stopAfterFailure(interruptError)),
+                )
+              : stopAfterFailure();
+          return containment.pipe(
+            Effect.forkIn(ownerScope, { startImmediately: true }),
+            Effect.asVoid,
+          );
+        }),
+      ),
+    );
 
   const handleProxyEvent = (
     record: RunRecord,
@@ -596,47 +702,31 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   };
 
   const handleWireEvent = makeRunEventHandler({
-    mutateView: mutateEventView,
-    mergeLateUsage,
-    runStarted: runStartedFromBackend,
-    runSettled: runSettledFromBackend,
-    settle,
-    acceptReport: acceptBackendReport,
+    mutateView: settlement.mutateEventView,
+    mergeLateUsage: settlement.mergeLateUsage,
+    runStarted: settlement.runStartedFromBackend,
+    runSettled: settlement.runSettledFromBackend,
+    settle: settlement.settle,
+    acceptReport: settlement.acceptBackendReport,
     notify: delivery.queueActionNotification,
-    failRun,
-    onWriteClaimViolation: (record, message) => containWriteClaimViolation(record, message),
+    failRun: settlement.failRun,
+    onWriteClaimViolation: containWriteClaimViolation,
     onProxyEvent: handleProxyEvent,
   });
 
-  ({
-    sendPeerNotices,
-    initializeProcess,
-    startPrompt,
-    steer: steerBackend,
-    interrupt: interruptBackend,
-    renameDisplay: renameBackend,
-  } = makeRunProcessLifecycle({
+  const initializeProcess = makeRunProcessInitializer({
     ownerScope,
-    records,
     withLock,
     publish,
+    initialize: processControls.initialize,
     handleBackendEvent: handleWireEvent,
     prepareBackendSpawn: prepareWriterLeaseForSpawn,
     markCleanupPending,
     closeExitedScope,
-    failRun,
-  }));
-
-  const { submitPrompt, retainUncertainAssignment } = makeRunAssignment({
-    withLock,
-    publish,
-    startPrompt: (record, message, assignmentEpoch) =>
-      startPrompt(record, message, assignmentEpoch),
-    activateAssignmentLocked,
-    replayAssignmentActivation,
+    failRun: settlement.failRun,
   });
 
-  const { start, startSessionOwned } = makeRunLaunch({
+  const launch = makeRunLaunch({
     ownerScope,
     backendRegistry,
     writerLeases,
@@ -653,21 +743,52 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     quarantineReclaimFailure: (record) => retainCleanupQuarantine(record, record.scope),
     markCleanupPending,
     closeRecordScope,
-    settle,
-    submitPrompt,
-    initializeProcess: (record) => initializeProcess(record),
-    sendPeerNotices: (changedId) => sendPeerNotices(changedId),
+    settle: settlement.settle,
+    submitPrompt: assignment.submitPrompt,
+    initializeProcess,
+    sendPeerNotices,
+  });
+
+  const resume = makeRunResume({
+    ownerScope,
+    records,
+    writerPools,
+    withLock,
+    publish,
+    writerLeases,
+    delivery,
+    requireRecord,
+    requireCapability,
+    allocateAssignmentAttemptToken,
+    initializeProcess,
+    submitPrompt: assignment.submitPrompt,
+    settle: settlement.settle,
+    failRun: settlement.failRun,
+    closeRecordScope,
+    retainUncertainAssignment: assignment.retainUncertainAssignment,
+    sendPeerNotices,
+  });
+
+  const writeClaims = makeRunWriteClaimControl({
+    records,
+    writerPools,
+    withLock,
+    publish,
+    requireRecord,
+    sendPeerNotices,
   });
 
   const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] = (request) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const fiber = yield* start(request).pipe(
-          Effect.ensuring(
-            retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
-          ),
-          Effect.forkIn(ownerScope, { startImmediately: true }),
-        );
+        const fiber = yield* launch
+          .start(request)
+          .pipe(
+            Effect.ensuring(
+              retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
+            ),
+            Effect.forkIn(ownerScope, { startImmediately: true }),
+          );
         return observations.redactCompletionReport(yield* restore(Fiber.join(fiber)));
       }),
     );
@@ -696,7 +817,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     request,
   ) =>
     authorizeTargets(callerRunId, [callerRunId]).pipe(
-      Effect.andThen(startSessionOwned({ ...request, parentRunId: callerRunId })),
+      Effect.andThen(launch.startSessionOwned({ ...request, parentRunId: callerRunId })),
     );
   const status: SubagentServiceContract["status"] = (id) =>
     observations
@@ -711,167 +832,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       })
       .pipe(Effect.catchTag("InvalidSubagentRequestError", () => Effect.fail(notFound(id))));
 
-  const { resume } = makeRunResume({
-    ownerScope,
-    records,
-    writerPools,
-    withLock,
-    publish,
-    writerLeases,
-    delivery,
-    requireRecord,
-    requireCapability,
-    allocateAssignmentAttemptToken,
-    initializeProcess: (record) => initializeProcess(record),
-    submitPrompt,
-    settle,
-    failRun,
-    closeRecordScope,
-    retainUncertainAssignment,
-    sendPeerNotices: (changedId) => sendPeerNotices(changedId),
-  });
-
-  const {
-    send,
-    reply,
-    interrupt,
-    rename,
-    stop: stopOne,
-  } = makeRunControls({
-    ownerScope,
-    withLock,
-    requireRecord,
-    requireCapability,
-    steerBackend,
-    beginAssignmentBackend: (record, message, attemptToken) =>
-      submitPrompt(record, message, "resume", attemptToken),
-    allocateAssignmentAttemptToken,
-    retainUncertainAssignment,
-    interruptBackend,
-    admitTurnInput,
-    releaseTurnInput,
-    claimTurnInputDrain,
-    renameBackend,
-    publish,
-    sendPeerNotices,
-    failPendingResponses,
-    closeRecordScope,
-    settle,
-  });
-
-  const stop: SubagentServiceContract["stop"] = (id) =>
-    Effect.gen(function* () {
-      const orderedIds = yield* withLock(
-        Effect.gen(function* () {
-          const root = yield* requireRecord(id);
-          const descendants = descendantRunIds(records, id);
-          const ordered = [...descendants, root.view.id].sort(
-            (left, right) =>
-              runDepth(records.get(right)?.view ?? root.view) -
-              runDepth(records.get(left)?.view ?? root.view),
-          );
-          for (const targetId of ordered) {
-            const target = records.get(targetId);
-            if (target) target.stoppedByParent = true;
-          }
-          return ordered;
-        }),
-      );
-      let selected: SubagentRunView | undefined;
-      let firstError: SubagentError | undefined;
-      for (const targetId of orderedIds) {
-        const outcome = yield* stopOne(targetId).pipe(
-          Effect.match({
-            onFailure: (error) => ({ error }),
-            onSuccess: (run) => ({ run }),
-          }),
-        );
-        if ("error" in outcome) firstError ??= outcome.error;
-        else if (targetId === id) selected = outcome.run;
-      }
-      if (firstError) return yield* firstError;
-      return selected ?? snapshotView((yield* requireRecord(id)).view);
-    });
-
-  // Do not publish a pool pause without admitting its containment fiber to the service scope.
-  containWriteClaimViolation = (record, message) =>
-    Effect.uninterruptible(
-      withLock(
-        Effect.gen(function* () {
-          if (record.writeViolationContainmentStarted) return false;
-          const pool = record.writerPool;
-          if (!pool) return false;
-          record.writeViolationContainmentStarted = true;
-          pool.admissionPaused = true;
-          pool.violationRunIds.add(record.view.id);
-          pool.pauseReason = message;
-          for (const memberId of pool.members.keys()) {
-            const member = records.get(memberId);
-            if (!member) continue;
-            member.view = {
-              ...member.view,
-              writeAdmissionPaused: true,
-              writeViolationOffender: pool.violationRunIds.has(memberId) ? true : undefined,
-            };
-          }
-          yield* publish;
-          const resumableInterrupt =
-            hasSubagentCapability(record.view, "interrupt") &&
-            hasSubagentCapability(record.view, "resume");
-          if (
-            resumableInterrupt &&
-            (record.view.state === "running" || record.view.state === "waiting_for_parent")
-          )
-            return "interrupt" as const;
-          return isActiveRunState(record.view.state) &&
-            record.view.state !== "paused" &&
-            record.view.state !== "stopping"
-            ? ("stop" as const)
-            : undefined;
-        }),
-      ).pipe(
-        Effect.flatMap((containmentAction) => {
-          if (!containmentAction) return Effect.void;
-          const stopAfterFailure = (interruptError?: SubagentError) =>
-            stop(record.view.id).pipe(
-              Effect.asVoid,
-              Effect.catch((stopError) =>
-                Effect.logWarning(
-                  interruptError
-                    ? `Could not contain write-claim violation after interrupt and stop failed: ${stopError.message}`
-                    : `Could not contain write-claim violation because stop failed: ${stopError.message}`,
-                ).pipe(Effect.annotateLogs("runId", record.view.id)),
-              ),
-            );
-          const containment =
-            containmentAction === "interrupt"
-              ? interrupt(record.view.id).pipe(
-                  Effect.asVoid,
-                  Effect.catch((interruptError) => stopAfterFailure(interruptError)),
-                )
-              : stopAfterFailure();
-          return containment.pipe(
-            Effect.forkIn(ownerScope, { startImmediately: true }),
-            Effect.asVoid,
-          );
-        }),
-      ),
-    );
-
-  const writeClaims = makeRunWriteClaimControl({
-    records,
-    writerPools,
-    withLock,
-    publish,
-    requireRecord,
-    sendPeerNotices,
-  });
-
   const projection = SubscriptionRef.get(projectionRef);
 
-  service = {
-    start,
-    startSessionOwned,
+  const service: SubagentServiceContract = {
+    start: launch.start,
+    startSessionOwned: launch.startSessionOwned,
     startSessionOwnedFrom,
     visibleList,
     authorizeTargets,
@@ -886,11 +851,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     status,
     withStatusObservations: observations.withStatusObservations,
     consumeCompletions: observations.consumeCompletions,
-    send,
-    reply,
-    interrupt,
-    resume,
-    rename,
+    send: controls.send,
+    reply: controls.reply,
+    interrupt: controls.interrupt,
+    resume: resume.resume,
+    rename: controls.rename,
     stop,
     grantWriteClaims: writeClaims.grant,
     revokeWriteClaims: writeClaims.revoke,
@@ -909,7 +874,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           [...records.values()].sort((left, right) => runDepth(right.view) - runDepth(left.view)),
           (record) => {
             record.stoppedByParent = true;
-            failPendingResponses(
+            settlement.failPendingResponses(
               record,
               new SubagentRuntimeClosedError({ message: "Parent session shut down." }),
             );

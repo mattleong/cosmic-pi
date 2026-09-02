@@ -116,6 +116,25 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect("refreshes peer notices from the live run registry after a peer stops", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      yield* service.start(request({ name: "peer-notice-first" }));
+      const second = yield* service.start(request({ name: "peer-notice-second" }));
+      const noticesBeforeStop =
+        fake.controls[0]?.ipc.filter((message) => message.type === "peer_notice") ?? [];
+      expect(noticesBeforeStop.at(-1)?.message).toContain(second.id);
+
+      yield* service.stop(second.id);
+      const noticesAfterStop =
+        fake.controls[0]?.ipc.filter((message) => message.type === "peer_notice") ?? [];
+      expect(noticesAfterStop.length).toBeGreaterThan(noticesBeforeStop.length);
+      expect(noticesAfterStop.at(-1)?.message).not.toContain(second.id);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect(
     "finishes admitted guidance before queue clearing and rejects guidance admitted after interrupt",
     () => {
@@ -179,6 +198,33 @@ describe("SubagentService", () => {
       }).pipe(Effect.scoped, provideBuiltLayer(layer));
     },
   );
+
+  it.effect("accepts a turn-input barrier ack before IPC transport settlement", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "early-barrier-ack" }));
+      const barrierGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextIpcType("turn_input_barrier", barrierGate);
+      fake.controls[0]?.ackNextIpcBeforeSendSettles("turn_input_barrier");
+
+      const interrupting = yield* service
+        .interrupt(run.id)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "abort") ?? false,
+      );
+
+      expect(yield* Deferred.isDone(barrierGate)).toBe(false);
+      expect(
+        fake.controls[0]?.commands.flatMap((command) =>
+          command.type === "clear_queue" || command.type === "abort" ? [command.type] : [],
+        ),
+      ).toEqual(["clear_queue", "abort"]);
+      expect((yield* Fiber.join(interrupting)).state).toBe("paused");
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
 
   it.effect(
     "suppresses queue clearing when the child cannot confirm its turn-input barrier",

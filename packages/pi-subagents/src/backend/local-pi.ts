@@ -4,7 +4,6 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -30,6 +29,7 @@ import {
   decodeRpcStateData,
   decodeRpcUsageOption,
   rpcStateModelId,
+  type LocalPiParentControl,
   type RpcCommand,
   type RpcResponse,
 } from "./local-pi-protocol.ts";
@@ -47,19 +47,14 @@ const RPC_TIMEOUT = "10 seconds";
 const EVENT_CAPACITY = 512;
 
 const noBackendEvent: Effect.Effect<BackendEvent | undefined> = Effect.as(Effect.void, undefined);
-const usageFromRpc = (usage: ReturnType<typeof decodeRpcUsageOption>): SubagentUsage =>
-  (() => {
-    const baseResult = {
-      input: usage?.input ?? 0,
-      output: usage?.output ?? 0,
-      cacheRead: usage?.cacheRead ?? 0,
-      cacheWrite: usage?.cacheWrite ?? 0,
-      totalTokens: usage?.totalTokens ?? 0,
-    };
-    const withCost =
-      usage?.cost?.total === undefined ? baseResult : { ...baseResult, cost: usage.cost.total };
-    return withCost;
-  })();
+const usageFromRpc = (usage: ReturnType<typeof decodeRpcUsageOption>): SubagentUsage => ({
+  input: usage?.input ?? 0,
+  output: usage?.output ?? 0,
+  cacheRead: usage?.cacheRead ?? 0,
+  cacheWrite: usage?.cacheWrite ?? 0,
+  totalTokens: usage?.totalTokens ?? 0,
+  ...(usage?.cost?.total !== undefined && { cost: usage.cost.total }),
+});
 
 const rpcOutcomeCode = (command: string): string => {
   switch (command) {
@@ -109,24 +104,16 @@ const normalizeRpcEvent = <ValueInput>(value: ValueInput, assignmentEpoch: numbe
           );
         case "message_end":
           return decodeAssistantMessage(envelope.message).pipe(
-            Effect.map((message) =>
-              message
-                ? (() => {
-                    const baseResult = {
-                      type: "assistant_message" as const,
-                      assignmentEpoch,
-                    };
-                    const withText = assistantText(message)
-                      ? { ...baseResult, text: assistantText(message) }
-                      : baseResult;
-                    const withUsage = {
-                      ...withText,
-                      usage: usageFromRpc(decodeRpcUsageOption(message.usage)),
-                    };
-                    return withUsage;
-                  })()
-                : undefined,
-            ),
+            Effect.map((message): BackendEvent | undefined => {
+              if (!message) return undefined;
+              const text = assistantText(message);
+              return {
+                type: "assistant_message",
+                assignmentEpoch,
+                ...(text && { text }),
+                usage: usageFromRpc(decodeRpcUsageOption(message.usage)),
+              };
+            }),
           );
         case "tool_execution_start":
           return Effect.succeed<BackendEvent>({
@@ -191,10 +178,6 @@ interface PendingRpcResponse {
   readonly deferred: Deferred.Deferred<RpcResponse, SubagentError>;
 }
 
-interface PendingIpcAck {
-  readonly deferred: Deferred.Deferred<void, SubagentError>;
-}
-
 const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   child: ChildProcessHandle,
 ) {
@@ -202,7 +185,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   const turnControl = yield* Semaphore.make(1);
   const withTurnControl = turnControl.withPermits(1);
   const responses = new Map<string, PendingRpcResponse>();
-  const ipcAcks = new Map<string, PendingIpcAck>();
+  const ipcAcks = new Map<string, Deferred.Deferred<void, SubagentError>>();
   const rawEventOwners = new Map<BackendEvent, ChildWireEvent>();
   let nextRpcId = 1;
   let nextIpcAckId = 1;
@@ -231,8 +214,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     for (const response of responses.values())
       Deferred.doneUnsafe(response.deferred, Effect.fail(error));
     responses.clear();
-    for (const pending of ipcAcks.values())
-      Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
+    for (const deferred of ipcAcks.values()) Deferred.doneUnsafe(deferred, Effect.fail(error));
     ipcAcks.clear();
   };
 
@@ -279,6 +261,31 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             ),
     });
 
+  const ipcAck = (
+    idPrefix: string,
+    makeControl: (id: string) => LocalPiParentControl,
+    timeoutError: () => SubagentError,
+  ): Effect.Effect<void, SubagentError> =>
+    correlatedRequest({
+      timeout: RPC_TIMEOUT,
+      register: (deferred) => {
+        const id = `${idPrefix}-${nextIpcAckId++}`;
+        ipcAcks.set(id, deferred);
+        return {
+          frame: id,
+          unregister: Effect.sync(() => {
+            if (ipcAcks.get(id) === deferred) ipcAcks.delete(id);
+          }),
+        };
+      },
+      send: (id) =>
+        child
+          .sendContactControl(makeControl(id))
+          .pipe(Effect.catchIf(isOutcomeUncertain, () => Effect.void)),
+      timeoutError,
+      awaitEarlyResponse: true,
+    });
+
   const offerEvent = (raw: ChildWireEvent, event: BackendEvent) =>
     Effect.suspend(() => {
       rawEventOwners.set(event, raw);
@@ -307,10 +314,10 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
         contact.type === "proxy_notification_ack" ||
         contact.type === "turn_input_barrier_ack"
       ) {
-        const pending = ipcAcks.get(contact.requestId);
-        if (pending)
+        const deferred = ipcAcks.get(contact.requestId);
+        if (deferred)
           Deferred.doneUnsafe(
-            pending.deferred,
+            deferred,
             contact.type === "turn_input_barrier_ack" || contact.ok
               ? Effect.void
               : Effect.fail(
@@ -450,27 +457,18 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
           Effect.mapError(() => protocolError("Subagent returned invalid startup state.")),
         ),
       ),
-      Effect.map((state) =>
-        (() => {
-          const baseResult = {};
-          const withModel = rpcStateModelId(state.model)
-            ? { ...baseResult, model: rpcStateModelId(state.model) }
-            : baseResult;
-          const withEffortAndSessionId = {
-            ...withModel,
-            effort: state.thinkingLevel,
-            sessionId: state.sessionId,
-          };
-          const withSessionFileAndResumeToken = state.sessionFile
-            ? {
-                ...withEffortAndSessionId,
-                sessionFile: state.sessionFile,
-                resumeToken: localPiResumeToken(state.sessionFile),
-              }
-            : withEffortAndSessionId;
-          return withSessionFileAndResumeToken;
-        })(),
-      ),
+      Effect.map((state) => {
+        const model = rpcStateModelId(state.model);
+        return {
+          ...(model && { model }),
+          effort: state.thinkingLevel,
+          sessionId: state.sessionId,
+          ...(state.sessionFile && {
+            sessionFile: state.sessionFile,
+            resumeToken: localPiResumeToken(state.sessionFile),
+          }),
+        };
+      }),
     ),
     start: (message: string, nextAssignmentEpoch: number) =>
       Effect.suspend(() => {
@@ -492,46 +490,19 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       withTurnControl(rpc({ type: "steer", message }).pipe(Effect.asVoid)),
     interrupt: withTurnControl(
       Effect.gen(function* () {
-        yield* Effect.acquireUseRelease(
-          Effect.sync(() => {
-            const requestId = `turn-input-barrier-${nextIpcAckId++}`;
-            const deferred = Deferred.makeUnsafe<void, SubagentError>();
-            ipcAcks.set(requestId, { deferred });
-            return { requestId, deferred };
+        yield* ipcAck(
+          "turn-input-barrier",
+          (requestId) => ({
+            channel: "pi-subagents",
+            type: "turn_input_barrier",
+            requestId,
           }),
-          ({ requestId, deferred }) =>
-            Effect.raceFirst(
-              child
-                .sendContactControl({
-                  channel: "pi-subagents",
-                  type: "turn_input_barrier",
-                  requestId,
-                })
-                .pipe(
-                  Effect.catch((error) =>
-                    isOutcomeUncertain(error) ? Effect.void : Effect.fail(error),
-                  ),
-                  Effect.andThen(Deferred.await(deferred)),
-                ),
-              Deferred.await(deferred),
-            ).pipe(
-              Effect.timeoutOption(RPC_TIMEOUT),
-              Effect.flatMap((outcome) =>
-                Option.isSome(outcome)
-                  ? Effect.void
-                  : Effect.fail(
-                      new SubagentProcessError({
-                        operation: "await turn-input barrier acknowledgment from",
-                        code: "turn_input_barrier_unconfirmed",
-                        message:
-                          "Subagent did not acknowledge the turn-input barrier; queue clearing and abort were not sent.",
-                      }),
-                    ),
-              ),
-            ),
-          ({ requestId }) =>
-            Effect.sync(() => {
-              ipcAcks.delete(requestId);
+          () =>
+            new SubagentProcessError({
+              operation: "await turn-input barrier acknowledgment from",
+              code: "turn_input_barrier_unconfirmed",
+              message:
+                "Subagent did not acknowledge the turn-input barrier; queue clearing and abort were not sent.",
             }),
         );
         yield* rpc({ type: "clear_queue" });
@@ -541,48 +512,21 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     renameDisplay: (name: string) => rpc({ type: "set_session_name", name }).pipe(Effect.asVoid),
     reply: (requestId: string, message: string) =>
       withTurnControl(
-        Effect.acquireUseRelease(
-          Effect.sync(() => {
-            const ackId = `parent-reply-${nextIpcAckId++}`;
-            const deferred = Deferred.makeUnsafe<void, SubagentError>();
-            ipcAcks.set(ackId, { deferred });
-            return { ackId, deferred };
+        ipcAck(
+          "parent-reply",
+          (ackId) => ({
+            channel: "pi-subagents",
+            type: "parent_reply",
+            requestId,
+            ackId,
+            message,
           }),
-          ({ ackId, deferred }) =>
-            Effect.raceFirst(
-              child
-                .sendContactControl({
-                  channel: "pi-subagents",
-                  type: "parent_reply",
-                  requestId,
-                  ackId,
-                  message,
-                })
-                .pipe(
-                  Effect.catch((error) =>
-                    isOutcomeUncertain(error) ? Effect.void : Effect.fail(error),
-                  ),
-                  Effect.andThen(Deferred.await(deferred)),
-                ),
-              Deferred.await(deferred),
-            ).pipe(
-              Effect.timeoutOption(RPC_TIMEOUT),
-              Effect.flatMap((outcome) =>
-                Option.isSome(outcome)
-                  ? Effect.void
-                  : Effect.fail(
-                      new SubagentProcessError({
-                        operation: "await parent reply acknowledgment from",
-                        code: "reply_outcome_uncertain",
-                        message:
-                          "Subagent did not acknowledge the parent reply; it may already have applied.",
-                      }),
-                    ),
-              ),
-            ),
-          ({ ackId }) =>
-            Effect.sync(() => {
-              ipcAcks.delete(ackId);
+          () =>
+            new SubagentProcessError({
+              operation: "await parent reply acknowledgment from",
+              code: "reply_outcome_uncertain",
+              message:
+                "Subagent did not acknowledge the parent reply; it may already have applied.",
             }),
         ),
       ),
@@ -590,47 +534,20 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       child.sendContactControl({ channel: "pi-subagents", type: "peer_notice", message }),
     deliverNotification: (message: string) =>
       withTurnControl(
-        Effect.acquireUseRelease(
-          Effect.sync(() => {
-            const requestId = `notification-${nextIpcAckId++}`;
-            const deferred = Deferred.makeUnsafe<void, SubagentError>();
-            ipcAcks.set(requestId, { deferred });
-            return { requestId, deferred };
+        ipcAck(
+          "notification",
+          (requestId) => ({
+            channel: "pi-subagents",
+            type: "proxy_notification",
+            requestId,
+            message,
           }),
-          ({ requestId, deferred }) =>
-            Effect.raceFirst(
-              child
-                .sendContactControl({
-                  channel: "pi-subagents",
-                  type: "proxy_notification",
-                  requestId,
-                  message,
-                })
-                .pipe(
-                  Effect.catch((error) =>
-                    isOutcomeUncertain(error) ? Effect.void : Effect.fail(error),
-                  ),
-                  Effect.andThen(Deferred.await(deferred)),
-                ),
-              Deferred.await(deferred),
-            ).pipe(
-              Effect.timeoutOption(RPC_TIMEOUT),
-              Effect.flatMap((outcome) =>
-                Option.isSome(outcome)
-                  ? Effect.void
-                  : Effect.fail(
-                      new SubagentProcessError({
-                        operation: "await descendant notification acknowledgment from",
-                        code: "transport_outcome_uncertain",
-                        message:
-                          "Subagent did not acknowledge the descendant notification; it may already be queued.",
-                      }),
-                    ),
-              ),
-            ),
-          ({ requestId }) =>
-            Effect.sync(() => {
-              ipcAcks.delete(requestId);
+          () =>
+            new SubagentProcessError({
+              operation: "await descendant notification acknowledgment from",
+              code: "transport_outcome_uncertain",
+              message:
+                "Subagent did not acknowledge the descendant notification; it may already be queued.",
             }),
         ),
       ),
@@ -669,38 +586,24 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessContract): 
       const resumeSessionFile = request.resumeToken
         ? (yield* decodeLocalPiResumeToken(request.resumeToken)).sessionFile
         : undefined;
-      const childRequest: ChildLaunchRequest = (() => {
-        const baseResult = {
-          runId: request.runId,
-          name: request.name,
-          cwd: request.cwd,
-          context: request.context,
-          writeIntent: request.writeIntent,
-          openaiFastMode: request.openaiFastMode,
-          model: request.model,
-          effort: request.effort,
-        };
-        const withRuntimeApiKey = request.runtimeApiKey
-          ? { ...baseResult, runtimeApiKey: request.runtimeApiKey }
-          : baseResult;
-        const withActiveToolsAndAdditionalFields = {
-          ...withRuntimeApiKey,
-          activeTools: request.activeTools,
-          projectTrusted: request.projectTrusted,
-          parentSessionId: request.parentSessionId,
-        };
-        const withParentSessionFile = request.parentSessionFile
-          ? { ...withActiveToolsAndAdditionalFields, parentSessionFile: request.parentSessionFile }
-          : withActiveToolsAndAdditionalFields;
-        const withParentLeafId = request.parentLeafId
-          ? { ...withParentSessionFile, parentLeafId: request.parentLeafId }
-          : withParentSessionFile;
-        const withResumeSessionFile = resumeSessionFile
-          ? { ...withParentLeafId, resumeSessionFile }
-          : withParentLeafId;
-        const withSystemPrompt = { ...withResumeSessionFile, systemPrompt: request.systemPrompt };
-        return withSystemPrompt;
-      })();
+      const childRequest: ChildLaunchRequest = {
+        runId: request.runId,
+        name: request.name,
+        cwd: request.cwd,
+        context: request.context,
+        writeIntent: request.writeIntent,
+        openaiFastMode: request.openaiFastMode,
+        model: request.model,
+        effort: request.effort,
+        ...(request.runtimeApiKey && { runtimeApiKey: request.runtimeApiKey }),
+        activeTools: request.activeTools,
+        projectTrusted: request.projectTrusted,
+        parentSessionId: request.parentSessionId,
+        ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
+        ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
+        ...(resumeSessionFile && { resumeSessionFile }),
+        systemPrompt: request.systemPrompt,
+      };
       const child = yield* childProcesses.spawn(childRequest);
       return yield* makeLocalPiHandle(child);
     }),

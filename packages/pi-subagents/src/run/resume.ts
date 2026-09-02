@@ -41,7 +41,6 @@ export interface RunResumeDependencies {
   ) => Effect.Effect<void, UnsupportedSubagentCapabilityError>;
   /** Assignment-attempt token allocation stays owned by the service. */
   readonly allocateAssignmentAttemptToken: () => string;
-  /** Late-bound process-lifecycle initializer; resolved at call time. */
   readonly initializeProcess: (
     record: RunRecord,
   ) => Effect.Effect<BackendStartupState, SubagentError>;
@@ -67,7 +66,6 @@ export interface RunResumeDependencies {
     attemptToken: string,
     warning: string,
   ) => Effect.Effect<void>;
-  /** Late-bound process-lifecycle peer notifier; resolved at call time. */
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
 }
 
@@ -309,18 +307,13 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     record.resumeToken = state.resumeToken;
                     const pendingSettlement = record.pendingInitializationSettlement;
                     record.pendingInitializationSettlement = undefined;
-                    record.view = (() => {
-                      const baseResult = {
-                        ...record.view,
-                        model: resolvedModel,
-                        effort: state.effort,
-                        sessionId: state.sessionId,
-                      };
-                      const withSessionFile = state.sessionFile
-                        ? { ...baseResult, sessionFile: state.sessionFile }
-                        : baseResult;
-                      return withSessionFile;
-                    })();
+                    record.view = {
+                      ...record.view,
+                      model: resolvedModel,
+                      effort: state.effort,
+                      sessionId: state.sessionId,
+                      ...(state.sessionFile && { sessionFile: state.sessionFile }),
+                    };
                     yield* publish;
                     return pendingSettlement;
                   }),

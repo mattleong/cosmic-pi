@@ -222,6 +222,11 @@ describe("SubagentService", () => {
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* Deferred.await(entered);
 
+      const competingObservation = yield* service.withStatusObservations(
+        [run.id],
+        ({ observations }) => Effect.succeed(observations[0]),
+      );
+      expect(competingObservation).not.toHaveProperty("completionReceipt");
       const competingStatus = yield* service.status(run.id);
       expect(competingStatus).not.toHaveProperty("finalText");
       expect(competingStatus.sessionEvents).not.toEqual(

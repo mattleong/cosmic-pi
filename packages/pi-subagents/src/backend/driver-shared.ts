@@ -1,7 +1,6 @@
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import {
   SubagentProtocolError,
   UnsupportedSubagentCapabilityError,
@@ -72,12 +71,8 @@ export const correlatedRequest = <Frame, Response>(
           ? Effect.raceFirst(correlated, Deferred.await(deferred))
           : correlated
       ).pipe(
-        Effect.timeoutOption(options.timeout),
-        Effect.flatMap((outcome) =>
-          Option.isSome(outcome)
-            ? Effect.succeed(outcome.value)
-            : Effect.fail(options.timeoutError(frame)),
-        ),
+        Effect.timeout(options.timeout),
+        Effect.catchTag("TimeoutError", () => Effect.fail(options.timeoutError(frame))),
         Effect.flatMap((response) =>
           options.decode ? options.decode(response) : Effect.succeed(response),
         ),

@@ -1,5 +1,6 @@
+import * as Effect from "effect/Effect";
 import type { RunRecord } from "./internal.ts";
-import { isActiveRunState } from "./model.ts";
+import { hasSubagentCapability, isActiveRunState } from "./model.ts";
 import { safeTextPrefix } from "./state.ts";
 
 const MAX_NOTICE_CLAIMS_PER_RUN = 8;
@@ -43,3 +44,25 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
     "The parent owns coordination and all claim grants. Writers may run concurrently only with disjoint exact-file claims. Never edit a peer's claimed file; contact the parent and wait before work that could overlap another task.",
   ].join("\n");
 };
+
+export const makeRunPeerNotifier =
+  (records: ReadonlyMap<string, RunRecord>) =>
+  (changedRunId: string): Effect.Effect<void> => {
+    const recipients = [...records.values()].flatMap((record) => {
+      const process = record.process;
+      return process &&
+        isActiveRunState(record.view.state) &&
+        hasSubagentCapability(record.view, "peer-notice")
+        ? [{ record, process }]
+        : [];
+    });
+    return Effect.forEach(
+      recipients,
+      ({ record, process }) =>
+        process.controls.notifyPeers(peerNoticeText(records.values(), record.view.id)).pipe(
+          Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.void }),
+          Effect.catch(() => Effect.void),
+        ),
+      { concurrency: 8, discard: true },
+    ).pipe(Effect.annotateLogs("changedRunId", changedRunId), Effect.asVoid);
+  };

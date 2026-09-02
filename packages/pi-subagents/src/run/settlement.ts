@@ -30,7 +30,6 @@ export interface RunSettlementDependencies {
   readonly publish: Effect.Effect<void>;
   readonly delivery: RunNotificationDelivery;
   readonly closeRecordScope: (record: RunRecord, scope?: Scope.Closeable) => Effect.Effect<void>;
-  /** Late-bound process-lifecycle peer notifier; resolved at call time. */
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
 }
 
@@ -135,11 +134,10 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           )
             return { transitioned: false as const, view: snapshotView(record.view) };
           if (record.initializationPending && state !== "stopped") {
-            record.pendingInitializationSettlement = (() => {
-              const baseResult = { state };
-              const withError = error ? { ...baseResult, error } : baseResult;
-              return withError;
-            })();
+            record.pendingInitializationSettlement = {
+              state,
+              ...(error && { error }),
+            };
             return {
               transitioned: false as const,
               deferredInitialization: true as const,
@@ -163,24 +161,15 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
             : record.completionGeneration;
           const completionWarning = foldRunWarnings(record.warningSlots);
           if (recordDeliverableOutcome)
-            delivery.insertCompletionLocked(
-              record,
-              (() => {
-                const baseResult = { generation: completionGeneration, outcome: state };
-                const withFinalText =
-                  state === "completed" && record.latestAssistantText
-                    ? { ...baseResult, finalText: record.latestAssistantText }
-                    : baseResult;
-                const withError =
-                  state === "failed"
-                    ? { ...withFinalText, error: error ?? "Run failed." }
-                    : withFinalText;
-                const withWarning = completionWarning
-                  ? { ...withError, warning: completionWarning }
-                  : withError;
-                return { ...withWarning, retained: false };
-              })(),
-            );
+            delivery.insertCompletionLocked(record, {
+              generation: completionGeneration,
+              outcome: state,
+              ...(state === "completed" &&
+                record.latestAssistantText && { finalText: record.latestAssistantText }),
+              ...(state === "failed" && { error: error ?? "Run failed." }),
+              ...(completionWarning && { warning: completionWarning }),
+              retained: false,
+            });
           record.notificationGeneration += 1;
           delivery.discardQuestionLocked(record.view.id);
           record.replyPendingRequestId = undefined;

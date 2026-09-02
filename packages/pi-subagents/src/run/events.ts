@@ -219,24 +219,18 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           Effect.flatMap((now) =>
             mutateView(record, event.assignmentEpoch, (current) => {
               record.latestAssistantText = latestAssistantText;
-              return (() => {
-                const baseResult = { ...current, lastActivityAt: now };
-                const withSessionEvents = latestAssistantText
-                  ? {
-                      ...baseResult,
-                      sessionEvents: appendAssistantSessionEvent(
-                        current.sessionEvents,
-                        latestAssistantText,
-                        now,
-                      ),
-                    }
-                  : baseResult;
-                const withUsage = {
-                  ...withSessionEvents,
-                  usage: addUsage(current.usage, event.usage),
-                };
-                return withUsage;
-              })();
+              return {
+                ...current,
+                lastActivityAt: now,
+                ...(latestAssistantText && {
+                  sessionEvents: appendAssistantSessionEvent(
+                    current.sessionEvents,
+                    latestAssistantText,
+                    now,
+                  ),
+                }),
+                usage: addUsage(current.usage, event.usage),
+              };
             }),
           ),
           Effect.asVoid,
@@ -304,16 +298,20 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 args: event.args,
                 startedAt: now,
               });
-              const withAudit = writeAudit ? { ...current, writeAudit } : current;
-              const withSessionEvents = warning
-                ? {
-                    ...withAudit,
-                    warning,
-                    sessionEvents: appendNoticeSessionEvent(sessionEvents, "warning", warning, now),
-                  }
-                : { ...withAudit, sessionEvents };
               return {
-                ...withSessionEvents,
+                ...current,
+                ...(writeAudit && { writeAudit }),
+                ...(warning
+                  ? {
+                      warning,
+                      sessionEvents: appendNoticeSessionEvent(
+                        sessionEvents,
+                        "warning",
+                        warning,
+                        now,
+                      ),
+                    }
+                  : { sessionEvents }),
                 currentTool: [...record.activeTools.values()].at(-1),
                 lastActivityAt: now,
               };

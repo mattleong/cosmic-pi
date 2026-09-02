@@ -24,6 +24,7 @@ import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.t
 import {
   makeSubagentLayer,
   type SubagentApplication,
+  type SubagentLayerOptions,
   type SubagentRuntimeError,
 } from "../layer.ts";
 import type { SubagentProjection } from "../run/model.ts";
@@ -134,57 +135,43 @@ export function registerSubagentApplication(
         if (restoredReload) profileOverrideHandoff.publish(generation, generation, restoredReload);
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
         const sessionOverrides = restoredReload ?? profileOverrideHandoff.capture();
-        return makePiManagedRuntime(
-          pi,
-          makeSubagentLayer(
-            (() => {
-              const baseResult = {
+        const layerOptions: SubagentLayerOptions = {
+          cwd: activation.cwd,
+          agentDirectory: activation.agentDirectory,
+          projectTrusted: activation.projectTrusted,
+          ...(sessionBaseConfig && { sessionBaseConfig }),
+          publishSessionBaseConfig: (config: ResolvedSubagentConfig) =>
+            profileOverrideHandoff.publishBaseConfig(generation, activeProfileGeneration, config),
+          initialSessionOverrides: sessionOverrides,
+          publishSessionOverrides: (seed: SessionProfileOverrideSeed) =>
+            profileOverrideHandoff.publish(generation, activeProfileGeneration, seed),
+          publish: bridge.publish,
+          notify,
+          proxyHandler: (
+            service: SubagentServiceContract,
+            callerRunId: string,
+            request: BackendProxyRequest,
+          ) => {
+            const input = decodeSubagentProxyRequest(request);
+            if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
+            return executeSubagentActionEffect(
+              pi,
+              {
                 cwd: activation.cwd,
-                agentDirectory: activation.agentDirectory,
                 projectTrusted: activation.projectTrusted,
-              };
-              const withSessionBaseConfig = sessionBaseConfig
-                ? { ...baseResult, sessionBaseConfig }
-                : baseResult;
-              const withPublishSessionBaseConfigAndAdditionalFields = {
-                ...withSessionBaseConfig,
-                publishSessionBaseConfig: (config: ResolvedSubagentConfig) =>
-                  profileOverrideHandoff.publishBaseConfig(
-                    generation,
-                    activeProfileGeneration,
-                    config,
-                  ),
-                initialSessionOverrides: sessionOverrides,
-                publishSessionOverrides: (seed: SessionProfileOverrideSeed) =>
-                  profileOverrideHandoff.publish(generation, activeProfileGeneration, seed),
-                publish: bridge.publish,
-                notify,
-                proxyHandler: (
-                  service: SubagentServiceContract,
-                  callerRunId: string,
-                  request: BackendProxyRequest,
-                ) => {
-                  const input = decodeSubagentProxyRequest(request);
-                  if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
-                  return executeSubagentActionEffect(
-                    pi,
-                    {
-                      cwd: activation.cwd,
-                      projectTrusted: activation.projectTrusted,
-                    },
-                    input,
-                    undefined,
-                    undefined,
-                    activation.ctx,
-                    callerRunId,
-                  ).pipe(Effect.provideService(SubagentService, service));
-                },
-              };
-              return withPublishSessionBaseConfigAndAdditionalFields;
-            })(),
-          ),
-          { agentDirectory: () => activation.agentDirectory, packageName: "pi-subagents" },
-        );
+              },
+              input,
+              undefined,
+              undefined,
+              activation.ctx,
+              callerRunId,
+            ).pipe(Effect.provideService(SubagentService, service));
+          },
+        };
+        return makePiManagedRuntime(pi, makeSubagentLayer(layerOptions), {
+          agentDirectory: () => activation.agentDirectory,
+          packageName: "pi-subagents",
+        });
       },
       startup: (activation) =>
         Effect.gen(function* () {
