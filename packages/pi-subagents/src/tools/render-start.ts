@@ -13,7 +13,7 @@ import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import { formatRunRoute, shortRunId } from "../ui/run-presentation.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
-import { renderExpansionAffordance } from "./render-affordance.ts";
+import { renderComponent, renderExpansionAffordance } from "./render-primitives.ts";
 import { failureRecovery } from "./render-management.ts";
 import type { SubagentStartFailure } from "./model.ts";
 import type { SubagentStartSpec } from "./schema.ts";
@@ -82,10 +82,10 @@ const selectedRoute = (entry: SubagentStartEntry): entry is SelectedStartEntry =
 const routeLabel = (entry: SubagentStartEntry): string => {
   if (selectedRoute(entry))
     return formatRunRoute(
-      entry.host ?? "local",
-      entry.runtime ?? "pi",
-      entry.model ?? "unknown model",
-      entry.effort ?? "off",
+      entry.host,
+      entry.runtime,
+      entry.model,
+      entry.effort,
       entry.openaiFastMode,
     );
   return entry.status === "pending" ? "resolving route/model" : "no eligible route/model";
@@ -131,18 +131,7 @@ const receiptRow = (
         ]
       : (() => {
           const lines = [`${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)}`];
-          const routeValue = selectedRoute(entry)
-            ? `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg(
-                "toolOutput",
-                formatRunRoute(
-                  entry.host ?? "local",
-                  entry.runtime ?? "pi",
-                  entry.model ?? "unknown model",
-                  entry.effort ?? "off",
-                  entry.openaiFastMode,
-                ),
-              )}`
-            : `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", route)}`;
+          const routeValue = `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", route)}`;
           lines.push(
             ...wrapTextWithAnsi(routeValue, Math.max(1, safeWidth - 5)).map(
               (line, index) => `${theme.fg("dim", index === 0 ? "  ╰─ " : "     ")}${line}`,
@@ -203,54 +192,38 @@ const receiptHeader = (
   );
 };
 
-class StartReceiptComponent implements Component {
-  private readonly failures: ReadonlyArray<SubagentStartFailure>;
-  private readonly entries: ReadonlyArray<SubagentStartEntry>;
-  private readonly partial: boolean;
-  private readonly expanded: boolean;
-  private readonly theme: Theme;
-
-  constructor(
-    failures: ReadonlyArray<SubagentStartFailure>,
-    entries: ReadonlyArray<SubagentStartEntry>,
-    partial: boolean,
-    expanded: boolean,
-    theme: Theme,
-  ) {
-    this.failures = failures;
-    this.entries = entries;
-    this.partial = partial;
-    this.expanded = expanded;
-    this.theme = theme;
-  }
-
-  render(width: number): string[] {
+const startReceiptComponent = (
+  failures: ReadonlyArray<SubagentStartFailure>,
+  entries: ReadonlyArray<SubagentStartEntry>,
+  partial: boolean,
+  expanded: boolean,
+  theme: Theme,
+): Component =>
+  renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const entries = this.entries;
     const started = entries.filter((entry) => entry.status === "started").length;
-    const failureDetails = this.expanded
+    const failureOf = (entry: SubagentStartEntry) =>
+      failures.find((failure) => failure.index === entry.index);
+    const failureDetails = expanded
       ? entries.flatMap((entry) => {
           const fallback =
             selectedRoute(entry) && entry.candidateIndex !== undefined && entry.candidateIndex > 0
               ? `${entry.status === "started" ? "Selected" : "Attempted"} candidate ${entry.candidateIndex + 1} after ${entry.candidateIndex} earlier candidate${entry.candidateIndex === 1 ? " was" : "s were"} unavailable.`
               : undefined;
-          const failure =
-            entry.status === "failed"
-              ? this.failures.find((candidate) => candidate.index === entry.index)
-              : undefined;
+          const failure = entry.status === "failed" ? failureOf(entry) : undefined;
           return [
-            ...(fallback ? wrapTextWithAnsi(this.theme.fg("dim", `  ${fallback}`), safeWidth) : []),
+            ...(fallback ? wrapTextWithAnsi(theme.fg("dim", `  ${fallback}`), safeWidth) : []),
             ...(failure
               ? [
                   ...wrapTextWithAnsi(
-                    this.theme.fg(
+                    theme.fg(
                       "error",
                       `Failure — ${sanitizeTerminalLine(entry.name)}${failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : ""}`,
                     ),
                     safeWidth,
                   ),
                   ...wrapTextWithAnsi(
-                    this.theme.fg(
+                    theme.fg(
                       "dim",
                       clipWithMarker(sanitizeTerminalLine(failure.message), 2_048, "… [truncated]"),
                     ),
@@ -258,12 +231,12 @@ class StartReceiptComponent implements Component {
                   ),
                   ...(failure.admittedRun
                     ? wrapTextWithAnsi(
-                        this.theme.fg("dim", formatFailedStartRecovery(failure.admittedRun)),
+                        theme.fg("dim", formatFailedStartRecovery(failure.admittedRun)),
                         safeWidth,
                       )
                     : []),
                   ...wrapTextWithAnsi(
-                    this.theme.fg(
+                    theme.fg(
                       "accent",
                       `Next: ${
                         failure.admittedRun
@@ -278,76 +251,53 @@ class StartReceiptComponent implements Component {
           ];
         })
       : [];
-    const showAllEntries = this.partial || this.expanded;
-    const collapsedOutcomes =
-      this.partial || this.expanded
-        ? []
-        : entries.flatMap((entry) => {
-            if (entry.status === "failed")
-              return receiptRow(
-                entry,
-                safeWidth,
-                this.theme,
-                this.failures.find((failure) => failure.index === entry.index),
-              );
-            if (!selectedRoute(entry) || !entry.warning) return [];
-            return [
-              truncateToWidth(
-                this.theme.fg(
-                  "warning",
-                  `${managerNoticeGlyph("warning")} ${sanitizeTerminalLine(entry.name)} · ${sanitizeTerminalLine(entry.warning)}`,
-                ),
-                safeWidth,
+    const showAllEntries = partial || expanded;
+    const collapsedOutcomes = showAllEntries
+      ? []
+      : entries.flatMap((entry) => {
+          if (entry.status === "failed")
+            return receiptRow(entry, safeWidth, theme, failureOf(entry));
+          if (!selectedRoute(entry) || !entry.warning) return [];
+          return [
+            truncateToWidth(
+              theme.fg(
+                "warning",
+                `${managerNoticeGlyph("warning")} ${sanitizeTerminalLine(entry.name)} · ${sanitizeTerminalLine(entry.warning)}`,
               ),
-            ];
-          });
-    return [
-      truncateToWidth(receiptHeader(entries, this.partial, this.theme), safeWidth),
-      ...(showAllEntries
-        ? entries.flatMap((entry) =>
-            receiptRow(
-              entry,
               safeWidth,
-              this.theme,
-              this.failures.find((failure) => failure.index === entry.index),
             ),
-          )
+          ];
+        });
+    return [
+      truncateToWidth(receiptHeader(entries, partial, theme), safeWidth),
+      ...(showAllEntries
+        ? entries.flatMap((entry) => receiptRow(entry, safeWidth, theme, failureOf(entry)))
         : collapsedOutcomes),
       ...failureDetails,
-      ...(!this.partial &&
-      !this.expanded &&
+      ...(!partial &&
+      !expanded &&
       entries.some(
         (entry) =>
           entry.status === "failed" || (selectedRoute(entry) && entry.warning !== undefined),
       )
-        ? [
-            truncateToWidth(
-              renderExpansionAffordance("launch details", false, this.theme),
-              safeWidth,
-            ),
-          ]
+        ? [truncateToWidth(renderExpansionAffordance("launch details", false, theme), safeWidth)]
         : []),
-      ...(!this.partial && started > 0
-        ? [truncateToWidth(this.theme.fg("dim", "→ /subagents for live status"), safeWidth)]
+      ...(!partial && started > 0
+        ? [truncateToWidth(theme.fg("dim", "→ /subagents for live status"), safeWidth)]
         : []),
     ];
-  }
-
-  invalidate(): void {
-    // Partial header animation is derived from the current clock frame.
-  }
-}
+  });
 
 export const renderStartProgressComponent = (
   failures: ReadonlyArray<SubagentStartFailure>,
   entries: ReadonlyArray<SubagentStartEntry>,
   expanded: boolean,
   theme: Theme,
-): Component => new StartReceiptComponent(failures, entries, true, expanded, theme);
+): Component => startReceiptComponent(failures, entries, true, expanded, theme);
 
 export const renderStartReceiptComponent = (
   failures: ReadonlyArray<SubagentStartFailure>,
   entries: ReadonlyArray<SubagentStartEntry>,
   expanded: boolean,
   theme: Theme,
-): Component => new StartReceiptComponent(failures, entries, false, expanded, theme);
+): Component => startReceiptComponent(failures, entries, false, expanded, theme);

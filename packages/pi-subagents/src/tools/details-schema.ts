@@ -305,15 +305,28 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
 });
 
-const RunActionFields = {
+export const RUN_DETAILS_ACTIONS = [
+  "list",
+  "status",
+  "send",
+  "reply",
+  "retry",
+  "interrupt",
+  "resume",
+  "stop",
+  "rename",
+  "claims",
+] as const;
+export type RunDetailsAction = (typeof RUN_DETAILS_ACTIONS)[number];
+
+const RunActionDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
   cards: boundedArray(SubagentRunCardSchema, MAX_TARGET_RUNS),
   runCount: nonNegativeInteger,
   actionFailures: Schema.optionalKey(boundedArray(CompactToolActionFailureSchema, MAX_TARGET_RUNS)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
-};
-const runActionSchema = <const Action extends string>(action: Action) =>
-  Schema.Struct({ ...RunActionFields, action: Schema.Literal(action) });
+  action: Schema.Literals(RUN_DETAILS_ACTIONS),
+});
 
 export const SubagentModelsDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
@@ -325,16 +338,7 @@ export const SubagentModelsDetailsSchema = Schema.Struct({
 
 export const CompactSubagentToolDetailsSchema = Schema.Union([
   SubagentModelsDetailsSchema,
-  runActionSchema("list"),
-  runActionSchema("status"),
-  runActionSchema("send"),
-  runActionSchema("reply"),
-  runActionSchema("retry"),
-  runActionSchema("interrupt"),
-  runActionSchema("resume"),
-  runActionSchema("stop"),
-  runActionSchema("rename"),
-  runActionSchema("claims"),
+  RunActionDetailsSchema,
 ]);
 
 export const SubagentStartAwaitCardDetailsSchema = Schema.Union([
@@ -362,58 +366,12 @@ export const DETAILS_PARSE_OPTIONS = {
   reportInput: false,
 } as const;
 
-const KNOWN_ROOT_KEYS = [
-  "version",
-  "action",
-  "cards",
-  "startEntries",
-  "startFailures",
-  "awaitUntil",
-  "awaitedRunIds",
-  "timedOut",
-  "attentionRequired",
-  "cancelled",
-  "contextOmitted",
-  "contentOmitted",
-  "profiles",
-  "fallbackProfile",
-  "runCount",
-  "actionFailures",
-] as const;
-const START_KEYS = new Set(["version", "action", "startEntries", "startFailures"]);
-const AWAIT_KEYS = new Set([
-  "version",
-  "action",
-  "cards",
-  "awaitUntil",
-  "awaitedRunIds",
-  "timedOut",
-  "attentionRequired",
-  "cancelled",
-  "contextOmitted",
-  "contentOmitted",
-]);
-const MODELS_KEYS = new Set(["version", "action", "profiles", "fallbackProfile", "contentOmitted"]);
-const RUN_ACTION_KEYS = new Set([
-  "version",
-  "action",
-  "cards",
-  "runCount",
-  "actionFailures",
-  "contentOmitted",
-]);
-const RUN_ACTIONS = new Set([
-  "list",
-  "status",
-  "send",
-  "reply",
-  "retry",
-  "interrupt",
-  "resume",
-  "stop",
-  "rename",
-  "claims",
-]);
+const START_KEYS = new Set(Object.keys(SubagentStartDetailsSchema.fields));
+const AWAIT_KEYS = new Set(Object.keys(SubagentAwaitDetailsSchema.fields));
+const MODELS_KEYS = new Set(Object.keys(SubagentModelsDetailsSchema.fields));
+const RUN_ACTION_KEYS = new Set(Object.keys(RunActionDetailsSchema.fields));
+const KNOWN_ROOT_KEYS = new Set([...START_KEYS, ...AWAIT_KEYS, ...MODELS_KEYS, ...RUN_ACTION_KEYS]);
+const RUN_ACTION_SET: ReadonlySet<string> = new Set(RUN_DETAILS_ACTIONS);
 
 const recordOf = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
   if (!hasObjectRuntimeType(value) || value === null || Array.isArray(value)) return undefined;
@@ -502,7 +460,7 @@ const preflight = <ValueInput>(value: ValueInput): boolean => {
       rootKeysAllowed(record, MODELS_KEYS) &&
       preflightArray(record, "profiles", PROFILE_IDS.length, preflightProfile)
     );
-  if (Predicate.isString(action) && RUN_ACTIONS.has(action))
+  if (Predicate.isString(action) && RUN_ACTION_SET.has(action))
     return (
       rootKeysAllowed(record, RUN_ACTION_KEYS) &&
       preflightArray(record, "cards", MAX_TARGET_RUNS, preflightCard) &&

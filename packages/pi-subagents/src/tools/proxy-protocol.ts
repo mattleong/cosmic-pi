@@ -28,43 +28,17 @@ export interface SubagentProxyRequest {
 
 export const encodeSubagentProxyInput = (input: SubagentToolInput): SubagentProxyRequest => {
   switch (input.action) {
-    case "models": {
-      const { action: _action, ...args } = input;
-      return { tool: SUBAGENT_TOOL_NAME.models, argumentsJson: JSON.stringify(args) };
-    }
-    case "start": {
-      const { action: _action, ...args } = input;
-      return { tool: SUBAGENT_TOOL_NAME.start, argumentsJson: JSON.stringify(args) };
-    }
-    case "list":
-      return { tool: SUBAGENT_TOOL_NAME.list, argumentsJson: "{}" };
-    case "status": {
-      const { action: _action, ...args } = input;
-      return { tool: SUBAGENT_TOOL_NAME.status, argumentsJson: JSON.stringify(args) };
-    }
-    case "await": {
-      const { action: _action, ...args } = input;
-      return { tool: SUBAGENT_TOOL_NAME.await, argumentsJson: JSON.stringify(args) };
-    }
-    case "send": {
-      const { action: _action, ...args } = input;
-      return { tool: SUBAGENT_TOOL_NAME.send, argumentsJson: JSON.stringify(args) };
-    }
-    case "reply": {
-      const { action: _action, ...args } = input;
-      return { tool: SUBAGENT_TOOL_NAME.reply, argumentsJson: JSON.stringify(args) };
-    }
     case "interrupt":
     case "resume":
     case "retry":
     case "stop":
       return { tool: SUBAGENT_TOOL_NAME.lifecycle, argumentsJson: JSON.stringify(input) };
-    case "rename": {
-      const { action: _action, ...args } = input;
-      return { tool: SUBAGENT_TOOL_NAME.rename, argumentsJson: JSON.stringify(args) };
-    }
     case "claims":
       return { tool: SUBAGENT_TOOL_NAME.claims, argumentsJson: JSON.stringify(input.operation) };
+    default: {
+      const { action, ...args } = input;
+      return { tool: SUBAGENT_TOOL_NAME[action], argumentsJson: JSON.stringify(args) };
+    }
   }
 };
 

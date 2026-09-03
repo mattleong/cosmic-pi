@@ -8,7 +8,7 @@ import {
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { formatRunRoute } from "../ui/run-presentation.ts";
-import { renderExpansionAffordance } from "./render-affordance.ts";
+import { renderComponent, renderExpansionAffordance } from "./render-primitives.ts";
 import type {
   CompactSubagentToolDetails,
   SubagentProfileCandidateCard,
@@ -134,24 +134,18 @@ const PROFILE_SOURCE_LABELS = {
   builtin: "built-in",
 } as const satisfies Record<SubagentProfileRouteCard["source"], string>;
 
-class ProfileRoutesComponent implements Component {
-  private readonly details: ModelsToolDetails;
-  private readonly expanded: boolean;
-  private readonly theme: Theme;
-
-  constructor(details: ModelsToolDetails, expanded: boolean, theme: Theme) {
-    this.details = details;
-    this.expanded = expanded;
-    this.theme = theme;
-  }
-
-  render(width: number): string[] {
+export const renderProfileRoutesComponent = (
+  details: ModelsToolDetails,
+  expanded: boolean,
+  theme: Theme,
+): Component =>
+  renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const profiles = this.details.profiles ?? [];
+    const profiles = details.profiles ?? [];
     const lines: string[] = [
-      this.theme.fg(
+      theme.fg(
         "accent",
-        `Profile routes · static eligibility only${this.details.fallbackProfile ? ` · fallback ${this.details.fallbackProfile}` : ""}`,
+        `Profile routes · static eligibility only${details.fallbackProfile ? ` · fallback ${details.fallbackProfile}` : ""}`,
       ),
     ];
     for (const profile of profiles) {
@@ -163,48 +157,43 @@ class ProfileRoutesComponent implements Component {
       const firstCandidate = profile.candidates[0];
       const first = firstCandidate ? formattedCandidateRoute(firstCandidate) : undefined;
       lines.push(
-        this.theme.fg(
+        theme.fg(
           color,
           `• ${profile.id}${profile.isDefault ? " · when omitted" : ""} · ${PROFILE_SOURCE_LABELS[profile.source]} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
         ),
       );
-      if (!this.expanded) continue;
-      lines.push(this.theme.fg("dim", `  ${profile.description}`));
+      if (!expanded) continue;
+      lines.push(theme.fg("dim", `  ${profile.description}`));
       lines.push(
-        this.theme.fg(
+        theme.fg(
           "dim",
           `  Defaults · ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${profile.defaultEffort ?? "inherit effort"}`,
         ),
       );
       for (const [index, candidate] of profile.candidates.entries()) {
         lines.push(
-          this.theme.fg(
+          theme.fg(
             candidate.status === "eligible" ? "success" : "warning",
             `  ${candidate.status === "eligible" ? "✓" : "–"} ${index + 1}. ${formattedCandidateRoute(candidate)}`,
           ),
         );
-        lines.push(this.theme.fg("dim", `     ${candidate.reason}`));
+        lines.push(theme.fg("dim", `     ${candidate.reason}`));
       }
     }
     if (profiles.length === 0)
-      lines.push(this.theme.fg("muted", "No profile route details were persisted."));
-    if (this.details.contentOmitted)
-      lines.push(this.theme.fg("warning", "Long model or route-detail text was omitted."));
+      lines.push(theme.fg("muted", "No profile route details were persisted."));
+    if (details.contentOmitted)
+      lines.push(theme.fg("warning", "Long model or route-detail text was omitted."));
     lines.push(
-      this.theme.fg(
+      theme.fg(
         "dim",
         "Launch checks pending · executable, authentication, native integration, and private harness are checked at launch.",
       ),
     );
     return lines.flatMap((line) =>
-      this.expanded ? wrapTextWithAnsi(line, safeWidth) : [truncateToWidth(line, safeWidth)],
+      expanded ? wrapTextWithAnsi(line, safeWidth) : [truncateToWidth(line, safeWidth)],
     );
-  }
-
-  invalidate(): void {
-    // Rendering is a pure projection of immutable result details.
-  }
-}
+  });
 
 const summaryText = (
   details: RunToolDetails,
@@ -253,28 +242,14 @@ export type SemanticRunRenderer = (
   showReports: boolean,
 ) => Component;
 
-class CompactResultComponent implements Component {
-  private readonly details: RunToolDetails;
-  private readonly expanded: boolean;
-  private readonly theme: Theme;
-  private readonly renderRuns: SemanticRunRenderer;
-
-  constructor(
-    details: RunToolDetails,
-    expanded: boolean,
-    theme: Theme,
-    renderRuns: SemanticRunRenderer,
-  ) {
-    this.details = details;
-    this.expanded = expanded;
-    this.theme = theme;
-    this.renderRuns = renderRuns;
-  }
-
-  /** Per-failure rows: summary, recovery affordance, and the expansion cue. */
-  private renderActionFailures(width: number): ReadonlyArray<string> {
-    const { theme, expanded } = this;
-    return (this.details.actionFailures ?? []).flatMap((failure) => {
+export const renderCompactResultComponent = (
+  details: RunToolDetails,
+  expanded: boolean,
+  theme: Theme,
+  renderRuns: SemanticRunRenderer,
+): Component => {
+  const renderActionFailures = (width: number): ReadonlyArray<string> =>
+    (details.actionFailures ?? []).flatMap((failure) => {
       const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
       const recovery = failureRecovery(failure.code, failure.message);
       const summary = theme.fg(
@@ -293,25 +268,24 @@ class CompactResultComponent implements Component {
           : []),
       ];
     });
-  }
 
-  render(width: number): string[] {
+  return renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const cards = this.details.cards ?? [];
-    const count = this.details.runCount ?? cards.length;
-    const failed = this.details.actionFailures?.length ?? 0;
+    const cards = details.cards ?? [];
+    const count = details.runCount ?? cards.length;
+    const failed = details.actionFailures?.length ?? 0;
     const neutral =
-      this.details.action === "list" ||
-      this.details.action === "status" ||
-      this.details.action === "retry" ||
-      this.details.action === "claims";
-    const strict = this.details.action === "reply" || this.details.action === "rename";
+      details.action === "list" ||
+      details.action === "status" ||
+      details.action === "retry" ||
+      details.action === "claims";
+    const strict = details.action === "reply" || details.action === "rename";
     const color: SemanticOutcomeBanner["color"] =
       failed === 0
         ? neutral
           ? "accent"
           : "success"
-        : this.details.action === "send"
+        : details.action === "send"
           ? count > 0
             ? "warning"
             : "error"
@@ -320,9 +294,9 @@ class CompactResultComponent implements Component {
             : "warning";
     const summary: SemanticOutcomeBanner = {
       color,
-      text: summaryText(this.details, count, failed, failed > 0 ? ` · ${failed} failed` : ""),
+      text: summaryText(details, count, failed, failed > 0 ? ` · ${failed} failed` : ""),
     };
-    const totalRuns = this.details.runCount ?? cards.length;
+    const totalRuns = details.runCount ?? cards.length;
     const omittedRuns = Math.max(0, totalRuns - cards.length);
     const omissionCues = [
       ...(omittedRuns > 0
@@ -330,36 +304,17 @@ class CompactResultComponent implements Component {
             `${cards.length} of ${totalRuns} shown · ${omittedRuns} omitted · use subagent_status for specific run IDs`,
           ]
         : []),
-      ...(this.details.contentOmitted
+      ...(details.contentOmitted
         ? ["Report content omitted · use subagent_status for individual run IDs"]
         : []),
     ];
     const omissionLines = omissionCues.flatMap((cue) =>
-      wrapTextWithAnsi(this.theme.fg("warning", cue), safeWidth),
+      wrapTextWithAnsi(theme.fg("warning", cue), safeWidth),
     );
     return [
-      ...this.renderRuns(cards, this.expanded, summary, this.details.action === "status").render(
-        safeWidth,
-      ),
+      ...renderRuns(cards, expanded, summary, details.action === "status").render(safeWidth),
       ...omissionLines,
-      ...this.renderActionFailures(safeWidth),
+      ...renderActionFailures(safeWidth),
     ];
-  }
-
-  invalidate(): void {
-    // Rendering is a pure projection of immutable result details.
-  }
-}
-
-export const renderProfileRoutesComponent = (
-  details: ModelsToolDetails,
-  expanded: boolean,
-  theme: Theme,
-): Component => new ProfileRoutesComponent(details, expanded, theme);
-
-export const renderCompactResultComponent = (
-  details: RunToolDetails,
-  expanded: boolean,
-  theme: Theme,
-  renderRuns: SemanticRunRenderer,
-): Component => new CompactResultComponent(details, expanded, theme, renderRuns);
+  });
+};

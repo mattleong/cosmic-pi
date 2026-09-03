@@ -36,11 +36,6 @@ export type ProfileWorkspaceTarget =
 export const profileWorkspaceScope = (target: ProfileWorkspaceTarget): ProfileSettingsScope =>
   target.kind === "session" ? "session" : target.set.scope;
 
-export const profileWorkspaceTargetLabel = (target: ProfileWorkspaceTarget): string =>
-  target.kind === "session"
-    ? "Session"
-    : `[${target.set.scope === "project" ? "P" : "G"}] ${target.set.name}`;
-
 export interface ProfileSettingsInspection extends SubagentConfigInspection {
   readonly session: SessionProfileSnapshot;
 }

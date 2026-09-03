@@ -1,17 +1,10 @@
 import { stripTerminalControls } from "pi-cosmic-core";
-import {
-  SUBAGENT_EFFORTS,
-  type SubagentContextMode,
-  type SubagentEffort,
-  type SubagentWriteIntent,
-} from "../domain/routing.ts";
+import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   MAX_PROFILE_CANDIDATES,
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
   PROFILE_IDS,
-  type ProfileCandidate,
   type ProfileId,
-  type ProfileRouteSource,
 } from "../profiles/model.ts";
 import type { SubagentRunView, SubagentUsage } from "../run/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
@@ -41,6 +34,7 @@ import {
   MAX_PROFILE_CHARS,
   type CompactSubagentToolDetails,
   type CompactToolActionFailure,
+  type RunDetailsAction,
   type SubagentAwaitDetails,
   type SubagentCardFailure,
   type SubagentProfileRouteCard,
@@ -48,19 +42,9 @@ import {
   type SubagentStartDetails,
   type SubagentStartEntry,
 } from "./details-schema.ts";
+import type { SubagentProfileView } from "./model.ts";
 
 type DetailDensity = "full" | "compact" | "minimal";
-type RunDetailsAction =
-  | "list"
-  | "status"
-  | "send"
-  | "reply"
-  | "retry"
-  | "interrupt"
-  | "resume"
-  | "stop"
-  | "rename"
-  | "claims";
 
 export interface StartDetailsInput {
   readonly startEntries: ReadonlyArray<SubagentStartEntry>;
@@ -81,26 +65,10 @@ export interface AwaitDetailsInput {
   readonly contentOmitted?: boolean | undefined;
 }
 
-export interface ProfileCandidateDetailsInput extends ProfileCandidate {
-  readonly status: "eligible" | "skipped";
-  readonly reason: string;
-}
-
-export interface ProfileRouteDetailsInput {
-  readonly id: ProfileId;
-  readonly description: string;
-  readonly source: ProfileRouteSource;
-  readonly isDefault: boolean;
-  readonly defaultContext: SubagentContextMode;
-  readonly defaultWriteIntent: SubagentWriteIntent;
-  readonly defaultEffort?: SubagentEffort | undefined;
-  readonly candidates: ReadonlyArray<ProfileCandidateDetailsInput>;
-}
-
 export type CompactToolDetailsInput =
   | {
       readonly action: "models";
-      readonly profiles: ReadonlyArray<ProfileRouteDetailsInput>;
+      readonly profiles: ReadonlyArray<SubagentProfileView>;
       readonly fallbackProfile: ProfileId;
     }
   | {
@@ -464,7 +432,7 @@ export const projectSubagentStartEntries = (
 
 /** Explicit privacy projection for persisted profile-route discovery. */
 export const projectSubagentProfileRoutes = (
-  profiles: ReadonlyArray<ProfileRouteDetailsInput>,
+  profiles: ReadonlyArray<SubagentProfileView>,
   density: DetailDensity = "full",
 ): ReadonlyArray<SubagentProfileRouteCard> => {
   const limits = DENSITY_LIMITS[density];

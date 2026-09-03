@@ -9,9 +9,11 @@ import {
   projectSubagentProfileRoutes,
   projectSubagentRunCard,
   projectSubagentStartEntries,
-  type ProfileCandidateDetailsInput,
-  type ProfileRouteDetailsInput,
 } from "../src/tools/details.ts";
+import type {
+  ProfileCandidateDiscovery as ProfileCandidateDetailsInput,
+  SubagentProfileView as ProfileRouteDetailsInput,
+} from "../src/tools/model.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
   decodeCompactToolDetails,

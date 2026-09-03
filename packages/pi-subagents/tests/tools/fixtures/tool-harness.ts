@@ -273,32 +273,6 @@ const makeContextFixture = (): ExtensionContext => {
 };
 export const context = makeContextFixture();
 
-export const registryContext = (
-  available: ReadonlyArray<{
-    readonly provider: string;
-    readonly id: string;
-    readonly name: string;
-    readonly reasoning: boolean;
-    readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
-  }>,
-  registeredProviderIds: ReadonlyArray<string> = [],
-): ExtensionContext => {
-  const fixture = {
-    ...context,
-    modelRegistry: {
-      getAvailable: () => [...available],
-      find: (provider: string, id: string) =>
-        available.find((model) => model.provider === provider && model.id === id),
-      hasConfiguredAuth: () => true,
-      getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
-      getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "stored-key" }),
-      getRegisteredProviderIds: () => [...registeredProviderIds],
-    },
-  };
-  // SAFETY: This variant changes only modelRegistry methods consumed by profile resolution.
-  return fixture as typeof fixture & ExtensionContext;
-};
-
 export const startCapturingService = (requests: StartSubagentRequest[]) =>
   subagentServiceDouble({
     start: (input) =>

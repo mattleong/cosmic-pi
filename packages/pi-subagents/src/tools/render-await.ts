@@ -8,6 +8,7 @@ import { aggregateUsage } from "../ui/metrics.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
+import { renderComponent } from "./render-primitives.ts";
 import { renderResponsiveRunRows, runTiming } from "./render-run-rows.ts";
 
 export interface AwaitProgressRun {
@@ -135,75 +136,6 @@ interface AwaitProgressHierarchy {
   readonly contextOmitted?: boolean | undefined;
 }
 
-class AwaitProgressComponent implements Component {
-  private readonly runs: ReadonlyArray<SubagentRunCard>;
-  private readonly targets: ReadonlyArray<SubagentRunCard>;
-  private readonly until: SubagentAwaitUntil;
-  private readonly theme: Theme;
-  private readonly hierarchy: AwaitProgressHierarchy;
-  private readonly outcome: AwaitSummaryOutcome;
-
-  constructor(
-    runs: ReadonlyArray<SubagentRunCard>,
-    targets: ReadonlyArray<SubagentRunCard>,
-    until: SubagentAwaitUntil,
-    theme: Theme,
-    hierarchy: AwaitProgressHierarchy,
-    outcome: AwaitSummaryOutcome,
-  ) {
-    this.runs = runs;
-    this.targets = targets;
-    this.until = until;
-    this.theme = theme;
-    this.hierarchy = hierarchy;
-    this.outcome = outcome;
-  }
-
-  render(width: number): string[] {
-    const safeWidth = Math.max(1, width);
-    const frame = Math.floor(synchronousNow() / 160);
-    const usage = aggregateUsage(this.runs, "compact");
-    const targetIds = this.hierarchy.awaitedRunIds ?? new Set(this.targets.map((run) => run.id));
-    const summary = {
-      ...this.outcome,
-      targetCount: targetIds.size,
-      descendantCount: this.runs.filter((run) => !targetIds.has(run.id)).length,
-    };
-    return [
-      truncateToWidth(
-        this.theme.fg(
-          interruptedOutcome(this.outcome)
-            ? "warning"
-            : this.targets.some((run) => run.state === "failed")
-              ? "error"
-              : this.targets.length > 0 &&
-                  this.targets.every((run) => isAssignmentFinishedRunState(run.state))
-                ? "success"
-                : "warning",
-          formatAwaitSummary(this.targets, this.until, usage, summary),
-        ),
-        safeWidth,
-      ),
-      ...(this.hierarchy.contextOmitted
-        ? [
-            truncateToWidth(
-              this.theme.fg("warning", "Some descendant context was omitted from this card."),
-              safeWidth,
-            ),
-          ]
-        : []),
-      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
-        frame,
-        hierarchy: this.hierarchy,
-      }),
-    ];
-  }
-
-  invalidate(): void {
-    // Rendering is derived from the current clock frame.
-  }
-}
-
 interface SubagentToolRendererState extends Record<string, unknown> {
   piSubagentsAwaitTicker?: (() => void) | undefined;
   piSubagentsAwaitInvalidate?: (() => void) | undefined;
@@ -266,4 +198,40 @@ export const renderAwaitProgressComponent = (
   theme: Theme,
   hierarchy: AwaitProgressHierarchy,
   outcome: AwaitSummaryOutcome = {},
-): Component => new AwaitProgressComponent(runs, targets, until, theme, hierarchy, outcome);
+): Component =>
+  renderComponent((width) => {
+    const safeWidth = Math.max(1, width);
+    const frame = Math.floor(synchronousNow() / 160);
+    const usage = aggregateUsage(runs, "compact");
+    const targetIds = hierarchy.awaitedRunIds ?? new Set(targets.map((run) => run.id));
+    const summary = {
+      ...outcome,
+      targetCount: targetIds.size,
+      descendantCount: runs.filter((run) => !targetIds.has(run.id)).length,
+    };
+    return [
+      truncateToWidth(
+        theme.fg(
+          interruptedOutcome(outcome)
+            ? "warning"
+            : targets.some((run) => run.state === "failed")
+              ? "error"
+              : targets.length > 0 &&
+                  targets.every((run) => isAssignmentFinishedRunState(run.state))
+                ? "success"
+                : "warning",
+          formatAwaitSummary(targets, until, usage, summary),
+        ),
+        safeWidth,
+      ),
+      ...(hierarchy.contextOmitted
+        ? [
+            truncateToWidth(
+              theme.fg("warning", "Some descendant context was omitted from this card."),
+              safeWidth,
+            ),
+          ]
+        : []),
+      ...renderResponsiveRunRows(runs, safeWidth, theme, { frame, hierarchy }),
+    ];
+  });

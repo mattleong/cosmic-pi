@@ -1,4 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+
+export const renderComponent = (render: (width: number) => string[]): Component => ({
+  render,
+  invalidate() {},
+});
 
 export const renderExpansionAffordance = (
   label: string,
