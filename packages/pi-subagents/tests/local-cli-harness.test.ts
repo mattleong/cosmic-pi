@@ -7,7 +7,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import type { BackendLaunchRequest } from "../src/backend/model.ts";
-import { prepareLocalCliHarness } from "../src/boundary/local-cli-harness.ts";
+import {
+  prepareLocalCliHarness,
+  sanitizeLocalCliEnvironment,
+} from "../src/boundary/local-cli-harness.ts";
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import type { SupervisorConnectionMetadata } from "../src/boundary/supervisor-channel.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
@@ -96,6 +99,18 @@ afterEach(() =>
 );
 
 describe("local CLI harness ownership", () => {
+  it("keeps adapter debug controls out of the child environment", () => {
+    const sanitized = sanitizeLocalCliEnvironment(
+      {
+        PATH: inheritedPath(process.env),
+        PI_SUBAGENTS_CLAUDE_DEBUG: "1",
+      },
+      "claude",
+      launch(),
+    );
+    expect(sanitized.PI_SUBAGENTS_CLAUDE_DEBUG).toBeUndefined();
+  });
+
   it.effect("removes a partially populated harness after preparation fails", () =>
     Effect.gen(function* () {
       const test = yield* Effect.promise(setup);

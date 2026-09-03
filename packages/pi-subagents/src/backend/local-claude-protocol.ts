@@ -59,6 +59,8 @@ const User = Schema.Struct({
   parent_tool_use_id: Schema.optional(ParentToolUseId),
   isSynthetic: Schema.optional(Schema.Boolean),
   isReplay: Schema.optional(Schema.Boolean),
+  isMeta: Schema.optional(Schema.Boolean),
+  isCompactSummary: Schema.optional(Schema.Boolean),
   origin: Schema.optional(MessageOrigin),
   message: Schema.Struct({
     role: Schema.Literal("user"),
@@ -163,6 +165,10 @@ export type ClaudeProtocolEvent =
       readonly originSubkind?: string | undefined;
       readonly isSynthetic: boolean;
       readonly isReplay: boolean;
+      readonly isMeta: boolean;
+      readonly isCompactSummary: boolean;
+      readonly contentKind: "text" | "blocks";
+      readonly textLength: number;
     }
   | {
       readonly type: "assistant";
@@ -270,10 +276,15 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
                 : [];
             });
         const protocolEvent: ClaudeProtocolEvent = (() => {
+          const text = textFromContent(event.message.content);
           const baseResult = {
             type: "user" as const,
-            text: textFromContent(event.message.content),
+            text,
             toolResults,
+            contentKind: Predicate.isString(event.message.content)
+              ? ("text" as const)
+              : ("blocks" as const),
+            textLength: text.length,
           };
           const withUuid = event.uuid ? { ...baseResult, uuid: event.uuid } : baseResult;
           const withSessionId = event.session_id
@@ -288,12 +299,14 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
           const withOriginSubkind = event.origin?.subkind
             ? { ...withOriginKind, originSubkind: event.origin.subkind }
             : withOriginKind;
-          const withIsSyntheticAndIsReplay = {
+          const withReplayMetadata = {
             ...withOriginSubkind,
             isSynthetic: event.isSynthetic === true,
             isReplay: event.isReplay === true,
+            isMeta: event.isMeta === true,
+            isCompactSummary: event.isCompactSummary === true,
           };
-          return withIsSyntheticAndIsReplay;
+          return withReplayMetadata;
         })();
         return protocolEvent;
       }

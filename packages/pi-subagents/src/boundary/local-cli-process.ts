@@ -18,6 +18,7 @@ import {
 } from "../domain/routing.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
+import { acquireLocalClaudeDebug, type LocalClaudeDebugRecorder } from "./local-claude-debug.ts";
 import { readValidatedCodexAuth, safeAgentDirectory } from "./harness-shared.ts";
 import {
   approvedCodexApiKey,
@@ -52,13 +53,18 @@ export interface LocalCliPreflightRequest {
   readonly cwd?: string | undefined;
 }
 
+export interface LocalCliProcessHandle extends LocalCliHandle {
+  /** Optional metadata-only recorder owned by the local-CLI process scope. */
+  readonly claudeDebug?: LocalClaudeDebugRecorder | undefined;
+}
+
 export interface LocalCliProcessContract {
   readonly preflight: (
     request: LocalCliPreflightRequest,
   ) => Effect.Effect<void, InvalidSubagentRequestError>;
   readonly spawn: (
     request: LocalCliSpawnRequest,
-  ) => Effect.Effect<LocalCliHandle, SubagentProcessError, Scope.Scope>;
+  ) => Effect.Effect<LocalCliProcessHandle, SubagentProcessError, Scope.Scope>;
 }
 
 export interface LocalCliProcessLayerOptions extends LocalCliHarnessOptions {
@@ -245,7 +251,16 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
     ),
     (owned) => removeLocalCliHarness(owned.directory).pipe(Effect.orDie),
   );
-  return yield* Effect.acquireRelease(
+  const sourceEnvironment = options.environment ?? process.env;
+  const claudeDebug =
+    request.runtime === "claude"
+      ? yield* acquireLocalClaudeDebug({
+          agentDirectory: options.agentDirectory,
+          environment: sourceEnvironment,
+          runId: request.launch.runId,
+        })
+      : undefined;
+  const transport = yield* Effect.acquireRelease(
     acquireLocalCliTransport({
       executable: harness.executable,
       args: harness.args,
@@ -253,8 +268,9 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
       cwd: request.launch.cwd,
       platform: options.platform,
     }),
-    (transport) => transport.release.pipe(Effect.orDie),
+    (owned) => owned.release.pipe(Effect.orDie),
   );
+  return claudeDebug ? { ...transport, claudeDebug } : transport;
 });
 
 // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.

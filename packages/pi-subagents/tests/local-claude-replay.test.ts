@@ -34,7 +34,15 @@ type ReplayScenario =
   | "uuidless-task-notification"
   | "cross-session-task-notification"
   | "nonsynthetic-task-notification"
-  | "foreign-replay";
+  | "foreign-replay"
+  | "same-content-foreign-replay"
+  | "known-replay-cross-session"
+  | "queued-task-notification"
+  | "queued-task-notification-duplicate"
+  | "queued-task-notification-cross-session"
+  | "tagged-task-notification-nonreplay"
+  | "tagged-task-notification-channel"
+  | "accepted-report-foreign-replay";
 
 const launch = (model: ReplayScenario): BackendLaunchRequest => ({
   runId: `agent-${model}`,
@@ -62,6 +70,17 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
     const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
+    const acceptedReport =
+      scenario === "accepted-report-foreign-replay"
+        ? {
+            runId: `agent-${scenario}`,
+            assignmentEpoch: 12,
+            sequence: 1,
+            deliveryId: "accepted-delivery",
+            text: "Accepted report text",
+            evidence: "accepted-report-evidence",
+          }
+        : undefined;
     const offerChild = (value: ClaudeInboundFrame): void => {
       Queue.offerUnsafe(childEvents, { type: "message", value });
     };
@@ -182,13 +201,58 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
             session_id: "claude-replay-session",
             message: { role: "user", content: "Untrusted task-shaped input." },
           });
-        if (scenario === "foreign-replay")
+        if (scenario === "accepted-report-foreign-replay" && acceptedReport)
+          Queue.offerUnsafe(supervisorEvents, { type: "report", ...acceptedReport });
+        if (scenario === "foreign-replay" || scenario === "accepted-report-foreign-replay")
           offerChild({
             type: "user",
             uuid: "foreign-replay-uuid",
             isReplay: true,
             session_id: "claude-replay-session",
             message: { role: "user", content: "Foreign injected input." },
+          });
+        if (
+          scenario === "queued-task-notification" ||
+          scenario === "queued-task-notification-duplicate" ||
+          scenario === "queued-task-notification-cross-session" ||
+          scenario === "tagged-task-notification-nonreplay" ||
+          scenario === "tagged-task-notification-channel"
+        ) {
+          const notification: ClaudeInboundFrame = {
+            type: "user",
+            uuid: "claude-queued-notification-uuid",
+            ...(scenario !== "tagged-task-notification-nonreplay" && { isReplay: true }),
+            session_id:
+              scenario === "queued-task-notification-cross-session"
+                ? "different-claude-session"
+                : "claude-replay-session",
+            ...(scenario === "tagged-task-notification-channel" && {
+              origin: { kind: "channel" },
+            }),
+            message: {
+              role: "user",
+              content:
+                "<task-notification><task-id>native-task</task-id><status>completed</status><summary>Native task completed.</summary></task-notification>",
+            },
+          };
+          offerChild(notification);
+          if (scenario === "queued-task-notification-duplicate") offerChild(notification);
+        }
+        if (scenario === "same-content-foreign-replay")
+          offerChild({
+            type: "user",
+            uuid: "same-content-foreign-uuid",
+            isReplay: true,
+            session_id: "claude-replay-session",
+            message: outbound.message,
+          });
+        if (scenario === "known-replay-cross-session")
+          offerChild({
+            type: "user",
+            uuid: outbound.uuid,
+            isReplay: true,
+            session_id: "different-claude-session",
+            message: outbound.message,
           });
         offerChild({
           type: "result",
@@ -258,7 +322,8 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           awaitReady: Effect.void,
           setAssignmentEpoch: () => Effect.void,
           hasAcceptedReport: () => Effect.succeed(true),
-          acceptedReportForEpoch: () => Effect.sync((): undefined => undefined),
+          acceptedReportForEpoch: (epoch) =>
+            Effect.succeed(acceptedReport?.assignmentEpoch === epoch ? acceptedReport : undefined),
           deliverNotification: () => Effect.void,
           reply: () => Effect.void,
           cancelPending: () => {},
@@ -338,6 +403,8 @@ describe("local Claude replay classification", () => {
         uuid: "forwarded-user",
         parent_tool_use_id: "native-agent-tool-use",
         isSynthetic: true,
+        isMeta: true,
+        isCompactSummary: true,
         origin: { kind: "task-notification", subkind: "peer-send-message" },
         message: { role: "user", content: "Forwarded text" },
       });
@@ -347,6 +414,10 @@ describe("local Claude replay classification", () => {
         originKind: "task-notification",
         originSubkind: "peer-send-message",
         isSynthetic: true,
+        isMeta: true,
+        isCompactSummary: true,
+        contentKind: "text",
+        textLength: 14,
       });
 
       const assistant = yield* decodeClaudeProtocolEvent({
@@ -369,12 +440,37 @@ describe("local Claude replay classification", () => {
     expectInternalUserFrame("uuidless-task-notification"),
   );
 
+  it.effect("owns Claude command-queue task-notification replays", () =>
+    expectInternalUserFrame("queued-task-notification"),
+  );
+
+  it.effect(
+    "suppresses duplicate internal task-notification replays without sent UUID aliasing",
+    () => expectInternalUserFrame("queued-task-notification-duplicate"),
+  );
+
   it.effect("fails closed on cross-session task notifications", () =>
     Effect.gen(function* () {
       expect(yield* takeRejectedUserFrame("cross-session-task-notification", 9)).toMatchObject({
         type: "protocol_error",
         message: expect.stringContaining("subkind=peer-send-message"),
       });
+    }),
+  );
+
+  it.effect("rejects near-miss command-queue task notifications", () =>
+    Effect.gen(function* () {
+      for (const scenario of [
+        "queued-task-notification-cross-session",
+        "tagged-task-notification-nonreplay",
+        "tagged-task-notification-channel",
+      ] as const) {
+        const failure = yield* takeRejectedUserFrame(scenario, 15);
+        expect(failure).toMatchObject({
+          type: "protocol_error",
+          message: expect.stringContaining("tag=task-notification"),
+        });
+      }
     }),
   );
 
@@ -397,8 +493,66 @@ describe("local Claude replay classification", () => {
       if (failure.type === "protocol_error") {
         expect(failure.message).toContain("session=match");
         expect(failure.message).toContain("parent-tool=absent");
+        expect(failure.message).toContain("report=none");
         expect(failure.message).not.toContain("foreign-replay-uuid");
+        expect(failure.message).not.toContain("Foreign injected input");
       }
     }),
+  );
+
+  it.effect("uses content matches only as evidence and never as replay authority", () =>
+    Effect.gen(function* () {
+      const failure = yield* takeRejectedUserFrame("same-content-foreign-replay", 14);
+      expect(failure).toMatchObject({
+        type: "protocol_error",
+        message: expect.stringContaining("content=assignment"),
+      });
+    }),
+  );
+
+  it.effect("rejects a confirmed UUID replayed from another native session", () =>
+    Effect.gen(function* () {
+      const failure = yield* takeRejectedUserFrame("known-replay-cross-session", 13);
+      expect(failure).toMatchObject({
+        type: "protocol_error",
+        message: expect.stringContaining("session=mismatch"),
+      });
+    }),
+  );
+
+  it.effect("preserves an accepted report when a trailing unknown replay arrives", () =>
+    withReplayHarness("accepted-report-foreign-replay", ({ processes, supervisors }) =>
+      Effect.gen(function* () {
+        const scenario = "accepted-report-foreign-replay" as const;
+        const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
+          launch(scenario),
+        );
+        yield* backend.controls.initialize;
+        yield* backend.controls.start("Preserve accepted report", 12);
+        expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 12 });
+        expect(yield* take(backend)).toMatchObject({
+          type: "assistant_message",
+          assignmentEpoch: 12,
+        });
+        const warning = yield* take(backend);
+        expect(warning).toMatchObject({
+          type: "warning",
+          source: "runtime-extension",
+          message: expect.stringContaining("report=accepted"),
+        });
+        expect(yield* take(backend)).toMatchObject({
+          type: "report",
+          assignmentEpoch: 12,
+          deliveryId: "accepted-delivery",
+          text: "Accepted report text",
+        });
+        expect(yield* take(backend)).toMatchObject({
+          type: "assistant_message",
+          assignmentEpoch: 12,
+          usage: expect.objectContaining({ cost: 0.001 }),
+        });
+        expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+      }),
+    ),
   );
 });
