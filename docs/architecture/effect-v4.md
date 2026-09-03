@@ -141,16 +141,16 @@ Compiler tooling lives at the workspace root. Runtime dependencies are declared 
 
 ## Quality checks
 
-- `tsconfig.base.json` enables strict TypeScript and core Effect language-service diagnostics for every package.
-- `tsconfig.effect.json` enables the workspace's Effect-native diagnostics.
-- Each package declares the official `effect-language-service diagnostics` command, and the root `pnpm effect:diagnostics` command runs those package scripts recursively.
+- `tsconfig.base.json` enables strict TypeScript and configures core Effect language-service diagnostics for every package.
+- `tsconfig.effect.json` enables the workspace's Effect-native diagnostics. `strictEffectProvide` applies to production `src/**/*.ts`; tests are Effect entry points that intentionally provide complete test Layers.
+- Each package declares the official `effect-tsgo diagnostics` command, and the root `pnpm effect:diagnostics` command runs those package scripts recursively. TypeScript typechecking and Effect diagnostics stay as separate gates so Effect messages are not emitted twice.
 - Oxlint, package tests, packaging smoke tests, and code review cover the remaining correctness and integration concerns.
 - Architecture conventions that TypeScript, Oxlint, or the Effect language service cannot express are documented guidance. The workspace does not maintain a repository-specific static analyzer or suppression ratchet.
 
 ## Upgrade procedure
 
 1. Update all synchronized Effect packages in one commit.
-2. Re-run `effect-language-service patch`.
+2. Update `@effect/tsgo` to a release that supports the pinned TypeScript version.
 3. Review release notes and the pinned declarations.
-4. Run `pnpm effect:lsp:check` and `pnpm effect:diagnostics`.
+4. Run `pnpm typecheck` and `pnpm effect:diagnostics`.
 5. Run focused tests, pack checks, benchmarks, and `pnpm validate`.

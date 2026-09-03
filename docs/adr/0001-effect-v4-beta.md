@@ -28,10 +28,10 @@ The implementation kickoff pinned Effect v4 beta.99. On 2026-08-13, the workspac
 - `effect@4.0.0-rc.111`
 - `@effect/platform-node@4.0.0-rc.111`
 - `@effect/vitest@4.0.0-rc.111`
-- `@effect/language-service@0.87.2`
-- `typescript@6.0.3`
+- `@effect/tsgo@0.39.1`
+- `typescript@7.0.2`
 
-Jointly released Effect ecosystem packages are synchronized in the pnpm catalog. The independently versioned language service is pinned separately. No caret, tilde, or moving dist-tag is permitted. Every prerelease upgrade is isolated, reviewed as potentially breaking, and followed by the complete validation gate.
+Jointly released Effect ecosystem packages are synchronized in the pnpm catalog. The independently versioned TypeScript-Go integration is pinned separately. No caret, tilde, or moving dist-tag is permitted. Every prerelease upgrade is isolated, reviewed as potentially breaking, and followed by the complete validation gate.
 
 ## Consequences
 

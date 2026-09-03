@@ -24,7 +24,7 @@
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
     "validate": "pnpm check && pnpm test",
     "typecheck": "tsc --noEmit",
-    "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
+    "effect:diagnostics": "effect-tsgo diagnostics --project tsconfig.json",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",

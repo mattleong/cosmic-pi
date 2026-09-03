@@ -18,7 +18,7 @@ tools the host supplies.
   keeps consumers on one shared `effect` instance and avoids a registry
   dependency that could never resolve. This `package.json` is repository-only
   and stays out of the tarball; `pi-code-mode` declares the runtime's external
-  dependencies (`acorn`, `effect`, `typescript`) itself.
+  dependencies (`acorn`, `effect`, and the TypeScript 6 `typescript-compiler-api` alias) itself.
 - **Host-neutral.** It registers no Pi extension and imports nothing from Pi.
   The `pi-code-mode` extension owns the Pi-facing integration: the `code_mode`
   agent tool, adapters for seven core `tools.pi` built-ins and Windows PowerShell, the

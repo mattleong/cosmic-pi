@@ -12,7 +12,6 @@ import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import { nodeFilePlatformLayer, nodeProcessLayer, stripTerminalControls } from "pi-cosmic-core";
 
 const externalEditorLayer = Layer.merge(nodeFilePlatformLayer, nodeProcessLayer);
-const provideLayer = Effect.provide;
 
 const inheritedTerminalOptions = {
   stdin: "inherit",
@@ -85,12 +84,12 @@ export function editWithExternalEditor(
   signal: AbortSignal,
 ): Promise<string | undefined> {
   if (signal.aborted) return Promise.resolve(undefined);
-  return Effect.runPromiseExit(
-    provideLayer(editWithExternalEditorEffect(tui, configuredCommand, value), externalEditorLayer, {
-      local: true,
-    }),
-    { signal },
-  ).then((exit) => {
+  const program = Effect.scoped(
+    Effect.flatMap(Layer.build(externalEditorLayer), (services) =>
+      Effect.provide(editWithExternalEditorEffect(tui, configuredCommand, value), services),
+    ),
+  );
+  return Effect.runPromiseExit(program, { signal }).then((exit) => {
     if (Exit.isSuccess(exit)) return exit.value;
     if (signal.aborted) return undefined;
     const failure = Cause.squash(exit.cause);

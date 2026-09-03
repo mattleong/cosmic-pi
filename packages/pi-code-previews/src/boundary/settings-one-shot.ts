@@ -2,12 +2,7 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import {
-  AgentDirectory,
-  nodeFilePlatformLayer,
-  piHostLoggerLayer,
-  provideBuiltLayer,
-} from "pi-cosmic-core";
+import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
 import { CodePreviewEnvironmentService } from "../config/env";
 import { CodePreviewSettingsService } from "../config/service";
 
@@ -26,8 +21,10 @@ export function runOneShotSettingsEffect<A, E>(
   effect: Effect.Effect<A, E, CodePreviewSettingsService>,
   signal?: AbortSignal,
 ): Promise<A> {
-  return Effect.runPromise(
-    effect.pipe(provideBuiltLayer(oneShotSettingsLayer())),
-    signal ? { signal } : undefined,
+  const program = Effect.scoped(
+    Effect.flatMap(Layer.build(oneShotSettingsLayer()), (services) =>
+      Effect.provide(effect, services),
+    ),
   );
+  return Effect.runPromise(program, signal ? { signal } : undefined);
 }

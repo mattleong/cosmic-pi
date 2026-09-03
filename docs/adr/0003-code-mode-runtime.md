@@ -34,8 +34,9 @@ host concerns, and without depending on an unpublished upstream package.
    remains checked under its own TypeScript project while inheriting the full
    workspace compiler, Effect language-service, and lint policy with no runtime
    exemptions. The relative import also guarantees the runtime shares the
-   extension's single `effect` instance. The runtime's `acorn`/`typescript`/`effect` dependencies
-   are declared by `pi-code-mode` itself so packed consumers install them. Only
+   extension's single `effect` instance. The runtime's `acorn`, `effect`, and
+   `typescript-compiler-api` dependencies are declared by `pi-code-mode` itself so packed
+   consumers install them. Only
    `runtime/src/` and the runtime's legal/provenance docs ship in the tarball;
    the nested workspace manifest is repository-only.
 2. `packages/pi-code-mode/` is the public Pi extension that owns registration,
@@ -54,7 +55,8 @@ The runtime is vendored from the OpenCode repository
 `d4704347465c1ee63d0c213ed00e648e7f0231c5`, package `packages/codemode`
 (`@opencode-ai/codemode@1.18.16`, MIT). Upstream file structure and behavior are
 preserved for diffability; the mechanical local deviations (Effect
-4.0.0-rc.111, TypeScript 6.0.3, Node + Effect-backed Vitest, oxfmt formatting,
+4.0.0-rc.111, the TypeScript 7.0.2 toolchain with a side-by-side TypeScript 6.0.3
+compiler API, Node + Effect-backed Vitest, oxfmt formatting,
 OpenAPI removal, explicit erasable TypeScript syntax, closed owned failure
 channels, Effect subpath imports, and host/guest clock separation) are enumerated
 in `packages/pi-code-mode/runtime/PROVENANCE.md`. These adaptations require no
@@ -78,8 +80,8 @@ confined-execution package entirely.
 
 ### Execution model: interpreted, never evaluated
 
-Model-generated programs are TypeScript-transpiled (using the `typescript`
-compiler API for syntax handling), parsed with Acorn, and executed by a
+Model-generated programs are TypeScript-transpiled using the
+`typescript-compiler-api` alias pinned to TypeScript 6.0.3, parsed with Acorn, and executed by a
 tree-walk interpreter over a deliberately bounded JavaScript subset. Generated
 code is never passed to `eval`, `new Function`, `node:vm`, or a child JavaScript
 process. Programs receive no filesystem, process, network, module, timer, or
@@ -156,11 +158,13 @@ of that limitation; they do not remove it.
   are exempt from the local soft file-size guidance and stylistic refactors;
   upstream comparability is the review mechanism (documented in the package
   `ARCHITECTURE.md` and `PROVENANCE.md`).
-- The workspace catalog pins `acorn@8.15.0` and `typescript@6.0.3`; both the
-  runtime package and `pi-code-mode` (which ships the runtime source and
-  therefore owns its external dependencies for consumers) consume `acorn`,
-  `effect`, and `typescript` via the catalog. Runtime tests also consume the
-  catalog-pinned `@effect/vitest`.
+- The workspace compiler is `typescript@7.0.2`. TypeScript 7 has no stable JavaScript
+  compiler API, so Code Mode follows Microsoft's side-by-side guidance and uses the catalog's
+  `typescript-compiler-api` alias at TypeScript 6.0.3 solely for in-process transpilation. Both the
+  runtime package and `pi-code-mode` (which ships the runtime source and therefore owns its
+  external dependencies for consumers) declare that alias with `acorn` and `effect`. Because the
+  alias also exposes TypeScript 6's `tsc` binary, both package typecheck scripts invoke the root
+  TypeScript 7 binary explicitly. Runtime tests also consume the catalog-pinned `@effect/vitest`.
 - Retained upstream behavioral cases from the codemode, parity, promise, and
   stdlib suites run as Effect-backed, non-`async` Vitest tests and gate the package,
   alongside the local `confinement` suite. Enumeration, signature-rendering, and

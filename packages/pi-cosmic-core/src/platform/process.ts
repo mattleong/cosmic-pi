@@ -286,8 +286,12 @@ export const runBoundedProcessScoped = (
 > => Effect.scoped(runBoundedProcess(request));
 
 /** Named Node boundary for consumers that do not own a larger platform Layer. */
-const provideLayer = Effect.provide;
-export const provideNodeProcess = provideLayer(nodeProcessLayer);
+export const provideNodeProcess = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, Exclude<R, ChildProcessSpawner.ChildProcessSpawner>> =>
+  Effect.scoped(
+    Effect.flatMap(Layer.build(nodeProcessLayer), (services) => Effect.provide(effect, services)),
+  );
 
 export const runBoundedProcessNode = (
   request: BoundedProcessRequest,

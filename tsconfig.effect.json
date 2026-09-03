@@ -43,10 +43,19 @@
           "processEnv": "error",
           "processEnvInEffect": "error",
           "serviceNotAsClass": "error",
-          "strictEffectProvide": "error",
           "unknownInEffectCatch": "error",
           "unsafeEffectTypeAssertion": "error"
-        }
+        },
+        "overrides": [
+          {
+            "include": ["src/**/*.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "strictEffectProvide": "error"
+              }
+            }
+          }
+        ]
       }
     ]
   }

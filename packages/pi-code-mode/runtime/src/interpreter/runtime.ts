@@ -15,7 +15,7 @@ import {
   ScriptTarget,
   flattenDiagnosticMessageText,
   transpileModule,
-} from "typescript";
+} from "typescript-compiler-api";
 import {
   copyIn,
   copyOut,

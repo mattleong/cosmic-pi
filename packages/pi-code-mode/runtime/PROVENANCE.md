@@ -65,8 +65,12 @@ confined to the additions listed there and do not alter upstream execution resul
    `Schema.TaggedError`. The model-visible signature renderer also recognizes
    the RC's combined string enum for non-finite `Schema.Number` encodings while
    retaining compatibility with the earlier per-sentinel enum shape.
-4. `typescript` is consumed at the workspace-pinned `6.0.3` instead of the
-   upstream catalog `5.8.2`; no source changes were required.
+4. The workspace typechecks with `typescript@7.0.2`. Because TypeScript 7 does not expose the
+   JavaScript compiler API, runtime transpilation imports the `typescript-compiler-api` alias pinned
+   to TypeScript 6.0.3 instead of upstream's direct `typescript@5.8.2` dependency. This follows
+   Microsoft's side-by-side guidance and keeps `transpileModule` behavior isolated from the
+   workspace compiler. The alias exposes TypeScript 6's `tsc` binary, so the Code Mode package
+   typecheck scripts call the root TypeScript 7 binary explicitly.
 5. All files are formatted with the repository's `oxfmt` configuration
    (semicolons, wrapping); compare against upstream with a formatter-insensitive
    diff or by re-formatting the upstream files before diffing.
