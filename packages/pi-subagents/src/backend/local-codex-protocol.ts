@@ -267,6 +267,67 @@ const normalizedWarning = (summary: string, details?: string | null): string => 
   return (parts.join("\n") || "Codex warning.").slice(0, MAX_WARNING_TEXT_CHARS);
 };
 
+/** Bounded item started/completed decoding: native-agent discriminants first, then ordinary items. */
+const decodeCodexItemNotification = Effect.fn("LocalCodexProtocol.decodeItemNotification")(
+  function* <ParamsInput>(method: "item/started" | "item/completed", params: ParamsInput) {
+    const envelope = yield* Schema.decodeUnknownEffect(NativeItemEnvelope)(params);
+    const discriminant = yield* Schema.decodeUnknownEffect(NativeItemDiscriminant)(envelope.item);
+    if (discriminant.type === "collabAgentToolCall") {
+      const item = yield* Schema.decodeUnknownEffect(
+        CollabAgentItem,
+        exactDecodeOptions,
+      )(envelope.item);
+      const receiver = item.receiverThreadIds[0];
+      const state =
+        method === "item/started" || item.status === "inProgress"
+          ? ("activity" as const)
+          : item.status === "failed"
+            ? ("failed" as const)
+            : item.tool === "spawnAgent" && receiver
+              ? ("running" as const)
+              : item.tool === "closeAgent" && receiver
+                ? ("stopped" as const)
+                : ("activity" as const);
+      return {
+        type: "native_activity" as const,
+        threadId: envelope.threadId,
+        turnId: envelope.turnId,
+        activityId: receiver ?? item.id,
+        kind: item.tool,
+        state,
+      };
+    }
+    if (discriminant.type === "subAgentActivity") {
+      const item = yield* Schema.decodeUnknownEffect(
+        SubAgentActivityItem,
+        exactDecodeOptions,
+      )(envelope.item);
+      if (method === "item/started") return { type: "ignored" as const };
+      return {
+        type: "native_activity" as const,
+        threadId: envelope.threadId,
+        turnId: envelope.turnId,
+        activityId: item.agentThreadId,
+        kind: `${item.kind}:${item.agentPath}`,
+        state:
+          item.kind === "started"
+            ? ("running" as const)
+            : item.kind === "interrupted"
+              ? ("stopped" as const)
+              : ("activity" as const),
+      };
+    }
+    const schema = method === "item/started" ? ItemStarted : ItemCompleted;
+    const value = yield* Schema.decodeUnknownEffect(schema)(params);
+    return {
+      type: method === "item/started" ? ("item_started" as const) : ("item_completed" as const),
+      threadId: value.threadId,
+      turnId: value.turnId,
+      item: value.item,
+    };
+  },
+);
+
 export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotification")(
   function* <ParamsInput>(method: string, params: ParamsInput) {
     switch (method) {
@@ -279,65 +340,8 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
         };
       }
       case "item/started":
-      case "item/completed": {
-        const envelope = yield* Schema.decodeUnknownEffect(NativeItemEnvelope)(params);
-        const discriminant = yield* Schema.decodeUnknownEffect(NativeItemDiscriminant)(
-          envelope.item,
-        );
-        if (discriminant.type === "collabAgentToolCall") {
-          const item = yield* Schema.decodeUnknownEffect(
-            CollabAgentItem,
-            exactDecodeOptions,
-          )(envelope.item);
-          const receiver = item.receiverThreadIds[0];
-          const state =
-            method === "item/started" || item.status === "inProgress"
-              ? ("activity" as const)
-              : item.status === "failed"
-                ? ("failed" as const)
-                : item.tool === "spawnAgent" && receiver
-                  ? ("running" as const)
-                  : item.tool === "closeAgent" && receiver
-                    ? ("stopped" as const)
-                    : ("activity" as const);
-          return {
-            type: "native_activity" as const,
-            threadId: envelope.threadId,
-            turnId: envelope.turnId,
-            activityId: receiver ?? item.id,
-            kind: item.tool,
-            state,
-          };
-        }
-        if (discriminant.type === "subAgentActivity") {
-          const item = yield* Schema.decodeUnknownEffect(
-            SubAgentActivityItem,
-            exactDecodeOptions,
-          )(envelope.item);
-          if (method === "item/started") return { type: "ignored" as const };
-          return {
-            type: "native_activity" as const,
-            threadId: envelope.threadId,
-            turnId: envelope.turnId,
-            activityId: item.agentThreadId,
-            kind: `${item.kind}:${item.agentPath}`,
-            state:
-              item.kind === "started"
-                ? ("running" as const)
-                : item.kind === "interrupted"
-                  ? ("stopped" as const)
-                  : ("activity" as const),
-          };
-        }
-        const schema = method === "item/started" ? ItemStarted : ItemCompleted;
-        const value = yield* Schema.decodeUnknownEffect(schema)(params);
-        return {
-          type: method === "item/started" ? ("item_started" as const) : ("item_completed" as const),
-          threadId: value.threadId,
-          turnId: value.turnId,
-          item: value.item,
-        };
-      }
+      case "item/completed":
+        return yield* decodeCodexItemNotification(method, params);
       case "item/agentMessage/delta": {
         const value = yield* Schema.decodeUnknownEffect(AgentDelta)(params);
         return { type: "agent_delta" as const, ...value };

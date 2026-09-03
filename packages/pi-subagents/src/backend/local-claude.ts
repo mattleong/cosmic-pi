@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import type { LocalCliProcessContract } from "../boundary/local-cli-process.ts";
@@ -36,6 +35,7 @@ import {
   uncorrelatedClaudeUserMessage,
   usageComponentsTotal,
   zeroUsageComponents,
+  type ResultExpectation,
   type UsageComponents,
 } from "./local-claude-correlation.ts";
 import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
@@ -76,6 +76,13 @@ const CLAUDE_NATIVE_AGENT_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 type ClaudeUserProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "user" }>;
+type ClaudeInitProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "init" }>;
+type ClaudeAssistantProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "assistant" }>;
+type ClaudeResultProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "result" }>;
+type ClaudeControlResponseEvent = Extract<
+  ClaudeProtocolEvent,
+  { readonly type: "control_response" }
+>;
 
 const unsupported = (capability: string) =>
   unsupportedCapability(
@@ -118,7 +125,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   supervisor: SupervisorChannelHandle,
 ) {
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
-  const { offer, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
+  const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
     events,
     child.acknowledge,
   );
@@ -237,400 +244,386 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   ) =>
     Effect.gen(function* () {
       for (const [index, result] of toolResults.entries()) {
+        // Native agent results surface as native activity; every other registered
+        // tool finishes through the plain tool lifecycle.
         const nativeName = nativeToolNames.get(result.id);
         nativeToolNames.delete(result.id);
-        if (nativeName) {
-          yield* offer(
-            {
+        const finished: BackendEvent = nativeName
+          ? {
               type: "native_agent_activity",
               assignmentEpoch,
               activityId: result.id,
               kind: nativeName,
               state: result.isError ? "failed" : "completed",
-            },
-            index === toolResults.length - 1 ? raw : undefined,
-          );
-          continue;
-        }
-        const name = toolNames.get(result.id) ?? "ClaudeTool";
-        toolNames.delete(result.id);
-        yield* offer(
-          {
-            type: "tool_finished",
-            assignmentEpoch,
-            toolCallId: result.id,
-            toolName: name,
-            isError: result.isError,
-          },
-          index === toolResults.length - 1 ? raw : undefined,
-        );
+            }
+          : {
+              type: "tool_finished",
+              assignmentEpoch,
+              toolCallId: result.id,
+              toolName: toolNames.get(result.id) ?? "ClaudeTool",
+              isError: result.isError,
+            };
+        if (!nativeName) toolNames.delete(result.id);
+        // Only the final result of the frame carries the raw ownership budget.
+        yield* offer(finished, index === toolResults.length - 1 ? raw : undefined);
       }
     });
+
+  const onInit = (event: ClaudeInitProtocolEvent, raw: LocalCliWireEvent): Effect.Effect<void> => {
+    nativeSessionId = event.sessionId;
+    Deferred.doneUnsafe(nativeInitialization, Effect.succeed(event));
+    return release(raw);
+  };
+
+  const isReplayConfirmation = (
+    event: ClaudeUserProtocolEvent,
+    pending: PendingUserReplay,
+    sameSession: boolean,
+  ): boolean =>
+    // Exact UUID correlation only; the pinned protocol replays the
+    // caller-supplied input uuid, so no text matching is consulted.
+    event.isReplay && event.uuid !== undefined && event.uuid === pending.uuid && sameSession;
+
+  const isInterruptMarker = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
+    event.isReplay &&
+    event.text === CLAUDE_INTERRUPT_MARKER &&
+    event.toolResults.length === 0 &&
+    event.uuid === undefined &&
+    sameSession;
+
+  const isSyntheticSubturn = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
+    (event.uuid === undefined || !correlation.hasSentUuid(event.uuid)) &&
+    event.isSynthetic &&
+    isInternalReplayOrigin(event.originKind, event.originSubkind) &&
+    assignmentEpoch > 0 &&
+    sameSession;
+
+  const isKnownReplay = (event: ClaudeUserProtocolEvent): boolean =>
+    // A delayed or duplicate replay of an input this handle already
+    // confirmed is safely acknowledged without further effect.
+    event.uuid !== undefined &&
+    correlation.hasSentUuid(event.uuid) &&
+    (event.isReplay || isInternalReplayOrigin(event.originKind, event.originSubkind));
+
+  const onUser = (event: ClaudeUserProtocolEvent, raw: LocalCliWireEvent) => {
+    const sameSession = isSameClaudeSession(event.sessionId, nativeSessionId);
+    const pending = pendingUserReplay;
+    const interrupt = pendingInterrupt;
+    if (event.parentToolUseId !== undefined) {
+      // --forward-subagent-text emits nested assistant/user frames with
+      // parent_tool_use_id. Text-only user frames are activity, while their tool
+      // results retain the nested tool lifecycle used by write-claim observation.
+      if (assignmentEpoch <= 0 || !sameSession)
+        return offer(
+          {
+            type: "protocol_error",
+            message: uncorrelatedClaudeUserMessage(event, nativeSessionId),
+          },
+          raw,
+        );
+      return event.toolResults.length > 0
+        ? handleToolResults(event.toolResults, raw)
+        : offer({ type: "activity", assignmentEpoch }, raw);
+    }
+    if (pending && isReplayConfirmation(event, pending, sameSession)) {
+      pendingUserReplay = undefined;
+      correlation.rememberSentUuid(pending.uuid);
+      if (pending.resultKind)
+        correlation.register(
+          { uuid: pending.uuid, kind: pending.resultKind, epoch: pending.epoch },
+          emittedUsageTotals,
+        );
+      Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
+      return pending.emitRunStarted
+        ? offer({ type: "run_started", assignmentEpoch: pending.epoch }, raw)
+        : release(raw);
+    }
+    if (interrupt && isInterruptMarker(event, sameSession)) {
+      interrupt.markerSeen = true;
+      if (interrupt.resultSeen) {
+        if (interrupt.abandoned) {
+          pendingInterrupt = undefined;
+          return offer({ type: "run_settled", assignmentEpoch: interrupt.epoch }, raw);
+        }
+        Deferred.doneUnsafe(interrupt.terminal, Effect.void);
+      }
+      return release(raw);
+    }
+    if (isSyntheticSubturn(event, sameSession)) {
+      // Claude-owned task notifications and auto-continuations are
+      // causal subturns of the active assignment. Older frames may omit
+      // their UUID, so a private identity owns only the result FIFO.
+      const syntheticUuid = event.uuid ?? `synthetic:${randomUUID()}`;
+      if (event.uuid !== undefined) correlation.rememberSentUuid(event.uuid);
+      correlation.register(
+        { uuid: syntheticUuid, kind: "synthetic", epoch: assignmentEpoch },
+        emittedUsageTotals,
+      );
+      return offer({ type: "activity", assignmentEpoch }, raw);
+    }
+    if (event.toolResults.length > 0) return handleToolResults(event.toolResults, raw);
+    if (isKnownReplay(event)) return release(raw);
+    return offer(
+      { type: "protocol_error", message: uncorrelatedClaudeUserMessage(event, nativeSessionId) },
+      raw,
+    );
+  };
+
+  const onControlResponse = (event: ClaudeControlResponseEvent, raw: LocalCliWireEvent) => {
+    const pending = controlResponses.get(event.requestId);
+    if (!pending) return release(raw);
+    controlResponses.delete(event.requestId);
+    Deferred.doneUnsafe(
+      pending.deferred,
+      event.success
+        ? Effect.succeed(event.response)
+        : Effect.fail(
+            processError(
+              pending.operation,
+              `${pending.operation}_rejected`,
+              event.diagnostic ?? `Claude Code rejected ${pending.operation}.`,
+            ),
+          ),
+    );
+    return release(raw);
+  };
+
+  const onAssistant = (event: ClaudeAssistantProtocolEvent, raw: LocalCliWireEvent) =>
+    Effect.gen(function* () {
+      for (const tool of event.tools) {
+        if (CLAUDE_NATIVE_AGENT_TOOLS.has(tool.name)) {
+          nativeToolNames.set(tool.id, tool.name);
+          yield* offer({
+            type: "native_agent_activity",
+            assignmentEpoch,
+            activityId: tool.id,
+            kind: tool.name,
+            state: CLAUDE_NATIVE_AGENT_START_TOOLS.has(tool.name) ? "running" : "completed",
+          });
+          continue;
+        }
+        toolNames.set(tool.id, tool.name);
+        yield* offer({
+          type: "tool_started",
+          assignmentEpoch,
+          toolCallId: tool.id,
+          toolName: tool.name,
+          args: tool.input,
+        });
+      }
+      // Native assistant usage repeats cumulatively per message id, so only the
+      // nonnegative delta for the same id is accounted.
+      const previous = event.messageId ? assistantUsageByMessage.get(event.messageId) : undefined;
+      const { delta, inconsistent } = cumulativeUsageDelta(
+        previous ?? zeroUsageComponents,
+        event.usage,
+      );
+      if (event.messageId) {
+        assistantUsageByMessage.delete(event.messageId);
+        assistantUsageByMessage.set(
+          event.messageId,
+          componentwiseMax(previous ?? zeroUsageComponents, event.usage),
+        );
+        while (assistantUsageByMessage.size > ASSISTANT_USAGE_MESSAGE_LIMIT) {
+          const oldest = assistantUsageByMessage.keys().next().value;
+          if (oldest === undefined) break;
+          assistantUsageByMessage.delete(oldest);
+        }
+      }
+      emittedUsageTotals = addUsageComponents(emittedUsageTotals, delta);
+      if (inconsistent)
+        yield* offer({
+          type: "warning",
+          source: "runtime-extension",
+          message:
+            "Claude reported a regressing cumulative assistant usage total; accounting stays monotone and the regression was ignored.",
+        });
+      yield* offer(
+        {
+          type: "assistant_message" as const,
+          assignmentEpoch,
+          ...(event.text !== undefined && event.text.length > 0 && { text: event.text }),
+          usage: { ...delta, totalTokens: usageComponentsTotal(delta) },
+        },
+        raw,
+      );
+    });
+
+  const reconcileResultUsage = (
+    event: ClaudeResultProtocolEvent,
+    expectation: ResultExpectation | undefined,
+  ): Effect.Effect<void> => {
+    if (
+      expectation === undefined ||
+      expectation.kind === "initialization" ||
+      (event.usage === undefined && event.totalCostUsd === undefined)
+    )
+      return Effect.void;
+    // The nonnegative already-emitted amount for this exact query is
+    // the componentwise floor delta over its registration baseline.
+    const emittedForQuery: UsageComponents = cumulativeUsageDelta(
+      expectation.usageBaseline,
+      emittedUsageTotals,
+    ).delta;
+    const { delta, inconsistent } = event.usage
+      ? cumulativeUsageDelta(emittedForQuery, event.usage)
+      : { delta: zeroUsageComponents, inconsistent: false };
+    emittedUsageTotals = addUsageComponents(emittedUsageTotals, delta);
+    // total_cost_usd is cumulative within one native query, but each
+    // result/query reports independently. Consume it once by UUID.
+    const costDelta = event.totalCostUsd;
+    const warn = inconsistent
+      ? offer({
+          type: "warning",
+          source: "runtime-extension",
+          message:
+            "Claude reported a regressing cumulative result usage total; accounting stays monotone and the regression was ignored.",
+        })
+      : Effect.void;
+    const emit =
+      usageComponentsTotal(delta) > 0 || costDelta !== undefined
+        ? offer({
+            type: "assistant_message",
+            assignmentEpoch: expectation.epoch,
+            usage: {
+              ...delta,
+              totalTokens: usageComponentsTotal(delta),
+              ...(costDelta !== undefined && { cost: costDelta }),
+            },
+          })
+        : Effect.void;
+    return warn.pipe(Effect.andThen(emit));
+  };
+
+  const settleInterruptResult = (interrupt: PendingInterrupt, raw: LocalCliWireEvent) =>
+    Effect.suspend(() => {
+      interrupt.resultSeen = true;
+      if (interrupt.markerSeen) {
+        if (interrupt.abandoned) {
+          pendingInterrupt = undefined;
+          return offer({ type: "run_settled", assignmentEpoch: interrupt.epoch }, raw);
+        }
+        Deferred.doneUnsafe(interrupt.terminal, Effect.void);
+      }
+      return release(raw);
+    });
+
+  const confirmAssignmentResult = (
+    event: ClaudeResultProtocolEvent,
+    expectation: ResultExpectation,
+    raw: LocalCliWireEvent,
+  ) => {
+    // Assignment results may be acknowledged only after the MCP report
+    // call recorded causal acceptance for the correlated epoch.
+    const completedEpoch = expectation.epoch;
+    return reconcileResultUsage(event, expectation).pipe(
+      Effect.andThen(
+        supervisor.hasAcceptedReport(completedEpoch).pipe(
+          Effect.matchEffect({
+            onFailure: (error) =>
+              offer(
+                {
+                  type: "protocol_error",
+                  message: `Unable to confirm Claude supervisor report ownership: ${error.message}`,
+                },
+                raw,
+              ),
+            onSuccess: (accepted) =>
+              accepted
+                ? release(raw).pipe(Effect.andThen(releaseReportAfterNativeResult(completedEpoch)))
+                : offer(
+                    {
+                      type: "protocol_error",
+                      message:
+                        "Claude Code result completed without an accepted supervisor report.",
+                    },
+                    raw,
+                  ),
+          }),
+        ),
+      ),
+    );
+  };
+
+  const onResult = (event: ClaudeResultProtocolEvent, raw: LocalCliWireEvent) => {
+    // Correlate to the exact originating input: the native
+    // user_message_uuid when reported, otherwise the owned issue-order
+    // FIFO for a pinned protocol frame that legitimately omits it.
+    const expectation = correlation.take(
+      event.userMessageUuid,
+      event.originKind,
+      event.originSubkind,
+    );
+    // An interrupted assignment result: the exact native aborted-stream failure for
+    // the pending interrupt's epoch (or an uncorrelated pinned frame), in this session.
+    const interrupt = pendingInterrupt;
+    const interruptedResult =
+      interrupt !== undefined &&
+      event.isError &&
+      event.subtype === "error_during_execution" &&
+      event.stopReason === "aborted_streaming" &&
+      ((event.userMessageUuid === undefined && expectation === undefined) ||
+        (expectation?.kind === "assignment" && expectation.epoch === interrupt.epoch)) &&
+      (event.sessionId === undefined ||
+        nativeSessionId === undefined ||
+        event.sessionId === nativeSessionId);
+    if (interruptedResult)
+      return reconcileResultUsage(event, expectation).pipe(
+        Effect.andThen(releaseReportAfterNativeResult(interrupt.epoch)),
+        Effect.andThen(settleInterruptResult(interrupt, raw)),
+      );
+    if (event.isError)
+      return reconcileResultUsage(event, expectation).pipe(
+        Effect.andThen(
+          offer(
+            {
+              type: "protocol_error",
+              message: event.diagnostic
+                ? `Claude Code result failed: ${event.diagnostic}`
+                : "Claude Code result failed before a supervisor report was accepted.",
+            },
+            raw,
+          ),
+        ),
+      );
+    // The shouldQuery:false native initialization probe produces one
+    // correlated result; it is an expected nonfatal artifact regardless
+    // of any assignment epoch already in flight.
+    if (expectation?.kind === "initialization") return release(raw);
+    if (expectation?.kind === "synthetic")
+      return reconcileResultUsage(event, expectation).pipe(Effect.andThen(release(raw)));
+    if (expectation === undefined)
+      return offer(
+        {
+          type: "protocol_error",
+          message: "Claude Code emitted a result that no issued input correlates to.",
+        },
+        raw,
+      );
+    return confirmAssignmentResult(event, expectation, raw);
+  };
 
   const consumeRaw = (raw: LocalCliWireEvent): Effect.Effect<void> => {
     if (raw.type === "protocol_error")
       return offer({ type: "protocol_error", message: raw.message }, raw);
-    if (raw.type === "exit") {
-      child.acknowledge(raw);
-      return Effect.void;
-    }
+    if (raw.type === "exit") return release(raw);
     return decodeClaudeProtocolEvent(raw.value).pipe(
       Effect.flatMap((event) => {
         switch (event.type) {
           case "ignored":
-            child.acknowledge(raw);
-            return Effect.void;
+            return release(raw);
           case "init":
-            nativeSessionId = event.sessionId;
-            Deferred.doneUnsafe(nativeInitialization, Effect.succeed(event));
-            child.acknowledge(raw);
-            return Effect.void;
+            return onInit(event, raw);
           case "activity":
             return offer({ type: "activity", assignmentEpoch }, raw);
-          case "user": {
-            const sameSession = isSameClaudeSession(event.sessionId, nativeSessionId);
-            if (event.parentToolUseId !== undefined) {
-              if (assignmentEpoch <= 0 || !sameSession)
-                return offer(
-                  {
-                    type: "protocol_error",
-                    message: uncorrelatedClaudeUserMessage(event, nativeSessionId),
-                  },
-                  raw,
-                );
-              // --forward-subagent-text emits nested assistant/user frames with
-              // parent_tool_use_id. Text-only user frames are activity, while
-              // their tool results retain the nested tool lifecycle used by
-              // write-claim observation.
-              return event.toolResults.length > 0
-                ? handleToolResults(event.toolResults, raw)
-                : offer({ type: "activity", assignmentEpoch }, raw);
-            }
-            const pending = pendingUserReplay;
-            // Exact UUID correlation only; the pinned protocol replays the
-            // caller-supplied input uuid, so no text matching is consulted.
-            if (
-              pending &&
-              event.isReplay &&
-              event.uuid !== undefined &&
-              event.uuid === pending.uuid &&
-              sameSession
-            ) {
-              pendingUserReplay = undefined;
-              correlation.rememberSentUuid(pending.uuid);
-              if (pending.resultKind)
-                correlation.register(
-                  {
-                    uuid: pending.uuid,
-                    kind: pending.resultKind,
-                    epoch: pending.epoch,
-                  },
-                  emittedUsageTotals,
-                );
-              Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
-              return pending.emitRunStarted
-                ? offer({ type: "run_started", assignmentEpoch: pending.epoch }, raw)
-                : Effect.sync(() => child.acknowledge(raw));
-            }
-            const interrupt = pendingInterrupt;
-            if (
-              interrupt &&
-              event.isReplay &&
-              event.text === CLAUDE_INTERRUPT_MARKER &&
-              event.toolResults.length === 0 &&
-              event.uuid === undefined &&
-              sameSession
-            ) {
-              interrupt.markerSeen = true;
-              if (interrupt.resultSeen) {
-                if (interrupt.abandoned) {
-                  pendingInterrupt = undefined;
-                  return offer({ type: "run_settled", assignmentEpoch: interrupt.epoch }, raw);
-                }
-                Deferred.doneUnsafe(interrupt.terminal, Effect.void);
-              }
-              child.acknowledge(raw);
-              return Effect.void;
-            }
-            if (
-              (event.uuid === undefined || !correlation.hasSentUuid(event.uuid)) &&
-              event.isSynthetic &&
-              isInternalReplayOrigin(event.originKind, event.originSubkind) &&
-              assignmentEpoch > 0 &&
-              sameSession
-            ) {
-              // Claude-owned task notifications and auto-continuations are
-              // causal subturns of the active assignment. Older frames may omit
-              // their UUID, so a private identity owns only the result FIFO.
-              const syntheticUuid = event.uuid ?? `synthetic:${randomUUID()}`;
-              if (event.uuid !== undefined) correlation.rememberSentUuid(event.uuid);
-              correlation.register(
-                {
-                  uuid: syntheticUuid,
-                  kind: "synthetic",
-                  epoch: assignmentEpoch,
-                },
-                emittedUsageTotals,
-              );
-              return offer({ type: "activity", assignmentEpoch }, raw);
-            }
-            if (event.toolResults.length > 0) return handleToolResults(event.toolResults, raw);
-            // A delayed or duplicate replay of an input this handle already
-            // confirmed is safely acknowledged without further effect.
-            if (
-              event.uuid !== undefined &&
-              correlation.hasSentUuid(event.uuid) &&
-              (event.isReplay || isInternalReplayOrigin(event.originKind, event.originSubkind))
-            ) {
-              child.acknowledge(raw);
-              return Effect.void;
-            }
-            return offer(
-              {
-                type: "protocol_error",
-                message: uncorrelatedClaudeUserMessage(event, nativeSessionId),
-              },
-              raw,
-            );
-          }
-          case "control_response": {
-            const pending = controlResponses.get(event.requestId);
-            if (!pending) {
-              child.acknowledge(raw);
-              return Effect.void;
-            }
-            controlResponses.delete(event.requestId);
-            Deferred.doneUnsafe(
-              pending.deferred,
-              event.success
-                ? Effect.succeed(event.response)
-                : Effect.fail(
-                    processError(
-                      pending.operation,
-                      `${pending.operation}_rejected`,
-                      event.diagnostic ?? `Claude Code rejected ${pending.operation}.`,
-                    ),
-                  ),
-            );
-            child.acknowledge(raw);
-            return Effect.void;
-          }
+          case "user":
+            return onUser(event, raw);
+          case "control_response":
+            return onControlResponse(event, raw);
           case "assistant":
-            return Effect.gen(function* () {
-              for (const tool of event.tools) {
-                if (CLAUDE_NATIVE_AGENT_TOOLS.has(tool.name)) {
-                  nativeToolNames.set(tool.id, tool.name);
-                  yield* offer({
-                    type: "native_agent_activity",
-                    assignmentEpoch,
-                    activityId: tool.id,
-                    kind: tool.name,
-                    state: CLAUDE_NATIVE_AGENT_START_TOOLS.has(tool.name) ? "running" : "completed",
-                  });
-                  continue;
-                }
-                toolNames.set(tool.id, tool.name);
-                yield* offer({
-                  type: "tool_started",
-                  assignmentEpoch,
-                  toolCallId: tool.id,
-                  toolName: tool.name,
-                  args: tool.input,
-                });
-              }
-              // Native assistant usage repeats cumulatively per message id, so
-              // only the nonnegative delta for the same id is accounted.
-              const previous = event.messageId
-                ? assistantUsageByMessage.get(event.messageId)
-                : undefined;
-              const { delta, inconsistent } = cumulativeUsageDelta(
-                previous ?? zeroUsageComponents,
-                event.usage,
-              );
-              if (event.messageId) {
-                assistantUsageByMessage.delete(event.messageId);
-                assistantUsageByMessage.set(
-                  event.messageId,
-                  componentwiseMax(previous ?? zeroUsageComponents, event.usage),
-                );
-                while (assistantUsageByMessage.size > ASSISTANT_USAGE_MESSAGE_LIMIT) {
-                  const oldest = assistantUsageByMessage.keys().next().value;
-                  if (oldest === undefined) break;
-                  assistantUsageByMessage.delete(oldest);
-                }
-              }
-              emittedUsageTotals = addUsageComponents(emittedUsageTotals, delta);
-              if (inconsistent)
-                yield* offer({
-                  type: "warning",
-                  source: "runtime-extension",
-                  message:
-                    "Claude reported a regressing cumulative assistant usage total; accounting stays monotone and the regression was ignored.",
-                });
-              const backendEvent: BackendEvent = (() => {
-                const baseResult = { type: "assistant_message" as const, assignmentEpoch };
-                const withText = event.text ? { ...baseResult, text: event.text } : baseResult;
-                const withUsage = {
-                  ...withText,
-                  usage: { ...delta, totalTokens: usageComponentsTotal(delta) },
-                };
-                return withUsage;
-              })();
-              yield* offer(backendEvent, raw);
-            });
-          case "result": {
-            // Correlate to the exact originating input: the native
-            // user_message_uuid when reported, otherwise the owned issue-order
-            // FIFO for a pinned protocol frame that legitimately omits it.
-            const expectation = correlation.take(
-              event.userMessageUuid,
-              event.originKind,
-              event.originSubkind,
-            );
-            // Result-level cumulative usage/cost reconciliation: emit only the
-            // nonnegative remainder over already-accounted assistant deltas so
-            // nothing is double-counted, and surface the known cost estimate.
-            const reconcileUsage = Effect.suspend(() => {
-              if (
-                expectation === undefined ||
-                expectation.kind === "initialization" ||
-                (event.usage === undefined && event.totalCostUsd === undefined)
-              )
-                return Effect.void;
-              // The nonnegative already-emitted amount for this exact query is
-              // the componentwise floor delta over its registration baseline.
-              const emittedForQuery: UsageComponents = cumulativeUsageDelta(
-                expectation.usageBaseline,
-                emittedUsageTotals,
-              ).delta;
-              const { delta, inconsistent } = event.usage
-                ? cumulativeUsageDelta(emittedForQuery, event.usage)
-                : { delta: zeroUsageComponents, inconsistent: false };
-              emittedUsageTotals = addUsageComponents(emittedUsageTotals, delta);
-              // total_cost_usd is cumulative within one native query, but each
-              // result/query reports independently. Consume it once by UUID.
-              const costDelta = event.totalCostUsd;
-              const warn = inconsistent
-                ? offer({
-                    type: "warning",
-                    source: "runtime-extension",
-                    message:
-                      "Claude reported a regressing cumulative result usage total; accounting stays monotone and the regression was ignored.",
-                  })
-                : Effect.void;
-              const emit =
-                usageComponentsTotal(delta) > 0 || costDelta !== undefined
-                  ? offer({
-                      type: "assistant_message",
-                      assignmentEpoch: expectation.epoch,
-                      usage: (() => {
-                        const baseResult = {
-                          ...delta,
-                          totalTokens: usageComponentsTotal(delta),
-                        };
-                        const withCost =
-                          costDelta === undefined ? baseResult : { ...baseResult, cost: costDelta };
-                        return withCost;
-                      })(),
-                    })
-                  : Effect.void;
-              return warn.pipe(Effect.andThen(emit));
-            });
-            const interrupt = pendingInterrupt;
-            const expectedInterruptedResult =
-              interrupt !== undefined &&
-              event.isError &&
-              event.subtype === "error_during_execution" &&
-              event.stopReason === "aborted_streaming" &&
-              ((event.userMessageUuid === undefined && expectation === undefined) ||
-                (expectation?.kind === "assignment" && expectation.epoch === interrupt.epoch)) &&
-              (event.sessionId === undefined ||
-                nativeSessionId === undefined ||
-                event.sessionId === nativeSessionId);
-            if (expectedInterruptedResult) {
-              return reconcileUsage.pipe(
-                Effect.andThen(releaseReportAfterNativeResult(interrupt.epoch)),
-                Effect.andThen(
-                  Effect.suspend(() => {
-                    interrupt.resultSeen = true;
-                    if (interrupt.markerSeen) {
-                      if (interrupt.abandoned) {
-                        pendingInterrupt = undefined;
-                        return offer(
-                          { type: "run_settled", assignmentEpoch: interrupt.epoch },
-                          raw,
-                        );
-                      }
-                      Deferred.doneUnsafe(interrupt.terminal, Effect.void);
-                    }
-                    child.acknowledge(raw);
-                    return Effect.void;
-                  }),
-                ),
-              );
-            }
-            if (event.isError)
-              return reconcileUsage.pipe(
-                Effect.andThen(
-                  offer(
-                    {
-                      type: "protocol_error",
-                      message: event.diagnostic
-                        ? `Claude Code result failed: ${event.diagnostic}`
-                        : "Claude Code result failed before a supervisor report was accepted.",
-                    },
-                    raw,
-                  ),
-                ),
-              );
-            // The shouldQuery:false native initialization probe produces one
-            // correlated result; it is an expected nonfatal artifact regardless
-            // of any assignment epoch already in flight.
-            if (expectation?.kind === "initialization")
-              return Effect.sync(() => child.acknowledge(raw));
-            if (expectation?.kind === "synthetic")
-              return reconcileUsage.pipe(Effect.andThen(Effect.sync(() => child.acknowledge(raw))));
-            if (expectation === undefined)
-              return offer(
-                {
-                  type: "protocol_error",
-                  message: "Claude Code emitted a result that no issued input correlates to.",
-                },
-                raw,
-              );
-            // Assignment results may be acknowledged only after the MCP report
-            // call recorded causal acceptance for the correlated epoch.
-            const completedEpoch = expectation.epoch;
-            return reconcileUsage.pipe(
-              Effect.andThen(
-                supervisor.hasAcceptedReport(completedEpoch).pipe(
-                  Effect.matchEffect({
-                    onFailure: (error) =>
-                      offer(
-                        {
-                          type: "protocol_error",
-                          message: `Unable to confirm Claude supervisor report ownership: ${error.message}`,
-                        },
-                        raw,
-                      ),
-                    onSuccess: (accepted) =>
-                      accepted
-                        ? Effect.sync(() => child.acknowledge(raw)).pipe(
-                            Effect.andThen(releaseReportAfterNativeResult(completedEpoch)),
-                          )
-                        : offer(
-                            {
-                              type: "protocol_error",
-                              message:
-                                "Claude Code result completed without an accepted supervisor report.",
-                            },
-                            raw,
-                          ),
-                  }),
-                ),
-              ),
-            );
-          }
+            return onAssistant(event, raw);
+          case "result":
+            return onResult(event, raw);
         }
       }),
       Effect.catch(() =>
@@ -730,6 +723,11 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       }),
       (acquired) => {
         if (!("pending" in acquired) || !acquired.pending) return Effect.fail(acquired.error);
+        const timeoutError = processError(
+          operation,
+          `${operation}_outcome_uncertain`,
+          "Claude stream input was sent but native replay confirmation did not arrive; the backend was closed to prevent ambiguous retry correlation.",
+        );
         return child.send(claudeUserFrame(text, { shouldQuery, uuid: acquired.pending.uuid })).pipe(
           Effect.mapError((error) =>
             error.code === "transport_outcome_uncertain"
@@ -746,18 +744,9 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
               : Effect.fail(error),
           ),
           Effect.andThen(Deferred.await(acquired.pending.acknowledgement)),
-          Effect.timeoutOption(CONTROL_TIMEOUT),
-          Effect.flatMap((outcome) =>
-            Option.isSome(outcome)
-              ? Effect.void
-              : failUncertainDelivery(
-                  processError(
-                    operation,
-                    `${operation}_outcome_uncertain`,
-                    "Claude stream input was sent but native replay confirmation did not arrive; the backend was closed to prevent ambiguous retry correlation.",
-                  ),
-                ),
-          ),
+          Effect.timeout(CONTROL_TIMEOUT),
+          // Interrupt the pending send/acknowledgement before force-closing its transport.
+          Effect.catchTag("TimeoutError", () => failUncertainDelivery(timeoutError)),
         );
       },
       (acquired) =>
@@ -823,18 +812,17 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     );
     yield* sendUser(INITIALIZATION_PROBE, 0, "initialize", false);
     const native = yield* Deferred.await(nativeInitialization).pipe(
-      Effect.timeoutOption(CONTROL_TIMEOUT),
-      Effect.flatMap((outcome) =>
-        Option.isSome(outcome)
-          ? Effect.succeed(outcome.value)
-          : Effect.fail(
-              processError(
-                "initialize",
-                "claude_native_init_missing",
-                "Claude Code did not emit its mandatory native system/init event.",
-              ),
+      Effect.timeoutOrElse({
+        duration: CONTROL_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            processError(
+              "initialize",
+              "claude_native_init_missing",
+              "Claude Code did not emit its mandatory native system/init event.",
             ),
-      ),
+          ),
+      }),
     );
     const resolvedModel =
       advertised.models.find((model) => model.value === request.model)?.resolvedModel ??
@@ -952,18 +940,17 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         concurrency: "unbounded",
         discard: true,
       }).pipe(
-        Effect.timeoutOption(CONTROL_TIMEOUT),
-        Effect.flatMap((outcome) =>
-          Option.isSome(outcome)
-            ? Effect.void
-            : Effect.fail(
-                processError(
-                  "interrupt",
-                  "interrupt_outcome_uncertain",
-                  "Claude interrupt did not complete its correlated response, replay marker, and aborted result lifecycle; it will not be retried.",
-                ),
+        Effect.timeoutOrElse({
+          duration: CONTROL_TIMEOUT,
+          orElse: () =>
+            Effect.fail(
+              processError(
+                "interrupt",
+                "interrupt_outcome_uncertain",
+                "Claude interrupt did not complete its correlated response, replay marker, and aborted result lifecycle; it will not be retried.",
               ),
-        ),
+            ),
+        }),
       );
     },
     (acquired, exit) =>

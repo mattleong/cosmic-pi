@@ -288,18 +288,17 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
             ),
           );
         }).pipe(
-          Effect.timeoutOption(WRITE_TIMEOUT),
-          Effect.flatMap((outcome) =>
-            outcome._tag === "Some"
-              ? Effect.void
-              : Effect.fail(
-                  processError(
-                    "send local CLI frame to",
-                    `Transport write exceeded ${WRITE_TIMEOUT}; delivery may already have occurred.`,
-                    "transport_outcome_uncertain",
-                  ),
+          Effect.timeoutOrElse({
+            duration: WRITE_TIMEOUT,
+            orElse: () =>
+              Effect.fail(
+                processError(
+                  "send local CLI frame to",
+                  `Transport write exceeded ${WRITE_TIMEOUT}; delivery may already have occurred.`,
+                  "transport_outcome_uncertain",
                 ),
-          ),
+              ),
+          }),
         );
       const terminate = (mode: "graceful" | "force") =>
         terminateProcessTreeEffect(child, mode, { platform }).pipe(

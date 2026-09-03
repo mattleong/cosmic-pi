@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
-import { aggregateUsage, formatUsage } from "../ui/metrics.ts";
+import { formatUsage } from "../ui/metrics.ts";
 import {
   formatSessionAge,
   projectRunRoutePresentation,
@@ -13,8 +13,8 @@ import {
   runStateGlyph,
   runStateLabel,
 } from "../ui/run-state.ts";
+import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
-import { projectRunCardTree, runCardTreeBranch } from "./run-card-tree.ts";
 
 export const runTiming = (run: {
   readonly endedAt?: number | undefined;
@@ -27,8 +27,6 @@ export const runTiming = (run: {
   const active = activeAge ? `active ${activeAge} ago` : "";
   return [elapsed, active].filter(Boolean).join(" · ");
 };
-
-export const aggregateRunUsage = aggregateUsage;
 
 const padVisible = (value: string, width: number): string =>
   `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
@@ -120,7 +118,7 @@ export const renderResponsiveRunRows = (
         : animatedRunStateGlyph(run.state, options.frame);
     const id = sanitizeTerminalLine(options.fullId ? run.id : shortRunId(run.id));
     const row = treeRows?.[index];
-    const branch = row ? runCardTreeBranch(row) : "";
+    const branch = row ? runTreeBranch(row) : "";
     const awaited = options.hierarchy?.awaitedRunIds?.has(run.id) ? "◎ " : "";
     const identity = `${branch}${awaited}${glyph} ${sanitizeTerminalLine(run.name)}`;
     return {

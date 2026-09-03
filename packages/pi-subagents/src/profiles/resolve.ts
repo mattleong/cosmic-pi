@@ -136,6 +136,77 @@ const baseAttempt = (
   reason: `Profile ${profile} selected ${candidate.host}/${candidate.runtime} candidate ${candidateIndex + 1}.`,
 });
 
+/** Exact skip codes and message fragments distinguishing parent from explicit local-Pi selectors. */
+type PiModelSkips = typeof PARENT_MODEL_SKIPS | typeof LOCAL_PI_MODEL_SKIPS;
+
+const PARENT_MODEL_SKIPS = {
+  ambiguousCode: "parent_model_ambiguous",
+  unresolvedCode: "parent_model_unavailable",
+  subject: "Parent model",
+  unresolvedPredicate: "is unavailable",
+} as const;
+
+const LOCAL_PI_MODEL_SKIPS = {
+  ambiguousCode: "pi_model_ambiguous",
+  unresolvedCode: "pi_model_unknown",
+  subject: "Pi candidate",
+  unresolvedPredicate: "is unknown or unauthenticated",
+} as const;
+
+/** Shared tail for parent and explicit local-Pi model selection: resolve, effort, fast mode. */
+const piModelTail = (
+  profile: ProfileId,
+  candidate: ProfileCandidate,
+  candidateIndex: number,
+  environment: ProfileResolutionEnvironment,
+  selectedEffort: SubagentEffort,
+  hardEffort: SubagentEffort | undefined,
+) => {
+  const label = profileCandidateLabel(candidate);
+  const skipCandidate = (code: string, reason: string): CandidateResult => ({
+    skipped: skip(label, code, reason, candidateIndex),
+  });
+  return (selector: string, skips: PiModelSkips): CandidateResult => {
+    const resolved = resolvePiModelSelector(selector, environment.availablePiModels);
+    if (resolved.kind !== "resolved")
+      return skipCandidate(
+        resolved.kind === "ambiguous" ? skips.ambiguousCode : skips.unresolvedCode,
+        resolved.kind === "ambiguous"
+          ? `${skips.subject} is ambiguous: ${resolved.candidates.join(", ")}.`
+          : `${skips.subject} ${skips.unresolvedPredicate}${
+              resolved.nearMatches.length > 0
+                ? `; close matches: ${resolved.nearMatches.join(", ")}`
+                : ""
+            }.`,
+      );
+    const effortSkip = unsupportedPiEffort(
+      environment,
+      resolved.provider,
+      resolved.id,
+      hardEffort,
+      label,
+      candidateIndex,
+    );
+    if (effortSkip) return { skipped: effortSkip };
+    const resolvedModel = `${resolved.provider}/${resolved.id}`;
+    if (candidate.openaiFastMode && !supportsSubagentFastMode("pi", resolvedModel))
+      return skipCandidate(
+        "fast_mode_unsupported",
+        `Pi model ${resolvedModel} does not support fast mode.`,
+      );
+    return {
+      attempt: baseAttempt(
+        profile,
+        candidate,
+        candidateIndex,
+        selectedEffort,
+        hardEffort !== undefined,
+        resolvedModel,
+      ),
+    };
+  };
+};
+
 const resolveCandidate = (
   profile: ProfileId,
   candidate: ProfileCandidate,
@@ -146,16 +217,23 @@ const resolveCandidate = (
   const label = profileCandidateLabel(candidate);
   const hardEffort = candidate.effort === "default" ? undefined : candidate.effort;
   const selectedEffort = hardEffort ?? softEffort(profileDefaultEffort, environment.parentModel);
+  const skipCandidate = (code: string, reason: string): CandidateResult => ({
+    skipped: skip(label, code, reason, candidateIndex),
+  });
+  const resolvePiModel = piModelTail(
+    profile,
+    candidate,
+    candidateIndex,
+    environment,
+    selectedEffort,
+    hardEffort,
+  );
 
   if (candidate.context === "fork" && !environment.forkAvailable)
-    return {
-      skipped: skip(
-        label,
-        "fork_context_unavailable",
-        "Forked context requires a persisted parent session with a stable leaf.",
-        candidateIndex,
-      ),
-    };
+    return skipCandidate(
+      "fork_context_unavailable",
+      "Forked context requires a persisted parent session with a stable leaf.",
+    );
 
   // Unsupported adapters remain syntactically and statically representable. Host resolution
   // dynamically classifies them so ordered fallback is visible in launch provenance.
@@ -173,98 +251,10 @@ const resolveCandidate = (
   if (candidate.model === "parent") {
     const parent = environment.parentModel;
     if (!parent)
-      return {
-        skipped: skip(
-          label,
-          "parent_model_missing",
-          "No active parent model is available.",
-          candidateIndex,
-        ),
-      };
-    const resolved = resolvePiModelSelector(parent.model, environment.availablePiModels);
-    if (resolved.kind !== "resolved")
-      return {
-        skipped: skip(
-          label,
-          resolved.kind === "ambiguous" ? "parent_model_ambiguous" : "parent_model_unavailable",
-          resolved.kind === "ambiguous"
-            ? `Parent model is ambiguous: ${resolved.candidates.join(", ")}.`
-            : `Parent model is unavailable${resolved.nearMatches.length > 0 ? `; close matches: ${resolved.nearMatches.join(", ")}` : ""}.`,
-          candidateIndex,
-        ),
-      };
-    const effortSkip = unsupportedPiEffort(
-      environment,
-      resolved.provider,
-      resolved.id,
-      hardEffort,
-      label,
-      candidateIndex,
-    );
-    if (effortSkip) return { skipped: effortSkip };
-    const resolvedModel = `${resolved.provider}/${resolved.id}`;
-    if (candidate.openaiFastMode && !supportsSubagentFastMode("pi", resolvedModel))
-      return {
-        skipped: skip(
-          label,
-          "fast_mode_unsupported",
-          `Pi model ${resolvedModel} does not support fast mode.`,
-          candidateIndex,
-        ),
-      };
-    return {
-      attempt: baseAttempt(
-        profile,
-        candidate,
-        candidateIndex,
-        selectedEffort,
-        hardEffort !== undefined,
-        resolvedModel,
-      ),
-    };
+      return skipCandidate("parent_model_missing", "No active parent model is available.");
+    return resolvePiModel(parent.model, PARENT_MODEL_SKIPS);
   }
-
-  const resolved = resolvePiModelSelector(candidate.model, environment.availablePiModels);
-  if (resolved.kind !== "resolved")
-    return {
-      skipped: skip(
-        label,
-        resolved.kind === "ambiguous" ? "pi_model_ambiguous" : "pi_model_unknown",
-        resolved.kind === "ambiguous"
-          ? `Pi candidate is ambiguous: ${resolved.candidates.join(", ")}.`
-          : `Pi candidate is unknown or unauthenticated${resolved.nearMatches.length > 0 ? `; close matches: ${resolved.nearMatches.join(", ")}` : ""}.`,
-        candidateIndex,
-      ),
-    };
-  const effortSkip = unsupportedPiEffort(
-    environment,
-    resolved.provider,
-    resolved.id,
-    hardEffort,
-    label,
-    candidateIndex,
-  );
-  if (effortSkip) return { skipped: effortSkip };
-  const resolvedModel = `${resolved.provider}/${resolved.id}`;
-  if (candidate.openaiFastMode && !supportsSubagentFastMode("pi", resolvedModel))
-    return {
-      skipped: skip(
-        label,
-        "fast_mode_unsupported",
-        `Pi model ${resolvedModel} does not support fast mode.`,
-        candidateIndex,
-      ),
-    };
-  return {
-    attempt: baseAttempt(
-      profile,
-      candidate,
-      candidateIndex,
-      selectedEffort,
-      hardEffort !== undefined,
-      resolvedModel,
-    ),
-  };
+  return resolvePiModel(candidate.model, LOCAL_PI_MODEL_SKIPS);
 };
 
 const resolveKnownProfileRoute = (

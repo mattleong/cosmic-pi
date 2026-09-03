@@ -15,6 +15,8 @@ import type { BackendEvent } from "./model.ts";
 export interface LocalCliRawEventOwnership {
   /** Enqueues one normalized event; a raw event transfers ownership on success. */
   readonly offer: (event: BackendEvent, raw?: LocalCliWireEvent) => Effect.Effect<void>;
+  /** Lazily releases one raw wire event that was consumed without a normalized offer. */
+  readonly release: (raw: LocalCliWireEvent) => Effect.Effect<void>;
   /** Releases the raw wire event owned by a consumed normalized event. */
   readonly acknowledge: (event: BackendEvent) => void;
   /** Releases every still-owned raw wire event during transport/scope shutdown. */
@@ -26,6 +28,8 @@ export const makeLocalCliRawEventOwnership = (
   acknowledgeRaw: (raw: LocalCliWireEvent) => void,
 ): LocalCliRawEventOwnership => {
   const rawOwners = new Map<BackendEvent, LocalCliWireEvent>();
+  const release = (raw: LocalCliWireEvent): Effect.Effect<void> =>
+    Effect.sync(() => acknowledgeRaw(raw));
   const acknowledge = (event: BackendEvent): void => {
     const raw = rawOwners.get(event);
     if (!raw) return;
@@ -52,5 +56,5 @@ export const makeLocalCliRawEventOwnership = (
         Effect.asVoid,
       );
     });
-  return { offer, acknowledge, acknowledgeAll };
+  return { offer, release, acknowledge, acknowledgeAll };
 };

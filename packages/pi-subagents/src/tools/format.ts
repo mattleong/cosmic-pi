@@ -17,6 +17,7 @@ import { formatUsage } from "../ui/metrics.ts";
 import { formatRunRoute, formatSessionAge } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
+import type { SubagentToolInput } from "./schema.ts";
 
 export const selectionSourceLabel = (
   run: Pick<SubagentRunView, "selection"> | { readonly selection: SubagentSelectionProvenance },
@@ -373,6 +374,90 @@ export const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailu
           return `  ${sanitizeTerminalLine(failure.id)}${code}: ${boundedLine(failure.message, 320)}`;
         }),
       ].join("\n");
+
+export const managementAcknowledgement = (
+  action: Exclude<SubagentToolInput["action"], "models" | "start">,
+  runs: ReadonlyArray<SubagentRunView>,
+  claimsAction?: "list" | "grant" | "revoke" | "resume_admission",
+): string => {
+  if (runs.length === 0) return "";
+  const ids = runs.map((run) => run.id).join(", ");
+  switch (action) {
+    case "send": {
+      const guided = runs.filter((run) => run.closeOnReport !== false);
+      const retained = runs.filter((run) => run.closeOnReport === false);
+      const summary = (
+        label: string,
+        targets: ReadonlyArray<SubagentRunView>,
+        suffix = "",
+        qualifier = "",
+      ) =>
+        `${label} ${targets.length} ${qualifier}subagent${targets.length === 1 ? "" : "s"}: ${targets.map((run) => run.id).join(", ")}${suffix}`;
+      return [
+        ...(guided.length > 0 ? [summary("Guidance delivered to", guided, ".")] : []),
+        ...(retained.length > 0
+          ? [
+              summary(
+                "Started the next assignment on",
+                retained,
+                "; subagent_await now targets the new report generation.",
+                "retained ",
+              ),
+            ]
+          : []),
+      ].join("\n");
+    }
+    case "reply":
+      return `Reply delivered to ${ids}.`;
+    case "retry":
+      return runs
+        .map((run) =>
+          run.predecessorRunId
+            ? `Continued ${run.predecessorRunId} as ${run.id} on profile ${run.profile ?? "generalist"} candidate ${(run.selection.candidateIndex ?? 0) + 1}.`
+            : `Started next profile candidate as ${run.id}.`,
+        )
+        .join("\n");
+    case "interrupt":
+      return `Interrupted ${ids}; state is paused.`;
+    case "resume":
+      return `Resumed ${ids}.`;
+    case "rename":
+      return runs.map((run) => `${run.id} renamed to ${run.name}.`).join("\n");
+    case "stop":
+      return runs
+        .map((run) => {
+          switch (run.state) {
+            case "stopped":
+              return `${run.id} is stopped.`;
+            case "completed":
+              return `${run.id} was already finished; no stop was needed.`;
+            case "failed":
+              return `${run.id} had already failed; no stop was needed.`;
+            case "stopping":
+              return `Stop cleanup is still in progress for ${run.id}.`;
+            default:
+              return `Stop requested for ${run.id}; current state is ${runStateLabel(run.state)}.`;
+          }
+        })
+        .join("\n");
+    case "claims": {
+      const contained =
+        claimsAction === "resume_admission" ||
+        runs.some((run) => run.writeAdmissionPaused === true);
+      return [
+        ...runs.map(
+          (run) =>
+            `${run.id}: ${run.writeClaims?.length ? run.writeClaims.join(", ") : run.writeIntent === "writer" ? "exclusive writer" : "read-only"}${run.writeAdmissionPaused ? " · admission paused" : ""}`,
+        ),
+        contained
+          ? "Claim-containment recovery uses resume_admission, then lifecycle resume with the authoritative claims, or stop and replace when resume is unavailable. Do not use subagent_reply for containment."
+          : "For a waiting worker, send the resulting authoritative claim set in subagent_reply before work continues.",
+      ].join("\n");
+    }
+    default:
+      return runs.map((run) => formatRun(run, true)).join("\n\n");
+  }
+};
 
 export const renderedCompletionReceipts = (
   observations: ReadonlyArray<SubagentRunObservation>,

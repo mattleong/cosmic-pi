@@ -8,10 +8,10 @@ import {
   type SubagentRunState,
   type SubagentRunView,
 } from "../run/model.ts";
-import { fleetTreeBranch, projectFleetTree, type FleetTreeRow } from "./fleet-tree.ts";
 import { aggregateUsage } from "./metrics.ts";
 import { subagentUiRefreshCadence, type SubagentUiRefreshCadence } from "./refresh.ts";
 import { formatSessionAge, projectRunRoutePresentation, shortRunId } from "./run-presentation.ts";
+import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
 
 const RUN_ID_COLLATOR = new Intl.Collator("en", { numeric: true });
@@ -258,7 +258,7 @@ const renderActivityRow = (
   const { run } = row;
   const ancestorOnly = !panel.trackedRunIds.has(run.id);
   const identityColor = ancestorOnly ? "dim" : runStateColor(run.state);
-  const branch = fleetTreeBranch(row);
+  const branch = runTreeBranch(row);
   const awaited = panel.awaitedRunIds.has(run.id) ? "◎ " : "";
   const name = sanitizeTerminalLine(run.name);
   const stateIdentity = `${awaited}${animatedRunStateGlyph(run.state, frame)} ${name}`;

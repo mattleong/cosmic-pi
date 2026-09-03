@@ -11,7 +11,11 @@ import {
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
-import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
+import type {
+  FullScreenAction,
+  FullScreenMode,
+  FullScreenSelectionKeybindingId,
+} from "pi-cosmic-ui/manager/keymap";
 import {
   confirmedReservedShortcut,
   detailWindowPositionLabel,
@@ -19,6 +23,7 @@ import {
   padListDetailRow,
   stackedListHeight,
   wideListDetailGeometry,
+  type ListDetailPane,
   type ListSelectionChange,
 } from "pi-cosmic-ui/manager/list-detail";
 import {
@@ -37,8 +42,9 @@ import {
   type SubagentProjection,
   type SubagentRunView,
 } from "../run/model.ts";
-import { fleetTreeBranch, projectFleetTree, type FleetTreeRow } from "./fleet-tree.ts";
-import { formatRelativeAge, renderSubagentSessionOutput } from "./session-output.ts";
+import { formatRelativeAge } from "./metrics.ts";
+import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
+import { renderSubagentSessionOutput } from "./session-output.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
 
 export type FleetMessageMode = "guidance" | "reply" | "next-assignment";
@@ -101,6 +107,76 @@ const canStop = (run: SubagentRunView | undefined): boolean =>
 type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
 
 const FLEET_SHORTCUTS = new Set(["h", "i", "l", "m", "n", "r", "t", "x"]);
+
+const shortcutUnavailableReason = (key: string): string =>
+  key === "m"
+    ? "This run cannot receive guidance, a reply, or a new assignment in its current state."
+    : key === "i"
+      ? "This run cannot be interrupted in its current state or backend."
+      : key === "r"
+        ? "This run cannot be resumed in its current state or backend."
+        : key === "n"
+          ? "This run cannot be renamed in its current state or backend."
+          : "This run is not currently stoppable.";
+
+/** Fixed list-pane tree keys resolve before the configurable navigation keymap. */
+const fixedTreeDirection = (data: string, pane: ListDetailPane): "back" | "forward" | undefined =>
+  pane === "list"
+    ? matchesKey(data, "h") || matchesKey(data, Key.left)
+      ? "back"
+      : matchesKey(data, "l") || matchesKey(data, Key.right)
+        ? "forward"
+        : undefined
+    : undefined;
+
+interface FleetActionLabel {
+  readonly full: string;
+  readonly compact: string;
+}
+
+const FLEET_ACTION_LABELS = [
+  [canInterrupt, "i Interrupt", "i Int"],
+  [canResume, "r Resume", "r Resume"],
+  [canRename, "n Rename", "n Name"],
+  [canStop, "x Stop subtree", "x Stop tree"],
+] as const;
+
+const fleetActionLabels = (selected: SubagentRunView): ReadonlyArray<FleetActionLabel> => {
+  const labels: FleetActionLabel[] = [];
+  if (canMessage(selected)) {
+    const messageLabel =
+      selected.state === "waiting_for_parent"
+        ? "m Reply"
+        : selected.state === "reported"
+          ? "m New task"
+          : "m Guide";
+    labels.push({ full: messageLabel, compact: messageLabel });
+  }
+  for (const [can, full, compact] of FLEET_ACTION_LABELS)
+    if (can(selected)) labels.push({ full, compact });
+  return labels;
+};
+
+const PROMPT_TITLE_PREFIX = {
+  reply: "Reply to",
+  "next-assignment": "Next assignment for",
+  guidance: "Guide",
+  resume: "Resume",
+  rename: "Rename",
+} as const satisfies Record<FleetPromptKind, string>;
+
+const PROMPT_INSTRUCTIONS = {
+  reply: "Answer the pending question",
+  "next-assignment": "Describe the next assignment",
+  guidance: "Enter guidance for the active assignment",
+  resume: "Optional continuation message; submit blank to resume",
+  rename: "Enter a new display name",
+} as const satisfies Record<FleetPromptKind, string>;
+
+const promptTitle = (prompt: FleetPrompt): string =>
+  `${PROMPT_TITLE_PREFIX[prompt.kind]} ${prompt.runName}`;
+
+const promptInstruction = (kind: FleetPromptKind): string => PROMPT_INSTRUCTIONS[kind];
 type FleetNotice = { readonly kind: "info" | "success" | "error"; readonly text: string };
 type FleetPrompt = {
   readonly kind: FleetPromptKind;
@@ -148,6 +224,15 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   private applySelection(next: ListSelectionChange): void {
     if (next.changed) this.pendingStop = undefined;
+  }
+
+  /** Shared keymap resolution bound to this overlay's configurable keybindings. */
+  private resolveInput(data: string, mode: FullScreenMode, reservedKeys?: ReadonlySet<string>) {
+    return this.shell.keymap.resolve(data, {
+      mode,
+      matchesKeybinding: this.options.matchesKeybinding,
+      ...(reservedKeys && { reservedKeys }),
+    });
   }
 
   private select(index: number, rows: ReadonlyArray<FleetTreeRow>): void {
@@ -253,151 +338,130 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   handleInput(data: string): void {
     const projection = this.options.getProjection();
-    const tree = this.tree(projection);
-    const rows = tree.rows;
+    const rows = this.tree(projection).rows;
     this.reconcile(rows);
     const selectedRow = rows[this.shell.state.selected];
     const selected = selectedRow?.run;
-    const matchesKeybinding = this.options.matchesKeybinding;
 
-    if (this.prompt) {
-      const resolution = this.shell.keymap.resolve(data, { mode: "text-input", matchesKeybinding });
-      if (resolution?._tag === "Action" && resolution.action === "cancel") {
-        this.prompt = undefined;
-        this.notice = { kind: "info", text: "Input canceled." };
-        this.options.requestRender();
-      } else if (resolution?._tag === "Action" && resolution.action === "confirm")
-        this.submitPrompt();
-      else {
-        this.prompt.feedback = undefined;
-        this.prompt.input.handleInput(data);
-        this.options.requestRender();
-      }
-      return;
-    }
-
-    if (this.pendingStop) {
-      const resolution = this.shell.keymap.resolve(data, {
-        mode: "confirmation",
-        matchesKeybinding,
-        reservedKeys: new Set(["x"]),
-      });
-      const run = selected && this.pendingStop === selected.id ? selected : undefined;
-      this.pendingStop = undefined;
-      if (confirmedReservedShortcut(resolution, data, "x") && run && canStop(run))
-        this.performAction(
-          `Stopping subtree at ${sanitizeTerminalLine(run.name)}…`,
-          `Stopped subtree at ${sanitizeTerminalLine(run.name)}.`,
-          () => this.options.actions.stop(run.id),
-        );
-      else {
-        this.notice = { kind: "info", text: "Stop canceled." };
-        this.options.requestRender();
-      }
-      return;
-    }
-
-    if (this.busyAction) {
-      // Esc/q close the overlay so a hung action can never trap the user; the in-flight
-      // operation itself is not cancelled and settles into the notice state on its own.
-      const resolution = this.shell.keymap.resolve(data, { mode: "busy", matchesKeybinding });
-      if (
-        resolution?._tag === "Action" &&
-        (resolution.action === "cancel" || resolution.action === "quit")
-      )
-        this.options.close();
-      return;
-    }
+    if (this.prompt) return this.handlePromptInput(data, this.prompt);
+    if (this.pendingStop) return this.handlePendingStopInput(data, selected);
+    if (this.busyAction) return this.handleBusyInput(data);
 
     // Every notice, including errors, dismisses on the next navigation key.
     this.notice = undefined;
-    const fixedTreeDirection =
-      this.shell.state.pane === "list"
-        ? matchesKey(data, "h") || matchesKey(data, Key.left)
-          ? "back"
-          : matchesKey(data, "l") || matchesKey(data, Key.right)
-            ? "forward"
-            : undefined
-        : undefined;
-    if (fixedTreeDirection) {
-      if (selectedRow?.hasChildren) {
-        if (fixedTreeDirection === "back") this.collapsedRunIds.add(selectedRow.run.id);
-        else this.collapsedRunIds.delete(selectedRow.run.id);
-        this.shell.resetDetailScroll();
-        this.reconcile(this.tree(projection).rows);
-      }
-      this.options.requestRender();
-      return;
-    }
-    const resolution = this.shell.keymap.resolve(data, {
-      mode: "navigation",
-      matchesKeybinding,
-      reservedKeys: FLEET_SHORTCUTS,
-    });
+    if (this.handleFixedTreeInput(data, projection, selectedRow)) return;
+    const resolution = this.resolveInput(data, "navigation", FLEET_SHORTCUTS);
     if (!resolution) return;
+    if (resolution._tag === "Shortcut") this.handleShortcut(resolution.key, selected);
+    else this.handleNavigation(resolution.action, rows, selected);
+  }
 
-    if (resolution._tag === "Shortcut") {
-      if (resolution.key === "t") {
-        this.showTechnicalDetails = !this.showTechnicalDetails;
-        this.shell.resetDetailScroll();
-      } else if (resolution.key === "x" && selected && canStop(selected))
-        this.pendingStop = selected.id;
-      else if (resolution.key === "i" && selected && canInterrupt(selected))
-        this.performAction(
-          `Interrupting ${sanitizeTerminalLine(selected.name)}…`,
-          `Interrupted ${sanitizeTerminalLine(selected.name)}; state is paused.`,
-          () => this.options.actions.interrupt(selected.id),
-        );
-      else if (resolution.key === "r" && selected && canResume(selected))
-        this.openPrompt(selected, "resume");
-      else if (resolution.key === "m" && selected && canMessage(selected))
-        this.openPrompt(
-          selected,
-          selected.state === "waiting_for_parent"
-            ? "reply"
-            : selected.state === "reported"
-              ? "next-assignment"
-              : "guidance",
-        );
-      else if (resolution.key === "n" && selected && canRename(selected))
-        this.openPrompt(selected, "rename");
-      else if (selected) {
-        const reason =
-          resolution.key === "m"
-            ? "This run cannot receive guidance, a reply, or a new assignment in its current state."
-            : resolution.key === "i"
-              ? "This run cannot be interrupted in its current state or backend."
-              : resolution.key === "r"
-                ? "This run cannot be resumed in its current state or backend."
-                : resolution.key === "n"
-                  ? "This run cannot be renamed in its current state or backend."
-                  : "This run is not currently stoppable.";
-        this.notice = { kind: "info", text: reason };
-      } else this.notice = { kind: "info", text: "No subagent run is selected." };
+  private handlePromptInput(data: string, prompt: FleetPrompt): void {
+    const resolution = this.resolveInput(data, "text-input");
+    if (resolution?._tag === "Action" && resolution.action === "cancel") {
+      this.prompt = undefined;
+      this.notice = { kind: "info", text: "Input canceled." };
       this.options.requestRender();
-      return;
+    } else if (resolution?._tag === "Action" && resolution.action === "confirm")
+      this.submitPrompt();
+    else {
+      prompt.feedback = undefined;
+      prompt.input.handleInput(data);
+      this.options.requestRender();
     }
+  }
 
-    if (resolution.action === "confirm") {
+  private handlePendingStopInput(data: string, selected: SubagentRunView | undefined): void {
+    const resolution = this.resolveInput(data, "confirmation", new Set(["x"]));
+    const run = selected && this.pendingStop === selected.id ? selected : undefined;
+    this.pendingStop = undefined;
+    if (confirmedReservedShortcut(resolution, data, "x") && run && canStop(run))
+      this.performAction(
+        `Stopping subtree at ${sanitizeTerminalLine(run.name)}…`,
+        `Stopped subtree at ${sanitizeTerminalLine(run.name)}.`,
+        () => this.options.actions.stop(run.id),
+      );
+    else {
+      this.notice = { kind: "info", text: "Stop canceled." };
+      this.options.requestRender();
+    }
+  }
+
+  private handleBusyInput(data: string): void {
+    // Esc/q close the overlay so a hung action can never trap the user; the in-flight
+    // operation itself is not cancelled and settles into the notice state on its own.
+    const resolution = this.resolveInput(data, "busy");
+    if (
+      resolution?._tag === "Action" &&
+      (resolution.action === "cancel" || resolution.action === "quit")
+    )
+      this.options.close();
+  }
+
+  /** Collapses or expands the selected subtree; returns false when `data` is not a tree key. */
+  private handleFixedTreeInput(
+    data: string,
+    projection: SubagentProjection,
+    selectedRow: FleetTreeRow | undefined,
+  ): boolean {
+    const direction = fixedTreeDirection(data, this.shell.state.pane);
+    if (!direction) return false;
+    if (selectedRow?.hasChildren) {
+      if (direction === "back") this.collapsedRunIds.add(selectedRow.run.id);
+      else this.collapsedRunIds.delete(selectedRow.run.id);
+      this.shell.resetDetailScroll();
+      this.reconcile(this.tree(projection).rows);
+    }
+    this.options.requestRender();
+    return true;
+  }
+
+  private handleShortcut(key: string, selected: SubagentRunView | undefined): void {
+    if (key === "t") {
+      this.showTechnicalDetails = !this.showTechnicalDetails;
+      this.shell.resetDetailScroll();
+    } else if (!selected) this.notice = { kind: "info", text: "No subagent run is selected." };
+    else if (!this.applyRunShortcut(key, selected))
+      this.notice = { kind: "info", text: shortcutUnavailableReason(key) };
+    this.options.requestRender();
+  }
+
+  /** Applies one run shortcut; returns false when it does not apply to the run's state or backend. */
+  private applyRunShortcut(key: string, selected: SubagentRunView): boolean {
+    if (key === "x" && canStop(selected)) this.pendingStop = selected.id;
+    else if (key === "i" && canInterrupt(selected))
+      this.performAction(
+        `Interrupting ${sanitizeTerminalLine(selected.name)}…`,
+        `Interrupted ${sanitizeTerminalLine(selected.name)}; state is paused.`,
+        () => this.options.actions.interrupt(selected.id),
+      );
+    else if (key === "r" && canResume(selected)) this.openPrompt(selected, "resume");
+    else if (key === "m" && canMessage(selected))
+      this.openPrompt(
+        selected,
+        selected.state === "waiting_for_parent"
+          ? "reply"
+          : selected.state === "reported"
+            ? "next-assignment"
+            : "guidance",
+      );
+    else if (key === "n" && canRename(selected)) this.openPrompt(selected, "rename");
+    else return false;
+    return true;
+  }
+
+  private handleNavigation(
+    action: FullScreenAction,
+    rows: ReadonlyArray<FleetTreeRow>,
+    selected: SubagentRunView | undefined,
+  ): void {
+    if (action === "confirm") {
       if (selected) this.shell.enterPane();
       this.options.requestRender();
       return;
     }
-    if (
-      this.shell.state.pane === "list" &&
-      (resolution.action === "back" || resolution.action === "forward")
-    ) {
-      if (selectedRow?.hasChildren) {
-        if (resolution.action === "back") this.collapsedRunIds.add(selectedRow.run.id);
-        else this.collapsedRunIds.delete(selectedRow.run.id);
-        this.shell.resetDetailScroll();
-        this.reconcile(this.tree(projection).rows);
-      }
-      this.options.requestRender();
-      return;
-    }
-    if (resolution.action === "help") this.alternateHelp = !this.alternateHelp;
-    const motion = listDetailMotionFromAction(resolution.action);
+    if (action === "help") this.alternateHelp = !this.alternateHelp;
+    const motion = listDetailMotionFromAction(action);
     if (motion) {
       const result = this.shell.applyMotion(motion, {
         rowCount: rows.length,
@@ -469,26 +533,8 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   private renderPrompt(width: number, height: number, prompt: FleetPrompt): string[] {
     const inner = Math.max(0, width - 2);
-    const title =
-      prompt.kind === "reply"
-        ? `Reply to ${prompt.runName}`
-        : prompt.kind === "next-assignment"
-          ? `Next assignment for ${prompt.runName}`
-          : prompt.kind === "guidance"
-            ? `Guide ${prompt.runName}`
-            : prompt.kind === "resume"
-              ? `Resume ${prompt.runName}`
-              : `Rename ${prompt.runName}`;
-    const instruction =
-      prompt.kind === "reply"
-        ? "Answer the pending question"
-        : prompt.kind === "next-assignment"
-          ? "Describe the next assignment"
-          : prompt.kind === "guidance"
-            ? "Enter guidance for the active assignment"
-            : prompt.kind === "resume"
-              ? "Optional continuation message; submit blank to resume"
-              : "Enter a new display name";
+    const title = promptTitle(prompt);
+    const instruction = promptInstruction(prompt.kind);
     const inputLines = prompt.input.render(Math.max(1, inner)).slice(0, 1);
     const feedback = prompt.feedback ? [this.options.theme.fg("warning", prompt.feedback)] : [];
     const contextLines = prompt.context
@@ -530,7 +576,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const { run } = row;
     const selected = index === this.shell.state.selected;
     const selection = selected ? this.options.theme.fg("accent", ">") : " ";
-    const branch = this.options.theme.fg("dim", fleetTreeBranch(row));
+    const branch = this.options.theme.fg("dim", runTreeBranch(row));
     const disclosure = row.hasChildren
       ? this.options.theme.fg("muted", row.expanded ? "▾" : "▸")
       : " ";
@@ -578,107 +624,83 @@ export class SubagentFleetComponent implements Component, Focusable {
     return `Subagents · ${start}–${end} of ${rows.length}${start > 1 ? " · ↑ more" : ""}${end < rows.length ? " · ↓ more" : ""}`;
   }
 
+  private keyLabel(id: FleetKeybindingId, fallback: string): string {
+    const printableFiltered = filterReservedKeyLabel(
+      this.options.keybindingLabel?.(id, fallback) || fallback,
+      FLEET_SHORTCUTS,
+      fallback,
+    );
+    const withoutTreeArrows = printableFiltered
+      .split("/")
+      .filter((label) => label !== "←" && label !== "→")
+      .join("/");
+    return withoutTreeArrows || fallback;
+  }
+
   private helpText(width: number, selected: SubagentRunView | undefined): string {
     const contentWidth = Math.max(0, width - 2);
-    const key = (id: FleetKeybindingId, fallback: string): string => {
-      const printableFiltered = filterReservedKeyLabel(
-        this.options.keybindingLabel?.(id, fallback) || fallback,
-        FLEET_SHORTCUTS,
-        fallback,
-      );
-      const withoutTreeArrows = printableFiltered
-        .split("/")
-        .filter((label) => label !== "←" && label !== "→")
-        .join("/");
-      return withoutTreeArrows || fallback;
-    };
-    const configuredNavigation = this.options.keybindingLabel
-      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
-      : undefined;
-    const navigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
-    const enter = key("tui.select.confirm", "Enter");
-    const escape = key("tui.select.cancel", "Esc");
-    if (this.prompt)
-      return renderResponsiveManagerFooter(contentWidth, [[`${enter} Submit`, `${escape} Cancel`]]);
-    if (this.busyAction)
-      return renderResponsiveManagerFooter(contentWidth, [[this.busyAction, `${escape}/q Close`]]);
-    if (this.pendingStop)
-      return renderResponsiveManagerFooter(contentWidth, [
-        [
-          `x Confirm stop ${sanitizeTerminalLine(selected?.name ?? "selected subagent")}`,
-          `${escape}/q Cancel`,
-        ],
-      ]);
-    const messageAction = !canMessage(selected)
-      ? undefined
-      : selected?.state === "waiting_for_parent"
-        ? "m Reply"
-        : selected?.state === "reported"
-          ? "m New task"
-          : "m Guide";
+    const enter = this.keyLabel("tui.select.confirm", "Enter");
+    const escape = this.keyLabel("tui.select.cancel", "Esc");
+    // Footer rows while a prompt, action, or stop confirmation owns the input.
+    const modal: ReadonlyArray<ReadonlyArray<string>> | undefined = this.prompt
+      ? [[`${enter} Submit`, `${escape} Cancel`]]
+      : this.busyAction
+        ? [[this.busyAction, `${escape}/q Close`]]
+        : this.pendingStop
+          ? [
+              [
+                `x Confirm stop ${sanitizeTerminalLine(selected?.name ?? "selected subagent")}`,
+                `${escape}/q Cancel`,
+              ],
+            ]
+          : undefined;
+    if (modal) return renderResponsiveManagerFooter(contentWidth, modal);
     if (!selected)
       return renderResponsiveManagerFooter(contentWidth, [
         ["No visible subagents", `${escape}/q Close`],
       ]);
-    const availableActions = [
-      messageAction ? { full: messageAction, compact: messageAction } : undefined,
-      canInterrupt(selected) ? { full: "i Interrupt", compact: "i Int" } : undefined,
-      canResume(selected) ? { full: "r Resume", compact: "r Resume" } : undefined,
-      canRename(selected) ? { full: "n Rename", compact: "n Name" } : undefined,
-      canStop(selected) ? { full: "x Stop subtree", compact: "x Stop tree" } : undefined,
-    ].filter((item): item is { full: string; compact: string } => item !== undefined);
-    const actions = availableActions.map((item) => item.full);
-    const compactActions = availableActions.map((item) => item.compact);
-    const scrollHelp =
-      this.shell.state.pane === "list" ? "C-u/d Half-page · gg/G Ends" : "C-u/d Detail · gg/G";
+    const available = fleetActionLabels(selected);
+    const actions =
+      available.length > 0 ? available.map((item) => item.full).join(" · ") : undefined;
+    const compactActions =
+      available.length > 0 ? available.map((item) => item.compact).join(" · ") : undefined;
+    const configuredNavigation = this.options.keybindingLabel
+      ? `${this.keyLabel("tui.select.up", "↑")}/${this.keyLabel("tui.select.down", "↓")}`
+      : undefined;
+    const navigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
     // The expanded ? overlay is the discoverable place for the full motion vocabulary.
-    const expandedScrollHelp =
-      this.shell.state.pane === "list"
-        ? "C-u/d Half · PgUp/PgDn Page · gg/G Ends"
-        : "C-u/d · PgUp/PgDn Detail · gg/G";
-    const browsingTree = this.shell.state.pane === "list";
-    const primaryNavigation = browsingTree
-      ? `${navigation} Move · h/l or ←/→ Collapse/expand · ${enter} Inspect`
-      : `j/k Scroll · h/${escape} Back`;
+    const listPane = this.shell.state.pane === "list";
+    const nav = listPane
+      ? {
+          primary: `${navigation} Move · h/l or ←/→ Collapse/expand · ${enter} Inspect`,
+          scroll: "C-u/d Half-page · gg/G Ends",
+          expandedScroll: "C-u/d Half · PgUp/PgDn Page · gg/G Ends",
+          short: `${navigation} · h/l · ${enter}`,
+          shortest: `${navigation} · h/l`,
+        }
+      : {
+          primary: `j/k Scroll · h/${escape} Back`,
+          scroll: "C-u/d Detail · gg/G",
+          expandedScroll: "C-u/d · PgUp/PgDn Detail · gg/G",
+          short: `j/k · h/${escape}`,
+          shortest: `j/k · h/${escape}`,
+        };
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
-          `${primaryNavigation} · ${expandedScrollHelp}`,
-          compactActions.length > 0 ? compactActions.join(" · ") : "No run actions",
+          `${nav.primary} · ${nav.expandedScroll}`,
+          compactActions ?? "No run actions",
           `t Technical · ? Back · ${escape}/q Close`,
         ],
-        [
-          primaryNavigation,
-          compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
-          `? Back · ${escape}/q`,
-        ],
-        [
-          compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
-          `? Back · ${escape}/q`,
-        ],
+        [nav.primary, compactActions ?? "No actions", `? Back · ${escape}/q`],
+        [compactActions ?? "No actions", `? Back · ${escape}/q`],
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
-      [
-        `${primaryNavigation} · ${scrollHelp}`,
-        actions.length > 0 ? actions.join(" · ") : undefined,
-        `t Technical · ? More · ${escape}/q Close`,
-      ],
-      [
-        primaryNavigation,
-        compactActions.length > 0 ? compactActions.join(" · ") : undefined,
-        `? More · ${escape}/q`,
-      ],
+      [`${nav.primary} · ${nav.scroll}`, actions, `t Technical · ? More · ${escape}/q Close`],
+      [nav.primary, compactActions, `? More · ${escape}/q`],
       width >= 60
-        ? [
-            browsingTree ? `${navigation} · h/l · ${enter}` : `j/k · h/${escape}`,
-            compactActions.length > 0 ? compactActions.join(" · ") : undefined,
-            `? · ${escape}/q`,
-          ]
-        : [
-            browsingTree ? `${navigation} · h/l` : `j/k · h/${escape}`,
-            `${enter} Inspect`,
-            `? More · ${escape}/q`,
-          ],
+        ? [nav.short, compactActions, `? · ${escape}/q`]
+        : [nav.shortest, `${enter} Inspect`, `? More · ${escape}/q`],
     ]);
   }
 

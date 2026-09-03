@@ -2,7 +2,6 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { BackendLaunchRequest, BackendStartupState } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
@@ -24,6 +23,7 @@ import {
 import { completeRunInitialization, type RunRecord } from "./internal.ts";
 import { descendantRunIds } from "./tree.ts";
 import { MAX_RETAINED_RUNS } from "./limits.ts";
+import { runSessionOwned } from "./session-owned.ts";
 import {
   emptyUsage,
   isActiveRunState,
@@ -669,15 +669,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
   const startSessionOwned = (
     request: StartSubagentRequest,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
-    Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        const fiber = yield* start(request).pipe(
-          Effect.forkIn(ownerScope, { startImmediately: true }),
-        );
-        // Public start is admission-only. A report racing prompt confirmation remains unresolved
-        // for exact-once await/notifier delivery and is never exposed or claimed here.
-        return redactCompletionReport(yield* restore(Fiber.join(fiber)));
-      }),
+    runSessionOwned(ownerScope, Effect.void, () => start(request)).pipe(
+      // Public start is admission-only. A report racing prompt confirmation remains unresolved
+      // for exact-once await/notifier delivery and is never exposed or claimed here.
+      Effect.map((view) => redactCompletionReport(view)),
     );
 
   return {

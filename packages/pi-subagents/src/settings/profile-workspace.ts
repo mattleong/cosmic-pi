@@ -28,6 +28,7 @@ import {
   type CandidateModelPickerData,
 } from "./profile-model-catalog.ts";
 import { makeProfileModelPickerPage, type ProfileModelChoice } from "./ui/model-picker.ts";
+import { isMovementMotion, movementOffset } from "./ui/list-navigation.ts";
 import {
   candidateFieldRows,
   draftKindLabel,
@@ -668,16 +669,27 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.keymap.resetChord();
   }
 
-  handleInput(data: string): void {
-    if (this.disposed) return;
-    if (this.modelPicker) {
-      this.modelPicker.handleInput(data);
-      return;
+  /** Endpoint jumps set the raw pane index without clearing the message or resetting panes. */
+  private moveToEndpoint(action: "first" | "last"): void {
+    const last = action === "last";
+    if (this.pane === "profiles") this.profileIndex = last ? PROFILE_IDS.length - 1 : 0;
+    else if (this.pane === "candidates")
+      this.candidateIndex = last ? Math.max(0, this.draft().candidates.length - 1) : 0;
+    else this.fieldIndex = last ? Math.max(0, this.rows().length - 1) : 0;
+  }
+
+  /** One Shortcut press; returns whether it fully consumed the input. */
+  private handleShortcutKey(key: string): boolean {
+    if (key === "p") {
+      this.options.close({ action: "sets", profile: this.profile() });
+      return true;
     }
-    if (this.selectPage) {
-      this.selectPage.handleInput(data);
-      return;
-    }
+    if (key === "/" && this.pane === "profiles") this.openProfileSearch();
+    return false;
+  }
+
+  /** Confirmation and busy-mode keys; both modes consume the input unconditionally. */
+  private handleModalInput(data: string): void {
     if (this.pendingAction) {
       const resolution = this.keymap.resolve(data, {
         mode: "confirmation",
@@ -691,13 +703,26 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         this.confirmPending();
       return;
     }
-    if (this.busy) {
-      const resolution = this.keymap.resolve(data, {
-        mode: "busy",
-        matchesKeybinding: this.options.matchesKeybinding,
-      });
-      if (this.catalogLoad && resolution?._tag === "Action" && resolution.action === "cancel")
-        this.cancelCatalogLoad();
+    const resolution = this.keymap.resolve(data, {
+      mode: "busy",
+      matchesKeybinding: this.options.matchesKeybinding,
+    });
+    if (this.catalogLoad && resolution?._tag === "Action" && resolution.action === "cancel")
+      this.cancelCatalogLoad();
+  }
+
+  handleInput(data: string): void {
+    if (this.disposed) return;
+    if (this.modelPicker) {
+      this.modelPicker.handleInput(data);
+      return;
+    }
+    if (this.selectPage) {
+      this.selectPage.handleInput(data);
+      return;
+    }
+    if (this.pendingAction || this.busy) {
+      this.handleModalInput(data);
       return;
     }
     const resolution = this.keymap.resolve(data, {
@@ -707,11 +732,8 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     });
     if (!resolution) return;
     if (resolution._tag === "Shortcut") {
-      if (resolution.key === "p") {
-        this.options.close({ action: "sets", profile: this.profile() });
-        return;
-      }
-      if (resolution.key === "/" && this.pane === "profiles") this.openProfileSearch();
+      if (this.handleShortcutKey(resolution.key)) return;
+      this.renderSoon();
       return;
     }
     const steps = pageSteps(this.options.getHeight() - 8);
@@ -734,55 +756,40 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       }
       this.message = undefined;
     };
-    switch (resolution.action) {
+    if (isMovementMotion(resolution.action)) {
+      move(movementOffset(resolution.action, steps));
+      this.renderSoon();
+      return;
+    }
+    if (this.handleNavigationAction(resolution.action)) this.renderSoon();
+  }
+
+  /** Non-movement navigation actions; returns whether the input only needs a re-render. */
+  private handleNavigationAction(action: string): boolean {
+    switch (action) {
       case "cancel":
       case "quit":
       case "back":
         this.back();
-        return;
+        return false;
       case "confirm":
       case "forward":
         this.forward();
-        return;
-      case "up":
-        move(-1);
-        break;
-      case "down":
-        move(1);
-        break;
-      case "half-page-up":
-        move(-steps.half);
-        break;
-      case "half-page-down":
-        move(steps.half);
-        break;
-      case "full-page-up":
-        move(-steps.page);
-        break;
-      case "full-page-down":
-        move(steps.page);
-        break;
+        return false;
       case "first":
-        if (this.pane === "profiles") this.profileIndex = 0;
-        else if (this.pane === "candidates") this.candidateIndex = 0;
-        else this.fieldIndex = 0;
-        break;
       case "last":
-        if (this.pane === "profiles") this.profileIndex = PROFILE_IDS.length - 1;
-        else if (this.pane === "candidates")
-          this.candidateIndex = Math.max(0, this.draft().candidates.length - 1);
-        else this.fieldIndex = Math.max(0, this.rows().length - 1);
-        break;
+        this.moveToEndpoint(action);
+        return true;
       case "search":
         if (this.pane === "profiles") this.openProfileSearch();
-        return;
+        return false;
       case "help":
       case "next-pane":
       case "previous-pane":
       case "pending-first":
-        break;
+        return true;
     }
-    this.renderSoon();
+    return false;
   }
 
   render(width: number): string[] {

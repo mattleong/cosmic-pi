@@ -16,6 +16,7 @@ import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
+import { aggregateUsage } from "../ui/metrics.ts";
 import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
@@ -29,7 +30,7 @@ import {
   type SemanticOutcomeBanner,
 } from "./render-management.ts";
 import { formatAwaitSummary, renderAwaitProgressComponent } from "./render-await.ts";
-import { aggregateRunUsage, renderResponsiveRunRows } from "./render-run-rows.ts";
+import { renderResponsiveRunRows } from "./render-run-rows.ts";
 import { renderStartProgressComponent, renderStartReceiptComponent } from "./render-start.ts";
 
 interface RunOverviewHierarchy {
@@ -229,7 +230,7 @@ class RunOverviewComponent implements Component {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
-    const usage = aggregateRunUsage(this.runs);
+    const usage = aggregateUsage(this.runs);
     const hierarchy = this.options.hierarchy;
     const showRunRows = this.options.showRunRows !== false;
     const showOutcomeDetails = this.options.showOutcomeDetails !== false;
@@ -600,7 +601,7 @@ export const renderSubagentResult = (
       awaitResultBanner({
         ...details,
         runs: targets,
-        usage: aggregateRunUsage(details.cards, "compact"),
+        usage: aggregateUsage(details.cards, "compact"),
         targetCount: targetIds.size,
         descendantCount: details.cards.filter((run) => !targetIds.has(run.id)).length,
       }),

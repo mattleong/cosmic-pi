@@ -339,14 +339,15 @@ export function registerSubagentChildBridge(
               },
               false,
             ).pipe(
-              Effect.timeout(QUESTION_TIMEOUT_MILLIS),
-              Effect.mapError((error) =>
-                error instanceof ParentContactError
-                  ? error
-                  : new ParentContactError({
+              Effect.timeoutOrElse({
+                duration: QUESTION_TIMEOUT_MILLIS,
+                orElse: () =>
+                  Effect.fail(
+                    new ParentContactError({
                       message: "Parent question timed out without a reply.",
                     }),
-              ),
+                  ),
+              }),
             ),
             signal,
           )

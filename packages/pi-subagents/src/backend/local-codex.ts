@@ -2,7 +2,6 @@ import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import type { LocalCliProcessContract } from "../boundary/local-cli-process.ts";
@@ -32,6 +31,7 @@ import {
   turnInterruptRequest,
   turnStartRequest,
   turnSteerRequest,
+  type CodexNotification,
   type CodexRequest,
 } from "./local-codex-protocol.ts";
 import { classifyLocalCliInterruptOwnership } from "./local-cli-interruption.ts";
@@ -112,23 +112,9 @@ const executableToolName = (item: {
   return EXECUTABLE_ITEM_TOOL_NAMES.get(item.type);
 };
 
-const usageDelta = (
-  previous: SubagentUsage,
-  total: {
-    readonly inputTokens: number;
-    readonly cachedInputTokens: number;
-    readonly outputTokens: number;
-    readonly totalTokens: number;
-    readonly cacheWriteInputTokens?: number | undefined;
-  },
-): SubagentUsage => ({
-  input: Math.max(0, total.inputTokens - previous.input),
-  output: Math.max(0, total.outputTokens - previous.output),
-  cacheRead: Math.max(0, total.cachedInputTokens - previous.cacheRead),
-  cacheWrite: Math.max(0, (total.cacheWriteInputTokens ?? 0) - previous.cacheWrite),
-  totalTokens: Math.max(0, total.totalTokens - previous.totalTokens),
-  // Codex reports no client-side cost; it remains unknown rather than a known $0.
-});
+type CodexUsage = Extract<CodexNotification, { readonly type: "usage" }>;
+type CodexItemEvent = Extract<CodexNotification, { type: "item_started" | "item_completed" }>;
+type CodexTurnCompleted = Extract<CodexNotification, { readonly type: "turn_completed" }>;
 
 const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function* (
   request: BackendLaunchRequest,
@@ -136,7 +122,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   supervisor: SupervisorChannelHandle,
 ) {
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
-  const { offer, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
+  const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
     events,
     child.acknowledge,
   );
@@ -174,44 +160,163 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     }),
   );
 
+  const onUsage = (event: CodexUsage, raw: LocalCliWireEvent) => {
+    // Nonnegative per-turn delta over the cumulative totals; Codex reports no
+    // client-side cost, so it remains unknown rather than a known $0.
+    const delta: SubagentUsage = {
+      input: Math.max(0, event.total.inputTokens - cumulativeUsage.input),
+      output: Math.max(0, event.total.outputTokens - cumulativeUsage.output),
+      cacheRead: Math.max(0, event.total.cachedInputTokens - cumulativeUsage.cacheRead),
+      cacheWrite: Math.max(
+        0,
+        (event.total.cacheWriteInputTokens ?? 0) - cumulativeUsage.cacheWrite,
+      ),
+      totalTokens: Math.max(0, event.total.totalTokens - cumulativeUsage.totalTokens),
+    };
+    cumulativeUsage = {
+      input: event.total.inputTokens,
+      output: event.total.outputTokens,
+      cacheRead: event.total.cachedInputTokens,
+      cacheWrite: event.total.cacheWriteInputTokens ?? 0,
+      totalTokens: event.total.totalTokens,
+    };
+    return offer({ type: "assistant_message", assignmentEpoch, usage: delta }, raw);
+  };
+
+  const onItemStarted = (event: CodexItemEvent, raw: LocalCliWireEvent) => {
+    const tool = executableToolName(event.item);
+    if (tool === undefined)
+      // agentMessage, reasoning, and unknown future informational items
+      // are activity; they never fabricate a tool lifecycle entry.
+      return offer({ type: "activity", assignmentEpoch }, raw);
+    return offer(
+      {
+        type: "tool_started",
+        assignmentEpoch,
+        toolCallId: event.item.id,
+        toolName: tool,
+        args:
+          event.item.type === "fileChange"
+            ? { changes: event.item.changes ?? [] }
+            : (event.item.arguments ?? (event.item.command ? { command: event.item.command } : {})),
+      },
+      raw,
+    );
+  };
+
+  const onItemCompleted = (event: CodexItemEvent, raw: LocalCliWireEvent) => {
+    if (event.item.type === "agentMessage")
+      return offer(
+        {
+          type: "assistant_message" as const,
+          assignmentEpoch,
+          ...(event.item.text !== undefined &&
+            event.item.text.length > 0 && { text: event.item.text }),
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+        },
+        raw,
+      );
+    const tool = executableToolName(event.item);
+    if (tool === undefined)
+      // Completion of an informational or unknown item is acknowledged
+      // without a fabricated tool_finished, matching item_started.
+      return release(raw);
+    return offer(
+      {
+        type: "tool_finished",
+        assignmentEpoch,
+        toolCallId: event.item.id,
+        toolName: tool,
+        isError: event.item.status === "failed" || event.item.status === "declined",
+      },
+      raw,
+    );
+  };
+
+  const onTurnCompleted = (event: CodexTurnCompleted, raw: LocalCliWireEvent) => {
+    const completedEpoch = assignmentEpoch;
+    activeTurnId = undefined;
+    if (runStartedTurnId === event.turnId) runStartedTurnId = undefined;
+    const interrupt = pendingInterrupt;
+    if (event.status === "interrupted") {
+      if (interrupt?.turnId === event.turnId && interrupt.assignmentEpoch === completedEpoch) {
+        interrupt.completionSeen = true;
+        if (interrupt.abandoned) {
+          // The exact native interrupted settlement arrived after the
+          // public interrupt timed out; settle it as a pause rather
+          // than failing the run.
+          pendingInterrupt = undefined;
+          return offer({ type: "run_settled", assignmentEpoch: interrupt.assignmentEpoch }, raw);
+        }
+        Deferred.doneUnsafe(interrupt.completion, Effect.void);
+        return release(raw);
+      }
+      return offer(
+        {
+          type: "protocol_error",
+          message: "Codex turn was interrupted without a matching parent interrupt lifecycle.",
+        },
+        raw,
+      );
+    }
+    if (event.status === "failed")
+      return offer(
+        {
+          type: "protocol_error",
+          message: event.diagnostic
+            ? `Codex turn failed: ${event.diagnostic}`
+            : "Codex turn failed before a supervisor report was accepted.",
+        },
+        raw,
+      );
+    // The MCP helper receives its report result only after SupervisorChannel records
+    // accepted epoch evidence. Codex cannot complete the tool call and then the turn
+    // before that causal write, so this query is independent of adapter queue scheduling.
+    return supervisor.hasAcceptedReport(completedEpoch).pipe(
+      Effect.mapError((error) =>
+        protocolError(`Unable to confirm Codex supervisor report ownership: ${error.message}`),
+      ),
+      Effect.flatMap((accepted) =>
+        accepted
+          ? release(raw)
+          : offer(
+              {
+                type: "protocol_error",
+                message: "Codex turn completed without an accepted supervisor report.",
+              },
+              raw,
+            ),
+      ),
+    );
+  };
+
   const consumeNotification = <ParamsInput>(
     raw: LocalCliWireEvent,
     method: string,
     params: ParamsInput,
-  ): Effect.Effect<void> =>
+  ) =>
     decodeCodexNotification(method, params).pipe(
       Effect.flatMap((event) => {
-        if (event.type === "ignored") {
-          child.acknowledge(raw);
-          return Effect.void;
-        }
+        if (event.type === "ignored") return release(raw);
         if (event.type === "warning")
           return offer(
             { type: "warning", source: "runtime-extension", message: event.message },
             raw,
           );
-        if ("threadId" in event && threadId && event.threadId !== threadId) {
-          child.acknowledge(raw);
-          return Effect.void;
-        }
+        if ("threadId" in event && threadId && event.threadId !== threadId) return release(raw);
+        // Every steerable notification carries a turn id; only turn_started may open one.
+        if ("turnId" in event && event.type !== "turn_started" && event.turnId !== activeTurnId)
+          return release(raw);
         switch (event.type) {
-          case "turn_started":
+          case "turn_started": {
             activeTurnId = event.turnId;
-            if (runStartedTurnId === event.turnId) {
-              child.acknowledge(raw);
-              return Effect.void;
-            }
+            if (runStartedTurnId === event.turnId) return release(raw);
             runStartedTurnId = event.turnId;
             return offer({ type: "run_started", assignmentEpoch }, raw);
+          }
           case "agent_delta":
-            return event.turnId === activeTurnId
-              ? offer({ type: "activity", assignmentEpoch }, raw)
-              : Effect.sync(() => child.acknowledge(raw));
+            return offer({ type: "activity", assignmentEpoch }, raw);
           case "native_activity":
-            if (event.turnId !== activeTurnId) {
-              child.acknowledge(raw);
-              return Effect.void;
-            }
             return offer(
               {
                 type: "native_agent_activity",
@@ -222,159 +327,14 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               },
               raw,
             );
-          case "usage": {
-            if (event.turnId !== activeTurnId) {
-              child.acknowledge(raw);
-              return Effect.void;
-            }
-            const delta = usageDelta(cumulativeUsage, event.total);
-            cumulativeUsage = {
-              input: event.total.inputTokens,
-              output: event.total.outputTokens,
-              cacheRead: event.total.cachedInputTokens,
-              cacheWrite: event.total.cacheWriteInputTokens ?? 0,
-              totalTokens: event.total.totalTokens,
-            };
-            return offer({ type: "assistant_message", assignmentEpoch, usage: delta }, raw);
-          }
-          case "item_started": {
-            if (event.turnId !== activeTurnId) {
-              child.acknowledge(raw);
-              return Effect.void;
-            }
-            const tool = executableToolName(event.item);
-            if (tool === undefined)
-              // agentMessage, reasoning, and unknown future informational items
-              // are activity; they never fabricate a tool lifecycle entry.
-              return offer({ type: "activity", assignmentEpoch }, raw);
-            return offer(
-              {
-                type: "tool_started",
-                assignmentEpoch,
-                toolCallId: event.item.id,
-                toolName: tool,
-                args:
-                  event.item.type === "fileChange"
-                    ? { changes: event.item.changes ?? [] }
-                    : (event.item.arguments ??
-                      (event.item.command ? { command: event.item.command } : {})),
-              },
-              raw,
-            );
-          }
-          case "item_completed": {
-            if (event.turnId !== activeTurnId) {
-              child.acknowledge(raw);
-              return Effect.void;
-            }
-            if (event.item.type === "agentMessage") {
-              const backendEvent: BackendEvent = (() => {
-                const baseResult = { type: "assistant_message" as const, assignmentEpoch };
-                const withText = event.item.text
-                  ? { ...baseResult, text: event.item.text }
-                  : baseResult;
-                const withUsage = {
-                  ...withText,
-                  usage: {
-                    input: 0,
-                    output: 0,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    totalTokens: 0,
-                  },
-                };
-                return withUsage;
-              })();
-              return offer(backendEvent, raw);
-            }
-            const tool = executableToolName(event.item);
-            if (tool === undefined) {
-              // Completion of an informational or unknown item is acknowledged
-              // without a fabricated tool_finished, matching item_started.
-              child.acknowledge(raw);
-              return Effect.void;
-            }
-            return offer(
-              {
-                type: "tool_finished",
-                assignmentEpoch,
-                toolCallId: event.item.id,
-                toolName: tool,
-                isError: event.item.status === "failed" || event.item.status === "declined",
-              },
-              raw,
-            );
-          }
-          case "turn_completed": {
-            if (event.turnId !== activeTurnId) {
-              child.acknowledge(raw);
-              return Effect.void;
-            }
-            const completedEpoch = assignmentEpoch;
-            activeTurnId = undefined;
-            if (runStartedTurnId === event.turnId) runStartedTurnId = undefined;
-            const interrupt = pendingInterrupt;
-            if (event.status === "interrupted") {
-              if (
-                interrupt?.turnId === event.turnId &&
-                interrupt.assignmentEpoch === completedEpoch
-              ) {
-                interrupt.completionSeen = true;
-                if (interrupt.abandoned) {
-                  // The exact native interrupted settlement arrived after the
-                  // public interrupt timed out; settle it as a pause rather
-                  // than failing the run.
-                  pendingInterrupt = undefined;
-                  return offer(
-                    { type: "run_settled", assignmentEpoch: interrupt.assignmentEpoch },
-                    raw,
-                  );
-                }
-                Deferred.doneUnsafe(interrupt.completion, Effect.void);
-                child.acknowledge(raw);
-                return Effect.void;
-              }
-              return offer(
-                {
-                  type: "protocol_error",
-                  message:
-                    "Codex turn was interrupted without a matching parent interrupt lifecycle.",
-                },
-                raw,
-              );
-            }
-            if (event.status === "failed")
-              return offer(
-                {
-                  type: "protocol_error",
-                  message: event.diagnostic
-                    ? `Codex turn failed: ${event.diagnostic}`
-                    : "Codex turn failed before a supervisor report was accepted.",
-                },
-                raw,
-              );
-            // The MCP helper receives its report result only after SupervisorChannel records
-            // accepted epoch evidence. Codex cannot complete the tool call and then the turn
-            // before that causal write, so this query is independent of adapter queue scheduling.
-            return supervisor.hasAcceptedReport(completedEpoch).pipe(
-              Effect.mapError((error) =>
-                protocolError(
-                  `Unable to confirm Codex supervisor report ownership: ${error.message}`,
-                ),
-              ),
-              Effect.flatMap((accepted) =>
-                accepted
-                  ? Effect.sync(() => child.acknowledge(raw))
-                  : offer(
-                      {
-                        type: "protocol_error",
-                        message: "Codex turn completed without an accepted supervisor report.",
-                      },
-                      raw,
-                    ),
-              ),
-            );
-          }
+          case "usage":
+            return onUsage(event, raw);
+          case "item_started":
+            return onItemStarted(event, raw);
+          case "item_completed":
+            return onItemCompleted(event, raw);
+          case "turn_completed":
+            return onTurnCompleted(event, raw);
         }
       }),
       Effect.catch(() =>
@@ -388,10 +348,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   const consumeRaw = (raw: LocalCliWireEvent): Effect.Effect<void> => {
     if (raw.type === "protocol_error")
       return offer({ type: "protocol_error", message: raw.message }, raw);
-    if (raw.type === "exit") {
-      child.acknowledge(raw);
-      return Effect.void;
-    }
+    if (raw.type === "exit") return release(raw);
     return decodeCodexEnvelope(raw.value).pipe(
       Effect.flatMap((envelope) => {
         if (envelope.type === "server_request")
@@ -405,10 +362,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         if (envelope.type === "notification")
           return consumeNotification(raw, envelope.method, envelope.params);
         const pending = responses.get(String(envelope.id));
-        if (!pending) {
-          child.acknowledge(raw);
-          return Effect.void;
-        }
+        if (!pending) return release(raw);
         responses.delete(String(envelope.id));
         Deferred.doneUnsafe(
           pending.deferred,
@@ -422,8 +376,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               )
             : Effect.succeed(envelope.result),
         );
-        child.acknowledge(raw);
-        return Effect.void;
+        return release(raw);
       }),
       Effect.catch(() =>
         offer({ type: "protocol_error", message: "Codex emitted an invalid JSON-RPC frame." }, raw),
@@ -694,18 +647,17 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                   concurrency: "unbounded",
                   discard: true,
                 }).pipe(
-                  Effect.timeoutOption(RPC_TIMEOUT),
-                  Effect.flatMap((outcome) =>
-                    Option.isSome(outcome)
-                      ? Effect.void
-                      : Effect.fail(
-                          processError(
-                            "interrupt",
-                            "interrupt_outcome_uncertain",
-                            "Codex interrupt did not receive both its correlated JSON-RPC response and matching interrupted turn completion.",
-                          ),
+                  Effect.timeoutOrElse({
+                    duration: RPC_TIMEOUT,
+                    orElse: () =>
+                      Effect.fail(
+                        processError(
+                          "interrupt",
+                          "interrupt_outcome_uncertain",
+                          "Codex interrupt did not receive both its correlated JSON-RPC response and matching interrupted turn completion.",
                         ),
-                  ),
+                      ),
+                  }),
                 );
               },
               (acquired, exit) =>

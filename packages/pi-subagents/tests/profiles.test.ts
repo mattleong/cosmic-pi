@@ -6,7 +6,11 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { resolveNamedProfileSet, resolveSubagentConfig } from "../src/config/options.ts";
-import { decodeSubagentConfig, SUBAGENT_CONFIG_VERSION } from "../src/config/schema.ts";
+import {
+  decodeProfileCandidate,
+  decodeSubagentConfig,
+  SUBAGENT_CONFIG_VERSION,
+} from "../src/config/schema.ts";
 import { SubagentConfigStore } from "../src/config/store.ts";
 import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
 import {
@@ -643,6 +647,76 @@ describe("subagent v6 profile configuration and resolution", () => {
     });
   });
 
+  it("pairs parent and explicit local-Pi model resolution with exact codes and messages", () => {
+    const parentRoute = resolved(document({ profiles: { scout: candidate({ model: "parent" }) } }));
+    expect(resolveProfilePlan("scout", parentRoute, environment)).toMatchObject({
+      kind: "resolved",
+      attempts: [{ source: "profile-parent-candidate", model: "openai/gpt-parent", effort: "low" }],
+    });
+    expect(
+      resolveProfilePlan("scout", parentRoute, { ...environment, parentModel: undefined }),
+    ).toMatchObject({
+      kind: "failed",
+      code: "profile_no_eligible_model",
+      skippedCandidates: [
+        { code: "parent_model_missing", reason: "No active parent model is available." },
+      ],
+    });
+    expect(
+      resolveProfilePlan("scout", parentRoute, {
+        ...environment,
+        parentModel: { model: "openai/gpt", effort: "high" },
+      }),
+    ).toMatchObject({
+      kind: "failed",
+      code: "profile_no_eligible_model",
+      skippedCandidates: [
+        {
+          code: "parent_model_unavailable",
+          reason:
+            "Parent model is unavailable; close matches: openai/gpt-parent, openai/gpt-review.",
+        },
+      ],
+    });
+    const ambiguousEnvironment = {
+      ...environment,
+      availablePiModels: [
+        ...environment.availablePiModels,
+        { provider: "anthropic", id: "gpt-parent", supportedEfforts: ["high"] as const },
+      ],
+    };
+    expect(
+      resolveProfilePlan("scout", parentRoute, {
+        ...ambiguousEnvironment,
+        parentModel: { model: "gpt-parent", effort: "high" },
+      }),
+    ).toMatchObject({
+      kind: "failed",
+      code: "profile_no_eligible_model",
+      skippedCandidates: [
+        {
+          code: "parent_model_ambiguous",
+          reason: "Parent model is ambiguous: anthropic/gpt-parent, openai/gpt-parent.",
+        },
+      ],
+    });
+
+    const explicitRoute = resolved(
+      document({ profiles: { scout: candidate({ model: "openai/gpt" }) } }),
+    );
+    expect(resolveProfilePlan("scout", explicitRoute, environment)).toMatchObject({
+      kind: "failed",
+      code: "profile_no_eligible_model",
+      skippedCandidates: [
+        {
+          code: "pi_model_unknown",
+          reason:
+            "Pi candidate is unknown or unauthenticated; close matches: openai/gpt-parent, openai/gpt-review.",
+        },
+      ],
+    });
+  });
+
   it("rejects persisted candidate getters without invoking them and guards hostile proxies", () => {
     let candidateReads = 0;
     let unknownRead = false;
@@ -716,6 +790,117 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(v3.diagnostics).toEqual(expect.arrayContaining(["global.version", "global.<unknown>"]));
     for (const version of [1, 2, "4", null, false, 4.5])
       expect(decodeSubagentConfig({ version }, "global").unsupportedVersion).toBe(true);
+  });
+
+  it("decodes profile candidates by declared version fast-mode key", () => {
+    const withFastMode = candidate({ model: "openai-codex/gpt-5.6-sol", openaiFastMode: true });
+    const legacyFastMode = legacyCandidate({
+      model: "openai-codex/gpt-5.6-sol",
+      openaiFastMode: true,
+    });
+
+    const current = decodeProfileCandidate(withFastMode);
+    expect(current).toMatchObject({ openaiFastMode: true, closeOnReport: true });
+    expect(decodeProfileCandidate(legacyFastMode)).toBeUndefined();
+    for (const version of [4, 5] as const) {
+      const legacy = decodeProfileCandidate(legacyFastMode, version);
+      expect(legacy).toMatchObject({ openaiFastMode: true, closeOnReport: true });
+      expect(decodeProfileCandidate(withFastMode, version)).toBeUndefined();
+    }
+  });
+
+  it("reads candidate optional fields descriptor-safely without invoking accessors", () => {
+    let optionalReads = 0;
+    const accessorOptional = candidate({ model: "openai-codex/gpt-5.6-sol" });
+    Object.defineProperty(accessorOptional, "openaiFastMode", {
+      enumerable: true,
+      get: () => {
+        optionalReads += 1;
+        return true;
+      },
+    });
+    expect(decodeProfileCandidate(accessorOptional)).toBeUndefined();
+    expect(optionalReads).toBe(0);
+
+    let retentionReads = 0;
+    const accessorRetention = candidate();
+    Object.defineProperty(accessorRetention, "closeOnReport", {
+      enumerable: true,
+      get: () => {
+        retentionReads += 1;
+        return false;
+      },
+    });
+    expect(decodeProfileCandidate(accessorRetention)).toBeUndefined();
+    expect(retentionReads).toBe(0);
+
+    let legacyReads = 0;
+    const legacyAccessor = legacyCandidate({ model: "openai-codex/gpt-5.6-sol" });
+    Object.defineProperty(legacyAccessor, "fastMode", {
+      enumerable: true,
+      get: () => {
+        legacyReads += 1;
+        return true;
+      },
+    });
+    expect(decodeProfileCandidate(legacyAccessor, 5)).toBeUndefined();
+    expect(legacyReads).toBe(0);
+
+    const requiredOnly = {
+      host: "local",
+      runtime: "pi",
+      model: "parent",
+      effort: "default",
+      context: "fresh",
+      writeIntent: "read-only",
+    } as const;
+    expect(decodeProfileCandidate(requiredOnly)).toMatchObject({ closeOnReport: true });
+    expect(decodeProfileCandidate(requiredOnly)).not.toHaveProperty("openaiFastMode");
+    expect(
+      decodeProfileCandidate({
+        ...requiredOnly,
+        host: "herdr",
+        runtime: "codex",
+        model: "m",
+        closeOnReport: false,
+      }),
+    ).toMatchObject({
+      closeOnReport: false,
+    });
+  });
+
+  it("validates per-version root bodies strictly", () => {
+    const nesting = { maxDirectChildren: 2, maxDepth: 1 };
+
+    const v4Nesting = decodeSubagentConfig({ version: 4, profiles: {}, nesting }, "global");
+    expect(v4Nesting.unsupportedVersion).toBe(false);
+    expect(v4Nesting.diagnostics).toContain("global.<unknown>");
+    expect(v4Nesting.file.nesting).toBeUndefined();
+
+    const v5Nesting = decodeSubagentConfig({ version: 5, profiles: {}, nesting }, "global");
+    expect(v5Nesting.file.nesting).toMatchObject(nesting);
+    expect(v5Nesting.diagnostics).not.toContain("global.<unknown>");
+
+    const v6LegacyRoot = decodeSubagentConfig(
+      { version: 6, profiles: { worker: candidate() } },
+      "global",
+    );
+    expect(v6LegacyRoot.unsupportedVersion).toBe(false);
+    expect(v6LegacyRoot.diagnostics).toContain("global.<unknown>");
+    expect(v6LegacyRoot.file.profileSets).toBeUndefined();
+    expect(v6LegacyRoot.invalidProfileRoutes).toEqual([]);
+
+    const v6Current = decodeSubagentConfig(
+      {
+        version: 6,
+        defaultProfileSet: "default",
+        profileSets: { default: { profiles: { worker: candidate() } } },
+        nesting,
+      },
+      "global",
+    );
+    expect(v6Current.diagnostics).not.toContain("global.<unknown>");
+    expect(v6Current.file.nesting).toMatchObject(nesting);
   });
 
   it("activates loaded base configuration when publication throws", () => {

@@ -181,19 +181,17 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
             lastActivityAt: now,
             currentTool: undefined,
             question: undefined,
+            // Report bookkeeping only applies to completed settlements; other outcomes keep
+            // their prior reportGeneration.
+            ...(state === "completed" && { reportGeneration: completionGeneration }),
           };
-          const reportBase = { reportGeneration: completionGeneration };
-          const reportDetails = record.latestAssistantText
-            ? { ...reportBase, finalText: record.latestAssistantText }
-            : reportBase;
           const completedView =
-            state === "completed" ? { ...viewBase, ...reportDetails } : viewBase;
+            state === "completed" && record.latestAssistantText
+              ? { ...viewBase, finalText: record.latestAssistantText }
+              : viewBase;
+          const settledError = state === "failed" ? (error ?? "Run failed.") : error;
           record.view =
-            state === "failed"
-              ? { ...completedView, error: error ?? "Run failed." }
-              : error
-                ? { ...completedView, error }
-                : completedView;
+            settledError === undefined ? completedView : { ...completedView, error: settledError };
           yield* publish;
           const view = snapshotView(record.view);
           if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));

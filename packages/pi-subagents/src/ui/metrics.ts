@@ -1,8 +1,5 @@
 import { formatTokens } from "pi-cosmic-core";
 
-/** Token counts render via the shared core formatter for TUI-wide consistency. */
-export const formatTokenCount = formatTokens;
-
 export const formatCost = (cost: number): string => {
   const value = Number.isFinite(cost) ? Math.max(0, cost) : 0;
   if (value === 0) return "$0";
@@ -28,7 +25,7 @@ export const aggregateUsage = (
   if (tokens <= 0 && (!costKnown || cost === 0)) return "";
   const lowerBound = partial ? (style === "compact" ? "≥" : "≥ ") : "";
   const costPart = costKnown ? ` · ${lowerBound}${formatCost(cost)}` : "";
-  return `${formatTokenCount(tokens)} ${style === "compact" ? "tok" : "tokens"}${costPart}`;
+  return `${formatTokens(tokens)} ${style === "compact" ? "tok" : "tokens"}${costPart}`;
 };
 
 /**
@@ -44,10 +41,21 @@ export const formatUsage = (
   const hasCost = usage.cost !== undefined && Number.isFinite(usage.cost);
   if (!hasTokens && (!hasCost || usage.cost === 0)) return "";
   const parts = [
-    `${formatTokenCount(usage.totalTokens)} ${tokensLabel}`,
+    `${formatTokens(usage.totalTokens)} ${tokensLabel}`,
     ...(hasCost ? [formatCost(usage.cost ?? 0)] : []),
   ];
   return parts.join(" · ");
+};
+
+export const formatRelativeAge = (milliseconds: number): string => {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  if (seconds < 1) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 };
 
 export const formatDuration = (milliseconds: number): string => {

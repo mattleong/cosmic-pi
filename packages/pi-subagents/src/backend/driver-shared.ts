@@ -71,8 +71,10 @@ export const correlatedRequest = <Frame, Response>(
           ? Effect.raceFirst(correlated, Deferred.await(deferred))
           : correlated
       ).pipe(
-        Effect.timeout(options.timeout),
-        Effect.catchTag("TimeoutError", () => Effect.fail(options.timeoutError(frame))),
+        Effect.timeoutOrElse({
+          duration: options.timeout,
+          orElse: () => Effect.fail(options.timeoutError(frame)),
+        }),
         Effect.flatMap((response) =>
           options.decode ? options.decode(response) : Effect.succeed(response),
         ),

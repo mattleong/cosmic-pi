@@ -24,6 +24,73 @@ export interface SemanticOutcomeBanner {
   readonly text: string;
 }
 
+/** [lower-cased code substrings, recovery text, optional message-only substrings]. */
+type FailureRecoveryRule = readonly [
+  codes: ReadonlyArray<string>,
+  recovery: string,
+  messages?: ReadonlyArray<string>,
+];
+
+const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
+  [
+    ["profile", "candidate", "auth", "harness", "model", "unsupported", "confinement", "readiness"],
+    "Inspect the effective route with subagent_models or choose a compatible route in /subagents profiles.",
+  ],
+  [
+    ["capacity", "writer"],
+    "Resolve the reported capacity or writer-ownership constraint, then retry the launch.",
+  ],
+];
+const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
+  [["notfound", "not_found"], "Refresh run IDs with subagent_list.", ["not found"]],
+  [
+    ["completion_claim_conflict"],
+    "Wait for or cancel the operation that already owns this completion, then retry.",
+  ],
+  [
+    ["retry_route_exhausted"],
+    "The original profile route is exhausted; only now consider a generalist replacement.",
+  ],
+  [
+    ["retry_cleanup_unconfirmed", "retry_outcome_uncertain"],
+    "Do not retry automatically; inspect the failed run and resolve the reported ownership uncertainty.",
+  ],
+  [
+    ["retry_claim", "retry_already"],
+    "Inspect the predecessor and its linked successor with subagent_status.",
+  ],
+  [
+    ["report_delivery_backlog"],
+    "Wait for automatic outcome delivery or claim the current outcome with subagent_await, then retry.",
+  ],
+  [
+    ["reply_outcome_uncertain"],
+    "Do not resend the reply automatically; inspect subagent_status and wait for the run's next event.",
+  ],
+  [
+    ["reply_send_failed"],
+    "The reply was never delivered and the question is still pending; resend it with subagent_reply.",
+  ],
+  [["reply_too_large"], "The question is still pending; send a shorter reply with subagent_reply."],
+  [
+    ["question_transport_closed"],
+    "The helper connection closed and the question was cancelled; inspect subagent_status before taking another action.",
+  ],
+  [
+    ["question_ownership_mismatch"],
+    "The question is no longer pending; refresh the run with subagent_status before taking another action.",
+  ],
+  [
+    ["waiting_for_parent", "parent_question"],
+    "Reply with subagent_reply, then await the run again.",
+    ["waiting for a parent reply"],
+  ],
+  [["capability", "unsupported"], "Inspect the run's capabilities with subagent_status."],
+  [
+    ["profile", "candidate", "auth", "harness", "model"],
+    "Inspect the effective route with subagent_models or edit it with /subagents profiles.",
+  ],
+];
 export const failureRecovery = (
   code: string | undefined,
   message: string,
@@ -31,68 +98,22 @@ export const failureRecovery = (
 ): string => {
   const normalizedCode = code?.toLowerCase() ?? "";
   const normalizedMessage = message.toLowerCase();
-  if (context === "start") {
-    if (
-      normalizedCode.includes("profile") ||
-      normalizedCode.includes("candidate") ||
-      normalizedCode.includes("auth") ||
-      normalizedCode.includes("harness") ||
-      normalizedCode.includes("model") ||
-      normalizedCode.includes("unsupported") ||
-      normalizedCode.includes("confinement") ||
-      normalizedCode.includes("readiness")
-    )
-      return "Inspect the effective route with subagent_models or choose a compatible route in /subagents profiles.";
-    if (normalizedCode.includes("capacity") || normalizedCode.includes("writer"))
-      return "Resolve the reported capacity or writer-ownership constraint, then retry the launch.";
-    return "Review the launch failure and profile route before retrying.";
-  }
-  if (
-    normalizedCode.includes("notfound") ||
-    normalizedCode.includes("not_found") ||
-    normalizedMessage.includes("not found")
-  )
-    return "Refresh run IDs with subagent_list.";
-  if (normalizedCode.includes("completion_claim_conflict"))
-    return "Wait for or cancel the operation that already owns this completion, then retry.";
-  if (normalizedCode.includes("retry_route_exhausted"))
-    return "The original profile route is exhausted; only now consider a generalist replacement.";
-  if (
-    normalizedCode.includes("retry_cleanup_unconfirmed") ||
-    normalizedCode.includes("retry_outcome_uncertain")
-  )
-    return "Do not retry automatically; inspect the failed run and resolve the reported ownership uncertainty.";
-  if (normalizedCode.includes("retry_claim") || normalizedCode.includes("retry_already"))
-    return "Inspect the predecessor and its linked successor with subagent_status.";
-  if (normalizedCode.includes("report_delivery_backlog"))
-    return "Wait for automatic outcome delivery or claim the current outcome with subagent_await, then retry.";
-  if (normalizedCode.includes("reply_outcome_uncertain"))
-    return "Do not resend the reply automatically; inspect subagent_status and wait for the run's next event.";
-  if (normalizedCode.includes("reply_send_failed"))
-    return "The reply was never delivered and the question is still pending; resend it with subagent_reply.";
-  if (normalizedCode.includes("reply_too_large"))
-    return "The question is still pending; send a shorter reply with subagent_reply.";
-  if (normalizedCode.includes("question_transport_closed"))
-    return "The helper connection closed and the question was cancelled; inspect subagent_status before taking another action.";
-  if (normalizedCode.includes("question_ownership_mismatch"))
-    return "The question is no longer pending; refresh the run with subagent_status before taking another action.";
-  if (
-    normalizedCode.includes("waiting_for_parent") ||
-    normalizedCode.includes("parent_question") ||
-    normalizedMessage.includes("waiting for a parent reply")
-  )
-    return "Reply with subagent_reply, then await the run again.";
-  if (normalizedCode.includes("capability") || normalizedCode.includes("unsupported"))
-    return "Inspect the run's capabilities with subagent_status.";
-  if (
-    normalizedCode.includes("profile") ||
-    normalizedCode.includes("candidate") ||
-    normalizedCode.includes("auth") ||
-    normalizedCode.includes("harness") ||
-    normalizedCode.includes("model")
-  )
-    return "Inspect the effective route with subagent_models or edit it with /subagents profiles.";
-  return "Review the failure detail and current subagent_status before retrying.";
+  const [rules, fallback] =
+    context === "start"
+      ? [
+          START_FAILURE_RECOVERY_RULES,
+          "Review the launch failure and profile route before retrying.",
+        ]
+      : [
+          ACTION_FAILURE_RECOVERY_RULES,
+          "Review the failure detail and current subagent_status before retrying.",
+        ];
+  const matched = rules.find(
+    ([codes, , messages]) =>
+      codes.some((needle) => normalizedCode.includes(needle)) ||
+      messages?.some((needle) => normalizedMessage.includes(needle)),
+  );
+  return matched?.[1] ?? fallback;
 };
 
 const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): string =>
@@ -104,23 +125,14 @@ const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): strin
     candidate.openaiFastMode && candidate.status === "eligible",
   )} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.closeOnReport ? "close after report" : "retain after report"}`;
 
-const profileSource = (source: SubagentProfileRouteCard["source"]): string => {
-  switch (source) {
-    case "session":
-      return "session override";
-    case "project":
-      return "project override";
-    case "project-invalid":
-      return "invalid project override";
-    case "global":
-      return "global override";
-    case "global-invalid":
-      return "invalid global override";
-    case "builtin":
-      return "built-in";
-  }
-  return source;
-};
+const PROFILE_SOURCE_LABELS = {
+  session: "session override",
+  project: "project override",
+  "project-invalid": "invalid project override",
+  global: "global override",
+  "global-invalid": "invalid global override",
+  builtin: "built-in",
+} as const satisfies Record<SubagentProfileRouteCard["source"], string>;
 
 class ProfileRoutesComponent implements Component {
   private readonly details: ModelsToolDetails;
@@ -153,7 +165,7 @@ class ProfileRoutesComponent implements Component {
       lines.push(
         this.theme.fg(
           color,
-          `• ${profile.id}${profile.isDefault ? " · when omitted" : ""} · ${profileSource(profile.source)} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
+          `• ${profile.id}${profile.isDefault ? " · when omitted" : ""} · ${PROFILE_SOURCE_LABELS[profile.source]} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
         ),
       );
       if (!this.expanded) continue;
@@ -194,21 +206,19 @@ class ProfileRoutesComponent implements Component {
   }
 }
 
-const actionSummary = (details: RunToolDetails): SemanticOutcomeBanner => {
-  const count = details.runCount ?? details.cards?.length ?? 0;
-  const failed = details.actionFailures?.length ?? 0;
+const summaryText = (
+  details: RunToolDetails,
+  count: number,
+  failed: number,
+  failedSuffix: string,
+): string => {
   const plural = count === 1 ? "" : "s";
+  const missing = failed > 0 ? ` · ${failed} missing` : "";
   switch (details.action) {
     case "list":
-      return {
-        color: "accent",
-        text: count > 0 ? `${count} session subagent${plural}` : "No session subagents",
-      };
+      return count > 0 ? `${count} session subagent${plural}` : "No session subagents";
     case "status":
-      return {
-        color: failed > 0 ? "warning" : "accent",
-        text: `Status · ${count} found${failed > 0 ? ` · ${failed} missing` : ""}`,
-      };
+      return `Status · ${count} found${missing}`;
     case "send": {
       // closeOnReport=false targets started their next assignment; others got guidance.
       const cards = details.cards ?? [];
@@ -219,69 +229,22 @@ const actionSummary = (details: RunToolDetails): SemanticOutcomeBanner => {
           : retained > 0
             ? "Guidance/next assignments"
             : "Guidance";
-      return {
-        color: failed > 0 ? (count > 0 ? "warning" : "error") : "success",
-        text: `${label} · ${count} delivered${failed > 0 ? ` · ${failed} failed` : ""}`,
-      };
+      return `${label} · ${count} delivered${failedSuffix}`;
     }
     case "reply":
-      return {
-        color: failed > 0 ? "error" : "success",
-        text: failed > 0 ? "Reply failed" : `Reply delivered to ${count} subagent${plural}`,
-      };
-    case "interrupt":
-      return {
-        color: failed > 0 ? "warning" : "success",
-        text: `Interrupt · ${count} paused${failed > 0 ? ` · ${failed} failed` : ""}`,
-      };
-    case "resume":
-      return {
-        color: failed > 0 ? "warning" : "success",
-        text: `Resume · ${count} updated${failed > 0 ? ` · ${failed} failed` : ""}`,
-      };
-    case "stop":
-      return {
-        color: failed > 0 ? "warning" : "success",
-        text: `Stop · ${count} updated${failed > 0 ? ` · ${failed} failed` : ""}`,
-      };
+      return failed > 0 ? "Reply failed" : `Reply delivered to ${count} subagent${plural}`;
     case "rename":
-      return {
-        color: failed > 0 ? "error" : "success",
-        text: failed > 0 ? "Rename failed" : "Subagent renamed",
-      };
+      return failed > 0 ? "Rename failed" : "Subagent renamed";
+    case "interrupt":
+      return `Interrupt · ${count} paused${failedSuffix}`;
+    case "resume":
+      return `Resume · ${count} updated${failedSuffix}`;
+    case "stop":
+      return `Stop · ${count} updated${failedSuffix}`;
     default:
-      return {
-        color: failed > 0 ? "warning" : "accent",
-        text: `${details.action} · ${count} result${count === 1 ? "" : "s"}${failed > 0 ? ` · ${failed} failed` : ""}`,
-      };
+      return `${details.action} · ${count} result${plural}${failedSuffix}`;
   }
 };
-
-const renderActionFailures = (
-  details: RunToolDetails,
-  width: number,
-  theme: Theme,
-  expanded: boolean,
-): ReadonlyArray<string> =>
-  (details.actionFailures ?? []).flatMap((failure) => {
-    const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-    const recovery = failureRecovery(failure.code, failure.message);
-    const summary = theme.fg(
-      "error",
-      `${managerStateGlyph("failed")} ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
-    );
-    const summaryLines = expanded
-      ? wrapTextWithAnsi(summary, width)
-      : [truncateToWidth(summary, width)];
-    const hidden = !expanded && visibleWidth(summary) > width;
-    return [
-      ...summaryLines,
-      truncateToWidth(theme.fg("accent", `  Next: ${recovery}`), width),
-      ...(hidden
-        ? [truncateToWidth(renderExpansionAffordance("failure text", false, theme), width)]
-        : []),
-    ];
-  });
 
 export type SemanticRunRenderer = (
   cards: ReadonlyArray<SubagentRunCard>,
@@ -308,10 +271,57 @@ class CompactResultComponent implements Component {
     this.renderRuns = renderRuns;
   }
 
+  /** Per-failure rows: summary, recovery affordance, and the expansion cue. */
+  private renderActionFailures(width: number): ReadonlyArray<string> {
+    const { theme, expanded } = this;
+    return (this.details.actionFailures ?? []).flatMap((failure) => {
+      const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
+      const recovery = failureRecovery(failure.code, failure.message);
+      const summary = theme.fg(
+        "error",
+        `${managerStateGlyph("failed")} ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
+      );
+      const summaryLines = expanded
+        ? wrapTextWithAnsi(summary, width)
+        : [truncateToWidth(summary, width)];
+      const hidden = !expanded && visibleWidth(summary) > width;
+      return [
+        ...summaryLines,
+        truncateToWidth(theme.fg("accent", `  Next: ${recovery}`), width),
+        ...(hidden
+          ? [truncateToWidth(renderExpansionAffordance("failure text", false, theme), width)]
+          : []),
+      ];
+    });
+  }
+
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
     const cards = this.details.cards ?? [];
-    const summary = actionSummary(this.details);
+    const count = this.details.runCount ?? cards.length;
+    const failed = this.details.actionFailures?.length ?? 0;
+    const neutral =
+      this.details.action === "list" ||
+      this.details.action === "status" ||
+      this.details.action === "retry" ||
+      this.details.action === "claims";
+    const strict = this.details.action === "reply" || this.details.action === "rename";
+    const color: SemanticOutcomeBanner["color"] =
+      failed === 0
+        ? neutral
+          ? "accent"
+          : "success"
+        : this.details.action === "send"
+          ? count > 0
+            ? "warning"
+            : "error"
+          : strict
+            ? "error"
+            : "warning";
+    const summary: SemanticOutcomeBanner = {
+      color,
+      text: summaryText(this.details, count, failed, failed > 0 ? ` · ${failed} failed` : ""),
+    };
     const totalRuns = this.details.runCount ?? cards.length;
     const omittedRuns = Math.max(0, totalRuns - cards.length);
     const omissionCues = [
@@ -332,7 +342,7 @@ class CompactResultComponent implements Component {
         safeWidth,
       ),
       ...omissionLines,
-      ...renderActionFailures(this.details, safeWidth, this.theme, this.expanded),
+      ...this.renderActionFailures(safeWidth),
     ];
   }
 

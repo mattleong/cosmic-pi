@@ -4,8 +4,15 @@ import {
   decodeFullScreenPrintable,
   FullScreenKeymap,
   pageSteps,
+  type PageSteps,
 } from "pi-cosmic-ui/manager/keymap";
 import type { SubagentConfigScope } from "../config/store.ts";
+import {
+  isListMotion,
+  isMovementMotion,
+  movementOffset,
+  nextListMotionIndex,
+} from "./ui/list-navigation.ts";
 import type { PersistentProfileSetRef, ProfileSettingsInspection } from "./profile-route-editor.ts";
 import {
   initialProfileSetPickerIndex,
@@ -269,39 +276,78 @@ export class ProfileSetPickerComponent implements Component {
     const move = (offset: number) => {
       menu.selected = Math.max(0, Math.min(menu.choices.length - 1, menu.selected + offset));
     };
-    switch (resolution.action) {
-      case "confirm":
-      case "forward":
-        this.chooseAction();
-        return;
+    if (isListMotion(resolution.action)) {
+      if (isMovementMotion(resolution.action))
+        move(movementOffset(resolution.action, { half: 3, page: 3 }));
+      else
+        menu.selected = nextListMotionIndex(resolution.action, menu.selected, menu.choices.length, {
+          half: 3,
+          page: 3,
+        });
+    } else
+      switch (resolution.action) {
+        case "confirm":
+        case "forward":
+          this.chooseAction();
+          return;
+        case "cancel":
+        case "back":
+          this.actionMenu = undefined;
+          this.message = undefined;
+          break;
+        case "quit":
+          this.options.close(undefined);
+          return;
+        case "search":
+        case "help":
+        case "next-pane":
+        case "previous-pane":
+        case "pending-first":
+          break;
+      }
+    this.renderSoon();
+  }
+
+  /** Shared list-motion handling for both input modes; endpoints keep the message untouched. */
+  private applyMotionAction(action: string, steps: PageSteps): boolean {
+    if (!isListMotion(action)) return false;
+    if (isMovementMotion(action)) this.move(movementOffset(action, steps));
+    else
+      this.selectedIndex = nextListMotionIndex(
+        action,
+        this.selectedIndex,
+        this.entries().length,
+        steps,
+      );
+    return true;
+  }
+
+  private handleSearchAction(action: string, steps: PageSteps): void {
+    if (this.applyMotionAction(action, steps)) return;
+    switch (action) {
       case "cancel":
-      case "back":
-        this.actionMenu = undefined;
-        this.message = undefined;
+        this.searching = false;
+        this.query = "";
+        this.selectedIndex = initialProfileSetPickerIndex(
+          this.allEntries,
+          this.options.initialScope,
+        );
         break;
+      case "confirm": {
+        const selected = this.selected();
+        if (!selected) {
+          this.message = { kind: "info", text: "No saved sets match this search." };
+          break;
+        }
+        this.searching = false;
+        this.query = "";
+        this.selectedIndex = this.allEntries.indexOf(selected);
+        this.openActions();
+        break;
+      }
       case "quit":
-        this.options.close(undefined);
-        return;
-      case "up":
-        move(-1);
-        break;
-      case "down":
-        move(1);
-        break;
-      case "first":
-        menu.selected = 0;
-        break;
-      case "last":
-        menu.selected = menu.choices.length - 1;
-        break;
-      case "half-page-up":
-      case "full-page-up":
-        move(-3);
-        break;
-      case "half-page-down":
-      case "full-page-down":
-        move(3);
-        break;
+      case "back":
+      case "forward":
       case "search":
       case "help":
       case "next-pane":
@@ -309,94 +355,31 @@ export class ProfileSetPickerComponent implements Component {
       case "pending-first":
         break;
     }
-    this.renderSoon();
   }
 
-  handleInput(data: string): void {
-    if (this.disposed) return;
-    if (this.pendingDelete) {
-      this.handleConfirmation(data);
-      return;
-    }
-    if (this.actionMenu) {
-      this.handleMenu(data);
-      return;
-    }
-    const printable = decodeFullScreenPrintable(data);
-    if (this.searching) {
-      const resolution = this.keymap.resolve(data, {
-        mode: "search",
-        matchesKeybinding: this.options.matchesKeybinding,
-      });
-      if (resolution?._tag === "Action") {
-        const steps = pageSteps(this.options.getHeight() - 8);
-        switch (resolution.action) {
-          case "cancel":
-            this.searching = false;
-            this.query = "";
-            this.selectedIndex = initialProfileSetPickerIndex(
-              this.allEntries,
-              this.options.initialScope,
-            );
-            break;
-          case "confirm": {
-            const selected = this.selected();
-            if (!selected) {
-              this.message = { kind: "info", text: "No saved sets match this search." };
-              break;
-            }
-            this.searching = false;
-            this.query = "";
-            this.selectedIndex = this.allEntries.indexOf(selected);
-            this.openActions();
-            break;
-          }
-          case "up":
-            this.move(-1);
-            break;
-          case "down":
-            this.move(1);
-            break;
-          case "half-page-up":
-            this.move(-steps.half);
-            break;
-          case "half-page-down":
-            this.move(steps.half);
-            break;
-          case "full-page-up":
-            this.move(-steps.page);
-            break;
-          case "full-page-down":
-            this.move(steps.page);
-            break;
-          case "first":
-            this.selectedIndex = 0;
-            break;
-          case "last":
-            this.selectedIndex = Math.max(0, this.entries().length - 1);
-            break;
-          case "quit":
-          case "back":
-          case "forward":
-          case "search":
-          case "help":
-          case "next-pane":
-          case "previous-pane":
-          case "pending-first":
-            break;
-        }
-      } else if (data === "\u007f" || data === "\b") {
-        this.query = this.query.slice(0, -1);
-        this.selectedIndex = 0;
-        this.message = undefined;
-      } else if (printable && printable !== "/") {
+  private handleSearchInput(data: string): void {
+    const resolution = this.keymap.resolve(data, {
+      mode: "search",
+      matchesKeybinding: this.options.matchesKeybinding,
+    });
+    if (resolution?._tag === "Action") {
+      this.handleSearchAction(resolution.action, pageSteps(this.options.getHeight() - 8));
+    } else if (data === "\u007f" || data === "\b") {
+      this.query = this.query.slice(0, -1);
+      this.selectedIndex = 0;
+      this.message = undefined;
+    } else {
+      const printable = decodeFullScreenPrintable(data);
+      if (printable && printable !== "/") {
         this.query += printable;
         this.selectedIndex = 0;
         this.message = undefined;
       }
-      this.renderSoon();
-      return;
     }
+    this.renderSoon();
+  }
+
+  private handleNavigationInput(data: string): void {
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
@@ -417,6 +400,10 @@ export class ProfileSetPickerComponent implements Component {
       return;
     }
     const steps = pageSteps(this.options.getHeight() - 8);
+    if (this.applyMotionAction(resolution.action, steps)) {
+      this.renderSoon();
+      return;
+    }
     switch (resolution.action) {
       case "cancel":
       case "quit":
@@ -427,30 +414,6 @@ export class ProfileSetPickerComponent implements Component {
       case "forward":
         this.openActions();
         return;
-      case "up":
-        this.move(-1);
-        break;
-      case "down":
-        this.move(1);
-        break;
-      case "half-page-up":
-        this.move(-steps.half);
-        break;
-      case "half-page-down":
-        this.move(steps.half);
-        break;
-      case "full-page-up":
-        this.move(-steps.page);
-        break;
-      case "full-page-down":
-        this.move(steps.page);
-        break;
-      case "first":
-        this.selectedIndex = 0;
-        break;
-      case "last":
-        this.selectedIndex = Math.max(0, this.entries().length - 1);
-        break;
       case "search":
         this.searching = true;
         this.query = "";
@@ -463,6 +426,20 @@ export class ProfileSetPickerComponent implements Component {
         break;
     }
     this.renderSoon();
+  }
+
+  handleInput(data: string): void {
+    if (this.disposed) return;
+    if (this.pendingDelete) {
+      this.handleConfirmation(data);
+      return;
+    }
+    if (this.actionMenu) {
+      this.handleMenu(data);
+      return;
+    }
+    if (this.searching) this.handleSearchInput(data);
+    else this.handleNavigationInput(data);
   }
 
   render(width: number): string[] {

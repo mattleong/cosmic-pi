@@ -191,9 +191,11 @@ const cleanupUnconfirmed = () =>
 export const releaseChildProcess = (
   operations: ChildProcessReleaseOperations,
 ): Effect.Effect<void, SubagentProcessError> => {
+  /** True when the process exit was observed within the bounded wait. */
   const waitForExit = operations.awaitExit.pipe(
     Effect.interruptible,
-    Effect.timeoutOption("2 seconds"),
+    Effect.as(true),
+    Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
   );
   return operations.requestAbort.pipe(
     Effect.andThen(Effect.sleep("100 millis")),
@@ -201,7 +203,7 @@ export const releaseChildProcess = (
     Effect.flatMap((gracefulAttempt) =>
       waitForExit.pipe(
         Effect.flatMap((gracefulExit) => {
-          if (gracefulExit._tag === "Some") {
+          if (gracefulExit) {
             if (operations.platform === "win32")
               return Exit.isSuccess(gracefulAttempt)
                 ? Effect.void
@@ -216,7 +218,7 @@ export const releaseChildProcess = (
             Effect.flatMap((forceAttempt) =>
               waitForExit.pipe(
                 Effect.flatMap((forcedExit) =>
-                  Exit.isSuccess(forceAttempt) && forcedExit._tag === "Some"
+                  Exit.isSuccess(forceAttempt) && forcedExit
                     ? Effect.void
                     : Effect.fail(cleanupUnconfirmed()),
                 ),
@@ -485,18 +487,17 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         operation: string,
       ) =>
         effect.pipe(
-          Effect.timeoutOption(TRANSPORT_WRITE_TIMEOUT),
-          Effect.flatMap((outcome) =>
-            outcome._tag === "Some"
-              ? Effect.void
-              : Effect.fail(
-                  processError(
-                    operation,
-                    `Subagent transport write exceeded ${TRANSPORT_WRITE_TIMEOUT}; the frame may already have been accepted.`,
-                    "transport_outcome_uncertain",
-                  ),
+          Effect.timeoutOrElse({
+            duration: TRANSPORT_WRITE_TIMEOUT,
+            orElse: () =>
+              Effect.fail(
+                processError(
+                  operation,
+                  `Subagent transport write exceeded ${TRANSPORT_WRITE_TIMEOUT}; the frame may already have been accepted.`,
+                  "transport_outcome_uncertain",
                 ),
-          ),
+              ),
+          }),
         );
       const send = (command: RpcCommand) =>
         withWriteTimeout(

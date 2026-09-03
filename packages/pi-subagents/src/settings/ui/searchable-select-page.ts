@@ -16,8 +16,8 @@ import {
   FullScreenKeymap,
   pageSteps,
   type FullScreenSelectionKeybindingId,
-  type PageSteps,
 } from "pi-cosmic-ui/manager/keymap";
+import { isListMotion, nextListMotionIndex } from "./list-navigation.ts";
 import { fullScreenSettingsHint } from "pi-cosmic-ui/manager/settings-adapter";
 
 export interface SearchableSelectPageChoice<A> {
@@ -54,46 +54,6 @@ export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOpti
   readonly select: (value: A) => void;
   readonly cancel: () => void;
 }
-
-export type SearchableSelectMotion =
-  | "up"
-  | "down"
-  | "half-page-up"
-  | "half-page-down"
-  | "full-page-up"
-  | "full-page-down"
-  | "first"
-  | "last";
-
-/**
- * Pure selection arithmetic for a non-empty dropdown: single-row motions wrap around the
- * ends while page motions and endpoints clamp to the list bounds.
- */
-export const nextSearchableSelectIndex = (
-  motion: SearchableSelectMotion,
-  current: number,
-  length: number,
-  steps: PageSteps,
-): number => {
-  switch (motion) {
-    case "up":
-      return (current - 1 + length) % length;
-    case "down":
-      return (current + 1) % length;
-    case "half-page-up":
-      return Math.max(0, current - steps.half);
-    case "half-page-down":
-      return Math.min(length - 1, current + steps.half);
-    case "full-page-up":
-      return Math.max(0, current - steps.page);
-    case "full-page-down":
-      return Math.min(length - 1, current + steps.page);
-    case "first":
-      return 0;
-    case "last":
-      return length - 1;
-  }
-};
 
 /** Responsive full-page fuzzy-search input and dropdown shared by settings selectors. */
 export class SearchableSelectPage<A> implements Component, Focusable {
@@ -177,6 +137,41 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     return list;
   }
 
+  /** Non-motion keymap actions shared by search and navigation modes. */
+  private handleSelectAction(action: string): void {
+    switch (action) {
+      case "cancel":
+        if (this.searchMode) this.setSearchMode(false);
+        else this.options.cancel();
+        break;
+      case "quit":
+      case "back":
+        this.options.cancel();
+        break;
+      case "confirm":
+      case "forward": {
+        const choice = this.selectedChoice();
+        if (choice) this.options.select(choice.payload);
+        else
+          this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
+        break;
+      }
+      case "search":
+        this.setSearchMode(true);
+        break;
+      case "help": {
+        const selected = this.selectedChoice();
+        this.alternateHelp = !this.alternateHelp;
+        this.list = this.buildList(selected);
+        break;
+      }
+      case "pending-first":
+      case "previous-pane":
+      case "next-pane":
+        break;
+    }
+  }
+
   handleInput(data: string): void {
     const resolution = this.keymap.resolve(data, {
       mode: this.searchMode ? "search" : "navigation",
@@ -186,57 +181,19 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       const currentChoice = this.selectedChoice();
       const current = currentChoice ? this.filtered.indexOf(currentChoice) : 0;
       const length = this.filtered.length;
-      switch (resolution.action) {
-        case "cancel":
-          if (this.searchMode) this.setSearchMode(false);
-          else this.options.cancel();
-          break;
-        case "quit":
-        case "back":
-          this.options.cancel();
-          break;
-        case "confirm":
-        case "forward": {
-          const choice = this.selectedChoice();
-          if (choice) this.options.select(choice.payload);
-          else
-            this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
-          break;
-        }
-        case "search":
-          this.setSearchMode(true);
-          break;
-        case "up":
-        case "down":
-        case "half-page-up":
-        case "half-page-down":
-        case "full-page-up":
-        case "full-page-down":
-        case "first":
-        case "last":
-          if (length > 0) {
-            this.list.setSelectedIndex(
-              nextSearchableSelectIndex(
-                resolution.action,
-                current,
-                length,
-                pageSteps(this.listHeight - 1),
-              ),
-            );
-          }
-          this.feedback = undefined;
-          break;
-        case "help": {
-          const selected = this.selectedChoice();
-          this.alternateHelp = !this.alternateHelp;
-          this.list = this.buildList(selected);
-          break;
-        }
-        case "pending-first":
-        case "previous-pane":
-        case "next-pane":
-          break;
-      }
+      if (isListMotion(resolution.action)) {
+        if (length > 0)
+          this.list.setSelectedIndex(
+            nextListMotionIndex(
+              resolution.action,
+              current,
+              length,
+              pageSteps(this.listHeight - 1),
+              true,
+            ),
+          );
+        this.feedback = undefined;
+      } else this.handleSelectAction(resolution.action);
       this.options.requestRender();
       return;
     }
@@ -260,6 +217,37 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     this.keymap.resetChord();
     this.input.focused = this._focused && active;
     this.feedback = undefined;
+  }
+
+  private footer(inner: number): string {
+    const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
+      this.options.keybindingLabel?.(id, fallback) || fallback;
+    const confirm = key("tui.select.confirm", "Enter");
+    const cancel = key("tui.select.cancel", "Esc");
+    const configuredNavigation = this.options.keybindingLabel
+      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
+      : undefined;
+    const normalNavigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
+    return this.searchMode
+      ? renderResponsiveManagerFooter(inner, [
+          ["Type to filter · ↑/↓ Navigate", `${confirm} Select · ${cancel} Done`],
+          [`${confirm} Select`, `${cancel} Done`],
+        ])
+      : this.alternateHelp
+        ? renderResponsiveManagerFooter(inner, [
+            [
+              `${normalNavigation} Navigate · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
+              `/ Filter · l/${confirm} Select · h/q/${cancel} Back · ? Less`,
+            ],
+            [`${normalNavigation} · C-u/d · PgUp/PgDn · gg/G`, `? Less · q Back`],
+          ])
+        : renderResponsiveManagerFooter(inner, [
+            [
+              `${normalNavigation} Navigate · ${confirm} Select`,
+              `/ Filter · ? More · ${cancel} Back`,
+            ],
+            [`${confirm} Select`, `? · ${cancel} Back`],
+          ]);
   }
 
   render(width: number): string[] {
@@ -335,34 +323,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       body.push(...header, ...this.list.render(inner).slice(0, desiredListHeight));
     }
 
-    const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
-      this.options.keybindingLabel?.(id, fallback) || fallback;
-    const confirm = key("tui.select.confirm", "Enter");
-    const cancel = key("tui.select.cancel", "Esc");
-    const configuredNavigation = this.options.keybindingLabel
-      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
-      : undefined;
-    const normalNavigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
-    const footer = this.searchMode
-      ? renderResponsiveManagerFooter(inner, [
-          ["Type to filter · ↑/↓ Navigate", `${confirm} Select · ${cancel} Done`],
-          [`${confirm} Select`, `${cancel} Done`],
-        ])
-      : this.alternateHelp
-        ? renderResponsiveManagerFooter(inner, [
-            [
-              `${normalNavigation} Navigate · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
-              `/ Filter · l/${confirm} Select · h/q/${cancel} Back · ? Less`,
-            ],
-            [`${normalNavigation} · C-u/d · PgUp/PgDn · gg/G`, `? Less · q Back`],
-          ])
-        : renderResponsiveManagerFooter(inner, [
-            [
-              `${normalNavigation} Navigate · ${confirm} Select`,
-              `/ Filter · ? More · ${cancel} Back`,
-            ],
-            [`${confirm} Select`, `? · ${cancel} Back`],
-          ]);
+    const footer = this.footer(inner);
     const bottom = `${theme.fg("borderAccent", "╰")}${theme.fg(
       "borderAccent",
       "─".repeat(Math.max(0, inner - visibleWidth(footer))),

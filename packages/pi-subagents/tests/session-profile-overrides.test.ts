@@ -40,6 +40,27 @@ const completeSources = (source: ProfileRouteSource) => ({
   generalist: source,
 });
 
+const EMPTY_ROUTES = {
+  scout: { candidates: [] },
+  researcher: { candidates: [] },
+  planner: { candidates: [] },
+  worker: { candidates: [] },
+  reviewer: { candidates: [] },
+  oracle: { candidates: [] },
+  generalist: { candidates: [] },
+};
+
+const decodeBaseline = (
+  origin: SessionProfileBaseline["origin"],
+  profiles: SessionProfileBaseline["profiles"],
+  profileSources: SessionProfileBaseline["profileSources"],
+) =>
+  decodeSessionProfileOverrideSeed({
+    revision: 0,
+    overrides: {},
+    baseline: { origin, profiles, profileSources },
+  });
+
 const baseConfig = (projectReviewerModel = "openai/project") => {
   const global = decodeSubagentConfig(
     {
@@ -130,18 +151,59 @@ describe("session profile overrides", () => {
     expect(restored.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/original");
   });
 
+  it("accepts exactly the detached baseline origin/source provenance matrix", () => {
+    const origins = {
+      builtin: { scope: "builtin" },
+      global: { scope: "global", name: "saved" },
+      "global-invalid": { scope: "global", name: "missing", invalid: true },
+      project: { scope: "project", name: "saved" },
+      "project-invalid": { scope: "project", name: "missing", invalid: true },
+    } satisfies Record<string, SessionProfileBaseline["origin"]>;
+    const sources: ReadonlyArray<ProfileRouteSource> = [
+      "session",
+      "project",
+      "global",
+      "builtin",
+      "project-invalid",
+      "global-invalid",
+    ];
+    const routeFor = (source: ProfileRouteSource): ProfileRoute =>
+      source === "builtin"
+        ? BUILTIN_PROFILE_ROUTES.reviewer
+        : source === "global-invalid" || source === "project-invalid"
+          ? { candidates: [] }
+          : route(`openai/${source}`);
+    const accepted = Object.fromEntries(
+      Object.entries(origins).map(([name, origin]) => {
+        // Sibling profiles carry the origin's own provenance so only the reviewer varies.
+        const siblingSource: ProfileRouteSource =
+          name === "global-invalid" || name === "project-invalid" ? name : "builtin";
+        const siblingRoutes = siblingSource === "builtin" ? BUILTIN_PROFILE_ROUTES : EMPTY_ROUTES;
+        return [
+          name,
+          sources.filter(
+            (source) =>
+              decodeBaseline(
+                origin,
+                { ...siblingRoutes, reviewer: routeFor(source) },
+                { ...completeSources(siblingSource), reviewer: source },
+              ) !== undefined,
+          ),
+        ];
+      }),
+    );
+
+    expect(accepted).toEqual({
+      builtin: ["builtin"],
+      global: ["global", "builtin", "global-invalid"],
+      "global-invalid": ["global-invalid"],
+      project: ["project", "global", "builtin", "project-invalid", "global-invalid"],
+      "project-invalid": ["project-invalid"],
+    });
+  });
+
   it("rejects impossible detached baseline provenance while retaining valid layering", () => {
     const baseline = makeSessionProfileSnapshot(baseConfig()).baseline;
-    const decodeBaseline = (
-      origin: SessionProfileBaseline["origin"],
-      profiles: SessionProfileBaseline["profiles"],
-      profileSources: SessionProfileBaseline["profileSources"],
-    ) =>
-      decodeSessionProfileOverrideSeed({
-        revision: 0,
-        overrides: {},
-        baseline: { origin, profiles, profileSources },
-      });
 
     expect(
       decodeBaseline({ scope: "builtin" }, BUILTIN_PROFILE_ROUTES, completeSources("builtin")),
@@ -184,26 +246,17 @@ describe("session profile overrides", () => {
         reviewer: "project",
       }),
     ).toBeUndefined();
-    const failClosedProfiles = {
-      scout: { candidates: [] },
-      researcher: { candidates: [] },
-      planner: { candidates: [] },
-      worker: { candidates: [] },
-      reviewer: { candidates: [] },
-      oracle: { candidates: [] },
-      generalist: { candidates: [] },
-    };
     expect(
       decodeBaseline(
         { scope: "global", name: "missing", invalid: true },
-        failClosedProfiles,
+        EMPTY_ROUTES,
         completeSources("global-invalid"),
       ),
     ).toBeDefined();
     expect(
       decodeBaseline(
         { scope: "global", name: "missing", invalid: true },
-        failClosedProfiles,
+        EMPTY_ROUTES,
         completeSources("global"),
       ),
     ).toBeUndefined();

@@ -21,6 +21,7 @@ import {
 import { hasRetainedAssignmentCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
+import { runSessionOwned } from "./session-owned.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
 import { emptyRunWarningSlots, setRunWarning } from "./warnings.ts";
 
@@ -307,7 +308,8 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     });
 
   const reply = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
-    Effect.uninterruptibleMask((restore) =>
+    runSessionOwned(
+      ownerScope,
       Effect.gen(function* () {
         const normalized = yield* validateParentMessage(message, "Reply message is required.");
         const claimed = yield* withLock(
@@ -343,7 +345,10 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             return { record, process, question };
           }),
         );
-        const commit = claimed.process.controls.reply(claimed.question.requestId, normalized).pipe(
+        return { ...claimed, normalized };
+      }),
+      ({ normalized, ...claimed }) =>
+        claimed.process.controls.reply(claimed.question.requestId, normalized).pipe(
           Effect.mapError((error) => {
             if (error._tag !== "SubagentProcessError") return error;
             // A pre-send failure proves the reply never reached the transport, so the
@@ -420,16 +425,12 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             );
           }),
           Effect.ensuring(releaseTurnInput(claimed.record)),
-        );
-        const commitFiber = yield* commit.pipe(
-          Effect.forkIn(ownerScope, { startImmediately: true }),
-        );
-        return yield* restore(Fiber.join(commitFiber));
-      }),
+        ),
     );
 
   const interrupt = (id: string): Effect.Effect<SubagentRunView, SubagentError> =>
-    Effect.uninterruptibleMask((restore) =>
+    runSessionOwned(
+      ownerScope,
       Effect.gen(function* () {
         const pauseOutcome = yield* Deferred.make<SubagentRunView, SubagentError>();
         const turnInputsDrained = yield* Deferred.make<void>();
@@ -453,7 +454,10 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             return selected;
           }),
         );
-        const commit = Effect.gen(function* () {
+        return { record, pauseOutcome, turnInputsDrained };
+      }),
+      ({ record, pauseOutcome, turnInputsDrained }) =>
+        Effect.gen(function* () {
           yield* Deferred.await(turnInputsDrained);
           yield* Effect.raceFirst(
             interruptBackend(record),
@@ -507,12 +511,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               return view;
             }),
           );
-        });
-        const commitFiber = yield* commit.pipe(
-          Effect.forkIn(ownerScope, { startImmediately: true }),
-        );
-        return yield* restore(Fiber.join(commitFiber));
-      }),
+        }),
     );
 
   const rename = (id: string, rawName: string): Effect.Effect<SubagentRunView, SubagentError> =>
@@ -572,13 +571,14 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     });
 
   const stop = (id: string): Effect.Effect<SubagentRunView, SubagentError> =>
-    Effect.uninterruptibleMask((restore) =>
+    runSessionOwned(
+      ownerScope,
       Effect.gen(function* () {
         const stopError = new SubagentProcessError({
           operation: "stop",
           message: `Subagent ${id} was stopped.`,
         });
-        const claim = yield* withLock(
+        return yield* withLock(
           Effect.gen(function* () {
             const selected = yield* requireRecord(id);
             if (isTerminalRunState(selected.view.state) || selected.view.state === "stopping")
@@ -598,14 +598,11 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             return { record: selected, cleanupRequired: true as const };
           }),
         );
-        const record = claim.record;
-        if (!claim.cleanupRequired) return snapshotView(record.view);
-        const cleanup = closeRecordScope(record).pipe(Effect.andThen(settle(record, "stopped")));
-        const cleanupFiber = yield* cleanup.pipe(
-          Effect.forkIn(ownerScope, { startImmediately: true }),
-        );
-        return yield* restore(Fiber.join(cleanupFiber));
       }),
+      ({ record, cleanupRequired }) =>
+        cleanupRequired
+          ? closeRecordScope(record).pipe(Effect.andThen(settle(record, "stopped")))
+          : Effect.succeed(snapshotView(record.view)),
     );
 
   return { send, reply, interrupt, rename, stop };

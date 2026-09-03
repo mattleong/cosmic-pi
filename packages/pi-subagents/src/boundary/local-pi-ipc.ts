@@ -46,8 +46,7 @@ const boundedSend = <Message, Failure>(
       resume(Effect.fail(notSent()));
     }
   }).pipe(
-    Effect.timeoutOption(IPC_WRITE_TIMEOUT),
-    Effect.flatMap((outcome) => (Option.isSome(outcome) ? Effect.void : Effect.fail(uncertain()))),
+    Effect.timeoutOrElse({ duration: IPC_WRITE_TIMEOUT, orElse: () => Effect.fail(uncertain()) }),
   );
 
 const attachListeners = <Outbound, Inbound>(

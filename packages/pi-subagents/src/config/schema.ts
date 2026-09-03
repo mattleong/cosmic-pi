@@ -186,6 +186,21 @@ const readCandidateField = (record: Readonly<JsonObject>, key: string) => {
   }
 };
 
+/** Descriptor-safe reads for every candidate field; the legacy fastMode value keeps its key.
+ * Required base fields must be present own values; optional fields must never be accessors. */
+const candidateFields = (record: Readonly<JsonObject>, fastModeKey: string) => {
+  const values: Array<readonly [string, unknown]> = [];
+  let decodable = true;
+  for (const key of [...CANDIDATE_BASE_KEYS, fastModeKey]) {
+    const field = readCandidateField(record, key);
+    const required = key !== "closeOnReport" && key !== fastModeKey;
+    if (!field.readable || (required && !field.present)) decodable = false;
+    else if (field.present)
+      values.push([key === fastModeKey ? "openaiFastMode" : key, field.value]);
+  }
+  return { decodable, values };
+};
+
 const isLegacyConfigVersion = (version: number | undefined): version is 4 | 5 =>
   version === LEGACY_SUBAGENT_CONFIG_VERSION || version === PREVIOUS_SUBAGENT_CONFIG_VERSION;
 
@@ -194,46 +209,13 @@ export const decodeProfileCandidate = <ValueInput>(
   version = SUBAGENT_CONFIG_VERSION,
 ): ProfileCandidate | undefined => {
   const record = decodedRecord(value);
-  const priorityKey = isLegacyConfigVersion(version) ? "fastMode" : "openaiFastMode";
-  const allowedKeys = new Set<string>([...CANDIDATE_BASE_KEYS, priorityKey]);
-  if (!record || !ownKeysAre(record, allowedKeys)) return undefined;
-  const host = readCandidateField(record, "host");
-  const runtime = readCandidateField(record, "runtime");
-  const model = readCandidateField(record, "model");
-  const effort = readCandidateField(record, "effort");
-  const context = readCandidateField(record, "context");
-  const writeIntent = readCandidateField(record, "writeIntent");
-  const openaiFastMode = readCandidateField(record, priorityKey);
-  const closeOnReport = readCandidateField(record, "closeOnReport");
-  if (
-    !host.readable ||
-    !host.present ||
-    !runtime.readable ||
-    !runtime.present ||
-    !model.readable ||
-    !model.present ||
-    !effort.readable ||
-    !effort.present ||
-    !context.readable ||
-    !context.present ||
-    !writeIntent.readable ||
-    !writeIntent.present ||
-    !openaiFastMode.readable ||
-    !closeOnReport.readable
-  )
+  const fastModeKey = isLegacyConfigVersion(version) ? "fastMode" : "openaiFastMode";
+  if (!record || !ownKeysAre(record, new Set([...CANDIDATE_BASE_KEYS, fastModeKey])))
     return undefined;
-  const plain = {
-    host: host.value,
-    runtime: runtime.value,
-    model: model.value,
-    effort: effort.value,
-    context: context.value,
-    writeIntent: writeIntent.value,
-    ...(openaiFastMode.present && { openaiFastMode: openaiFastMode.value }),
-    ...(closeOnReport.present && { closeOnReport: closeOnReport.value }),
-  };
+  const { decodable, values } = candidateFields(record, fastModeKey);
+  if (!decodable) return undefined;
   try {
-    const decoded = Schema.decodeUnknownOption(CandidateContractSchema)(plain);
+    const decoded = Schema.decodeUnknownOption(CandidateContractSchema)(Object.fromEntries(values));
     if (Option.isNone(decoded)) return undefined;
     const candidate = normalizeProfileCandidate(decoded.value);
     return profileCandidateValidationIssues(candidate).length === 0 ? candidate : undefined;
@@ -402,15 +384,78 @@ const ConfigVersionSchema = Schema.Literals([
   SUBAGENT_CONFIG_VERSION,
 ]);
 
-const decodeConfigVersion = <ValueInput>(value: ValueInput): 4 | 5 | 6 | undefined => {
-  const decoded = Schema.decodeUnknownOption(ConfigVersionSchema)(value);
-  return Option.isSome(decoded) ? decoded.value : undefined;
+/** Allowed root keys per declared version; unsupported versions use the current key set. */
+const ROOT_KEYS_BY_VERSION = {
+  [LEGACY_SUBAGENT_CONFIG_VERSION]: ["version", "profiles"],
+  [PREVIOUS_SUBAGENT_CONFIG_VERSION]: ["version", "profiles", "nesting"],
+  [SUBAGENT_CONFIG_VERSION]: ["version", "defaultProfileSet", "profileSets", "nesting"],
+} as const;
+
+const rootKeysFor = (version: 4 | 5 | 6 | undefined): ReadonlySet<string> =>
+  new Set(ROOT_KEYS_BY_VERSION[version ?? SUBAGENT_CONFIG_VERSION]);
+
+/** Current-version body decode: file fields plus null-prototype invalid-set bookkeeping. */
+const decodeCurrentBody = (rawRoot: Readonly<JsonObject>, scope: string, diagnostics: string[]) => {
+  const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
+  const decoded = setsField.present
+    ? decodeProfileSets(
+        setsField.value,
+        SUBAGENT_CONFIG_VERSION,
+        `${scope}.profileSets`,
+        diagnostics,
+      )
+    : undefined;
+  const defaultField = readField(
+    rawRoot,
+    "defaultProfileSet",
+    `${scope}.defaultProfileSet`,
+    diagnostics,
+  );
+  const decodedDefault = defaultField.present
+    ? Schema.decodeUnknownOption(Schema.String)(defaultField.value)
+    : undefined;
+  const defaultProfileSet =
+    decodedDefault !== undefined &&
+    Option.isSome(decodedDefault) &&
+    isProfileSetName(decodedDefault.value)
+      ? decodedDefault.value
+      : undefined;
+  const invalidDefaultProfileSet = defaultField.present && defaultProfileSet === undefined;
+  if (invalidDefaultProfileSet) diagnostics.push(`${scope}.defaultProfileSet`);
+  return {
+    file: {
+      ...(decoded && Object.keys(decoded.sets).length > 0 && { profileSets: decoded.sets }),
+      ...(defaultProfileSet !== undefined && { defaultProfileSet }),
+    },
+    invalidProfileSetRoutes: decoded?.invalidRoutes ?? {},
+    invalidProfileSets: decoded?.invalidSets ?? [],
+    invalidDefaultProfileSet,
+  };
 };
 
-const decodeProfileSetName = <ValueInput>(value: ValueInput): string | undefined => {
-  const decoded = Schema.decodeUnknownOption(Schema.String)(value);
-  if (Option.isNone(decoded) || !isProfileSetName(decoded.value)) return undefined;
-  return decoded.value;
+/** Version-4/5 body decode: maps root routes into set `default` and migrates only valid data. */
+const decodeLegacyBody = (
+  rawRoot: Readonly<JsonObject>,
+  scope: string,
+  version: 4 | 5,
+  diagnostics: string[],
+) => {
+  const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
+  const decoded = profilesField.present
+    ? decodeProfiles(profilesField.value, version, `${scope}.profiles`, diagnostics)
+    : undefined;
+  if (!decoded) return undefined;
+  const profileSets = { [MIGRATED_PROFILE_SET_NAME]: { profiles: decoded.profiles } };
+  // SAFETY: This null-prototype map is populated only with the validated migrated set name.
+  const invalidProfileSetRoutes = Object.create(null) as Record<string, ReadonlyArray<ProfileId>>;
+  if (decoded.invalidRoutes.length > 0)
+    invalidProfileSetRoutes[MIGRATED_PROFILE_SET_NAME] = decoded.invalidRoutes;
+  return {
+    file: { defaultProfileSet: MIGRATED_PROFILE_SET_NAME, profileSets },
+    invalidProfileSetRoutes,
+    invalidProfileSets: [],
+    invalidDefaultProfileSet: false,
+  };
 };
 
 /** Strict version-4/5/6 unknown-boundary decode for one global or project document. */
@@ -422,88 +467,37 @@ export function decodeSubagentConfig<InputInput>(
   const decodedRoot = decodedRecord(input);
   const rawRoot = decodedRoot ?? {};
   if (!decodedRoot) diagnostics.push(scope);
-  const versionField = readField(rawRoot, "version", `${scope}.version`, diagnostics);
-  const version = decodeConfigVersion(versionField.value);
-  const supported = version !== undefined;
-  const allowedRootKeys =
-    version === LEGACY_SUBAGENT_CONFIG_VERSION
-      ? new Set(["version", "profiles"])
-      : version === PREVIOUS_SUBAGENT_CONFIG_VERSION
-        ? new Set(["version", "profiles", "nesting"])
-        : new Set(["version", "defaultProfileSet", "profileSets", "nesting"]);
-  if (!ownKeysAre(rawRoot, allowedRootKeys)) diagnostics.push(`${scope}.<unknown>`);
+  const decodedVersion = Schema.decodeUnknownOption(ConfigVersionSchema)(
+    readField(rawRoot, "version", `${scope}.version`, diagnostics).value,
+  );
+  const version = Option.getOrUndefined(decodedVersion);
+  if (!ownKeysAre(rawRoot, rootKeysFor(version))) diagnostics.push(`${scope}.<unknown>`);
 
-  let file: SubagentConfigFile = supported ? { version } : {};
   // SAFETY: This null-prototype map is populated only by bounded profile decoders.
   const invalidProfileSetRoutes = Object.create(null) as Record<string, ReadonlyArray<ProfileId>>;
+  let file: SubagentConfigFile = version === undefined ? {} : { version };
   let invalidProfileSets: ReadonlyArray<string> = [];
   let invalidDefaultProfileSet = false;
 
-  if (isLegacyConfigVersion(version)) {
-    const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
-    if (profilesField.present) {
-      const decoded = decodeProfiles(
-        profilesField.value,
-        version,
-        `${scope}.profiles`,
-        diagnostics,
-      );
-      if (decoded) {
-        const profileSet: SubagentProfileSet = { profiles: decoded.profiles };
-        file = {
-          ...file,
-          defaultProfileSet: MIGRATED_PROFILE_SET_NAME,
-          profileSets: { [MIGRATED_PROFILE_SET_NAME]: profileSet },
-        };
-        if (decoded.invalidRoutes.length > 0)
-          invalidProfileSetRoutes[MIGRATED_PROFILE_SET_NAME] = decoded.invalidRoutes;
-      }
-    }
-  } else if (version === SUBAGENT_CONFIG_VERSION) {
-    const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
-    if (setsField.present) {
-      const decoded = decodeProfileSets(
-        setsField.value,
-        version,
-        `${scope}.profileSets`,
-        diagnostics,
-      );
-      if (decoded) {
-        if (Object.keys(decoded.sets).length > 0) file = { ...file, profileSets: decoded.sets };
-        Object.assign(invalidProfileSetRoutes, decoded.invalidRoutes);
-        invalidProfileSets = decoded.invalidSets;
-      }
-    }
-    const defaultField = readField(
-      rawRoot,
-      "defaultProfileSet",
-      `${scope}.defaultProfileSet`,
-      diagnostics,
-    );
-    if (defaultField.present) {
-      const defaultName = decodeProfileSetName(defaultField.value);
-      if (defaultName === undefined) {
-        diagnostics.push(`${scope}.defaultProfileSet`);
-        invalidDefaultProfileSet = true;
-      } else {
-        file = { ...file, defaultProfileSet: defaultName };
-      }
-    }
-  }
-
-  const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
-  const nesting =
-    (version === PREVIOUS_SUBAGENT_CONFIG_VERSION || version === SUBAGENT_CONFIG_VERSION) &&
-    nestingField.present
-      ? decodeSubagentNesting(nestingField.value)
+  const body = isLegacyConfigVersion(version)
+    ? decodeLegacyBody(rawRoot, scope, version, diagnostics)
+    : version === SUBAGENT_CONFIG_VERSION
+      ? decodeCurrentBody(rawRoot, scope, diagnostics)
       : undefined;
-  if (
-    (version === PREVIOUS_SUBAGENT_CONFIG_VERSION || version === SUBAGENT_CONFIG_VERSION) &&
-    nestingField.present &&
-    nesting === undefined
-  )
-    diagnostics.push(`${scope}.nesting`);
-  if (nesting !== undefined) file = { ...file, nesting };
+  if (body) {
+    file = { ...file, ...body.file };
+    Object.assign(invalidProfileSetRoutes, body.invalidProfileSetRoutes);
+    invalidProfileSets = body.invalidProfileSets;
+    invalidDefaultProfileSet = body.invalidDefaultProfileSet;
+  }
+  const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
+  const supportsNesting =
+    version === PREVIOUS_SUBAGENT_CONFIG_VERSION || version === SUBAGENT_CONFIG_VERSION;
+  if (supportsNesting && nestingField.present) {
+    const nesting = decodeSubagentNesting(nestingField.value);
+    if (nesting === undefined) diagnostics.push(`${scope}.nesting`);
+    else file = { ...file, nesting };
+  }
 
   const defaultName = file.defaultProfileSet;
   if (
@@ -516,7 +510,7 @@ export function decodeSubagentConfig<InputInput>(
     diagnostics.push(`${scope}.defaultProfileSet`);
   }
   const invalidProfileRoutes = defaultName ? (invalidProfileSetRoutes[defaultName] ?? []) : [];
-  const unsupportedVersion = !supported;
+  const unsupportedVersion = version === undefined;
   if (unsupportedVersion) diagnostics.push(`${scope}.version`);
 
   return {

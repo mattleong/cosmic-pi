@@ -56,49 +56,60 @@ export const writerConflictError = (
     return new SubagentWriterConflictError({
       activeId: active?.view.id ?? "shared-writer-pool",
       activeName: active?.view.name ?? "shared writer pool",
-      message:
-        pool?.state === "quarantined"
-          ? "Shared-cwd writer ownership remains quarantined because cleanup could not be confirmed."
-          : pool?.state === "failed"
-            ? "Shared-cwd writer-pool preparation failed and existing members are still cleaning up; retry shortly."
-            : pool?.state === "releasing"
-              ? "Shared-cwd writer ownership is still being released; retry shortly."
-              : `New writers are paused for this cwd after a write-claim violation.${pool?.pauseReason ? ` ${pool.pauseReason}` : ""}`,
+      message: writerPoolUnavailableMessage(pool),
     });
   }
 
-  const conflictingRecord = [...records.values()].find((record) => {
-    if (record === excluded || record === additionallyExcluded) return false;
-    if (record.evictionClaim?.writerCwdDigest === canonicalCwd.digest) {
-      return firstWriteClaimConflict(writeClaims, record.evictionClaim.writeClaims) !== undefined;
-    }
-    if (record.canonicalWriterCwd?.digest !== canonicalCwd.digest) return false;
-    if (record.retryClaim)
-      return firstWriteClaimConflict(writeClaims, record.view.writeClaims) !== undefined;
-    if (!ownsWriterSlot(record)) return false;
-    if (record.cleanupPending) return true;
-    return firstWriteClaimConflict(writeClaims, record.view.writeClaims) !== undefined;
-  });
-  if (!conflictingRecord) return undefined;
-  const evictionReserved = conflictingRecord.evictionClaim?.writerCwdDigest === canonicalCwd.digest;
-  const retryReserved = conflictingRecord.retryClaim !== undefined;
-  const conflict = firstWriteClaimConflict(
-    writeClaims,
-    evictionReserved
-      ? conflictingRecord.evictionClaim?.writeClaims
-      : conflictingRecord.view.writeClaims,
-  );
-  return new SubagentWriterConflictError({
-    activeId: conflictingRecord.view.id,
-    activeName: conflictingRecord.view.name,
-    message: evictionReserved
-      ? "Overlapping writer start admission is already reserved while subagent history is reclaimed."
-      : retryReserved
-        ? `Writer ${conflictingRecord.view.name} (${conflictingRecord.view.id}) reserves overlapping claims for an explicit route retry.`
-        : conflictingRecord.cleanupPending
-          ? `Writer ${conflictingRecord.view.name} (${conflictingRecord.view.id}) remains quarantined because cleanup could not be confirmed.`
-          : conflict?.left === "<exclusive>" || conflict?.right === "<exclusive>"
-            ? `Writer ${conflictingRecord.view.name} (${conflictingRecord.view.id}) owns the shared cwd exclusively.`
-            : `Writer ${conflictingRecord.view.name} (${conflictingRecord.view.id}) already claims ${conflict?.right ?? "the requested file"}.`,
-  });
+  for (const record of records.values()) {
+    if (record === excluded || record === additionallyExcluded) continue;
+    const message = writerConflictMessage(record, canonicalCwd, writeClaims);
+    if (message === undefined) continue;
+    return new SubagentWriterConflictError({
+      activeId: record.view.id,
+      activeName: record.view.name,
+      message,
+    });
+  }
+  return undefined;
+};
+
+const writerPoolUnavailableMessage = (pool: WriterPoolEntry | undefined): string => {
+  switch (pool?.state) {
+    case "quarantined":
+      return "Shared-cwd writer ownership remains quarantined because cleanup could not be confirmed.";
+    case "failed":
+      return "Shared-cwd writer-pool preparation failed and existing members are still cleaning up; retry shortly.";
+    case "releasing":
+      return "Shared-cwd writer ownership is still being released; retry shortly.";
+    default:
+      return `New writers are paused for this cwd after a write-claim violation.${pool?.pauseReason ? ` ${pool.pauseReason}` : ""}`;
+  }
+};
+
+/** Why one record blocks a writer start on the same canonical cwd, or undefined when it does not. */
+const writerConflictMessage = (
+  record: RunRecord,
+  canonicalCwd: CanonicalWriterCwd,
+  writeClaims: ReadonlyArray<string> | undefined,
+): string | undefined => {
+  if (record.evictionClaim?.writerCwdDigest === canonicalCwd.digest)
+    return (
+      firstWriteClaimConflict(writeClaims, record.evictionClaim.writeClaims) &&
+      "Overlapping writer start admission is already reserved while subagent history is reclaimed."
+    );
+  if (record.canonicalWriterCwd?.digest !== canonicalCwd.digest) return undefined;
+  const writer = `Writer ${record.view.name} (${record.view.id})`;
+  if (record.retryClaim)
+    return (
+      firstWriteClaimConflict(writeClaims, record.view.writeClaims) &&
+      `${writer} reserves overlapping claims for an explicit route retry.`
+    );
+  if (!ownsWriterSlot(record)) return undefined;
+  if (record.cleanupPending)
+    return `${writer} remains quarantined because cleanup could not be confirmed.`;
+  const conflict = firstWriteClaimConflict(writeClaims, record.view.writeClaims);
+  if (conflict === undefined) return undefined;
+  return conflict.left === "<exclusive>" || conflict.right === "<exclusive>"
+    ? `${writer} owns the shared cwd exclusively.`
+    : `${writer} already claims ${conflict.right ?? "the requested file"}.`;
 };

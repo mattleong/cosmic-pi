@@ -1,7 +1,6 @@
 // NDJSON request/response RPC sessions over spawned helper processes live at this boundary.
 import { nodeSpawn as spawn, type NodeChildProcess } from "./node-builtins.ts";
 import { awaitProcessClose } from "pi-cosmic-core";
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -462,14 +461,13 @@ const makeNdjsonRpcSession = <Reply>(
             return Effect.fail(transportClosed());
           }
           return awaitReply.pipe(
-            Effect.timeout(timeoutMillis),
-            Effect.mapError((error) =>
-              Cause.isTimeoutError(error)
-                ? new RpcCallTimeoutError({
-                    message: `Helper process call ${id} timed out.`,
-                  })
-                : error,
-            ),
+            Effect.timeoutOrElse({
+              duration: timeoutMillis,
+              orElse: () =>
+                Effect.fail(
+                  new RpcCallTimeoutError({ message: `Helper process call ${id} timed out.` }),
+                ),
+            }),
           );
         }),
 

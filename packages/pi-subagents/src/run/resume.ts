@@ -2,7 +2,6 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { BackendStartupState } from "../backend/model.ts";
 import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
@@ -21,6 +20,7 @@ import { clearRunNativeActivity, completeRunInitialization, type RunRecord } fro
 import { isTerminalRunState, type SubagentCapability, type SubagentRunView } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
+import { runSessionOwned } from "./session-owned.ts";
 import { snapshotView } from "./state.ts";
 import { emptyRunWarningSlots } from "./warnings.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
@@ -144,7 +144,8 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
   const resume = (id: string, message?: string): Effect.Effect<SubagentRunView, SubagentError> =>
     waitForRunCleanupBounded(id).pipe(
       Effect.andThen(
-        Effect.uninterruptibleMask((restore) =>
+        runSessionOwned(
+          ownerScope,
           Effect.gen(function* () {
             const prompt = message?.trim()
               ? yield* validateParentMessage(message, "Resume message is required.")
@@ -246,7 +247,10 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 return { record: selected, needsRespawn, attemptToken };
               }),
             );
-            const commit = Effect.gen(function* () {
+            return { prompt, now, claimed };
+          }),
+          ({ prompt, now, claimed }) =>
+            Effect.gen(function* () {
               const record = claimed.record;
               if (claimed.needsRespawn) {
                 const nextScope = yield* Scope.make();
@@ -396,12 +400,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                       Effect.asVoid,
                     ),
               ),
-            );
-            const commitFiber = yield* commit.pipe(
-              Effect.forkIn(ownerScope, { startImmediately: true }),
-            );
-            return yield* restore(Fiber.join(commitFiber));
-          }),
+            ),
         ),
       ),
     );

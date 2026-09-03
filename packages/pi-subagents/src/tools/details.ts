@@ -16,7 +16,7 @@ import {
 import type { SubagentRunView, SubagentUsage } from "../run/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
-import { projectRunCardTree } from "./run-card-tree.ts";
+import { projectRunCardTree } from "../ui/run-tree-rows.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
@@ -109,22 +109,11 @@ export type CompactToolDetailsInput =
       readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
     };
 
-interface StringLimits {
-  readonly id: number;
-  readonly name: number;
-  readonly model: number;
-  readonly provenance: number;
-  readonly skipped: number;
-  readonly currentTool: number;
-  readonly progress: number;
-  readonly warning: number;
-  readonly question: number;
-}
-
-const STRING_LIMITS = {
+/** Per-density caps for every projected field family: full owns the base caps; compact tightens full, minimal tightens compact.
+ * Shared caps are inherited rather than duplicated. */
+const BASE_DENSITY_LIMITS = {
   full: {
     id: MAX_PROTOCOL_ID_CHARS,
-    name: MAX_NAME_CHARS,
     model: MAX_CARD_MODEL_CHARS,
     provenance: MAX_CARD_PROVENANCE_CHARS,
     skipped: MAX_CARD_SKIPS,
@@ -132,30 +121,82 @@ const STRING_LIMITS = {
     progress: 512,
     warning: 512,
     question: MAX_CARD_QUESTION_CHARS,
+    writeClaims: MAX_WRITE_CLAIMS,
+    observedWrites: 64,
+    writeViolations: 16,
+    shortName: MAX_NAME_CHARS,
+    startProfile: MAX_PROFILE_CHARS,
+    startWarning: MAX_CARD_PROVENANCE_CHARS,
+    startRunId: MAX_PROTOCOL_ID_CHARS,
+    failureMessage: MAX_FAILURE_MESSAGE_CHARS,
+    failureCode: MAX_FAILURE_CODE_CHARS,
+    failureRunId: MAX_PROTOCOL_ID_CHARS,
+    profileDescription: 512,
+    profileModel: MAX_PROFILE_MODEL_SELECTOR_CHARS,
+    profileReason: 1_024,
+    actionFailureMessage: MAX_ACTION_FAILURE_MESSAGE_CHARS,
+    actionFailureId: MAX_ACTION_FAILURE_ID_CHARS,
   },
+} as const;
+
+const COMPACT_DENSITY_LIMITS = {
   compact: {
+    ...BASE_DENSITY_LIMITS.full,
     id: 256,
-    name: MAX_NAME_CHARS,
-    model: MAX_CARD_MODEL_CHARS,
     provenance: 256,
     skipped: 4,
     currentTool: 128,
     progress: 256,
     warning: 256,
     question: 1_024,
+    writeClaims: 16,
+    observedWrites: 16,
+    writeViolations: 8,
+    startProfile: 48,
+    startWarning: 512,
+    startRunId: 256,
+    failureMessage: 256,
+    failureCode: 64,
+    failureRunId: 256,
+    profileDescription: 256,
+    profileModel: MAX_PROFILE_MODEL_SELECTOR_CHARS,
+    profileReason: 256,
+    actionFailureMessage: 160,
+    actionFailureId: MAX_ACTION_FAILURE_ID_CHARS,
   },
+} as const;
+
+const DENSITY_LIMITS = {
+  full: BASE_DENSITY_LIMITS.full,
+  compact: COMPACT_DENSITY_LIMITS.compact,
   minimal: {
+    ...COMPACT_DENSITY_LIMITS.compact,
     id: 128,
-    name: 64,
-    model: MAX_CARD_MODEL_CHARS,
     provenance: 96,
     skipped: 0,
     currentTool: 64,
     progress: 96,
     warning: 96,
     question: 512,
+    writeClaims: 4,
+    observedWrites: 0,
+    writeViolations: 1,
+    shortName: 48,
+    startProfile: 32,
+    startWarning: 160,
+    startRunId: 128,
+    failureMessage: 96,
+    failureCode: 48,
+    failureRunId: 128,
+    profileDescription: 48,
+    profileModel: 24,
+    profileReason: 24,
+    actionFailureMessage: 96,
+    actionFailureId: 64,
   },
-} as const satisfies Readonly<Record<DetailDensity, StringLimits>>;
+} as const;
+
+const DENSITY_ORDER: ReadonlyArray<DetailDensity> = ["full", "compact", "minimal"];
 
 const clean = (value: string, maximum: number): string =>
   safeTextPrefix(stripTerminalControls(value).replaceAll("\u0000", ""), maximum);
@@ -183,7 +224,7 @@ const projectSelection = (
   selection: SubagentRunView["selection"],
   density: DetailDensity,
 ): SubagentRunCard["selection"] => {
-  const limits = STRING_LIMITS[density];
+  const limits = DENSITY_LIMITS[density];
   const warning = optionalText(selection.warning, limits.provenance);
   return {
     source: selection.source,
@@ -208,27 +249,27 @@ const projectWriteCardFields = (
   run: SubagentRunView,
   density: DetailDensity,
 ): Partial<SubagentRunCard> => {
-  const claimLimit = density === "full" ? MAX_WRITE_CLAIMS : density === "compact" ? 16 : 4;
+  const limits = DENSITY_LIMITS[density];
   const projectedClaims = run.writeClaims
     ? run.writeClaims
-        .slice(0, claimLimit)
+        .slice(0, limits.writeClaims)
         .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file"))
     : undefined;
-  const observedLimit = density === "full" ? 64 : density === "compact" ? 16 : 0;
+  // Minimal density keeps only the single current-offender violation as containment evidence.
   const violationLimit =
-    density === "full" ? 16 : density === "compact" ? 8 : run.writeViolationOffender ? 1 : 0;
+    density === "minimal" && !run.writeViolationOffender ? 0 : limits.writeViolations;
   return {
     ...(projectedClaims !== undefined && {
       writeClaims: projectedClaims,
       writeClaimCount: nonNegativeInteger(run.writeClaims?.length ?? 0),
     }),
     ...(run.writeClaims !== undefined &&
-      run.writeClaims.length > claimLimit && { writeClaimsOmitted: true as const }),
+      run.writeClaims.length > limits.writeClaims && { writeClaimsOmitted: true as const }),
     ...(run.writeAudit !== undefined && {
       writeAudit: {
-        observedFileWrites: (observedLimit === 0
+        observedFileWrites: (limits.observedWrites === 0
           ? []
-          : run.writeAudit.observedFileWrites.slice(-observedLimit)
+          : run.writeAudit.observedFileWrites.slice(-limits.observedWrites)
         ).map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
         violations: (violationLimit === 0
           ? []
@@ -250,7 +291,7 @@ const projectOptionalCardFields = (
   run: SubagentRunView,
   density: DetailDensity,
 ): Partial<SubagentRunCard> => {
-  const limits = STRING_LIMITS[density];
+  const limits = DENSITY_LIMITS[density];
   const currentTool = optionalText(run.currentTool, limits.currentTool);
   const progress = optionalText(run.progress, limits.progress);
   const warning = optionalText(run.warning, limits.warning);
@@ -270,7 +311,7 @@ export const projectSubagentRunCard = (
   run: SubagentRunView,
   density: DetailDensity = "full",
 ): SubagentRunCard => {
-  const limits = STRING_LIMITS[density];
+  const limits = DENSITY_LIMITS[density];
   const profile = run.profile && PROFILE_IDS.includes(run.profile) ? run.profile : undefined;
   const parentRunId = optionalText(run.parentRunId, limits.id);
   const nativeLatestId = optionalText(run.nativeActivity?.latest?.id, 256);
@@ -344,20 +385,14 @@ const projectFailure = (
   failure: SubagentCardFailure,
   density: DetailDensity,
 ): SubagentCardFailure => {
-  const maximumMessage =
-    density === "full" ? MAX_FAILURE_MESSAGE_CHARS : density === "compact" ? 256 : 96;
-  const maximumCode = density === "full" ? MAX_FAILURE_CODE_CHARS : density === "compact" ? 64 : 48;
-  const name = optionalText(failure.name, density === "minimal" ? 48 : MAX_NAME_CHARS);
-  const code = optionalText(failure.code, maximumCode);
-  const message = requiredText(failure.message, maximumMessage, "Launch failed.");
+  const limits = DENSITY_LIMITS[density];
+  const name = optionalText(failure.name, limits.shortName);
+  const code = optionalText(failure.code, limits.failureCode);
+  const message = requiredText(failure.message, limits.failureMessage, "Launch failed.");
   const recovery = failure.admittedRun;
   const admittedRun = recovery
     ? {
-        runId: requiredText(
-          recovery.runId,
-          density === "full" ? MAX_PROTOCOL_ID_CHARS : density === "compact" ? 256 : 128,
-          "unknown-run",
-        ),
+        runId: requiredText(recovery.runId, limits.failureRunId, "unknown-run"),
         cleanupDisposition: recovery.cleanupDisposition,
         retryDisposition: recovery.retryDisposition,
         remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
@@ -377,23 +412,17 @@ const projectStartEntry = (
   entry: SubagentStartEntry,
   density: DetailDensity,
 ): SubagentStartEntry => {
+  const limits = DENSITY_LIMITS[density];
   const identity = {
     index: nonNegativeInteger(entry.index),
-    name: requiredText(entry.name, density === "minimal" ? 48 : MAX_NAME_CHARS, "launch"),
-    profile: requiredText(
-      entry.profile,
-      density === "full" ? MAX_PROFILE_CHARS : density === "compact" ? 48 : 32,
-      "generalist",
-    ),
+    name: requiredText(entry.name, limits.shortName, "launch"),
+    profile: requiredText(entry.profile, limits.startProfile, "generalist"),
   };
   if (entry.status === "pending")
     return { ...identity, status: "pending", routeStatus: "resolving" };
   if (entry.routeStatus === "unavailable")
     return { ...identity, status: "failed", routeStatus: "unavailable" };
-  const warning = optionalText(
-    entry.warning,
-    density === "full" ? MAX_CARD_PROVENANCE_CHARS : density === "compact" ? 512 : 160,
-  );
+  const warning = optionalText(entry.warning, limits.startWarning);
   const selectedFields = {
     routeStatus: "selected" as const,
     host: entry.host,
@@ -411,11 +440,7 @@ const projectStartEntry = (
         ...identity,
         status: "started",
         ...selectedFields,
-        runId: requiredText(
-          entry.runId,
-          density === "full" ? MAX_PROTOCOL_ID_CHARS : density === "compact" ? 256 : 128,
-          "unknown-run",
-        ),
+        runId: requiredText(entry.runId, limits.startRunId, "unknown-run"),
       }
     : { ...identity, status: "failed", ...selectedFields };
 };
@@ -427,22 +452,16 @@ export const projectSubagentStartEntries = (
 ): ReadonlyArray<SubagentStartEntry> =>
   entries.slice(0, MAX_START_BATCH).map((entry) => projectStartEntry(entry, density));
 
-const profileLimits = (density: DetailDensity) =>
-  density === "full"
-    ? { description: 512, model: MAX_PROFILE_MODEL_SELECTOR_CHARS, reason: 1_024 }
-    : density === "compact"
-      ? { description: 256, model: MAX_PROFILE_MODEL_SELECTOR_CHARS, reason: 256 }
-      : { description: 48, model: 24, reason: 24 };
 /** Explicit privacy projection for persisted profile-route discovery. */
 export const projectSubagentProfileRoutes = (
   profiles: ReadonlyArray<ProfileRouteDetailsInput>,
   density: DetailDensity = "full",
 ): ReadonlyArray<SubagentProfileRouteCard> => {
-  const limits = profileLimits(density);
+  const limits = DENSITY_LIMITS[density];
   return profiles.slice(0, PROFILE_IDS.length).map((profile) => {
     return {
       id: profile.id,
-      description: requiredText(profile.description, limits.description, "Profile route."),
+      description: requiredText(profile.description, limits.profileDescription, "Profile route."),
       source: profile.source,
       isDefault: profile.isDefault,
       defaultContext: profile.defaultContext,
@@ -454,10 +473,10 @@ export const projectSubagentProfileRoutes = (
           density === "minimal"
             ? boundedAsciiOr(
                 candidate.model,
-                limits.model,
+                limits.profileModel,
                 candidate.runtime === "pi" ? "x/y" : "x",
               )
-            : requiredText(candidate.model, limits.model, "omitted-model"),
+            : requiredText(candidate.model, limits.profileModel, "omitted-model"),
         effort: candidate.effort,
         context: candidate.context,
         writeIntent: candidate.writeIntent,
@@ -466,8 +485,8 @@ export const projectSubagentProfileRoutes = (
         status: candidate.status,
         reason:
           density === "minimal"
-            ? boundedAsciiOr(candidate.reason, limits.reason, "Omitted.")
-            : requiredText(candidate.reason, limits.reason, "Route detail omitted."),
+            ? boundedAsciiOr(candidate.reason, limits.profileReason, "Omitted.")
+            : requiredText(candidate.reason, limits.profileReason, "Route detail omitted."),
       })),
       ...(profile.defaultEffort !== undefined && { defaultEffort: profile.defaultEffort }),
     };
@@ -479,15 +498,13 @@ const projectActionFailures = (
   density: DetailDensity,
 ): ReadonlyArray<CompactToolActionFailure> | undefined => {
   if (!failures || failures.length === 0) return undefined;
-  const messageLimit =
-    density === "full" ? MAX_ACTION_FAILURE_MESSAGE_CHARS : density === "compact" ? 160 : 96;
-  const idLimit = density === "minimal" ? 64 : MAX_ACTION_FAILURE_ID_CHARS;
+  const limits = DENSITY_LIMITS[density];
   return failures.slice(0, MAX_TARGET_RUNS).map((failure) => {
     const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
     return {
-      id: requiredText(failure.id, idLimit, "unknown-run"),
+      id: requiredText(failure.id, limits.actionFailureId, "unknown-run"),
       ...(code !== undefined && { code }),
-      message: requiredText(failure.message, messageLimit, "Action failed."),
+      message: requiredText(failure.message, limits.actionFailureMessage, "Action failed."),
     };
   });
 };
@@ -538,6 +555,16 @@ export const makeStartDetails = (input: StartDetailsInput): SubagentStartDetails
 const reportsWereOmitted = (runs: ReadonlyArray<SubagentRunView>): boolean =>
   runs.some((run) => run.finalText !== undefined || run.error !== undefined);
 
+const projectedCards = (
+  runs: ReadonlyArray<SubagentRunView>,
+  density: DetailDensity,
+  includeReports: boolean,
+): ReadonlyArray<SubagentRunCard> =>
+  runs.slice(0, MAX_TARGET_RUNS).map((run) => {
+    const card = projectSubagentRunCard(run, density);
+    return includeReports ? card : omitReports(card);
+  });
+
 const awaitCandidate = (
   input: AwaitDetailsInput,
   density: DetailDensity,
@@ -553,13 +580,8 @@ const awaitCandidate = (
     .map((row) => row.run)
     .filter((run) => !targetIds.has(run.id));
   const contextSource = contextCandidates.slice(0, Math.max(0, MAX_TARGET_RUNS - source.length));
-  const targetCards = source.map((run) => {
-    const card = projectSubagentRunCard(run, density);
-    return includeReports ? card : omitReports(card);
-  });
-  const contextCards = contextSource.map((run) =>
-    omitReports(projectSubagentRunCard(run, density)),
-  );
+  const targetCards = projectedCards(source, density, includeReports);
+  const contextCards = projectedCards(contextSource, density, false);
   const awaitedRunIds =
     targetCards.length > 0 ? targetCards.map((card) => card.id) : requestedAwaitedRunIds;
   const omitted = !includeReports && reportsWereOmitted(source);
@@ -609,10 +631,7 @@ const runDetailsCandidate = (
   const orderedRuns =
     input.action === "list" ? projectRunCardTree(input.runs).map((row) => row.run) : input.runs;
   const source = orderedRuns.slice(0, MAX_TARGET_RUNS);
-  const cards = source.map((run) => {
-    const card = projectSubagentRunCard(run, density);
-    return includeReports ? card : omitReports(card);
-  });
+  const cards = projectedCards(source, density, includeReports);
   const failures = projectActionFailures(input.actionFailures, density);
   const omitted = !includeReports && reportsWereOmitted(source);
   return {
@@ -644,11 +663,7 @@ export const makeCompactToolDetails = (
 ): CompactSubagentToolDetails => {
   if (input.action === "models")
     return semanticCandidate(
-      [
-        modelDetailsCandidate(input, "full"),
-        modelDetailsCandidate(input, "compact"),
-        modelDetailsCandidate(input, "minimal"),
-      ],
+      DENSITY_ORDER.map((density) => modelDetailsCandidate(input, density)),
       decodeCompactToolDetails,
     );
   const withReports = input.action === "status";

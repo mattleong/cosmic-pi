@@ -1,5 +1,6 @@
 // Promise assertions are test-runner boundaries.
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, maybe, step } from "../support/effect-test.ts";
@@ -29,6 +30,15 @@ import {
   view,
 } from "./fixtures/tool-harness.ts";
 import { extensionApiFixture, extensionContextFixture } from "../fixtures/pi-host.ts";
+
+// v4 Deferred latch shared by tests that gate a host promise on test-side release.
+const deferred = <A>() => {
+  const cell = Deferred.makeUnsafe<A>();
+  return {
+    promise: Effect.runPromise(Deferred.await(cell)),
+    resolve: (value: A) => Deferred.doneUnsafe(cell, Effect.succeed(value)),
+  };
+};
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -1264,5 +1274,88 @@ describe("subagent tool", () => {
         reject({ task: "Probe", supersedes: {} } as SubagentProfileStartSpec),
       ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
     );
+  });
+
+  effectTest("publishes request-ordered partial receipts for out-of-order launches", function* () {
+    const slowLaunch = deferred<void>();
+    const updates: Array<{ readonly text: string; readonly details: unknown }> = [];
+    const recordUpdate = (update: { content?: unknown; details?: unknown }) => {
+      // SAFETY: The tool's update contract is a content array of text blocks plus a details payload.
+      const text =
+        (update.content as ReadonlyArray<{ readonly text?: string }> | undefined)?.[0]?.text ?? "";
+      updates.push({ text, details: update.details });
+    };
+    const service = subagentServiceDouble({
+      startSessionOwned: (input: StartSubagentRequest) =>
+        input.name === "launch-1"
+          ? Effect.tryPromise(() =>
+              slowLaunch.promise.then(() => view({ id: "agent-slow", name: "launch-1" })),
+            )
+          : input.name === "launch-2"
+            ? Effect.fail(
+                new SubagentProcessError({ operation: "start", message: "simulated failure" }),
+              )
+            : Effect.sync(() => view({ id: "agent-fast", name: "launch-3" })),
+    });
+    const tool = captureSubagentTools(service, ["read"]).get("subagent_start");
+    const agents = ["launch-1", "launch-2", "launch-3"].map((name) => ({ task: "Review", name }));
+
+    let execution: Promise<unknown> | undefined;
+    yield* step(() => {
+      execution = tool?.execute("call", { agents }, undefined, recordUpdate, context);
+      return Promise.resolve();
+    });
+    yield* step(() =>
+      vi.waitFor(() => {
+        if (!updates.some((update) => update.text.includes("Processed 1 of 3")))
+          throw new Error("Waiting for the first partial receipt.");
+      }),
+    );
+    slowLaunch.resolve(undefined);
+    // SAFETY: The started execution promise is assigned inside the step above and always resolves.
+    const result = (yield* step(() => execution as Promise<unknown>)) as
+      | { content?: ReadonlyArray<{ readonly text?: string }> }
+      | undefined;
+
+    // The first partial receipt names the two unresolved launches in request order.
+    const partial = updates[0]!;
+    expect(partial.text).toContain("Processed 1 of 3 launches");
+    expect(partial.text).toContain("0 started");
+    expect(partial.text).toContain("1 failed");
+    expect(partial.text).toContain("2 pending (#1 launch-1, #3 launch-3)");
+
+    // Every published receipt stays request-ordered, and pending entries stay resolving.
+    const receipt = (update: (typeof updates)[number]) =>
+      // SAFETY: The tool constructs these persisted details on this public path.
+      update.details as {
+        readonly startEntries?: ReadonlyArray<{
+          readonly index: number;
+          readonly status: string;
+          readonly routeStatus: string;
+          readonly runId?: string;
+        }>;
+        readonly startFailures?: ReadonlyArray<{ readonly index: number }>;
+      };
+    for (const update of updates) {
+      const indexes = (receipt(update).startEntries ?? []).map((entry) => entry.index);
+      expect(indexes).toEqual([0, 1, 2]);
+    }
+    const partialReceipt = receipt(partial);
+    expect(partialReceipt.startEntries?.[0]).toMatchObject({ status: "pending" });
+    expect(partialReceipt.startEntries?.[1]).toMatchObject({
+      status: "failed",
+      routeStatus: "selected",
+    });
+    expect(partialReceipt.startEntries?.[2]).toMatchObject({ status: "pending" });
+
+    const final = receipt(updates.at(-1)!);
+    expect(final.startEntries?.map((entry) => entry.runId)).toEqual([
+      "agent-slow",
+      undefined,
+      "agent-fast",
+    ]);
+    expect(final.startFailures?.map((failure) => failure.index)).toEqual([1]);
+    expect(result?.content?.[0]?.text).toContain("agent-slow");
+    expect(result?.content?.[0]?.text).toContain("agent-fast");
   });
 });

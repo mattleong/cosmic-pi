@@ -2,7 +2,7 @@ import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -51,7 +51,8 @@ import {
 } from "./model.ts";
 import { emptyProjection, sortRuns } from "./projection.ts";
 import { sanitizeOutputText, snapshotView } from "./state.ts";
-import { descendantRunIds, isRunInSubtree, projectRunTree, runDepth } from "./tree.ts";
+import { runSessionOwned } from "./session-owned.ts";
+import { descendantRunIds, isRunInSubtree, leafFirst, projectRunTree } from "./tree.ts";
 import { encodeSubagentProxyPayload } from "../tools/proxy-protocol.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { makeRunWriteClaimControl } from "./write-claim-control.ts";
@@ -217,11 +218,16 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const profileService = yield* SubagentProfileService;
   const writerLeases = yield* WriterLeaseService;
   const ownerScope = yield* Effect.scope;
+  // Keyed parent-proxy executions for the `${runId}:${requestId}` identity. Effect rc.111
+  // FiberMap.make registers one acquireRelease finalizer on the service scope that marks the
+  // map Closed and then interrupts every managed fiber; because it is acquired before the
+  // leaf-first shutdown finalizer below, LIFO finalizer order runs that shutdown first and
+  // interrupts surviving proxy executions only afterwards.
+  const proxyRuns = yield* FiberMap.make<string, void, never>();
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
   const writerPools = new Map<string, WriterPoolEntry>();
-  const proxyCancellations = new Map<string, Deferred.Deferred<void>>();
   const initial = emptyProjection();
   const initialProjection: SubagentProjection = Object.freeze({
     revision: initial.revision,
@@ -513,12 +519,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const orderedIds = yield* withLock(
         Effect.gen(function* () {
           const root = yield* requireRecord(id);
-          const descendants = descendantRunIds(records, id);
-          const ordered = [...descendants, root.view.id].sort(
-            (left, right) =>
-              runDepth(records.get(right)?.view ?? root.view) -
-              runDepth(records.get(left)?.view ?? root.view),
-          );
+          // Descendants are already leaf-first; the requested root closes last.
+          const ordered = [...descendantRunIds(records, id), root.view.id];
           for (const targetId of ordered) {
             const target = records.get(targetId);
             if (target) target.stoppedByParent = true;
@@ -526,20 +528,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           return ordered;
         }),
       );
-      let selected: SubagentRunView | undefined;
-      let firstError: SubagentError | undefined;
-      for (const targetId of orderedIds) {
-        const outcome = yield* controls.stop(targetId).pipe(
-          Effect.match({
-            onFailure: (error) => ({ error }),
-            onSuccess: (run) => ({ run }),
-          }),
-        );
-        if ("error" in outcome) firstError ??= outcome.error;
-        else if (targetId === id) selected = outcome.run;
-      }
-      if (firstError) return yield* firstError;
-      return selected ?? snapshotView((yield* requireRecord(id)).view);
+      // Every target is attempted in order; the first typed failure wins afterwards.
+      const [failures, stopped] = yield* Effect.partition(orderedIds, (targetId) =>
+        controls.stop(targetId),
+      );
+      if (failures[0]) return yield* failures[0];
+      return stopped.at(-1) ?? snapshotView((yield* requireRecord(id)).view);
     });
 
   // Do not publish a pool pause without admitting its containment fiber to the service scope.
@@ -615,12 +609,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     >,
   ): Effect.Effect<void> => {
     const key = `${record.view.id}:${event.requestId}`;
-    if (event.type === "proxy_cancel") {
-      const cancellation = proxyCancellations.get(key);
-      return cancellation
-        ? Deferred.succeed(cancellation, undefined).pipe(Effect.asVoid)
-        : Effect.void;
-    }
+    if (event.type === "proxy_cancel")
+      // Nonblocking: the interrupt of the keyed execution is forked into the owner scope with
+      // immediate start so cancel events never wait on the interrupted fiber's finalizers.
+      return FiberMap.remove(proxyRuns, key).pipe(
+        Effect.forkIn(ownerScope, { startImmediately: true }),
+        Effect.asVoid,
+      );
     if (
       !options.proxyHandler ||
       record.view.runtime !== "pi" ||
@@ -636,11 +631,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           }) ?? "{}",
         )
         .pipe(Effect.ignore);
-    if (
-      [...proxyCancellations.keys()].filter((candidate) =>
-        candidate.startsWith(`${record.view.id}:`),
-      ).length >= 16
-    )
+    const runKeyPrefix = `${record.view.id}:`;
+    let concurrent = 0;
+    for (const [candidateKey] of proxyRuns)
+      if (candidateKey.startsWith(runKeyPrefix)) concurrent += 1;
+    if (concurrent >= 16)
       return event
         .respond(
           false,
@@ -650,8 +645,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           }) ?? "{}",
         )
         .pipe(Effect.ignore);
-    const cancellation = Deferred.makeUnsafe<void>();
-    if (proxyCancellations.has(key))
+    if (FiberMap.hasUnsafe(proxyRuns, key))
       return event
         .respond(
           false,
@@ -661,7 +655,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           }) ?? "{}",
         )
         .pipe(Effect.ignore);
-    proxyCancellations.set(key, cancellation);
     const execute = options.proxyHandler(service, record.view.id, event).pipe(
       Effect.provideService(SubagentProfileService, profileService),
       Effect.provideService(SubagentBackendRegistry, backendRegistry),
@@ -690,15 +683,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       }),
       Effect.ignore,
     );
-    return Effect.raceFirst(execute, Deferred.await(cancellation)).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          if (proxyCancellations.get(key) === cancellation) proxyCancellations.delete(key);
-        }),
-      ),
-      Effect.forkIn(ownerScope, { startImmediately: true }),
-      Effect.asVoid,
-    );
+    // onlyIfMissing defensively keeps the explicit conflict response authoritative if a
+    // completing same-key execution races this registration. rc.111 runImpl forks immediately
+    // with the current context, so the execution starts at once and leaves the map on exit.
+    return FiberMap.run(proxyRuns, key, execute, { onlyIfMissing: true }).pipe(Effect.asVoid);
   };
 
   const handleWireEvent = makeRunEventHandler({
@@ -779,19 +767,15 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
 
   const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] = (request) =>
-    Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        const fiber = yield* launch
-          .start(request)
-          .pipe(
-            Effect.ensuring(
-              retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
-            ),
-            Effect.forkIn(ownerScope, { startImmediately: true }),
-          );
-        return observations.redactCompletionReport(yield* restore(Fiber.join(fiber)));
-      }),
-    );
+    runSessionOwned(ownerScope, Effect.void, () =>
+      launch
+        .start(request)
+        .pipe(
+          Effect.ensuring(
+            retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
+          ),
+        ),
+    ).pipe(Effect.map((view) => observations.redactCompletionReport(view)));
 
   const list = SubscriptionRef.get(projectionRef).pipe(Effect.map((current) => current.runs));
   const visibleList: SubagentServiceContract["visibleList"] = (callerRunId) =>
@@ -871,7 +855,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ).pipe(
       Effect.andThen(
         Effect.forEach(
-          [...records.values()].sort((left, right) => runDepth(right.view) - runDepth(left.view)),
+          leafFirst(records.values()),
           (record) => {
             record.stoppedByParent = true;
             settlement.failPendingResponses(

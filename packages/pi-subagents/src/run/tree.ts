@@ -25,18 +25,22 @@ export const isRunInSubtree = (
   return false;
 };
 
+/** Deepest runs first, so a shutdown closes every descendant before its ancestor. */
+export const leafFirst = (records: Iterable<RunRecord>): ReadonlyArray<RunRecord> =>
+  [...records].sort((left, right) => runDepth(right.view) - runDepth(left.view));
+
+/** Leaf-first descendant ids of `rootRunId`, excluding the root itself. */
 export const descendantRunIds = (
   records: ReadonlyMap<string, RunRecord>,
   rootRunId: string,
 ): ReadonlyArray<string> =>
-  [...records.values()]
-    .filter((record) =>
+  leafFirst(
+    [...records.values()].filter((record) =>
       rootRunId === SUBAGENT_ROOT_RUN_ID
         ? true
         : record.view.id !== rootRunId && isRunInSubtree(records, rootRunId, record.view.id),
-    )
-    .sort((left, right) => runDepth(right.view) - runDepth(left.view))
-    .map((record) => record.view.id);
+    ),
+  ).map((record) => record.view.id);
 
 export interface ProjectedRunTree {
   readonly root: SubagentTreeRootView;

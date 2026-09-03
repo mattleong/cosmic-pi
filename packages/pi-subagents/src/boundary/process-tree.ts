@@ -139,16 +139,17 @@ const terminateWindowsTree = (
   });
 
   return waitForTaskkill.pipe(
-    Effect.timeout(timeoutMillis),
-    Effect.catchTag("TimeoutError", () =>
-      Effect.fail(
-        processTreeError(
-          "run taskkill",
-          "taskkill_timeout",
-          `The Windows process-tree terminator timed out after ${timeoutMillis} ms.`,
+    Effect.timeoutOrElse({
+      duration: timeoutMillis,
+      orElse: () =>
+        Effect.fail(
+          processTreeError(
+            "run taskkill",
+            "taskkill_timeout",
+            `The Windows process-tree terminator timed out after ${timeoutMillis} ms.`,
+          ),
         ),
-      ),
-    ),
+    }),
   );
 };
 

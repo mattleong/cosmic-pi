@@ -2,7 +2,6 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import type { WriterLeaseConflictError, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import {
@@ -203,18 +202,17 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
         parentSessionId: record.launch.parentSessionId,
         runId: record.view.id,
       }).pipe(
-        Effect.timeoutOption("5 seconds"),
-        Effect.flatMap((outcome) =>
-          Option.isSome(outcome)
-            ? Effect.void
-            : Effect.fail(
-                new SubagentProcessError({
-                  operation: "reclaim private run state",
-                  code: "run_state_reclaim_timeout",
-                  message: "Timed out while reclaiming private subagent run state.",
-                }),
-              ),
-        ),
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () =>
+            Effect.fail(
+              new SubagentProcessError({
+                operation: "reclaim private run state",
+                code: "run_state_reclaim_timeout",
+                message: "Timed out while reclaiming private subagent run state.",
+              }),
+            ),
+        }),
         Effect.tapError((error) =>
           withLock(
             Effect.sync(() => {

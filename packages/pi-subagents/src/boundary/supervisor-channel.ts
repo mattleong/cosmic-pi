@@ -1140,18 +1140,17 @@ export const makeSupervisorChannel = (
           return Latch.await(state.readiness).pipe(Effect.flatMap(() => waitUntilReady()));
         });
       const awaitReady: Effect.Effect<void, SupervisorChannelError> = waitUntilReady().pipe(
-        Effect.timeoutOption(REPLY_TIMEOUT),
-        Effect.flatMap((outcome) =>
-          Option.isSome(outcome)
-            ? Effect.void
-            : Effect.fail(
-                channelError(
-                  "await ready",
-                  "supervisor_helper_unavailable",
-                  "No authenticated supervisor helper became ready.",
-                ),
+        Effect.timeoutOrElse({
+          duration: REPLY_TIMEOUT,
+          orElse: () =>
+            Effect.fail(
+              channelError(
+                "await ready",
+                "supervisor_helper_unavailable",
+                "No authenticated supervisor helper became ready.",
               ),
-        ),
+            ),
+        }),
       );
 
       const setAssignmentEpoch: SupervisorChannelHandle["setAssignmentEpoch"] = (epoch) =>
@@ -1207,15 +1206,19 @@ export const makeSupervisorChannel = (
                 "supervisor_helper_unavailable",
                 "No authenticated helper accepted the assignment update.",
               );
-            const outcome = yield* Deferred.await(firstAcknowledgement).pipe(
-              Effect.timeoutOption(REPLY_TIMEOUT),
+            yield* Deferred.await(firstAcknowledgement).pipe(
+              Effect.timeoutOrElse({
+                duration: REPLY_TIMEOUT,
+                orElse: () =>
+                  Effect.fail(
+                    channelError(
+                      "set assignment epoch",
+                      "assignment_epoch_outcome_uncertain",
+                      "Assignment epoch acknowledgement timed out.",
+                    ),
+                  ),
+              }),
             );
-            if (Option.isNone(outcome))
-              return yield* channelError(
-                "set assignment epoch",
-                "assignment_epoch_outcome_uncertain",
-                "Assignment epoch acknowledgement timed out.",
-              );
           }).pipe(
             Effect.onExit((exit) =>
               Effect.sync(() => {

@@ -274,49 +274,29 @@ const decodeOrigin = (value: {
   };
 };
 
+/** Route sources a detached baseline may carry per valid origin scope; "session" is never one. */
+const DETACHED_BASELINE_SOURCES = {
+  builtin: ["builtin"],
+  global: ["builtin", "global", "global-invalid"],
+  project: ["builtin", "global", "project", "global-invalid", "project-invalid"],
+} satisfies Readonly<Record<SessionProfileOrigin["scope"], ReadonlyArray<ProfileRouteSource>>>;
+
+const allowedDetachedSources = (origin: SessionProfileOrigin): ReadonlyArray<ProfileRouteSource> =>
+  origin.scope !== "builtin" && origin.invalid === true
+    ? [origin.scope === "global" ? "global-invalid" : "project-invalid"]
+    : DETACHED_BASELINE_SOURCES[origin.scope];
+
 const isDetachedBaselineProvenanceValid = (baseline: SessionProfileBaseline): boolean => {
-  const invalidOriginSource =
-    baseline.origin.scope === "global"
-      ? "global-invalid"
-      : baseline.origin.scope === "project"
-        ? "project-invalid"
-        : undefined;
-  for (const profile of PROFILE_IDS) {
+  const allowed = allowedDetachedSources(baseline.origin);
+  return PROFILE_IDS.every((profile) => {
     const source = baseline.profileSources[profile];
-    if (source === "session") return false;
-    if (
-      (source === "global-invalid" || source === "project-invalid") &&
-      baseline.profiles[profile].candidates.length !== 0
-    )
-      return false;
-    if (
-      source === "builtin" &&
-      !sameProfileRoute(baseline.profiles[profile], BUILTIN_PROFILE_ROUTES[profile])
-    )
-      return false;
-    if (baseline.origin.scope !== "builtin" && baseline.origin.invalid === true) {
-      if (source !== invalidOriginSource) return false;
-      continue;
-    }
-    if (baseline.origin.scope === "builtin" && source !== "builtin") return false;
-    if (
-      baseline.origin.scope === "global" &&
-      source !== "builtin" &&
-      source !== "global" &&
-      source !== "global-invalid"
-    )
-      return false;
-    if (
-      baseline.origin.scope === "project" &&
-      source !== "builtin" &&
-      source !== "global" &&
-      source !== "project" &&
-      source !== "global-invalid" &&
-      source !== "project-invalid"
-    )
-      return false;
-  }
-  return true;
+    const route = baseline.profiles[profile];
+    if (!allowed.includes(source)) return false;
+    if (source === "global-invalid" || source === "project-invalid")
+      return route.candidates.length === 0;
+    if (source === "builtin") return sameProfileRoute(route, BUILTIN_PROFILE_ROUTES[profile]);
+    return true;
+  });
 };
 
 export const emptySessionProfileOverrideSeed = (): SessionProfileOverrideSeed =>
