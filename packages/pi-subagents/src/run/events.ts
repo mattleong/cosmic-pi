@@ -149,17 +149,66 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       });
     });
 
+  const handleInactiveEvent = (record: RunRecord, event: BackendEvent): Effect.Effect<void> => {
+    // A backend may report final cumulative usage/cost only at its native result, after the
+    // accepted report settled the run. That exact epoch's usage still merges into the outcome.
+    if (event.type === "assistant_message")
+      return mergeLateUsage(record, event.assignmentEpoch, event.usage);
+    return Effect.void;
+  };
+
+  const handleAssistantMessage = (
+    record: RunRecord,
+    event: Extract<BackendEvent, { readonly type: "assistant_message" }>,
+  ): Effect.Effect<void> => {
+    const latestAssistantText = event.text
+      ? sanitizeOutputText(event.text, MAX_FINAL_TEXT_CHARS)
+      : undefined;
+    return Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) =>
+        mutateView(record, event.assignmentEpoch, (current) => {
+          record.latestAssistantText = latestAssistantText;
+          return {
+            ...current,
+            lastActivityAt: now,
+            ...(latestAssistantText && {
+              sessionEvents: appendAssistantSessionEvent(
+                current.sessionEvents,
+                latestAssistantText,
+                now,
+              ),
+            }),
+            usage: addUsage(current.usage, event.usage),
+          };
+        }),
+      ),
+      Effect.asVoid,
+    );
+  };
+
+  const handleExit = (
+    record: RunRecord,
+    event: Extract<BackendEvent, { readonly type: "exit" }>,
+  ): Effect.Effect<void> => {
+    const processFailure = new SubagentProcessError({
+      operation: "run",
+      message: sanitizeDiagnosticText(
+        event.diagnostic.trim() ||
+          `Subagent process exited${event.exitCode === null ? "" : ` with code ${event.exitCode}`}.`,
+        MAX_ERROR_CHARS,
+      ),
+    });
+    record.process?.cancelPending(processFailure);
+    return isInactiveRunRecord(record)
+      ? Effect.void
+      : settle(record, "failed", processFailure.message).pipe(Effect.asVoid);
+  };
+
   return (record: RunRecord, event: BackendEvent): Effect.Effect<void, SubagentError> => {
     if (event.type === "proxy_request" || event.type === "proxy_cancel")
       return onProxyEvent(record, event);
-    if (event.type !== "exit" && isInactiveRunRecord(record)) {
-      // A backend may report final cumulative usage/cost only at its native
-      // result, after the accepted report already settled the run. That exact
-      // epoch's usage still merges into the completed outcome.
-      if (event.type === "assistant_message")
-        return mergeLateUsage(record, event.assignmentEpoch, event.usage);
-      return Effect.void;
-    }
+    if (event.type !== "exit" && isInactiveRunRecord(record))
+      return handleInactiveEvent(record, event);
     switch (event.type) {
       case "run_started":
         return runStarted(record, event.assignmentEpoch);
@@ -211,31 +260,8 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           ),
           Effect.asVoid,
         );
-      case "assistant_message": {
-        const latestAssistantText = event.text
-          ? sanitizeOutputText(event.text, MAX_FINAL_TEXT_CHARS)
-          : undefined;
-        return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) =>
-            mutateView(record, event.assignmentEpoch, (current) => {
-              record.latestAssistantText = latestAssistantText;
-              return {
-                ...current,
-                lastActivityAt: now,
-                ...(latestAssistantText && {
-                  sessionEvents: appendAssistantSessionEvent(
-                    current.sessionEvents,
-                    latestAssistantText,
-                    now,
-                  ),
-                }),
-                usage: addUsage(current.usage, event.usage),
-              };
-            }),
-          ),
-          Effect.asVoid,
-        );
-      }
+      case "assistant_message":
+        return handleAssistantMessage(record, event);
       case "tool_started":
         return Clock.currentTimeMillis.pipe(
           Effect.flatMap((now) => {
@@ -385,19 +411,8 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         const error = protocolError(event.message);
         return failRun(record, error.message, error).pipe(Effect.asVoid);
       }
-      case "exit": {
-        const processFailure = new SubagentProcessError({
-          operation: "run",
-          message: sanitizeDiagnosticText(
-            event.diagnostic.trim() ||
-              `Subagent process exited${event.exitCode === null ? "" : ` with code ${event.exitCode}`}.`,
-            MAX_ERROR_CHARS,
-          ),
-        });
-        record.process?.cancelPending(processFailure);
-        if (isInactiveRunRecord(record)) return Effect.void;
-        return settle(record, "failed", processFailure.message).pipe(Effect.asVoid);
-      }
+      case "exit":
+        return handleExit(record, event);
     }
   };
 }

@@ -295,6 +295,66 @@ const inheritedEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
 
+const callingPaneTopologyMatches = (
+  snapshot: HerdrSnapshot,
+  resolved: HerdrPane,
+  callingPaneId: string,
+): boolean => {
+  const exactPanes = snapshot.panes.filter(
+    (pane) =>
+      pane.paneId === callingPaneId &&
+      pane.terminalId === resolved.terminalId &&
+      pane.workspaceId === resolved.workspaceId &&
+      pane.tabId === resolved.tabId,
+  );
+  const paneIds = snapshot.panes.filter((pane) => pane.paneId === callingPaneId);
+  const terminalIds = snapshot.panes.filter((pane) => pane.terminalId === resolved.terminalId);
+  const workspaces = snapshot.workspaces.filter(
+    (workspace) => workspace.workspaceId === resolved.workspaceId,
+  );
+  const tabs = snapshot.tabs.filter((tab) => tab.tabId === resolved.tabId);
+  return (
+    resolved.paneId === callingPaneId &&
+    exactPanes.length === 1 &&
+    paneIds.length === 1 &&
+    terminalIds.length === 1 &&
+    workspaces.length === 1 &&
+    tabs.length === 1 &&
+    tabs[0]?.workspaceId === resolved.workspaceId
+  );
+};
+
+const validateNativePreflight = (runtime: SubagentRuntime, result: CommandResult) =>
+  Effect.gen(function* () {
+    if (result.cleanupUnconfirmed)
+      return yield* readinessError(
+        `${runtime}_preflight_cleanup_unconfirmed`,
+        `${runtime} readiness probe cleanup could not be confirmed; candidate fallback is unsafe.`,
+      );
+    if (result.timedOut || result.overflowed)
+      return yield* readinessError(
+        `${runtime}_preflight_unbounded`,
+        `${runtime} readiness probe exceeded its time or output bound.`,
+      );
+    if (result.code !== 0)
+      return yield* readinessError(
+        result.code === null ? `${runtime}_executable_unavailable` : `${runtime}_unauthenticated`,
+        result.code === null
+          ? `${runtime} executable is unavailable.`
+          : `${runtime} authentication/readiness is unavailable.`,
+      );
+    if (runtime === "claude")
+      yield* parseJson("inspect Claude authentication", result.stdout).pipe(
+        Effect.flatMap(decodeClaudeAuthStatusEffect),
+        Effect.mapError(() =>
+          readinessError(
+            "claude_unauthenticated",
+            "Claude auth status did not return bounded authenticated evidence.",
+          ),
+        ),
+      );
+  });
+
 const operationCode = (operation: string, suffix: string): string =>
   `herdr_${operation.replaceAll(/[^a-z0-9]+/giu, "_").replaceAll(/^_|_$/gu, "")}_${suffix}`;
 const outcomeUncertain = (operation: string, detail: string) =>
@@ -630,32 +690,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
           ),
         ),
       );
-      const matchingCallingPanes = liveSnapshot.panes.filter(
-        (pane) =>
-          pane.paneId === callingPaneId &&
-          pane.terminalId === resolvedCallingPane.terminalId &&
-          pane.workspaceId === resolvedCallingPane.workspaceId &&
-          pane.tabId === resolvedCallingPane.tabId,
-      );
-      const callingPaneIds = liveSnapshot.panes.filter((pane) => pane.paneId === callingPaneId);
-      const callingTerminalIds = liveSnapshot.panes.filter(
-        (pane) => pane.terminalId === resolvedCallingPane.terminalId,
-      );
-      const callingWorkspaces = liveSnapshot.workspaces.filter(
-        (workspace) => workspace.workspaceId === resolvedCallingPane.workspaceId,
-      );
-      const callingTabs = liveSnapshot.tabs.filter(
-        (tab) => tab.tabId === resolvedCallingPane.tabId,
-      );
-      if (
-        resolvedCallingPane.paneId !== callingPaneId ||
-        matchingCallingPanes.length !== 1 ||
-        callingPaneIds.length !== 1 ||
-        callingTerminalIds.length !== 1 ||
-        callingWorkspaces.length !== 1 ||
-        callingTabs.length !== 1 ||
-        callingTabs[0]?.workspaceId !== resolvedCallingPane.workspaceId
-      )
+      if (!callingPaneTopologyMatches(liveSnapshot, resolvedCallingPane, callingPaneId))
         return yield* readinessError(
           "herdr_calling_pane_unresolvable",
           "The inherited Herdr calling pane did not match one exact live pane/terminal/workspace/tab tuple.",
@@ -694,33 +729,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
           ),
         ),
       );
-      if (native.cleanupUnconfirmed)
-        return yield* readinessError(
-          `${runtime}_preflight_cleanup_unconfirmed`,
-          `${runtime} readiness probe cleanup could not be confirmed; candidate fallback is unsafe.`,
-        );
-      if (native.timedOut || native.overflowed)
-        return yield* readinessError(
-          `${runtime}_preflight_unbounded`,
-          `${runtime} readiness probe exceeded its time or output bound.`,
-        );
-      if (native.code !== 0)
-        return yield* readinessError(
-          native.code === null ? `${runtime}_executable_unavailable` : `${runtime}_unauthenticated`,
-          native.code === null
-            ? `${runtime} executable is unavailable.`
-            : `${runtime} authentication/readiness is unavailable.`,
-        );
-      if (runtime === "claude")
-        yield* parseJson("inspect Claude authentication", native.stdout).pipe(
-          Effect.flatMap(decodeClaudeAuthStatusEffect),
-          Effect.mapError(() =>
-            readinessError(
-              "claude_unauthenticated",
-              "Claude auth status did not return bounded authenticated evidence.",
-            ),
-          ),
-        );
+      yield* validateNativePreflight(runtime, native);
     });
 
   return {

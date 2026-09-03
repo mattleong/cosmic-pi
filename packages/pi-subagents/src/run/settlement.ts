@@ -9,7 +9,12 @@ import {
   type BackendReport,
 } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError } from "./errors.ts";
-import { clearRunNativeActivity, isInactiveRunRecord, type RunRecord } from "./internal.ts";
+import {
+  clearRunNativeActivity,
+  isInactiveRunRecord,
+  type CompletionGenerationRecord,
+  type RunRecord,
+} from "./internal.ts";
 import { isTerminalRunState, type SubagentRunView, type SubagentUsage } from "./model.ts";
 import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
@@ -38,6 +43,52 @@ export type AssignmentActivationReplay =
   | { readonly kind: "retained-report"; readonly view: SubagentRunView }
   | { readonly kind: "close-report"; readonly report: BackendReport }
   | { readonly kind: "settlement" };
+
+type SettlementState = "completed" | "failed" | "stopped";
+
+const settlementBlocked = (record: RunRecord, state: SettlementState): boolean =>
+  isTerminalRunState(record.view.state) ||
+  (state !== "stopped" && (record.stoppedByParent || record.view.state === "stopping"));
+
+const completionForSettlement = (
+  record: RunRecord,
+  state: "completed" | "failed",
+  generation: number,
+  warning: string | undefined,
+  error: string | undefined,
+): CompletionGenerationRecord => ({
+  generation,
+  outcome: state,
+  ...(state === "completed" &&
+    record.latestAssistantText && { finalText: record.latestAssistantText }),
+  ...(state === "failed" && { error: error ?? "Run failed." }),
+  ...(warning && { warning }),
+  retained: false,
+});
+
+const viewForSettlement = (
+  record: RunRecord,
+  state: SettlementState,
+  now: number,
+  completionGeneration: number,
+  error: string | undefined,
+): SubagentRunView => {
+  const base: SubagentRunView = {
+    ...record.view,
+    state,
+    endedAt: now,
+    lastActivityAt: now,
+    currentTool: undefined,
+    question: undefined,
+    ...(state === "completed" && { reportGeneration: completionGeneration }),
+  };
+  const completed =
+    state === "completed" && record.latestAssistantText
+      ? { ...base, finalText: record.latestAssistantText }
+      : base;
+  const settledError = state === "failed" ? (error ?? "Run failed.") : error;
+  return settledError === undefined ? completed : { ...completed, error: settledError };
+};
 
 /**
  * Owns event-driven view mutation, pause commits, terminal settlement, backend
@@ -123,15 +174,12 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   const failPendingResponses = (record: RunRecord, error: SubagentError) =>
     record.process?.cancelPending(error);
 
-  const settle = (record: RunRecord, state: "completed" | "failed" | "stopped", error?: string) =>
+  const settle = (record: RunRecord, state: SettlementState, error?: string) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const result = yield* withLock(
         Effect.gen(function* () {
-          if (
-            isTerminalRunState(record.view.state) ||
-            (state !== "stopped" && (record.stoppedByParent || record.view.state === "stopping"))
-          )
+          if (settlementBlocked(record, state))
             return { transitioned: false as const, view: snapshotView(record.view) };
           if (record.initializationPending && state !== "stopped") {
             record.pendingInitializationSettlement = {
@@ -161,37 +209,21 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
             : record.completionGeneration;
           const completionWarning = foldRunWarnings(record.warningSlots);
           if (recordDeliverableOutcome)
-            delivery.insertCompletionLocked(record, {
-              generation: completionGeneration,
-              outcome: state,
-              ...(state === "completed" &&
-                record.latestAssistantText && { finalText: record.latestAssistantText }),
-              ...(state === "failed" && { error: error ?? "Run failed." }),
-              ...(completionWarning && { warning: completionWarning }),
-              retained: false,
-            });
+            delivery.insertCompletionLocked(
+              record,
+              completionForSettlement(
+                record,
+                state,
+                completionGeneration,
+                completionWarning,
+                error,
+              ),
+            );
           record.notificationGeneration += 1;
           delivery.discardQuestionLocked(record.view.id);
           record.replyPendingRequestId = undefined;
           if (state === "completed") record.assignment.phase = "reported";
-          const viewBase = {
-            ...record.view,
-            state,
-            endedAt: now,
-            lastActivityAt: now,
-            currentTool: undefined,
-            question: undefined,
-            // Report bookkeeping only applies to completed settlements; other outcomes keep
-            // their prior reportGeneration.
-            ...(state === "completed" && { reportGeneration: completionGeneration }),
-          };
-          const completedView =
-            state === "completed" && record.latestAssistantText
-              ? { ...viewBase, finalText: record.latestAssistantText }
-              : viewBase;
-          const settledError = state === "failed" ? (error ?? "Run failed.") : error;
-          record.view =
-            settledError === undefined ? completedView : { ...completedView, error: settledError };
+          record.view = viewForSettlement(record, state, now, completionGeneration, error);
           yield* publish;
           const view = snapshotView(record.view);
           if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));

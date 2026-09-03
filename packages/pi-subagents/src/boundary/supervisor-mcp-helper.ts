@@ -574,6 +574,77 @@ const decodeToolArguments = <ValueInput>(
   return { kind: "message", message: value.message };
 };
 
+const decodeInitializeMessage = <ParamsInput>(
+  params: ParamsInput,
+  id: RpcId | undefined,
+): DecodedMcpMessage | undefined => {
+  if (
+    id === undefined ||
+    !exactKeys(
+      params,
+      ["protocolVersion", "capabilities", "clientInfo", "_meta"],
+      ["protocolVersion"],
+    ) ||
+    !boundedString(params.protocolVersion, 64) ||
+    (own(params, "_meta") && !boundedMetadata(params._meta))
+  )
+    return undefined;
+  return {
+    method: "initialize",
+    id,
+    protocolVersion: params.protocolVersion,
+    piBridge:
+      isJsonObject(params.clientInfo) && params.clientInfo.name === "pi-subagents-pi-bridge",
+  };
+};
+
+const decodeInitializedMessage = <ParamsInput>(
+  params: ParamsInput,
+  id: RpcId | undefined,
+): DecodedMcpMessage | undefined =>
+  id === undefined && validMeta(params) ? { method: "notifications/initialized" } : undefined;
+
+const decodeCancelledMessage = <ParamsInput>(
+  params: ParamsInput,
+  id: RpcId | undefined,
+): DecodedMcpMessage | undefined => {
+  if (
+    id !== undefined ||
+    !exactKeys(params, ["requestId", "reason", "_meta"], ["requestId"]) ||
+    !validRpcId(params.requestId) ||
+    (params.reason !== undefined && !boundedString(params.reason, 512, false)) ||
+    (own(params, "_meta") && !boundedMetadata(params._meta))
+  )
+    return undefined;
+  return { method: "notifications/cancelled", requestId: params.requestId };
+};
+
+const decodeRequestMessage = <ParamsInput>(
+  method: "ping" | "tools/list",
+  params: ParamsInput,
+  id: RpcId | undefined,
+): DecodedMcpMessage | undefined =>
+  id !== undefined && validMeta(params) ? { method, id } : undefined;
+
+const decodeToolCallMessage = <ParamsInput>(
+  params: ParamsInput,
+  id: RpcId | undefined,
+): DecodedMcpMessage | undefined => {
+  if (
+    id === undefined ||
+    !exactKeys(params, ["name", "arguments", "_meta"], ["name", "arguments"]) ||
+    !boundedString(params.name, 128) ||
+    (own(params, "_meta") && !boundedMetadata(params._meta))
+  )
+    return undefined;
+  return { method: "tools/call", id, name: params.name, arguments: params.arguments };
+};
+
+const decodeUnknownMessage = (requestedMethod: string, id: RpcId | undefined): DecodedMcpMessage =>
+  id === undefined
+    ? { method: "unknown", requestedMethod }
+    : { method: "unknown", requestedMethod, id };
+
 const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | undefined => {
   if (
     !exactKeys(value, ["jsonrpc", "id", "method", "params"], ["jsonrpc", "method"]) ||
@@ -588,60 +659,18 @@ const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | un
   if (own(value, "id") && id === undefined) return undefined;
   switch (value.method) {
     case "initialize":
-      if (
-        id === undefined ||
-        !exactKeys(
-          value.params,
-          ["protocolVersion", "capabilities", "clientInfo", "_meta"],
-          ["protocolVersion"],
-        ) ||
-        !boundedString(value.params.protocolVersion, 64) ||
-        (own(value.params, "_meta") && !boundedMetadata(value.params._meta))
-      )
-        return undefined;
-      return {
-        method: "initialize",
-        id,
-        protocolVersion: value.params.protocolVersion,
-        piBridge:
-          isJsonObject(value.params.clientInfo) &&
-          value.params.clientInfo.name === "pi-subagents-pi-bridge",
-      };
+      return decodeInitializeMessage(value.params, id);
     case "notifications/initialized":
-      return id === undefined && validMeta(value.params)
-        ? { method: "notifications/initialized" }
-        : undefined;
+      return decodeInitializedMessage(value.params, id);
     case "notifications/cancelled":
-      if (
-        id !== undefined ||
-        !exactKeys(value.params, ["requestId", "reason", "_meta"], ["requestId"]) ||
-        !validRpcId(value.params.requestId) ||
-        (value.params.reason !== undefined && !boundedString(value.params.reason, 512, false)) ||
-        (own(value.params, "_meta") && !boundedMetadata(value.params._meta))
-      )
-        return undefined;
-      return { method: "notifications/cancelled", requestId: value.params.requestId };
+      return decodeCancelledMessage(value.params, id);
     case "ping":
     case "tools/list":
-      return id !== undefined && validMeta(value.params) ? { method: value.method, id } : undefined;
+      return decodeRequestMessage(value.method, value.params, id);
     case "tools/call":
-      if (
-        id === undefined ||
-        !exactKeys(value.params, ["name", "arguments", "_meta"], ["name", "arguments"]) ||
-        !boundedString(value.params.name, 128) ||
-        (own(value.params, "_meta") && !boundedMetadata(value.params._meta))
-      )
-        return undefined;
-      return {
-        method: "tools/call",
-        id,
-        name: value.params.name,
-        arguments: value.params.arguments,
-      };
+      return decodeToolCallMessage(value.params, id);
     default:
-      return id === undefined
-        ? { method: "unknown", requestedMethod: value.method }
-        : { method: "unknown", requestedMethod: value.method, id };
+      return decodeUnknownMessage(value.method, id);
   }
 };
 

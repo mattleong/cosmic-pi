@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type { Static, TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
@@ -102,6 +103,20 @@ export const decodeSubagentProxyResult = (source: string): AgentToolResult<unkno
 const invalid = (message: string) =>
   new InvalidSubagentRequestError({ code: "proxy_request_invalid", message });
 
+const decodeTaggedArguments = <
+  S extends TSchema,
+  A extends SubagentToolInput["action"],
+  ValueInput,
+>(
+  tool: string,
+  schema: S,
+  action: A,
+  args: ValueInput,
+): (Static<S> & { readonly action: A }) | InvalidSubagentRequestError =>
+  Check(schema, args)
+    ? { ...args, action }
+    : invalid(`Nested ${tool} arguments failed strict validation.`);
+
 /** Strict server-side decode for authenticated private Pi proxy calls. */
 export const decodeSubagentProxyRequest = (
   request: SubagentProxyRequest,
@@ -114,42 +129,26 @@ export const decodeSubagentProxyRequest = (
   const args = decoded.value;
   switch (request.tool) {
     case SUBAGENT_TOOL_NAME.models:
-      return Check(ModelsParameters, args)
-        ? { ...args, action: "models" }
-        : invalid("Nested subagent_models arguments failed strict validation.");
+      return decodeTaggedArguments(request.tool, ModelsParameters, "models", args);
     case SUBAGENT_TOOL_NAME.start:
-      return Check(StartParameters, args)
-        ? { ...args, action: "start" }
-        : invalid("Nested subagent_start arguments failed strict validation.");
+      return decodeTaggedArguments(request.tool, StartParameters, "start", args);
     case SUBAGENT_TOOL_NAME.list:
-      return Check(ListParameters, args)
-        ? { ...args, action: "list" }
-        : invalid("Nested subagent_list arguments failed strict validation.");
+      return decodeTaggedArguments(request.tool, ListParameters, "list", args);
     case SUBAGENT_TOOL_NAME.status:
-      return Check(StatusParameters, args)
-        ? { ...args, action: "status" }
-        : invalid("Nested subagent_status arguments failed strict validation.");
+      return decodeTaggedArguments(request.tool, StatusParameters, "status", args);
     case SUBAGENT_TOOL_NAME.await:
-      return Check(AwaitParameters, args)
-        ? { ...args, action: "await" }
-        : invalid("Nested subagent_await arguments failed strict validation.");
+      return decodeTaggedArguments(request.tool, AwaitParameters, "await", args);
     case SUBAGENT_TOOL_NAME.send:
-      return Check(SendParameters, args)
-        ? { ...args, action: "send" }
-        : invalid("Nested subagent_send arguments failed strict validation.");
+      return decodeTaggedArguments(request.tool, SendParameters, "send", args);
     case SUBAGENT_TOOL_NAME.reply:
-      return Check(ReplyParameters, args)
-        ? { ...args, action: "reply" }
-        : invalid("Nested subagent_reply arguments failed strict validation.");
+      return decodeTaggedArguments(request.tool, ReplyParameters, "reply", args);
     case SUBAGENT_TOOL_NAME.lifecycle:
       return Check(LifecycleParameters, args) &&
         (args.action === "resume" || args.message === undefined)
         ? args
         : invalid("Nested subagent_lifecycle arguments failed strict validation.");
     case SUBAGENT_TOOL_NAME.rename:
-      return Check(RenameParameters, args)
-        ? { ...args, action: "rename" }
-        : invalid("Nested subagent_rename arguments failed strict validation.");
+      return decodeTaggedArguments(request.tool, RenameParameters, "rename", args);
     case SUBAGENT_TOOL_NAME.claims:
       return Check(ClaimsParameters, args) && claimsOperationError(args) === undefined
         ? { action: "claims", operation: args }

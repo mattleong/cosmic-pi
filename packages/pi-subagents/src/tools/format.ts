@@ -169,101 +169,148 @@ export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string
 const boundedLine = (value: string, maximum: number): string =>
   clipWithMarker(sanitizeTerminalLine(value), maximum, "… [truncated]");
 
-export const formatRun = (run: SubagentRunView, detailed = false): string => {
+const statusField = (label: string, value: string): string =>
+  `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
+
+const optionalStatusField = (label: string, value: string | undefined): string | undefined =>
+  value ? statusField(label, value) : undefined;
+
+const formatRunHeader = (run: SubagentRunView, route: string): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
-  const route = formatRunRoute(run.host, run.runtime, run.model, run.effort, run.openaiFastMode);
   const tree = run.depth
     ? ` · depth=${run.depth} · children=${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
     : "";
   const native = run.nativeActivity
     ? ` · native=${run.nativeActivity.active}/${run.nativeActivity.total}`
     : "";
-  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}`;
-  if (!detailed) return header;
-  const field = (label: string, value: string): string =>
-    `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
-  const now = synchronousNow();
-  const durationEnd = run.endedAt ?? now;
-  const elapsed = formatSessionAge(durationEnd, run.startedAt) || undefined;
-  const activityAge = formatSessionAge(now, run.lastActivityAt);
-  const activity = activityAge ? `${activityAge} ago` : undefined;
+  return `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}`;
+};
+
+const identityStatusFields = (
+  run: SubagentRunView,
+  route: string,
+): ReadonlyArray<string | undefined> => {
   const retained = run.state === "reported" && run.closeOnReport === false;
-  // Unknown or zero-information usage renders nothing rather than "unknown".
-  const usage = formatUsage(run.usage);
   return [
     "Subagent status",
-    field("Name", run.name),
-    field("ID", run.id),
-    field("State", runStateLabel(run.state)),
-    run.parentRunId ? field("Parent", run.parentRunId) : undefined,
-    run.depth !== undefined
-      ? field(
+    statusField("Name", run.name),
+    statusField("ID", run.id),
+    statusField("State", runStateLabel(run.state)),
+    optionalStatusField("Parent", run.parentRunId),
+    run.depth === undefined
+      ? undefined
+      : statusField(
           "Tree",
           `depth ${run.depth} · ${run.directChildCount ?? 0} direct · ${run.descendantCount ?? 0} descendants`,
-        )
-      : undefined,
-    run.profile ? field("Profile", run.profile) : undefined,
-    field("Route", route),
-    field(
+        ),
+    optionalStatusField("Profile", run.profile),
+    statusField("Route", route),
+    statusField(
       "Retention",
       `${run.closeOnReport === false ? "retain backend after report" : "close after report"} · assignment ${run.reportGeneration || 1}${retained ? " · retained now" : ""}`,
     ),
-    field("Selection", selectionSourceLabel(run)),
-    run.selection.routeSource ? field("Route source", run.selection.routeSource) : undefined,
-    field("Reason", run.selection.reason),
-    run.predecessorRunId ? field("Predecessor", run.predecessorRunId) : undefined,
-    run.supersededByRunId ? field("Superseded by", run.supersededByRunId) : undefined,
-    run.retryBlocked
-      ? field("Route retry", "blocked by uncertain execution or cleanup; inspect manually")
-      : run.retryExhausted
-        ? field("Route retry", "exhausted; only now consider a generalist replacement")
-        : (run.remainingCandidateCount ?? 0) > 0 && run.state === "failed"
-          ? field(
-              "Route retry",
-              `${run.remainingCandidateCount} candidate${run.remainingCandidateCount === 1 ? " remains" : "s remain"}; use subagent_lifecycle action=retry`,
-            )
-          : undefined,
-    ...run.selection.skippedCandidates.map((candidate) =>
-      field(
-        "Skipped",
-        `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`} [${candidate.code}]: ${candidate.reason}`,
-      ),
+  ];
+};
+
+const routeRetryStatus = (run: SubagentRunView): string | undefined => {
+  if (run.retryBlocked)
+    return statusField(
+      "Route retry",
+      "blocked by uncertain execution or cleanup; inspect manually",
+    );
+  if (run.retryExhausted)
+    return statusField("Route retry", "exhausted; only now consider a generalist replacement");
+  const remaining = run.remainingCandidateCount ?? 0;
+  if (remaining === 0 || run.state !== "failed") return undefined;
+  return statusField(
+    "Route retry",
+    `${remaining} candidate${remaining === 1 ? " remains" : "s remain"}; use subagent_lifecycle action=retry`,
+  );
+};
+
+const selectionStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => [
+  statusField("Selection", selectionSourceLabel(run)),
+  optionalStatusField("Route source", run.selection.routeSource),
+  statusField("Reason", run.selection.reason),
+  optionalStatusField("Predecessor", run.predecessorRunId),
+  optionalStatusField("Superseded by", run.supersededByRunId),
+  routeRetryStatus(run),
+  ...run.selection.skippedCandidates.map((candidate) =>
+    statusField(
+      "Skipped",
+      `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`} [${candidate.code}]: ${candidate.reason}`,
     ),
-    run.selection.warning ? field("Route warning", run.selection.warning) : undefined,
-    field("Context", run.context),
-    field("Intent", run.writeIntent),
+  ),
+  optionalStatusField("Route warning", run.selection.warning),
+];
+
+const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
+  const audit = run.writeAudit;
+  return [
+    statusField("Context", run.context),
+    statusField("Intent", run.writeIntent),
     run.writeIntent === "writer"
-      ? field("Writes", run.writeClaims?.join(", ") || "exclusive whole cwd")
+      ? statusField("Writes", run.writeClaims?.join(", ") || "exclusive whole cwd")
       : undefined,
-    run.writeAdmissionPaused ? field("Admission", "paused after claim violation") : undefined,
-    run.writeViolationOffender ? field("Containment", "current violation offender") : undefined,
-    run.writeAudit
-      ? field(
+    run.writeAdmissionPaused ? statusField("Admission", "paused after claim violation") : undefined,
+    run.writeViolationOffender
+      ? statusField("Containment", "current violation offender")
+      : undefined,
+    audit
+      ? statusField(
           "Write audit",
-          `${run.writeAudit.observedFileWrites.length} native file path${run.writeAudit.observedFileWrites.length === 1 ? "" : "s"} observed · ${run.writeAudit.violations.length} violation${run.writeAudit.violations.length === 1 ? "" : "s"} · ${run.writeAudit.bashWriteHints} Bash heuristic notice${run.writeAudit.bashWriteHints === 1 ? "" : "s"}`,
+          `${audit.observedFileWrites.length} native file path${audit.observedFileWrites.length === 1 ? "" : "s"} observed · ${audit.violations.length} violation${audit.violations.length === 1 ? "" : "s"} · ${audit.bashWriteHints} Bash heuristic notice${audit.bashWriteHints === 1 ? "" : "s"}`,
         )
       : undefined,
-    field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
-    run.pid ? field("Process", `pid ${run.pid}`) : undefined,
-    elapsed ? field("Elapsed", elapsed) : undefined,
-    activity ? field("Activity", activity) : undefined,
-    usage ? field("Usage", usage) : undefined,
-    run.nativeActivity
-      ? field(
+    statusField(
+      "Capabilities",
+      `${run.capabilities.join(", ") || "none"}; stop/await always available`,
+    ),
+  ];
+};
+
+const activityStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
+  const now = synchronousNow();
+  const elapsed = formatSessionAge(run.endedAt ?? now, run.startedAt) || undefined;
+  const activityAge = formatSessionAge(now, run.lastActivityAt);
+  const activity = activityAge ? `${activityAge} ago` : undefined;
+  const usage = formatUsage(run.usage);
+  const native = run.nativeActivity;
+  return [
+    run.pid ? statusField("Process", `pid ${run.pid}`) : undefined,
+    optionalStatusField("Elapsed", elapsed),
+    optionalStatusField("Activity", activity),
+    optionalStatusField("Usage", usage),
+    native
+      ? statusField(
           "Native",
-          `${run.nativeActivity.active} active · ${run.nativeActivity.total} total${run.nativeActivity.latest ? ` · latest ${run.nativeActivity.latest.kind} ${run.nativeActivity.latest.state}` : ""}`,
+          `${native.active} active · ${native.total} total${native.latest ? ` · latest ${native.latest.kind} ${native.latest.state}` : ""}`,
         )
       : undefined,
-    run.currentTool ? field("Current tool", run.currentTool) : undefined,
-    run.progress ? field("Progress", run.progress) : undefined,
-    run.warning ? field("Warning", run.warning) : undefined,
-    run.question ? field("Needs reply", run.question.message) : undefined,
-    run.error ? field("Failure", run.error) : undefined,
-    run.finalText
-      ? `\nFinal report\n${sanitizeTerminalText(run.finalText)}`
-      : run.state === "completed" || run.state === "reported"
-        ? "\nFinal report\nUnavailable in this observation; it may be claimed by another subagent_await or already delivered to the parent."
-        : undefined,
+    optionalStatusField("Current tool", run.currentTool),
+    optionalStatusField("Progress", run.progress),
+    optionalStatusField("Warning", run.warning),
+    run.question ? statusField("Needs reply", run.question.message) : undefined,
+    optionalStatusField("Failure", run.error),
+  ];
+};
+
+const finalReportStatus = (run: SubagentRunView): string | undefined => {
+  if (run.finalText) return `\nFinal report\n${sanitizeTerminalText(run.finalText)}`;
+  if (run.state !== "completed" && run.state !== "reported") return undefined;
+  return "\nFinal report\nUnavailable in this observation; it may be claimed by another subagent_await or already delivered to the parent.";
+};
+
+export const formatRun = (run: SubagentRunView, detailed = false): string => {
+  const route = formatRunRoute(run.host, run.runtime, run.model, run.effort, run.openaiFastMode);
+  const header = formatRunHeader(run, route);
+  if (!detailed) return header;
+  return [
+    ...identityStatusFields(run, route),
+    ...selectionStatusFields(run),
+    ...writeStatusFields(run),
+    ...activityStatusFields(run),
+    finalReportStatus(run),
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");

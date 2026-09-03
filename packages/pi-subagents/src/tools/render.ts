@@ -20,7 +20,9 @@ import { aggregateUsage } from "../ui/metrics.ts";
 import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
+  type CompactSubagentToolDetails,
   type SubagentRunCard,
+  type SubagentStartAwaitCardDetails,
 } from "./details-schema.ts";
 import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
 import { renderExpansionAffordance } from "./render-affordance.ts";
@@ -114,94 +116,131 @@ const reportAffordance = (
   return renderExpansionAffordance(label, expanded, theme);
 };
 
-const expandedRunDiagnostics = (
+const runRetentionLabel = (run: SubagentRunCard): string =>
+  run.closeOnReport === false
+    ? `retain backend · assignment ${run.reportGeneration || 1}`
+    : `close after report · assignment ${run.reportGeneration || 1}`;
+
+const runSelectionSummary = (run: SubagentRunCard): string => {
+  const profile = run.profile ? `${sanitizeTerminalLine(run.profile)} · ` : "";
+  return sanitizeTerminalLine(`${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`);
+};
+
+const runWriterSummary = (run: SubagentRunCard): string | undefined => {
+  if (run.writeIntent !== "writer") return undefined;
+  if (!run.writeClaims) return "Writer · exclusive cwd";
+  const claimCount = run.writeClaimCount ?? run.writeClaims.length;
+  const omitted = Math.max(0, claimCount - run.writeClaims.length);
+  return `Writer claims · ${run.writeClaims.join(", ")}${omitted > 0 ? ` · ${omitted} omitted` : ""}`;
+};
+
+const routineRunDiagnostics = (
   run: SubagentRunCard,
   width: number,
   theme: Theme,
-  includeRoutine: boolean,
+  selection: string,
+  retention: string,
 ): ReadonlyArray<string> => {
-  const profile = run.profile ? `${sanitizeTerminalLine(run.profile)} · ` : "";
-  const selectionSummary = sanitizeTerminalLine(
-    `${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`,
-  );
-  const retention =
-    run.closeOnReport === false
-      ? `retain backend · assignment ${run.reportGeneration || 1}`
-      : `close after report · assignment ${run.reportGeneration || 1}`;
-  const routineDetails = [
+  const details = [
     run.context ? `context=${run.context}` : undefined,
     retention,
     run.capabilities ? `capabilities=${run.capabilities.join(", ") || "none"}` : undefined,
   ]
     .filter((value): value is string => value !== undefined)
     .join(" · ");
+  return [
+    ...wrapTextWithAnsi(theme.fg("dim", `ID: ${sanitizeTerminalLine(run.id)}`), width),
+    ...wrapTextWithAnsi(theme.fg("dim", selection), width),
+    ...wrapTextWithAnsi(theme.fg("dim", details), width),
+  ];
+};
+
+const exceptionalRunDiagnostics = (
+  run: SubagentRunCard,
+  width: number,
+  theme: Theme,
+  selection: string,
+  retention: string,
+): ReadonlyArray<string> => {
   const fallbackSelected =
     (run.selection.candidateIndex ?? 0) > 0 || run.selection.skippedCandidates.length > 0;
-  const claimCount = run.writeClaimCount ?? run.writeClaims?.length ?? 0;
-  const omittedClaimCount = Math.max(0, claimCount - (run.writeClaims?.length ?? 0));
-  const writerSummary =
-    run.writeIntent !== "writer"
-      ? undefined
-      : run.writeClaims
-        ? `Writer claims · ${run.writeClaims.join(", ")}${omittedClaimCount > 0 ? ` · ${omittedClaimCount} omitted` : ""}`
-        : "Writer · exclusive cwd";
+  const writer = runWriterSummary(run);
   return [
-    ...(includeRoutine
-      ? [
-          ...wrapTextWithAnsi(theme.fg("dim", `ID: ${sanitizeTerminalLine(run.id)}`), width),
-          ...wrapTextWithAnsi(theme.fg("dim", selectionSummary), width),
-          ...wrapTextWithAnsi(theme.fg("dim", routineDetails), width),
-        ]
-      : [
-          ...(fallbackSelected ? wrapTextWithAnsi(theme.fg("dim", selectionSummary), width) : []),
-          ...(run.closeOnReport === false
-            ? wrapTextWithAnsi(theme.fg("dim", retention), width)
-            : []),
-          ...(writerSummary ? wrapTextWithAnsi(theme.fg("warning", writerSummary), width) : []),
-          ...(run.writeAdmissionPaused
-            ? wrapTextWithAnsi(theme.fg("warning", "Writer admission paused"), width)
-            : []),
-          ...(run.writeAudit?.violations ?? []).flatMap((violation) =>
-            wrapTextWithAnsi(
-              theme.fg(
-                "error",
-                sanitizeTerminalLine(
-                  `Write claim violation · ${violation.path} · ${violation.toolName}`,
-                ),
-              ),
-              width,
-            ),
-          ),
-        ]),
-    ...(run.progress && !isAssignmentFinishedRunState(run.state)
-      ? wrapTextWithAnsi(
-          theme.fg("accent", `  Progress: ${sanitizeTerminalLine(run.progress)}`),
-          width,
-        )
+    ...(fallbackSelected ? wrapTextWithAnsi(theme.fg("dim", selection), width) : []),
+    ...(run.closeOnReport === false ? wrapTextWithAnsi(theme.fg("dim", retention), width) : []),
+    ...(writer ? wrapTextWithAnsi(theme.fg("warning", writer), width) : []),
+    ...(run.writeAdmissionPaused
+      ? wrapTextWithAnsi(theme.fg("warning", "Writer admission paused"), width)
       : []),
-    ...(run.warning
-      ? wrapTextWithAnsi(
-          theme.fg("warning", `  Warning: ${sanitizeTerminalLine(run.warning)}`),
-          width,
-        )
-      : []),
-    ...run.selection.skippedCandidates.flatMap((candidate) =>
+    ...(run.writeAudit?.violations ?? []).flatMap((violation) =>
       wrapTextWithAnsi(
         theme.fg(
-          "dim",
-          sanitizeTerminalLine(
-            `  skipped ${candidate.candidate} [${candidate.code}] · ${candidate.reason}`,
-          ),
+          "error",
+          sanitizeTerminalLine(`Write claim violation · ${violation.path} · ${violation.toolName}`),
         ),
         width,
       ),
     ),
-    ...(run.selection.warning
-      ? wrapTextWithAnsi(
-          theme.fg("warning", sanitizeTerminalLine(`  ${run.selection.warning}`)),
-          width,
-        )
-      : []),
+  ];
+};
+
+const runActivityDiagnostics = (
+  run: SubagentRunCard,
+  width: number,
+  theme: Theme,
+): ReadonlyArray<string> => [
+  ...(run.progress && !isAssignmentFinishedRunState(run.state)
+    ? wrapTextWithAnsi(
+        theme.fg("accent", `  Progress: ${sanitizeTerminalLine(run.progress)}`),
+        width,
+      )
+    : []),
+  ...(run.warning
+    ? wrapTextWithAnsi(
+        theme.fg("warning", `  Warning: ${sanitizeTerminalLine(run.warning)}`),
+        width,
+      )
+    : []),
+];
+
+const runRouteDiagnostics = (
+  run: SubagentRunCard,
+  width: number,
+  theme: Theme,
+): ReadonlyArray<string> => [
+  ...run.selection.skippedCandidates.flatMap((candidate) =>
+    wrapTextWithAnsi(
+      theme.fg(
+        "dim",
+        sanitizeTerminalLine(
+          `  skipped ${candidate.candidate} [${candidate.code}] · ${candidate.reason}`,
+        ),
+      ),
+      width,
+    ),
+  ),
+  ...(run.selection.warning
+    ? wrapTextWithAnsi(
+        theme.fg("warning", sanitizeTerminalLine(`  ${run.selection.warning}`)),
+        width,
+      )
+    : []),
+];
+
+const expandedRunDiagnostics = (
+  run: SubagentRunCard,
+  width: number,
+  theme: Theme,
+  includeRoutine: boolean,
+): ReadonlyArray<string> => {
+  const selection = runSelectionSummary(run);
+  const retention = runRetentionLabel(run);
+  return [
+    ...(includeRoutine
+      ? routineRunDiagnostics(run, width, theme, selection, retention)
+      : exceptionalRunDiagnostics(run, width, theme, selection, retention)),
+    ...runActivityDiagnostics(run, width, theme),
+    ...runRouteDiagnostics(run, width, theme),
   ];
 };
 
@@ -538,6 +577,8 @@ export interface SubagentResultRenderOptions {
   readonly panelOwnsLiveHierarchy?: boolean | undefined;
 }
 
+type ToolTextContent = ReadonlyArray<{ readonly type: string; readonly text?: string }>;
+
 class EmptyLiveHierarchyComponent implements Component {
   render(): string[] {
     return [];
@@ -546,80 +587,64 @@ class EmptyLiveHierarchyComponent implements Component {
   invalidate(): void {}
 }
 
-export const renderSubagentResult = (
-  result: {
-    readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
-    readonly details?: unknown;
-  },
-  isPartial: boolean,
+const renderPartialStartAwait = (
+  details: SubagentStartAwaitCardDetails,
   expanded: boolean,
   theme: Theme,
-  options: SubagentResultRenderOptions = {},
-): Component => {
-  const details = decodeStartAwaitCardDetails(result.details);
-  if (
-    isPartial &&
-    options.panelOwnsLiveHierarchy &&
-    (details?.action === "start" || details?.action === "await")
-  )
-    return new EmptyLiveHierarchyComponent();
-  if (isPartial && details?.action === "await" && details.awaitUntil) {
-    const targets = awaitTargets(details);
-    const hierarchy = awaitHierarchy(details);
-    return renderAwaitProgressComponent(
-      details.cards,
-      targets,
-      details.awaitUntil,
-      theme,
-      hierarchy,
-      {
-        cancelled: details.cancelled,
-        timedOut: details.timedOut,
-        attentionRequired: details.attentionRequired,
-      },
-    );
-  }
-  if (isPartial && details?.action === "start")
+  options: SubagentResultRenderOptions,
+): Component | undefined => {
+  if (options.panelOwnsLiveHierarchy) return new EmptyLiveHierarchyComponent();
+  if (details.action === "start")
     return renderStartProgressComponent(
       details.startFailures ?? [],
       details.startEntries,
       expanded,
       theme,
     );
-  if (!isPartial && details) {
-    if (details.action === "start")
-      return renderStartReceiptComponent(
-        details.startFailures ?? [],
-        details.startEntries,
-        expanded,
-        theme,
-      );
-    const targets = awaitTargets(details);
-    const hierarchy = awaitHierarchy(details);
-    const targetIds = hierarchy.awaitedRunIds ?? new Set(targets.map((run) => run.id));
-    const banner = includeContentOmission(
-      awaitResultBanner({
-        ...details,
-        runs: targets,
-        usage: aggregateUsage(details.cards, "compact"),
-        targetCount: targetIds.size,
-        descendantCount: details.cards.filter((run) => !targetIds.has(run.id)).length,
-      }),
-      details.contentOmitted,
+  if (!details.awaitUntil) return undefined;
+  const targets = awaitTargets(details);
+  const hierarchy = awaitHierarchy(details);
+  return renderAwaitProgressComponent(
+    details.cards,
+    targets,
+    details.awaitUntil,
+    theme,
+    hierarchy,
+    {
+      cancelled: details.cancelled,
+      timedOut: details.timedOut,
+      attentionRequired: details.attentionRequired,
+    },
+  );
+};
+
+const renderSettledStartAwait = (
+  content: ToolTextContent,
+  details: SubagentStartAwaitCardDetails,
+  expanded: boolean,
+  theme: Theme,
+): Component => {
+  if (details.action === "start")
+    return renderStartReceiptComponent(
+      details.startFailures ?? [],
+      details.startEntries,
+      expanded,
+      theme,
     );
-    if (expanded) {
-      const rendered = renderExpandedStartAwaitResult(
-        details.cards,
-        theme,
-        banner,
-        true,
-        hierarchy,
-        targets,
-        true,
-      );
-      if (!details.contentOmitted) return rendered;
-      return recoveredOmittedFallback(result.content, theme) ?? rendered;
-    }
+  const targets = awaitTargets(details);
+  const hierarchy = awaitHierarchy(details);
+  const targetIds = hierarchy.awaitedRunIds ?? new Set(targets.map((run) => run.id));
+  const banner = includeContentOmission(
+    awaitResultBanner({
+      ...details,
+      runs: targets,
+      usage: aggregateUsage(details.cards, "compact"),
+      targetCount: targetIds.size,
+      descendantCount: details.cards.filter((run) => !targetIds.has(run.id)).length,
+    }),
+    details.contentOmitted,
+  );
+  if (!expanded)
     return renderStartAwaitOverviewComponent(
       details.cards,
       theme,
@@ -628,31 +653,53 @@ export const renderSubagentResult = (
       targets,
       false,
     );
-  }
-  const compact = decodeCompactToolDetails(result.details);
-  if (compact?.action === "models" && compact.profiles)
-    return renderProfileRoutesComponent(compact, expanded, theme);
-  if (compact && compact.action !== "models") {
-    const hierarchy = compact.action === "list" ? {} : undefined;
-    const rendered = renderCompactResultComponent(
-      compact,
-      expanded,
-      theme,
-      (cards, isExpanded, banner, showReports) =>
-        isExpanded
-          ? renderExpandedStartAwaitResult(cards, theme, banner, showReports, hierarchy)
-          : new RunOverviewComponent(cards, theme, {
-              expanded: false,
-              reportSections: showReports ? expandedRunReportSections(cards) : [],
-              banner,
-              showReportOutcomes: showReports,
-              hierarchy,
-            }),
-    );
-    if (!expanded || !compact.contentOmitted) return rendered;
-    return recoveredOmittedFallback(result.content, theme) ?? rendered;
-  }
-  let text = boundToolOutput(sanitizeTerminalText(joinTextContent(result.content)));
+  const rendered = renderExpandedStartAwaitResult(
+    details.cards,
+    theme,
+    banner,
+    true,
+    hierarchy,
+    targets,
+    true,
+  );
+  return details.contentOmitted ? (recoveredOmittedFallback(content, theme) ?? rendered) : rendered;
+};
+
+const renderCompactDetails = (
+  content: ToolTextContent,
+  compact: CompactSubagentToolDetails,
+  expanded: boolean,
+  theme: Theme,
+): Component | undefined => {
+  if (compact.action === "models")
+    return compact.profiles ? renderProfileRoutesComponent(compact, expanded, theme) : undefined;
+  const hierarchy = compact.action === "list" ? {} : undefined;
+  const rendered = renderCompactResultComponent(
+    compact,
+    expanded,
+    theme,
+    (cards, isExpanded, banner, showReports) =>
+      isExpanded
+        ? renderExpandedStartAwaitResult(cards, theme, banner, showReports, hierarchy)
+        : new RunOverviewComponent(cards, theme, {
+            expanded: false,
+            reportSections: showReports ? expandedRunReportSections(cards) : [],
+            banner,
+            showReportOutcomes: showReports,
+            hierarchy,
+          }),
+  );
+  if (!expanded || !compact.contentOmitted) return rendered;
+  return recoveredOmittedFallback(content, theme) ?? rendered;
+};
+
+const renderTextFallback = (
+  content: ToolTextContent,
+  isPartial: boolean,
+  expanded: boolean,
+  theme: Theme,
+): Component => {
+  let text = boundToolOutput(sanitizeTerminalText(joinTextContent(content)));
   if (!expanded) {
     const lines = text.split("\n");
     if (lines.length > 12)
@@ -663,4 +710,25 @@ export const renderSubagentResult = (
     0,
     0,
   );
+};
+
+export const renderSubagentResult = (
+  result: { readonly content: ToolTextContent; readonly details?: unknown },
+  isPartial: boolean,
+  expanded: boolean,
+  theme: Theme,
+  options: SubagentResultRenderOptions = {},
+): Component => {
+  const details = decodeStartAwaitCardDetails(result.details);
+  if (details) {
+    if (!isPartial) return renderSettledStartAwait(result.content, details, expanded, theme);
+    const rendered = renderPartialStartAwait(details, expanded, theme, options);
+    if (rendered) return rendered;
+  }
+  const compact = decodeCompactToolDetails(result.details);
+  if (compact) {
+    const rendered = renderCompactDetails(result.content, compact, expanded, theme);
+    if (rendered) return rendered;
+  }
+  return renderTextFallback(result.content, isPartial, expanded, theme);
 };

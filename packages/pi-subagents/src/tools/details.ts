@@ -306,6 +306,41 @@ const projectOptionalCardFields = (
   };
 };
 
+const projectNativeActivity = (
+  activity: SubagentRunView["nativeActivity"],
+): SubagentRunCard["nativeActivity"] => {
+  if (!activity) return undefined;
+  const latestId = optionalText(activity.latest?.id, 256);
+  return {
+    active: nonNegativeInteger(activity.active),
+    total: nonNegativeInteger(activity.total),
+    ...(activity.latest !== undefined && {
+      latest: {
+        kind: requiredText(activity.latest.kind, 128, "native-agent"),
+        state: activity.latest.state,
+        updatedAt: nonNegative(activity.latest.updatedAt),
+        ...(latestId !== undefined && { id: latestId }),
+      },
+    }),
+  };
+};
+
+const projectReportCardFields = (run: SubagentRunView): Partial<SubagentRunCard> => {
+  const finalText = optionalText(run.finalText, MAX_FINAL_TEXT_CHARS);
+  const error = optionalText(run.error, MAX_ERROR_CHARS);
+  const finalTextTruncated =
+    run.finalText !== undefined &&
+    finalText?.length !== stripTerminalControls(run.finalText).length;
+  const errorTruncated =
+    run.error !== undefined && error?.length !== stripTerminalControls(run.error).length;
+  return {
+    ...(finalText !== undefined && { finalText }),
+    ...(error !== undefined && { error }),
+    ...(finalTextTruncated && { finalTextTruncated: true as const }),
+    ...(errorTruncated && { errorTruncated: true as const }),
+  };
+};
+
 /** Explicit privacy projection from a run view to persisted renderer fields. */
 export const projectSubagentRunCard = (
   run: SubagentRunView,
@@ -314,23 +349,7 @@ export const projectSubagentRunCard = (
   const limits = DENSITY_LIMITS[density];
   const profile = run.profile && PROFILE_IDS.includes(run.profile) ? run.profile : undefined;
   const parentRunId = optionalText(run.parentRunId, limits.id);
-  const nativeLatestId = optionalText(run.nativeActivity?.latest?.id, 256);
-  const nativeActivity: SubagentRunCard["nativeActivity"] = run.nativeActivity
-    ? {
-        active: nonNegativeInteger(run.nativeActivity.active),
-        total: nonNegativeInteger(run.nativeActivity.total),
-        ...(run.nativeActivity.latest !== undefined && {
-          latest: {
-            kind: requiredText(run.nativeActivity.latest.kind, 128, "native-agent"),
-            state: run.nativeActivity.latest.state,
-            updatedAt: nonNegative(run.nativeActivity.latest.updatedAt),
-            ...(nativeLatestId !== undefined && { id: nativeLatestId }),
-          },
-        }),
-      }
-    : undefined;
-  const finalText = optionalText(run.finalText, MAX_FINAL_TEXT_CHARS);
-  const error = optionalText(run.error, MAX_ERROR_CHARS);
+  const nativeActivity = projectNativeActivity(run.nativeActivity);
   return {
     id: requiredText(run.id, limits.id, "unknown-run"),
     name: sanitizeName(run.name) || "subagent",
@@ -359,16 +378,7 @@ export const projectSubagentRunCard = (
     }),
     ...(nativeActivity !== undefined && { nativeActivity }),
     ...(profile !== undefined && { profile }),
-    ...(finalText !== undefined && { finalText }),
-    ...(error !== undefined && { error }),
-    ...(run.finalText !== undefined &&
-      finalText?.length !== stripTerminalControls(run.finalText).length && {
-        finalTextTruncated: true as const,
-      }),
-    ...(run.error !== undefined &&
-      error?.length !== stripTerminalControls(run.error).length && {
-        errorTruncated: true as const,
-      }),
+    ...projectReportCardFields(run),
   };
 };
 

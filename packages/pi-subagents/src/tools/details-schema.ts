@@ -511,47 +511,78 @@ const preflight = <ValueInput>(value: ValueInput): boolean => {
   return true;
 };
 
-const validStartRelationships = (details: SubagentStartDetails): boolean => {
+interface StartRelationships {
+  readonly failedIndexes: ReadonlySet<number>;
+  readonly runIds: Set<string>;
+}
+
+const collectStartRelationships = (
+  entries: SubagentStartDetails["startEntries"],
+): StartRelationships | undefined => {
   const failedIndexes = new Set<number>();
   const runIds = new Set<string>();
-  for (let index = 0; index < details.startEntries.length; index += 1) {
-    const entry = details.startEntries[index];
-    if (!entry || entry.index !== index) return false;
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!entry || entry.index !== index) return undefined;
     if (entry.status === "failed") failedIndexes.add(index);
-    if (entry.status === "started") {
-      if (runIds.has(entry.runId)) return false;
-      runIds.add(entry.runId);
-    }
+    if (entry.status !== "started") continue;
+    if (runIds.has(entry.runId)) return undefined;
+    runIds.add(entry.runId);
   }
+  return { failedIndexes, runIds };
+};
+
+type FailedStartRecovery = NonNullable<SubagentCardFailure["admittedRun"]>;
+
+const validRetryDisposition = (recovery: FailedStartRecovery): boolean => {
+  switch (recovery.retryDisposition) {
+    case "eligible":
+      return recovery.cleanupDisposition === "confirmed" && recovery.hasRemainingCandidate;
+    case "pending":
+      return recovery.cleanupDisposition === "pending" && recovery.hasRemainingCandidate;
+    case "blocked":
+      return recovery.hasRemainingCandidate;
+    case "exhausted":
+    case "unavailable":
+      return !recovery.hasRemainingCandidate;
+  }
+};
+
+const registerRecovery = (
+  entry: SubagentStartDetails["startEntries"][number] | undefined,
+  recovery: FailedStartRecovery,
+  runIds: Set<string>,
+): boolean => {
+  if (entry?.routeStatus !== "selected" || runIds.has(recovery.runId)) return false;
+  if (recovery.hasRemainingCandidate !== recovery.remainingCandidateCount > 0) return false;
+  if (!validRetryDisposition(recovery)) return false;
+  runIds.add(recovery.runId);
+  return true;
+};
+
+const validStartRelationships = (details: SubagentStartDetails): boolean => {
+  const relationships = collectStartRelationships(details.startEntries);
+  if (!relationships) return false;
   const failures = details.startFailures ?? [];
-  if (failures.length !== failedIndexes.size) return false;
+  if (failures.length !== relationships.failedIndexes.size) return false;
   const seenFailures = new Set<number>();
   let previousFailureIndex = -1;
   for (const failure of failures) {
     if (
-      !failedIndexes.has(failure.index) ||
+      !relationships.failedIndexes.has(failure.index) ||
       seenFailures.has(failure.index) ||
       failure.index <= previousFailureIndex
     )
       return false;
     seenFailures.add(failure.index);
     previousFailureIndex = failure.index;
-    const recovery = failure.admittedRun;
-    if (!recovery) continue;
-    const entry = details.startEntries[failure.index];
-    if (entry?.routeStatus !== "selected" || runIds.has(recovery.runId)) return false;
-    runIds.add(recovery.runId);
-    if (recovery.hasRemainingCandidate !== recovery.remainingCandidateCount > 0) return false;
     if (
-      (recovery.retryDisposition === "eligible" &&
-        (recovery.cleanupDisposition !== "confirmed" || !recovery.hasRemainingCandidate)) ||
-      (recovery.retryDisposition === "pending" &&
-        (recovery.cleanupDisposition !== "pending" || !recovery.hasRemainingCandidate)) ||
-      (recovery.retryDisposition === "blocked" && !recovery.hasRemainingCandidate) ||
-      ((recovery.retryDisposition === "exhausted" || recovery.retryDisposition === "unavailable") &&
-        recovery.hasRemainingCandidate) ||
-      (recovery.cleanupDisposition === "quarantined" &&
-        (recovery.retryDisposition === "eligible" || recovery.retryDisposition === "pending"))
+      failure.admittedRun &&
+      !registerRecovery(
+        details.startEntries[failure.index],
+        failure.admittedRun,
+        relationships.runIds,
+      )
     )
       return false;
   }

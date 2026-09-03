@@ -47,6 +47,43 @@ import { failedStartRecoveryForRecord } from "./retry.ts";
 
 const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
 
+const validateStartRequest = (
+  request: StartSubagentRequest,
+  platform: NodeJS.Platform,
+): Effect.Effect<ReadonlyArray<string> | undefined, SubagentError> =>
+  Effect.gen(function* () {
+    if (!request.task.trim())
+      return yield* new InvalidSubagentRequestError({
+        code: "task_required",
+        message: "Subagent task is required.",
+      });
+    const normalizedClaims =
+      request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
+    if (normalizedClaims && !normalizedClaims.ok)
+      return yield* new InvalidSubagentRequestError({
+        code: normalizedClaims.code,
+        message: normalizedClaims.message,
+      });
+    if (normalizedClaims && request.writeIntent !== "writer")
+      return yield* new InvalidSubagentRequestError({
+        code: "write_claims_read_only",
+        message: "writes may be supplied only for a writer subagent.",
+      });
+    if (request.closeOnReport === false && !isRetainableProfileCandidate(request))
+      return yield* new InvalidSubagentRequestError({
+        code: "retained_report_capability_invalid",
+        message: "closeOnReport=false requires a Herdr-hosted read-only backend.",
+      });
+    if (request.writeIntent === "writer" && platform === "win32")
+      return yield* new UnsupportedSafeWriterOwnershipError({
+        code: "unsupported_safe_writer_ownership",
+        platform,
+        message:
+          "Writer subagents are disabled on Windows because descendant termination cannot yet be proven without Job Object ownership. Read-only subagents remain available.",
+      });
+    return normalizedClaims?.claims;
+  });
+
 /** Available only for an error returned after this service admitted and fully compensated a run. */
 export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
   failedStartRecoveries.get(error);
@@ -129,39 +166,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
   const start = (request: StartSubagentRequest): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        if (!request.task.trim())
-          return yield* new InvalidSubagentRequestError({
-            code: "task_required",
-            message: "Subagent task is required.",
-          });
+        const writeClaims = yield* validateStartRequest(request, writerLeases.platform);
         const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
         const nestingPolicy: SubagentNestingPolicy =
           request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
-        const normalizedClaims =
-          request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
-        if (normalizedClaims && !normalizedClaims.ok)
-          return yield* new InvalidSubagentRequestError({
-            code: normalizedClaims.code,
-            message: normalizedClaims.message,
-          });
-        if (normalizedClaims && request.writeIntent !== "writer")
-          return yield* new InvalidSubagentRequestError({
-            code: "write_claims_read_only",
-            message: "writes may be supplied only for a writer subagent.",
-          });
-        const writeClaims = normalizedClaims?.claims;
-        if (request.closeOnReport === false && !isRetainableProfileCandidate(request))
-          return yield* new InvalidSubagentRequestError({
-            code: "retained_report_capability_invalid",
-            message: "closeOnReport=false requires a Herdr-hosted read-only backend.",
-          });
-        if (request.writeIntent === "writer" && writerLeases.platform === "win32")
-          return yield* new UnsupportedSafeWriterOwnershipError({
-            code: "unsupported_safe_writer_ownership",
-            platform: writerLeases.platform,
-            message:
-              "Writer subagents are disabled on Windows because descendant termination cannot yet be proven without Job Object ownership. Read-only subagents remain available.",
-          });
         const driver = yield* restore(
           backendRegistry.resolve({
             host: request.host,
@@ -232,18 +240,8 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           new SubagentRuntimeClosedError({
             message: "The subagent session runtime is closed.",
           });
-        /**
-         * Shared locked final admission and record construction. Rechecks every
-         * admission constraint before deleting history; `ownReservation` is this
-         * start's own claimed candidate (excluded from the recheck because every
-         * concurrent admission already counted its reservation while reclamation
-         * ran), while a fresh admission excludes nothing. Caller must hold the
-         * service lock, and every eviction reclaim must already have definitely
-         * succeeded before this deletes the evicted record. A mutable writer-pool
-         * safety transition may still reject phase C; that path quarantines the
-         * already-reclaimed history record against resume.
-         */
-        const admitLocked = (evicted: RunRecord | undefined, ownReservation?: RunRecord) =>
+
+        const retryPredecessorLocked = () =>
           Effect.gen(function* () {
             const predecessor = request.supersedes
               ? records.get(request.supersedes.runId)
@@ -259,6 +257,11 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 code: "retry_claim_stale",
                 message: `Failed predecessor ${request.supersedes.runId} no longer owns this next-candidate retry claim.`,
               });
+            return predecessor;
+          });
+
+        const admissionParentLocked = (predecessor: RunRecord | undefined) =>
+          Effect.gen(function* () {
             const parent =
               parentRunId === SUBAGENT_ROOT_RUN_ID ? undefined : records.get(parentRunId);
             if (parentRunId !== SUBAGENT_ROOT_RUN_ID && !parent)
@@ -286,6 +289,14 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 code: "retry_parent_mismatch",
                 message: "A retry successor must keep its predecessor's parent.",
               });
+            return parent;
+          });
+
+        const validateCapacityLocked = (
+          ownReservation: RunRecord | undefined,
+          predecessor: RunRecord | undefined,
+        ) =>
+          Effect.gen(function* () {
             const capacityFailure = processCapacityError(
               records,
               parentRunId,
@@ -293,17 +304,177 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               ownReservation,
             );
             if (capacityFailure) return yield* capacityFailure;
-            if (canonicalWriterCwd) {
-              const writerFailure = writerConflictError(
-                records,
-                writerPools,
-                canonicalWriterCwd,
-                writeClaims,
-                ownReservation,
-                predecessor,
-              );
-              if (writerFailure) return yield* writerFailure;
+            if (!canonicalWriterCwd) return;
+            const writerFailure = writerConflictError(
+              records,
+              writerPools,
+              canonicalWriterCwd,
+              writeClaims,
+              ownReservation,
+              predecessor,
+            );
+            if (writerFailure) return yield* writerFailure;
+          });
+
+        const writerPoolForAdmissionLocked = (id: string) =>
+          Effect.gen(function* () {
+            if (!canonicalWriterCwd) return undefined;
+            let writerPool = writerPools.get(canonicalWriterCwd.digest);
+            if (!writerPool) {
+              writerPool = {
+                cwd: canonicalWriterCwd,
+                leaseScope: yield* Scope.make(),
+                releaseState: { authorized: false },
+                preparationSettled: Deferred.makeUnsafe<void, SubagentError>(),
+                members: new Map(),
+                violationRunIds: new Set(),
+                state: "pending",
+                admissionPaused: false,
+              };
+              writerPools.set(canonicalWriterCwd.digest, writerPool);
             }
+            writerPool.members.set(id, writeClaims);
+            return writerPool;
+          });
+
+        const buildRunView = (
+          parent: RunRecord | undefined,
+          id: string,
+          name: string,
+        ): SubagentRunView => {
+          const remainingCandidateCount = request.routeContinuation
+            ? Math.max(
+                0,
+                request.routeContinuation.candidates.length -
+                  request.routeContinuation.selectedCandidateIndex -
+                  1,
+              )
+            : undefined;
+          return {
+            id,
+            name,
+            task: request.task.trim(),
+            ...(request.profile && { profile: request.profile }),
+            ...(request.supersedes && { predecessorRunId: request.supersedes.runId }),
+            ...(remainingCandidateCount !== undefined && { remainingCandidateCount }),
+            parentRunId,
+            depth: (parent?.view.depth ?? 0) + 1,
+            selection: request.selection ?? {
+              source: "profile-candidate",
+              host: request.host,
+              runtime: request.runtime,
+              closeOnReport: request.closeOnReport,
+              reason: "Profile route selection.",
+              skippedCandidates: [],
+            },
+            cwd: canonicalWriterCwd?.path ?? request.cwd,
+            state: "starting",
+            context: request.context,
+            writeIntent: request.writeIntent,
+            ...(writeClaims !== undefined && {
+              writeClaims,
+              writeAudit: {
+                observedFileWrites: [],
+                violations: [],
+                bashWriteHints: 0,
+              },
+            }),
+            openaiFastMode: request.openaiFastMode,
+            host: request.host,
+            runtime: request.runtime,
+            closeOnReport: request.closeOnReport,
+            reportGeneration: 0,
+            capabilities: driver.capabilities,
+            model: request.model,
+            effort: request.effort,
+            startedAt: now,
+            lastActivityAt: now,
+            sessionEvents: [],
+            usage: emptyUsage(),
+          };
+        };
+
+        const buildBackendLaunch = (id: string, name: string): BackendLaunchRequest => ({
+          runId: id,
+          name,
+          closeOnReport: request.closeOnReport,
+          cwd: canonicalWriterCwd?.path ?? request.cwd,
+          context: request.context,
+          writeIntent: request.writeIntent,
+          openaiFastMode: request.openaiFastMode,
+          model: request.model,
+          effort: request.effort,
+          ...(request.runtimeApiKey && { runtimeApiKey: request.runtimeApiKey }),
+          activeTools: request.activeTools,
+          projectTrusted: request.projectTrusted,
+          parentSessionId: request.parentSessionId,
+          ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
+          ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
+          systemPrompt: childSystemPrompt(
+            writeClaims === undefined ? request : { ...request, writes: writeClaims },
+          ),
+        });
+
+        const buildRunRecord = (
+          view: SubagentRunView,
+          scope: Scope.Closeable,
+          launch: BackendLaunchRequest,
+          cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">,
+          initializationSettled: Deferred.Deferred<void>,
+          assignmentAttemptToken: string,
+          writerPool: WriterPoolEntry | undefined,
+        ): RunRecord => ({
+          view,
+          scope,
+          driver,
+          launch,
+          activeTools: new Map(),
+          nativeAgents: new Map(),
+          nativeAgentTotal: 0,
+          cleanupSettlement,
+          cleanupDisposition: "pending",
+          routeContinuation: request.routeContinuation,
+          retryExhausted: false,
+          pauseRequested: false,
+          stoppedByParent: false,
+          cleanupPending: false,
+          runStateReclaimState: "pending",
+          writeViolationContainmentStarted: false,
+          ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
+          initializationPending: true,
+          initializationSettled,
+          notificationGeneration: 0,
+          completionGeneration: 0,
+          warningSlots: emptyRunWarningSlots(),
+          completionGenerations: new Map(),
+          completionClaims: new Map(),
+          assignment: {
+            epoch: 1,
+            phase: "preparing",
+            attemptToken: assignmentAttemptToken,
+            startedObserved: false,
+            outcomeUncertain: false,
+            pendingRunSettled: false,
+          },
+          nextAssignmentEpoch: 2,
+        });
+
+        /**
+         * Shared locked final admission and record construction. Rechecks every
+         * admission constraint before deleting history; `ownReservation` is this
+         * start's own claimed candidate (excluded from the recheck because every
+         * concurrent admission already counted its reservation while reclamation
+         * ran), while a fresh admission excludes nothing. Caller must hold the
+         * service lock, and every eviction reclaim must already have definitely
+         * succeeded before this deletes the evicted record. A mutable writer-pool
+         * safety transition may still reject phase C; that path quarantines the
+         * already-reclaimed history record against resume.
+         */
+        const admitLocked = (evicted: RunRecord | undefined, ownReservation?: RunRecord) =>
+          Effect.gen(function* () {
+            const predecessor = yield* retryPredecessorLocked();
+            const parent = yield* admissionParentLocked(predecessor);
+            yield* validateCapacityLocked(ownReservation, predecessor);
             if (evicted) {
               evicted.evictionClaim = undefined;
               records.delete(evicted.view.id);
@@ -317,131 +488,18 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
             const { id, name } = allocateRunIdentity(requestedName);
             const assignmentAttemptToken = allocateAssignmentAttemptToken();
-            let writerPool: WriterPoolEntry | undefined;
-            if (canonicalWriterCwd) {
-              writerPool = writerPools.get(canonicalWriterCwd.digest);
-              if (!writerPool) {
-                writerPool = {
-                  cwd: canonicalWriterCwd,
-                  leaseScope: yield* Scope.make(),
-                  releaseState: { authorized: false },
-                  preparationSettled: Deferred.makeUnsafe<void, SubagentError>(),
-                  members: new Map(),
-                  violationRunIds: new Set(),
-                  state: "pending",
-                  admissionPaused: false,
-                };
-                writerPools.set(canonicalWriterCwd.digest, writerPool);
-              }
-              writerPool.members.set(id, writeClaims);
-            }
-            const remainingCandidateCount = request.routeContinuation
-              ? Math.max(
-                  0,
-                  request.routeContinuation.candidates.length -
-                    request.routeContinuation.selectedCandidateIndex -
-                    1,
-                )
-              : undefined;
-            const view: SubagentRunView = {
-              id,
-              name,
-              task: request.task.trim(),
-              ...(request.profile && { profile: request.profile }),
-              ...(request.supersedes && { predecessorRunId: request.supersedes.runId }),
-              ...(remainingCandidateCount !== undefined && { remainingCandidateCount }),
-              parentRunId,
-              depth: (parent?.view.depth ?? 0) + 1,
-              selection: request.selection ?? {
-                source: "profile-candidate",
-                host: request.host,
-                runtime: request.runtime,
-                closeOnReport: request.closeOnReport,
-                reason: "Profile route selection.",
-                skippedCandidates: [],
-              },
-              cwd: canonicalWriterCwd?.path ?? request.cwd,
-              state: "starting",
-              context: request.context,
-              writeIntent: request.writeIntent,
-              ...(writeClaims !== undefined && {
-                writeClaims,
-                writeAudit: {
-                  observedFileWrites: [],
-                  violations: [],
-                  bashWriteHints: 0,
-                },
-              }),
-              openaiFastMode: request.openaiFastMode,
-              host: request.host,
-              runtime: request.runtime,
-              closeOnReport: request.closeOnReport,
-              reportGeneration: 0,
-              capabilities: driver.capabilities,
-              model: request.model,
-              effort: request.effort,
-              startedAt: now,
-              lastActivityAt: now,
-              sessionEvents: [],
-              usage: emptyUsage(),
-            };
-            const launch: BackendLaunchRequest = {
-              runId: id,
-              name,
-              closeOnReport: request.closeOnReport,
-              cwd: canonicalWriterCwd?.path ?? request.cwd,
-              context: request.context,
-              writeIntent: request.writeIntent,
-              openaiFastMode: request.openaiFastMode,
-              model: request.model,
-              effort: request.effort,
-              ...(request.runtimeApiKey && { runtimeApiKey: request.runtimeApiKey }),
-              activeTools: request.activeTools,
-              projectTrusted: request.projectTrusted,
-              parentSessionId: request.parentSessionId,
-              ...(request.parentSessionFile && {
-                parentSessionFile: request.parentSessionFile,
-              }),
-              ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
-              systemPrompt: childSystemPrompt(
-                writeClaims === undefined ? request : { ...request, writes: writeClaims },
-              ),
-            };
-            const record: RunRecord = {
+            const writerPool = yield* writerPoolForAdmissionLocked(id);
+            const view = buildRunView(parent, id, name);
+            const launch = buildBackendLaunch(id, name);
+            const record = buildRunRecord(
               view,
               scope,
-              driver,
               launch,
-              activeTools: new Map(),
-              nativeAgents: new Map(),
-              nativeAgentTotal: 0,
               cleanupSettlement,
-              cleanupDisposition: "pending",
-              routeContinuation: request.routeContinuation,
-              retryExhausted: false,
-              pauseRequested: false,
-              stoppedByParent: false,
-              cleanupPending: false,
-              runStateReclaimState: "pending",
-              writeViolationContainmentStarted: false,
-              ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
-              initializationPending: true,
               initializationSettled,
-              notificationGeneration: 0,
-              completionGeneration: 0,
-              warningSlots: emptyRunWarningSlots(),
-              completionGenerations: new Map(),
-              completionClaims: new Map(),
-              assignment: {
-                epoch: 1,
-                phase: "preparing",
-                attemptToken: assignmentAttemptToken,
-                startedObserved: false,
-                outcomeUncertain: false,
-                pendingRunSettled: false,
-              },
-              nextAssignmentEpoch: 2,
-            };
+              assignmentAttemptToken,
+              writerPool,
+            );
             if (predecessor) {
               predecessor.retryClaim = undefined;
               predecessor.view = { ...predecessor.view, supersededByRunId: id };

@@ -151,12 +151,40 @@ export const targetProfilePrimarySummary = (
 export const profileDescription = (profile: ProfileId): string =>
   PROFILE_DEFINITIONS[profile].description;
 
-export const candidateFieldRows = (
+const advancedSummaryValues = (
   candidate: ProfileCandidate,
-  profile?: ProfileId,
-  parentEffort: SubagentEffort = "high",
-  parentModel?: string | undefined,
-  advancedExpanded = false,
+  parentModel: string | undefined,
+): ReadonlyArray<string> =>
+  [
+    isLocalPiProfileCandidate(candidate) && candidate.context === "fork"
+      ? "forked context"
+      : undefined,
+    candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
+    !candidate.closeOnReport ? "stays open after reporting" : undefined,
+  ].filter((value): value is string => value !== undefined);
+
+const fastModeFieldRow = (
+  candidate: ProfileCandidate,
+  parentModel: string | undefined,
+  fastAvailable: boolean,
+): ProfileWorkspaceFieldRow => ({
+  field: "openaiFastMode",
+  label: "  OpenAI fast mode",
+  value: fastAvailable
+    ? candidateFastModeApplied(candidate, parentModel)
+      ? "on, priority"
+      : "off, standard"
+    : "on, but unavailable",
+  fixed: !fastAvailable && !candidate.openaiFastMode,
+  ...(!fastAvailable &&
+    !candidate.openaiFastMode && {
+      fixedReason: "The selected model does not support OpenAI fast mode.",
+    }),
+});
+
+const advancedCandidateRows = (
+  candidate: ProfileCandidate,
+  parentModel: string | undefined,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const localPi = isLocalPiProfileCandidate(candidate);
   const retainedAllowed = isRetainableProfileCandidate(candidate);
@@ -164,12 +192,7 @@ export const candidateFieldRows = (
     candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
   const fastAvailable =
     fastModel !== undefined && supportsSubagentFastMode(candidate.runtime, fastModel);
-  const advancedValues = [
-    localPi && candidate.context === "fork" ? "forked context" : undefined,
-    candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
-    !candidate.closeOnReport ? "stays open after reporting" : undefined,
-  ].filter((value): value is string => value !== undefined);
-  const advanced: ReadonlyArray<ProfileWorkspaceFieldRow> = [
+  return [
     ...(localPi || candidate.context !== "fresh"
       ? [
           {
@@ -177,29 +200,12 @@ export const candidateFieldRows = (
             label: "  Context",
             value: candidate.context,
             fixed: !localPi,
-            ...(!localPi && {
-              fixedReason: "Fork is available only with Local Pi.",
-            }),
+            ...(!localPi && { fixedReason: "Fork is available only with Local Pi." }),
           },
         ]
       : []),
     ...(fastAvailable || candidate.openaiFastMode
-      ? [
-          {
-            field: "openaiFastMode" as const,
-            label: "  OpenAI fast mode",
-            value: fastAvailable
-              ? candidateFastModeApplied(candidate, parentModel)
-                ? "on, priority"
-                : "off, standard"
-              : "on, but unavailable",
-            fixed: !fastAvailable && !candidate.openaiFastMode,
-            ...(!fastAvailable &&
-              !candidate.openaiFastMode && {
-                fixedReason: "The selected model does not support OpenAI fast mode.",
-              }),
-          },
-        ]
+      ? [fastModeFieldRow(candidate, parentModel, fastAvailable)]
       : []),
     ...(retainedAllowed || !candidate.closeOnReport
       ? [
@@ -215,6 +221,17 @@ export const candidateFieldRows = (
         ]
       : []),
   ];
+};
+
+export const candidateFieldRows = (
+  candidate: ProfileCandidate,
+  profile?: ProfileId,
+  parentEffort: SubagentEffort = "high",
+  parentModel?: string | undefined,
+  advancedExpanded = false,
+): ReadonlyArray<ProfileWorkspaceFieldRow> => {
+  const advanced = advancedCandidateRows(candidate, parentModel);
+  const advancedValues = advancedSummaryValues(candidate, parentModel);
   const essential: ReadonlyArray<ProfileWorkspaceFieldRow> = [
     { field: "model", label: "Model", value: candidate.model, fixed: false },
     {
