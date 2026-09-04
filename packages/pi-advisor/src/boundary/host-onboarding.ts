@@ -1,12 +1,135 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
+import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
+import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
+import {
+  makeModelPickerPage,
+  modelSelector,
+  type ModelPickerModel,
+} from "pi-cosmic-ui/manager/model-picker";
 import { PiCommandError, selectAtHostCommandBoundary } from "./host-commands.ts";
 
 export type AdvisorOnboardingChoice =
   | { readonly type: "model"; readonly provider: string; readonly model: string }
   | { readonly type: "not-now" };
 
-type AdvisorOnboardingContext = Pick<ExtensionContext, "mode" | "modelRegistry" | "ui">;
+type AdvisorOnboardingContext = Pick<
+  ExtensionContext,
+  "hasUI" | "mode" | "model" | "modelRegistry" | "scopedModels" | "ui"
+>;
+
+type AdvisorPickerModel = ModelPickerModel;
+type AdvisorPickerResult = AdvisorOnboardingChoice | undefined;
+
+type AdvisorPickerFactory = (
+  tui: TUI,
+  theme: Theme,
+  keybindings: KeybindingsManager,
+  done: (result: AdvisorPickerResult) => void,
+) => Component;
+
+const neutralComponent = (): Component => ({
+  render: () => [],
+  invalidate: () => undefined,
+  handleInput: () => undefined,
+});
+
+const projectModel = (model: {
+  readonly provider: string;
+  readonly id: string;
+  readonly name?: string | undefined;
+  readonly reasoning?: boolean | undefined;
+}): AdvisorPickerModel => ({
+  provider: model.provider,
+  id: model.id,
+  name: model.name,
+  reasoning: model.reasoning,
+});
+
+const sortModels = (models: ReadonlyArray<AdvisorPickerModel>): AdvisorPickerModel[] =>
+  [...models].sort((left, right) => modelSelector(left).localeCompare(modelSelector(right)));
+
+/** Owns the signal-less Pi custom surface so interruption cannot leave a focused picker behind. */
+const openAdvisorModelPickerAtHostBoundary = (
+  ctx: AdvisorOnboardingContext,
+  models: ReadonlyArray<AdvisorPickerModel>,
+  scopedModels: ReadonlyArray<AdvisorPickerModel>,
+): Effect.Effect<AdvisorPickerResult, PiCommandError> =>
+  Effect.suspend(() => {
+    let closing = false;
+    let factoryInvoked = false;
+    let doneInvoked = false;
+    let hostDone: ((result: AdvisorPickerResult) => void) | undefined;
+    const finish = (result: AdvisorPickerResult): void => {
+      if (doneInvoked || hostDone === undefined) return;
+      doneInvoked = true;
+      try {
+        hostDone(result);
+      } catch {
+        // Host callback failures are contained at this boundary.
+      }
+    };
+    const close = (): void => {
+      closing = true;
+      finish(undefined);
+    };
+    const factory: AdvisorPickerFactory = (tui, theme, keybindings, done) => {
+      if (factoryInvoked) {
+        close();
+        return neutralComponent();
+      }
+      factoryInvoked = true;
+      hostDone = done;
+      if (closing) {
+        close();
+        return neutralComponent();
+      }
+      return makeModelPickerPage({
+        theme,
+        breadcrumb: "/advisor › setup › model",
+        title: "Set up Advisor",
+        subtitle: "Choose the model used for independent review",
+        scopedModels,
+        allModels: models,
+        current: ctx.model ? modelSelector(ctx.model) : undefined,
+        actions: [
+          {
+            id: "not-now",
+            label: "Not now",
+            description: "Dismiss automatic setup for this configuration",
+            select: () => finish({ type: "not-now" }),
+          },
+        ],
+        getHeight: () => tui.terminal.rows,
+        requestRender: () => tui.requestRender(),
+        matchesKeybinding: (data, id) => keybindings.matches(data, id),
+        keybindingLabel: (id, fallback) =>
+          fullScreenKeybindingLabel(
+            id,
+            fallback,
+            Predicate.isFunction(keybindings.getKeys)
+              ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+              : undefined,
+          ),
+        select: (model) => finish({ type: "model", provider: model.provider, model: model.id }),
+        cancel: () => finish(undefined),
+      });
+    };
+    return Effect.tryPromise({
+      try: () =>
+        ctx.ui.custom<AdvisorPickerResult>(factory, {
+          overlay: true,
+          overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+        }),
+      catch: () =>
+        new PiCommandError({
+          operation: "model selection",
+          message: "Advisor command failed.",
+        }),
+    }).pipe(Effect.ensuring(Effect.sync(close)));
+  });
 
 /** Pi-owned model discovery and setup UI stay behind one host boundary. */
 export function selectAdvisorOnboardingAtHostBoundary(
@@ -15,16 +138,19 @@ export function selectAdvisorOnboardingAtHostBoundary(
   if (ctx.mode !== "tui") return Effect.void;
   return Effect.try({
     try: () => {
-      const models = ctx.modelRegistry
-        .getAvailable()
-        .map((model) => ({ label: `${model.provider}/${model.id}`, model }))
-        .sort((left, right) => left.label.localeCompare(right.label));
+      const models = sortModels(ctx.modelRegistry.getAvailable().map(projectModel));
+      const available = new Map(models.map((model) => [modelSelector(model), model]));
+      const scopedModels = sortModels(
+        (ctx.scopedModels ?? [])
+          .map(({ model }) => available.get(modelSelector(model)))
+          .filter((model): model is AdvisorPickerModel => model !== undefined),
+      );
       if (models.length === 0)
         ctx.ui.notify(
           "No authenticated models are available. Configure a provider in pi, then run /advisor setup.",
           "warning",
         );
-      return models;
+      return { models, scopedModels };
     },
     catch: () =>
       new PiCommandError({
@@ -32,20 +158,20 @@ export function selectAdvisorOnboardingAtHostBoundary(
         message: "Advisor command failed.",
       }),
   }).pipe(
-    Effect.flatMap((models) =>
-      selectAtHostCommandBoundary(ctx, "Set up Advisor", [
-        ...models.map(({ label }) => label),
-        "Not now",
-      ]).pipe(
+    Effect.flatMap(({ models, scopedModels }) => {
+      if (ctx.hasUI && Predicate.isFunction(ctx.ui.custom))
+        return openAdvisorModelPickerAtHostBoundary(ctx, models, scopedModels);
+      const labels = models.map(modelSelector);
+      return selectAtHostCommandBoundary(ctx, "Set up Advisor", [...labels, "Not now"]).pipe(
         Effect.map((selected) => {
           if (!selected) return undefined;
           if (selected === "Not now") return { type: "not-now" } as const;
-          const model = models.find(({ label }) => label === selected)?.model;
+          const model = models.find((entry) => modelSelector(entry) === selected);
           return model
             ? ({ type: "model", provider: model.provider, model: model.id } as const)
             : undefined;
         }),
-      ),
-    ),
+      );
+    }),
   );
 }

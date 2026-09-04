@@ -62,6 +62,18 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
     };
   });
 
+export interface ModelPickerAction {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string | undefined;
+  readonly searchText?: string | undefined;
+  readonly select: () => void;
+}
+
+type ModelPickerPageEntry<M extends ModelPickerModel> =
+  | { readonly _tag: "Model"; readonly model: M }
+  | { readonly _tag: "Action"; readonly action: ModelPickerAction };
+
 export interface ModelPickerPageOptions<
   M extends ModelPickerModel,
 > extends SearchableSelectHostOptions {
@@ -74,6 +86,7 @@ export interface ModelPickerPageOptions<
   readonly initialScope?: ModelPickerScope | undefined;
   readonly current?: string | undefined;
   readonly notice?: string | undefined;
+  readonly actions?: ReadonlyArray<ModelPickerAction> | undefined;
   readonly select: (model: M) => void;
   readonly cancel: () => void;
 }
@@ -85,7 +98,7 @@ export interface ModelPickerPageOptions<
 export class ModelPickerPage<M extends ModelPickerModel> implements Component, Focusable {
   private readonly options: ModelPickerPageOptions<M>;
   private scope: ModelPickerScope;
-  private page: SearchableSelectPage<M>;
+  private page: SearchableSelectPage<ModelPickerPageEntry<M>>;
   private _focused = false;
 
   constructor(options: ModelPickerPageOptions<M>) {
@@ -123,13 +136,35 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
   private buildPage(
     selected: string | undefined,
     search?: { readonly query: string; readonly active: boolean },
-  ): SearchableSelectPage<M> {
+  ): SearchableSelectPage<ModelPickerPageEntry<M>> {
+    const modelChoices: Array<SearchableSelectPageChoice<ModelPickerPageEntry<M>>> =
+      createModelPickerChoices(this.models(), this.options.current).map((choice) => ({
+        ...choice,
+        payload: { _tag: "Model", model: choice.payload },
+      }));
+    const actionChoices: Array<SearchableSelectPageChoice<ModelPickerPageEntry<M>>> = (
+      this.options.actions ?? []
+    ).map((entry) => {
+      const value = `action:${entry.id}`;
+      const item = {
+        value,
+        label: sanitizeTerminalLine(entry.label),
+      };
+      return {
+        value,
+        item: entry.description
+          ? { ...item, description: sanitizeTerminalLine(entry.description) }
+          : item,
+        searchText: sanitizeTerminalLine(entry.searchText ?? entry.label),
+        payload: { _tag: "Action", action: entry },
+      };
+    });
     return new SearchableSelectPage({
       theme: this.options.theme,
       breadcrumb: this.options.breadcrumb ?? "/models",
       title: this.options.title ?? "Choose model",
       subtitle: this.scopeSubtitle(),
-      choices: createModelPickerChoices(this.models(), this.options.current),
+      choices: [...modelChoices, ...actionChoices],
       current: selected ?? this.options.current,
       notice: this.options.notice,
       emptyText: "No matching models",
@@ -139,7 +174,10 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
       requestRender: this.options.requestRender,
       matchesKeybinding: this.options.matchesKeybinding,
       keybindingLabel: this.options.keybindingLabel,
-      select: this.options.select,
+      select: (entry) => {
+        if (entry._tag === "Model") this.options.select(entry.model);
+        else entry.action.select();
+      },
       cancel: this.options.cancel,
     });
   }
