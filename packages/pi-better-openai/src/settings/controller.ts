@@ -13,8 +13,12 @@ import {
   invokeHostCallback,
   redactDiagnosticValue,
 } from "pi-cosmic-core";
+import { listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
+import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
 import {
+  createSettingsGroupSubmenu,
   createSettingsListSurface,
+  settingsItemsFromDescriptors,
   type SettingsSurfaceItem,
 } from "pi-cosmic-ui/manager/settings-surface";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
@@ -30,7 +34,6 @@ import type { ResolvedConfig } from "../config/schema.ts";
 import { modelList, settingsSummary, type FastSnapshot } from "../fast/controller.ts";
 import { FastModeService } from "../fast/service.ts";
 import { OpenAIUsageService } from "../usage/controller.ts";
-import { settingItemsFromDescriptors, SettingsSubmenu, textPanel } from "./ui/panel.ts";
 
 const OPENAI_SETTINGS_COMMAND = "openai-settings";
 
@@ -140,10 +143,18 @@ export function registerSettingsController(
           .custom((tui, theme, keyboard, done) => {
             let outerList: SettingsList | undefined;
             const fastItems = (): SettingItem[] =>
-              settingItemsFromDescriptors(
+              settingsItemsFromDescriptors(
                 [fastEnabledDescriptor, ...FAST_SETTING_DESCRIPTORS],
                 cfg,
               );
+            const textPanel = (title: string, lines: string[], complete: () => void) =>
+              new TextPanelComponent({
+                title,
+                lines,
+                done: complete,
+                frame: listDetailFrame(theme),
+                dismiss: "back-keys",
+              });
             const diagnosticItems = (): SettingItem[] => [
               {
                 id: "diagnostics",
@@ -188,12 +199,13 @@ export function registerSettingsController(
               complete: (selectedValue?: string) => void,
               summary: () => string,
             ) =>
-              new SettingsSubmenu({
+              createSettingsGroupSubmenu({
                 title,
                 items,
                 onChange: writeSetting,
                 done: complete,
                 summary,
+                listTheme: getSettingsListTheme(),
               });
             const settingsGroups = [
               {
@@ -257,7 +269,7 @@ export function registerSettingsController(
                   submenu: (_value, complete) =>
                     submenu(
                       group.submenuTitle,
-                      () => settingItemsFromDescriptors(group.descriptors, cfg),
+                      () => settingsItemsFromDescriptors(group.descriptors, cfg),
                       complete,
                       group.summary,
                     ),

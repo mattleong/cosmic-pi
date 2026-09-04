@@ -1,5 +1,4 @@
-import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
-import { SettingsList } from "@earendil-works/pi-tui";
+import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import type { LoadSettingsOptions } from "../config/document-store";
 import type { CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
@@ -43,17 +42,26 @@ export function persistSettingsChange(
   });
 }
 
-export function createCodePreviewSettingsList({
+export interface CodePreviewSettingsModel {
+  readonly items: SettingItem[];
+  readonly bind: (list: SettingsList) => void;
+  readonly onChange: (id: string, value: string, list: SettingsList) => void;
+  readonly onCancel: () => void;
+}
+
+export function createCodePreviewSettingsModel({
   notify,
   done,
   loadOptions,
-}: SettingsListControllerOptions): SettingsList {
-  let list: SettingsList;
+}: SettingsListControllerOptions): CodePreviewSettingsModel {
+  let activeList: SettingsList | undefined;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
   let revision = 0;
-  const handleSettingChange = (id: string, value: string) => {
+  const handleSettingChange = (list: SettingsList, id: string, value: string) => {
     if (isSettingsGroupItemId(id)) {
-      syncSettingsListValues(list, draftSettings, handleSettingChange);
+      syncSettingsListValues(list, draftSettings, (nextId, nextValue) =>
+        handleSettingChange(list, nextId, nextValue),
+      );
       return;
     }
 
@@ -62,7 +70,9 @@ export function createCodePreviewSettingsList({
     const next = updateSetting(draftSettings, id, value);
     const changeRevision = ++revision;
     draftSettings = next;
-    syncSettingsListValues(list, draftSettings, handleSettingChange);
+    syncSettingsListValues(list, draftSettings, (nextId, nextValue) =>
+      handleSettingChange(list, nextId, nextValue),
+    );
     void persistSettingsChange(next, previousTheme, loadOptions)
       .then(() => {
         if (resetRequested) notify("Code preview settings reset to defaults", "info");
@@ -72,29 +82,31 @@ export function createCodePreviewSettingsList({
         // newer serialized save is still able to publish the complete draft.
         if (revision === changeRevision) {
           draftSettings = cloneCodePreviewSettings(codePreviewSettings);
-          syncSettingsListValues(list, draftSettings, handleSettingChange);
+          syncSettingsListValues(list, draftSettings, (nextId, nextValue) =>
+            handleSettingChange(list, nextId, nextValue),
+          );
         }
         notify(formatSettingsSaveError(error), "warning");
       });
   };
-
-  const items = createSettingsCategoryItems(
-    draftSettings,
-    () => draftSettings,
-    handleSettingChange,
-  );
-  list = new SettingsList(
-    items,
-    items.length + 2,
-    getSettingsListTheme(),
-    handleSettingChange,
-    () => {
+  const routeBoundChange = (id: string, value: string): void => {
+    if (activeList) handleSettingChange(activeList, id, value);
+  };
+  return {
+    items: createSettingsCategoryItems(draftSettings, () => draftSettings, routeBoundChange),
+    bind: (list) => {
+      activeList = list;
+    },
+    onChange: (id, value, list) => {
+      activeList = list;
+      handleSettingChange(list, id, value);
+    },
+    onCancel: () => {
       void flushSettingsSaveQueue()
         .catch(() => undefined)
         .finally(done);
     },
-  );
-  return list;
+  };
 }
 
 function syncSettingsListValues(

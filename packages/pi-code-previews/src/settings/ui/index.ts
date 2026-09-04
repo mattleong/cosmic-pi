@@ -1,9 +1,13 @@
+import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { type SettingItem } from "@earendil-works/pi-tui";
-import type { SettingsSurfaceItem } from "pi-cosmic-ui/manager/settings-surface";
+import {
+  createSettingsGroupSubmenu,
+  type SettingsSurfaceItem,
+} from "pi-cosmic-ui/manager/settings-surface";
 import { getSettingsPath } from "../../config/store";
 import type { CodePreviewSettings } from "../../config/schema";
 import { formatSettingValue } from "../../config/values";
-import { SettingsGroupSubmenu, ThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
+import { ThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
 import {
   ADVANCED_SETTING_IDS,
   APPEARANCE_SETTING_IDS,
@@ -113,13 +117,14 @@ function createSettingsGroupItemFromDefinition(
     description: definition.description,
     currentValue: definition.summarize(current),
     submenu: (_currentValue, done) =>
-      new SettingsGroupSubmenu({
+      createSettingsGroupSubmenu({
         title: definition.label,
         description: definition.description,
         items: () => definition.items(getCurrent(), getCurrent, onSettingChange),
         onChange: onSettingChange,
         done,
         summary: () => definition.summarize(getCurrent()),
+        listTheme: getSettingsListTheme(),
       }),
   };
 }

@@ -9,7 +9,6 @@ import {
   type SettingItem,
 } from "@earendil-works/pi-tui";
 import { bundledThemes } from "shiki";
-import { withoutGroupRowChanges } from "pi-cosmic-ui/manager/settings-surface";
 import { ON_OFF_VALUES, formatOnOff } from "../../config/values";
 import {
   ALL_CODE_PREVIEW_TOOLS,
@@ -24,55 +23,6 @@ import {
   getCodePreviewToolStatuses,
   type CodePreviewToolStatus,
 } from "../../tools/status";
-
-type SettingChangeHandler = (id: string, value: string) => void;
-
-interface SettingsGroupSubmenuOptions {
-  title: string;
-  description: string;
-  items: () => SettingItem[];
-  onChange: SettingChangeHandler;
-  done: (selectedValue?: string) => void;
-  summary?: () => string;
-  maxVisible?: number;
-}
-
-export class SettingsGroupSubmenu extends Container {
-  private readonly settingsList: SettingsList;
-  private readonly options: SettingsGroupSubmenuOptions;
-
-  constructor(options: SettingsGroupSubmenuOptions) {
-    super();
-    this.options = options;
-
-    const items = options.items();
-    const notifyChange = withoutGroupRowChanges(items, options.onChange);
-    this.settingsList = new SettingsList(
-      items,
-      options.maxVisible ?? Math.min(items.length + 2, 12),
-      getSettingsListTheme(),
-      (id, value) => {
-        notifyChange(id, value);
-        this.syncValues();
-      },
-      () => options.done(options.summary?.()),
-    );
-
-    this.addChild(new Text(options.title, 0, 0));
-    this.addChild(new Text(options.description, 0, 0));
-    this.addChild(new Spacer(1));
-    this.addChild(this.settingsList);
-  }
-
-  handleInput(data: string): void {
-    this.settingsList.handleInput(data);
-  }
-
-  private syncValues(): void {
-    for (const item of this.options.items())
-      this.settingsList.updateValue(item.id, item.currentValue);
-  }
-}
 
 export class ToolPreviewSettingsSubmenu extends Container {
   private readonly selectedTools: Set<CodePreviewToolName>;

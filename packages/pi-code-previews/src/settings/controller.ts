@@ -1,9 +1,10 @@
 import * as Predicate from "effect/Predicate";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getSettingsListTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { isProjectTrusted } from "pi-cosmic-core";
-import { settingsHintRenderer, VimSettingsAdapter } from "pi-cosmic-ui/manager/settings-adapter";
-import { createCodePreviewSettingsList } from "./panel";
+import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
+import { createCodePreviewSettingsModel } from "./panel";
 
 export function registerSettingsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("code-preview-settings", {
@@ -15,24 +16,28 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
         return Promise.resolve();
       }
       return ctx.ui.custom((tui, theme, keybindings, done) => {
-        const list = createCodePreviewSettingsList({
+        const model = createCodePreviewSettingsModel({
           notify: (message, level) => ctx.ui.notify(message, level),
           done: () => done(undefined),
           loadOptions: { projectCwd: ctx.cwd, projectTrusted: isProjectTrusted(ctx) },
         });
-        return new VimSettingsAdapter(list, {
+        const created = createSettingsListSurface({
+          header: new Text(theme.fg("accent", theme.bold("Code Preview Settings")), 1, 1),
+          items: model.items,
+          height: model.items.length + 2,
+          listTheme: getSettingsListTheme(),
+          onChange: model.onChange,
+          onCancel: model.onCancel,
           matchesKeybinding: Predicate.isFunction(keybindings?.matches)
             ? (data, id) => keybindings.matches(data, id)
             : undefined,
           requestRender: Predicate.isFunction(tui?.requestRender)
             ? () => tui.requestRender()
             : undefined,
-          // The shared renderer follows the adapter's focus/search mode instead of assuming
-          // a never-searching surface.
-          renderHint: Predicate.isFunction(theme?.fg)
-            ? settingsHintRenderer({ dim: (text) => theme.fg("dim", text) })
-            : undefined,
+          dim: Predicate.isFunction(theme?.fg) ? (text) => theme.fg("dim", text) : (text) => text,
         });
+        model.bind(created.list);
+        return created.surface;
       });
     },
   });

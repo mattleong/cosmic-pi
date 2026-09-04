@@ -1,7 +1,8 @@
 import * as Predicate from "effect/Predicate";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
+import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
 import { codePreviewSettings } from "../config/state";
 import { formatOnOff } from "../config/values";
 import { getSettingsPath } from "../config/store";
@@ -57,57 +58,15 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
       }
       return ctx.ui.custom(
         (_tui, theme, _kb, done) =>
-          new HealthPanel(
-            lines.map((line, index) => (index === 0 ? theme.bold(line) : line)).join("\n"),
-            done,
-            (value) => theme.fg("dim", value),
-          ),
+          new TextPanelComponent({
+            title: theme.bold(lines[0] ?? "Code preview health"),
+            lines: lines.slice(1),
+            done: () => done(undefined),
+            frame: listDetailFrame(theme),
+            dismiss: "any-key",
+          }),
         { overlay: true },
       );
     },
   });
-}
-
-export class HealthPanel implements Component {
-  private readonly text: string;
-  private readonly done: (result?: undefined) => void;
-  private readonly border: (value: string) => string;
-
-  constructor(text: string, done: (result?: undefined) => void, border: (value: string) => string) {
-    this.text = `${text}\n\nPress any key to close`;
-    this.done = done;
-    this.border = border;
-  }
-
-  render(width: number): string[] {
-    const available = Math.max(0, Math.floor(width));
-    if (available === 0) return [];
-    const lines = this.text.split("\n");
-    if (available < 4)
-      return lines.map((line) => truncateToWidth(line, available, "").padEnd(available));
-    const frameWidth = available;
-    const innerWidth = frameWidth - 4;
-    const content = lines.map((line) => truncateToWidth(line, innerWidth, "…"));
-    const empty = this.frameLine("", innerWidth);
-    return [
-      this.border(`╭${"─".repeat(frameWidth - 2)}╮`),
-      empty,
-      ...content.map((line) => this.frameLine(line, innerWidth)),
-      empty,
-      this.border(`╰${"─".repeat(frameWidth - 2)}╯`),
-    ];
-  }
-
-  invalidate(): void {
-    // No cached rendering state.
-  }
-
-  handleInput(): void {
-    this.done();
-  }
-
-  private frameLine(line: string, innerWidth: number): string {
-    const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
-    return `${this.border("│")} ${line}${padding} ${this.border("│")}`;
-  }
 }

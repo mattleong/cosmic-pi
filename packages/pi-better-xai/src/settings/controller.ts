@@ -5,7 +5,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Text, type SettingItem } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import {
   completeSettingsArguments,
@@ -15,7 +15,11 @@ import {
   type HostNotificationLevel,
   type CapturedHostSignal,
 } from "pi-cosmic-core";
-import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
+import {
+  createSettingsListSurface,
+  settingsItemsFromDescriptors,
+  settingsRowGenerations,
+} from "pi-cosmic-ui/manager/settings-surface";
 import { hasSettingsSurface, openSettingsSurfaceAtHostBoundary } from "../boundary/host-ui.ts";
 import { SETTINGS_OPTION_DESCRIPTORS } from "../config/options.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
@@ -98,14 +102,8 @@ export function registerSettingsController(
     } catch {
       return completeHostFeedback(ctx, "Better xAI settings are unavailable.", "warning");
     }
-    const items: SettingItem[] = SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => ({
-      id: descriptor.id,
-      label: descriptor.label,
-      currentValue: descriptor.currentValue(cfg),
-      values: [...(descriptor.values ?? [])],
-      description: descriptor.description,
-    }));
-    const pickerGenerations = new Map<string, number>();
+    const items = settingsItemsFromDescriptors(SETTINGS_OPTION_DESCRIPTORS, cfg);
+    const pickerGenerations = settingsRowGenerations();
     return openSettingsSurfaceAtHostBoundary(
       ctx,
       (tui, theme, keybindings, done) =>
@@ -118,10 +116,9 @@ export function registerSettingsController(
           // through the same display update: success shows the committed value and failure
           // restores the persisted projection value.
           onChange: (id, value, list) => {
-            const generation = (pickerGenerations.get(id) ?? 0) + 1;
-            pickerGenerations.set(id, generation);
+            const generation = pickerGenerations.begin(id);
             const show = (currentValue: string) => {
-              if (pickerGenerations.get(id) !== generation) return;
+              if (!pickerGenerations.isCurrent(id, generation)) return;
               invokeHostCallback(() => {
                 list.updateValue(id, currentValue);
                 tui.requestRender();
