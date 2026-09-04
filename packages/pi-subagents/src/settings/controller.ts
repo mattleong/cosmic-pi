@@ -1,4 +1,5 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
+import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -267,11 +268,14 @@ function openProfileEditor(
   return actions.inspectProfiles(projectTrusted).then(
     (initialInspection) => {
       let inspection = initialInspection;
-      const modelCatalog = new ProfileModelCatalog(ctx.modelRegistry);
+      const modelCatalog = new ProfileModelCatalog(
+        ctx.modelRegistry,
+        (ctx.scopedModels ?? []).map(({ model }) => model),
+      );
       let requestWorkspaceRender: (() => void) | undefined;
       const modelRefreshController = new AbortController();
       let refreshWarningSent = false;
-      void modelCatalog.refresh(modelRefreshController.signal).then((result) => {
+      void Effect.runPromise(modelCatalog.refresh(modelRefreshController.signal)).then((result) => {
         if (result === "updated" && !modelRefreshController.signal.aborted)
           requestWorkspaceRender?.();
         if (result === "failed" && !modelRefreshController.signal.aborted && !refreshWarningSent) {

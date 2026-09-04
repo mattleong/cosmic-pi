@@ -1,5 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
+import {
+  createModelPickerChoices,
+  makeModelPickerPage,
+  type ModelPickerModel,
+} from "pi-cosmic-ui/manager/model-picker";
+import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
@@ -11,10 +17,6 @@ import {
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
 import { profileRouteOptionLabel } from "./profile-workspace-model.ts";
-import {
-  SearchableSelectPage,
-  type SearchableSelectHostOptions,
-} from "pi-cosmic-ui/manager/searchable-select";
 
 export type ProfileModelChoice =
   | { readonly kind: "model"; readonly selector: string }
@@ -94,20 +96,24 @@ export function createProfileModelChoices(input: {
     const canonical = `${model.provider}/${model.id}`;
     if (!isSafeNativeModelSelector(canonical)) continue;
     const efforts = model.supportedEfforts;
+    const fastModeAvailable = supportsSubagentFastMode("pi", canonical);
+    const projected = createModelPickerChoices(
+      [
+        {
+          ...model,
+          description: sanitizeTerminalLine(
+            `${model.name && model.name !== model.id ? `${boundedMiddle(sanitizeTerminalLine(model.name), 48)} · ` : ""}${model.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts.join(", ") || "none"}${fastModeAvailable ? " · fast mode available" : ""}`,
+          ),
+        },
+      ],
+      input.currentSelector,
+    )[0]!;
     result.push({
       choice: { kind: "model", selector: canonical },
-      item: compactSelectItem(
-        canonical,
-        sanitizeTerminalLine(
-          `${boundedMiddle(sanitizeTerminalLine(canonical), 88)}${input.currentSelector === canonical ? " (current)" : ""}`,
-        ),
-        sanitizeTerminalLine(
-          `${model.name && model.name !== model.id ? `${boundedMiddle(sanitizeTerminalLine(model.name), 48)} · ` : ""}${model.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts.join(", ") || "none"}${supportsSubagentFastMode("pi", canonical) ? " · fast mode available" : ""}`,
-        ),
-      ),
-      searchText: sanitizeTerminalLine(`${canonical} ${model.name ?? ""}`),
+      item: projected.item,
+      searchText: projected.searchText,
       supportedEfforts: efforts,
-      fastModeAvailable: supportsSubagentFastMode("pi", canonical),
+      fastModeAvailable,
     });
   }
   return result;
@@ -147,6 +153,7 @@ export interface ProfileModelPickerContext {
 export interface ProfileModelPickerPageOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
   readonly choices: ReadonlyArray<ProfileModelPickerChoice>;
+  readonly scopedChoices?: ReadonlyArray<ProfileModelPickerChoice> | undefined;
   readonly initialSelection?: string | undefined;
   readonly context: ProfileModelPickerContext;
   readonly targetLabel?: string | undefined;
@@ -158,33 +165,42 @@ export interface ProfileModelPickerPageOptions extends SearchableSelectHostOptio
 const runtimeLabel = (runtime: SubagentRuntime): string =>
   runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude" : "Codex";
 
+interface ProfilePickerModel extends ModelPickerModel {
+  readonly choice: ProfileModelChoice;
+}
+
+const projectPickerChoices = (
+  choices: ReadonlyArray<ProfileModelPickerChoice>,
+): ProfilePickerModel[] =>
+  choices.map((choice) => ({
+    provider: "profile",
+    id: choiceValue(choice.choice),
+    selector: choiceValue(choice.choice),
+    label: choice.item.label,
+    description: choice.item.description,
+    searchText: choice.searchText,
+    choice: choice.choice,
+  }));
+
 /** Full-page searchable model dropdown used inside the profile workspace. */
 export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOptions) => {
   const context = options.context;
   const host = context.host === "local" ? "Local" : "Herdr";
   const optionLabel = profileRouteOptionLabel(context.candidateIndex);
-  const baseResult = {
+  return makeModelPickerPage({
     theme: options.theme,
     breadcrumb: `/subagents profiles › ${context.profile} › ${optionLabel} › Model`,
     title: `Choose model · ${context.profile} · ${optionLabel}`,
     subtitle: `${options.targetLabel ? `${options.targetLabel} · ` : ""}${host} ${runtimeLabel(context.runtime)}`,
-    choices: options.choices.map((choice) => ({
-      value: choiceValue(choice.choice),
-      item: choice.item,
-      searchText: choice.searchText,
-      payload: choice.choice,
-    })),
+    scopedModels: options.scopedChoices ? projectPickerChoices(options.scopedChoices) : [],
+    allModels: projectPickerChoices(options.choices),
     current: options.initialSelection,
-  };
-  const withNotice = options.notice ? { ...baseResult, notice: options.notice } : baseResult;
-  return new SearchableSelectPage<ProfileModelChoice>({
-    ...withNotice,
-    emptyText: "No matching models",
+    notice: options.notice,
     getHeight: options.getHeight,
     requestRender: options.requestRender,
     matchesKeybinding: options.matchesKeybinding,
     keybindingLabel: options.keybindingLabel,
-    select: options.select,
+    select: (model) => options.select(model.choice),
     cancel: options.cancel,
   });
 };

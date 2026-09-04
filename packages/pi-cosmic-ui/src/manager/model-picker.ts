@@ -16,15 +16,22 @@ import {
 export interface ModelPickerModel {
   readonly provider: string;
   readonly id: string;
+  /** Canonical selection identity override for native runtimes and pseudo-model rows. */
+  readonly selector?: string | undefined;
   readonly name?: string | undefined;
   readonly reasoning?: boolean | undefined;
   readonly supportedEfforts?: ReadonlyArray<string> | undefined;
+  /** Optional complete presentation overrides; callers retain domain-specific model metadata. */
+  readonly label?: string | undefined;
+  readonly description?: string | undefined;
+  readonly searchText?: string | undefined;
 }
 
 export type ModelPickerScope = "scoped" | "all";
 
-export const modelSelector = (model: Pick<ModelPickerModel, "provider" | "id">): string =>
-  `${model.provider}/${model.id}`;
+export const modelSelector = (
+  model: Pick<ModelPickerModel, "provider" | "id" | "selector">,
+): string => model.selector ?? `${model.provider}/${model.id}`;
 
 const boundedMiddle = (value: string, maximum: number): string => {
   const characters = [...value];
@@ -35,6 +42,12 @@ const boundedMiddle = (value: string, maximum: number): string => {
 
 const modelItem = <M extends ModelPickerModel>(model: M, current?: string): SelectItem => {
   const selector = sanitizeTerminalLine(modelSelector(model));
+  if (model.label) {
+    const base = { value: selector, label: sanitizeTerminalLine(model.label) };
+    return model.description
+      ? { ...base, description: sanitizeTerminalLine(model.description) }
+      : base;
+  }
   const efforts = model.supportedEfforts?.map(sanitizeTerminalLine).join(", ") || "default";
   const name =
     model.name && model.name !== model.id
@@ -57,7 +70,7 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
     return {
       value: selector,
       item: modelItem(model, current),
-      searchText: sanitizeTerminalLine(`${selector} ${model.name ?? ""}`),
+      searchText: sanitizeTerminalLine(model.searchText ?? `${selector} ${model.name ?? ""}`),
       payload: model,
     };
   });

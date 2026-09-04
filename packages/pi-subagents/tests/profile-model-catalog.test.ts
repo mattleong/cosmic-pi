@@ -69,7 +69,7 @@ describe("profile model catalog", () => {
       expect(Object.isFrozen(initial)).toBe(true);
       expect(Object.isFrozen(initial.piModels)).toBe(true);
 
-      const updating = catalog.refresh();
+      const updating = Effect.runPromise(catalog.refresh());
       models = [piModel("openai", "gpt-new")];
       expect(catalog.capture()).toBe(initial);
       refresh.resolve();
@@ -83,7 +83,7 @@ describe("profile model catalog", () => {
 
       registryError = "registry refresh failed";
       refresh = deferred();
-      const failing = catalog.refresh();
+      const failing = Effect.runPromise(catalog.refresh());
       models = [piModel("openai", "gpt-failed")];
       refresh.resolve();
       expect(yield* Effect.promise(() => failing)).toBe("failed");
@@ -92,7 +92,7 @@ describe("profile model catalog", () => {
       registryError = undefined;
       refresh = deferred();
       const controller = new AbortController();
-      const aborting = catalog.refresh(controller.signal);
+      const aborting = Effect.runPromise(catalog.refresh(controller.signal));
       models = [piModel("openai", "gpt-aborted")];
       controller.abort();
       refresh.resolve();
@@ -113,8 +113,36 @@ describe("profile model catalog", () => {
       expect(preferredHerdrPiSelector(catalog.capture(), "native/first")).toBe("native/first");
 
       models = [piModel("native", "second"), piModel("extension2", "eligible")];
-      expect(yield* Effect.promise(() => catalog.refresh())).toBe("updated");
+      expect(yield* catalog.refresh()).toBe("updated");
       expect(preferredHerdrPiSelector(catalog.capture(), "native/first")).toBe("native/second");
+    }),
+  );
+
+  it.effect("projects scoped Pi models separately from all authenticated models", () =>
+    Effect.gen(function* () {
+      const scoped = piModel("openai", "scoped");
+      const registry: ProfileModelRegistry = {
+        getAvailable: () => [scoped, piModel("anthropic", "all-only")],
+        getError: () => undefined,
+        refresh: () => Promise.resolve({ aborted: false }),
+      };
+      const catalog = new ProfileModelCatalog(registry, [scoped]);
+      const picker = yield* Effect.promise(() =>
+        loadCandidateModelPicker({
+          profile: "reviewer",
+          candidateIndex: 0,
+          candidate: candidate({ model: "openai/scoped" }),
+          listNativeModels: () => Promise.resolve([]),
+          piCatalog: catalog.capture(),
+        }),
+      );
+      expect(picker.scopedChoices?.some((entry) => entry.item.value === "openai/scoped")).toBe(
+        true,
+      );
+      expect(picker.scopedChoices?.some((entry) => entry.item.value === "anthropic/all-only")).toBe(
+        false,
+      );
+      expect(picker.choices.some((entry) => entry.item.value === "anthropic/all-only")).toBe(true);
     }),
   );
 

@@ -453,6 +453,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         const pickerBase = {
           theme: this.options.theme,
           choices: picker.choices,
+          scopedChoices: picker.scopedChoices,
           initialSelection: preferAdvertisedDefault
             ? (picker.defaultSelector ?? picker.current)
             : picker.current,
