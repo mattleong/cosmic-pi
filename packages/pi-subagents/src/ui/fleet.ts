@@ -11,10 +11,11 @@ import {
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
-import type {
-  FullScreenAction,
-  FullScreenMode,
-  FullScreenSelectionKeybindingId,
+import {
+  decodeFullScreenPrintable,
+  type FullScreenAction,
+  type FullScreenMode,
+  type FullScreenSelectionKeybindingId,
 } from "pi-cosmic-ui/manager/keymap";
 import {
   confirmedReservedShortcut,
@@ -120,14 +121,13 @@ const shortcutUnavailableReason = (key: string): string =>
           : "This run is not currently stoppable.";
 
 /** Fixed list-pane tree keys resolve before the configurable navigation keymap. */
-const fixedTreeDirection = (data: string, pane: ListDetailPane): "back" | "forward" | undefined =>
-  pane === "list"
-    ? matchesKey(data, "h") || matchesKey(data, Key.left)
-      ? "back"
-      : matchesKey(data, "l") || matchesKey(data, Key.right)
-        ? "forward"
-        : undefined
-    : undefined;
+const fixedTreeDirection = (data: string, pane: ListDetailPane): "back" | "forward" | undefined => {
+  if (pane !== "list") return undefined;
+  const printable = decodeFullScreenPrintable(data);
+  if (printable === "h" || matchesKey(data, Key.left)) return "back";
+  if (printable === "l" || matchesKey(data, Key.right)) return "forward";
+  return undefined;
+};
 
 interface FleetActionLabel {
   readonly full: string;
@@ -418,13 +418,16 @@ export class SubagentFleetComponent implements Component, Focusable {
     const direction = fixedTreeDirection(data, this.shell.state.pane);
     if (!direction) return false;
     if (selectedRow?.hasChildren) {
+      const collapsed = this.collapsedRunIds.has(selectedRow.run.id);
       if (direction === "back") this.collapsedRunIds.add(selectedRow.run.id);
-      else this.collapsedRunIds.delete(selectedRow.run.id);
+      else if (collapsed) this.collapsedRunIds.delete(selectedRow.run.id);
+      else return false;
       this.shell.resetDetailScroll();
       this.reconcile(this.tree(projection).rows);
+      this.options.requestRender();
+      return true;
     }
-    this.options.requestRender();
-    return true;
+    return false;
   }
 
   private handleShortcut(key: string, selected: SubagentRunView | undefined): void {

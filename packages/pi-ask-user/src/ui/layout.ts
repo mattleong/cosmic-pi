@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 
 export function appendWrapped(lines: string[], prefix: string, value: string, width: number): void {
   const safeWidth = Math.max(1, width);
@@ -15,10 +16,7 @@ export function appendWrapped(lines: string[], prefix: string, value: string, wi
   }
 }
 
-export function padLine(value: string, width: number): string {
-  const truncated = truncateToWidth(value, Math.max(0, width), "");
-  return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
-}
+export const padLine = padListDetailRow;
 
 export const borderLine = (width: number, theme: Theme): string =>
   theme.fg("accent", "─".repeat(Math.max(1, width)));

@@ -147,6 +147,15 @@ describe("/subagents tree navigation", () => {
     },
   );
 
+  it("uses l to inspect a leaf and h to return through shared pane navigation", () => {
+    const { component, close } = makeFleet([run("alpha")]);
+    component.render(120);
+    component.handleInput("l");
+    component.handleInput("h");
+    component.handleInput(ESC);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("uses h/l as shared pane navigation after entering detail", () => {
     const { component, close } = makeFleet([run("alpha")]);
     component.render(120);
