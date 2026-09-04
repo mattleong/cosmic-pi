@@ -15,7 +15,7 @@ import {
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
-import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
+import { clipWithMarker } from "../run/state.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import {
   decodeCompactToolDetails,
@@ -25,7 +25,11 @@ import {
   type SubagentStartAwaitCardDetails,
 } from "./details-schema.ts";
 import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
-import { renderComponent, renderExpansionAffordance } from "./render-primitives.ts";
+import {
+  composeToolComponent as renderComponent,
+  renderExpansionAffordance,
+  renderToolHeader,
+} from "pi-cosmic-ui/tool";
 import {
   renderCompactResultComponent,
   renderProfileRoutesComponent,
@@ -505,16 +509,8 @@ const recoveredOmittedFallback = (
   return container;
 };
 
-export const renderSubagentCall = (name: string, target: string, theme: Theme): Component => {
-  const safeTarget = sanitizeTerminalLine(target);
-  const clippedTarget =
-    safeTarget.length <= 160 ? safeTarget : `${safeTextPrefix(safeTarget, 146)}… [truncated]`;
-  return new Text(
-    `${theme.fg("toolTitle", theme.bold(name))}${clippedTarget ? ` ${theme.fg("dim", clippedTarget)}` : ""}`,
-    0,
-    0,
-  );
-};
+export const renderSubagentCall = (name: string, target: string, theme: Theme): Component =>
+  new Text(renderToolHeader({ title: name, subtitle: target }, theme), 0, 0);
 
 const awaitTargets = (details: {
   readonly cards: ReadonlyArray<SubagentRunCard>;

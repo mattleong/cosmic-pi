@@ -27,7 +27,7 @@ Only runtime source plus its README, legal, and provenance documents ship.
   output codecs instead of declaring a second protocol shape.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
   legacy details, ignores malformed rows, and retains valid explicit totals. `tool-renderer.ts`
-  renders calls and results, while `result-output.ts` projects small structured results without
+  renders calls and results with Cosmic UI's semantic tool header, activity, and disclosure vocabulary, while `result-output.ts` projects small structured results without
   changing model-visible text.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
   Windows PowerShell, the explicit Background Tasks protocol client, the guarded progress

@@ -13,7 +13,10 @@ import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import { formatRunRoute, shortRunId } from "../ui/run-presentation.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
-import { renderComponent, renderExpansionAffordance } from "./render-primitives.ts";
+import {
+  composeToolComponent as renderComponent,
+  renderExpansionAffordance,
+} from "pi-cosmic-ui/tool";
 import { failureRecovery } from "./render-management.ts";
 import type { SubagentStartFailure } from "./model.ts";
 import type { SubagentStartSpec } from "./schema.ts";

@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { escapeControlChars } from "../../../shared/terminal-text";
+import { toolStatusLine } from "pi-cosmic-ui/tool";
 import { renderHiddenPreviewExpandHint } from "../../../preview/bordered-tool-call";
 import type { RendererState } from "./types";
 
@@ -11,9 +12,14 @@ export function renderResultPrelude(options: {
   isError?: boolean;
   errorText?: string;
 }): Component | undefined {
-  if (options.isPartial) return new Text(options.theme.fg("warning", options.loadingLabel), 0, 0);
+  if (options.isPartial)
+    return new Text(toolStatusLine(options.theme, "running", options.loadingLabel), 0, 0);
   if (options.isError && options.errorText !== undefined)
-    return new Text(options.theme.fg("error", escapeControlChars(options.errorText)), 0, 0);
+    return new Text(
+      toolStatusLine(options.theme, "error", escapeControlChars(options.errorText)),
+      0,
+      0,
+    );
   return undefined;
 }
 

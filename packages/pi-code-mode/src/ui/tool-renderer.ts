@@ -10,7 +10,12 @@ import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as codePreviews from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
-import { brailleSpinnerFrame, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
+import {
+  managerActivityColor,
+  managerActivityGlyph,
+  type ManagerActivityKind,
+} from "pi-cosmic-ui/manager";
+import { expandKeyHint, renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
   decodeOption,
@@ -56,7 +61,7 @@ const textContentOf = (result: AgentToolResult<unknown>): string => {
 
 const intentHeadline = <Args>(args: Args, theme: Theme): string => {
   const intent = describeCodeModeIntent(decodeOption(CodeModeArgumentsInputSchema, args)?.intent);
-  return `${theme.fg("toolTitle", theme.bold("Code Mode"))} ${theme.fg("dim", `· ${intent}`)}`;
+  return renderToolHeader({ title: "Code Mode", subtitle: `· ${intent}` }, theme);
 };
 
 const sourceOf = <Args>(args: Args): string | undefined => {
@@ -99,12 +104,14 @@ export const renderCodeModeToolCall = <Args>(
   return container;
 };
 
-const ACTIVITY_SYMBOLS = {
-  queued: { symbol: startingSpinnerFrame(0), color: "dim" },
-  completed: { symbol: managerStateGlyph("done"), color: "success" },
-  error: { symbol: managerStateGlyph("failed"), color: "error" },
-  cancelled: { symbol: managerStateGlyph("stopped"), color: "muted" },
-} as const;
+const ACTIVITY_KINDS = {
+  queued: "pending",
+  completed: "done",
+  error: "failed",
+  cancelled: "stopped",
+} as const satisfies Readonly<
+  Record<Exclude<CodeModeCallEntry["status"], "running">, ManagerActivityKind>
+>;
 
 const formatCallDuration = (durationMs: number): string =>
   durationMs < 1_000
@@ -126,10 +133,10 @@ const nestedToolIcon = (tool: string): string | undefined => {
 };
 
 const activityRow = (entry: CodeModeCallEntry, theme: Theme, animationFrame: number): string => {
-  const { symbol, color } =
-    entry.status === "running"
-      ? { symbol: brailleSpinnerFrame(animationFrame), color: "warning" as const }
-      : ACTIVITY_SYMBOLS[entry.status];
+  const kind: ManagerActivityKind =
+    entry.status === "running" ? "running" : ACTIVITY_KINDS[entry.status];
+  const symbol = managerActivityGlyph(kind, animationFrame);
+  const color = managerActivityColor(kind);
   const icon = nestedToolIcon(entry.tool);
   const toolPrefix = icon === undefined ? "" : `${theme.fg("toolTitle", icon)} `;
   const label = entry.activity ?? describeNestedActivity(entry.tool, undefined);
@@ -212,9 +219,12 @@ const expandHintLine = (
   theme: Theme,
   expandKeys: ReadonlyArray<string>,
 ): string => {
-  const keys = expandKeys.join("/");
-  const label = keys.length === 0 ? "expand" : `${keys} expand`;
-  return theme.fg("dim", `▸ ${isError ? "error" : "output"} · ${label}`);
+  return renderExpansionAffordance(
+    isError ? "error" : "output",
+    false,
+    theme,
+    expandKeyHint(expandKeys, "expand"),
+  );
 };
 
 const renderCodeModeToolResultUnsafe = (

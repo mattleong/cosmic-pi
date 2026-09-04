@@ -11,7 +11,7 @@
 - `src/boundary/host-external-editor.ts` owns Pi settings, scoped temporary files, and the inherited-terminal child process. Each call runs one named `Effect.runPromiseExit` boundary that locally provides a fresh file/process Layer, closes its resources before the exit is observed, and sanitizes edited text before returning it to Pi's editor.
 - `src/boundary/host-ui.ts` is the synchronous active-dialog and status bridge. It stores one resume callback and no raw terminal listener.
 - `src/questionnaire/` owns the TypeBox request schema and cross-module request types, immutable answer and state contracts, semantic validation, the pure reducer, typed errors, and the serialized Effect service. Choice and question schema values stay private to `schema.ts`.
-- `src/tools/ask-user.ts` owns LLM response formatting and `ask_user` registration through the `pi-code-previews` cooperative shell. The tool receives a domain callback instead of an Effect service or runner.
+- `src/tools/ask-user.ts` owns LLM response formatting and `ask_user` registration through the `pi-code-previews` cooperative shell, using Cosmic UI's semantic tool header and outcome rows. The tool receives a domain callback instead of an Effect service or runner.
 - `src/ui/` owns input routing, synchronous dialog rendering, markdown previews, and pure layout helpers. `layout.ts` contains only width and column helpers. The dialog keeps the `?` help toggle and navigation-only Vim aliases from `pi-cosmic-ui/manager/keymap`; embedded editors retain ordinary text input, and `q` never cancels the dialog.
 - `tests/` protects lifecycle admission and cleanup, questionnaire semantics, host boundaries, defensive rendering, bridge ownership, and public dialog and layout behavior.
 

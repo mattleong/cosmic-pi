@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { withCodePreviewShell } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
+import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import {
   AskUserParameters,
@@ -109,8 +110,12 @@ export function registerAskUserTool(
     renderCall(args, theme) {
       const questions = decodeCallTitles(args)?.questions ?? [];
       const titles = questions.map((question) => stripTerminalControls(question.title)).join(", ");
+      const count = `${questions.length} question${questions.length === 1 ? "" : "s"}`;
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("ask_user"))} ${theme.fg("muted", `${questions.length} question${questions.length === 1 ? "" : "s"}`)}${titles ? ` ${theme.fg("dim", `(${titles})`)}` : ""}`,
+        renderToolHeader(
+          { title: "ask_user", subtitle: `${count}${titles ? ` (${titles})` : ""}` },
+          theme,
+        ),
         0,
         0,
       );
@@ -118,11 +123,15 @@ export function registerAskUserTool(
     renderResult(result, _options, theme) {
       const details = decodeOutcomeDetails(result.details);
       if (details?.outcome === "cancelled")
-        return new Text(theme.fg("warning", "Questionnaire cancelled"), 0, 0);
+        return new Text(toolStatusLine(theme, "warning", "Questionnaire cancelled"), 0, 0);
       if (details?.outcome === "submitted") {
         const lines = details.answers.map((answer) => {
           const value = answer.kind === "choices" ? answer.labels.join(", ") : answer.text;
-          return `${theme.fg("success", "✓")} ${theme.fg("accent", stripTerminalControls(answer.key))}: ${stripTerminalControls(value)}`;
+          return toolStatusLine(
+            theme,
+            "success",
+            `${stripTerminalControls(answer.key)}: ${stripTerminalControls(value)}`,
+          );
         });
         return new Text(lines.join("\n"), 0, 0);
       }

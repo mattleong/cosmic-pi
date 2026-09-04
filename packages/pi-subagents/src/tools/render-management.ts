@@ -8,7 +8,10 @@ import {
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { formatRunRoute } from "../ui/run-presentation.ts";
-import { renderComponent, renderExpansionAffordance } from "./render-primitives.ts";
+import {
+  composeToolComponent as renderComponent,
+  renderExpansionAffordance,
+} from "pi-cosmic-ui/tool";
 import type {
   CompactSubagentToolDetails,
   SubagentProfileCandidateCard,

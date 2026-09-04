@@ -8,7 +8,7 @@ import { aggregateUsage } from "../ui/metrics.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
-import { renderComponent } from "./render-primitives.ts";
+import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
 import { renderResponsiveRunRows, runTiming } from "./render-run-rows.ts";
 
 export interface AwaitProgressRun {

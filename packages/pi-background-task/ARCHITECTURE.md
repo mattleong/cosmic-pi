@@ -13,7 +13,7 @@
 - `src/boundary/host-ui.ts` — exception-safe Pi status projection bridge for the footer and `/tasks`.
 - `src/task/` — `bounds.ts` is the pure owner of command, resolved-cwd, name, task-id, and session-id character limits used by both schemas and service admission. The directory also owns the task model with its pure projection helpers (`sortTasksByActivity`, `footerStatus`, and `countTaskStates` as the single owner of the failed/timed-out counting policy), typed errors, bounded logs with shared UTF-8 byte accounting, and the scoped service. Bounded `wait` barriers reuse each task's completion and output wake signals, match literal text across retained chunks, and report timeout as data. Each `logs` or `wait` call retains the record it admitted and re-inspects that record under the registry semaphore, so later retention or clear operations affect only new lookups. One latch-driven worker coalesces output publications onto the configured leading/trailing interval; `totalLogBufferBytes` splits roughly in half between retained logs and per-process ingress buffers divided across `maxRunning`.
 - `src/tools/` owns the shared action executor and schema plus `background_task` registration and
-  pure collapsed or expanded log rendering. Command details are an action-discriminated union,
+  pure collapsed or expanded log rendering over the shared Cosmic UI tool header and expansion hint. Command details are an action-discriminated union,
   and the public `pi-code-previews` cooperative shell decorates the registered tool.
 - `src/code-mode/` and the public `src/protocol.ts` re-export own the versioned plain-data query
   contract for `tools.session.backgroundTask`, including the exact v1 Effect input/output codecs

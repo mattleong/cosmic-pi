@@ -8,6 +8,7 @@ import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
 } from "pi-cosmic-core";
+import { expandKeyHint, renderToolHeader } from "pi-cosmic-ui/tool";
 import { BackgroundTaskService } from "../task/service.ts";
 import { executeBackgroundTaskCommand, type BackgroundTaskToolDetails } from "./command.ts";
 import { BackgroundTaskParameters } from "./schema.ts";
@@ -23,6 +24,7 @@ export function registerBackgroundTaskTool(
   pi: ExtensionAPI,
   runner: BackgroundTaskToolRunner,
 ): void {
+  const expandKeys = getKeybindings().getKeys("app.tools.expand");
   const tool = defineTool({
     name: "background_task",
     label: "Background Task",
@@ -46,7 +48,10 @@ export function registerBackgroundTaskTool(
       const action = args.action ?? "...";
       const target = sanitizeTerminalLine(args.id ?? args.name ?? args.command ?? "");
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("background_task"))} ${theme.fg("muted", action)}${target ? ` ${theme.fg("dim", target)}` : ""}`,
+        renderToolHeader(
+          { title: "background_task", subtitle: `${action}${target ? ` ${target}` : ""}` },
+          theme,
+        ),
         0,
         0,
       );
@@ -75,9 +80,7 @@ export function registerBackgroundTaskTool(
             `      --- ${hidden} lines hidden ---`,
             ...lines.slice(-4),
           ].join("\n");
-          const expandKeys = getKeybindings().getKeys("app.tools.expand").join("/");
-          const expandHint = expandKeys ? `${expandKeys} expand` : "expand";
-          collapsedLogFooter = `Showing 12 of ${lines.length} log lines · ${expandHint}`;
+          collapsedLogFooter = `Showing 12 of ${lines.length} log lines · ${expandKeyHint(expandKeys, "expand")}`;
         } else text = normalized;
       }
       if (
