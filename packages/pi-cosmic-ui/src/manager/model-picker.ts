@@ -21,6 +21,9 @@ export interface ModelPickerModel {
   readonly name?: string | undefined;
   readonly reasoning?: boolean | undefined;
   readonly supportedEfforts?: ReadonlyArray<string> | undefined;
+  /** Unavailable rows remain visible and searchable but cannot be selected. */
+  readonly available?: boolean | undefined;
+  readonly unavailableReason?: string | undefined;
   /** Optional complete presentation overrides; callers retain domain-specific model metadata. */
   readonly label?: string | undefined;
   readonly description?: string | undefined;
@@ -42,11 +45,19 @@ const boundedMiddle = (value: string, maximum: number): string => {
 
 const modelItem = <M extends ModelPickerModel>(model: M, current?: string): SelectItem => {
   const selector = sanitizeTerminalLine(modelSelector(model));
+  const unavailable = model.available === false;
+  const status = `${current === selector ? " (current)" : ""}${unavailable ? " (unavailable)" : ""}`;
+  const unavailableReason = unavailable
+    ? sanitizeTerminalLine(model.unavailableReason ?? "Model is unavailable")
+    : undefined;
   if (model.label) {
-    const base = { value: selector, label: sanitizeTerminalLine(model.label) };
-    return model.description
-      ? { ...base, description: sanitizeTerminalLine(model.description) }
-      : base;
+    const label = sanitizeTerminalLine(model.label);
+    const base = {
+      value: selector,
+      label: `${label}${unavailable && !/\bunavailable\b/i.test(label) ? " (unavailable)" : ""}`,
+    };
+    const description = unavailableReason ?? model.description;
+    return description ? { ...base, description: sanitizeTerminalLine(description) } : base;
   }
   const efforts = model.supportedEfforts?.map(sanitizeTerminalLine).join(", ") || "default";
   const name =
@@ -55,8 +66,10 @@ const modelItem = <M extends ModelPickerModel>(model: M, current?: string): Sele
       : "";
   return {
     value: selector,
-    label: `${boundedMiddle(selector, 88)}${current === selector ? " (current)" : ""}`,
-    description: `${name}${model.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts}`,
+    label: `${boundedMiddle(selector, 88)}${status}`,
+    description:
+      unavailableReason ??
+      `${name}${model.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts}`,
   };
 };
 
@@ -72,6 +85,11 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
       item: modelItem(model, current),
       searchText: sanitizeTerminalLine(model.searchText ?? `${selector} ${model.name ?? ""}`),
       payload: model,
+      enabled: model.available !== false,
+      disabledReason:
+        model.available === false
+          ? sanitizeTerminalLine(model.unavailableReason ?? "Model is unavailable")
+          : undefined,
     };
   });
 
@@ -86,6 +104,13 @@ export interface ModelPickerAction {
 type ModelPickerPageEntry<M extends ModelPickerModel> =
   | { readonly _tag: "Model"; readonly model: M }
   | { readonly _tag: "Action"; readonly action: ModelPickerAction };
+
+export interface ModelPickerCatalogUpdate<M extends ModelPickerModel> {
+  readonly scopedModels: ReadonlyArray<M>;
+  readonly allModels?: ReadonlyArray<M> | undefined;
+  readonly current?: string | undefined;
+  readonly notice?: string | undefined;
+}
 
 export interface ModelPickerPageOptions<
   M extends ModelPickerModel,
@@ -109,7 +134,7 @@ export interface ModelPickerPageOptions<
  * authorization, compatibility policy, validation, persistence, and lifecycle.
  */
 export class ModelPickerPage<M extends ModelPickerModel> implements Component, Focusable {
-  private readonly options: ModelPickerPageOptions<M>;
+  private options: ModelPickerPageOptions<M>;
   private scope: ModelPickerScope;
   private page: SearchableSelectPage<ModelPickerPageEntry<M>>;
   private _focused = false;
@@ -193,6 +218,23 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
       },
       cancel: this.options.cancel,
     });
+  }
+
+  /** Replaces caller-owned catalog snapshots while preserving search and stable selection identity. */
+  refreshCatalogs(update: ModelPickerCatalogUpdate<M>): void {
+    const selected = this.page.selectedValue;
+    const search = this.page.searchState;
+    this.options = {
+      ...this.options,
+      scopedModels: update.scopedModels,
+      allModels: update.allModels,
+      current: update.current ?? this.options.current,
+      notice: update.notice,
+    };
+    if (!this.options.allModels || this.options.scopedModels.length === 0) this.scope = "all";
+    this.page = this.buildPage(selected, search);
+    this.page.focused = this._focused;
+    this.options.requestRender();
   }
 
   handleInput(data: string): void {

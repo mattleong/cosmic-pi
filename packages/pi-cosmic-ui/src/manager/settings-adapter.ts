@@ -1,5 +1,6 @@
 import { truncateToWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
 import {
+  decodeFullScreenPrintable,
   FullScreenKeymap,
   type FullScreenAction,
   type FullScreenKeymapOptions,
@@ -186,7 +187,14 @@ export class VimSettingsAdapter implements Component, Focusable {
       return;
     }
 
-    if (resolution?._tag !== "Action") return;
+    if (resolution?._tag !== "Action") {
+      if (decodeFullScreenPrintable(data) === " ") {
+        this.child.handleInput?.(" ");
+        this.syncChildFocus();
+        this.options.requestRender?.();
+      }
+      return;
+    }
     if (resolution.action === "help") {
       this.helpExpanded = !this.helpExpanded;
       this.options.requestRender?.();
@@ -207,13 +215,17 @@ export class VimSettingsAdapter implements Component, Focusable {
   }
 
   render(width: number): string[] {
+    const safeWidth = Math.max(0, Math.floor(width));
+    if (safeWidth === 0) return [];
     this.syncChildFocus();
-    const lines = [...this.child.render(width)];
+    const lines = [...this.child.render(safeWidth)].map((line) =>
+      truncateToWidth(line, safeWidth, ""),
+    );
     const hint = this.options.renderHint?.(this.mode, this.helpExpanded);
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const bridge = this.child as Component & SettingsFocusableBridge;
     if (hint && bridge.submenuComponent === null && lines.at(-2) === "") lines.pop();
-    return hint ? [...lines, truncateToWidth(hint, Math.max(0, width), "")] : lines;
+    return hint ? [...lines, truncateToWidth(hint, safeWidth, "")] : lines;
   }
 
   invalidate(): void {
@@ -249,7 +261,14 @@ export const settingsSurfaceBridge = (
     set focused(value: boolean) {
       adapter.focused = value;
     },
-    render: (width: number): string[] => invoke(() => container.render(width), []),
+    render: (width: number): string[] => {
+      const safeWidth = Math.max(0, Math.floor(width));
+      if (safeWidth === 0) return [];
+      return invoke(
+        () => container.render(safeWidth).map((line) => truncateToWidth(line, safeWidth, "")),
+        [],
+      );
+    },
     invalidate: (): void => invoke(() => container.invalidate(), undefined),
     handleInput: (data: string): void => {
       invoke(() => adapter.handleInput(data), undefined);

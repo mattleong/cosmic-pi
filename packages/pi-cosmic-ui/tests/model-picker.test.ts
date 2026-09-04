@@ -60,6 +60,71 @@ describe("ModelPickerPage", () => {
     expect(select).toHaveBeenCalledWith(all[1]);
   });
 
+  it("keeps a hidden stable identity across filtering and scope changes", () => {
+    const select = vi.fn();
+    const page = makeModelPickerPage({
+      theme,
+      scopedModels: scoped,
+      allModels: all,
+      current: "anthropic/claude-opus",
+      getHeight: () => 12,
+      requestRender: vi.fn(),
+      select,
+      cancel: vi.fn(),
+    });
+    page.handleInput("/");
+    page.handleInput("gpt");
+    page.handleInput("\x1b");
+    page.handleInput("\t");
+    page.handleInput("\r");
+
+    expect(select).toHaveBeenCalledWith(all[1]);
+  });
+
+  it("keeps unavailable rows visible but prevents selection", () => {
+    const select = vi.fn();
+    const page = makeModelPickerPage({
+      theme,
+      scopedModels: [
+        {
+          provider: "openai",
+          id: "unavailable",
+          available: false,
+          unavailableReason: "Requires another runtime",
+        },
+      ],
+      getHeight: () => 12,
+      requestRender: vi.fn(),
+      select,
+      cancel: vi.fn(),
+    });
+
+    expect(page.render(80).join("\n")).toContain("unavailable");
+    page.handleInput("\r");
+    expect(select).not.toHaveBeenCalled();
+    expect(page.render(80).join("\n")).toContain("Requires another runtime");
+  });
+
+  it("refreshes caller snapshots without losing the selected identity", () => {
+    const select = vi.fn();
+    const page = makeModelPickerPage({
+      theme,
+      scopedModels: scoped,
+      allModels: all,
+      current: "anthropic/claude-opus",
+      getHeight: () => 12,
+      requestRender: vi.fn(),
+      select,
+      cancel: vi.fn(),
+    });
+
+    page.refreshCatalogs({ scopedModels: [], allModels: [...all] });
+    page.handleInput("\r");
+
+    expect(page.activeScope).toBe("all");
+    expect(select).toHaveBeenCalledWith(all[1]);
+  });
+
   it("keeps search active across scope changes and bounds every width", () => {
     const page = makeModelPickerPage({
       theme,

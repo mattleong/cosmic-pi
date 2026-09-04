@@ -336,6 +336,8 @@ describe("saved profile-set library", () => {
     for (let index = 0; index < 5; index += 1) picker.component.handleInput("j");
     picker.component.handleInput("\r");
     expect(picker.close).not.toHaveBeenCalled();
+    picker.component.handleInput("\x1b[13;1:2u");
+    expect(picker.close).not.toHaveBeenCalled();
 
     picker.component.handleInput("x");
     expect(picker.close).not.toHaveBeenCalled();

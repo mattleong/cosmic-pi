@@ -72,7 +72,11 @@ const selectionMatch = (
   id: FullScreenSelectionKeybindingId,
   key: KeyId,
   matchesKeybinding: FullScreenKeymapOptions["matchesKeybinding"],
-): boolean => configuredMatch(data, id, matchesKeybinding) || matchesKey(data, key);
+  allowConfigured = true,
+): boolean =>
+  matchesKey(data, key) || (allowConfigured && configuredMatch(data, id, matchesKeybinding));
+
+const SHARED_PRINTABLE_ACTIONS = new Set(["g", "G", "j", "k", "h", "l", "/", "q", "Q", "?"]);
 
 /** Stateful, synchronous resolver for extension-owned full-screen navigation. */
 export class FullScreenKeymap {
@@ -88,6 +92,8 @@ export class FullScreenKeymap {
 
     const textOwnsPrintable =
       (mode === "search" || mode === "text-input") && printable !== undefined;
+    const sharedActionOwnsPrintable =
+      mode === "navigation" && printable !== undefined && SHARED_PRINTABLE_ACTIONS.has(printable);
     if (
       (mode === "navigation" || mode === "confirmation") &&
       printable !== undefined &&
@@ -96,9 +102,15 @@ export class FullScreenKeymap {
       this.resetChord();
       return isKeyRepeat(data) ? undefined : { _tag: "Shortcut", key: printable };
     }
+    if (mode === "confirmation" && isKeyRepeat(data)) {
+      this.resetChord();
+      return undefined;
+    }
     if (
       matchesKey(data, Key.escape) ||
-      (!textOwnsPrintable && configuredMatch(data, "tui.select.cancel", matchesKeybinding))
+      (!textOwnsPrintable &&
+        !sharedActionOwnsPrintable &&
+        configuredMatch(data, "tui.select.cancel", matchesKeybinding))
     ) {
       this.resetChord();
       return action("cancel");
@@ -119,7 +131,9 @@ export class FullScreenKeymap {
 
     if (
       matchesKey(data, Key.enter) ||
-      (!textOwnsPrintable && configuredMatch(data, "tui.select.confirm", matchesKeybinding))
+      (!textOwnsPrintable &&
+        !sharedActionOwnsPrintable &&
+        configuredMatch(data, "tui.select.confirm", matchesKeybinding))
     ) {
       this.resetChord();
       return action("confirm");
@@ -130,11 +144,21 @@ export class FullScreenKeymap {
       return undefined;
     }
 
-    if (selectionMatch(data, "tui.select.up", Key.up, matchesKeybinding)) {
+    if (
+      selectionMatch(data, "tui.select.up", Key.up, matchesKeybinding, !sharedActionOwnsPrintable)
+    ) {
       this.resetChord();
       return action("up");
     }
-    if (selectionMatch(data, "tui.select.down", Key.down, matchesKeybinding)) {
+    if (
+      selectionMatch(
+        data,
+        "tui.select.down",
+        Key.down,
+        matchesKeybinding,
+        !sharedActionOwnsPrintable,
+      )
+    ) {
       this.resetChord();
       return action("down");
     }
@@ -147,11 +171,27 @@ export class FullScreenKeymap {
       this.resetChord();
       return action("last");
     }
-    if (selectionMatch(data, "tui.select.pageUp", Key.pageUp, matchesKeybinding)) {
+    if (
+      selectionMatch(
+        data,
+        "tui.select.pageUp",
+        Key.pageUp,
+        matchesKeybinding,
+        !sharedActionOwnsPrintable,
+      )
+    ) {
       this.resetChord();
       return action("full-page-up");
     }
-    if (selectionMatch(data, "tui.select.pageDown", Key.pageDown, matchesKeybinding)) {
+    if (
+      selectionMatch(
+        data,
+        "tui.select.pageDown",
+        Key.pageDown,
+        matchesKeybinding,
+        !sharedActionOwnsPrintable,
+      )
+    ) {
       this.resetChord();
       return action("full-page-down");
     }

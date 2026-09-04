@@ -51,7 +51,7 @@ const page = (height = 14, notice?: string) => {
 };
 
 describe("searchable selector state", () => {
-  it("preserves selection through detail toggles and filtering", () => {
+  it("preserves stable selection through detail toggles and a cleared filter", () => {
     const moved = page();
     moved.component.handleInput("\u001b[B");
     moved.component.handleInput("?");
@@ -62,9 +62,49 @@ describe("searchable selector state", () => {
     filtered.component.handleInput("/");
     filtered.component.handleInput("two");
     filtered.component.handleInput("\u001b");
+    expect(filtered.component.searchState).toEqual({ query: "", active: false });
     filtered.component.handleInput("?");
     filtered.component.handleInput("\r");
+    expect(filtered.select).toHaveBeenCalledWith("openai/model-one");
+  });
+
+  it("selects the visible match when confirmed inside search", () => {
+    const filtered = page();
+    filtered.component.handleInput("/");
+    filtered.component.handleInput("two");
+    filtered.component.handleInput("\r");
+
     expect(filtered.select).toHaveBeenCalledWith("openai/model-two");
+    expect(filtered.component.selectedValue).toBe("openai/model-two");
+  });
+
+  it("keeps disabled rows visible without selecting them", () => {
+    const select = vi.fn();
+    const component = new SearchableSelectPage({
+      theme,
+      breadcrumb: "/models",
+      title: "Choose model",
+      subtitle: "",
+      choices: [
+        {
+          value: "disabled",
+          item: { value: "disabled", label: "Disabled model" },
+          searchText: "disabled",
+          payload: "disabled",
+          enabled: false,
+          disabledReason: "Unavailable in this runtime",
+        },
+      ],
+      getHeight: () => 12,
+      requestRender: vi.fn(),
+      select,
+      cancel: vi.fn(),
+    });
+
+    component.handleInput("\r");
+
+    expect(select).not.toHaveBeenCalled();
+    expect(component.render(80).join("\n")).toContain("Unavailable in this runtime");
   });
 
   it("keeps compact and narrow output bounded", () => {

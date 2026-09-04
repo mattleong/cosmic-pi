@@ -97,6 +97,13 @@ describe("Cosmic footer client discovery", () => {
         contribution: expect.objectContaining({ kind: "status", id: "manager-status" }),
       }),
     });
+
+    bus.emitted.splice(0);
+    bus.events.emit(COSMIC_UI_HOST_STATE, {
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      active: true,
+    });
+    expect(bus.emitted.map(({ name }) => name)).toContain(COSMIC_UI_FOOTER_UPSERT);
   });
 
   it("tracks host ownership broadcasts and contains consumer failures", () => {

@@ -108,12 +108,15 @@ export function registerBetterXaiApplication(
         pi,
         makeXaiApplicationLayer(input, {
           projection,
-          onChange: () => updateFooter(MutableRef.get(input.context)),
+          onChange: () => {
+            if (currentContext === input.context) updateFooter(MutableRef.get(input.context));
+          },
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-xai" },
       ),
     startup: () => dependencies.startupEffect(),
-    onActivated: ({ ctx }) => {
+    onActivated: ({ ctx, context }) => {
+      currentContext = context;
       watchCosmicUi();
       updateFooter(ctx);
     },
@@ -166,7 +169,6 @@ export function registerBetterXaiApplication(
       return slot.shutdown().then(() => undefined);
     }
     const context = MutableRef.make(ctx);
-    currentContext = context;
     if (capturedHost.aborted) {
       notifyAtHostBoundary(ctx, "Better xAI failed to start.", "warning");
     }

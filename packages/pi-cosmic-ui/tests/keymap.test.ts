@@ -34,8 +34,9 @@ describe("FullScreenKeymap", () => {
     expect(keymap.resolve("j", { mode: "text-input" })).toBeUndefined();
   });
 
-  it("ignores repeated reserved shortcuts and rejects DEL as printable", () => {
+  it("ignores every repeated confirmation input and rejects DEL as printable", () => {
     const keymap = new FullScreenKeymap();
+    expect(keymap.resolve("\x1b[13;1:2u", { mode: "confirmation" })).toBeUndefined();
     expect(
       keymap.resolve("\x1b[120;1:2u", {
         mode: "confirmation",
@@ -43,6 +44,16 @@ describe("FullScreenKeymap", () => {
       }),
     ).toBeUndefined();
     expect(decodeFullScreenPrintable("\x7f")).toBeUndefined();
+  });
+
+  it("keeps shared printable actions ahead of configured movement bindings", () => {
+    const keymap = new FullScreenKeymap();
+    const matchesKeybinding = (data: string, id: string) =>
+      data === "q" && id === "tui.select.down";
+
+    expect(keymap.resolve("q", { mode: "navigation", matchesKeybinding })).toMatchObject({
+      action: "quit",
+    });
   });
 
   it("lets printable input belong to search and supports the gg chord", () => {

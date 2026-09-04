@@ -146,6 +146,30 @@ describe("profile model catalog", () => {
     }),
   );
 
+  it.effect("marks a retained unavailable current model as non-selectable", () =>
+    Effect.gen(function* () {
+      const available = piModel("openai", "available");
+      const catalog = new ProfileModelCatalog({
+        getAvailable: () => [available],
+        getError: () => undefined,
+        refresh: () => Promise.resolve({ aborted: false }),
+      });
+      const picker = yield* Effect.promise(() =>
+        loadCandidateModelPicker({
+          profile: "reviewer",
+          candidateIndex: 0,
+          candidate: candidate({ model: "openai/missing" }),
+          listNativeModels: () => Promise.resolve([]),
+          piCatalog: catalog.capture(),
+        }),
+      );
+      const retained = picker.choices.find((entry) => entry.item.value === "openai/missing");
+
+      expect(retained).toMatchObject({ enabled: false });
+      expect(retained?.unavailableReason).toBeTruthy();
+    }),
+  );
+
   it.effect("sanitizes Pi and native display text without changing selector identity", () =>
     Effect.gen(function* () {
       const registry: ProfileModelRegistry = {

@@ -28,6 +28,8 @@ export interface ProfileModelPickerChoice {
   readonly searchText: string;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable: boolean;
+  readonly enabled?: boolean | undefined;
+  readonly unavailableReason?: string | undefined;
 }
 
 const choiceValue = (choice: ProfileModelChoice): string =>
@@ -179,6 +181,8 @@ const projectPickerChoices = (
     label: choice.item.label,
     description: choice.item.description,
     searchText: choice.searchText,
+    available: choice.enabled !== false,
+    unavailableReason: choice.unavailableReason,
     choice: choice.choice,
   }));
 

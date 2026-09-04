@@ -294,6 +294,8 @@ const unavailableCurrentChoice = (
       ),
     },
     searchText: sanitizeTerminalLine(`${candidate.model} current unavailable configured`),
+    enabled: false,
+    unavailableReason: "Configured model is unavailable; choose another model or cancel to keep it",
     fastModeAvailable: advertisedChoices.some(
       (choice) =>
         choice.choice.kind === "model" &&

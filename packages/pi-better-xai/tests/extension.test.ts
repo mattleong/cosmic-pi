@@ -451,6 +451,31 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     }),
   );
 
+  it.effect("clears a legacy replacement footer before replacement startup settles", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stalled = stalledStartup();
+      let starts = 0;
+      const h = yield* harness({
+        startupEffect: () => (++starts === 1 ? Effect.void : stalled.effect),
+      });
+      yield* fs.writeFileString(
+        path.join(h.cwd, ".pi", "extensions", "pi-better-xai.json"),
+        '{"usage":{"enabled":false},"footer":{"mode":"replace"}}\n',
+      );
+      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      expect(h.setFooter).toHaveBeenCalledWith(expect.any(Function));
+
+      const replacement = h.handlers.get("session_start")?.({}, h.ctx);
+      yield* Deferred.await(stalled.started);
+
+      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+      yield* invoke(replacement);
+    }),
+  );
+
   it.effect("replacement immediately interrupts a stalled session startup", () =>
     Effect.gen(function* () {
       const stalled = stalledStartup();

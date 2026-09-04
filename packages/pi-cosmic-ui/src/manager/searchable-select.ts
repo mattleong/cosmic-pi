@@ -21,6 +21,8 @@ export interface SearchableSelectPageChoice<A> {
   readonly item: SelectItem;
   readonly searchText: string;
   readonly payload: A;
+  readonly enabled?: boolean | undefined;
+  readonly disabledReason?: string | undefined;
 }
 
 export type SettingsSelectKeybindingId = FullScreenSelectionKeybindingId;
@@ -66,6 +68,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   private listHeight: number;
   private feedback: string | undefined;
   private searchMode: boolean;
+  private selectedIdentity: string | undefined;
   private alternateHelp = false;
   private _focused = false;
   private readonly keymap = new FullScreenKeymap();
@@ -76,6 +79,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     this.filtered = options.choices;
     this.listHeight = this.resolveListHeight();
     this.searchMode = options.initialSearchMode ?? Boolean(options.initialQuery);
+    this.selectedIdentity = options.current ?? options.choices[0]?.value;
     if (this.query) this.input.setValue(this.query);
     this.list = this.buildList();
     this.input.focused = false;
@@ -87,7 +91,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
 
   /** Stable selected identity exposed for pure wrappers such as the scoped model picker. */
   get selectedValue(): string | undefined {
-    return this.selectedChoice()?.value;
+    return this.selectedIdentity;
   }
 
   /** Current filter state exposed so a wrapper can rebuild without losing search context. */
@@ -108,9 +112,8 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   private resizeList(height: number): void {
     const next = Math.max(1, height);
     if (next === this.listHeight) return;
-    const selected = this.selectedChoice();
     this.listHeight = next;
-    this.list = this.buildList(selected);
+    this.list = this.buildList();
   }
 
   private selectedChoice(): SearchableSelectPageChoice<A> | undefined {
@@ -118,7 +121,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     return selected ? this.filtered.find((entry) => entry.value === selected.value) : undefined;
   }
 
-  private buildList(preferred?: SearchableSelectPageChoice<A>): SelectList {
+  private buildList(): SelectList {
     this.filtered = fuzzyFilter(
       [...this.options.choices],
       this.query,
@@ -139,10 +142,13 @@ export class SearchableSelectPage<A> implements Component, Focusable {
           theme.fg("warning", `  ${this.options.emptyText ?? "No matching options"}`),
       },
     );
-    const preferredIndex = preferred ? this.filtered.indexOf(preferred) : -1;
-    const currentIndex = this.options.current
-      ? this.filtered.findIndex((choice) => choice.value === this.options.current)
+    const preferredIndex = this.selectedIdentity
+      ? this.filtered.findIndex((choice) => choice.value === this.selectedIdentity)
       : -1;
+    const currentIndex =
+      preferredIndex < 0 && this.selectedIdentity === undefined && this.options.current
+        ? this.filtered.findIndex((choice) => choice.value === this.options.current)
+        : -1;
     const selectedIndex = preferredIndex >= 0 ? preferredIndex : currentIndex;
     if (selectedIndex >= 0) list.setSelectedIndex(selectedIndex);
     return list;
@@ -152,7 +158,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   private handleSelectAction(action: string): void {
     switch (action) {
       case "cancel":
-        if (this.searchMode) this.setSearchMode(false);
+        if (this.searchMode) this.clearSearchAndExit();
         else this.options.cancel();
         break;
       case "quit":
@@ -162,18 +168,23 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       case "confirm":
       case "forward": {
         const choice = this.selectedChoice();
-        if (choice) this.options.select(choice.payload);
-        else
-          this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
+        if (choice?.enabled !== false) {
+          if (choice) {
+            this.selectedIdentity = choice.value;
+            this.options.select(choice.payload);
+          } else
+            this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
+        } else
+          this.feedback =
+            choice.disabledReason ?? `${choice.item.label || choice.value} is unavailable.`;
         break;
       }
       case "search":
         this.setSearchMode(true);
         break;
       case "help": {
-        const selected = this.selectedChoice();
         this.alternateHelp = !this.alternateHelp;
-        this.list = this.buildList(selected);
+        this.list = this.buildList();
         break;
       }
       case "pending-first":
@@ -193,7 +204,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       const current = currentChoice ? this.filtered.indexOf(currentChoice) : 0;
       const length = this.filtered.length;
       if (isListMotion(resolution.action)) {
-        if (length > 0)
+        if (length > 0) {
           this.list.setSelectedIndex(
             nextListMotionIndex(
               resolution.action,
@@ -203,6 +214,8 @@ export class SearchableSelectPage<A> implements Component, Focusable {
               true,
             ),
           );
+          this.selectedIdentity = this.selectedChoice()?.value ?? this.selectedIdentity;
+        }
         this.feedback = undefined;
       } else this.handleSelectAction(resolution.action);
       this.options.requestRender();
@@ -210,16 +223,23 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     }
 
     if (this.searchMode) {
-      const selected = this.selectedChoice();
       this.input.handleInput(data);
       const next = this.input.getValue();
       if (next !== this.query) {
         this.query = next;
         this.feedback = undefined;
-        this.list = this.buildList(selected);
+        this.list = this.buildList();
       }
       this.options.requestRender();
     }
+  }
+
+  private clearSearchAndExit(): void {
+    this.setSearchMode(false);
+    if (!this.query) return;
+    this.query = "";
+    this.input.setValue("");
+    this.list = this.buildList();
   }
 
   private setSearchMode(active: boolean): void {

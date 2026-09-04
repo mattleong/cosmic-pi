@@ -69,6 +69,18 @@ export function makeFooterStatusDeclaration(options: {
     id: options.statusKey,
     ...options.placement,
   });
+  let declared = false;
+  let stopWatching: (() => void) | undefined;
+  const ensureWatching = () => {
+    if (stopWatching) return;
+    stopWatching = client.onHostStateChange((state) => {
+      if (declared && state.active) client.upsert(contribution);
+    });
+  };
+  const stop = () => {
+    stopWatching?.();
+    stopWatching = undefined;
+  };
   return {
     activate(ctx) {
       let tui = false;
@@ -78,13 +90,19 @@ export function makeFooterStatusDeclaration(options: {
         tui = false;
       }
       if (!tui) {
+        declared = false;
+        stop();
         client.shutdown();
         return;
       }
+      declared = true;
+      ensureWatching();
       client.query();
       if (client.installed) client.upsert(contribution);
     },
     shutdown() {
+      declared = false;
+      stop();
       client.shutdown();
     },
   };

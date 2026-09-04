@@ -1,4 +1,4 @@
-import type { Component } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import {
   fullScreenSettingsHint,
@@ -39,6 +39,15 @@ describe("VimSettingsAdapter", () => {
     expect(forwarded).toEqual(["\x1b[B", "\r", "\x1b"]);
   });
 
+  it("preserves Space as the built-in alternate activation key", () => {
+    const { child, forwarded } = makeChild();
+    const adapter = new VimSettingsAdapter(child);
+
+    adapter.handleInput(" ");
+
+    expect(forwarded).toEqual([" "]);
+  });
+
   it("owns search focus and clears the hidden filter on Esc", () => {
     const { child, forwarded, setValue, applyFilter } = makeChild();
     const adapter = new VimSettingsAdapter(child, { search: true });
@@ -64,6 +73,16 @@ describe("VimSettingsAdapter", () => {
     expect(forwarded).toContain("\x1b[B");
     expect(afterInput).toHaveBeenCalledTimes(1);
     expect(bridge.render(20)).toEqual(["settings", ""]);
+    expect(bridge.render(0)).toEqual([]);
+    expect(bridge.render(1).every((line) => visibleWidth(line) <= 1)).toBe(true);
+  });
+
+  it("bounds child rendering at zero and one column", () => {
+    const { child } = makeChild();
+    const adapter = new VimSettingsAdapter(child);
+
+    expect(adapter.render(0)).toEqual([]);
+    expect(adapter.render(1).every((line) => visibleWidth(line) <= 1)).toBe(true);
   });
 
   it("changes hints by mode without relying on exact chrome", () => {
