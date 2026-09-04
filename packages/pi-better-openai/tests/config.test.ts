@@ -4,7 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodePlatformLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
 import { prepareSettingUpdate } from "../src/config/options.ts";
-import { DEFAULT_FOOTER_CONFIG, type ConfigFile } from "../src/config/schema.ts";
+import type { ConfigFile } from "../src/config/schema.ts";
 import {
   configPaths,
   readConfig,
@@ -18,10 +18,6 @@ const temp = FileSystem.FileSystem.pipe(
 );
 
 layer(nodePlatformLayer)("config helpers", (it) => {
-  it("uses status as the safe footer default", () => {
-    expect(DEFAULT_FOOTER_CONFIG.mode).toBe("status");
-  });
-
   it.effect("preserves unknown fields through Effect document writes", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
@@ -46,14 +42,13 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       const cwd = path.join(root, "project");
       const agent = path.join(root, "agent");
       const paths = yield* configPaths(cwd, agent);
-      yield* writeConfig(paths.global, { usage: { enabled: true }, footer: { mode: "status" } });
-      yield* writeConfig(paths.project, { usage: { enabled: false }, footer: { mode: "replace" } });
+      yield* writeConfig(paths.global, { usage: { showResetTimes: true } });
+      yield* writeConfig(paths.project, { usage: { showResetTimes: false } });
 
       const resolved = yield* resolveConfig(cwd, agent, false);
       expect(resolved.configPath).toBe(paths.global);
       expect(resolved.projectConfigExists).toBe(false);
-      expect(resolved.usage.enabled).toBe(true);
-      expect(resolved.footer.mode).toBe("status");
+      expect(resolved.usage.showResetTimes).toBe(true);
     }),
   );
 
@@ -62,11 +57,9 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       const path = yield* Path.Path;
       const configPath = path.join(yield* temp, "config.json");
       yield* writeConfig(configPath, {
-        footer: { mode: "float" },
         image: { enabled: true, defaultSave: "desktop", outputFormat: "gif" },
       });
       const parsed = yield* readConfig(configPath);
-      expect(parsed?.footer).toBeUndefined();
       expect(parsed?.image).toEqual({ enabled: true });
     }),
   );
@@ -118,8 +111,6 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       const cases: ReadonlyArray<readonly [string, string, JsonObject]> = [
         ["persistState", "false", { persistState: false }],
         ["compaction.enabled", "true", { compaction: { enabled: true } }],
-        ["footer.mode", "status", { footer: { mode: "status" } }],
-        ["usage.enabled", "true", { usage: { enabled: true } }],
         ["usage.refreshIntervalMs", "15000", { usage: { refreshIntervalMs: 15_000 } }],
         [
           "usage.showOnlyOnSubscriptionModels",
@@ -143,9 +134,8 @@ layer(nodePlatformLayer)("config helpers", (it) => {
   it.effect("rejects invalid booleans, numbers, and enums", () =>
     Effect.gen(function* () {
       for (const [id, value] of [
-        ["usage.enabled", "yes"],
+        ["usage.showResetTimes", "yes"],
         ["usage.refreshIntervalMs", "NaN"],
-        ["footer.mode", "other"],
         ["compaction.enabled", "sometimes"],
         ["image.defaultModel", " \t"],
       ] as const) {

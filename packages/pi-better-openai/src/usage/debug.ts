@@ -12,7 +12,6 @@ export function formatDebug(
   const state = MutableRef.get(projection);
   const cfg = state.config;
   return formatUsageDebugReport({
-    usageEnabled: cfg?.usage.enabled ?? false,
     currentModel: currentModelKey(ctx),
     eligible: state.eligible,
     requiresSubscriptionModel: cfg?.usage.showOnlyOnSubscriptionModels ?? true,

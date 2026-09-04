@@ -25,7 +25,6 @@ import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts
 import {
   COMPACTION_SETTING_DESCRIPTORS,
   FAST_SETTING_DESCRIPTORS,
-  FOOTER_SETTING_DESCRIPTORS,
   IMAGE_SETTING_DESCRIPTORS,
   SETTINGS_OPTION_DESCRIPTORS,
   USAGE_SETTING_DESCRIPTORS,
@@ -217,23 +216,12 @@ export function registerSettingsController(
                 summary: () => (cfg.compaction.enabled ? "OpenAI native" : "Pi default"),
               },
               {
-                id: "section.footer",
-                label: "Footer",
-                description: "Configure Better OpenAI footer ownership.",
-                submenuTitle: "Footer settings",
-                descriptors: FOOTER_SETTING_DESCRIPTORS,
-                summary: () => cfg.footer.mode,
-              },
-              {
                 id: "section.usage",
                 label: "Usage",
-                description: "Configure subscription usage fetching and display.",
+                description: "Configure usage refresh details. Footer visibility is in /cosmic-ui.",
                 submenuTitle: "Usage settings",
                 descriptors: USAGE_SETTING_DESCRIPTORS,
-                summary: () =>
-                  cfg.usage.enabled
-                    ? `enabled · ${Math.round(cfg.usage.refreshIntervalMs / 1000)}s`
-                    : "disabled",
+                summary: () => `${Math.round(cfg.usage.refreshIntervalMs / 1000)}s refresh`,
               },
               {
                 id: "section.image",

@@ -22,6 +22,7 @@ export interface OpenAISessionInput {
 export interface OpenAIApplicationLayerOptions {
   readonly projection: MutableRef.MutableRef<OpenAIProjection>;
   readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
+  readonly isUsageVisible: () => boolean;
   readonly onUsageChange: (context: MutableRef.MutableRef<ExtensionContext>) => void;
 }
 
@@ -36,6 +37,7 @@ export const makeOpenAIApplicationLayer = (
     projection: options.projection,
     projectTrusted,
     onChange: () => options.onUsageChange(context),
+    isUsageVisible: options.isUsageVisible,
   });
   const fast = FastModeService.layer({ projection: options.fastProjection }).pipe(
     Layer.provideMerge(usage),

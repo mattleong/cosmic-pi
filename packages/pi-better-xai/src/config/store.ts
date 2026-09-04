@@ -9,10 +9,8 @@ import {
 } from "pi-cosmic-core";
 import {
   CONFIG_BASENAME,
-  DEFAULT_FOOTER_CONFIG,
   DEFAULT_USAGE_CONFIG,
   FiniteNumberSchema,
-  FooterModeSchema,
   type ResolvedConfig,
 } from "./schema.ts";
 
@@ -28,31 +26,24 @@ const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 
 type DecodedConfig = {
   usage: Partial<ResolvedConfig["usage"]>;
-  footer: Partial<ResolvedConfig["footer"]>;
 };
 
 function decodeConfig<ValueInput>(value: ValueInput): DecodedConfig {
   const root = decodeTolerantFields(
     value,
-    { usage: UnknownRecordSchema, footer: UnknownRecordSchema },
+    { usage: UnknownRecordSchema },
     { path: "config" },
   ).value;
   const usage = decodeTolerantFields(
     root.usage,
     {
-      enabled: Schema.Boolean,
       refreshIntervalMs: FiniteNumberSchema,
       showOnlyOnSubscriptionModels: Schema.Boolean,
       showResetTimes: Schema.Boolean,
     },
     { path: "usage" },
   ).value;
-  const footer = decodeTolerantFields(
-    root.footer,
-    { mode: FooterModeSchema },
-    { path: "footer" },
-  ).value;
-  return { usage, footer };
+  return { usage };
 }
 
 const store = makeScopedConfigStore({
@@ -64,7 +55,6 @@ const store = makeScopedConfigStore({
   decode: decodeConfig,
   defaultDocument: (): JsonObject => ({
     usage: { ...DEFAULT_USAGE_CONFIG },
-    footer: { ...DEFAULT_FOOTER_CONFIG },
   }),
   resolve: (
     metadata: ScopedConfigMetadata,
@@ -81,11 +71,6 @@ const store = makeScopedConfigStore({
       usage: {
         ...usage,
         refreshIntervalMs: Math.max(5_000, usage.refreshIntervalMs),
-      },
-      footer: {
-        ...DEFAULT_FOOTER_CONFIG,
-        ...global?.footer,
-        ...project?.footer,
       },
     };
   },

@@ -5,17 +5,8 @@ import {
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
-import { FOOTER_MODES, FooterModeSchema } from "./schema.ts";
 
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
-  {
-    id: "usage.enabled",
-    label: "Usage display",
-    currentValue: (cfg) => String(cfg.usage.enabled),
-    values: ["true", "false"],
-    description: "Fetch and display xAI subscription usage windows.",
-    decoder: BooleanFromJsonSchema,
-  },
   {
     id: "usage.refreshIntervalMs",
     label: "Usage refresh",
@@ -39,15 +30,6 @@ export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor<Reso
     values: ["true", "false"],
     description: "Include compact reset countdowns and local reset times.",
     decoder: BooleanFromJsonSchema,
-  },
-  {
-    id: "footer.mode",
-    label: "Footer mode",
-    currentValue: (cfg) => cfg.footer.mode,
-    values: FOOTER_MODES,
-    description:
-      "replace = custom footer line, status = pi status line, off = no Better xAI footer/status.",
-    decoder: FooterModeSchema,
   },
 ];
 

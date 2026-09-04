@@ -16,8 +16,8 @@ import {
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
+import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 import type { ResolvedConfig } from "./config/schema.ts";
-import { createFooterController } from "./footer/controller.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import {
   makeXaiApplicationLayer,
@@ -63,32 +63,32 @@ export function registerBetterXaiApplication(
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-xai");
 
   const config = (_ctx: ExtensionContext) => requiredConfig(projection);
-  const footerController = createFooterController({ config, projection, hasTerminalUI });
+  const setStatus = makeSetStatusSafely("better-xai");
+  let usageVisible = true;
+  const isUsageVisible = () => {
+    cosmicUi.query();
+    return cosmicUi.isVisible("xai.usage");
+  };
   const updateFooter = (fallback: ExtensionContext) => {
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
     const cfg = MutableRef.get(projection).config;
     if (!cfg) return;
-    if (hasTerminalUI(ctx)) cosmicUi.query();
-    else cosmicUi.shutdown();
-    if (cosmicUi.active) {
-      footerController.update(ctx, "off");
-      if (cfg.footer.mode === "off") cosmicUi.remove("xai.usage");
-      else {
-        const usage = xaiUsageFooterPrimitive(projection);
-        if (usage) cosmicUi.upsert(usage);
-        else cosmicUi.remove("xai.usage");
-      }
-      return;
-    }
-    if (cosmicUi.installed && cfg.footer.mode !== "off") {
-      const usage = xaiUsageFooterPrimitive(projection);
+    cosmicUi.query();
+    const nextUsageVisible = cosmicUi.isVisible("xai.usage");
+    const usage = nextUsageVisible ? xaiUsageFooterPrimitive(projection) : undefined;
+    if (hasTerminalUI(ctx) && cosmicUi.installed) {
       if (usage) cosmicUi.upsert(usage);
       else cosmicUi.remove("xai.usage");
-    } else cosmicUi.remove("xai.usage");
-    footerController.update(
-      ctx,
-      cosmicUi.installed && cfg.footer.mode === "replace" ? "status" : cfg.footer.mode,
-    );
+    }
+    setStatus(ctx, hasTerminalUI(ctx) && cosmicUi.active ? undefined : usage?.text);
+    if (usageVisible !== nextUsageVisible) {
+      usageVisible = nextUsageVisible;
+      slot.fork(
+        XaiUsageService.use((service) =>
+          service.contextChanged(true).pipe(Effect.andThen(service.refresh({ force: true }))),
+        ),
+      );
+    }
   };
   let stopCosmicUiChanges: (() => void) | undefined;
   const watchCosmicUi = () => {
@@ -108,6 +108,7 @@ export function registerBetterXaiApplication(
         pi,
         makeXaiApplicationLayer(input, {
           projection,
+          isUsageVisible,
           onChange: () => {
             if (currentContext === input.context) updateFooter(MutableRef.get(input.context));
           },
@@ -122,7 +123,7 @@ export function registerBetterXaiApplication(
     },
     onDeactivated: ({ context }) => {
       if (currentContext === context) {
-        footerController.update(MutableRef.get(context), "off");
+        setStatus(MutableRef.get(context), undefined);
         currentContext = undefined;
       }
       stopWatchingCosmicUi();

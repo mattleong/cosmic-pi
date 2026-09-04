@@ -13,7 +13,6 @@ import {
 import { extensionContextFixture } from "./support/host.ts";
 
 type BusHandler = Parameters<ExtensionAPI["events"]["on"]>[1];
-
 function eventBus() {
   const listeners = new Map<string, Set<BusHandler>>();
   const emitted: Array<{ readonly name: string; readonly data: unknown }> = [];
@@ -34,52 +33,70 @@ function eventBus() {
 }
 
 describe("Cosmic footer client discovery", () => {
-  it("distinguishes an absent, inactive, and active host on every query", () => {
+  it("distinguishes absent, inactive, and active hosts without losing visibility policy", () => {
     const bus = eventBus();
     const client = createCosmicFooterClient(bus.events, "provider");
-
     expect(client.query()).toBe(false);
     expect(client.installed).toBe(false);
+    expect(client.isVisible("openai.usage")).toBe(true);
 
     let active = false;
-    bus.events.on(COSMIC_UI_HOST_QUERY, (data) => {
-      // SAFETY: This listener is registered only for the typed host-query event emitted by the client.
-      (data as CosmicUiHostQuery).respond({ active });
+    const hidden = ["openai.usage"];
+    const stop = bus.events.on(COSMIC_UI_HOST_QUERY, (data) => {
+      // SAFETY: This listener receives only the typed host query emitted by the client.
+      (data as CosmicUiHostQuery).respond({ active, ready: true, hidden });
     });
     expect(client.query()).toBe(false);
     expect(client.installed).toBe(true);
-    expect(client.active).toBe(false);
-
+    expect(client.isVisible("openai.usage")).toBe(false);
+    hidden.length = 0;
+    expect(client.isVisible("openai.usage")).toBe(false);
     active = true;
     expect(client.query()).toBe(true);
-    expect(client.installed).toBe(true);
-    expect(client.active).toBe(true);
+    expect(client.isVisible("openai.usage")).toBe(true);
+    stop();
+    expect(client.query()).toBe(false);
+    expect(client.installed).toBe(false);
   });
 
-  it("buffers contributions and removes stale entries through an installed inactive host", () => {
+  it("waits for host preferences before enabling automatic provider work", () => {
+    const bus = eventBus();
+    const client = createCosmicFooterClient(bus.events, "provider");
+    let ready = false;
+    bus.events.on(COSMIC_UI_HOST_QUERY, (data) => {
+      // SAFETY: Only typed host queries reach this handler.
+      (data as CosmicUiHostQuery).respond({ active: false, ready, hidden: [] });
+    });
+    client.query();
+    expect(client.installed).toBe(true);
+    expect(client.isVisible("openai.usage")).toBe(false);
+    ready = true;
+    client.query();
+    expect(client.isVisible("openai.usage")).toBe(true);
+  });
+
+  it("buffers contributions and removes stale entries through an inactive host", () => {
     const bus = eventBus();
     bus.events.on(COSMIC_UI_HOST_QUERY, (data) => {
-      // SAFETY: This listener is registered only for the typed host-query event emitted by the client.
-      (data as CosmicUiHostQuery).respond({ active: false });
+      // SAFETY: The client emits the typed host query on this event.
+      (data as CosmicUiHostQuery).respond({ active: false, ready: true, hidden: [] });
     });
     const client = createCosmicFooterClient(bus.events, "provider");
     client.query();
     bus.emitted.splice(0);
-
     client.upsert({ kind: "text", id: "usage", region: "details", text: "ready" });
     client.remove("usage");
-
     expect(bus.emitted.map(({ name }) => name)).toEqual([
       COSMIC_UI_FOOTER_UPSERT,
       COSMIC_UI_FOOTER_REMOVE,
     ]);
   });
 
-  it("registers status placement through an installed inactive host", () => {
+  it("republishes status placement when a host becomes active", () => {
     const bus = eventBus();
     bus.events.on(COSMIC_UI_HOST_QUERY, (data) => {
-      // SAFETY: This listener is registered only for the typed host-query event emitted by the client.
-      (data as CosmicUiHostQuery).respond({ active: false });
+      // SAFETY: The declaration emits the typed host query on this event.
+      (data as CosmicUiHostQuery).respond({ active: false, ready: true, hidden: [] });
     });
     const declaration = makeFooterStatusDeclaration({
       events: bus.events,
@@ -87,9 +104,14 @@ describe("Cosmic footer client discovery", () => {
       statusKey: "manager-status",
       placement: { region: "identity", align: "right" },
     });
-
     declaration.activate(extensionContextFixture({ mode: "tui" }));
-
+    bus.emitted.splice(0);
+    bus.events.emit(COSMIC_UI_HOST_STATE, {
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      active: true,
+      ready: true,
+      hidden: [],
+    });
     expect(bus.emitted).toContainEqual({
       name: COSMIC_UI_FOOTER_UPSERT,
       data: expect.objectContaining({
@@ -97,65 +119,43 @@ describe("Cosmic footer client discovery", () => {
         contribution: expect.objectContaining({ kind: "status", id: "manager-status" }),
       }),
     });
-
-    bus.emitted.splice(0);
-    bus.events.emit(COSMIC_UI_HOST_STATE, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      active: true,
-    });
-    expect(bus.emitted.map(({ name }) => name)).toContain(COSMIC_UI_FOOTER_UPSERT);
   });
 
-  it("tracks host ownership broadcasts and contains consumer failures", () => {
+  it("propagates visibility changes without an ownership change and contains consumer failure", () => {
     const bus = eventBus();
     const client = createCosmicFooterClient(bus.events, "provider");
-    const observed: boolean[] = [];
-    client.onHostStateChange((state) => {
-      observed.push(state.active);
-      if (!state.active) throw new Error("consumer failure");
+    const visible: boolean[] = [];
+    client.onHostStateChange(() => {
+      visible.push(client.isVisible("openai.usage"));
+      throw new Error("consumer failure");
     });
-
-    bus.events.emit(COSMIC_UI_HOST_STATE, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      active: true,
-    });
-    bus.events.emit(COSMIC_UI_HOST_STATE, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      active: false,
-    });
-
-    expect(observed).toEqual([true, false]);
-    expect(client.installed).toBe(true);
-    expect(client.active).toBe(false);
+    for (const hidden of [[], ["openai.usage"], []]) {
+      bus.events.emit(COSMIC_UI_HOST_STATE, {
+        version: COSMIC_UI_PROTOCOL_VERSION,
+        active: true,
+        ready: true,
+        hidden,
+      });
+    }
+    expect(visible).toEqual([true, false, true]);
+    expect(client.active).toBe(true);
   });
 
-  it("keeps legacy no-argument host responses compatible", () => {
+  it("rejects malformed or hostile host state without claiming an active host", () => {
     const bus = eventBus();
-    bus.events.on(COSMIC_UI_HOST_QUERY, (data) => {
-      // SAFETY: This listener is registered only for the typed host-query event emitted by the client.
-      (data as CosmicUiHostQuery).respond();
-    });
     const client = createCosmicFooterClient(bus.events, "provider");
-
-    expect(client.query()).toBe(true);
-    expect(client.installed).toBe(true);
-  });
-
-  it("contains hostile host responses", () => {
-    const bus = eventBus();
     bus.events.on(COSMIC_UI_HOST_QUERY, (data) => {
-      const hostile = Object.defineProperty({}, "active", {
+      const hostile = Object.defineProperty({ active: false, ready: true, hidden: [] }, "active", {
         get() {
           throw new Error("hostile active getter");
         },
       });
-      // SAFETY: This listener receives the typed query; the hostile state assertion is deliberate.
-      (data as CosmicUiHostQuery).respond(hostile as { active: boolean });
+      // SAFETY: Deliberately malformed boundary input tests containment.
+      (data as CosmicUiHostQuery).respond(hostile);
     });
-    const client = createCosmicFooterClient(bus.events, "provider");
-
     expect(client.query()).toBe(false);
-    expect(client.installed).toBe(true);
+    expect(client.installed).toBe(false);
+    bus.events.emit(COSMIC_UI_HOST_STATE, { version: COSMIC_UI_PROTOCOL_VERSION, active: true });
     expect(client.active).toBe(false);
   });
 });

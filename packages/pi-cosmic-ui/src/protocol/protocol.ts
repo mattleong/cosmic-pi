@@ -8,12 +8,12 @@ import {
   detachCosmicFooterContributionFromReceiver,
 } from "./canonicalization.ts";
 
-export const COSMIC_UI_PROTOCOL_VERSION = 1 as const;
-export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v1:host:query";
-export const COSMIC_UI_HOST_STATE = "cosmic-ui:v1:host:state";
-export const COSMIC_UI_FOOTER_UPSERT = "cosmic-ui:v1:footer:upsert";
-export const COSMIC_UI_FOOTER_REMOVE = "cosmic-ui:v1:footer:remove";
-export const COSMIC_UI_FOOTER_INVALIDATE = "cosmic-ui:v1:footer:invalidate";
+export const COSMIC_UI_PROTOCOL_VERSION = 2 as const;
+export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v2:host:query";
+export const COSMIC_UI_HOST_STATE = "cosmic-ui:v2:host:state";
+export const COSMIC_UI_FOOTER_UPSERT = "cosmic-ui:v2:footer:upsert";
+export const COSMIC_UI_FOOTER_REMOVE = "cosmic-ui:v2:footer:remove";
+export const COSMIC_UI_FOOTER_INVALIDATE = "cosmic-ui:v2:footer:invalidate";
 
 export type CosmicFooterTone = "normal" | "accent" | "dim" | "success" | "warning" | "error";
 export type CosmicFooterRegion = "identity" | "metrics" | "details" | "media";
@@ -139,11 +139,15 @@ export { detachCosmicFooterContribution };
 export interface CosmicUiHostState {
   /** True only while Cosmic UI owns the live custom-footer slot. */
   active: boolean;
+  /** Visibility preferences have loaded for the current session. */
+  ready: boolean;
+  /** Hidden contribution IDs, also respected by provider status fallback and polling. */
+  hidden: readonly string[];
 }
 
 export interface CosmicUiHostQuery {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
-  respond(state?: CosmicUiHostState): void;
+  respond(state: CosmicUiHostState): void;
 }
 export interface CosmicUiHostStateEvent extends CosmicUiHostState {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
@@ -173,6 +177,8 @@ const HostQueryData = Schema.Struct({
 const HostStateData = Schema.Struct({
   version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
   active: Schema.Boolean,
+  ready: Schema.Boolean,
+  hidden: Schema.Array(Schema.String),
 });
 const TextContributionData = Schema.Struct({
   kind: Schema.Literal("text"),
@@ -280,8 +286,12 @@ export function normalizeCosmicUiHostQuery<ValueInput>(
   const respond = query.respond;
   return Object.freeze({
     version: query.version,
-    respond: (state: CosmicUiHostState | undefined) => {
-      const detached = Object.freeze({ active: state?.active === true });
+    respond: (state: CosmicUiHostState) => {
+      const detached = Object.freeze({
+        active: state.active,
+        ready: state.ready,
+        hidden: Object.freeze([...state.hidden]),
+      });
       Function.prototype.apply.call(respond, query, [detached]);
     },
   });
@@ -292,7 +302,14 @@ export function normalizeCosmicUiHostStateEvent<ValueInput>(
   value: ValueInput,
 ): CosmicUiHostStateEvent | undefined {
   const event = decodeSafely(HostStateData, value);
-  return event ? Object.freeze({ version: event.version, active: event.active }) : undefined;
+  return event
+    ? Object.freeze({
+        version: event.version,
+        active: event.active,
+        ready: event.ready,
+        hidden: Object.freeze([...event.hidden]),
+      })
+    : undefined;
 }
 
 /** Reads every hostile upsert field exactly once into a detached plain snapshot. */

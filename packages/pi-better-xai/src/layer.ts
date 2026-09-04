@@ -16,6 +16,7 @@ export interface XaiSessionInput {
 export interface XaiApplicationLayerOptions {
   readonly projection: MutableRef.MutableRef<XaiProjection>;
   readonly onChange: () => void;
+  readonly isUsageVisible: () => boolean;
 }
 
 /** Compose the complete Better xAI application dependency graph for one Pi session. */
@@ -33,6 +34,7 @@ export const makeXaiApplicationLayer = (
     projection: options.projection,
     projectTrusted,
     onChange: options.onChange,
+    isUsageVisible: options.isUsageVisible,
   }).pipe(Layer.provide(platform));
 };
 

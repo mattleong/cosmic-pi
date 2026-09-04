@@ -53,12 +53,10 @@ const initialConfig = (): ResolvedConfig => ({
   projectConfigExists: true,
   globalConfigExists: false,
   usage: {
-    enabled: true,
     refreshIntervalMs: 60_000,
     showOnlyOnSubscriptionModels: true,
     showResetTimes: true,
   },
-  footer: { mode: "status" },
 });
 
 function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
@@ -136,10 +134,10 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
     if (!component) throw new Error("settings component has not opened");
     return component;
   };
-  const setUsageEnabled = (enabled: boolean) => {
+  const setRefreshInterval = (refreshIntervalMs: number) => {
     currentConfig = {
       ...currentConfig,
-      usage: { ...currentConfig.usage, enabled },
+      usage: { ...currentConfig.usage, refreshIntervalMs },
     };
   };
   const makeConfigUnavailable = () => {
@@ -151,7 +149,7 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
     makeConfigUnavailable,
     open,
     selectedComponent,
-    setUsageEnabled,
+    setRefreshInterval,
     notify,
     requestRender,
     runImpl,
@@ -178,35 +176,38 @@ describe("Better xAI settings controller", () => {
       const component = h.selectedComponent();
 
       component.handleInput?.(input.enter);
-      expect(renderedRow(component, "Usage display")).toContain("false");
+      expect(renderedRow(component, "Usage refresh")).toContain("120000");
       component.handleInput?.(input.enter);
-      expect(renderedRow(component, "Usage display")).toContain("true");
+      expect(renderedRow(component, "Usage refresh")).toContain("300000");
 
-      h.setUsageEnabled(false);
+      h.setRefreshInterval(120000);
       first.resolve(Result.succeed(undefined));
       yield* Effect.promise(() =>
         vi.waitFor(() => {
           expect(h.updateFooter).toHaveBeenCalledOnce();
         }),
       );
-      expect(renderedRow(component, "Usage display")).toContain("true");
+      expect(renderedRow(component, "Usage refresh")).toContain("300000");
 
       h.notify.mockImplementation((message: string) => {
-        if (message === "Invalid value for usage.enabled.")
+        if (message === "Invalid value for usage.refreshIntervalMs.")
           throw new Error("host-notification-failure");
       });
       second.resolve(
         Result.fail(
           new InvalidSettingError({
-            id: "usage.enabled",
-            message: "Invalid value for usage.enabled.",
+            id: "usage.refreshIntervalMs",
+            message: "Invalid value for usage.refreshIntervalMs.",
           }),
         ),
       );
       yield* Effect.promise(() =>
         vi.waitFor(() => {
-          expect(h.notify).toHaveBeenCalledWith("Invalid value for usage.enabled.", "error");
-          expect(renderedRow(component, "Usage display")).toContain("false");
+          expect(h.notify).toHaveBeenCalledWith(
+            "Invalid value for usage.refreshIntervalMs.",
+            "error",
+          );
+          expect(renderedRow(component, "Usage refresh")).toContain("120000");
         }),
       );
 
@@ -228,7 +229,7 @@ describe("Better xAI settings controller", () => {
         });
 
         component.handleInput?.(input.enter);
-        expect(renderedRow(component, "Usage display")).toContain("false");
+        expect(renderedRow(component, "Usage refresh")).toContain("120000");
         h.makeConfigUnavailable();
         write.reject(new Error("runtime unavailable"));
         yield* Effect.promise(() =>
@@ -237,7 +238,7 @@ describe("Better xAI settings controller", () => {
               "Better xAI settings are unavailable.",
               "warning",
             );
-            expect(renderedRow(component, "Usage display")).toContain("true");
+            expect(renderedRow(component, "Usage refresh")).toContain("60000");
           }),
         );
 
@@ -253,7 +254,7 @@ describe("Better xAI settings controller", () => {
       yield* Effect.promise(() => h.invoke("help"));
       yield* Effect.promise(() => h.invoke("diagnostics"));
       yield* Effect.promise(() => h.invoke("unknown true"));
-      yield* Effect.promise(() => h.invoke("usage.enabled"));
+      yield* Effect.promise(() => h.invoke("usage.refreshIntervalMs"));
 
       expect(h.runImpl).not.toHaveBeenCalled();
     }),

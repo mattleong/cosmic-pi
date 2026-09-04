@@ -5,45 +5,35 @@ import * as Path from "effect/Path";
 import { provideBuiltLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { decodeSettingUpdate } from "../src/config/options.ts";
-import { DEFAULT_FOOTER_CONFIG } from "../src/config/schema.ts";
 import { resolveConfig } from "../src/config/store.ts";
 
 describe("xAI configuration", () => {
-  it("uses status as the safe footer default", () => {
-    expect(DEFAULT_FOOTER_CONFIG.mode).toBe("status");
-  });
-
   it.effect(
     "applies project fields over global fields over defaults before clamping refresh",
     () => {
       const documents = makeInMemoryDocuments({
         "/project/.pi/extensions/pi-better-xai.json": {
           usage: {
-            enabled: "invalid-project-value",
+            showOnlyOnSubscriptionModels: "invalid-project-value",
             refreshIntervalMs: 4_000,
             showResetTimes: false,
           },
-          footer: { mode: "status" },
         },
         "/agent/extensions/pi-better-xai.json": {
           usage: {
-            enabled: false,
             refreshIntervalMs: 20_000,
             showOnlyOnSubscriptionModels: false,
           },
-          footer: { mode: "off" },
         },
       });
 
       return Effect.gen(function* () {
         const resolved = yield* resolveConfig("/project", "/agent", true);
         expect(resolved.usage).toEqual({
-          enabled: false,
           refreshIntervalMs: 5_000,
           showOnlyOnSubscriptionModels: false,
           showResetTimes: false,
         });
-        expect(resolved.footer).toEqual({ mode: "status" });
       }).pipe(provideBuiltLayer(Layer.merge(Path.layer, documents.layer)));
     },
   );
@@ -51,7 +41,6 @@ describe("xAI configuration", () => {
   it.effect("patches the exact dotted path for every setting id", () =>
     Effect.gen(function* () {
       const cases: ReadonlyArray<readonly [string, string, JsonObject]> = [
-        ["usage.enabled", "false", { usage: { enabled: false } }],
         ["usage.refreshIntervalMs", "60000", { usage: { refreshIntervalMs: 60_000 } }],
         [
           "usage.showOnlyOnSubscriptionModels",
@@ -59,7 +48,6 @@ describe("xAI configuration", () => {
           { usage: { showOnlyOnSubscriptionModels: true } },
         ],
         ["usage.showResetTimes", "false", { usage: { showResetTimes: false } }],
-        ["footer.mode", "status", { footer: { mode: "status" } }],
       ];
       for (const [id, raw, expected] of cases) {
         const update = yield* decodeSettingUpdate(id, raw);
@@ -84,8 +72,8 @@ describe("xAI configuration", () => {
 
   it.effect("replaces a non-object section instead of failing", () =>
     Effect.gen(function* () {
-      const update = yield* decodeSettingUpdate("footer.mode", "off");
-      expect(update({ footer: "corrupt" })).toEqual({ footer: { mode: "off" } });
+      const update = yield* decodeSettingUpdate("usage.showResetTimes", "false");
+      expect(update({ usage: "corrupt" })).toEqual({ usage: { showResetTimes: false } });
     }),
   );
 
@@ -102,7 +90,9 @@ describe("xAI configuration", () => {
         Effect.flip,
       );
       expect(intervalFailure).toBeInstanceOf(InvalidSettingError);
-      const modeFailure = yield* decodeSettingUpdate("footer.mode", "other").pipe(Effect.flip);
+      const modeFailure = yield* decodeSettingUpdate("usage.showResetTimes", "other").pipe(
+        Effect.flip,
+      );
       expect(modeFailure).toBeInstanceOf(InvalidSettingError);
     }),
   );

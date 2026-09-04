@@ -41,6 +41,7 @@ interface XaiUsageServiceOptions {
   readonly projection: MutableRef.MutableRef<XaiProjection>;
   readonly onChange: () => void;
   readonly startPolling?: boolean;
+  readonly isUsageVisible?: () => boolean;
   readonly agentDir?: string;
   readonly projectTrusted?: boolean;
   /** Owned domain seam for deterministic refresh/concurrency tests. */
@@ -82,6 +83,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService>()(
         projection: options.projection,
         onChange: options.onChange,
         startPolling: options.startPolling,
+        backgroundEnabled: options.isUsageVisible,
         agentDir: options.agentDir,
         projectTrusted: options.projectTrusted,
         initialProjection: initialXaiProjection,

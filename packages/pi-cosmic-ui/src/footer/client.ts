@@ -20,6 +20,7 @@ export interface CosmicFooterClient {
   readonly installed: boolean;
   /** Whether that host currently owns the custom-footer slot. */
   readonly active: boolean;
+  readonly isVisible: (id: string) => boolean;
   readonly query: () => boolean;
   readonly onHostStateChange: (listener: (state: CosmicUiHostState) => void) => () => void;
   readonly upsert: (contribution: CosmicFooterContribution) => void;
@@ -35,6 +36,8 @@ export function createCosmicFooterClient(
 ): CosmicFooterClient {
   let installed = false;
   let active = false;
+  let hidden: readonly string[] = [];
+  let ready = false;
   const emit = (
     name: string,
     value:
@@ -56,18 +59,25 @@ export function createCosmicFooterClient(
     get active() {
       return active;
     },
+    isVisible(id) {
+      return (!installed || ready) && !hidden.includes(id);
+    },
     query() {
       installed = false;
       active = false;
+      hidden = [];
       emit(COSMIC_UI_HOST_QUERY, {
         version: COSMIC_UI_PROTOCOL_VERSION,
         respond: (state) => {
+          const parsed = normalizeCosmicUiHostStateEvent({
+            version: COSMIC_UI_PROTOCOL_VERSION,
+            ...state,
+          });
+          if (!parsed) return;
           installed = true;
-          try {
-            active = state?.active !== false;
-          } catch {
-            active = false;
-          }
+          active = parsed.active;
+          ready = parsed.ready;
+          hidden = parsed.hidden;
         },
       });
       return active;
@@ -80,8 +90,10 @@ export function createCosmicFooterClient(
             if (!event) return;
             installed = true;
             active = event.active;
+            hidden = event.hidden;
+            ready = event.ready;
             try {
-              listener(Object.freeze({ active }));
+              listener(Object.freeze({ active, ready, hidden }));
             } catch {
               // A consumer callback cannot break event-bus delivery.
             }
@@ -109,6 +121,7 @@ export function createCosmicFooterClient(
       const removeOwner = installed;
       installed = false;
       active = false;
+      hidden = [];
       if (removeOwner)
         emit(COSMIC_UI_FOOTER_REMOVE, { version: COSMIC_UI_PROTOCOL_VERSION, owner });
     },

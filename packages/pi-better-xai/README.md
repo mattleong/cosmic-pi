@@ -8,7 +8,7 @@ A pi extension for xAI / Grok subscription workflows: usage visibility and Cosmi
 pi install npm:pi-better-xai
 ```
 
-Install `pi-cosmic-ui` as well to render Better xAI's usage primitive with the same progress-bar footer treatment as Better OpenAI. Without Cosmic UI, Better xAI falls back to a plain usage footer/status line.
+Install `pi-cosmic-ui` as well to render Better xAI's usage primitive with the same progress-bar footer treatment as Better OpenAI. Without an active Cosmic footer, Better xAI automatically uses Pi's status line.
 
 ## Requirements
 
@@ -29,13 +29,14 @@ Usage display requires pi's `xai` OAuth credentials.
 ### Commands
 
 - `/xai-usage` shows current xAI subscription usage.
-- `/xai-settings` configures usage display and footer fallback mode.
+- `/xai-settings` configures usage refresh details.
+- `/cosmic-ui` controls footer visibility, density, and layout.
 
 ## Footer
 
 The extension publishes a data-oriented usage primitive over the versioned Cosmic UI event protocol when a host is present.
 
-When Cosmic UI is active, it owns footer layout and renders `xai.usage` with progress bars matching `openai.usage`. An installed but inactive Cosmic UI host forces status fallback rather than another custom footer; `footer.mode: "off"` removes both contributions and fallback status:
+Cosmic UI owns the footer and renders `xai.usage` with progress bars matching `openai.usage`. In `/cosmic-ui`, xAI usage is either `automatic` on eligible models or `hidden`. Hidden usage skips automatic requests and suppresses both custom-footer and status-line output. `/xai-usage` still fetches once on an eligible model. Disabling the custom footer restores Pi's default footer without discarding visibility preferences. Better xAI never replaces the footer.
 
 ```text
 xAI     7d ████████░░ 82%  mo ████████░░ 83%
@@ -50,13 +51,11 @@ Source endpoints (unofficial first-party xAI / grok.com CLI proxy):
 
 Stored at `~/.pi/agent/extensions/pi-better-xai.json` (or project `.pi/extensions/`).
 
-| Key                                  | Default  | Description                                                                                        |
-| ------------------------------------ | -------- | -------------------------------------------------------------------------------------------------- |
-| `usage.enabled`                      | `true`   | Fetch and show usage                                                                               |
-| `usage.refreshIntervalMs`            | `60000`  | Poll interval                                                                                      |
-| `usage.showOnlyOnSubscriptionModels` | `true`   | Hide on API-key xAI models                                                                         |
-| `usage.showResetTimes`               | `true`   | Include reset countdowns                                                                           |
-| `footer.mode`                        | `status` | `status` by default; `replace` is a legacy standalone fallback; `off` hides provider footer output |
+| Key                                  | Default | Description                |
+| ------------------------------------ | ------- | -------------------------- |
+| `usage.refreshIntervalMs`            | `60000` | Poll interval              |
+| `usage.showOnlyOnSubscriptionModels` | `true`  | Hide on API-key xAI models |
+| `usage.showResetTimes`               | `true`  | Include reset countdowns   |
 
 ## Effect runtime
 

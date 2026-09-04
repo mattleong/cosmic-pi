@@ -67,6 +67,6 @@ export function visibleStatusLine(
   projection: MutableRef.MutableRef<XaiProjection>,
 ): string | undefined {
   const state = MutableRef.get(projection);
-  if (!state.config?.usage.enabled || !state.eligible) return undefined;
+  if (!state.config || !state.eligible) return undefined;
   return state.statusLine;
 }

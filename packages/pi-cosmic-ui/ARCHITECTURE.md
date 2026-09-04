@@ -8,7 +8,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 
 - Settings command registered by `src/settings/controller.ts`.
 - Events: session lifecycle, turns, model/thinking/session changes, messages, blocking UI prompt spans, and file-mutating tool completion.
-- Cross-extension events: host query/state plus footer upsert/remove/invalidate. Discovery replies synchronously with live custom-footer ownership; legacy no-argument replies still mean active. Installation transitions broadcast host state so providers can re-query immediately. Clients distinguish an absent host from an installed-but-inactive host, and they may buffer contributions through the inactive host while providers use status fallback without competing for the footer slot.
+- Cross-extension v2 events: host query/state plus footer upsert/remove/invalidate. Discovery reports live custom-footer ownership, settings readiness, and hidden IDs. Installation, readiness, and visibility changes broadcast host state. Providers wait for preferences before automatic fetching, honor hidden IDs in both contribution and status fallback paths, and never install a custom footer. No legacy protocol replies, provider footer modes, or settings migrations remain.
 
 ## Source map
 

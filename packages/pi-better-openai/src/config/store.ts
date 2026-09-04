@@ -13,10 +13,8 @@ import {
   CONFIG_BASENAME,
   DEFAULT_COMPACTION_CONFIG,
   DEFAULT_CONFIG,
-  DEFAULT_FOOTER_CONFIG,
   DEFAULT_IMAGE_CONFIG,
   DEFAULT_USAGE_CONFIG,
-  FooterModeSchema,
   ImageOutputFormatSchema,
   ImageSaveModeSchema,
   type ConfigFile,
@@ -44,7 +42,6 @@ function decodeConfig<ValueInput>(value: ValueInput): ConfigFile {
       active: Schema.Boolean,
       desiredActive: Schema.Boolean,
       usage: UnknownRecordSchema,
-      footer: UnknownRecordSchema,
       compaction: UnknownRecordSchema,
       image: UnknownRecordSchema,
     },
@@ -54,18 +51,12 @@ function decodeConfig<ValueInput>(value: ValueInput): ConfigFile {
   const usage = decodeTolerantFields(
     root.usage,
     {
-      enabled: Schema.Boolean,
       refreshIntervalMs: FiniteNumberSchema,
       showOnlyOnSubscriptionModels: Schema.Boolean,
       showResetTimes: Schema.Boolean,
     },
     { path: "usage" },
   ).value as UsageConfig;
-  const footer = decodeTolerantFields(
-    root.footer,
-    { mode: FooterModeSchema },
-    { path: "footer" },
-  ).value;
   const compaction = decodeTolerantFields(
     root.compaction,
     { enabled: Schema.Boolean },
@@ -92,7 +83,6 @@ function decodeConfig<ValueInput>(value: ValueInput): ConfigFile {
   if (root.active !== undefined) decoded.active = root.active;
   if (root.desiredActive !== undefined) decoded.desiredActive = root.desiredActive;
   if (Object.keys(usage).length > 0) decoded.usage = usage;
-  if (footer.mode !== undefined) decoded.footer = { mode: footer.mode };
   if (compaction.enabled !== undefined) decoded.compaction = { enabled: compaction.enabled };
   if (Object.values(image).some((field) => field !== undefined)) decoded.image = image;
   return decoded;
@@ -116,7 +106,6 @@ function resolveConfigFiles(
       project?.persistState ?? global?.persistState ?? DEFAULT_CONFIG.persistState ?? true,
     desiredActive,
     usage: {
-      enabled: project?.usage?.enabled ?? global?.usage?.enabled ?? DEFAULT_USAGE_CONFIG.enabled,
       refreshIntervalMs: Number.clamp(
         project?.usage?.refreshIntervalMs ??
           global?.usage?.refreshIntervalMs ??
@@ -131,9 +120,6 @@ function resolveConfigFiles(
         project?.usage?.showResetTimes ??
         global?.usage?.showResetTimes ??
         DEFAULT_USAGE_CONFIG.showResetTimes,
-    },
-    footer: {
-      mode: project?.footer?.mode ?? global?.footer?.mode ?? DEFAULT_FOOTER_CONFIG.mode,
     },
     compaction: {
       enabled:

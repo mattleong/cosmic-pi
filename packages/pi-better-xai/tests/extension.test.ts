@@ -53,10 +53,7 @@ const harness = (dependencies?: BetterXaiExtensionDependencies) =>
     const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-better-xai-agent-" });
     const configDirectory = path.join(cwd, ".pi", "extensions");
     yield* fs.makeDirectory(configDirectory, { recursive: true });
-    yield* fs.writeFileString(
-      path.join(configDirectory, "pi-better-xai.json"),
-      '{"usage":{"enabled":false},"footer":{"mode":"status"}}\n',
-    );
+    yield* fs.writeFileString(path.join(configDirectory, "pi-better-xai.json"), "{}\n");
     yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDir));
 
     const handlers = new Map<string, Handler>();
@@ -143,12 +140,12 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       const h = yield* harness();
       yield* fs.writeFileString(
         path.join(h.cwd, ".pi", "extensions", "pi-better-xai.json"),
-        '{"usage":{"enabled":false},"footer":{"mode":"replace"}}\n',
+        "{}\n",
       );
       vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
         if (name === COSMIC_UI_HOST_QUERY) {
           // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
-          (data as CosmicUiHostQuery).respond({ active: false });
+          (data as CosmicUiHostQuery).respond({ active: false, ready: true, hidden: [] });
         }
       });
 
@@ -166,7 +163,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
         if (name === COSMIC_UI_HOST_QUERY) {
           // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
-          (data as CosmicUiHostQuery).respond({ active });
+          (data as CosmicUiHostQuery).respond({ active, ready: true, hidden: [] });
         }
       });
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
@@ -179,7 +176,12 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         .mock.calls.filter(([name]) => name === COSMIC_UI_HOST_QUERY).length;
 
       active = true;
-      stateListener?.({ version: COSMIC_UI_PROTOCOL_VERSION, active: true });
+      stateListener?.({
+        version: COSMIC_UI_PROTOCOL_VERSION,
+        active: true,
+        ready: true,
+        hidden: [],
+      });
 
       const queriesAfter = vi
         .mocked(h.pi.events.emit)
@@ -190,19 +192,19 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     }),
   );
 
-  it.effect("removes Cosmic contributions when footer mode is off", () =>
+  it.effect("removes Cosmic contributions when usage is hidden", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const h = yield* harness();
       yield* fs.writeFileString(
         path.join(h.cwd, ".pi", "extensions", "pi-better-xai.json"),
-        '{"usage":{"enabled":true},"footer":{"mode":"off"}}\n',
+        "{}\n",
       );
       vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
         if (name === COSMIC_UI_HOST_QUERY) {
           // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
-          (data as CosmicUiHostQuery).respond({ active: true });
+          (data as CosmicUiHostQuery).respond({ active: true, ready: true, hidden: ["xai.usage"] });
         }
       });
 
@@ -451,26 +453,21 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     }),
   );
 
-  it.effect("clears a legacy replacement footer before replacement startup settles", () =>
+  it.effect("clears provider status before replacement startup settles", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       const stalled = stalledStartup();
       let starts = 0;
       const h = yield* harness({
         startupEffect: () => (++starts === 1 ? Effect.void : stalled.effect),
       });
-      yield* fs.writeFileString(
-        path.join(h.cwd, ".pi", "extensions", "pi-better-xai.json"),
-        '{"usage":{"enabled":false},"footer":{"mode":"replace"}}\n',
-      );
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      expect(h.setFooter).toHaveBeenCalledWith(expect.any(Function));
+      h.setStatus.mockClear();
 
       const replacement = h.handlers.get("session_start")?.({}, h.ctx);
       yield* Deferred.await(stalled.started);
 
-      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", undefined);
+      expect(h.setFooter).not.toHaveBeenCalled();
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
       yield* invoke(replacement);
     }),

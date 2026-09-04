@@ -27,7 +27,6 @@ import { withUsageEligibility, type UsageProjectionBase } from "./usage-projecti
 
 /** Usage configuration fields the shared controller relies on. */
 export interface UsageControllerConfigFields {
-  readonly enabled: boolean;
   readonly refreshIntervalMs: number;
   readonly showOnlyOnSubscriptionModels: boolean;
 }
@@ -111,6 +110,8 @@ export interface UsageRefreshControllerOptions<
   readonly projection: MutableRef.MutableRef<P>;
   readonly onChange: () => void;
   readonly startPolling?: boolean | undefined;
+  /** Presentation owner controls automatic requests; explicit notified requests still fetch. */
+  readonly backgroundEnabled?: (() => boolean) | undefined;
   readonly agentDir?: string | undefined;
   readonly projectTrusted?: boolean | undefined;
   /** Provider initial projection (shared fields plus provider identity fields). */
@@ -273,7 +274,7 @@ export const makeUsageRefreshController = <
       const segments = [
         `${ctx.model?.provider ?? "none"}/${ctx.model?.id ?? "none"}`,
         ...(options.refreshKeyScope ? [options.refreshKeyScope(ctx)] : []),
-        String(current.config?.usage.enabled ?? false),
+        String(options.backgroundEnabled?.() ?? true),
         String(current.config?.usage.showOnlyOnSubscriptionModels ?? true),
       ];
       return segments.join(":");
@@ -298,7 +299,8 @@ export const makeUsageRefreshController = <
           const cfg = current.config;
           if (!cfg || !hostHasUi(ctx)) return { _tag: "Skipped" } as const;
           const now = yield* Clock.currentTimeMillis;
-          if (!cfg.usage.enabled) return { _tag: "Disabled", notify } as const;
+          if (!notify && options.backgroundEnabled?.() === false)
+            return { _tag: "Disabled", notify } as const;
           if (!(yield* options.eligibility(ctx, cfg))) return { _tag: "Hidden", notify } as const;
           if (
             !request.force &&
@@ -344,7 +346,7 @@ export const makeUsageRefreshController = <
                 error: undefined,
                 statusText:
                   value._tag === "Disabled"
-                    ? "Usage display is disabled."
+                    ? "Usage is hidden in Cosmic UI."
                     : options.hiddenStatusText,
               });
             if (value._tag === "Failure" || value._tag === "Missing") {
@@ -451,7 +453,6 @@ export const makeUsageRefreshController = <
 
 /** Input for the shared usage debug report. */
 export interface UsageDebugReport {
-  readonly usageEnabled: boolean;
   readonly currentModel: string;
   readonly eligible: boolean;
   readonly requiresSubscriptionModel: boolean;
@@ -471,7 +472,6 @@ export interface UsageDebugReport {
 /** Renders the standard provider usage debug report from projection-owned data. */
 export function formatUsageDebugReport(report: UsageDebugReport): string {
   return [
-    `Usage enabled: ${report.usageEnabled}`,
     `Current model: ${report.currentModel}`,
     `Current model eligible: ${report.eligible}`,
     `Requires subscription model: ${report.requiresSubscriptionModel}`,

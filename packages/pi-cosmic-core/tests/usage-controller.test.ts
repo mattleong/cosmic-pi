@@ -80,7 +80,6 @@ it.effect(
       projectConfigExists: false,
       globalConfigExists: true,
       usage: {
-        enabled: true,
         refreshIntervalMs: 60_000,
         showOnlyOnSubscriptionModels: true,
       },
@@ -171,7 +170,6 @@ it.effect("composes the default synchronizeState from eligibility and hiddenStat
     projectConfigExists: false,
     globalConfigExists: true,
     usage: {
-      enabled: true,
       refreshIntervalMs: 60_000,
       showOnlyOnSubscriptionModels: true,
     },

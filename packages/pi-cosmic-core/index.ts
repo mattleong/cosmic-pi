@@ -127,14 +127,6 @@ export {
   type UsageRefreshControllerOptions,
 } from "./src/usage-controller.ts";
 export {
-  createFooterPresenter,
-  type FooterHostData,
-  type FooterMode,
-  type FooterPresenter,
-  type FooterPresenterOptions,
-  type FooterTheme,
-} from "./src/footer-presenter.ts";
-export {
   freezeSnapshot,
   makeFrozenProjection,
   ProjectionError,

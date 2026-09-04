@@ -39,7 +39,6 @@ export const resetProjection = (projection: MutableRef.MutableRef<OpenAIProjecti
 
 export function usageConfigChanged(left: ResolvedConfig, right: ResolvedConfig): boolean {
   return (
-    left.usage.enabled !== right.usage.enabled ||
     left.usage.refreshIntervalMs !== right.usage.refreshIntervalMs ||
     left.usage.showOnlyOnSubscriptionModels !== right.usage.showOnlyOnSubscriptionModels ||
     left.usage.showResetTimes !== right.usage.showResetTimes
@@ -123,7 +122,7 @@ export function visibleStatusLine(
   projection: MutableRef.MutableRef<OpenAIProjection>,
   isUsingOAuth?: boolean,
 ): string | undefined {
-  if (!cfg.usage.enabled || !isOpenAISubscriptionModel(ctx, cfg, isUsingOAuth)) return undefined;
+  if (!isOpenAISubscriptionModel(ctx, cfg, isUsingOAuth)) return undefined;
   const state = MutableRef.get(projection);
   return state.snapshot?.scope === usageScopeForModel(ctx.model?.id) ? state.statusLine : undefined;
 }

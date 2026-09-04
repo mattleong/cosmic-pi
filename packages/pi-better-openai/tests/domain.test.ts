@@ -47,30 +47,28 @@ describe("OpenAI configuration and credentials", () => {
   it.effect("decodes fields independently and merges project over global", () => {
     const store = documents({
       "/agent/extensions/pi-better-openai.json": {
-        usage: { enabled: false, refreshIntervalMs: 30_000, showResetTimes: false },
+        usage: { refreshIntervalMs: 30_000, showResetTimes: false },
         image: { defaultSave: "global", timeoutMs: 40_000 },
       },
       "/project/.pi/extensions/pi-better-openai.json": {
-        usage: { enabled: true, refreshIntervalMs: "bad" },
-        footer: { mode: "status" },
+        usage: { showOnlyOnSubscriptionModels: false, refreshIntervalMs: "bad" },
         image: { outputFormat: "webp", defaultSave: "invalid" },
       },
     });
     return Effect.gen(function* () {
       const cfg = yield* resolveConfig("/project", "/agent", true);
       expect(cfg.usage).toMatchObject({
-        enabled: true,
+        showOnlyOnSubscriptionModels: false,
         refreshIntervalMs: 30_000,
         showResetTimes: false,
       });
-      expect(cfg.footer.mode).toBe("status");
       expect(cfg.image).toMatchObject({
         defaultSave: "global",
         outputFormat: "webp",
         timeoutMs: 40_000,
       });
       const parsed = yield* readConfig("/project/.pi/extensions/pi-better-openai.json");
-      expect(parsed?.usage?.enabled).toBe(true);
+      expect(parsed?.usage?.showOnlyOnSubscriptionModels).toBe(false);
       expect(parsed?.usage?.refreshIntervalMs).toBeUndefined();
     }).pipe(provideBuiltLayer(Layer.merge(store.layer, Path.layer)));
   });

@@ -26,6 +26,24 @@ import { decodeUnknownOrUndefined } from "../schema/decode.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
+const isUsageSetting = (id: string) => id === "visible:openai.usage" || id === "visible:xai.usage";
+const visibilityValue = (id: string, visible: boolean) =>
+  isUsageSetting(id) ? (visible ? "automatic" : "hidden") : String(visible);
+const footerLabels = {
+  model: "Model",
+  effort: "Thinking level",
+  location: "Directory",
+  "openai.fast": "Fast indicator",
+  branch: "Branch",
+  pullRequest: "Pull request",
+  git: "Git changes",
+  context: "Context usage",
+  session: "Session",
+  metrics: "Token and cost metrics",
+  "openai.usage": "OpenAI usage",
+  "xai.usage": "xAI usage",
+  extensions: "Extension status",
+} satisfies Record<(typeof DEFAULT_FOOTER_ORDER)[number], string>;
 
 type CosmicUiSettingChange =
   | {
@@ -40,7 +58,16 @@ function decodeCosmicUiSettingChange<IdInput, ValueInput>(
   value: ValueInput,
 ): CosmicUiSettingChange | undefined {
   if (!Predicate.isString(id)) return undefined;
-  const booleanValue = decodeUnknownOrUndefined(BooleanSettingSchema, value);
+  const booleanValue = decodeUnknownOrUndefined(
+    BooleanSettingSchema,
+    isUsageSetting(id)
+      ? value === "automatic"
+        ? "true"
+        : value === "hidden"
+          ? "false"
+          : undefined
+      : value,
+  );
   if (id === "enabled")
     return booleanValue === undefined
       ? undefined
@@ -70,7 +97,7 @@ const projectedSettingValue = (config: ResolvedCosmicUiConfig, id: string): stri
   const visibilityId = decodeUnknownOrUndefined(VisibilityIdSchema, id.slice("visible:".length));
   return visibilityId === undefined
     ? undefined
-    : String(!config.footer.hidden.includes(visibilityId));
+    : visibilityValue(id, !config.footer.hidden.includes(visibilityId));
 };
 
 export function registerSettingsCommand(
@@ -102,7 +129,9 @@ export function registerSettingsCommand(
       const items: SettingItem[] = [
         {
           id: "enabled",
-          label: "Footer enabled",
+          label: "Custom footer",
+          description:
+            "Disable to use Pi's default footer. Item visibility still applies to provider status.",
           currentValue: String(cfg.footer.enabled),
           values: ["true", "false"],
         },
@@ -120,9 +149,12 @@ export function registerSettingsCommand(
         },
         ...DEFAULT_FOOTER_ORDER.map((id) => ({
           id: `visible:${id}`,
-          label: `Show ${id}`,
-          currentValue: String(!cfg.footer.hidden.includes(id)),
-          values: ["true", "false"],
+          label: footerLabels[id],
+          currentValue: visibilityValue(`visible:${id}`, !cfg.footer.hidden.includes(id)),
+          values: isUsageSetting(`visible:${id}`) ? ["automatic", "hidden"] : ["true", "false"],
+          description: isUsageSetting(`visible:${id}`)
+            ? "Automatic on eligible models. Hidden stops automatic requests; the usage command still works."
+            : "Show this item in the footer.",
         })),
       ];
       // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.

@@ -146,8 +146,25 @@ export function cosmicUiWithDependencies(
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
-  const requestRender = () => bridge.requestRenderNow();
   let footerInstallation!: ReturnType<typeof createFooterInstallation>;
+  let publishedHostState: string | undefined;
+  const publishHostState = () => {
+    if (!footerInstallation) return;
+    const state = {
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      active: footerInstallation.isActive(),
+      ready: currentContext !== undefined,
+      hidden: [...config().footer.hidden],
+    };
+    const key = JSON.stringify(state);
+    if (publishedHostState === key) return;
+    publishedHostState = key;
+    callbacks.invoke("host-query", () => pi.events.emit(COSMIC_UI_HOST_STATE, state), undefined);
+  };
+  const requestRender = () => {
+    bridge.requestRenderNow();
+    publishHostState();
+  };
 
   const slot = makePiSessionRuntimeSlot<
     CosmicUiSessionInput,
@@ -178,6 +195,7 @@ export function cosmicUiWithDependencies(
       currentContext = context;
       workingOwners.activate({ token, timer: activeWorkingTimer });
       footerInstallation.update(ctx);
+      publishHostState();
       slot.fork(
         CosmicUiService.use((service) => service.refreshAll(true)),
         signal,
@@ -188,6 +206,7 @@ export function cosmicUiWithDependencies(
       if (currentContext === context) currentContext = undefined;
       workingOwners.deactivate(token);
       footerInstallation.uninstall();
+      publishHostState();
     },
     onStartFailure: ({ ctx, releaseSignal }) => {
       releaseSignal();
@@ -252,17 +271,7 @@ export function cosmicUiWithDependencies(
         ctx,
       );
     },
-    onActiveChange: (active) => {
-      callbacks.invoke(
-        "host-query",
-        () =>
-          pi.events.emit(COSMIC_UI_HOST_STATE, {
-            version: COSMIC_UI_PROTOCOL_VERSION,
-            active,
-          }),
-        undefined,
-      );
-    },
+    onActiveChange: publishHostState,
   });
 
   const onProtocolEvent = <E>(
@@ -288,7 +297,12 @@ export function cosmicUiWithDependencies(
         if (query)
           callbacks.invoke(
             "host-query",
-            () => query.respond({ active: footerInstallation.isActive() }),
+            () =>
+              query.respond({
+                active: footerInstallation.isActive(),
+                ready: currentContext !== undefined,
+                hidden: [...config().footer.hidden],
+              }),
             undefined,
           );
       }),

@@ -7,8 +7,6 @@ import {
 } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
 import {
-  FOOTER_MODES,
-  FooterModeSchema,
   IMAGE_OUTPUT_FORMATS,
   IMAGE_SAVE_MODES,
   ImageOutputFormatSchema,
@@ -42,26 +40,7 @@ export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<R
     decoder: BooleanFromJsonSchema,
   },
 ];
-export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
-  {
-    id: "footer.mode",
-    label: "Footer mode",
-    currentValue: (cfg) => cfg.footer.mode,
-    values: FOOTER_MODES,
-    description:
-      "replace = custom footer, status = pi footer plus status line, off = no Better OpenAI footer/status.",
-    decoder: FooterModeSchema,
-  },
-];
 export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
-  {
-    id: "usage.enabled",
-    label: "Usage display",
-    currentValue: (cfg) => String(cfg.usage.enabled),
-    values: ["true", "false"],
-    description: "Fetch and display OpenAI subscription usage windows.",
-    decoder: BooleanFromJsonSchema,
-  },
   {
     id: "usage.refreshIntervalMs",
     label: "Usage refresh",
@@ -132,7 +111,6 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   ...FAST_SETTING_DESCRIPTORS,
   ...COMPACTION_SETTING_DESCRIPTORS,
-  ...FOOTER_SETTING_DESCRIPTORS,
   ...USAGE_SETTING_DESCRIPTORS,
   ...IMAGE_SETTING_DESCRIPTORS,
 ];

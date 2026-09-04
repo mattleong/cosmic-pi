@@ -146,7 +146,7 @@ export function registerSettingsController(
   };
 
   pi.registerCommand("xai-settings", {
-    description: "Configure Better xAI usage display",
+    description: "Configure xAI usage refresh details; footer visibility is in /cosmic-ui",
     getArgumentCompletions: (prefix) =>
       completeSettingsArguments(prefix, SETTINGS_OPTION_DESCRIPTORS, [
         { value: "help", label: "help", description: "Show setting ids and usage" },
@@ -178,7 +178,7 @@ export function registerSettingsController(
           "  /xai-settings diagnostics",
           "",
           "Examples:",
-          "  /xai-settings usage.enabled false",
+          "  /xai-settings usage.refreshIntervalMs 30000",
           "  /xai-settings usage.showResetTimes true",
         ];
         return completeHostFeedback(ctx, lines.join("\n"), "info");

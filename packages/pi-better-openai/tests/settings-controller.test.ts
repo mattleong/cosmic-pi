@@ -14,7 +14,6 @@ import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
 import { redactDiagnosticValue } from "pi-cosmic-core";
 import { beforeAll, describe, vi } from "vitest";
-import { DEFAULT_FOOTER_CONFIG, type FooterMode } from "../src/config/schema.ts";
 import { initialFastSnapshot } from "../src/fast/controller.ts";
 import { registerSettingsController } from "../src/settings/controller.ts";
 import { makeResolvedConfig } from "./helpers.ts";
@@ -54,7 +53,6 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
   let component: Component | undefined;
   let currentConfig = makeResolvedConfig({
     configPath: "/tmp/openai-settings.json",
-    footer: { ...DEFAULT_FOOTER_CONFIG, mode: "status" },
   });
   const requestRender = vi.fn();
   const notify = vi.fn();
@@ -125,14 +123,14 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
     if (!component) throw new Error("settings component has not opened");
     return component;
   };
-  const setFooterMode = (mode: FooterMode) => {
+  const setRefreshInterval = (refreshIntervalMs: number) => {
     currentConfig = {
       ...currentConfig,
-      footer: { ...currentConfig.footer, mode },
+      usage: { ...currentConfig.usage, refreshIntervalMs },
     };
   };
 
-  return { invoke, open, selectedComponent, setFooterMode, requestRender, runImpl };
+  return { invoke, open, selectedComponent, setRefreshInterval, requestRender, runImpl };
 }
 
 const input = {
@@ -141,7 +139,7 @@ const input = {
   escape: "\u001b",
 };
 
-function openFooterSubmenu(component: Component): void {
+function openUsageSubmenu(component: Component): void {
   component.handleInput?.(input.down);
   component.handleInput?.(input.down);
   component.handleInput?.(input.enter);
@@ -165,20 +163,20 @@ describe("Better OpenAI settings controller", () => {
         const { closed } = yield* h.open;
         const component = h.selectedComponent();
 
-        openFooterSubmenu(component);
+        openUsageSubmenu(component);
         component.handleInput?.(input.enter);
-        expect(renderedRow(component, "Footer mode")).toContain("off");
+        expect(renderedRow(component, "Usage refresh")).toContain("120000");
 
-        h.setFooterMode("replace");
+        h.setRefreshInterval(15000);
         write.resolve(undefined);
         yield* Effect.promise(() =>
           vi.waitFor(() => {
-            expect(renderedRow(component, "Footer mode")).toContain("replace");
+            expect(renderedRow(component, "Usage refresh")).toContain("15000");
           }),
         );
 
         component.handleInput?.(input.escape);
-        expect(renderedRow(component, "Footer")).toContain("replace");
+        expect(renderedRow(component, "Usage")).toContain("15s");
         component.handleInput?.(input.escape);
         yield* Effect.promise(() => closed);
       }),
@@ -195,9 +193,9 @@ describe("Better OpenAI settings controller", () => {
       const { closed } = yield* h.open;
       const component = h.selectedComponent();
 
-      openFooterSubmenu(component);
+      openUsageSubmenu(component);
       component.handleInput?.(input.enter);
-      expect(renderedRow(component, "Footer mode")).toContain("off");
+      expect(renderedRow(component, "Usage refresh")).toContain("120000");
       component.handleInput?.(input.escape);
       component.handleInput?.(input.escape);
       yield* Effect.promise(() => closed);
@@ -210,7 +208,7 @@ describe("Better OpenAI settings controller", () => {
         }),
       );
       expect(() => component.render(100)).not.toThrow();
-      expect(renderedRow(component, "Footer")).toContain("status");
+      expect(renderedRow(component, "Usage")).toContain("60s");
     }),
   );
 
@@ -225,7 +223,7 @@ describe("Better OpenAI settings controller", () => {
       const { closed } = yield* h.open;
       const component = h.selectedComponent();
 
-      for (let index = 0; index < 5; index += 1) component.handleInput?.(input.down);
+      for (let index = 0; index < 4; index += 1) component.handleInput?.(input.down);
       component.handleInput?.(input.enter);
       component.handleInput?.(input.down);
       component.handleInput?.(input.down);
@@ -256,7 +254,7 @@ describe("Better OpenAI settings controller", () => {
         yield* Effect.promise(() => h.invoke("unknown true"));
         expect(h.runImpl).not.toHaveBeenCalled();
 
-        yield* Effect.promise(() => h.invoke("footer.mode off"));
+        yield* Effect.promise(() => h.invoke("usage.showResetTimes false"));
         expect(h.runImpl).toHaveBeenCalledOnce();
       }),
   );

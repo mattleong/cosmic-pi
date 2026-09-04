@@ -174,7 +174,7 @@ describe("Cosmic UI extension", () => {
 
       expect(() =>
         h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
-          version: 1,
+          version: COSMIC_UI_PROTOCOL_VERSION,
           get respond() {
             return queryRespond();
           },
@@ -183,7 +183,7 @@ describe("Cosmic UI extension", () => {
       expect(respond).toHaveBeenCalledOnce();
       expect(() =>
         h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-          version: 1,
+          version: COSMIC_UI_PROTOCOL_VERSION,
           get owner() {
             return upsertOwner();
           },
@@ -195,7 +195,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "session_start");
       expect(() =>
         h.pi.events.emit(COSMIC_UI_FOOTER_INVALIDATE, {
-          version: 1,
+          version: COSMIC_UI_PROTOCOL_VERSION,
           get owner() {
             return invalidateOwner();
           },
@@ -205,7 +205,7 @@ describe("Cosmic UI extension", () => {
       yield* waitUntil(() => invalidate.mock.calls.length === 1);
       expect(() =>
         h.pi.events.emit(COSMIC_UI_FOOTER_REMOVE, {
-          version: 1,
+          version: COSMIC_UI_PROTOCOL_VERSION,
           owner: "owner",
           get id() {
             return removeId();
@@ -250,12 +250,13 @@ describe("Cosmic UI extension", () => {
         return response;
       };
 
-      expect(query()).toEqual({ active: false });
+      expect(query()).toEqual({ active: false, ready: false, hidden: [] });
       yield* emit(h, "session_start");
-      expect(query()).toEqual({ active: true });
+      expect(query()).toEqual({ active: true, ready: true, hidden: [] });
       yield* emit(h, "session_shutdown");
       expect(query()).toBeUndefined();
-      expect(broadcasts).toEqual([true, false]);
+      expect(broadcasts).toContain(true);
+      expect(broadcasts.at(-1)).toBe(false);
     }),
   );
 

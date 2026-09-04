@@ -13,7 +13,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { COSMIC_UI_HOST_QUERY, type CosmicUiHostQuery } from "pi-cosmic-ui/protocol";
+import {
+  COSMIC_UI_HOST_QUERY,
+  COSMIC_UI_HOST_STATE,
+  COSMIC_UI_FOOTER_UPSERT,
+  COSMIC_UI_FOOTER_REMOVE,
+  COSMIC_UI_PROTOCOL_VERSION,
+  type CosmicUiHostQuery,
+} from "pi-cosmic-ui/protocol";
 import { afterEach, vi } from "vitest";
 import betterOpenAI, {
   betterOpenAIWithDependencies,
@@ -32,10 +39,9 @@ afterEach(() => {
 interface TestConfigDocument {
   readonly persistState: boolean;
   readonly usage: {
-    readonly enabled: boolean;
     readonly showOnlyOnSubscriptionModels?: boolean;
   };
-  readonly footer: { readonly mode: string };
+
   readonly image: { readonly enabled: boolean };
 }
 
@@ -54,8 +60,8 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
       path.join(cwd, ".pi", "extensions", "pi-better-openai.json"),
       encodeConfigDocument({
         persistState: false,
-        usage: { enabled: false },
-        footer: { mode: "status" },
+        usage: {},
+
         image: { enabled: false },
       }),
     );
@@ -342,8 +348,8 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         path.join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json"),
         encodeConfigDocument({
           persistState: false,
-          usage: { enabled: false },
-          footer: { mode: "off" },
+          usage: {},
+
           image: { enabled: true },
         }),
       );
@@ -370,8 +376,8 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         configPath,
         encodeConfigDocument({
           persistState: false,
-          usage: { enabled: true, showOnlyOnSubscriptionModels: true },
-          footer: { mode: "off" },
+          usage: { showOnlyOnSubscriptionModels: true },
+
           image: { enabled: false },
         }),
       );
@@ -393,6 +399,51 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
     }),
   );
 
+  it.effect("uses one visibility policy for Cosmic contributions and default-footer fallback", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const ctx = { ...h.ctx, mode: "tui" as const };
+      vi.mocked(h.pi.getFlag).mockReturnValue(true);
+      let active = true;
+      let hidden: string[] = [];
+      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
+        if (name === COSMIC_UI_HOST_QUERY) {
+          // SAFETY: Only the typed host query is emitted under this name.
+          (data as CosmicUiHostQuery).respond({ active, ready: true, hidden });
+        }
+      });
+      yield* h.emit("session_start", {}, ctx);
+      const stateListener = vi
+        .mocked(h.pi.events.on)
+        .mock.calls.find(([name]) => name === COSMIC_UI_HOST_STATE)?.[1];
+      const publish = () =>
+        stateListener?.({ version: COSMIC_UI_PROTOCOL_VERSION, active, ready: true, hidden });
+      expect(h.pi.events.emit).toHaveBeenCalledWith(
+        COSMIC_UI_FOOTER_UPSERT,
+        expect.objectContaining({ contribution: expect.objectContaining({ id: "openai.fast" }) }),
+      );
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
+
+      active = false;
+      publish();
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", expect.any(String));
+      hidden = ["openai.fast"];
+      publish();
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
+      expect(h.pi.events.emit).toHaveBeenCalledWith(
+        COSMIC_UI_FOOTER_REMOVE,
+        expect.objectContaining({ id: "openai.fast" }),
+      );
+
+      hidden = [];
+      publish();
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", expect.any(String));
+      yield* h.emit("session_shutdown", {}, ctx);
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
+      expect(ctx.ui.setFooter).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("uses status fallback when an installed Cosmic UI host is inactive", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -402,15 +453,15 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         path.join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json"),
         encodeConfigDocument({
           persistState: false,
-          usage: { enabled: false },
-          footer: { mode: "replace" },
+          usage: {},
+
           image: { enabled: false },
         }),
       );
       vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
         if (name === COSMIC_UI_HOST_QUERY) {
           // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
-          (data as CosmicUiHostQuery).respond({ active: false });
+          (data as CosmicUiHostQuery).respond({ active: false, ready: true, hidden: [] });
         }
       });
       const tuiContext = { ...h.ctx, mode: "tui" as const };
@@ -434,7 +485,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       yield* h.emit("session_start");
       expect(h.ctx.ui.setFooter).not.toHaveBeenCalled();
-      yield* invoke(h.commands.get("openai-settings")?.("usage.enabled false", h.ctx));
+      yield* invoke(h.commands.get("openai-settings")?.("usage.showResetTimes false", h.ctx));
       yield* h.emit("session_shutdown");
     }),
   );

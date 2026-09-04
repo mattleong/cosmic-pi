@@ -47,6 +47,7 @@ interface OpenAIUsageServiceOptions {
   readonly projection: MutableRef.MutableRef<OpenAIProjection>;
   readonly onChange: () => void;
   readonly startPolling?: boolean;
+  readonly isUsageVisible?: () => boolean;
   readonly agentDir?: string;
   readonly projectTrusted?: boolean;
 }
@@ -71,6 +72,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         projection: options.projection,
         onChange: options.onChange,
         startPolling: options.startPolling,
+        backgroundEnabled: options.isUsageVisible,
         agentDir: options.agentDir,
         projectTrusted: options.projectTrusted,
         initialProjection,

@@ -95,9 +95,17 @@ function settingsHarness() {
     surface.handleInput(data);
   };
   const enabledLine = () =>
-    surface?.render(100).find((line) => line.includes("Footer enabled")) ?? "";
+    surface?.render(100).find((line) => line.includes("Custom footer")) ?? "";
   const densityLine = () =>
     surface?.render(100).find((line) => line.includes("Footer density")) ?? "";
+  const usageLine = () =>
+    surface
+      ?.render(100)
+      .filter((line) => line.includes("OpenAI usage"))
+      .join("\n") ?? "";
+  const setUsageVisible = (visible: boolean) => {
+    config = { ...config, footer: { ...config.footer, hidden: visible ? [] : ["openai.usage"] } };
+  };
   const setEnabled = (enabled: boolean) => {
     config = { ...config, footer: { ...config.footer, enabled } };
   };
@@ -115,11 +123,39 @@ function settingsHarness() {
     requestRender,
     setDensity,
     setEnabled,
+    setUsageVisible,
+    usageLine,
     updates,
   };
 }
 
 describe("Cosmic UI settings controller", () => {
+  it.effect(
+    "settles automatic and hidden usage choices against the single visibility preference",
+    () => {
+      const h = settingsHarness();
+      return Effect.gen(function* () {
+        const opened = h.open();
+        // Search selects the contribution without depending on its position in the menu.
+        h.input("/");
+        for (const character of "OpenAI usage") h.input(character);
+        h.input();
+        expect(h.updates).toHaveLength(1);
+        h.setUsageVisible(false);
+        yield* Deferred.succeed(h.updates[0]!, undefined);
+        yield* flushSettlements;
+        expect(h.usageLine()).toContain("hidden");
+        h.input();
+        expect(h.updates).toHaveLength(2);
+        yield* Deferred.fail(h.updates[1]!, new Error("write failed"));
+        yield* flushSettlements;
+        expect(h.usageLine()).toContain("hidden");
+        h.close();
+        yield* Effect.promise(() => opened);
+      });
+    },
+  );
+
   it.effect("ignores stale success and failure settlements for a newer optimistic edit", () => {
     const h = settingsHarness();
     return Effect.gen(function* () {
