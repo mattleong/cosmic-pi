@@ -33,6 +33,7 @@ const catalogVersion = (name) => {
   return version;
 };
 const piVersion = catalogVersion("@earendil-works/pi-coding-agent");
+const piServerVersion = catalogVersion("@earendil-works/pi-server");
 const tuiVersion = catalogVersion("@earendil-works/pi-tui");
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
 
@@ -109,6 +110,13 @@ try {
           "pi-subagents": `file:${tarballPath("pi-subagents")}`,
         },
         pnpm: {
+          packageExtensions: {
+            [`@earendil-works/pi-coding-agent@${piVersion}`]: {
+              dependencies: {
+                "@earendil-works/pi-server": piServerVersion,
+              },
+            },
+          },
           overrides: {
             "pi-ask-user": `file:${tarballPath("pi-ask-user")}`,
             "pi-cosmic-core": `file:${tarballPath("pi-cosmic-core")}`,
