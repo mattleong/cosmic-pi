@@ -166,6 +166,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.options.parentEffort,
       this.options.parentModel,
       this.advancedExpanded,
+      { index: this.candidateIndex, count: this.draft().candidates.length },
     );
   }
 
@@ -582,8 +583,10 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.setMessage("info", "No profile change was needed.");
       this.renderSoon();
     } else {
-      this.fieldIndex = 0;
-      this.advancedExpanded = false;
+      if (action !== "move-up" && action !== "move-down") {
+        this.fieldIndex = 0;
+        this.advancedExpanded = false;
+      }
       const restoringInvalidLowerRoute =
         action === "reset" && this.scope !== "global" && result.draft.kind === "invalid";
       this.persist(
@@ -631,6 +634,14 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       return;
     }
     const field = row.field;
+    if (field === "move-up" || field === "move-down") {
+      this.performDraftAction(field);
+      return;
+    }
+    if (field === "remove") {
+      this.arm("remove");
+      return;
+    }
     if (field === "model") {
       this.openModelPicker(candidate);
       return;

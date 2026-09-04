@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { effectTest, step } from "./support/effect-test.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import {
@@ -9,6 +10,11 @@ import {
   type SessionProfileOverrideSeed,
 } from "../src/profiles/session-overrides.ts";
 import { inheritSessionDraft } from "../src/settings/profile-route-editor.ts";
+import type { ProfileCandidate } from "../src/profiles/model.ts";
+import {
+  candidateFieldRows,
+  type ProfileWorkspaceField,
+} from "../src/settings/ui/profile-workspace-model.ts";
 import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceOptions,
@@ -138,7 +144,7 @@ const openFields = (component: ProfileWorkspaceComponent): void => {
 
 const openActions = (component: ProfileWorkspaceComponent): void => {
   openFields(component);
-  for (let index = 0; index < 5; index += 1) component.handleInput("j");
+  component.handleInput("G");
   component.handleInput("\r");
 };
 
@@ -148,6 +154,118 @@ const chooseDisable = (component: ProfileWorkspaceComponent): void => {
   for (let index = 0; index < 3; index += 1) component.handleInput("j");
   component.handleInput("\r");
 };
+
+const modelEditor = (count = 3) => {
+  const original: ReadonlyArray<ProfileCandidate> = Array.from({ length: count }, (_, index) => ({
+    host: "local",
+    runtime: "pi",
+    model: `openai/model-${index}`,
+    effort: "high",
+    context: "fresh",
+    writeIntent: "read-only",
+    openaiFastMode: false,
+    closeOnReport: true,
+  }));
+  let candidates = original;
+  const inspection = () =>
+    makeInspection({ revision: 1, overrides: { generalist: { candidates } } });
+  const saveDraft = vi.fn<ProfileWorkspaceOptions["saveDraft"]>((_target, _profile, draft) => {
+    candidates = draft.candidates;
+    return Promise.resolve({ inspection: inspection() });
+  });
+  const component = new ProfileWorkspaceComponent(
+    baseOptions({ inspection: inspection(), saveDraft }),
+  );
+  openFields(component);
+  const selectField = (field: ProfileWorkspaceField): void => {
+    const rows = candidateFieldRows(original[0]!, "generalist");
+    const index = rows.findIndex((row) => row.field === field);
+    if (index < 0) throw new Error(`Missing field ${field}`);
+    component.handleInput("g");
+    component.handleInput("g");
+    for (let step = 0; step < index; step += 1) component.handleInput("j");
+    component.handleInput("\r");
+  };
+  return { component, original, saveDraft, selectField, candidates: () => candidates };
+};
+
+describe("direct profile model actions", () => {
+  effectTest("keeps the moved model selected across repeated moves and saves", function* () {
+    const editor = modelEditor();
+    const [first, second, third] = editor.original;
+    editor.selectField("move-down");
+    yield* step(settle);
+    expect(editor.candidates()).toEqual([second, first, third]);
+
+    editor.component.handleInput("\r");
+    yield* step(settle);
+    expect(editor.candidates()).toEqual([second, third, first]);
+
+    editor.selectField("move-up");
+    yield* step(settle);
+    expect(editor.candidates()).toEqual([second, first, third]);
+    editor.component.handleInput("\r");
+    yield* step(settle);
+    expect(editor.candidates()).toEqual(editor.original);
+
+    editor.selectField("remove");
+    editor.component.handleInput("\r");
+    yield* step(settle);
+    expect(editor.candidates()).toEqual([second, third]);
+  });
+
+  effectTest("does not save moves beyond the first or last position", function* () {
+    const editor = modelEditor(2);
+    editor.selectField("move-up");
+    expect(editor.saveDraft).not.toHaveBeenCalled();
+    editor.selectField("move-down");
+    yield* step(settle);
+    editor.saveDraft.mockClear();
+    editor.component.handleInput("\r");
+    expect(editor.saveDraft).not.toHaveBeenCalled();
+    expect(editor.candidates()).toEqual([...editor.original].reverse());
+  });
+
+  effectTest(
+    "requires confirmation, allows cancellation, and selects a remaining model after deletion",
+    function* () {
+      const editor = modelEditor();
+      editor.selectField("move-down");
+      yield* step(settle);
+      editor.saveDraft.mockClear();
+      editor.selectField("remove");
+      expect(editor.saveDraft).not.toHaveBeenCalled();
+      editor.component.handleInput("\u001b");
+      expect(editor.saveDraft).not.toHaveBeenCalled();
+
+      editor.selectField("remove");
+      editor.component.handleInput("\r");
+      yield* step(settle);
+      expect(editor.candidates()).toEqual([editor.original[1], editor.original[2]]);
+      editor.selectField("remove");
+      editor.component.handleInput("\r");
+      yield* step(settle);
+      expect(editor.candidates()).toEqual([editor.original[2]]);
+    },
+  );
+
+  effectTest(
+    "keeps single-model moves inert and disables the profile only after confirmed deletion",
+    function* () {
+      const editor = modelEditor(1);
+      editor.selectField("move-up");
+      editor.selectField("move-down");
+      editor.selectField("remove");
+      expect(editor.saveDraft).not.toHaveBeenCalled();
+      editor.component.handleInput("\r");
+      yield* step(settle);
+      expect(editor.saveDraft).toHaveBeenCalledWith({ kind: "session" }, "generalist", {
+        kind: "disabled",
+        candidates: [],
+      });
+    },
+  );
+});
 
 describe("profile workspace navigation", () => {
   it("opens the saved-set library from p and preserves the selected profile", () => {

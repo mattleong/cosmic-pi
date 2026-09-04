@@ -30,6 +30,9 @@ export type ProfileWorkspaceField =
   | "context"
   | "openaiFastMode"
   | "closeOnReport"
+  | "move-up"
+  | "move-down"
+  | "remove"
   | "actions";
 
 export interface ProfileWorkspaceFieldRow {
@@ -229,6 +232,7 @@ export const candidateFieldRows = (
   parentEffort: SubagentEffort = "high",
   parentModel?: string | undefined,
   advancedExpanded = false,
+  position: { readonly index: number; readonly count: number } = { index: 0, count: 1 },
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const advanced = advancedCandidateRows(candidate, parentModel);
   const advancedValues = advancedSummaryValues(candidate, parentModel);
@@ -260,13 +264,35 @@ export const candidateFieldRows = (
   return [
     ...essential,
     ...(advancedExpanded ? advanced : []),
+    {
+      field: "move-up",
+      label: "Move up",
+      value: "earlier in fallback order",
+      fixed: position.index === 0,
+      ...(position.index === 0 && { fixedReason: "This model is already Primary." }),
+    },
+    {
+      field: "move-down",
+      label: "Move down",
+      value: "later in fallback order",
+      fixed: position.index >= position.count - 1,
+      ...(position.index >= position.count - 1 && {
+        fixedReason: "This model is already last in the fallback order.",
+      }),
+    },
+    {
+      field: "remove",
+      label: "Delete model",
+      value: position.count === 1 ? "disables this profile" : "remove from this profile",
+      fixed: false,
+    },
     { field: "actions", label: "Actions", value: "manage Primary and fallbacks", fixed: false },
   ];
 };
 
 export type SelectableCandidateField = Exclude<
   ProfileWorkspaceField,
-  "model" | "advanced" | "actions"
+  "model" | "advanced" | "move-up" | "move-down" | "remove" | "actions"
 >;
 
 const RUN_WITH_CHOICES: ReadonlyArray<

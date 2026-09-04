@@ -293,6 +293,7 @@ const fieldRows = (state: ProfileWorkspaceRenderState) => {
     state.parentEffort,
     state.parentModel,
     state.advancedExpanded,
+    { index: state.candidateIndex, count: state.draft.candidates.length },
   );
 };
 
@@ -326,6 +327,10 @@ const fieldHelp = {
   context: "Fresh starts without earlier context. Fork is available only with Local Pi.",
   openaiFastMode: "Fast mode requests OpenAI priority service when the model supports it.",
   closeOnReport: "Only Herdr read-only runs can stay open after reporting.",
+  "move-up": "Move this model earlier in the fallback order. The first model becomes Primary.",
+  "move-down": "Move this model later in the fallback order. The first model becomes Primary.",
+  remove:
+    "Delete this model from the profile after confirmation. Deleting the last model disables the profile.",
   actions:
     "Add, copy, reorder, or remove Primary/Fallback choices. You can also disable or restore the profile.",
 } satisfies Readonly<Record<ProfileWorkspaceField, string>>;

@@ -16,7 +16,7 @@ At 100 columns or more, the editor uses the shared list/detail frame with profil
 
 Profiles open into ordered Primary and Fallback rows. Candidate settings show Model, Reasoning, File access, and Run with first. Run with combines host and runtime into the six Local or Herdr plus Pi, Claude, or Codex choices. Advanced expands Context, OpenAI fast mode, and Report policy only when those values apply or need repair.
 
-The main footer is `Enter Edit`, `p Profile sets`, and `Esc Close`. Route additions, copies, reordering, removal, disable, and restore operations live in the explicit Actions selector. Destructive choices require Enter confirmation and allow Esc cancellation. Model catalogs load asynchronously from one captured generation; cancellation or disposal aborts outstanding catalog work and ignores late UI continuations.
+The main footer is `Enter Edit`, `p Profile sets`, and `Esc Close`. Move up, Move down, and Delete model appear directly in candidate settings. Moves keep the same model selected and save immediately; the first model is Primary. Boundary moves are unavailable. Deleting the last model warns that the profile will be disabled. The Actions selector still offers additions, copies, reordering, removal, disable, and restore operations. Destructive choices require Enter confirmation and allow Esc cancellation. Model catalogs load asynchronously from one captured generation; cancellation or disposal aborts outstanding catalog work and ignores late UI continuations.
 
 ## Saved-set library
 
