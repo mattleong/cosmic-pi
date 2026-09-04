@@ -14,7 +14,7 @@ import { profileRouteOptionLabel } from "./profile-workspace-model.ts";
 import {
   SearchableSelectPage,
   type SearchableSelectHostOptions,
-} from "./searchable-select-page.ts";
+} from "pi-cosmic-ui/manager/searchable-select";
 
 export type ProfileModelChoice =
   | { readonly kind: "model"; readonly selector: string }

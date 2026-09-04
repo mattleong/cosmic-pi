@@ -25,7 +25,7 @@ import {
 import {
   SearchableSelectPage,
   type SearchableSelectHostOptions,
-} from "./searchable-select-page.ts";
+} from "pi-cosmic-ui/manager/searchable-select";
 
 interface SharedSelectorOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;

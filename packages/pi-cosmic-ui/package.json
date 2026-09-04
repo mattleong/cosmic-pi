@@ -35,7 +35,9 @@
     "./manager/key-labels": "./src/manager/key-labels.ts",
     "./manager/keymap": "./src/manager/keymap.ts",
     "./manager/list-detail": "./src/manager/list-detail.ts",
+    "./manager/list-navigation": "./src/manager/list-navigation.ts",
     "./manager/list-detail-shell": "./src/manager/list-detail-shell.ts",
+    "./manager/searchable-select": "./src/manager/searchable-select.ts",
     "./manager/settings-adapter": "./src/manager/settings-adapter.ts",
     "./manager/settings-surface": "./src/manager/settings-surface.ts",
     "./protocol": "./src/protocol/protocol.ts"

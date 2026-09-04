@@ -1,4 +1,4 @@
-import type { PageSteps } from "pi-cosmic-ui/manager/keymap";
+import type { PageSteps } from "./keymap.ts";
 
 /** Motion keybindings shared by settings list pages; endpoint motions jump to the bounds. */
 export type ListMotion =

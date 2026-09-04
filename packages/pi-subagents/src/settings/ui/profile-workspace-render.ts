@@ -38,7 +38,7 @@ import {
   type ProfileWorkspaceField,
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
-import type { SettingsSelectKeybindingId } from "./searchable-select-page.ts";
+import type { SettingsSelectKeybindingId } from "pi-cosmic-ui/manager/searchable-select";
 
 export interface ProfileWorkspaceConfirmation {
   readonly title: string;

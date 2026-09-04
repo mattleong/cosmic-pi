@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import { SearchableSelectPage } from "../src/settings/ui/searchable-select-page.ts";
+import { SearchableSelectPage } from "../src/manager/searchable-select.ts";
 
 // SAFETY: The pure selector renderer uses only these Theme methods.
 const theme = {

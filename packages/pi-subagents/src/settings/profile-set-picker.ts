@@ -12,7 +12,7 @@ import {
   isMovementMotion,
   movementOffset,
   nextListMotionIndex,
-} from "./ui/list-navigation.ts";
+} from "pi-cosmic-ui/manager/list-navigation";
 import type { PersistentProfileSetRef, ProfileSettingsInspection } from "./profile-route-editor.ts";
 import {
   initialProfileSetPickerIndex,
@@ -21,7 +21,7 @@ import {
   type ProfileSetPickerEntry,
 } from "./ui/profile-set-picker-model.ts";
 import { renderProfileSetPicker } from "./ui/profile-set-picker-render.ts";
-import type { SearchableSelectHostOptions } from "./ui/searchable-select-page.ts";
+import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 
 export type ProfileSetPickerAction =
   | { readonly action: "use-current"; readonly target: PersistentProfileSetRef }

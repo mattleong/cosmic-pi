@@ -28,7 +28,7 @@ import {
   type CandidateModelPickerData,
 } from "./profile-model-catalog.ts";
 import { makeProfileModelPickerPage, type ProfileModelChoice } from "./ui/model-picker.ts";
-import { isMovementMotion, movementOffset } from "./ui/list-navigation.ts";
+import { isMovementMotion, movementOffset } from "pi-cosmic-ui/manager/list-navigation";
 import {
   candidateFieldRows,
   draftKindLabel,
@@ -51,7 +51,7 @@ import {
 import {
   SearchableSelectPage,
   type SearchableSelectHostOptions,
-} from "./ui/searchable-select-page.ts";
+} from "pi-cosmic-ui/manager/searchable-select";
 
 export type ProfileWorkspaceSaveResult =
   | {

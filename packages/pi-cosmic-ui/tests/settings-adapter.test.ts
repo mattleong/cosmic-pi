@@ -6,6 +6,13 @@ import {
   VimSettingsAdapter,
 } from "../src/manager/settings-adapter.ts";
 
+interface TestSettingsChild extends Component {
+  focused: boolean;
+  readonly searchInput: { focused: boolean; readonly setValue: (value: string) => void };
+  readonly submenuComponent: null;
+  readonly applyFilter: (query: string) => void;
+}
+
 const makeChild = () => {
   const forwarded: string[] = [];
   const setValue = vi.fn();
@@ -18,7 +25,7 @@ const makeChild = () => {
     handleInput: (data: string) => forwarded.push(data),
     render: () => ["settings", ""],
     invalidate: vi.fn(),
-  } satisfies Component & Record<string, unknown>;
+  } satisfies TestSettingsChild;
   return { child, forwarded, setValue, applyFilter };
 };
 

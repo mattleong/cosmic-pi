@@ -10,15 +10,11 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
-import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
-import {
-  FullScreenKeymap,
-  pageSteps,
-  type FullScreenSelectionKeybindingId,
-} from "pi-cosmic-ui/manager/keymap";
+import { renderResponsiveManagerFooter } from "./chrome.ts";
+import { padListDetailRow } from "./list-detail.ts";
 import { isListMotion, nextListMotionIndex } from "./list-navigation.ts";
-import { fullScreenSettingsHint } from "pi-cosmic-ui/manager/settings-adapter";
+import { FullScreenKeymap, pageSteps, type FullScreenSelectionKeybindingId } from "./keymap.ts";
+import { fullScreenSettingsHint } from "./settings-adapter.ts";
 
 export interface SearchableSelectPageChoice<A> {
   readonly value: string;
