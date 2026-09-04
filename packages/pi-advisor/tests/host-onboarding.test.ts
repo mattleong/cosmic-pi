@@ -18,18 +18,22 @@ const context = (options: {
   const models = [...(options.models ?? [])];
   const scoped = [...(options.scoped ?? [])];
   const custom: ExtensionContext["ui"]["custom"] = (factory) =>
-    new Promise((resolve) => {
-      const tuiFixture = { terminal: { rows: 14 }, requestRender: vi.fn() };
-      // SAFETY: The picker reads only terminal rows and requestRender from this TUI fixture.
-      const tui = tuiFixture as never;
-      const keybindingsFixture = { matches: () => false, getKeys: () => [] };
-      // SAFETY: The picker reads only matches and getKeys from this keybinding fixture.
-      const keybindings = keybindingsFixture as never;
-      const component = factory(tui, theme, keybindings, resolve);
-      Promise.resolve(component).then((ready) => {
-        for (const input of options.inputs) ready.handleInput?.(input);
-      });
-    });
+    Effect.runPromise(
+      Effect.callback((resume) => {
+        const tuiFixture = { terminal: { rows: 14 }, requestRender: vi.fn() };
+        // SAFETY: The picker reads only terminal rows and requestRender from this TUI fixture.
+        const tui = tuiFixture as never;
+        const keybindingsFixture = { matches: () => false, getKeys: () => [] };
+        // SAFETY: The picker reads only matches and getKeys from this keybinding fixture.
+        const keybindings = keybindingsFixture as never;
+        const component = factory(tui, theme, keybindings, (result) =>
+          resume(Effect.succeed(result)),
+        );
+        Promise.resolve(component).then((ready) => {
+          for (const input of options.inputs) ready.handleInput?.(input);
+        });
+      }),
+    );
   const fixture = {
     mode: "tui" as const,
     hasUI: true,
