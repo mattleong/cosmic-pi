@@ -324,7 +324,8 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   const events = yield* Queue.dropping<ChildWireEvent, Cause.Done>(EVENT_CAPACITY);
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
-  const cliEntry = join(getPackageDir(), "dist", "cli.js");
+  // Pi's published CLI bundles dependencies absent from the unbundled dist/cli.js.
+  const cliEntry = join(getPackageDir(), "dist", "bundle", "cli.js");
   const toolPolicy = childToolPolicy(request.activeTools);
   const cliArgs = [
     "--mode",
