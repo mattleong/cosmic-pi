@@ -46,7 +46,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 
 Better OpenAI publishes data-oriented fast-mode and usage primitives over the versioned Cosmic UI event protocol when a host is present. Better OpenAI depends on `pi-cosmic-ui` only for that narrow plain-data protocol client; provider behavior stays correct when no Cosmic UI host answers discovery.
 
-When Cosmic UI is active, it owns footer layout, visibility, and density. Better OpenAI's `footer.mode` continues to control only the standalone fallback. The `usage.enabled` setting remains effective in both modes.
+When Cosmic UI is active, it owns footer layout, visibility, and density. The default `footer.mode` is `status`; `replace` remains an explicit legacy standalone fallback and is downgraded to status while an installed Cosmic UI host is inactive. `off` removes Better OpenAI footer contributions and standalone status. The `usage.enabled` setting remains effective whenever footer output is enabled.
 
 ## Configuration
 

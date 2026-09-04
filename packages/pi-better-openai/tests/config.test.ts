@@ -4,7 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodePlatformLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
 import { prepareSettingUpdate } from "../src/config/options.ts";
-import type { ConfigFile } from "../src/config/schema.ts";
+import { DEFAULT_FOOTER_CONFIG, type ConfigFile } from "../src/config/schema.ts";
 import {
   configPaths,
   readConfig,
@@ -18,6 +18,10 @@ const temp = FileSystem.FileSystem.pipe(
 );
 
 layer(nodePlatformLayer)("config helpers", (it) => {
+  it("uses status as the safe footer default", () => {
+    expect(DEFAULT_FOOTER_CONFIG.mode).toBe("status");
+  });
+
   it.effect("preserves unknown fields through Effect document writes", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;

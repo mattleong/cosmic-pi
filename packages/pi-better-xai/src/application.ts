@@ -66,11 +66,40 @@ export function registerBetterXaiApplication(
   const footerController = createFooterController({ config, projection, hasTerminalUI });
   const updateFooter = (fallback: ExtensionContext) => {
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
-    if (!MutableRef.get(projection).config) return;
-    if (!cosmicUi.active) return footerController.update(ctx);
-    const usage = xaiUsageFooterPrimitive(projection);
-    if (usage) cosmicUi.upsert(usage);
-    else cosmicUi.remove("xai.usage");
+    const cfg = MutableRef.get(projection).config;
+    if (!cfg) return;
+    if (hasTerminalUI(ctx)) cosmicUi.query();
+    else cosmicUi.shutdown();
+    if (cosmicUi.active) {
+      footerController.update(ctx, "off");
+      if (cfg.footer.mode === "off") cosmicUi.remove("xai.usage");
+      else {
+        const usage = xaiUsageFooterPrimitive(projection);
+        if (usage) cosmicUi.upsert(usage);
+        else cosmicUi.remove("xai.usage");
+      }
+      return;
+    }
+    if (cosmicUi.installed && cfg.footer.mode !== "off") {
+      const usage = xaiUsageFooterPrimitive(projection);
+      if (usage) cosmicUi.upsert(usage);
+      else cosmicUi.remove("xai.usage");
+    } else cosmicUi.remove("xai.usage");
+    footerController.update(
+      ctx,
+      cosmicUi.installed && cfg.footer.mode === "replace" ? "status" : cfg.footer.mode,
+    );
+  };
+  let stopCosmicUiChanges: (() => void) | undefined;
+  const watchCosmicUi = () => {
+    if (stopCosmicUiChanges) return;
+    stopCosmicUiChanges = cosmicUi.onHostStateChange(() => {
+      if (currentContext) updateFooter(MutableRef.get(currentContext));
+    });
+  };
+  const stopWatchingCosmicUi = () => {
+    stopCosmicUiChanges?.();
+    stopCosmicUiChanges = undefined;
   };
 
   const slot = makePiSessionRuntimeSlot<XaiSessionInput, XaiApplication, never, XaiRuntimeError>({
@@ -85,13 +114,15 @@ export function registerBetterXaiApplication(
       ),
     startup: () => dependencies.startupEffect(),
     onActivated: ({ ctx }) => {
-      if (hasTerminalUI(ctx)) cosmicUi.query();
-      else cosmicUi.shutdown();
+      watchCosmicUi();
       updateFooter(ctx);
     },
     onDeactivated: ({ context }) => {
-      if (currentContext !== context) return;
-      currentContext = undefined;
+      if (currentContext === context) {
+        footerController.update(MutableRef.get(context), "off");
+        currentContext = undefined;
+      }
+      stopWatchingCosmicUi();
       cosmicUi.shutdown();
       resetProjection(projection);
     },

@@ -8,7 +8,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 
 - Settings command registered by `src/settings/controller.ts`.
 - Events: session lifecycle, turns, model/thinking/session changes, messages, blocking UI prompt spans, and file-mutating tool completion.
-- Cross-extension events: host query plus footer upsert/remove/invalidate.
+- Cross-extension events: host query/state plus footer upsert/remove/invalidate. Discovery replies synchronously with live custom-footer ownership; legacy no-argument replies still mean active. Installation transitions broadcast host state so providers can re-query immediately. Clients distinguish an absent host from an installed-but-inactive host, and they may buffer contributions through the inactive host while providers use status fallback without competing for the footer slot.
 
 ## Source map
 
@@ -19,7 +19,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/footer/component.ts` assembles synchronous footer lines and surfaces from detached projections.
 - `src/boundary/host-footer-projection.ts` materializes hostile Pi getters behind the host-callback boundary; `src/boundary/host-usage.ts` Schema-decodes non-negative finite usage, context, and model numbers before arithmetic or rendering. Settings, usage, and protocol schemas share the private `src/schema/decode.ts` exit decoder. Protocol normalization keeps its outer exception guard for hostile proxies.
 - `src/footer/builtin-contributions.ts` projects detached host/application data into built-in text contributions.
-- The remaining `src/footer/` modules own registry/client behavior and pure responsive layout. Text/status contributions are terminal-sanitized, and surface layout preserves only exact anchored Kitty/iTerm image lines plus safe visual SGR on ordinary lines.
+- The remaining `src/footer/` modules own registry/client behavior and pure responsive layout. Text/status contributions are terminal-sanitized, every semantic contribution tone resolves to a valid Pi theme token, and surface layout preserves only exact anchored Kitty/iTerm image lines plus safe visual SGR on ordinary lines.
 - `src/manager/chrome.ts` exports pure shared manager chrome: fixed-width starting/Braille activity frames, responsive grouped action footers, the shared narrow/stacked/wide layout tiers (`managerLayoutTier`), and the unified status vocabulary (`◌` pending, Braille running, `✓` done, `✗` failed, `⊘` stopped/cancelled, `◒` stopping) through `managerNoticeGlyph` / `managerStateGlyph` (`pi-cosmic-ui/manager`).
 - `src/manager/keymap.ts` (`pi-cosmic-ui/manager/keymap`) exports the pure full-screen key resolver (internal navigation/search/text-input/confirmation/busy contexts), Vim chord handling, distinct half-page (`Ctrl-U/D`) and full-page (`PgUp/PgDn` plus configured `tui.select.pageUp/pageDown`) motions, the printable decoder (`decodeFullScreenPrintable`, which rejects DEL as a control key in both raw and Kitty encodings), and the pure `pageSteps` full/half page-step arithmetic shared by full-screen list surfaces. The busy context resolves only Esc/configured cancel to `cancel` and `q`/`Q` to `quit` and swallows every other key, so overlays with an in-flight operation stay dismissible without exposing navigation or shortcuts.
 - `src/manager/list-navigation.ts` (`pi-cosmic-ui/manager/list-navigation`) owns pure clamped and optional wrap-around selection arithmetic for row, endpoint, half-page, and full-page motions.

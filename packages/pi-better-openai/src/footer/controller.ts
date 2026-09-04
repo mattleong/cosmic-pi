@@ -233,9 +233,9 @@ export function createFooterController(deps: {
       renderDetailed(ctx, theme, footerData, width),
   });
 
-  function updateFooter(ctx: ExtensionContext): void {
+  function updateFooter(ctx: ExtensionContext, modeOverride?: "replace" | "status" | "off"): void {
     currentContext = ctx;
-    presenter.update(ctx);
+    presenter.update(ctx, modeOverride);
   }
 
   function addAssistantUsage(usage: {

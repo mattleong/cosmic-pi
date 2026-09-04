@@ -17,7 +17,9 @@ import {
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
+  COSMIC_UI_HOST_STATE,
   COSMIC_UI_PROTOCOL_VERSION,
+  type CosmicUiHostStateEvent,
 } from "../src/protocol/protocol.ts";
 import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
@@ -225,6 +227,35 @@ describe("Cosmic UI extension", () => {
       ])
         expect(() => h.pi.events.emit(eventName, throwing)).not.toThrow();
       yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("reports live custom-footer ownership through host discovery", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const broadcasts: boolean[] = [];
+      h.pi.events.on(COSMIC_UI_HOST_STATE, (data) => {
+        // SAFETY: This listener is registered only for Cosmic UI's typed host-state event.
+        broadcasts.push((data as CosmicUiHostStateEvent).active);
+      });
+      let response: { readonly active: boolean } | undefined;
+      const query = () => {
+        response = undefined;
+        h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
+          version: COSMIC_UI_PROTOCOL_VERSION,
+          respond: (state?: { readonly active: boolean }) => {
+            response = state;
+          },
+        });
+        return response;
+      };
+
+      expect(query()).toEqual({ active: false });
+      yield* emit(h, "session_start");
+      expect(query()).toEqual({ active: true });
+      yield* emit(h, "session_shutdown");
+      expect(query()).toBeUndefined();
+      expect(broadcasts).toEqual([true, false]);
     }),
   );
 

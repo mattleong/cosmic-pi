@@ -81,7 +81,8 @@ export function makeFooterStatusDeclaration(options: {
         client.shutdown();
         return;
       }
-      if (client.query()) client.upsert(contribution);
+      client.query();
+      if (client.installed) client.upsert(contribution);
     },
     shutdown() {
       client.shutdown();

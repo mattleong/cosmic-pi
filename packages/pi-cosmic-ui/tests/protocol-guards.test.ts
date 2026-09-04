@@ -4,6 +4,7 @@ import {
   normalizeCosmicFooterRemoveEvent,
   normalizeCosmicFooterUpsertEvent,
   normalizeCosmicUiHostQuery,
+  normalizeCosmicUiHostStateEvent,
 } from "../src/protocol/protocol.ts";
 
 const hostileVersion = () =>
@@ -17,6 +18,7 @@ describe("Cosmic UI protocol guards", () => {
   it("contains hostile getters instead of throwing through the event boundary", () => {
     for (const normalize of [
       normalizeCosmicUiHostQuery,
+      normalizeCosmicUiHostStateEvent,
       normalizeCosmicFooterUpsertEvent,
       normalizeCosmicFooterRemoveEvent,
       normalizeCosmicFooterInvalidateEvent,
@@ -46,6 +48,7 @@ describe("Cosmic UI protocol guards", () => {
 
     for (const normalize of [
       normalizeCosmicUiHostQuery,
+      normalizeCosmicUiHostStateEvent,
       normalizeCosmicFooterUpsertEvent,
       normalizeCosmicFooterRemoveEvent,
       normalizeCosmicFooterInvalidateEvent,

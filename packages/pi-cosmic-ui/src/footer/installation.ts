@@ -20,6 +20,7 @@ interface FooterInstallationOptions {
     ctx: ExtensionContext,
   ) => void;
   readonly refreshAfterBranchChange: (ctx: ExtensionContext) => void;
+  readonly onActiveChange: (active: boolean) => void;
 }
 
 /** Owns the synchronous Pi footer installation generation and exact-once disposal state. */
@@ -33,6 +34,12 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
   let activeFooterInstance: object | undefined;
   let activeFooterRenderRequest: (() => void) | undefined;
   let activeFooterDisposeAll: (() => void) | undefined;
+  let publishedActive = false;
+  const publishActive = (active: boolean) => {
+    if (active === publishedActive) return;
+    publishedActive = active;
+    options.onActiveChange(active);
+  };
 
   const uninstall = () => {
     const ctx = installedContext;
@@ -59,6 +66,7 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
     if (installedContext === ctx) installedContext = undefined;
     footerComponent = undefined;
     pendingFooterGeneration = undefined;
+    publishActive(false);
     if (renderRequest) options.clearRenderRequest(renderRequest);
   };
 
@@ -173,6 +181,7 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
                   activeFooterDisposeAll = undefined;
                   installedContext = undefined;
                   if (footerComponent === component) footerComponent = undefined;
+                  publishActive(false);
                   disposeAll();
                 } else if (pendingFooterGeneration === generation) {
                   stagedInstance = undefined;
@@ -199,6 +208,7 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
       activeFooterDisposeAll = disposeAll;
       installedContext = ctx;
       if (stagedComponent) footerComponent = stagedComponent;
+      publishActive(true);
     } else {
       if (pendingFooterGeneration === generation) pendingFooterGeneration = undefined;
       const failedRenderRequest = stagedRenderRequest;
@@ -213,6 +223,7 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
   return {
     update,
     uninstall,
+    isActive: () => installedContext !== undefined,
     invalidateContextUsage: () => footerComponent?.invalidateContextUsage(),
   };
 };

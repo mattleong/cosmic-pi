@@ -56,7 +56,7 @@ export const DEFAULT_USAGE_CONFIG: ResolvedConfig["usage"] = {
   showOnlyOnSubscriptionModels: true,
   showResetTimes: true,
 };
-export const DEFAULT_FOOTER_CONFIG: ResolvedConfig["footer"] = { mode: "replace" };
+export const DEFAULT_FOOTER_CONFIG: ResolvedConfig["footer"] = { mode: "status" };
 export const DEFAULT_COMPACTION_CONFIG: ResolvedConfig["compaction"] = { enabled: false };
 export const DEFAULT_IMAGE_CONFIG: ResolvedConfig["image"] = {
   enabled: true,

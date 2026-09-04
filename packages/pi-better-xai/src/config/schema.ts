@@ -32,5 +32,5 @@ export const DEFAULT_USAGE_CONFIG: ResolvedConfig["usage"] = {
 };
 
 export const DEFAULT_FOOTER_CONFIG: ResolvedConfig["footer"] = {
-  mode: "replace",
+  mode: "status",
 };

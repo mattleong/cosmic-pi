@@ -10,6 +10,7 @@ import {
 
 export const COSMIC_UI_PROTOCOL_VERSION = 1 as const;
 export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v1:host:query";
+export const COSMIC_UI_HOST_STATE = "cosmic-ui:v1:host:state";
 export const COSMIC_UI_FOOTER_UPSERT = "cosmic-ui:v1:footer:upsert";
 export const COSMIC_UI_FOOTER_REMOVE = "cosmic-ui:v1:footer:remove";
 export const COSMIC_UI_FOOTER_INVALIDATE = "cosmic-ui:v1:footer:invalidate";
@@ -135,9 +136,17 @@ export type CosmicFooterContribution =
 
 export { detachCosmicFooterContribution };
 
+export interface CosmicUiHostState {
+  /** True only while Cosmic UI owns the live custom-footer slot. */
+  active: boolean;
+}
+
 export interface CosmicUiHostQuery {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
-  respond(): void;
+  respond(state?: CosmicUiHostState): void;
+}
+export interface CosmicUiHostStateEvent extends CosmicUiHostState {
+  version: typeof COSMIC_UI_PROTOCOL_VERSION;
 }
 export interface CosmicFooterUpsertEvent {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
@@ -160,6 +169,10 @@ const FooterColorSchema = Schema.Literals(COSMIC_FOOTER_COLOR_TOKENS);
 const HostQueryData = Schema.Struct({
   version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
   respond: Schema.Unknown,
+});
+const HostStateData = Schema.Struct({
+  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
+  active: Schema.Boolean,
 });
 const TextContributionData = Schema.Struct({
   kind: Schema.Literal("text"),
@@ -267,10 +280,19 @@ export function normalizeCosmicUiHostQuery<ValueInput>(
   const respond = query.respond;
   return Object.freeze({
     version: query.version,
-    respond: () => {
-      Function.prototype.apply.call(respond, query, []);
+    respond: (state: CosmicUiHostState | undefined) => {
+      const detached = Object.freeze({ active: state?.active === true });
+      Function.prototype.apply.call(respond, query, [detached]);
     },
   });
+}
+
+/** Reads every hostile host-state field exactly once into a detached plain snapshot. */
+export function normalizeCosmicUiHostStateEvent<ValueInput>(
+  value: ValueInput,
+): CosmicUiHostStateEvent | undefined {
+  const event = decodeSafely(HostStateData, value);
+  return event ? Object.freeze({ version: event.version, active: event.active }) : undefined;
 }
 
 /** Reads every hostile upsert field exactly once into a detached plain snapshot. */

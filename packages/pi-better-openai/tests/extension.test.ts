@@ -13,6 +13,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { COSMIC_UI_HOST_QUERY, type CosmicUiHostQuery } from "pi-cosmic-ui/protocol";
 import { afterEach, vi } from "vitest";
 import betterOpenAI, {
   betterOpenAIWithDependencies,
@@ -389,6 +390,35 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown", {}, selected);
+    }),
+  );
+
+  it.effect("uses status fallback when an installed Cosmic UI host is inactive", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const h = yield* harness();
+      yield* fs.writeFileString(
+        path.join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json"),
+        encodeConfigDocument({
+          persistState: false,
+          usage: { enabled: false },
+          footer: { mode: "replace" },
+          image: { enabled: false },
+        }),
+      );
+      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
+        if (name === COSMIC_UI_HOST_QUERY) {
+          // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
+          (data as CosmicUiHostQuery).respond({ active: false });
+        }
+      });
+      const tuiContext = { ...h.ctx, mode: "tui" as const };
+
+      yield* h.emit("session_start", {}, tuiContext);
+
+      expect(tuiContext.ui.setFooter).not.toHaveBeenCalled();
+      yield* h.emit("session_shutdown", {}, tuiContext);
     }),
   );
 

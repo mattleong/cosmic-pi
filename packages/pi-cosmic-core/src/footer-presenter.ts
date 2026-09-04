@@ -13,7 +13,7 @@ export type FooterHostData = Parameters<FooterFactory>[2];
 export type FooterMode = "replace" | "status" | "off";
 
 export interface FooterPresenter {
-  readonly update: (ctx: ExtensionContext) => void;
+  readonly update: (ctx: ExtensionContext, modeOverride?: FooterMode) => void;
 }
 
 export interface FooterPresenterOptions {
@@ -177,9 +177,9 @@ export function createFooterPresenter(options: FooterPresenterOptions): FooterPr
     }
   }
 
-  function update(ctx: ExtensionContext): void {
+  function update(ctx: ExtensionContext, modeOverride?: FooterMode): void {
     try {
-      const mode = options.footerMode(ctx);
+      const mode = modeOverride ?? options.footerMode(ctx);
       if (!options.hasTerminalUI(ctx)) {
         setStatus(ctx, mode === "off" ? undefined : options.statusText(ctx));
         return;

@@ -47,6 +47,8 @@ import {
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
+  COSMIC_UI_HOST_STATE,
+  COSMIC_UI_PROTOCOL_VERSION,
   normalizeCosmicFooterInvalidateEvent,
   normalizeCosmicFooterRemoveEvent,
   normalizeCosmicFooterUpsertEvent,
@@ -250,6 +252,17 @@ export function cosmicUiWithDependencies(
         ctx,
       );
     },
+    onActiveChange: (active) => {
+      callbacks.invoke(
+        "host-query",
+        () =>
+          pi.events.emit(COSMIC_UI_HOST_STATE, {
+            version: COSMIC_UI_PROTOCOL_VERSION,
+            active,
+          }),
+        undefined,
+      );
+    },
   });
 
   const onProtocolEvent = <E>(
@@ -272,7 +285,12 @@ export function cosmicUiWithDependencies(
           () => normalizeCosmicUiHostQuery(data),
           undefined,
         );
-        if (query) callbacks.invoke("host-query", query.respond, undefined);
+        if (query)
+          callbacks.invoke(
+            "host-query",
+            () => query.respond({ active: footerInstallation.isActive() }),
+            undefined,
+          );
       }),
       onProtocolEvent(
         COSMIC_UI_FOOTER_UPSERT,
@@ -465,8 +483,8 @@ export function cosmicUiWithDependencies(
   });
   pi.on("session_shutdown", () => {
     workingOwners.clearRun();
-    disposeSubscriptions();
     footerInstallation.uninstall();
+    disposeSubscriptions();
     return Promise.all([slot.shutdown(), shutdownTickers()]).then(() => {
       currentContext = undefined;
       resetTotals();

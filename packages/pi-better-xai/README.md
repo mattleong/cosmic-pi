@@ -35,7 +35,7 @@ Usage display requires pi's `xai` OAuth credentials.
 
 The extension publishes a data-oriented usage primitive over the versioned Cosmic UI event protocol when a host is present.
 
-When Cosmic UI is active, it owns footer layout and renders `xai.usage` with progress bars matching `openai.usage`:
+When Cosmic UI is active, it owns footer layout and renders `xai.usage` with progress bars matching `openai.usage`. An installed but inactive Cosmic UI host forces status fallback rather than another custom footer; `footer.mode: "off"` removes both contributions and fallback status:
 
 ```text
 xAI     7d ████████░░ 82%  mo ████████░░ 83%
@@ -50,13 +50,13 @@ Source endpoints (unofficial first-party xAI / grok.com CLI proxy):
 
 Stored at `~/.pi/agent/extensions/pi-better-xai.json` (or project `.pi/extensions/`).
 
-| Key                                  | Default   | Description                                            |
-| ------------------------------------ | --------- | ------------------------------------------------------ |
-| `usage.enabled`                      | `true`    | Fetch and show usage                                   |
-| `usage.refreshIntervalMs`            | `60000`   | Poll interval                                          |
-| `usage.showOnlyOnSubscriptionModels` | `true`    | Hide on API-key xAI models                             |
-| `usage.showResetTimes`               | `true`    | Include reset countdowns                               |
-| `footer.mode`                        | `replace` | Standalone fallback only: `replace` / `status` / `off` |
+| Key                                  | Default  | Description                                                                                        |
+| ------------------------------------ | -------- | -------------------------------------------------------------------------------------------------- |
+| `usage.enabled`                      | `true`   | Fetch and show usage                                                                               |
+| `usage.refreshIntervalMs`            | `60000`  | Poll interval                                                                                      |
+| `usage.showOnlyOnSubscriptionModels` | `true`   | Hide on API-key xAI models                                                                         |
+| `usage.showResetTimes`               | `true`   | Include reset countdowns                                                                           |
+| `footer.mode`                        | `status` | `status` by default; `replace` is a legacy standalone fallback; `off` hides provider footer output |
 
 ## Effect runtime
 

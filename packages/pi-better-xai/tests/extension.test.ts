@@ -6,6 +6,13 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import {
+  COSMIC_UI_FOOTER_REMOVE,
+  COSMIC_UI_HOST_QUERY,
+  COSMIC_UI_HOST_STATE,
+  COSMIC_UI_PROTOCOL_VERSION,
+  type CosmicUiHostQuery,
+} from "pi-cosmic-ui/protocol";
 import { afterEach, vi } from "vitest";
 import {
   registerBetterXaiApplication,
@@ -81,7 +88,7 @@ const harness = (dependencies?: BetterXaiExtensionDependencies) =>
 
     if (dependencies) registerBetterXaiApplication(pi, dependencies);
     else betterXai(pi);
-    return { handlers, commands, ctx, cwd, notify, setStatus, setFooter };
+    return { handlers, commands, ctx, cwd, notify, setStatus, setFooter, pi };
   });
 
 function stalledStartup() {
@@ -125,6 +132,88 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       h.notify.mockClear();
       yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
+      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+    }),
+  );
+
+  it.effect("uses status fallback instead of a custom footer when Cosmic UI is inactive", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const h = yield* harness();
+      yield* fs.writeFileString(
+        path.join(h.cwd, ".pi", "extensions", "pi-better-xai.json"),
+        '{"usage":{"enabled":false},"footer":{"mode":"replace"}}\n',
+      );
+      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
+        if (name === COSMIC_UI_HOST_QUERY) {
+          // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
+          (data as CosmicUiHostQuery).respond({ active: false });
+        }
+      });
+
+      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+
+      expect(h.setFooter).not.toHaveBeenCalled();
+      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+    }),
+  );
+
+  it.effect("re-queries and yields status ownership when Cosmic UI becomes active", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      let active = false;
+      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
+        if (name === COSMIC_UI_HOST_QUERY) {
+          // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
+          (data as CosmicUiHostQuery).respond({ active });
+        }
+      });
+      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      const stateListener = vi
+        .mocked(h.pi.events.on)
+        .mock.calls.find(([name]) => name === COSMIC_UI_HOST_STATE)?.[1];
+      expect(stateListener).toBeDefined();
+      const queriesBefore = vi
+        .mocked(h.pi.events.emit)
+        .mock.calls.filter(([name]) => name === COSMIC_UI_HOST_QUERY).length;
+
+      active = true;
+      stateListener?.({ version: COSMIC_UI_PROTOCOL_VERSION, active: true });
+
+      const queriesAfter = vi
+        .mocked(h.pi.events.emit)
+        .mock.calls.filter(([name]) => name === COSMIC_UI_HOST_QUERY).length;
+      expect(queriesAfter).toBe(queriesBefore + 1);
+      expect(h.setFooter).not.toHaveBeenCalled();
+      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+    }),
+  );
+
+  it.effect("removes Cosmic contributions when footer mode is off", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const h = yield* harness();
+      yield* fs.writeFileString(
+        path.join(h.cwd, ".pi", "extensions", "pi-better-xai.json"),
+        '{"usage":{"enabled":true},"footer":{"mode":"off"}}\n',
+      );
+      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
+        if (name === COSMIC_UI_HOST_QUERY) {
+          // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
+          (data as CosmicUiHostQuery).respond({ active: true });
+        }
+      });
+
+      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+
+      expect(h.pi.events.emit).toHaveBeenCalledWith(
+        COSMIC_UI_FOOTER_REMOVE,
+        expect.objectContaining({ owner: "pi-better-xai", id: "xai.usage" }),
+      );
+      expect(h.setFooter).not.toHaveBeenCalled();
+      expect(h.setStatus).not.toHaveBeenCalledWith("better-xai", expect.any(String));
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );

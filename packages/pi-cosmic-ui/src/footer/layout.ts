@@ -142,10 +142,22 @@ const CONTRIBUTION_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
   ["extensions", "mdLink"],
 ]);
 
+const TONE_COLORS = {
+  normal: "text",
+  accent: "accent",
+  dim: "dim",
+  success: "success",
+  warning: "warning",
+  error: "error",
+} as const satisfies Record<NonNullable<CosmicFooterTextContribution["tone"]>, CosmicFooterColor>;
+
 function contributionColor(contribution: CosmicFooterTextContribution): CosmicFooterColor {
   if (contribution.tone === "warning" || contribution.tone === "error") return contribution.tone;
   if (contribution.color) return contribution.color;
-  return CONTRIBUTION_COLORS.get(contribution.id) ?? "accent";
+  const semanticColor = CONTRIBUTION_COLORS.get(contribution.id);
+  if (semanticColor) return semanticColor;
+  if (contribution.tone) return TONE_COLORS[contribution.tone];
+  return "accent";
 }
 
 function tone(

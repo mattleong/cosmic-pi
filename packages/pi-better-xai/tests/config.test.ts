@@ -5,9 +5,14 @@ import * as Path from "effect/Path";
 import { provideBuiltLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { decodeSettingUpdate } from "../src/config/options.ts";
+import { DEFAULT_FOOTER_CONFIG } from "../src/config/schema.ts";
 import { resolveConfig } from "../src/config/store.ts";
 
 describe("xAI configuration", () => {
+  it("uses status as the safe footer default", () => {
+    expect(DEFAULT_FOOTER_CONFIG.mode).toBe("status");
+  });
+
   it.effect(
     "applies project fields over global fields over defaults before clamping refresh",
     () => {
