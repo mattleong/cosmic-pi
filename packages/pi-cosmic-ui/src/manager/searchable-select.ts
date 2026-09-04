@@ -51,6 +51,11 @@ export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOpti
   readonly cancel: () => void;
 }
 
+export interface SearchableSelectSearchState {
+  readonly query: string;
+  readonly active: boolean;
+}
+
 /** Responsive full-page fuzzy-search input and dropdown shared by settings selectors. */
 export class SearchableSelectPage<A> implements Component, Focusable {
   private readonly input = new Input();
@@ -78,6 +83,16 @@ export class SearchableSelectPage<A> implements Component, Focusable {
 
   get focused(): boolean {
     return this._focused;
+  }
+
+  /** Stable selected identity exposed for pure wrappers such as the scoped model picker. */
+  get selectedValue(): string | undefined {
+    return this.selectedChoice()?.value;
+  }
+
+  /** Current filter state exposed so a wrapper can rebuild without losing search context. */
+  get searchState(): SearchableSelectSearchState {
+    return { query: this.query, active: this.searchMode };
   }
 
   set focused(value: boolean) {
