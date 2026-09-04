@@ -2,6 +2,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
   brailleSpinnerFrame,
+  managerActivityColor,
+  managerActivityGlyph,
   managerLayoutTier,
   managerNoticeGlyph,
   managerStateGlyph,
@@ -30,6 +32,8 @@ describe("manager chrome", () => {
   it("provides stable semantic animation and status vocabulary", () => {
     expect(brailleSpinnerFrame(0)).toBe(brailleSpinnerFrame(10));
     expect(startingSpinnerFrame(0)).toBe(startingSpinnerFrame(4));
+    expect(managerActivityGlyph("running", 0)).toBe(managerActivityGlyph("running", 10));
+    expect(managerActivityColor("failed")).toBe("error");
     expect(managerNoticeGlyph("error")).toBeTruthy();
     expect(managerStateGlyph("stopped")).toBeTruthy();
   });

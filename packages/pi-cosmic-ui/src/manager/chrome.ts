@@ -31,6 +31,8 @@ const MANAGER_NOTICE_GLYPHS = {
 export const managerNoticeGlyph = (kind: ManagerNoticeKind): string => MANAGER_NOTICE_GLYPHS[kind];
 
 export type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
+export type ManagerActivityKind = "pending" | "running" | ManagerStateGlyphKind;
+export type ManagerStatusColor = "accent" | "success" | "warning" | "error" | "muted" | "dim";
 
 const MANAGER_STATE_GLYPHS = {
   done: "✓",
@@ -42,6 +44,23 @@ const MANAGER_STATE_GLYPHS = {
 /** Shared terminal-state glyph pairs for manager rows (`/subagents`, `/tasks`). */
 export const managerStateGlyph = (kind: ManagerStateGlyphKind): string =>
   MANAGER_STATE_GLYPHS[kind];
+
+/** Total semantic activity projection shared by managers and tool renderers. */
+export const managerActivityGlyph = (kind: ManagerActivityKind, frame = 0): string =>
+  kind === "pending"
+    ? startingSpinnerFrame(frame)
+    : kind === "running"
+      ? brailleSpinnerFrame(frame)
+      : managerStateGlyph(kind);
+
+/** Theme-token policy for the shared activity vocabulary. */
+export const managerActivityColor = (kind: ManagerActivityKind): ManagerStatusColor => {
+  if (kind === "pending") return "accent";
+  if (kind === "running" || kind === "done") return "success";
+  if (kind === "failed") return "error";
+  if (kind === "stopping") return "warning";
+  return "muted";
+};
 
 export type ManagerFooterGroup = string | undefined;
 

@@ -7,10 +7,13 @@
 import {
   Container,
   SettingsList,
+  Spacer,
+  Text,
   type Component,
   type Focusable,
   type SettingItem,
 } from "@earendil-works/pi-tui";
+import type { SettingsOptionDescriptor } from "pi-cosmic-core";
 import type { FullScreenKeymapOptions } from "./keymap.ts";
 import {
   settingsHintRenderer,
@@ -19,7 +22,7 @@ import {
   type SettingsSurfaceBridgeOptions,
 } from "./settings-adapter.ts";
 
-type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
+export type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
 
 export type SettingsSurfaceItem = SettingItem & {
   /** "group" marks navigation/summary rows whose submenu completions never reach `onChange`. */
@@ -36,6 +39,98 @@ export const withoutGroupRowChanges = (
     if (!groupIds.has(id)) onChange(id, value);
   };
 };
+
+export const settingsItemsFromDescriptors = <Config>(
+  descriptors: ReadonlyArray<
+    Pick<
+      SettingsOptionDescriptor<Config>,
+      "id" | "label" | "description" | "currentValue" | "values"
+    >
+  >,
+  config: Config,
+): SettingsSurfaceItem[] =>
+  descriptors.map((descriptor) => {
+    const item: SettingsSurfaceItem = {
+      id: descriptor.id,
+      label: descriptor.label,
+      currentValue: descriptor.currentValue(config),
+      description: descriptor.description,
+    };
+    return descriptor.values ? { ...item, values: [...descriptor.values] } : item;
+  });
+
+export interface SettingsRowGenerations {
+  readonly begin: (id: string) => number;
+  readonly isCurrent: (id: string, generation: number) => boolean;
+}
+
+/** Pure per-row generation latch for optimistic asynchronous settings updates. */
+export const settingsRowGenerations = (): SettingsRowGenerations => {
+  const generations = new Map<string, number>();
+  return {
+    begin: (id) => {
+      const generation = (generations.get(id) ?? 0) + 1;
+      generations.set(id, generation);
+      return generation;
+    },
+    isCurrent: (id, generation) => generations.get(id) === generation,
+  };
+};
+
+export interface SettingsGroupSubmenuOptions {
+  readonly title: string;
+  readonly description?: string | undefined;
+  readonly items: () => SettingsSurfaceItem[];
+  readonly onChange: (id: string, value: string) => void | Promise<void>;
+  readonly done: (summary?: string) => void;
+  readonly summary?: (() => string) | undefined;
+  readonly listTheme: SettingsListTheme;
+  readonly maxVisible?: number | undefined;
+}
+
+class SettingsGroupSubmenu extends Container {
+  private readonly options: SettingsGroupSubmenuOptions;
+  private readonly list: SettingsList;
+
+  constructor(options: SettingsGroupSubmenuOptions) {
+    super();
+    this.options = options;
+    const items = options.items();
+    const notifyChange = withoutGroupRowChanges(items, (id, value) => this.change(id, value));
+    this.list = new SettingsList(
+      items,
+      options.maxVisible ?? Math.min(items.length + 2, 12),
+      options.listTheme,
+      notifyChange,
+      () => options.done(options.summary?.()),
+      { enableSearch: false },
+    );
+    this.addChild(new Text(options.title, 0, 0));
+    if (options.description) this.addChild(new Text(options.description, 0, 0));
+    this.addChild(new Spacer(1));
+    this.addChild(this.list);
+  }
+
+  handleInput(data: string): void {
+    this.list.handleInput(data);
+  }
+
+  private change(id: string, value: string): void {
+    const reconcile = (): void => this.reconcile();
+    try {
+      Promise.resolve(this.options.onChange(id, value)).then(reconcile, reconcile);
+    } catch {
+      reconcile();
+    }
+  }
+
+  private reconcile(): void {
+    for (const item of this.options.items()) this.list.updateValue(item.id, item.currentValue);
+  }
+}
+
+export const createSettingsGroupSubmenu = (options: SettingsGroupSubmenuOptions): Component =>
+  new SettingsGroupSubmenu(options);
 
 export interface SettingsListSurfaceOptions {
   /** Caller-owned header component rendered above the list (title, config path, …). */
