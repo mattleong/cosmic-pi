@@ -82,6 +82,15 @@ describe("/tasks stop confirmation", () => {
     expect(stop).toHaveBeenCalledWith("a");
   });
 
+  it("sanitizes the pending task identity in the confirmation footer", () => {
+    const { component } = makeManager([task("\x1b[31mbad\nidentity")]);
+    component.handleInput("x");
+
+    const rendered = component.render(120);
+    expect(rendered.some((line) => line.includes("Confirm stop bad identity"))).toBe(true);
+    expect(rendered.every((line) => !line.includes("\x1b[31m"))).toBe(true);
+  });
+
   it("cancels a pending stop on Esc without closing the manager", () => {
     const { component, stop, close } = makeManager([task("a")]);
     component.handleInput("x");

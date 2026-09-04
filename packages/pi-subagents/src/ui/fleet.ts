@@ -387,11 +387,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       );
       return;
     }
-    if (
-      !run ||
-      (resolution?._tag === "Action" &&
-        (resolution.action === "cancel" || resolution.action === "quit"))
-    ) {
+    if (!run || (resolution?._tag === "Action" && resolution.action === "cancel")) {
       this.pendingStop = undefined;
       this.notice = { kind: "info", text: "Stop canceled." };
     }

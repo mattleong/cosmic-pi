@@ -156,8 +156,7 @@ export class TaskManagerComponent implements Component {
         this.options.stop(selected.id);
       } else if (
         !hasStableTarget ||
-        (resolution?._tag === "Action" &&
-          (resolution.action === "cancel" || resolution.action === "quit"))
+        (resolution?._tag === "Action" && resolution.action === "cancel")
       )
         this.pendingStop = undefined;
       this.options.requestRender();
@@ -264,7 +263,7 @@ export class TaskManagerComponent implements Component {
     const escape = key("tui.select.cancel", "Esc");
     if (this.pendingStop)
       return renderResponsiveManagerFooter(contentWidth, [
-        [`x Confirm stop ${this.pendingStop}`, `${escape}/q Cancel`],
+        [`x Confirm stop ${sanitizeTerminalLine(this.pendingStop)}`, `${escape}/q Cancel`],
       ]);
     const actions = [
       selected && isActiveTaskState(selected.state)
