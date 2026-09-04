@@ -146,10 +146,20 @@ export class TaskManagerComponent implements Component {
         matchesKeybinding,
         reservedKeys: new Set(["x"]),
       });
+      const hasStableTarget = selected?.id === this.pendingStop;
       const confirmed =
-        confirmedReservedShortcut(resolution, data, "x") && selected?.id === this.pendingStop;
-      this.pendingStop = undefined;
-      if (confirmed && selected) this.options.stop(selected.id);
+        hasStableTarget &&
+        ((resolution?._tag === "Action" && resolution.action === "confirm") ||
+          confirmedReservedShortcut(resolution, data, "x"));
+      if (confirmed && selected) {
+        this.pendingStop = undefined;
+        this.options.stop(selected.id);
+      } else if (
+        !hasStableTarget ||
+        (resolution?._tag === "Action" &&
+          (resolution.action === "cancel" || resolution.action === "quit"))
+      )
+        this.pendingStop = undefined;
       this.options.requestRender();
       return;
     }

@@ -106,7 +106,7 @@ const canStop = (run: SubagentRunView | undefined): boolean =>
 
 type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
 
-const FLEET_SHORTCUTS = new Set(["h", "i", "l", "m", "n", "r", "t", "x"]);
+const FLEET_SHORTCUTS = new Set(["i", "m", "n", "r", "t", "x"]);
 
 const shortcutUnavailableReason = (key: string): string =>
   key === "m"
@@ -374,17 +374,28 @@ export class SubagentFleetComponent implements Component, Focusable {
   private handlePendingStopInput(data: string, selected: SubagentRunView | undefined): void {
     const resolution = this.resolveInput(data, "confirmation", new Set(["x"]));
     const run = selected && this.pendingStop === selected.id ? selected : undefined;
-    this.pendingStop = undefined;
-    if (confirmedReservedShortcut(resolution, data, "x") && run && canStop(run))
+    const confirmed =
+      resolution?._tag === "Action" && resolution.action === "confirm"
+        ? true
+        : confirmedReservedShortcut(resolution, data, "x");
+    if (confirmed && run && canStop(run)) {
+      this.pendingStop = undefined;
       this.performAction(
         `Stopping subtree at ${sanitizeTerminalLine(run.name)}…`,
         `Stopped subtree at ${sanitizeTerminalLine(run.name)}.`,
         () => this.options.actions.stop(run.id),
       );
-    else {
-      this.notice = { kind: "info", text: "Stop canceled." };
-      this.options.requestRender();
+      return;
     }
+    if (
+      !run ||
+      (resolution?._tag === "Action" &&
+        (resolution.action === "cancel" || resolution.action === "quit"))
+    ) {
+      this.pendingStop = undefined;
+      this.notice = { kind: "info", text: "Stop canceled." };
+    }
+    this.options.requestRender();
   }
 
   private handleBusyInput(data: string): void {

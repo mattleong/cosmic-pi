@@ -6,6 +6,7 @@ import {
   sanitizeTerminalStyledText,
 } from "pi-cosmic-core";
 import type {
+  CosmicFooterColor,
   CosmicFooterPlacement,
   CosmicFooterTextContribution,
   CosmicFooterTheme,
@@ -125,7 +126,7 @@ export function renderProviderUsageLine(
   return truncateToWidth(pieces.join(""), width, "");
 }
 
-const CONTRIBUTION_COLORS: ReadonlyMap<string, string> = new Map([
+const CONTRIBUTION_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
   ["model", "mdLink"],
   ["effort", "syntaxOperator"],
   ["location", "accent"],
@@ -141,7 +142,7 @@ const CONTRIBUTION_COLORS: ReadonlyMap<string, string> = new Map([
   ["extensions", "mdLink"],
 ]);
 
-function contributionColor(contribution: CosmicFooterTextContribution): string {
+function contributionColor(contribution: CosmicFooterTextContribution): CosmicFooterColor {
   if (contribution.tone === "warning" || contribution.tone === "error") return contribution.tone;
   if (contribution.color) return contribution.color;
   return CONTRIBUTION_COLORS.get(contribution.id) ?? "accent";

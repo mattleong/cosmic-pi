@@ -1,3 +1,4 @@
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
@@ -15,6 +16,56 @@ export const COSMIC_UI_FOOTER_INVALIDATE = "cosmic-ui:v1:footer:invalidate";
 
 export type CosmicFooterTone = "normal" | "accent" | "dim" | "success" | "warning" | "error";
 export type CosmicFooterRegion = "identity" | "metrics" | "details" | "media";
+export const COSMIC_FOOTER_COLOR_TOKENS = [
+  "accent",
+  "border",
+  "borderAccent",
+  "borderMuted",
+  "success",
+  "error",
+  "warning",
+  "muted",
+  "dim",
+  "text",
+  "thinkingText",
+  "searchMatchText",
+  "userMessageText",
+  "customMessageText",
+  "customMessageLabel",
+  "toolTitle",
+  "toolOutput",
+  "mdHeading",
+  "mdLink",
+  "mdLinkUrl",
+  "mdCode",
+  "mdCodeBlock",
+  "mdCodeBlockBorder",
+  "mdQuote",
+  "mdQuoteBorder",
+  "mdHr",
+  "mdListBullet",
+  "toolDiffAdded",
+  "toolDiffRemoved",
+  "toolDiffContext",
+  "syntaxComment",
+  "syntaxKeyword",
+  "syntaxFunction",
+  "syntaxVariable",
+  "syntaxString",
+  "syntaxNumber",
+  "syntaxType",
+  "syntaxOperator",
+  "syntaxPunctuation",
+  "thinkingOff",
+  "thinkingMinimal",
+  "thinkingLow",
+  "thinkingMedium",
+  "thinkingHigh",
+  "thinkingXhigh",
+  "thinkingMax",
+  "bashMode",
+] as const satisfies ReadonlyArray<ThemeColor>;
+export type CosmicFooterColor = (typeof COSMIC_FOOTER_COLOR_TOKENS)[number];
 export type CosmicFooterPlacement =
   | "stacked"
   | "inline-left"
@@ -23,7 +74,7 @@ export type CosmicFooterPlacement =
   | "habitat";
 
 export interface CosmicFooterTheme {
-  fg(color: string, value: string): string;
+  fg(color: CosmicFooterColor, value: string): string;
 }
 export interface CosmicFooterSurfaceRenderOptions {
   width: number;
@@ -42,8 +93,8 @@ export interface CosmicFooterTextContribution {
   order?: number;
   /** Line label; details entries with a label render as their own labeled line. */
   label?: string;
-  /** Theme color token; tones warning/error still take precedence. */
-  color?: string;
+  /** Valid Pi theme color token; tones warning/error still take precedence. */
+  color?: CosmicFooterColor;
   /**
    * Id of another text entry this one decorates: this entry's text is prefixed
    * onto the target instead of rendering separately. Renders standalone when
@@ -105,6 +156,7 @@ export interface CosmicFooterInvalidateEvent {
 }
 
 const NonEmpty = Schema.String.check(Schema.isNonEmpty());
+const FooterColorSchema = Schema.Literals(COSMIC_FOOTER_COLOR_TOKENS);
 const HostQueryData = Schema.Struct({
   version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
   respond: Schema.Unknown,
@@ -122,7 +174,7 @@ const TextContributionData = Schema.Struct({
   priority: Schema.optional(Schema.Number),
   order: Schema.optional(Schema.Number),
   label: Schema.optional(NonEmpty),
-  color: Schema.optional(NonEmpty),
+  color: Schema.optional(FooterColorSchema),
   decorates: Schema.optional(NonEmpty),
 });
 const StatusContributionData = Schema.Struct({

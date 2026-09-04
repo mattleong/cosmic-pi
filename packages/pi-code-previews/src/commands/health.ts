@@ -68,7 +68,7 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
   });
 }
 
-class HealthPanel implements Component {
+export class HealthPanel implements Component {
   private readonly text: string;
   private readonly done: (result?: undefined) => void;
   private readonly border: (value: string) => string;
@@ -80,9 +80,14 @@ class HealthPanel implements Component {
   }
 
   render(width: number): string[] {
-    const frameWidth = Math.max(4, width);
+    const available = Math.max(0, Math.floor(width));
+    if (available === 0) return [];
+    const lines = this.text.split("\n");
+    if (available < 4)
+      return lines.map((line) => truncateToWidth(line, available, "").padEnd(available));
+    const frameWidth = available;
     const innerWidth = frameWidth - 4;
-    const content = this.text.split("\n").map((line) => truncateToWidth(line, innerWidth, "…"));
+    const content = lines.map((line) => truncateToWidth(line, innerWidth, "…"));
     const empty = this.frameLine("", innerWidth);
     return [
       this.border(`╭${"─".repeat(frameWidth - 2)}╮`),

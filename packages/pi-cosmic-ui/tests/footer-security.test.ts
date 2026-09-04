@@ -14,6 +14,22 @@ const kittyImage = "\x1b_Ga=T,f=100,q=2,c=2,r=1;QUJD\x1b\\";
 const itermImage = "\x1b[2A\x1b]1337;File=inline=1;size=3;width=2;height=auto:QUJD\x07";
 
 describe("footer terminal safety", () => {
+  it("rejects non-theme footer colors before rendering", () => {
+    const event = normalizeCosmicFooterUpsertEvent({
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "owner",
+      contribution: {
+        kind: "text",
+        id: "usage",
+        region: "details",
+        text: "safe",
+        color: "not-a-theme-token",
+      },
+    });
+
+    expect(event).toBeUndefined();
+  });
+
   it("sanitizes protocol text, compact text, and labels", () => {
     const event = normalizeCosmicFooterUpsertEvent({
       version: COSMIC_UI_PROTOCOL_VERSION,

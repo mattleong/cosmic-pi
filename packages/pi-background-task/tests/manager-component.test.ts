@@ -74,6 +74,14 @@ describe("/tasks stop confirmation", () => {
     expect(stop).toHaveBeenCalledWith("a");
   });
 
+  it("accepts Enter and ignores unrelated input while confirmation is pending", () => {
+    const { component, stop } = makeManager([task("a")]);
+    component.handleInput("x");
+    component.handleInput("z");
+    component.handleInput(ENTER);
+    expect(stop).toHaveBeenCalledWith("a");
+  });
+
   it("cancels a pending stop on Esc without closing the manager", () => {
     const { component, stop, close } = makeManager([task("a")]);
     component.handleInput("x");

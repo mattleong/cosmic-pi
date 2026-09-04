@@ -147,6 +147,15 @@ describe("/subagents tree navigation", () => {
     },
   );
 
+  it("uses h/l as shared pane navigation after entering detail", () => {
+    const { component, close } = makeFleet([run("alpha")]);
+    component.render(120);
+    component.handleInput(ENTER);
+    component.handleInput("h");
+    component.handleInput(ESC);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it.each([50, 80, 120])(
     "uses Enter for inspection and Esc returns to the tree before closing at width %i",
     (width) => {
@@ -217,6 +226,16 @@ describe("/subagents tree navigation", () => {
     const rendered = component.render(120).join("\n");
     expect(rendered).toContain("beta");
     expect(rendered).not.toContain("alpha");
+  });
+});
+
+describe("/subagents stop confirmation", () => {
+  it("accepts Enter and ignores unrelated input while confirmation is pending", () => {
+    const { component, actions } = makeFleet([run("alpha")]);
+    component.handleInput("x");
+    component.handleInput("z");
+    component.handleInput(ENTER);
+    expect(actions.stop).toHaveBeenCalledWith("alpha");
   });
 });
 
