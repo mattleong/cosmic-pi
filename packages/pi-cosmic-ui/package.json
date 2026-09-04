@@ -42,7 +42,8 @@
     "./manager/searchable-select": "./src/manager/searchable-select.ts",
     "./manager/settings-adapter": "./src/manager/settings-adapter.ts",
     "./manager/settings-surface": "./src/manager/settings-surface.ts",
-    "./protocol": "./src/protocol/protocol.ts"
+    "./protocol": "./src/protocol/protocol.ts",
+    "./tool": "./src/tool/presentation.ts"
   },
   "publishConfig": {
     "access": "public"
