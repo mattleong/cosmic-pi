@@ -45,8 +45,8 @@ function makeContext(initialModel: string) {
   return {
     // SAFETY: These tests exercise only the context members implemented by the fixture.
     ctx: fixture as typeof fixture & ExtensionContext,
-    setModel(id: string) {
-      currentModel = model(id);
+    setModel(id: string, provider = "openai") {
+      currentModel = { ...model(id), provider };
     },
   };
 }
@@ -137,7 +137,15 @@ describe("FastModeService", () => {
             desiredActive: true,
           });
 
-          current.setModel("unsupported-model");
+          current.setModel("future-model");
+          yield* fast.modelChanged(current.ctx);
+          expect(MutableRef.get(projection).active).toBe(true);
+
+          current.setModel("future-model", "openai-codex");
+          yield* fast.modelChanged(current.ctx);
+          expect(MutableRef.get(projection).active).toBe(true);
+
+          current.setModel("future-model", "other-provider");
           yield* fast.modelChanged(current.ctx);
           expect(MutableRef.get(projection)).toMatchObject({
             active: false,

@@ -29,7 +29,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 
 ## Features
 
-- Fast mode for supported OpenAI models, toggled with `/fast` or in `/openai-settings`.
+- Fast mode for all `openai` and `openai-codex` models, toggled with `/fast` or in `/openai-settings`.
 - Optional OpenAI-native context compaction for `openai-responses` models. Pi still decides when to compact; Better OpenAI replaces threshold and manual compaction with `POST /responses/compact`. Provider failures and overflow recovery fall back to Pi compaction.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive TUI settings picker via `/openai-settings`, plus scriptable updates via `/openai-settings <id> <value>`; run `/openai-settings help` for available keys.
@@ -64,19 +64,7 @@ For canonical `openai-codex` subscription requests, active fast mode adds `x-cod
 
 The extension owns one scoped Effect runtime per Pi session. Repeated `session_start` replaces and disposes the previous runtime; usage polling and image streams are interrupted during replacement or `session_shutdown`.
 
-Fast-mode model support is controlled by the package and cannot be overridden in user configuration. The current allow-list is:
-
-```json
-[
-  "openai/gpt-5.4",
-  "openai/gpt-5.5",
-  "openai-codex/gpt-5.6-sol",
-  "openai-codex/gpt-5.6-terra",
-  "openai-codex/gpt-5.6-luna",
-  "openai-codex/gpt-5.4",
-  "openai-codex/gpt-5.5"
-]
-```
+Fast mode assumes every model from the `openai` and `openai-codex` providers supports the `priority` service tier. There is no model allowlist.
 
 Example config:
 

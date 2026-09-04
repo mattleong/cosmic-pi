@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import { freezeSnapshot } from "pi-cosmic-core";
-import { fastModelKey, SUPPORTED_FAST_MODELS, supportsFastModel } from "./models.ts";
+import { fastModelKey, supportsFastModel } from "./models.ts";
 
 export interface FastSnapshot {
   readonly desiredActive: boolean;
@@ -16,7 +16,6 @@ export const currentModelKey = (ctx: ExtensionContext): string =>
   ctx.model ? fastModelKey(ctx.model.provider, ctx.model.id) : "none";
 export const supportsFast = (ctx: ExtensionContext): boolean =>
   supportsFastModel(ctx.model?.provider, ctx.model?.id);
-export const modelList = (): string => SUPPORTED_FAST_MODELS.join(", ");
 export const isFastActive = (ctx: ExtensionContext, snapshot: FastSnapshot): boolean =>
   snapshot.desiredActive && supportsFast(ctx);
 
@@ -24,12 +23,12 @@ export function fastStateText(ctx: ExtensionContext, snapshot: FastSnapshot): st
   const model = currentModelKey(ctx);
   if (isFastActive(ctx, snapshot)) return `Fast mode is on for ${model}.`;
   if (snapshot.desiredActive)
-    return `Fast mode is requested, but inactive for unsupported model ${model}. Supported models: ${modelList()}.`;
+    return `Fast mode is requested, but inactive for ${model}. Select an openai or openai-codex model to activate it.`;
   return `Fast mode is off. Current model: ${model}.`;
 }
 
 export const unsupportedRequestMessage = (ctx: ExtensionContext): string =>
-  `Fast mode requested, but ${currentModelKey(ctx)} is unsupported. It will activate automatically when you switch to a supported model: ${modelList()}.`;
+  `Fast mode requested, but inactive for ${currentModelKey(ctx)}. It will activate automatically when you switch to any openai or openai-codex model.`;
 
 export const inactiveForModelMessage = (ctx: ExtensionContext): string =>
   `Fast mode inactive for unsupported model ${currentModelKey(ctx)}.`;

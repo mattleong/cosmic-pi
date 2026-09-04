@@ -30,7 +30,7 @@ import {
   USAGE_SETTING_DESCRIPTORS,
 } from "../config/options.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
-import { modelList, settingsSummary, type FastSnapshot } from "../fast/controller.ts";
+import { settingsSummary, type FastSnapshot } from "../fast/controller.ts";
 import { FastModeService } from "../fast/service.ts";
 import { OpenAIUsageService } from "../usage/controller.ts";
 
@@ -66,7 +66,7 @@ export function registerSettingsController(
     id: "fast.enabled",
     label: "Fast mode",
     values: ["true", "false"] as const,
-    description: `Request OpenAI fast mode. Activates for package-supported models: ${modelList()}.`,
+    description: "Request OpenAI fast mode for any openai or openai-codex model.",
     currentValue: (_cfg: ResolvedConfig) => String(MutableRef.get(fastProjection).desiredActive),
   };
   const descriptors = [fastEnabledDescriptor, ...SETTINGS_OPTION_DESCRIPTORS];

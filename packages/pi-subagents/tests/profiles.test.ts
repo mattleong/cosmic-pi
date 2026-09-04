@@ -339,16 +339,18 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("defaults fast mode off and accepts only eligible persisted fast routes", () => {
-    const supportedPi = decodeSubagentConfig(
-      document({
-        profiles: {
-          generalist: candidate({ model: "openai-codex/gpt-5.6-sol", openaiFastMode: true }),
-        },
-      }),
-    );
-    expect(supportedPi.file.profileSets?.default?.profiles?.generalist).toMatchObject({
-      openaiFastMode: true,
-    });
+    for (const provider of ["openai", "openai-codex"]) {
+      const supportedPi = decodeSubagentConfig(
+        document({
+          profiles: {
+            generalist: candidate({ model: `${provider}/future-model`, openaiFastMode: true }),
+          },
+        }),
+      );
+      expect(supportedPi.file.profileSets?.default?.profiles?.generalist).toMatchObject({
+        openaiFastMode: true,
+      });
+    }
 
     const parent = decodeSubagentConfig(
       document({ profiles: { generalist: candidate({ model: "parent", openaiFastMode: true }) } }),
