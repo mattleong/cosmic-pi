@@ -1,13 +1,21 @@
 // Test lifecycle boundary intentionally uses Promise-shaped host callbacks and AbortController.
 import assert from "node:assert/strict";
-import type { ExtensionAPI, ToolDefinition, ToolInfo } from "@earendil-works/pi-coding-agent";
+import {
+  withFileMutationQueue,
+  type ExtensionAPI,
+  type ToolDefinition,
+  type ToolInfo,
+} from "@earendil-works/pi-coding-agent";
+import { it } from "@effect/vitest";
+import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { makePiManagedRuntime } from "pi-cosmic-core";
+import { makePiManagedRuntime, nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
 import { makeLifecycleProbe } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import {
+  captureCodePreviewSessionCapability,
   clearCodePreviewSessionCapability,
   hasCodePreviewSessionCapability,
 } from "../../src/application/capability";
@@ -21,6 +29,100 @@ import { setCodePreviewSettings } from "../../src/config/state";
 import { codePreviewApplicationLayer } from "../../src/layer";
 import { registerToolRenderers } from "../../src/tools/renderers/registration";
 import { effectTest, settle, step } from "../support/effect-test";
+import { executeWriteWithPreview } from "../../src/write/preview-execution";
+
+for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
+  it.effect(`revokes a queued write on ${cancellation} before its predecessor releases`, () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-queue-" });
+      const path = `${directory}/target.txt`;
+      yield* fs.writeFileString(path, "before");
+      const h = harness();
+      yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+      yield* step(() => start(h));
+      const predecessorEntered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const predecessor = withFileMutationQueue(path, () =>
+        Effect.runPromise(
+          Deferred.succeed(predecessorEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+          ),
+        ),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(release, undefined);
+          yield* step(() => predecessor);
+          yield* step(() => shutdown(h));
+        }),
+      );
+      yield* Deferred.await(predecessorEntered);
+      const controller = new AbortController();
+      let outcome: "pending" | "success" | "failure" = "pending";
+      const pending = executeWriteWithPreview(
+        "queued",
+        path,
+        "stale",
+        directory,
+        controller.signal,
+      ).then(
+        () => {
+          outcome = "success";
+        },
+        () => {
+          outcome = "failure";
+        },
+      );
+      // Let the owner enter the queue wait before cancellation.
+      for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+      if (cancellation === "abort") controller.abort();
+      else if (cancellation === "replacement") yield* step(() => start(h));
+      else yield* step(() => shutdown(h));
+      for (let turn = 0; turn < 30; turn++) {
+        if (outcome !== "pending") break;
+        yield* Effect.yieldNow;
+      }
+      assert.equal(
+        outcome,
+        "failure",
+        "waiting caller must settle while predecessor is still held",
+      );
+      assert.equal(yield* fs.readFileString(path), "before");
+      yield* Deferred.succeed(release, undefined);
+      yield* step(() => predecessor);
+      yield* step(() => pending);
+      // Joining a fresh queue entry proves the revoked delayed callback has drained.
+      yield* step(() => withFileMutationQueue(path, () => Promise.resolve()));
+      assert.equal(yield* fs.readFileString(path), "before");
+      if (cancellation !== "shutdown") {
+        yield* step(() => executeWriteWithPreview("fresh", path, "fresh", directory, undefined));
+        assert.equal(yield* fs.readFileString(path), "fresh");
+      }
+    }).pipe(provideBuiltLayer(nodeFilePlatformLayer)),
+  );
+}
+
+effectTest("captured capability cannot execute through a replacement slot", function* () {
+  const h = harness();
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+  yield* step(() => start(h));
+  const old = captureCodePreviewSessionCapability();
+  assert.ok(old);
+  yield* step(() => start(h));
+  let ran = false;
+  yield* step(() =>
+    assert.rejects(
+      old.run(
+        Effect.sync(() => {
+          ran = true;
+        }),
+      ),
+    ),
+  );
+  assert.equal(ran, false);
+  yield* step(() => shutdown(h));
+});
 
 type HostContext = {
   cwd?: unknown;

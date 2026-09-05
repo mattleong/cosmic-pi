@@ -178,6 +178,30 @@ try {
     );
   }
 
+  const packedSharpDecoder = join(
+    temporaryDirectory,
+    "node_modules/pi-better-openai/src/boundary/sharp-decoder.mjs",
+  );
+  const sharpSmoke = spawnSync(process.execPath, [packedSharpDecoder], {
+    cwd: temporaryDirectory,
+    env: {},
+    input: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=",
+      "base64",
+    ),
+    encoding: "utf8",
+    timeout: 30_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 256,
+  });
+  if (
+    sharpSmoke.status !== 0 ||
+    sharpSmoke.stdout !== '{"format":"png"}' ||
+    sharpSmoke.stderr !== ""
+  ) {
+    throw new Error("Packed Sharp decoder could not validate a tiny PNG in a clean consumer.");
+  }
+
   // Pi and the clean-consumer smoke load TypeScript source directly through Jiti.
   for (const source of [
     "pi-cosmic-core/index.ts",

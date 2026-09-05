@@ -272,6 +272,17 @@ export function registerSubagentApplication(
 
   registerSubagentManagerCommand(pi, bridge, {
     isAvailable: () => currentActivation !== undefined,
+    captureModelRefresh: () => {
+      const activation = currentActivation;
+      const isCurrent = () => activation !== undefined && currentActivation === activation;
+      return {
+        isCurrent,
+        run: (effect, signal) =>
+          isCurrent()
+            ? run(effect, signal)
+            : Promise.reject(new Error("Subagents session was replaced.")),
+      };
+    },
     stop: (id) => run(SubagentService.use((service) => service.stop(id))).then(() => undefined),
     interrupt: (id) =>
       run(SubagentService.use((service) => service.interrupt(id))).then(() => undefined),
@@ -297,7 +308,10 @@ export function registerSubagentApplication(
             const session = yield* profiles.capture;
             return { ...persistent, session };
           }),
-        ),
+        ).then((inspection) => {
+          if (currentActivation !== activation) throw new Error("Subagents session was replaced.");
+          return inspection;
+        }),
       ),
     patchProfile: withConfigStore((store) => store.patchProfile),
     patchDefaultProfileSet: withConfigStore((store) => store.patchDefaultProfileSet),

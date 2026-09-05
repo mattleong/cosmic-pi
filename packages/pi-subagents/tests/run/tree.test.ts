@@ -288,6 +288,37 @@ describe("root-owned subagent run tree", () => {
     },
   );
 
+  it.effect("finishes the complete leaf-first stop after its waiter is cancelled", () => {
+    const releaseOrder: number[] = [];
+    const fake = fakeChildLayer(Effect.void, { onRelease: (index) => releaseOrder.push(index) });
+    const projections: import("../../src/run/model.ts").SubagentProjection[] = [];
+    const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
+      Layer.provide(fake.layer),
+    );
+    return SubagentService.use((service) =>
+      Effect.gen(function* () {
+        const parent = yield* service.start(request({ name: "parent" }));
+        const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+        const leaf = yield* service.startSessionOwnedFrom(child.id, request({ name: "leaf" }));
+        const gate = yield* Deferred.make<void>();
+        fake.controls[2]?.gateRelease(gate);
+        const waiter = yield* service.stop(parent.id).pipe(Effect.forkScoped);
+        yield* yieldUntil(
+          () => projections.at(-1)?.runs.find((run) => run.id === leaf.id)?.state === "stopping",
+        );
+        yield* Fiber.interrupt(waiter);
+        expect(releaseOrder).toEqual([]);
+        yield* Deferred.succeed(gate, undefined);
+        yield* yieldUntil(
+          () => projections.at(-1)?.runs.every((run) => run.state === "stopped") === true,
+        );
+        yield* service.stop(parent.id);
+        expect(releaseOrder).toEqual([2, 1, 0]);
+        expect(fake.controls.map((control) => control.released())).toEqual([1, 1, 1]);
+      }),
+    ).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("stops an explicit subtree leaf-first", () => {
     const releaseOrder: number[] = [];
     const fake = fakeChildLayer(Effect.void, {

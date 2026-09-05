@@ -123,6 +123,10 @@ const atSessionRevision = (
 
 const actions = (value: ProfileSettingsInspection): FleetManagerActions => ({
   isAvailable: () => true,
+  captureModelRefresh: () => ({
+    isCurrent: () => true,
+    run: (effect, signal) => Effect.runPromise(effect, { signal }),
+  }),
   stop: () => Promise.resolve(),
   interrupt: () => Promise.resolve(),
   resume: () => Promise.resolve(),
@@ -398,6 +402,33 @@ describe("profile settings controller", () => {
         initialProfile: "scout",
         initialField: "model",
       });
+    },
+  );
+
+  effectTest(
+    "does not open or refresh an editor after its inspection owner is replaced",
+    function* () {
+      const fixture = setup();
+      const pending = Deferred.makeUnsafe<ProfileSettingsInspection>();
+      let current = true;
+      const submitted = vi.fn();
+      const run = <A>(effect: Effect.Effect<A>, signal: AbortSignal) => {
+        submitted();
+        return Effect.runPromise(effect, { signal });
+      };
+      vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
+        isCurrent: () => current,
+        run,
+      });
+      vi.mocked(fixture.managerActions.inspectProfiles).mockImplementation(() =>
+        Effect.runPromise(Deferred.await(pending)),
+      );
+      const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
+      current = false;
+      Deferred.doneUnsafe(pending, Effect.succeed(inspection()));
+      yield* step(() => running);
+      expect(fixture.overlays).toEqual([]);
+      expect(submitted).not.toHaveBeenCalled();
     },
   );
 

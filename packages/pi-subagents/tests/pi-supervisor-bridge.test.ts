@@ -20,7 +20,15 @@ const openFixture = fileURLToPath(
   new URL("./fixtures/pi-bridge-open-fixture.mjs", import.meta.url),
 );
 
+const parseFixturePid = (text: string): number => {
+  if (!/^[1-9]\d*$/u.test(text) || !Number.isSafeInteger(Number(text)))
+    throw new Error("Fixture PID is not a positive integer.");
+  return Number(text);
+};
+
 const processAlive = (pid: number): boolean => {
+  if (!Number.isSafeInteger(pid) || pid <= 0)
+    throw new Error("Refusing a process-group liveness probe.");
   try {
     process.kill(pid, 0);
     return true;
@@ -40,7 +48,27 @@ const waitForDead = (pid: number): Promise<void> =>
 
 afterEach(() =>
   Promise.all(
-    directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
+    directories.splice(0).map((directory) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const pid = yield* Effect.tryPromise(() =>
+            fs
+              .readFile(join(directory, "scenario.json.pid"), "utf8")
+              .then(parseFixturePid)
+              .catch(() => undefined),
+          );
+          if (pid !== undefined && processAlive(pid)) {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {
+              /* Exit can race cleanup. */
+            }
+            yield* Effect.tryPromise(() => waitForDead(pid));
+          }
+          yield* Effect.tryPromise(() => fs.rm(directory, { recursive: true, force: true }));
+        }),
+      ),
+    ),
   ).then(() => undefined),
 );
 
@@ -59,10 +87,25 @@ describe("packaged delegated-Pi supervisor bridge", () => {
                   const opened = yield* Effect.exit(
                     openPiSupervisorBridge(scenario, {
                       helperPath: openFixture,
-                      initializeTimeoutMillis: 75,
+                      initializeTimeoutMillis: mode === "timeout" ? 75 : 1_000,
                     }),
                   );
-                  expect(Exit.isFailure(opened)).toBe(true);
+                  // Closing stdin and acknowledging initialization race the notification write.
+                  // Either opening outcome is valid; parent-scope release must kill the helper.
+                  if (mode !== "notification-close") {
+                    expect(Exit.isFailure(opened)).toBe(true);
+                    const pid = yield* Effect.tryPromise(() =>
+                      fs
+                        .readFile(`${scenario}.pid`, "utf8")
+                        .then(parseFixturePid)
+                        .catch(() => undefined),
+                    );
+                    if (mode === "malformed") expect(pid).toBeDefined();
+                    if (pid !== undefined) {
+                      yield* Effect.tryPromise(() => waitForDead(pid));
+                      expect(processAlive(pid)).toBe(false);
+                    }
+                  }
                 }),
               ),
             ),
@@ -70,7 +113,7 @@ describe("packaged delegated-Pi supervisor bridge", () => {
           .then(() =>
             fs
               .readFile(`${scenario}.pid`, "utf8")
-              .then((value) => Number(value))
+              .then(parseFixturePid)
               .catch(() => undefined),
           )
           .then((pid) => {
@@ -81,6 +124,39 @@ describe("packaged delegated-Pi supervisor bridge", () => {
           });
       }));
   }
+
+  it("releases interrupted initialization while its parent scope remains open", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const directory = yield* Effect.tryPromise(() =>
+            fs.mkdtemp(join(tmpdir(), "pi-subagents-pi-bridge-interrupt-")),
+          );
+          directories.push(directory);
+          const scenario = join(directory, "scenario.json");
+          yield* Effect.tryPromise(() => fs.writeFile(scenario, '{"mode":"timeout"}'));
+          const opening = yield* openPiSupervisorBridge(scenario, { helperPath: openFixture }).pipe(
+            Effect.forkScoped,
+          );
+          let pid: number | undefined;
+          for (let attempt = 0; attempt < 200 && pid === undefined; attempt++) {
+            pid = yield* Effect.tryPromise(() =>
+              fs
+                .readFile(`${scenario}.pid`, "utf8")
+                .then(parseFixturePid)
+                .catch(() => undefined),
+            );
+            if (pid === undefined) yield* Effect.sleep("10 millis");
+          }
+          expect(pid).toBeDefined();
+          yield* Fiber.interrupt(opening);
+          if (pid !== undefined) {
+            yield* Effect.tryPromise(() => waitForDead(pid));
+            expect(processAlive(pid)).toBe(false);
+          }
+        }),
+      ),
+    ));
 
   it("kills a successfully initialized helper when its scope closes", () =>
     fs.mkdtemp(join(tmpdir(), "pi-subagents-pi-bridge-scope-")).then((directory) => {
@@ -99,7 +175,7 @@ describe("packaged delegated-Pi supervisor bridge", () => {
           ),
         )
         .then(() => fs.readFile(`${scenario}.pid`, "utf8"))
-        .then((value) => Number(value))
+        .then(parseFixturePid)
         .then((pid) =>
           waitForDead(pid).then(() => {
             expect(processAlive(pid)).toBe(false);

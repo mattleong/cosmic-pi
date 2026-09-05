@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Scheduler from "effect/Scheduler";
 import {
   makeRefreshCoordinatorWith,
   mergeRefreshRequest,
@@ -10,6 +11,74 @@ import {
 } from "../src/coordination/refresh-coordinator.ts";
 
 describe("RefreshCoordinator", () => {
+  it.effect("remains reusable across every scheduler interruption point in admission", () =>
+    Effect.gen(function* () {
+      // Sweep public scheduler checkpoints, including registration before owner work.
+      // Reuse is checked by a completion probe rather than a TestClock timeout.
+      for (let interruptAt = 1; interruptAt <= 100; interruptAt++) {
+        const coordinator = yield* makeRefreshCoordinatorWith<number>((_, next) => next);
+        const scheduler = new Scheduler.MixedScheduler();
+        let checkpoints = 0;
+        const admissionScheduler: Scheduler.Scheduler = {
+          executionMode: scheduler.executionMode,
+          makeDispatcher: () => scheduler.makeDispatcher(),
+          shouldYield: (fiber) => {
+            if (++checkpoints === interruptAt) {
+              fiber.interruptUnsafe();
+              return true;
+            }
+            return false;
+          },
+        };
+        const owner = yield* coordinator
+          .run(1, () => Effect.void)
+          .pipe(Effect.provideService(Scheduler.Scheduler, admissionScheduler), Effect.forkScoped);
+        yield* Fiber.await(owner);
+        let reused = false;
+        const retry = yield* coordinator
+          .run(2, () =>
+            Effect.sync(() => {
+              reused = true;
+            }),
+          )
+          .pipe(Effect.forkScoped);
+        for (let turn = 0; turn < 20 && !reused; turn++) yield* Effect.yieldNow;
+        expect(reused, `interruption checkpoint ${interruptAt}`).toBe(true);
+        yield* Fiber.join(retry);
+      }
+    }),
+  );
+
+  it.effect(
+    "interrupts joiner waiting without cancelling its owner or losing the merged request",
+    () =>
+      Effect.gen(function* () {
+        const coordinator = yield* makeRefreshCoordinatorWith<number>((_, next) => next);
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const requests: number[] = [];
+        const operation = (request: number) =>
+          Effect.gen(function* () {
+            requests.push(request);
+            if (request === 1) {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+            }
+          });
+        const owner = yield* coordinator.run(1, operation).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        const joiner = yield* coordinator.run(2, operation).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(joiner);
+        expect(requests).toEqual([1]);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(owner);
+        expect(requests).toEqual([1, 2]);
+        yield* coordinator.run(3, operation);
+        expect(requests).toEqual([1, 2, 3]);
+      }),
+  );
+
   it.effect("coalesces force and notify into one follow-up", () =>
     Effect.gen(function* () {
       const coordinator = yield* makeRefreshCoordinatorWith<RefreshRequest, string>(

@@ -111,6 +111,7 @@ export function cosmicUiWithDependencies(
           releaseSignal: abort.release,
         };
   };
+  let lifecycleGeneration = 0;
   let lastCompleteTotals = emptyTotals();
   const rememberTotals = (totals: FooterTotals) => {
     lastCompleteTotals = totals;
@@ -341,8 +342,10 @@ export function cosmicUiWithDependencies(
   });
 
   pi.on("session_start", (_event, ctx) => {
+    const generation = ++lifecycleGeneration;
     const shutdownFailedStart = () =>
       slot.shutdown().then(() => {
+        if (generation !== lifecycleGeneration) return;
         currentContext = undefined;
         resetTotals();
         resetProjection(projection);
@@ -496,10 +499,12 @@ export function cosmicUiWithDependencies(
     workingOwners.pauseOutputForActiveRun();
   });
   pi.on("session_shutdown", () => {
+    const generation = ++lifecycleGeneration;
     workingOwners.clearRun();
     footerInstallation.uninstall();
     disposeSubscriptions();
     return Promise.all([slot.shutdown(), shutdownTickers()]).then(() => {
+      if (generation !== lifecycleGeneration) return;
       currentContext = undefined;
       resetTotals();
       protocolBuffer.reset();

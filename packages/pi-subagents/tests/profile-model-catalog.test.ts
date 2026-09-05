@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import type { NativeRuntimeModel } from "../src/boundary/native-model-catalog.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
@@ -50,6 +51,37 @@ const hasTerminalControls = (value: string): boolean => {
 };
 
 describe("profile model catalog", () => {
+  for (const lateFailure of [false, true]) {
+    it.effect(
+      `releases noncooperative refresh on interruption and ignores late ${lateFailure ? "rejection" : "publication"}`,
+      () =>
+        Effect.gen(function* () {
+          const pending = yield* Deferred.make<ProfileModelRegistryRefreshResult, string>();
+          let registrySignal: AbortSignal | undefined;
+          let models = [piModel("openai", "old")];
+          const entered = yield* Deferred.make<void>();
+          const catalog = new ProfileModelCatalog({
+            getAvailable: () => models,
+            getError: () => undefined,
+            refresh: (options) => {
+              registrySignal = options?.signal;
+              Deferred.doneUnsafe(entered, Effect.void);
+              return Effect.runPromise(Deferred.await(pending));
+            },
+          });
+          const initial = catalog.capture();
+          const refreshing = yield* catalog.refresh().pipe(Effect.forkScoped);
+          yield* Deferred.await(entered);
+          yield* Fiber.interrupt(refreshing);
+          expect(registrySignal?.aborted).toBe(true);
+          models = [piModel("openai", "late")];
+          if (lateFailure) yield* Deferred.fail(pending, "late failure");
+          else yield* Deferred.succeed(pending, { aborted: false });
+          yield* Effect.promise(() => Promise.resolve());
+          expect(catalog.capture()).toBe(initial);
+        }),
+    );
+  }
   it.effect("atomically replaces one immutable snapshot and retains it on failure or abort", () =>
     Effect.gen(function* () {
       let models = [piModel("openai", "gpt-old")];

@@ -1,6 +1,7 @@
 // Explicit test entry-point Layer provision owns the local process scope.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -9,6 +10,7 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   LocalProcess,
   makeBackgroundProcessEnvironment,
+  makeWindowsTreeTermination,
   terminateWindowsTree,
   type WindowsTreeTerminatorSpawn,
 } from "../src/boundary/local-process.ts";
@@ -73,6 +75,110 @@ const fakeTerminator = () => {
 };
 
 describe("windows tree terminator", () => {
+  it.effect("maps synchronous helper spawn failure without preventing later escalation", () =>
+    Effect.gen(function* () {
+      const fake = fakeTerminator();
+      const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) => {
+        if (!args.includes("/F")) throw new Error("private spawn details");
+        return fake.spawn(command, args, options);
+      });
+      yield* terminate("graceful");
+      const stopping = yield* terminate("force").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      fake.emit("exit", 0);
+      yield* Fiber.join(stopping);
+      const failed = yield* terminateWindowsTree(42, () => {
+        throw new Error("private spawn details");
+      }).pipe(Effect.flip);
+      expect(failed).toMatchObject({ _tag: "LocalProcessError", reason: "terminate" });
+      expect(String(failed)).not.toContain("private spawn details");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("cleans a partially installed helper despite throwing listener removal", () =>
+    Effect.gen(function* () {
+      const fake = fakeTerminator();
+      const failed = yield* terminateWindowsTree(42, (command, args, options) => {
+        const child = fake.spawn(command, args, options);
+        return {
+          ...child,
+          on: (event, listener) => {
+            if (event === "error") throw new Error("listener setup failed");
+            child.on(event, listener);
+          },
+          removeListener: (event, listener) => {
+            child.removeListener(event, listener);
+            throw new Error("listener removal failed");
+          },
+        };
+      }).pipe(Effect.flip);
+      expect(failed).toMatchObject({ _tag: "LocalProcessError" });
+      expect(fake.killed).toEqual(["SIGKILL"]);
+      expect(fake.isUnrefed()).toBe(true);
+      expect(fake.listenerCounts()).toEqual({ exit: 0, error: 0 });
+    }),
+  );
+  it.effect("still escalates after the graceful helper times out", () =>
+    Effect.gen(function* () {
+      const graceful = fakeTerminator();
+      const force = fakeTerminator();
+      const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) =>
+        (args.includes("/F") ? force : graceful).spawn(command, args, options),
+      );
+      yield* terminate("graceful");
+      yield* TestClock.adjust("2 seconds");
+      expect(graceful.killed).toEqual(["SIGKILL"]);
+      const stopping = yield* terminate("force").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      expect(force.spawns).toHaveLength(1);
+      force.emit("exit", 0);
+      yield* Fiber.join(stopping);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("joins a hanging graceful helper before force, once, and contains late errors", () =>
+    Effect.gen(function* () {
+      const graceful = fakeTerminator();
+      const force = fakeTerminator();
+      const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) =>
+        (args.includes("/F") ? force : graceful).spawn(command, args, options),
+      );
+      yield* terminate("graceful");
+      yield* terminate("graceful");
+      expect(graceful.spawns).toHaveLength(1);
+      const stopping = yield* terminate("force").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      expect(graceful.killed).toEqual(["SIGKILL"]);
+      graceful.emit("error", new Error("late graceful error"));
+      expect(force.spawns).toHaveLength(1);
+      yield* TestClock.adjust("2 seconds");
+      yield* Fiber.join(stopping).pipe(Effect.ignore);
+      force.emit("error", new Error("late force error"));
+      const retry = yield* terminate("force").pipe(Effect.forkScoped({ startImmediately: true }));
+      expect(force.spawns).toHaveLength(2);
+      force.emit("exit", 0);
+      yield* Fiber.join(retry);
+      expect(force.killed).toEqual(["SIGKILL"]);
+      expect(graceful.spawns).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("scope closure interrupts a hanging graceful helper without awaiting exit", () =>
+    Effect.gen(function* () {
+      const fake = fakeTerminator();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const terminate = yield* makeWindowsTreeTermination(42, fake.spawn);
+          yield* terminate("graceful");
+        }),
+      );
+      expect(fake.killed).toEqual(["SIGKILL"]);
+      expect(fake.listenerCounts()).toEqual({ exit: 0, error: 1 });
+      fake.emit("error", new Error("late shutdown error"));
+    }),
+  );
   it.effect("confirms a zero-exit taskkill and removes its listeners", () =>
     Effect.gen(function* () {
       const fake = fakeTerminator();
@@ -129,6 +235,30 @@ describe("windows tree terminator", () => {
 });
 
 describe("local process boundary", () => {
+  it.effect("interrupts pending cwd inspection and ignores late settlement without spawning", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const pending = yield* Deferred.make<{ isDirectory(): boolean }>();
+      let inspectedResult = false;
+      const layer = LocalProcess.layerWithInspection(() => {
+        Deferred.doneUnsafe(entered, Effect.void);
+        return Effect.runPromise(Deferred.await(pending));
+      });
+      const starting = yield* LocalProcess.use((service) =>
+        service.spawn({ command: "exit 0", cwd: ".", ingressBufferBytes: 1024 }),
+      ).pipe(Effect.scoped, provideBuiltLayer(layer), Effect.forkScoped);
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(starting);
+      yield* Deferred.succeed(pending, {
+        isDirectory: () => {
+          inspectedResult = true;
+          return true;
+        },
+      });
+      yield* Effect.promise(() => Promise.resolve());
+      expect(inspectedResult).toBe(false);
+    }),
+  );
   it("case-folds blocked environment keys only on Windows", () => {
     const blocked = {
       BASH_ENV: "bash",

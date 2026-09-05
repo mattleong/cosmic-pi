@@ -180,7 +180,7 @@ it.effect("interrupting an await leaves the UI alive and restores automatic deli
   }),
 );
 
-it.effect("interruption at the waiter commit boundary restores automatic delivery", () =>
+it.effect("cancellation after final acknowledgement never redelivers the answer", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Deferred.succeed(f.mount, undefined);
@@ -217,12 +217,12 @@ it.effect("interruption at the waiter commit boundary restores automatic deliver
       expect(
         (yield* service.controlAsync({ action: "status", requestId: receipt.requestId }))
           .requests[0]?.delivery,
-      ).toBe("sent");
-      expect(yield* Ref.get(f.messages)).toHaveLength(1);
+      ).toBe("waiter");
+      expect(yield* Ref.get(f.messages)).toEqual([]);
       expect(
         (yield* service.controlAsync({ action: "await", requestId: receipt.requestId }))
           .requests[0],
-      ).toMatchObject({ delivery: "sent", outcome });
+      ).toMatchObject({ delivery: "waiter", outcome });
     }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
   }),
 );
@@ -527,5 +527,219 @@ it.effect("rejects blank work descriptions and unavailable async hosts before op
         reason: "unavailable",
       });
     }).pipe(Effect.provide(AskUserService.layer(f.host)));
+  }),
+);
+
+it.effect("acknowledging failed openings recovers a full registry after host recovery", () =>
+  Effect.gen(function* () {
+    const recovered = yield* Ref.make(false);
+    const host: AskUserHost = (_request, opened) =>
+      Effect.gen(function* () {
+        if (!(yield* Ref.get(recovered)))
+          return yield* new AskUserHostError({ operation: "open", message: "Unavailable" });
+        if (opened) yield* Deferred.succeed(opened, undefined);
+        return yield* Effect.never;
+      });
+    yield* Effect.gen(function* () {
+      const service = yield* AskUserService;
+      for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
+        expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({
+          _tag: "AskUserHostError",
+        });
+      }
+      const listed = yield* service.controlAsync({ action: "status" });
+      expect(listed.requests).toHaveLength(MAX_RETAINED_REQUESTS);
+      expect(
+        listed.requests.every((item) => item.status === "failed" && item.delivery === "none"),
+      ).toBe(true);
+      expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
+      for (const item of listed.requests) {
+        expect(
+          (yield* service.controlAsync({ action: "await", requestId: item.requestId })).requests[0],
+        ).toMatchObject({ status: "failed", delivery: "waiter" });
+      }
+      yield* Ref.set(recovered, true);
+      const receipt = yield* service.startAsync(request);
+      expect(receipt.status).toBe("pending");
+      expect(
+        yield* Effect.flip(
+          service.controlAsync({ action: "status", requestId: listed.requests[0]!.requestId }),
+        ),
+      ).toMatchObject({ reason: "not-found" });
+    }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
+  }),
+);
+
+const pausedScheduler = () => {
+  const tasks: Array<() => void> = [];
+  const scheduler: Scheduler.Scheduler = {
+    executionMode: "async",
+    shouldYield: (fiber) => fiber.currentOpCount >= fiber.maxOpsBeforeYield,
+    makeDispatcher: () => ({
+      scheduleTask: (task) => {
+        tasks.push(task);
+      },
+      flush: () => {
+        while (tasks.length) tasks.shift()!();
+      },
+    }),
+  };
+  return { scheduler, step: () => tasks.shift()?.() };
+};
+
+for (const prior of ["none", "pending", "failed"] as const) {
+  for (const budget of [8, 16]) {
+    for (const interruptSuccessor of [false, true]) {
+      it.effect(
+        `acknowledgement is atomic across cancellation (${prior}, budget ${budget}, successor interrupted ${interruptSuccessor})`,
+        () =>
+          Effect.gen(function* () {
+            let beforeCommit = false;
+            let afterCommit = false;
+            // Stop at each scheduler chunk through preparation and finalization.
+            for (let checkpoint = -1; checkpoint < 24; checkpoint++) {
+              const f = yield* fixture;
+              const attempts = yield* Ref.make(0);
+              const delivery = (snapshot: AsyncQuestionnaireSnapshot) =>
+                Effect.gen(function* () {
+                  if (prior === "failed" && (yield* Ref.updateAndGet(attempts, (n) => n + 1)) === 1)
+                    return yield* new AskUserHostError({ operation: "deliver", message: "Failed" });
+                  yield* f.delivery(snapshot);
+                });
+              yield* Deferred.succeed(f.mount, undefined);
+              yield* Effect.gen(function* () {
+                const service = yield* AskUserService;
+                const receipt = yield* service.startAsync(request);
+                const awaitResult = service.controlAsync({
+                  action: "await",
+                  requestId: receipt.requestId,
+                });
+                const status = service.controlAsync({
+                  action: "status",
+                  requestId: receipt.requestId,
+                });
+                if (prior === "failed") {
+                  yield* Deferred.succeed(f.answer, outcome);
+                  yield* Effect.yieldNow;
+                }
+                const paused = pausedScheduler();
+                const first = yield* Effect.forkChild(
+                  awaitResult.pipe(
+                    Effect.provideService(Scheduler.MaxOpsBeforeYield, budget),
+                    Effect.provideService(Scheduler.Scheduler, paused.scheduler),
+                  ),
+                  { startImmediately: true },
+                );
+                if (prior !== "failed") {
+                  for (let i = 0; i < 20; i++) paused.step();
+                  if (checkpoint === -1) first.interruptUnsafe();
+                  if (prior === "none")
+                    yield* Deferred.fail(
+                      f.answer,
+                      new AskUserHostError({ operation: "open", message: "Unavailable" }),
+                    );
+                  else yield* Deferred.succeed(f.answer, outcome);
+                  yield* Effect.yieldNow;
+                }
+                for (let i = 0; i < checkpoint; i++) paused.step();
+                const published = (yield* status).requests[0]!.delivery === "waiter";
+                beforeCommit ||= !published;
+                afterCommit ||= published;
+                first.interruptUnsafe();
+                // A published acknowledgement also proves claim release. Run B
+                // while A's post-release cleanup is still paused where possible.
+                if (!published) {
+                  for (let i = 0; i < 100; i++) paused.step();
+                  expect((yield* status).requests[0]?.delivery).toBe(
+                    prior === "pending" ? "sent" : prior,
+                  );
+                }
+                let secondPublished = false;
+                if (interruptSuccessor) {
+                  const successor = pausedScheduler();
+                  const second = yield* Effect.forkChild(
+                    awaitResult.pipe(
+                      Effect.provideService(Scheduler.MaxOpsBeforeYield, budget),
+                      Effect.provideService(Scheduler.Scheduler, successor.scheduler),
+                    ),
+                    { startImmediately: true },
+                  );
+                  for (let i = 0; i < checkpoint; i++) successor.step();
+                  secondPublished = (yield* status).requests[0]!.delivery === "waiter";
+                  second.interruptUnsafe();
+                  for (let i = 0; i < 100; i++) successor.step();
+                  yield* Fiber.await(second);
+                } else {
+                  const result = yield* awaitResult;
+                  secondPublished = result.requests[0]!.delivery === "waiter";
+                }
+                for (let i = 0; i < 100; i++) paused.step();
+                yield* Fiber.await(first);
+                yield* Effect.yieldNow;
+                const acknowledged = published || secondPublished;
+                const expected = acknowledged ? "waiter" : prior === "pending" ? "sent" : prior;
+                expect((yield* status).requests[0]?.delivery).toBe(expected);
+                if (prior === "none") expect(yield* Ref.get(f.messages)).toEqual([]);
+                if (prior === "failed") {
+                  yield* TestClock.adjust("1 second");
+                  for (let i = 0; i < 100; i++) paused.step();
+                  expect((yield* status).requests[0]?.delivery).toBe(
+                    acknowledged ? "waiter" : "sent",
+                  );
+                }
+              }).pipe(Effect.provide(AskUserService.layer(f.host, delivery)));
+            }
+            expect(beforeCommit).toBe(true);
+            expect(afterCommit).toBe(true);
+          }),
+      );
+    }
+  }
+}
+
+it.effect("cancellation after final failed-opening acknowledgement retains it", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* Effect.gen(function* () {
+      const service = yield* AskUserService;
+      const opening = yield* Effect.forkChild(service.startAsync(request));
+      yield* Deferred.await(f.entered);
+      const id = (yield* service.controlAsync({ action: "status" })).requests[0]!.requestId;
+      const waiter = yield* Effect.forkChild(
+        service
+          .controlAsync({ action: "await", requestId: id })
+          .pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16)),
+        { startImmediately: true },
+      );
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      yield* Deferred.fail(
+        f.answer,
+        new AskUserHostError({ operation: "open", message: "Unavailable" }),
+      );
+      yield* Deferred.succeed(f.mount, undefined);
+      let observedCommit = false;
+      for (let i = 0; i < 100; i++) {
+        if (
+          (yield* service.controlAsync({ action: "status", requestId: id })).requests[0]
+            ?.delivery === "waiter"
+        ) {
+          observedCommit = true;
+          waiter.interruptUnsafe();
+          break;
+        }
+        yield* Effect.yieldNow;
+      }
+      expect(observedCommit).toBe(true);
+      expect(Exit.isFailure(yield* Fiber.await(waiter))).toBe(true);
+      yield* Fiber.await(opening);
+      for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+      expect(
+        (yield* service.controlAsync({ action: "status", requestId: id })).requests[0],
+      ).toMatchObject({ status: "failed", delivery: "waiter" });
+      expect(yield* Ref.get(f.messages)).toEqual([]);
+      expect(
+        (yield* service.controlAsync({ action: "await", requestId: id })).requests[0]?.delivery,
+      ).toBe("waiter");
+    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
   }),
 );

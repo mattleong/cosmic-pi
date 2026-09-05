@@ -1166,10 +1166,23 @@ describe("Cosmic UI extension", () => {
       yield* Effect.promise(() => Promise.resolve());
       expect(shutdownHostUiTickers).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
-
+      yield* emit(h, "session_start");
+      const footer = h.setFooter.mock.calls.at(-1)?.[0](
+        { requestRender: vi.fn() },
+        { fg: (_color: string, text: string) => text },
+        {
+          getGitBranch: () => null,
+          getExtensionStatuses: () => new Map(),
+          getAvailableProviderCount: () => 1,
+          onBranchChange: () => vi.fn(),
+        },
+      );
+      const replacementState = footer.render(100);
       yield* Deferred.succeed(finishTickerShutdown, undefined);
       yield* Fiber.join(shutdown);
       expect(settled).toBe(true);
+      expect(footer.render(100)).toEqual(replacementState);
+      yield* emit(h, "session_shutdown");
     });
   });
 

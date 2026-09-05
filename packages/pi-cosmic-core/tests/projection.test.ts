@@ -1,7 +1,78 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot, makeFrozenProjection, ProjectionError } from "../src/projection.ts";
+
+it.effect("commits authoritative state when interrupted at publication", () =>
+  Effect.gen(function* () {
+    let published = 0;
+    let interrupted = false;
+    const projection = yield* makeFrozenProjection(
+      0,
+      (n) => n,
+      (n) => {
+        published = n;
+      },
+    );
+    const scheduler = new Scheduler.MixedScheduler();
+    const commitScheduler: Scheduler.Scheduler = {
+      executionMode: scheduler.executionMode,
+      makeDispatcher: () => scheduler.makeDispatcher(),
+      shouldYield: (fiber) => {
+        if (published === 1 && !interrupted) {
+          interrupted = true;
+          fiber.interruptUnsafe();
+          return true;
+        }
+        return false;
+      },
+    };
+    const fiber = yield* projection
+      .transition(() => Effect.succeed([undefined, 1] as const))
+      .pipe(Effect.provideService(Scheduler.Scheduler, commitScheduler), Effect.forkScoped);
+    yield* Fiber.await(fiber);
+    expect(interrupted).toBe(true);
+    expect(published).toBe(1);
+    expect(projection.getSnapshot()).toBe(published);
+    expect(yield* projection.getState).toBe(published);
+  }),
+);
+
+it.effect("interrupts lock wait and update work without blocking later transitions", () =>
+  Effect.gen(function* () {
+    const projection = yield* makeFrozenProjection(0, (n) => n);
+    const started = yield* Deferred.make<void>();
+    const owner = yield* projection
+      .transition(() => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)))
+      .pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    let waitingUpdateRan = false;
+    const waiter = yield* projection
+      .transition((n) =>
+        Effect.sync(() => {
+          waitingUpdateRan = true;
+          return [undefined, n + 1] as const;
+        }),
+      )
+      .pipe(Effect.forkScoped);
+    yield* Effect.yieldNow;
+    yield* Fiber.interrupt(waiter);
+    expect(waitingUpdateRan).toBe(false);
+    yield* Fiber.interrupt(owner);
+    expect(yield* projection.getState).toBe(0);
+    yield* Effect.all(
+      Array.from({ length: 20 }, () =>
+        projection.transition((n) => Effect.yieldNow.pipe(Effect.as([undefined, n + 1] as const))),
+      ),
+      { concurrency: "unbounded" },
+    );
+    expect(yield* projection.getState).toBe(20);
+    expect(projection.getSnapshot()).toBe(20);
+  }),
+);
 
 class TransitionFailure extends Schema.TaggedError<TransitionFailure>()("TransitionFailure", {
   message: Schema.String,
@@ -106,6 +177,30 @@ it.effect("does not publish or commit a failed transition", () =>
     expect(result._tag).toBe("Failure");
     expect(projection.getSnapshot()).toBe(before);
     expect((yield* projection.getState).count).toBe(1);
+  }),
+);
+
+it.effect("rejects invalid projection preparation without committing and releases the lock", () =>
+  Effect.gen(function* () {
+    let published = 0;
+    const projection = yield* makeFrozenProjection(
+      0,
+      (n) => (n === 1 ? Number.NaN : n),
+      (n) => {
+        published = n;
+      },
+    );
+    const result = yield* projection
+      .transition(() => Effect.succeed([undefined, 1] as const))
+      .pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    expect(yield* projection.getState).toBe(0);
+    expect(projection.getSnapshot()).toBe(0);
+    expect(published).toBe(0);
+    yield* projection.transition((n) => Effect.succeed([undefined, n + 2] as const));
+    expect(yield* projection.getState).toBe(2);
+    expect(projection.getSnapshot()).toBe(2);
+    expect(published).toBe(2);
   }),
 );
 

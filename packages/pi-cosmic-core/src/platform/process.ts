@@ -42,6 +42,10 @@ export interface BoundedProcessRequest {
   readonly totalOutputLimitBytes?: number;
   readonly timeoutMillis: number;
   readonly cleanupTimeoutMillis?: number;
+  /** Total, synchronous observer called during finalization, including interruption.
+   * False also covers failed acquisition: no handle means no proof of cleanup.
+   */
+  readonly onCleanup?: (confirmed: boolean) => void;
   /** Sweep a detached process group even after a successful leader exit. */
   readonly sweepProcessTreeOnExit?: boolean;
   readonly detached?: boolean;
@@ -160,21 +164,20 @@ export const confirmEffectProcessClose = (
   handle: ChildProcessSpawner.ChildProcessHandle,
   timeoutMillis: number,
 ): Effect.Effect<boolean> =>
-  Effect.interruptible(
-    handle.isRunning.pipe(
-      Effect.catch(() => Effect.succeed(true)),
-      Effect.flatMap((running) =>
-        running
-          ? handle
-              .kill({ killSignal: "SIGTERM", forceKillAfter: Math.max(1, timeoutMillis / 2) })
-              .pipe(
-                Effect.timeoutOption(Math.max(1, timeoutMillis)),
-                Effect.map(Option.isSome),
-                Effect.catch(() => Effect.succeed(false)),
-              )
-          : Effect.succeed(true),
-      ),
-    ),
+  Effect.gen(function* () {
+    const running = yield* handle.isRunning;
+    if (!running) return true;
+    yield* handle
+      .kill({ killSignal: "SIGTERM", forceKillAfter: Math.max(1, timeoutMillis / 2) })
+      .pipe(Effect.ignore);
+    // Successful signal delivery is not proof of exit. Pinned Node uses its
+    // exit-event Deferred for isRunning, including signal-terminated children.
+    return !(yield* handle.isRunning);
+  }).pipe(
+    Effect.interruptible,
+    Effect.timeoutOption(Math.max(1, timeoutMillis)),
+    Effect.map((result) => Option.isSome(result) && result.value),
+    Effect.catchCause(() => Effect.succeed(false)),
   );
 
 /**
@@ -206,10 +209,36 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     killSignal: "SIGTERM",
     forceKillAfter: Math.max(1, cleanupTimeoutMillis / 2),
   });
-  const handle = yield* command.pipe(
-    Effect.mapError(
-      () => new BoundedProcessError({ operation: "spawn", message: "Unable to start process." }),
-    ),
+  const handle = yield* Effect.uninterruptibleMask(() =>
+    Effect.gen(function* () {
+      // Register before dispatch. The spawner can acquire a native child and
+      // fail before publishing its handle; its own finalizer swallows kill errors.
+      let confirmed = false;
+      if (request.onCleanup)
+        yield* Effect.addFinalizer(() => Effect.sync(() => request.onCleanup!(confirmed)));
+      const acquired = yield* command.pipe(
+        Effect.mapError(
+          () =>
+            new BoundedProcessError({ operation: "spawn", message: "Unable to start process." }),
+        ),
+      );
+      if (request.onCleanup)
+        yield* Effect.addFinalizer(() =>
+          confirmEffectProcessClose(acquired, cleanupTimeoutMillis).pipe(
+            Effect.flatMap((closed) =>
+              closed && request.sweepProcessTreeOnExit
+                ? sweepExitedProcessTree(acquired, cleanupTimeoutMillis)
+                : Effect.succeed(closed),
+            ),
+            Effect.tap((closed) =>
+              Effect.sync(() => {
+                confirmed = closed;
+              }),
+            ),
+          ),
+        );
+      return acquired;
+    }),
   );
   const observed = Effect.all(
     [

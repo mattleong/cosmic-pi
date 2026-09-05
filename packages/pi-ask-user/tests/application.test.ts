@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, expect, vi } from "vitest";
+import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import { askUserWithDependencies } from "../src/application.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type {
@@ -40,7 +41,10 @@ interface CapturedCommand {
   readonly handler: (args: string, ctx: ExtensionContext) => Promise<void>;
 }
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 interface PromiseGate<A> {
   readonly promise: Promise<A>;
@@ -132,6 +136,13 @@ const asyncUi = () => {
   let component: Component | undefined;
   let mounted: (() => void) | undefined;
   const done = vi.fn();
+  const tui = {
+    requestRender: vi.fn(),
+    showOverlay: () => ({ hide: vi.fn() }),
+    stop: vi.fn(),
+    start: vi.fn(),
+  };
+  let customCalls = 0;
   const ui = {
     notify: vi.fn(),
     setStatus: vi.fn(),
@@ -144,18 +155,21 @@ const asyncUi = () => {
       ) => Component,
       options: { onHandle: (handle: OverlayHandle) => void },
     ) => {
+      customCalls++;
       const completed = controlled<AskUserOutcome>();
       // SAFETY: The fake supplies the TUI/theme/keybinding members used by the dialog boundary.
       const opaque = <A>(value: A): never => value as never;
       component = factory(
-        opaque({ requestRender: vi.fn(), showOverlay: () => ({ hide: vi.fn() }) }),
+        opaque(tui),
         opaque({
           fg: (_c: string, text: string) => text,
           bg: (_c: string, text: string) => text,
           bold: (text: string) => text,
         }),
         opaque({
-          matches: (data: string, key: string) => data === "\r" && key === "tui.select.confirm",
+          matches: (data: string, key: string) =>
+            (data === "\r" && key === "tui.select.confirm") ||
+            (data === "external" && key === "app.editor.external"),
         }),
         (outcome) => {
           done(outcome);
@@ -170,6 +184,10 @@ const asyncUi = () => {
   return {
     ui,
     done,
+    tui,
+    get customCalls() {
+      return customCalls;
+    },
     get mounted() {
       return mounted;
     },
@@ -400,6 +418,72 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
   );
+
+  for (const lateResult of ["success", "rejection"] as const) {
+    it.effect(`replacement joins editor termination and TUI restoration (${lateResult})`, () =>
+      Effect.gen(function* () {
+        const ui = asyncUi();
+        const terminated = controlled();
+        let editorSignal: AbortSignal | undefined;
+        const edit = vi
+          .spyOn(externalEditor, "editWithExternalEditor")
+          .mockImplementation((tui, _command, _value, signal) => {
+            editorSignal = signal;
+            tui.stop();
+            return terminated.promise.then(() => {
+              tui.start();
+              tui.requestRender(true);
+              if (lateResult === "rejection") throw new Error("late editor failure");
+              return "late edited text";
+            });
+          });
+        // SAFETY: This fixture implements the UI methods consumed by the host.
+        const h = yield* harness(() => Promise.resolve(), { mode: "tui", ui: ui.ui as never });
+        yield* Effect.promise(() => h.emit("session_start"));
+        const start = h.tools.get("ask_user_async")!;
+        const opening = start.execute("open", asyncRequest, undefined, undefined, h.ctx);
+        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mounted).toBeDefined()));
+        ui.mounted!();
+        yield* Effect.promise(() => opening);
+        const oldComponent = ui.component!;
+        oldComponent.handleInput?.("n");
+        oldComponent.handleInput?.("external");
+        expect(editorSignal?.aborted).toBe(false);
+        expect(ui.tui.stop).toHaveBeenCalledOnce();
+        let replaced = false;
+        const replacing = h.emit("session_start").then(() => {
+          replaced = true;
+        });
+        yield* Effect.promise(() => vi.waitFor(() => expect(editorSignal?.aborted).toBe(true)));
+        for (let i = 0; i < 30; i++) yield* Effect.yieldNow;
+        expect(replaced).toBe(false);
+        expect(ui.tui.start).not.toHaveBeenCalled();
+        yield* Effect.promise(() =>
+          expect(
+            start.execute("stale", asyncRequest, undefined, undefined, h.ctx),
+          ).rejects.toBeDefined(),
+        );
+        expect(ui.customCalls).toBe(1);
+        terminated.resolve();
+        yield* Effect.promise(() => replacing);
+        expect(ui.tui.start).toHaveBeenCalledOnce();
+        // A detached old component cannot admit another editor even after late settlement.
+        yield* Effect.promise(() => Promise.resolve());
+        oldComponent.handleInput?.("external");
+        expect(edit).toHaveBeenCalledOnce();
+        const next = h.tools
+          .get("ask_user_async")!
+          .execute("next", asyncRequest, undefined, undefined, h.ctx);
+        yield* Effect.promise(() => vi.waitFor(() => expect(ui.customCalls).toBe(2)));
+        ui.mounted!();
+        yield* Effect.promise(() => next);
+        yield* Effect.promise(() => h.emit("session_shutdown"));
+        yield* Effect.promise(() => h.emit("session_shutdown"));
+        expect(ui.tui.start).toHaveBeenCalledOnce();
+        expect(ui.done).toHaveBeenCalledTimes(2);
+      }),
+    );
+  }
 
   it.effect("RPC retains only the compatible blocking tool", () =>
     Effect.gen(function* () {

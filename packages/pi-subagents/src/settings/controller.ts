@@ -81,6 +81,10 @@ export interface SessionProfileSetSnapshotWrite extends Omit<
 
 export interface FleetManagerActions {
   readonly isAvailable: () => boolean;
+  readonly captureModelRefresh: () => {
+    readonly isCurrent: () => boolean;
+    readonly run: <A>(effect: Effect.Effect<A>, signal: AbortSignal) => Promise<A>;
+  };
   readonly stop: (id: string) => Promise<void>;
   readonly interrupt: (id: string) => Promise<void>;
   readonly resume: (id: string, message?: string) => Promise<void>;
@@ -237,8 +241,10 @@ function openProfileEditor(
     ctx.ui.notify("Trust this project to edit its saved profile sets.", "warning");
     return Promise.resolve(false);
   }
+  const refreshOwner = actions.captureModelRefresh();
   return actions.inspectProfiles(projectTrusted).then(
     (initialInspection) => {
+      if (!refreshOwner.isCurrent()) return false;
       let inspection = initialInspection;
       const modelCatalog = new ProfileModelCatalog(
         ctx.modelRegistry,
@@ -247,14 +253,25 @@ function openProfileEditor(
       let requestWorkspaceRender: (() => void) | undefined;
       const modelRefreshController = new AbortController();
       let refreshWarningSent = false;
-      void Effect.runPromise(modelCatalog.refresh(modelRefreshController.signal)).then((result) => {
-        if (result === "updated" && !modelRefreshController.signal.aborted)
-          requestWorkspaceRender?.();
-        if (result === "failed" && !modelRefreshController.signal.aborted && !refreshWarningSent) {
-          refreshWarningSent = true;
-          ctx.ui.notify("Could not refresh Pi models. Showing the last available list.", "warning");
-        }
-      });
+      void refreshOwner.run(modelCatalog.refresh(), modelRefreshController.signal).then(
+        (result) => {
+          if (!refreshOwner.isCurrent()) return;
+          if (result === "updated" && !modelRefreshController.signal.aborted)
+            requestWorkspaceRender?.();
+          if (
+            result === "failed" &&
+            !modelRefreshController.signal.aborted &&
+            !refreshWarningSent
+          ) {
+            refreshWarningSent = true;
+            ctx.ui.notify(
+              "Could not refresh Pi models. Showing the last available list.",
+              "warning",
+            );
+          }
+        },
+        () => undefined,
+      );
       let parentEffort: SubagentEffort = "high";
       if (ctx.model) {
         try {

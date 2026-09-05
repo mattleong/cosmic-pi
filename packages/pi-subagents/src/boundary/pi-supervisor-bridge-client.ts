@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import {
@@ -270,44 +271,59 @@ export const openPiSupervisorBridge = (
         message: "Private supervisor configuration path is invalid.",
       });
     }
-    const session = yield* makeNdjsonRpcSession<BridgeReply>({
-      command: process.execPath,
-      args: [options.helperPath ?? packagedHelperPath, "--config", configPath],
-      environment: {},
-      diagnosticMaxBytes: 0,
-      waitForSpawnEvent: false,
-      maxLineBytes: MAX_LINE_BYTES,
-      maxQueuedOutputBytes: MAX_LINE_BYTES * 2,
-      maxPendingCalls: MAX_PENDING,
-      writeQueueCapacity: WRITE_QUEUE_CAPACITY,
-      classifyInbound: classifyBridgeLine,
-      onEvent: (event) => {
-        if (event.kind === "notification") options.onNotification?.(event.message);
-      },
-      unknownReplyPolicy: "ignore",
-      cancelNotification: (id) =>
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          method: "notifications/cancelled",
-          params: { requestId: id, reason: "Pi tool call cancelled" },
-        })}\n`,
-    });
-    yield* session
-      .call(
-        INITIALIZE_REQUEST_ID,
-        encodeFrame(initializeRequest()),
-        options.initializeTimeoutMillis ?? CALL_TIMEOUT_MILLIS,
-      )
-      .pipe(
-        Effect.filterOrFail(
-          (reply) => reply.kind === "initialized",
-          () =>
-            new RpcCallRejectedError({
-              detail: "Private supervisor bridge initialization returned an unexpected payload.",
-            }),
-        ),
-      );
-    yield* session.notify(initializedNotificationFrame());
+    const parentScope = yield* Effect.scope;
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const openingScope = yield* Scope.fork(parentScope);
+        return yield* restore(
+          Effect.gen(function* () {
+            const session = yield* makeNdjsonRpcSession<BridgeReply>({
+              command: process.execPath,
+              args: [options.helperPath ?? packagedHelperPath, "--config", configPath],
+              environment: {},
+              diagnosticMaxBytes: 0,
+              waitForSpawnEvent: false,
+              maxLineBytes: MAX_LINE_BYTES,
+              maxQueuedOutputBytes: MAX_LINE_BYTES * 2,
+              maxPendingCalls: MAX_PENDING,
+              writeQueueCapacity: WRITE_QUEUE_CAPACITY,
+              classifyInbound: classifyBridgeLine,
+              onEvent: (event) => {
+                if (event.kind === "notification") options.onNotification?.(event.message);
+              },
+              unknownReplyPolicy: "ignore",
+              cancelNotification: (id) =>
+                `${JSON.stringify({
+                  jsonrpc: "2.0",
+                  method: "notifications/cancelled",
+                  params: { requestId: id, reason: "Pi tool call cancelled" },
+                })}\n`,
+            });
+            yield* session
+              .call(
+                INITIALIZE_REQUEST_ID,
+                encodeFrame(initializeRequest()),
+                options.initializeTimeoutMillis ?? CALL_TIMEOUT_MILLIS,
+              )
+              .pipe(
+                Effect.filterOrFail(
+                  (reply) => reply.kind === "initialized",
+                  () =>
+                    new RpcCallRejectedError({
+                      detail:
+                        "Private supervisor bridge initialization returned an unexpected payload.",
+                    }),
+                ),
+              );
+            yield* session.notify(initializedNotificationFrame());
 
-    return makeBridgeClientDoor(session);
+            return makeBridgeClientDoor(session);
+          }).pipe(Effect.provideService(Scope.Scope, openingScope)),
+        ).pipe(
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit) ? Scope.close(openingScope, exit) : Effect.void,
+          ),
+        );
+      }),
+    );
   });

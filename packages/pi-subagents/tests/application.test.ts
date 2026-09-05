@@ -44,6 +44,71 @@ const deferred = <A>() => {
 };
 
 describe("subagent Pi registration", () => {
+  for (const cancellation of ["editor", "shutdown", "replacement"] as const) {
+    effectTest(`owns pending settings refresh through ${cancellation} cancellation`, function* () {
+      const handlers = new Map<string, Handler>();
+      let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+      const pi = extensionApiFixture({
+        on: vi.fn((name: string, handler: Handler) => {
+          handlers.set(name, handler);
+        }),
+        registerCommand: vi.fn(
+          (
+            _name: string,
+            definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
+          ) => {
+            command = definition.handler;
+          },
+        ),
+        registerTool: vi.fn(),
+        getActiveTools: () => [],
+        setActiveTools: vi.fn(),
+      });
+      registerSubagentApplication(pi, {
+        getAgentDirectory: testAgentDirectory,
+        loadSettings: () => Promise.resolve(),
+      });
+      const closed = deferred<boolean>();
+      const pending = deferred<{ aborted: boolean }>();
+      let refreshSignal: AbortSignal | undefined;
+      const notify = vi.fn();
+      const ctx = extensionContextFixture({
+        cwd: process.cwd(),
+        signal: undefined,
+        hasUI: true,
+        mode: "tui",
+        isProjectTrusted: () => false,
+        ui: { notify, custom: vi.fn(() => closed.promise) },
+        modelRegistry: {
+          getAvailable: () => [],
+          getError: () => undefined,
+          refresh: (options?: { signal?: AbortSignal }) => {
+            refreshSignal = options?.signal;
+            return pending.promise;
+          },
+        },
+      });
+      yield* settle(() => handlers.get("session_start")?.({}, ctx));
+      const editing = command?.("profiles", ctx) ?? Promise.resolve();
+      yield* step(() => vi.waitFor(() => expect(refreshSignal).toBeDefined()));
+      if (cancellation === "editor") closed.resolve(false);
+      else
+        yield* settle(() =>
+          handlers.get(cancellation === "shutdown" ? "session_shutdown" : "session_start")?.(
+            {},
+            ctx,
+          ),
+        );
+      yield* step(() => vi.waitFor(() => expect(refreshSignal?.aborted).toBe(true)));
+      const priorNotifications = notify.mock.calls.length;
+      pending.resolve({ aborted: false });
+      closed.resolve(false);
+      yield* step(() => editing);
+      expect(notify.mock.calls).toHaveLength(priorNotifications);
+      yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
+    });
+  }
+
   effectTest("holds the session revision lock through a deferred saved-set write", function* () {
     const global = decodeSubagentConfig({ version: 6, profileSets: {} }, "global");
     const config = resolveSubagentConfig({

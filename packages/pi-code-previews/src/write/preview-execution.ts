@@ -5,6 +5,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
+  captureCodePreviewSessionCapability,
+  CodePreviewSessionUnavailable,
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
 } from "../application/capability";
@@ -103,11 +105,41 @@ export function executeWriteWithPreview(
   signal: AbortSignal | undefined,
 ) {
   const absolutePath = resolvePreviewPath(path, cwd);
-  return withFileMutationQueue(absolutePath, () =>
-    runCodePreviewSessionEffect(
-      executeWriteWithPreviewEffect(toolCallId, path, content, cwd),
-      signal,
-    ),
+  const owner = captureCodePreviewSessionCapability();
+  if (!owner)
+    return Promise.reject(
+      new CodePreviewSessionUnavailable({
+        operation: "write",
+        message: "Code preview session is not active.",
+      }),
+    );
+  // The originating runtime owns the foreign queue wait as well as the mutation.
+  // Interruption detaches the wait and revokes its delayed callback even if Pi's
+  // preceding mutation never settles. The callback cannot enter a replacement slot.
+  return owner.run(
+    Effect.tryPromise({
+      try: (queueSignal) =>
+        withFileMutationQueue(absolutePath, () => {
+          if (queueSignal.aborted)
+            return Promise.reject(
+              new CodePreviewSessionUnavailable({
+                operation: "write",
+                message: "Code preview write was cancelled.",
+              }),
+            );
+          return owner.run(
+            executeWriteWithPreviewEffect(toolCallId, path, content, cwd),
+            queueSignal,
+          );
+        }),
+      catch: () =>
+        new CodePreviewWriteError({
+          operation: "write",
+          path: absolutePath,
+          message: `Unable to write ${path}.`,
+        }),
+    }),
+    signal,
   );
 }
 

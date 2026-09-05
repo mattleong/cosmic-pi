@@ -515,8 +515,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
 
   const stop: SubagentServiceContract["stop"] = (id) =>
-    Effect.gen(function* () {
-      const orderedIds = yield* withLock(
+    runSessionOwned(
+      ownerScope,
+      withLock(
         Effect.gen(function* () {
           const root = yield* requireRecord(id);
           // Descendants are already leaf-first; the requested root closes last.
@@ -527,14 +528,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           }
           return ordered;
         }),
-      );
-      // Every target is attempted in order; the first typed failure wins afterwards.
-      const [failures, stopped] = yield* Effect.partition(orderedIds, (targetId) =>
-        controls.stop(targetId),
-      );
-      if (failures[0]) return yield* failures[0];
-      return stopped.at(-1) ?? snapshotView((yield* requireRecord(id)).view);
-    });
+      ),
+      (orderedIds) =>
+        Effect.gen(function* () {
+          // Every target is attempted in order; the first typed failure wins afterwards.
+          const [failures, stopped] = yield* Effect.partition(orderedIds, (targetId) =>
+            controls.stop(targetId),
+          );
+          if (failures[0]) return yield* failures[0];
+          return stopped.at(-1) ?? snapshotView((yield* requireRecord(id)).view);
+        }),
+    );
 
   // Do not publish a pool pause without admitting its containment fiber to the service scope.
   const containWriteClaimViolation = (record: RunRecord, message: string) =>

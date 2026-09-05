@@ -213,7 +213,7 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
   const wait = (id: string, cancel: boolean) =>
     Effect.suspend(() => {
       const owner = Symbol();
-      let committed = false;
+      let acknowledge = false;
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const claimed = yield* Ref.modify(
@@ -241,45 +241,41 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
           return yield* restore(Deferred.await(entry.completed)).pipe(
             Effect.andThen(
               Effect.gen(function* () {
-                yield* update(id, (current) => {
-                  committed = ["pending", "failed"].includes(current.snapshot.delivery);
-                  return {
-                    ...current,
-                    snapshot: {
-                      ...current.snapshot,
-                      delivery: committed ? "waiter" : current.snapshot.delivery,
+                const { snapshot } = yield* get(id);
+                acknowledge = ["pending", "failed", "none"].includes(snapshot.delivery);
+                return {
+                  requests: [
+                    {
+                      ...snapshot,
+                      delivery: acknowledge ? ("waiter" as const) : snapshot.delivery,
                     },
-                  };
-                });
-                return { requests: [(yield* get(id)).snapshot] };
+                  ],
+                };
               }),
             ),
           );
         }),
       ).pipe(
-        // Observe interruption at the mask's exit too, after the delivery commit.
         Effect.onExit((exit) =>
           Effect.gen(function* () {
-            yield* update(id, (current) => {
-              if (current.waiter !== owner) return current;
-              const { waiter: _waiter, ...rest } = current;
-              return committed && Exit.isFailure(exit)
-                ? { ...rest, snapshot: { ...rest.snapshot, delivery: "pending" } }
-                : rest;
-            });
-            if (!(yield* Ref.get(closed))) yield* Effect.forkIn(deliver(id), scope);
-          }),
-        ),
-        // onExit cleanup is masked too. Interruption during that cleanup must
-        // not turn a rejected await into a permanently consumed answer.
-        Effect.onInterrupt(() =>
-          Effect.gen(function* () {
-            if (!committed) return;
-            yield* update(id, (current) =>
-              current.snapshot.delivery === "waiter"
-                ? { ...current, snapshot: { ...current.snapshot, delivery: "pending" } }
-                : current,
-            );
+            const release = (commit: boolean) =>
+              update(id, (current) => {
+                if (current.waiter !== owner) return current;
+                const { waiter: _waiter, ...rest } = current;
+                return acknowledge && commit
+                  ? { ...rest, snapshot: { ...rest.snapshot, delivery: "waiter" } }
+                  : rest;
+              });
+            // Ref.update is the acknowledgement linearization point: publication
+            // and claim release are one synchronous transition. Re-enable
+            // interruption for that transition so a pending interrupt cannot
+            // publish a stale Success captured before masked cleanup yielded.
+            const completion = Exit.isFailure(exit)
+              ? exit
+              : yield* Effect.exit(Effect.interruptible(release(true)));
+            // If interruption won, only release our still-owned claim. If the
+            // commit won, ownership is gone and later cancellation cannot undo it.
+            if (Exit.isFailure(completion)) yield* release(false);
             if (!(yield* Ref.get(closed))) yield* Effect.forkIn(deliver(id), scope);
           }),
         ),

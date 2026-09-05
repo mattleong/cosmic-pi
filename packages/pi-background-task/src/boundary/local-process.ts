@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
@@ -113,15 +114,6 @@ export function makeBackgroundProcessEnvironment(
 }
 
 function dispatchGracefulTermination(pid: number): void {
-  if (process.platform === "win32") {
-    const killer = spawnWindowsTreeTerminator("taskkill", ["/pid", String(pid), "/T"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    killer.on("error", () => {});
-    killer.unref();
-    return;
-  }
   try {
     process.kill(-pid, "SIGTERM");
   } catch {
@@ -157,34 +149,104 @@ export type WindowsTreeTerminatorSpawn = (
 export const terminateWindowsTree = (
   pid: number,
   spawnTerminator: WindowsTreeTerminatorSpawn = spawnWindowsTreeTerminator,
+  mode: "graceful" | "force" = "force",
 ): Effect.Effect<void, LocalProcessError> =>
   Effect.callback<void, LocalProcessError>((resume) => {
-    const killer = spawnTerminator("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    const settle = (result: Error | number | null) => {
-      removeListeners();
-      resume(result === 0 ? Effect.void : Effect.fail(processError("terminate", result)));
+    let killer: WindowsTreeTerminatorChild;
+    try {
+      killer = spawnTerminator(
+        "taskkill",
+        ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])],
+        { stdio: "ignore", windowsHide: true },
+      );
+    } catch (error) {
+      resume(Effect.fail(processError("terminate", error)));
+      return Effect.void;
+    }
+    // Keep acquisition and listener/finalizer handoff in this synchronous callback.
+    // A throwing cleanup method must not suppress the remaining cleanup attempts.
+    const attempt = (operation: () => void): boolean => {
+      try {
+        operation();
+        return true;
+      } catch {
+        return false;
+      }
     };
+    let settled = false;
+    let cleaned = false;
     const removeListeners = () => {
-      killer.removeListener("exit", settle);
-      killer.removeListener("error", settle);
+      const exitRemoved = attempt(() => killer.removeListener("exit", settle));
+      const errorRemoved = attempt(() => killer.removeListener("error", settle));
+      return exitRemoved && errorRemoved;
     };
-    killer.on("exit", settle);
-    killer.on("error", settle);
-    return Effect.sync(() => {
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      settled = true;
       removeListeners();
-      killer.on("error", () => {});
-      killer.kill("SIGKILL");
-      killer.unref();
-    });
+      attempt(() => killer.on("error", () => {}));
+      attempt(() => killer.kill("SIGKILL"));
+      attempt(() => killer.unref());
+    };
+    const settle = (result: Error | number | null) => {
+      if (settled) return;
+      settled = true;
+      const detached = removeListeners();
+      if (!detached) cleanup();
+      resume(
+        result === 0 && detached ? Effect.void : Effect.fail(processError("terminate", result)),
+      );
+    };
+    try {
+      killer.on("exit", settle);
+      killer.on("error", settle);
+    } catch (error) {
+      cleanup();
+      resume(Effect.fail(processError("terminate", error)));
+    }
+    return Effect.sync(cleanup);
   }).pipe(
     Effect.timeoutOrElse({
       duration: "2 seconds",
       orElse: () => Effect.fail(processError("terminate", "taskkill timed out")),
     }),
   );
+
+/** Immediate graceful dispatch is owned by the process scope, not its stop waiter. */
+export const makeWindowsTreeTermination = (
+  pid: number,
+  spawn: WindowsTreeTerminatorSpawn = spawnWindowsTreeTerminator,
+) =>
+  Effect.gen(function* () {
+    const ownerScope = yield* Effect.scope;
+    let gracefulFiber: Fiber.Fiber<void> | undefined;
+    let dispatched = false;
+    const forceLock = yield* Semaphore.make(1);
+    // Once force owns the permit, join graceful cleanup and the bounded force attempt.
+    // The mask can delay cancellation by at most the helper's two-second deadline.
+    const force = forceLock.withPermits(1)(
+      Effect.suspend(() => {
+        dispatched = true;
+        return (gracefulFiber ? Fiber.interrupt(gracefulFiber) : Effect.void).pipe(
+          Effect.andThen(terminateWindowsTree(pid, spawn)),
+        );
+      }).pipe(Effect.uninterruptible),
+    );
+    return (mode: "graceful" | "force") =>
+      mode === "force"
+        ? force
+        : Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (dispatched) return;
+              dispatched = true;
+              gracefulFiber = yield* terminateWindowsTree(pid, spawn, "graceful").pipe(
+                Effect.ignore,
+                Effect.forkIn(ownerScope, { startImmediately: true }),
+              );
+            }),
+          );
+  });
 
 const terminateLingeringGroup = (pid: number): Effect.Effect<void> => {
   if (process.platform === "win32") return terminateWindowsTree(pid).pipe(Effect.ignore);
@@ -197,9 +259,12 @@ const terminateLingeringGroup = (pid: number): Effect.Effect<void> => {
   });
 };
 
-const verifyCwd = (cwd: string) =>
+const verifyCwd = (
+  cwd: string,
+  inspect: (path: string) => Promise<{ isDirectory(): boolean }> = stat,
+) =>
   Effect.tryPromise({
-    try: () => stat(cwd),
+    try: () => inspect(cwd),
     catch: (error) => processError("inspect working directory", error),
   }).pipe(
     Effect.flatMap((info) =>
@@ -219,7 +284,6 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
   request: LocalProcessRequest,
 ) {
-  yield* verifyCwd(request.cwd);
   const ingressBufferBytes = Math.max(1, Math.floor(request.ingressBufferBytes));
   const outputQueue = yield* Queue.dropping<LocalProcessOutput, Cause.Done>(INGRESS_CHUNKS);
   const stdoutDecoder = new StringDecoder("utf8");
@@ -246,6 +310,8 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     .spawn(command)
     .pipe(Effect.mapError((error) => processError("spawn", error)));
   const pid = Number(child.pid);
+  const windowsTermination =
+    process.platform === "win32" ? yield* makeWindowsTreeTermination(pid) : undefined;
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;
@@ -316,37 +382,42 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
         exitCode: observed.code,
         ...(observed.signal && { signal: observed.signal }),
       };
-      return terminateLingeringGroup(pid).pipe(Effect.as(result));
+      return (
+        windowsTermination
+          ? windowsTermination("force").pipe(Effect.ignore)
+          : terminateLingeringGroup(pid)
+      ).pipe(Effect.as(result));
     }),
     Effect.forkScoped({ startImmediately: true }),
   );
 
-  const forceTermination =
-    process.platform === "win32"
-      ? terminateWindowsTree(pid)
-      : child.isRunning.pipe(
-          Effect.catch(() => Effect.succeed(true)),
-          Effect.flatMap((running) =>
-            running
-              ? child.kill({ killSignal: "SIGKILL" }).pipe(
-                  Effect.timeoutOrElse({
-                    duration: "2 seconds",
-                    orElse: () => Effect.fail(processError("terminate", "cleanup timed out")),
-                  }),
-                )
-              : terminateLingeringGroup(pid),
-          ),
-          Effect.mapError((error) =>
-            error instanceof LocalProcessError ? error : processError("terminate", error),
-          ),
-        );
+  const forceTermination = windowsTermination
+    ? windowsTermination("force")
+    : child.isRunning.pipe(
+        Effect.catch(() => Effect.succeed(true)),
+        Effect.flatMap((running) =>
+          running
+            ? child.kill({ killSignal: "SIGKILL" }).pipe(
+                Effect.timeoutOrElse({
+                  duration: "2 seconds",
+                  orElse: () => Effect.fail(processError("terminate", "cleanup timed out")),
+                }),
+              )
+            : terminateLingeringGroup(pid),
+        ),
+        Effect.mapError((error) =>
+          error instanceof LocalProcessError ? error : processError("terminate", error),
+        ),
+      );
   const terminate = (mode: "graceful" | "force") =>
     mode === "force"
       ? forceTermination
-      : Effect.try({
-          try: () => dispatchGracefulTermination(pid),
-          catch: (error) => processError("terminate", error),
-        });
+      : windowsTermination
+        ? windowsTermination("graceful")
+        : Effect.try({
+            try: () => dispatchGracefulTermination(pid),
+            catch: (error) => processError("terminate", error),
+          });
 
   const output = Stream.fromQueue(outputQueue).pipe(
     Stream.mapEffect((event) =>
@@ -375,16 +446,26 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
 export class LocalProcess extends Context.Service<LocalProcess, LocalProcessContract>()(
   "pi-background-task/boundary/local-process/LocalProcess",
 ) {
-  static readonly layer = Layer.effect(
-    this,
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      return LocalProcess.of({
-        spawn: (request) =>
-          Effect.acquireRelease(acquireProcess(spawner, request), (handle) => handle.release).pipe(
-            Effect.map(({ release: _release, ...handle }) => handle),
-          ),
-      });
-    }),
-  ).pipe(Layer.provide(nodeProcessLayer));
+  /** Owned filesystem inspection seam; production supplies Node stat. */
+  static readonly layerWithInspection = (
+    inspect: (path: string) => Promise<{ isDirectory(): boolean }>,
+  ) =>
+    Layer.effect(
+      this,
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        return LocalProcess.of({
+          // Inspection owns no resource. Do not mask a noncooperative filesystem Promise.
+          spawn: (request) =>
+            verifyCwd(request.cwd, inspect).pipe(
+              Effect.andThen(
+                Effect.acquireRelease(acquireProcess(spawner, request), (handle) => handle.release),
+              ),
+              Effect.map(({ release: _release, ...handle }) => handle),
+            ),
+        });
+      }),
+    ).pipe(Layer.provide(nodeProcessLayer));
+
+  static readonly layer = this.layerWithInspection(stat);
 }

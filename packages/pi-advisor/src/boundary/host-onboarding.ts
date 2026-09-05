@@ -1,5 +1,5 @@
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
@@ -61,14 +61,29 @@ const openAdvisorModelPickerAtHostBoundary = (
     let closing = false;
     let factoryInvoked = false;
     let doneInvoked = false;
+    let requested: { readonly result: AdvisorPickerResult } | undefined;
     let hostDone: ((result: AdvisorPickerResult) => void) | undefined;
+    let hostTui: TUI | undefined;
+    let overlay: OverlayHandle | undefined;
+    let rejectCompletion: (() => void) | undefined;
     const finish = (result: AdvisorPickerResult): void => {
-      if (doneInvoked || hostDone === undefined) return;
+      requested ??= { result };
+      if (doneInvoked || !hostDone || !hostTui || !overlay) return;
       doneInvoked = true;
       try {
-        hostDone(result);
+        // Pi 0.85 done pops the global stack. Use Ask User's owned-overlay guard
+        // so a foreign overlay survives both selection and cancellation.
+        overlay.hide();
+        const guard = hostTui.showOverlay(neutralComponent(), { nonCapturing: true });
+        try {
+          hostDone(requested.result);
+        } finally {
+          guard.hide();
+        }
       } catch {
-        // Host callback failures are contained at this boundary.
+        // Pi's Promise may never settle if cleanup throws before done resolves it.
+        // Settle the Effect independently; never retry an unguarded global pop.
+        rejectCompletion?.();
       }
     };
     const close = (): void => {
@@ -82,6 +97,7 @@ const openAdvisorModelPickerAtHostBoundary = (
       }
       factoryInvoked = true;
       hostDone = done;
+      hostTui = tui;
       if (closing) {
         close();
         return neutralComponent();
@@ -117,17 +133,31 @@ const openAdvisorModelPickerAtHostBoundary = (
         cancel: () => finish(undefined),
       });
     };
-    return Effect.tryPromise({
-      try: () =>
-        ctx.ui.custom<AdvisorPickerResult>(factory, {
-          overlay: true,
-          overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
-        }),
-      catch: () =>
-        new PiCommandError({
-          operation: "model selection",
-          message: "Advisor command failed.",
-        }),
+    return Effect.callback<AdvisorPickerResult, PiCommandError>((resume) => {
+      const fail = () =>
+        resume(
+          Effect.fail(
+            new PiCommandError({
+              operation: "model selection",
+              message: "Advisor command failed.",
+            }),
+          ),
+        );
+      rejectCompletion = fail;
+      try {
+        ctx.ui
+          .custom<AdvisorPickerResult>(factory, {
+            overlay: true,
+            overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+            onHandle: (handle) => {
+              overlay = handle;
+              if (closing || requested) finish(requested?.result);
+            },
+          })
+          .then((result) => resume(Effect.succeed(result)), fail);
+      } catch {
+        fail();
+      }
     }).pipe(Effect.ensuring(Effect.sync(close)));
   });
 

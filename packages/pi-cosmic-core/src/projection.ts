@@ -3,7 +3,8 @@ import { runtimeTypeName } from "./runtime-values.ts";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 
 export class ProjectionError extends Schema.TaggedError<ProjectionError>()("ProjectionError", {
   path: Schema.String,
@@ -140,7 +141,8 @@ export const makeFrozenProjection = <State, Snapshot>(
 ): Effect.Effect<FrozenProjection<State, Snapshot>, ProjectionError> =>
   Effect.gen(function* () {
     const initialSnapshot = yield* projectSnapshot(initialState, project);
-    const state = yield* SynchronizedRef.make(initialState);
+    const state = yield* Ref.make(initialState);
+    const lock = yield* Semaphore.make(1);
     const snapshot = MutableRef.make(initialSnapshot);
     if (publish) {
       yield* Effect.try({
@@ -150,28 +152,29 @@ export const makeFrozenProjection = <State, Snapshot>(
     }
 
     const transition: FrozenProjection<State, Snapshot>["transition"] = (update) =>
-      SynchronizedRef.modifyEffect(state, (current) =>
-        update(current).pipe(
-          Effect.flatMap(([result, next]) =>
-            projectSnapshot(next, project).pipe(
-              Effect.flatMap((published) =>
-                Effect.try({
-                  try: () => {
-                    publish?.(published);
-                    MutableRef.set(snapshot, published);
-                    return [result, next] as const;
-                  },
-                  catch: () => projectionError("$", "Unable to publish the snapshot."),
-                }),
-              ),
-            ),
-          ),
-        ),
+      lock.withPermit(
+        Effect.gen(function* () {
+          const current = yield* Ref.get(state);
+          const [result, next] = yield* update(current);
+          const published = yield* projectSnapshot(next, project);
+          // Preparation and lock waiting remain interruptible. Once publication starts,
+          // include the backing Ref commit in the same protected transaction.
+          yield* Effect.uninterruptible(
+            Effect.try({
+              try: () => {
+                publish?.(published);
+                MutableRef.set(snapshot, published);
+              },
+              catch: () => projectionError("$", "Unable to publish the snapshot."),
+            }).pipe(Effect.andThen(Ref.set(state, next))),
+          );
+          return result;
+        }),
       );
 
     return {
       getSnapshot: () => MutableRef.get(snapshot),
-      getState: SynchronizedRef.get(state),
+      getState: Ref.get(state),
       transition,
     };
   });

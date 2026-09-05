@@ -24,6 +24,7 @@ import { registerSettingsCommand } from "../settings/controller";
 import { CodePreviewSyntaxService } from "../syntax/service";
 import {
   clearCodePreviewSessionCapability,
+  CodePreviewSessionUnavailable,
   installCodePreviewSessionCapability,
 } from "./capability";
 import { CodePreviewSchedulerService, type CodePreviewSchedulerServiceContract } from "./scheduler";
@@ -124,9 +125,17 @@ export function codePreviewsWithDependencies(
   >({
     makeRuntime: () => dependencies.makeRuntime(pi),
     startup,
-    onActivated: (input, _token, scheduler) => {
+    onActivated: (input, token, scheduler) => {
       installCodePreviewSessionCapability({
-        run: (effect, signal) => slot.run(effect, signal),
+        run: (effect, signal) =>
+          slot.isCurrent(token)
+            ? slot.run(effect, signal)
+            : Promise.reject(
+                new CodePreviewSessionUnavailable({
+                  operation: "run",
+                  message: "Code preview session is not active.",
+                }),
+              ),
         defer: scheduler.defer,
         schedule: scheduler.schedule,
       });

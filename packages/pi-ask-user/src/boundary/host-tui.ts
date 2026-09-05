@@ -41,6 +41,26 @@ export const makeAskUserTuiHost =
           let bridgeToken: number | undefined;
           let dialog: InstanceType<typeof AskUserDialog> | undefined;
           let releasePrompt: (() => void) | undefined;
+          const editors = new Set<Promise<void>>();
+          const editExternally = (tui: TUI, value: string): Promise<string | undefined> => {
+            if (authority.signal.aborted) return Promise.resolve(undefined);
+            const editing = editWithExternalEditor(tui, editorCommand, value, authority.signal);
+            // Settlement includes the owned process, temporary files, and TUI restoration.
+            // Retain only nonrejecting joins; dialog consumers still receive live failures.
+            const settled = editing.then(
+              () => undefined,
+              () => undefined,
+            );
+            editors.add(settled);
+            void settled.then(() => editors.delete(settled));
+            return editing.then(
+              (result) => (authority.signal.aborted ? undefined : result),
+              (error) => {
+                if (!authority.signal.aborted) throw error;
+                return undefined;
+              },
+            );
+          };
 
           const finish = (outcome: AskUserOutcome): void => {
             requested ??= outcome;
@@ -66,7 +86,12 @@ export const makeAskUserTuiHost =
                 operation: "close",
                 message: "Unable to close the questionnaire overlay.",
               }),
-          }).pipe(Effect.ignore);
+          }).pipe(
+            Effect.ignore,
+            // Ordered finalization joins only admitted, owned editor cleanup, never
+            // the arbitrary custom Promise. Revocation above prevents late admissions.
+            Effect.andThen(Effect.promise(() => Promise.all(editors))),
+          );
 
           return Effect.tryPromise(() => {
             // Recheck after the lazy import, in the same synchronous call as custom().
@@ -83,8 +108,7 @@ export const makeAskUserTuiHost =
                   keybindings,
                   request,
                   done: finish,
-                  editExternally: (value) =>
-                    editWithExternalEditor(tui, editorCommand, value, authority.signal),
+                  editExternally: (value) => editExternally(tui, value),
                   onCollapse: () => {
                     if (!authority.signal.aborted && bridgeToken !== undefined)
                       bridge.markCollapsed(bridgeToken);

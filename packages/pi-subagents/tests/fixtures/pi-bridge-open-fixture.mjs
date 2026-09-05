@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { closeSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import readline from "node:readline";
 
 const configIndex = process.argv.indexOf("--config");
 const scenarioPath = process.argv[configIndex + 1];
 const scenario = JSON.parse(await readFile(scenarioPath, "utf8"));
-await writeFile(`${scenarioPath}.pid`, String(process.pid));
+// Never expose an empty PID file while writeFile is pending. Number("") is 0,
+// which makes a liveness probe inspect the test process group instead of this helper.
+await writeFile(`${scenarioPath}.pid.tmp`, String(process.pid));
+await rename(`${scenarioPath}.pid.tmp`, `${scenarioPath}.pid`);
 
 if (scenario.mode === "malformed") {
   process.stdout.write("{not-json}\n");

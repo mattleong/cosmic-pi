@@ -123,7 +123,7 @@ export class ProfileModelCatalog {
       const retained = this.snapshot;
       if (signal?.aborted) return Effect.succeed("aborted" as const);
       return Effect.tryPromise({
-        try: (effectSignal) => this.registry.refresh({ signal: signal ?? effectSignal }),
+        try: (effectSignal) => this.registry.refresh({ signal: effectSignal }),
         catch: () => undefined,
       }).pipe(
         Effect.match({
@@ -151,6 +151,16 @@ export class ProfileModelCatalog {
             return "updated";
           },
         }),
+        Effect.raceFirst(
+          signal
+            ? Effect.callback<ProfileModelCatalogRefresh>((resume) => {
+                const abort = () => resume(Effect.succeed("aborted"));
+                signal.addEventListener("abort", abort, { once: true });
+                if (signal.aborted) abort();
+                return Effect.sync(() => signal.removeEventListener("abort", abort));
+              })
+            : Effect.never,
+        ),
       );
     });
   }

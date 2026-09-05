@@ -37,6 +37,11 @@ export function clearCodePreviewSessionCapability(): void {
   activeCapability = undefined;
 }
 
+/** Capture before entering any foreign queue. Never resolve a delayed call through the live slot. */
+export function captureCodePreviewSessionCapability(): CodePreviewSessionCapability | undefined {
+  return activeCapability;
+}
+
 export function hasCodePreviewSessionCapability(): boolean {
   return activeCapability !== undefined;
 }
