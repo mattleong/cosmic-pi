@@ -33,7 +33,6 @@ const catalogVersion = (name) => {
   return version;
 };
 const piVersion = catalogVersion("@earendil-works/pi-coding-agent");
-const piServerVersion = catalogVersion("@earendil-works/pi-server");
 const tuiVersion = catalogVersion("@earendil-works/pi-tui");
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
 
@@ -103,13 +102,6 @@ try {
           ...tarballDependencies,
         },
         pnpm: {
-          packageExtensions: {
-            [`@earendil-works/pi-coding-agent@${piVersion}`]: {
-              dependencies: {
-                "@earendil-works/pi-server": piServerVersion,
-              },
-            },
-          },
           overrides: Object.fromEntries(
             Object.entries(tarballDependencies).filter(
               ([packageName]) => packageName !== "pi-advisor",

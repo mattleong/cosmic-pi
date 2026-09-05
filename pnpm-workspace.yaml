@@ -5,10 +5,9 @@ packages:
   - packages/pi-code-mode/runtime
 
 catalog:
-  "@earendil-works/pi-ai": 0.85.0
-  "@earendil-works/pi-coding-agent": 0.85.0
-  "@earendil-works/pi-server": 0.85.0
-  "@earendil-works/pi-tui": 0.85.0
+  "@earendil-works/pi-ai": 0.85.1
+  "@earendil-works/pi-coding-agent": 0.85.1
+  "@earendil-works/pi-tui": 0.85.1
   "@effect/platform-node": 4.0.0-rc.111
   "@effect/vitest": 4.0.0-rc.111
   "@oxlint/plugins": 1.78.0
@@ -24,12 +23,6 @@ catalog:
 
 engineStrict: true
 strictPeerDependencies: true
-
-# Pi 0.85.0 imports this package without declaring it (upstream issue #9132).
-packageExtensions:
-  "@earendil-works/pi-coding-agent@0.85.0":
-    dependencies:
-      "@earendil-works/pi-server": 0.85.0
 
 onlyBuiltDependencies:
   - "@google/genai"
