@@ -243,6 +243,29 @@ describe("checkpoint ledger", () => {
     ).toBeUndefined();
   });
 
+  test("ignores excess root and routing fields but rejects excess review fields", () => {
+    const ledger = createCheckpointLedger({
+      fingerprint: "a".repeat(64),
+      anchorId: "anchor",
+    });
+    expect(
+      parseLedger({ ...ledger, future: true, routing: { ...ledger.routing, future: true } }),
+    ).toEqual(ledger);
+    for (const reviewSummary of [
+      { ...ledger.reviewSummary, future: true },
+      {
+        ...ledger.reviewSummary,
+        severityCounts: { ...ledger.reviewSummary.severityCounts, future: 0 },
+      },
+      {
+        ...ledger.reviewSummary,
+        categoryCounts: { ...ledger.reviewSummary.categoryCounts, future: 0 },
+      },
+    ]) {
+      expect(parseLedger({ ...ledger, reviewSummary })).toBeUndefined();
+    }
+  });
+
   test("defaults the legacy v3 completed-turn field while tolerating unknown root fields", () => {
     const ledger = createCheckpointLedger({
       fingerprint: "a".repeat(64),

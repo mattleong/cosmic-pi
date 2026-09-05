@@ -3,12 +3,8 @@ import { describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { effectTest, step } from "./support/effect-test.ts";
-import { resolveSubagentConfig } from "../src/config/options.ts";
-import { decodeSubagentConfig } from "../src/config/schema.ts";
-import {
-  makeSessionProfileSnapshot,
-  type SessionProfileOverrideSeed,
-} from "../src/profiles/session-overrides.ts";
+import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
+import type { SessionProfileOverrideSeed } from "../src/profiles/session-overrides.ts";
 import { inheritSessionDraft } from "../src/settings/profile-route-editor.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
@@ -21,21 +17,18 @@ import {
   type ProfileWorkspaceSaveResult,
 } from "../src/settings/profile-workspace.ts";
 
-const makeInspection = (seed?: SessionProfileOverrideSeed) => {
-  const global = decodeSubagentConfig(
-    { version: 6, defaultProfileSet: "default", profileSets: { default: { profiles: {} } } },
-    "global",
+const makeInspection = (seed?: SessionProfileOverrideSeed) =>
+  makeProfileSettingsInspection(
+    {
+      globalDocument: {
+        version: 6,
+        defaultProfileSet: "default",
+        profileSets: { default: { profiles: {} } },
+      },
+      projectTrusted: true,
+    },
+    seed,
   );
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: false,
-    global,
-  });
-  return { config, global, session: makeSessionProfileSnapshot(config, seed) };
-};
 
 const inheritedInvalidProjectInspection = (withOwnInvalidRoute: boolean) => {
   const invalidRoute = {
@@ -48,34 +41,21 @@ const inheritedInvalidProjectInspection = (withOwnInvalidRoute: boolean) => {
     openaiFastMode: false,
     closeOnReport: true,
   };
-  const global = decodeSubagentConfig(
-    {
+  return makeProfileSettingsInspection({
+    globalDocument: {
       version: 6,
       defaultProfileSet: "lower",
       profileSets: { lower: { profiles: { generalist: invalidRoute } } },
     },
-    "global",
-  );
-  const project = decodeSubagentConfig(
-    {
+    projectDocument: {
       version: 6,
       defaultProfileSet: "partial",
       profileSets: {
         partial: { profiles: withOwnInvalidRoute ? { generalist: invalidRoute } : {} },
       },
     },
-    "project",
-  );
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
     projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
   });
-  return { config, global, project, session: makeSessionProfileSnapshot(config) };
 };
 
 const invalidBaselineInspection = (withRepairOverride: boolean) => {

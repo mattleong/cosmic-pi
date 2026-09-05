@@ -77,4 +77,3 @@ export const BackgroundTaskParameters = Type.Object({
 });
 
 export type BackgroundTaskToolInput = Static<typeof BackgroundTaskParameters>;
-export type BackgroundTaskAction = (typeof BACKGROUND_TASK_ACTIONS)[number];

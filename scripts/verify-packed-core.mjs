@@ -86,6 +86,9 @@ try {
     );
   }
   const tarballPath = (packageName) => join(temporaryDirectory, tarballNames.get(packageName));
+  const tarballDependencies = Object.fromEntries(
+    packageNames.map((packageName) => [packageName, `file:${tarballPath(packageName)}`]),
+  );
   await writeFile(
     join(temporaryDirectory, "package.json"),
     `${JSON.stringify(
@@ -97,17 +100,7 @@ try {
           "@earendil-works/pi-coding-agent": piVersion,
           "@earendil-works/pi-tui": tuiVersion,
           jiti: "2.7.0",
-          "pi-ask-user": `file:${tarballPath("pi-ask-user")}`,
-          "pi-better-openai": `file:${tarballPath("pi-better-openai")}`,
-          "pi-better-xai": `file:${tarballPath("pi-better-xai")}`,
-          "pi-cosmic-core": `file:${tarballPath("pi-cosmic-core")}`,
-          "pi-cosmic-ui": `file:${tarballPath("pi-cosmic-ui")}`,
-          "pi-code-mode": `file:${tarballPath("pi-code-mode")}`,
-          "pi-code-previews": `file:${tarballPath("pi-code-previews")}`,
-          "pi-directory-models": `file:${tarballPath("pi-directory-models")}`,
-          "pi-advisor": `file:${tarballPath("pi-advisor")}`,
-          "pi-background-task": `file:${tarballPath("pi-background-task")}`,
-          "pi-subagents": `file:${tarballPath("pi-subagents")}`,
+          ...tarballDependencies,
         },
         pnpm: {
           packageExtensions: {
@@ -117,18 +110,11 @@ try {
               },
             },
           },
-          overrides: {
-            "pi-ask-user": `file:${tarballPath("pi-ask-user")}`,
-            "pi-cosmic-core": `file:${tarballPath("pi-cosmic-core")}`,
-            "pi-cosmic-ui": `file:${tarballPath("pi-cosmic-ui")}`,
-            "pi-better-openai": `file:${tarballPath("pi-better-openai")}`,
-            "pi-better-xai": `file:${tarballPath("pi-better-xai")}`,
-            "pi-code-mode": `file:${tarballPath("pi-code-mode")}`,
-            "pi-code-previews": `file:${tarballPath("pi-code-previews")}`,
-            "pi-directory-models": `file:${tarballPath("pi-directory-models")}`,
-            "pi-background-task": `file:${tarballPath("pi-background-task")}`,
-            "pi-subagents": `file:${tarballPath("pi-subagents")}`,
-          },
+          overrides: Object.fromEntries(
+            Object.entries(tarballDependencies).filter(
+              ([packageName]) => packageName !== "pi-advisor",
+            ),
+          ),
         },
       },
       null,
@@ -154,15 +140,10 @@ try {
     const load = (specifier) => createJiti(import.meta.url, { moduleCache: false }).import(specifier);
     const api = await load("pi-cosmic-core");
     const testing = await load("pi-cosmic-core/testing");
-    const askUser = await load("pi-ask-user");
-    const xai = await load("pi-better-xai");
-    const openai = await load("pi-better-openai");
-    const cosmicUi = await load("pi-cosmic-ui");
-    const directoryModels = await load("pi-directory-models");
-    const advisor = await load("pi-advisor");
-    const backgroundTask = await load("pi-background-task");
-    const subagents = await load("pi-subagents");
-    const codeMode = await load("pi-code-mode");
+    for (const packageName of ${JSON.stringify(extensionPackages.filter((name) => name !== "pi-code-previews"))}) {
+      const extension = await load(packageName);
+      if (typeof extension.default !== "function") throw new Error("missing " + packageName + " extension export");
+    }
     const protocol = await load("pi-cosmic-ui/protocol");
     const client = await load("pi-cosmic-ui/client");
     const manager = await load("pi-cosmic-ui/manager");
@@ -171,15 +152,6 @@ try {
     const runtime = await load(join(process.cwd(), "node_modules/pi-code-mode/runtime/src/index.ts"));
     if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error("missing core exports");
     if (typeof testing.makeInMemoryDocuments !== "function" || typeof testing.makeCapturedTracer !== "function") throw new Error("missing core testing exports");
-    if (typeof askUser.default !== "function") throw new Error("missing ask-user extension export");
-    if (typeof xai.default !== "function") throw new Error("missing xAI extension export");
-    if (typeof openai.default !== "function") throw new Error("missing OpenAI extension export");
-    if (typeof cosmicUi.default !== "function") throw new Error("missing Cosmic UI extension export");
-    if (typeof directoryModels.default !== "function") throw new Error("missing directory-model extension export");
-    if (typeof advisor.default !== "function") throw new Error("missing advisor extension export");
-    if (typeof backgroundTask.default !== "function") throw new Error("missing background task extension export");
-    if (typeof subagents.default !== "function") throw new Error("missing subagents extension export");
-    if (typeof codeMode.default !== "function") throw new Error("missing code-mode extension export");
     if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function") throw new Error("missing code-preview public exports");
     if (typeof runtime.CodeMode?.make !== "function" || typeof runtime.Tool?.make !== "function") throw new Error("missing source-loaded Code Mode runtime exports");
     if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 2) throw new Error("missing Cosmic UI v2 protocol exports");

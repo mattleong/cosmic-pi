@@ -152,7 +152,7 @@ export const awaitSessionAbortEffect = (
     Effect.map((outcome) => (Option.isNone(outcome) ? "timed-out" : outcome.value)),
   );
 export const stopSessionEffect = (session: AgentSession, abort: boolean, abortTimeoutMs: number) =>
-  Effect.uninterruptibleMask(() =>
+  Effect.uninterruptible(
     (abort
       ? Effect.interruptible(awaitSessionAbortEffect(session, abortTimeoutMs)).pipe(Effect.asVoid)
       : Effect.void

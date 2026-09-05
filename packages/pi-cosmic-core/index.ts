@@ -195,6 +195,7 @@ export {
   decodeSettingUpdate,
   FiniteNumberFromJsonSchema,
   InvalidSettingError,
+  makeUsageSettingDescriptors,
   sectionSettingValue,
   type SettingsCompletionChoice,
   type SettingsCompletionDescriptor,

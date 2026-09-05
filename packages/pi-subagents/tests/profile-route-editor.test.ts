@@ -1,6 +1,5 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
-import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { isNativeProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
 import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
@@ -24,6 +23,7 @@ import {
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
 } from "../src/settings/profile-route-editor.ts";
+import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
 
 const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
   host: "local",
@@ -59,39 +59,11 @@ const inspection = (
           }
         : input,
     );
-  const globalDocument = Schema.decodeUnknownSync(JsonObjectSchema)(currentDocument(global));
-  const projectDocument = project
-    ? Schema.decodeUnknownSync(JsonObjectSchema)(currentDocument(project))
-    : undefined;
-  const decodedGlobal = decodeSubagentConfig(globalDocument, "global");
-  const decodedProject = projectDocument
-    ? decodeSubagentConfig(projectDocument, "project")
-    : undefined;
-  const config = resolveSubagentConfig(
-    (() => {
-      const baseResult = {
-        globalConfigPath: "/agent/pi-subagents.json",
-        projectConfigPath: "/repo/.pi/pi-subagents.json",
-        projectTrusted: true,
-        globalConfigExists: true,
-        projectConfigExists: project !== undefined,
-        global: decodedGlobal,
-      };
-      const withProject = decodedProject ? { ...baseResult, project: decodedProject } : baseResult;
-      return withProject;
-    })(),
-  );
-  return (() => {
-    const baseResult = {
-      config,
-      session: makeSessionProfileSnapshot(config),
-      globalDocument,
-    };
-    const withProjectDocument = projectDocument ? { ...baseResult, projectDocument } : baseResult;
-    const withGlobal = { ...withProjectDocument, global: decodedGlobal };
-    const withProject = decodedProject ? { ...withGlobal, project: decodedProject } : withGlobal;
-    return withProject;
-  })();
+  return makeProfileSettingsInspection({
+    globalDocument: currentDocument(global),
+    projectDocument: project ? currentDocument(project) : undefined,
+    projectTrusted: true,
+  });
 };
 
 const inheritedInvalidSetInspection = (
@@ -122,25 +94,11 @@ const inheritedInvalidSetInspection = (
     defaultProfileSet: "partial",
     profileSets: { partial: { profiles: projectProfiles } },
   });
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const project = decodeSubagentConfig(projectDocument, "project");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
-  });
-  return {
-    config,
-    global,
-    project,
+  return makeProfileSettingsInspection({
     globalDocument,
     projectDocument,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: true,
+  });
 };
 
 const threeRoute = [

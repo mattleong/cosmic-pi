@@ -2,8 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vitest";
-import { resolveSubagentConfig } from "../src/config/options.ts";
-import { decodeSubagentConfig } from "../src/config/schema.ts";
+import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../src/profiles/model.ts";
 import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
@@ -54,16 +53,10 @@ const inspection = (
     defaultProfileSet: "work",
     profileSets: { work: { profiles: { worker: workerRoute } } },
   });
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
+  return makeProfileSettingsInspection({
+    globalDocument,
     projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: false,
-    global,
   });
-  return { config, global, globalDocument, session: makeSessionProfileSnapshot(config) };
 };
 
 const targetAwareInspection = (): ProfileSettingsInspection => {
@@ -107,25 +100,11 @@ const inheritedInvalidTargetInspection = (): ProfileSettingsInspection => {
     defaultProfileSet: "partial",
     profileSets: { partial: { profiles: {} } },
   });
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const project = decodeSubagentConfig(projectDocument, "project");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
-  });
-  return {
-    config,
-    global,
-    project,
+  return makeProfileSettingsInspection({
     globalDocument,
     projectDocument,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: true,
+  });
 };
 
 const indexOfProfile = (profile: ProfileId): number => PROFILE_IDS.indexOf(profile);

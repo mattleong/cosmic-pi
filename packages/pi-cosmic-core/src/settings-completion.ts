@@ -88,6 +88,44 @@ export const FiniteNumberFromJsonSchema = Schema.fromJsonString(
   Schema.Number.check(Schema.isFinite()),
 );
 
+/** The three usage settings shared by subscription providers; schemas stay provider-owned. */
+export const makeUsageSettingDescriptors = <
+  Config extends {
+    readonly usage: {
+      readonly refreshIntervalMs: number;
+      readonly showOnlyOnSubscriptionModels: boolean;
+      readonly showResetTimes: boolean;
+    };
+  },
+>(
+  subscriptionDescription: string,
+): readonly SettingsOptionDescriptor<Config>[] => [
+  {
+    id: "usage.refreshIntervalMs",
+    label: "Usage refresh",
+    currentValue: (cfg) => String(cfg.usage.refreshIntervalMs),
+    values: ["15000", "30000", "60000", "120000", "300000", "600000"],
+    description: "Usage refresh interval in milliseconds.",
+    decoder: FiniteNumberFromJsonSchema,
+  },
+  {
+    id: "usage.showOnlyOnSubscriptionModels",
+    label: "Usage only on OAuth",
+    currentValue: (cfg) => String(cfg.usage.showOnlyOnSubscriptionModels),
+    values: ["true", "false"],
+    description: subscriptionDescription,
+    decoder: BooleanFromJsonSchema,
+  },
+  {
+    id: "usage.showResetTimes",
+    label: "Usage reset times",
+    currentValue: (cfg) => String(cfg.usage.showResetTimes),
+    values: ["true", "false"],
+    description: "Include compact reset countdowns and local reset times.",
+    decoder: BooleanFromJsonSchema,
+  },
+];
+
 /**
  * Builds the shared settings-update decoder over a package's descriptors: unknown ids and values
  * that fail their decoder fail with `InvalidSettingError`, while a known id yields a document

@@ -17,57 +17,7 @@ export interface SettingItemDefinition {
   values?: CodePreviewSettingValueOptions;
 }
 
-export const SETTINGS_GROUP_ID_PREFIX = "group:";
-
-export const APPEARANCE_SETTING_IDS = [
-  "shikiTheme",
-  "syntaxHighlighting",
-  "toolCallBackground",
-  "toolCallTiming",
-  "readLineNumbers",
-  "pathIcons",
-] as const satisfies readonly SettingsUiItemId[];
-
-export const DIFF_PREVIEW_SETTING_IDS = [
-  "diffIntensity",
-  "wordEmphasis",
-  "editDiffPreview",
-  "editCollapsedLines",
-] as const satisfies readonly SettingsUiItemId[];
-
-export const READ_PREVIEW_SETTING_IDS = [
-  "readContentPreview",
-  "readCollapsedLines",
-] as const satisfies readonly SettingsUiItemId[];
-
-export const WRITE_PREVIEW_SETTING_IDS = [
-  "writeContentPreview",
-  "writeCollapsedLines",
-] as const satisfies readonly SettingsUiItemId[];
-
-export const SEARCH_LIST_PREVIEW_SETTING_IDS = [
-  "grepResultPreview",
-  "grepCollapsedLines",
-  "findResultPreview",
-  "lsResultPreview",
-  "pathListCollapsedLines",
-] as const satisfies readonly SettingsUiItemId[];
-
-export const BASH_PREVIEW_SETTING_IDS = [
-  "bashResultPreview",
-] as const satisfies readonly SettingsUiItemId[];
-
-export const WARNING_SETTING_IDS = [
-  "bashWarnings",
-  "secretWarnings",
-] as const satisfies readonly SettingsUiItemId[];
-
-export const ADVANCED_SETTING_IDS = [
-  "settingsFile",
-  "resetToDefaults",
-] as const satisfies readonly SettingsUiItemId[];
-
-const CODE_PREVIEW_SETTING_ITEM_DEFINITIONS = {
+export const SETTING_ITEM_DEFINITIONS = {
   shikiTheme: {
     label: "Syntax theme",
     description: "Theme used for Shiki syntax highlighting in code previews.",
@@ -195,13 +145,6 @@ const CODE_PREVIEW_SETTING_ITEM_DEFINITIONS = {
     description:
       "Open granular tool preview toggles. Changes take effect after /reload. Tools already owned by another extension are skipped automatically.",
   },
-} as const satisfies Record<
-  Exclude<CodePreviewEditableSettingId, "resetToDefaults">,
-  SettingItemDefinition
->;
-
-export const SETTING_ITEM_DEFINITIONS = {
-  ...CODE_PREVIEW_SETTING_ITEM_DEFINITIONS,
   settingsFile: {
     label: "Settings file",
     description: "Settings are stored globally in this file.",

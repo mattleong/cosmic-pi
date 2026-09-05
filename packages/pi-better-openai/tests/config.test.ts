@@ -4,7 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodePlatformLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
 import { prepareSettingUpdate } from "../src/config/options.ts";
-import type { ConfigFile } from "../src/config/schema.ts";
+import { DEFAULT_IMAGE_CONFIG, type ConfigFile } from "../src/config/schema.ts";
 import {
   configPaths,
   readConfig,
@@ -61,6 +61,24 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       });
       const parsed = yield* readConfig(configPath);
       expect(parsed?.image).toEqual({ enabled: true });
+    }),
+  );
+
+  it.effect.each([
+    ["blank global model", " \t", " \n", DEFAULT_IMAGE_CONFIG.defaultModel],
+    ["blank project model", " custom-model ", " \t", "custom-model"],
+  ] as const)("inherits image model for %s", ([, globalModel, projectModel, expected]) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const root = yield* temp;
+      const agent = path.join(root, "agent");
+      const paths = yield* configPaths(root, agent);
+      yield* writeConfig(paths.global, { image: { defaultModel: globalModel, enabled: false } });
+      yield* writeConfig(paths.project, { image: { defaultModel: projectModel, enabled: true } });
+
+      const resolved = yield* resolveConfig(root, agent, true);
+      expect(resolved.image.defaultModel).toBe(expected);
+      expect(resolved.image.enabled).toBe(true);
     }),
   );
 

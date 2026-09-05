@@ -4,8 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { describe, expect, vi } from "vitest";
 import type { SubagentProjectionBridge } from "../src/boundary/host-ui.ts";
-import { resolveSubagentConfig } from "../src/config/options.ts";
-import { decodeSubagentConfig } from "../src/config/schema.ts";
+import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
 import { PROFILE_IDS } from "../src/profiles/model.ts";
 import {
   makeSessionProfileSnapshot,
@@ -48,25 +47,11 @@ const inspection = (): ProfileSettingsInspection => {
       project: { profiles: {} },
     },
   };
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const project = decodeSubagentConfig(projectDocument, "project");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
-  });
-  return {
-    config,
-    global,
-    project,
+  return makeProfileSettingsInspection({
     globalDocument,
     projectDocument,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: true,
+  });
 };
 
 const invalidSourceInspection = (): ProfileSettingsInspection => {
@@ -75,21 +60,10 @@ const invalidSourceInspection = (): ProfileSettingsInspection => {
     defaultProfileSet: "missing",
     profileSets: { valid: { profiles: {} } },
   };
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: false,
-    globalConfigExists: true,
-    projectConfigExists: false,
-    global,
-  });
-  return {
-    config,
-    global,
+  return makeProfileSettingsInspection({
     globalDocument,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: false,
+  });
 };
 
 const invalidProjectInheritanceInspection = (): ProfileSettingsInspection => {
@@ -109,25 +83,11 @@ const invalidProjectInheritanceInspection = (): ProfileSettingsInspection => {
       project: { profiles: {} },
     },
   };
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const project = decodeSubagentConfig(projectDocument, "project");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
-  });
-  return {
-    config,
-    global,
-    project,
+  return makeProfileSettingsInspection({
     globalDocument,
     projectDocument,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: true,
+  });
 };
 
 const malformedGlobalDefaultInspection = (): ProfileSettingsInspection => {
@@ -136,21 +96,10 @@ const malformedGlobalDefaultInspection = (): ProfileSettingsInspection => {
     defaultProfileSet: [],
     profileSets: { common: { profiles: {} } },
   };
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: false,
-    globalConfigExists: true,
-    projectConfigExists: false,
-    global,
-  });
-  return {
-    config,
-    global,
+  return makeProfileSettingsInspection({
     globalDocument,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: false,
+  });
 };
 
 const atSessionRevision = (

@@ -69,6 +69,9 @@ const CheckpointRoutingFields = {
 };
 const AdvisorCheckpointLedgerInputSchema = Schema.Struct({
   ...CheckpointLedgerFields,
+  reviewSummary: ReviewSummaryWireSchema.annotate({
+    parseOptions: { onExcessProperty: "error" },
+  }),
   routing: Schema.Struct({
     ...CheckpointRoutingFields,
     completedPrimaryTurns: Schema.optional(NonNegativeIntSchema),
@@ -194,43 +197,25 @@ export function parseLedger<ValueInput>(value: ValueInput): AdvisorCheckpointLed
   if (!snapshot) return undefined;
   const routing = snapshotDataRecord(snapshot.routing);
   if (!routing) return undefined;
-  const schemaInput = {
-    protocolVersion: snapshot.protocolVersion,
-    fingerprint: snapshot.fingerprint,
-    anchorId: snapshot.anchorId,
-    reviewSummary: snapshot.reviewSummary,
-    routing: {
-      cancellationLatched: routing.cancellationLatched,
-      completedPrimaryTurns: routing.completedPrimaryTurns,
-      immunityUntilCompletedTurn: routing.immunityUntilCompletedTurn,
-    },
-    emissionHashes: snapshot.emissionHashes,
-  };
   const decoded = Schema.decodeUnknownOption(AdvisorCheckpointLedgerInputSchema, {
-    onExcessProperty: "error",
-  })(schemaInput);
+    onExcessProperty: "ignore",
+  })(snapshot);
   if (Option.isNone(decoded)) return undefined;
   const input = decoded.value;
-  const routingSnapshot = routing;
   const lifecycleSnapshot = snapshotData(snapshot.findingLifecycle);
-  const interventionBudget = snapshotDataRecord(routingSnapshot.interventionBudget);
+  const interventionBudget = snapshotDataRecord(routing.interventionBudget);
   const parsedRouting: AdvisorCheckpointLedger["routing"] = {
-    cancellationLatched: input.routing.cancellationLatched,
+    ...input.routing,
     completedPrimaryTurns: input.routing.completedPrimaryTurns ?? 0,
-    immunityUntilCompletedTurn: input.routing.immunityUntilCompletedTurn,
   };
   const base: AdvisorCheckpointLedger = {
-    protocolVersion: ADVISOR_CHECKPOINT_PROTOCOL_VERSION,
-    fingerprint: input.fingerprint,
-    anchorId: input.anchorId,
-    reviewSummary: input.reviewSummary,
+    ...input,
     routing: interventionBudget
       ? {
           ...parsedRouting,
           interventionBudget: sanitizeInterventionBudgetSnapshot(interventionBudget),
         }
       : parsedRouting,
-    emissionHashes: [...input.emissionHashes],
   };
   const ledger: AdvisorCheckpointLedger = Array.isArray(lifecycleSnapshot)
     ? { ...base, findingLifecycle: sanitizeFindingLifecycle(lifecycleSnapshot) }

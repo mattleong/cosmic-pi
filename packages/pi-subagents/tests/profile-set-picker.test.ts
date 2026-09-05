@@ -1,8 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { resolveSubagentConfig } from "../src/config/options.ts";
-import { decodeSubagentConfig } from "../src/config/schema.ts";
-import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
+import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
 import {
   ProfileSetPickerComponent,
   type ProfileSetPickerAction,
@@ -29,25 +27,11 @@ const projectDocument = {
 };
 
 const inspection = (): ProfileSettingsInspection => {
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const project = decodeSubagentConfig(projectDocument, "project");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
-  });
-  return {
-    config,
-    global,
-    project,
+  return makeProfileSettingsInspection({
     globalDocument,
     projectDocument,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: true,
+  });
 };
 
 const invalidInspection = (): ProfileSettingsInspection => {
@@ -69,21 +53,10 @@ const invalidInspection = (): ProfileSettingsInspection => {
       valid: { profiles: {} },
     },
   };
-  const global = decodeSubagentConfig(document, "global");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: false,
-    globalConfigExists: true,
-    projectConfigExists: false,
-    global,
-  });
-  return {
-    config,
-    global,
+  return makeProfileSettingsInspection({
     globalDocument: document,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: false,
+  });
 };
 
 const inheritedInvalidInspection = (): ProfileSettingsInspection => {
@@ -110,25 +83,11 @@ const inheritedInvalidInspection = (): ProfileSettingsInspection => {
     defaultProfileSet: "partial",
     profileSets: { partial: { profiles: {} } },
   };
-  const global = decodeSubagentConfig(inheritedGlobalDocument, "global");
-  const project = decodeSubagentConfig(partialProjectDocument, "project");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
-  });
-  return {
-    config,
-    global,
-    project,
+  return makeProfileSettingsInspection({
     globalDocument: inheritedGlobalDocument,
     projectDocument: partialProjectDocument,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: true,
+  });
 };
 
 const malformedDefaultInspection = (scope: "global" | "project"): ProfileSettingsInspection => {
@@ -138,41 +97,16 @@ const malformedDefaultInspection = (scope: "global" | "project"): ProfileSetting
     profileSets: { saved: { profiles: {} } },
   };
   if (scope === "global") {
-    const global = decodeSubagentConfig(malformed, "global");
-    const config = resolveSubagentConfig({
-      globalConfigPath: "/agent/pi-subagents.json",
-      projectConfigPath: "/repo/.pi/pi-subagents.json",
-      projectTrusted: true,
-      globalConfigExists: true,
-      projectConfigExists: false,
-      global,
-    });
-    return {
-      config,
-      global,
+    return makeProfileSettingsInspection({
       globalDocument: malformed,
-      session: makeSessionProfileSnapshot(config),
-    };
+      projectTrusted: true,
+    });
   }
-  const global = decodeSubagentConfig(globalDocument, "global");
-  const project = decodeSubagentConfig(malformed, "project");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
-  });
-  return {
-    config,
-    global,
-    project,
+  return makeProfileSettingsInspection({
     globalDocument,
     projectDocument: malformed,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: true,
+  });
 };
 
 const structurallyInvalidInspection = (): ProfileSettingsInspection => {
@@ -183,21 +117,10 @@ const structurallyInvalidInspection = (): ProfileSettingsInspection => {
       valid: { profiles: {} },
     },
   };
-  const global = decodeSubagentConfig(document, "global");
-  const config = resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: false,
-    globalConfigExists: true,
-    projectConfigExists: false,
-    global,
-  });
-  return {
-    config,
-    global,
+  return makeProfileSettingsInspection({
     globalDocument: document,
-    session: makeSessionProfileSnapshot(config),
-  };
+    projectTrusted: false,
+  });
 };
 
 // SAFETY: The component and renderer use only the Theme methods implemented by this fixture.

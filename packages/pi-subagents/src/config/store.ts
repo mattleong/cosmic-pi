@@ -702,64 +702,32 @@ export const subagentConfigStoreLayer = Layer.effect(
         );
       });
 
-    const patchProfile: SubagentConfigStoreContract["patchProfile"] = (
-      cwd,
-      agentDirectory,
-      patch,
-    ) => patchDocument(cwd, agentDirectory, patch, applyProfilePatch, patch.route === undefined);
-    const patchDefaultProfileSet: SubagentConfigStoreContract["patchDefaultProfileSet"] = (
-      cwd,
-      agentDirectory,
-      patch,
-    ) =>
-      patchDocument(
-        cwd,
-        agentDirectory,
-        patch,
-        applyDefaultProfileSetPatch,
-        patch.defaultProfileSet === undefined,
-      );
-    const createProfileSet: SubagentConfigStoreContract["createProfileSet"] = (
-      cwd,
-      agentDirectory,
-      patch,
-    ) => patchDocument(cwd, agentDirectory, patch, applyCreateProfileSet);
-    const createProfileSetFromSnapshot: SubagentConfigStoreContract["createProfileSetFromSnapshot"] =
-      (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch, applyCreateProfileSetFromSnapshot);
-    const copyProfileSet: SubagentConfigStoreContract["copyProfileSet"] = (
-      cwd,
-      agentDirectory,
-      patch,
-    ) => patchDocument(cwd, agentDirectory, patch, applyCopyProfileSet);
-    const renameProfileSet: SubagentConfigStoreContract["renameProfileSet"] = (
-      cwd,
-      agentDirectory,
-      patch,
-    ) => patchDocument(cwd, agentDirectory, patch, applyRenameProfileSet);
-    const deleteProfileSet: SubagentConfigStoreContract["deleteProfileSet"] = (
-      cwd,
-      agentDirectory,
-      patch,
-    ) => patchDocument(cwd, agentDirectory, patch, applyDeleteProfileSet, true);
-    const patchNesting: SubagentConfigStoreContract["patchNesting"] = (
-      cwd,
-      agentDirectory,
-      patch,
-    ) => patchDocument(cwd, agentDirectory, patch, applyNestingPatch, patch.nesting === undefined);
-
     return SubagentConfigStore.of({
       paths,
       load,
       inspect,
-      patchProfile,
-      patchDefaultProfileSet,
-      createProfileSet,
-      createProfileSetFromSnapshot,
-      copyProfileSet,
-      renameProfileSet,
-      deleteProfileSet,
-      patchNesting,
+      patchProfile: (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch, applyProfilePatch, patch.route === undefined),
+      patchDefaultProfileSet: (cwd, agentDirectory, patch) =>
+        patchDocument(
+          cwd,
+          agentDirectory,
+          patch,
+          applyDefaultProfileSetPatch,
+          patch.defaultProfileSet === undefined,
+        ),
+      createProfileSet: (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch, applyCreateProfileSet),
+      createProfileSetFromSnapshot: (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch, applyCreateProfileSetFromSnapshot),
+      copyProfileSet: (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch, applyCopyProfileSet),
+      renameProfileSet: (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch, applyRenameProfileSet),
+      deleteProfileSet: (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch, applyDeleteProfileSet, true),
+      patchNesting: (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch, applyNestingPatch, patch.nesting === undefined),
     });
   }),
 );

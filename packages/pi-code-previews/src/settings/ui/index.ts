@@ -9,16 +9,7 @@ import type { CodePreviewSettings } from "../../config/schema";
 import { formatSettingValue } from "../../config/values";
 import { ThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
 import {
-  ADVANCED_SETTING_IDS,
-  APPEARANCE_SETTING_IDS,
-  BASH_PREVIEW_SETTING_IDS,
-  DIFF_PREVIEW_SETTING_IDS,
-  READ_PREVIEW_SETTING_IDS,
-  SEARCH_LIST_PREVIEW_SETTING_IDS,
   SETTING_ITEM_DEFINITIONS,
-  SETTINGS_GROUP_ID_PREFIX,
-  WARNING_SETTING_IDS,
-  WRITE_PREVIEW_SETTING_IDS,
   type SettingItemDefinition,
   type SettingsUiItemId,
 } from "./registry";
@@ -48,13 +39,23 @@ type SettingsGroupDefinition = {
   ) => SettingItem[];
 };
 
+const SETTINGS_GROUP_ID_PREFIX = "group:";
+
 const SETTINGS_CATEGORY_GROUPS = [
   {
     name: "appearance",
     label: "Appearance",
     description: "Theme, syntax color, tool frames, timing, line numbers, and path icons.",
     summarize: summarizeAppearance,
-    items: (current) => createSettingListItems(current, APPEARANCE_SETTING_IDS),
+    items: (current) =>
+      createSettingListItems(current, [
+        "shikiTheme",
+        "syntaxHighlighting",
+        "toolCallBackground",
+        "toolCallTiming",
+        "readLineNumbers",
+        "pathIcons",
+      ]),
   },
   {
     name: "outputPreviews",
@@ -62,21 +63,23 @@ const SETTINGS_CATEGORY_GROUPS = [
     description: "Collapsed output/code visibility and preview lengths by tool family.",
     summarize: summarizeOutputPreviews,
     items: (current, getCurrent, onSettingChange) =>
-      createOutputPreviewItems(current, getCurrent, onSettingChange),
+      OUTPUT_PREVIEW_GROUPS.map((group) =>
+        createSettingsGroupItemFromDefinition(group, current, getCurrent, onSettingChange),
+      ),
   },
   {
     name: "warningsSafety",
     label: "Warnings & safety",
     description: "Preview-only safety warnings for shell commands and secret-looking values.",
     summarize: summarizeWarnings,
-    items: (current) => createSettingListItems(current, WARNING_SETTING_IDS),
+    items: (current) => createSettingListItems(current, ["bashWarnings", "secretWarnings"]),
   },
   {
     name: "advanced",
     label: "Advanced",
     description: "Settings file location and restore defaults.",
     summarize: () => "file & defaults",
-    items: (current) => createSettingListItems(current, ADVANCED_SETTING_IDS),
+    items: (current) => createSettingListItems(current, ["settingsFile", "resetToDefaults"]),
   },
 ] as const satisfies readonly SettingsGroupDefinition[];
 
@@ -112,7 +115,7 @@ function createSettingsGroupItemFromDefinition(
 ): SettingsSurfaceItem {
   return {
     kind: "group",
-    id: groupId(definition.name),
+    id: `${SETTINGS_GROUP_ID_PREFIX}${definition.name}`,
     label: definition.label,
     description: definition.description,
     currentValue: definition.summarize(current),
@@ -139,47 +142,52 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
     label: "Read previews",
     description: "File content visibility and collapsed read size.",
     summarize: summarizeReadPreviews,
-    items: (current) => createSettingListItems(current, READ_PREVIEW_SETTING_IDS),
+    items: (current) =>
+      createSettingListItems(current, ["readContentPreview", "readCollapsedLines"]),
   },
   {
     name: "writePreviews",
     label: "Write previews",
     description: "Write content/diff visibility and collapsed write content size.",
     summarize: summarizeWritePreviews,
-    items: (current) => createSettingListItems(current, WRITE_PREVIEW_SETTING_IDS),
+    items: (current) =>
+      createSettingListItems(current, ["writeContentPreview", "writeCollapsedLines"]),
   },
   {
     name: "diffPreviews",
     label: "Edit diff previews",
     description: "Edit diff visibility, backgrounds, word emphasis, and collapsed size.",
     summarize: summarizeDiffPreviews,
-    items: (current) => createSettingListItems(current, DIFF_PREVIEW_SETTING_IDS),
+    items: (current) =>
+      createSettingListItems(current, [
+        "diffIntensity",
+        "wordEmphasis",
+        "editDiffPreview",
+        "editCollapsedLines",
+      ]),
   },
   {
     name: "searchListPreviews",
     label: "Search/list previews",
     description: "Grep, find, and ls result visibility plus collapsed sizes.",
     summarize: summarizeSearchListPreviews,
-    items: (current) => createSettingListItems(current, SEARCH_LIST_PREVIEW_SETTING_IDS),
+    items: (current) =>
+      createSettingListItems(current, [
+        "grepResultPreview",
+        "grepCollapsedLines",
+        "findResultPreview",
+        "lsResultPreview",
+        "pathListCollapsedLines",
+      ]),
   },
   {
     name: "bashPreviews",
     label: "Bash previews",
     description: "Successful bash output visibility.",
     summarize: summarizeBashPreviews,
-    items: (current) => createSettingListItems(current, BASH_PREVIEW_SETTING_IDS),
+    items: (current) => createSettingListItems(current, ["bashResultPreview"]),
   },
 ];
-
-function createOutputPreviewItems(
-  current: CodePreviewSettings,
-  getCurrent: SettingsProvider,
-  onSettingChange: SettingChangeHandler,
-): SettingItem[] {
-  return OUTPUT_PREVIEW_GROUPS.map((group) =>
-    createSettingsGroupItemFromDefinition(group, current, getCurrent, onSettingChange),
-  );
-}
 
 function createSettingListItems(
   current: CodePreviewSettings,
@@ -201,8 +209,4 @@ function createSettingItem(current: CodePreviewSettings, id: SettingsUiItemId): 
   if (id === "shikiTheme")
     item.submenu = (currentValue, done) => new ThemeSelectSubmenu(currentValue, done);
   return item;
-}
-
-function groupId(name: string): string {
-  return `${SETTINGS_GROUP_ID_PREFIX}${name}`;
 }

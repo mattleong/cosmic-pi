@@ -199,7 +199,7 @@ export class AdvisorRuntime {
         };
         const startCleanup = yield* Deferred.make<void>();
         this.pendingStartCleanup = startCleanup;
-        const result = yield* Effect.uninterruptibleMask(() =>
+        const result = yield* Effect.uninterruptible(
           Effect.interruptible(
             createChildSessionEffect(
               () => this.childFactory.createSession(createOptions),
@@ -279,42 +279,26 @@ export class AdvisorRuntime {
         finalizationQueued: false,
       };
       this.activeCheckpoint = active;
-      const promptEffect = Effect.tryPromise({
-        try: () => session.prompt(prompt, { expandPromptTemplates: false, source: "extension" }),
-        catch: toModelError("Advisor checkpoint failed."),
-      }).pipe(
-        Effect.raceFirst(
-          Deferred.await(active.abortRequested).pipe(
-            Effect.andThen(this.abortEffect()),
-            Effect.andThen(
-              Effect.fail(
-                new AdvisorRuntimeResetRequiredError({
-                  message: "Advisor checkpoint requires a fresh context.",
-                }),
-              ),
-            ),
+      const abortRequestEffect = Deferred.await(active.abortRequested).pipe(
+        Effect.andThen(this.abortEffect()),
+        Effect.andThen(
+          Effect.fail(
+            new AdvisorRuntimeResetRequiredError({
+              message: "Advisor checkpoint requires a fresh context.",
+            }),
           ),
         ),
       );
+      const promptEffect = Effect.tryPromise({
+        try: () => session.prompt(prompt, { expandPromptTemplates: false, source: "extension" }),
+        catch: toModelError("Advisor checkpoint failed."),
+      }).pipe(Effect.raceFirst(abortRequestEffect));
       yield* promptEffect.pipe(
         Effect.andThen(this.sessionEvents.awaitChildEventsEffect(checkpointEpoch)),
         Effect.andThen(
           Effect.suspend(() =>
             active.finalizationQueued
-              ? Deferred.await(active.finalization).pipe(
-                  Effect.raceFirst(
-                    Deferred.await(active.abortRequested).pipe(
-                      Effect.andThen(this.abortEffect()),
-                      Effect.andThen(
-                        Effect.fail(
-                          new AdvisorRuntimeResetRequiredError({
-                            message: "Advisor checkpoint requires a fresh context.",
-                          }),
-                        ),
-                      ),
-                    ),
-                  ),
-                )
+              ? Deferred.await(active.finalization).pipe(Effect.raceFirst(abortRequestEffect))
               : Effect.void,
           ),
         ),
@@ -392,7 +376,7 @@ export class AdvisorRuntime {
     return this.startEffect(startOptions).pipe(Effect.withSpan("pi-advisor.child.reprime"));
   }
   private acquireChildEffect(session: AgentSession, startEpoch: number, abortTimeoutMs: number) {
-    return Effect.uninterruptibleMask(() =>
+    return Effect.uninterruptible(
       Effect.gen({ self: this }, function* () {
         const scope = yield* Scope.fork(this.resourceScope);
         const releaseState = { aborted: false };
@@ -493,7 +477,7 @@ export class AdvisorRuntime {
   }
   abortEffect() {
     return this.lifecycleLock.withPermits(1)(
-      Effect.uninterruptibleMask(() =>
+      Effect.uninterruptible(
         Effect.gen({ self: this }, function* () {
           yield* Effect.interruptible(this.awaitPendingStartCleanupEffect());
           this.epoch++;
