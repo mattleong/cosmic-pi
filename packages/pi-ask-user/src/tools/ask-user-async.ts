@@ -26,7 +26,7 @@ export function registerAsyncAskUserTools(
         name: "ask_user_async",
         label: "Ask User Async",
         description:
-          "Open and focus a structured questionnaire now, returning a pending request ID without waiting for answers. TUI only. Same questions and limits as ask_user, plus nonblank independentWork and blockedWork descriptions of at most 500 characters each. Only one pending questionnaire; cannot overlap blocking ask_user or an unrelated UI prompt. Answers arrive automatically as a custom steering message unless an await owns delivery. Up to 16 session-local requests are retained. Only delivered, unclaimed terminal results can be evicted; full capacity otherwise rejects admission.",
+          "Admit a structured questionnaire and return a pending request ID without waiting for answers. TUI only. If another questionnaire is active, return queued immediately; it opens automatically in order after earlier questionnaires and unrelated UI prompts close. Otherwise wait only for its overlay to mount. Same questions and limits as ask_user, plus nonblank independentWork and blockedWork descriptions of at most 500 characters each. Shares a FIFO queue of at most 16 pending questionnaires with blocking and routed child requests. Cannot admit during an unrelated UI prompt; queued requests wait for safe mounting. Answers arrive automatically as a custom steering message unless an await owns delivery. Separately, up to 16 session-local async results are retained. Only delivered, unclaimed terminal results can be evicted; full capacity otherwise rejects admission.",
         promptSnippet: "Ask for decisions while continuing specific independent work",
         promptGuidelines: [
           "Use ask_user_async only when a concrete decision is needed and you can name useful independent work. Otherwise use blocking ask_user.",
@@ -42,7 +42,12 @@ export function registerAsyncAskUserTools(
         executionMode: "sequential",
         execute(_id, input, signal) {
           return start(input, signal).then((snapshot) => ({
-            content: [{ type: "text" as const, text: formatAsyncSnapshot(snapshot) }],
+            content: [
+              {
+                type: "text" as const,
+                text: `${formatAsyncSnapshot(snapshot)}\nPresentation: ${snapshot.presentation ?? "open"}. Queued admission is not a mount or an answer.`,
+              },
+            ],
             details: snapshot,
           }));
         },

@@ -1,0 +1,118 @@
+import {
+  registerActivityProvider,
+  type ActivityEvents,
+  type ActivityItem,
+} from "pi-cosmic-ui/activity";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { isActiveTaskState, type BackgroundTaskProjection } from "../task/model.ts";
+import type { BackgroundTaskProjectionBridge } from "./host-ui.ts";
+
+export function backgroundTaskActivityItems(
+  projection: BackgroundTaskProjection,
+): readonly ActivityItem[] {
+  return Object.freeze(
+    projection.tasks.map((task) => {
+      const item: ActivityItem = {
+        id: task.id,
+        kind: "command" as const,
+        title: sanitizeDiagnosticContent(task.name ?? task.command, { maximumLength: 512 }),
+        status:
+          task.state === "starting"
+            ? ("pending" as const)
+            : task.state === "stopping"
+              ? ("stopping" as const)
+              : isActiveTaskState(task.state)
+                ? ("running" as const)
+                : task.state === "failed" || task.state === "timed_out"
+                  ? ("failed" as const)
+                  : task.state === "stopped"
+                    ? ("cancelled" as const)
+                    : ("done" as const),
+        revision: `${task.startedAt}:${task.state}:${task.logCursor}`,
+        summary: task.state,
+        startedAt: task.startedAt,
+        updatedAt: task.endedAt ?? task.logs.at(-1)?.timestamp ?? task.startedAt,
+        actions: Object.freeze(
+          isActiveTaskState(task.state)
+            ? [
+                Object.freeze({
+                  id: "stop",
+                  label: "Stop",
+                  confirmation: `Stop ${task.id} and its process tree?`,
+                }),
+              ]
+            : [],
+        ),
+      };
+      if (task.endedAt !== undefined) Object.assign(item, { endedAt: task.endedAt });
+      return Object.freeze(item);
+    }),
+  );
+}
+
+/** Materialize only the selected task's bounded tail, never a fleet-wide log snapshot. */
+export function backgroundTaskActivityDetail(
+  projection: BackgroundTaskProjection,
+  id: string,
+): string | undefined {
+  const task = projection.tasks.find((task) => task.id === id);
+  if (!task) return undefined;
+  let remaining = 12_000;
+  const chunks: string[] = [];
+  for (let index = task.logs.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    const text = task.logs[index]!.text.slice(-remaining);
+    chunks.push(text);
+    remaining -= text.length;
+  }
+  const header = sanitizeDiagnosticContent(
+    [`${task.name ?? task.id}: ${task.state}`, task.command, task.cwd, task.error ?? ""].join("\n"),
+    { maximumLength: 4_000 },
+  );
+  return sanitizeDiagnosticContent(`${header}\n\n${chunks.reverse().join("")}`, {
+    maximumLength: 16_384,
+  });
+}
+
+/** Commands have no ownerRunId; keep them at the root and never infer ancestry. */
+export function registerBackgroundTaskActivity(options: {
+  readonly events: ActivityEvents;
+  readonly sessionId: string;
+  readonly bridge: BackgroundTaskProjectionBridge;
+  readonly isCurrent: () => boolean;
+  readonly stop: (id: string, signal: AbortSignal) => Promise<void>;
+}): () => void {
+  let live = true;
+  const current = () => live && options.isCurrent();
+  const lookup = (id: string, revision: string, signal: AbortSignal) => {
+    if (!current() || signal.aborted) throw new Error("Background Tasks activity is unavailable.");
+    const item = backgroundTaskActivityItems(options.bridge.get()).find(
+      (item) => item.id === id && item.revision === revision,
+    );
+    if (!item) throw new Error("Background task activity changed.");
+    return item;
+  };
+  const registration = registerActivityProvider(options.events, {
+    sessionId: options.sessionId,
+    providerId: "pi-background-task",
+    snapshot: () => (current() ? backgroundTaskActivityItems(options.bridge.get()) : []),
+    getDetail: (id, revision, signal) =>
+      Promise.resolve().then(() => {
+        lookup(id, revision, signal);
+        return backgroundTaskActivityDetail(options.bridge.get(), id) ?? "";
+      }),
+    invoke: (id, action, revision, signal) =>
+      Promise.resolve().then(() => {
+        const item = lookup(id, revision, signal);
+        if (action !== "stop" || !item.actions?.some((allowed) => allowed.id === action))
+          throw new Error("Background task action is unavailable.");
+        return options.stop(id, signal);
+      }),
+  });
+  const unsubscribe = options.bridge.subscribe(() => registration.publish());
+  registration.publish();
+  return () => {
+    live = false;
+    unsubscribe();
+    registration.dispose();
+  };
+}

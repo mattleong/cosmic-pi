@@ -95,6 +95,8 @@ class SupervisorBridge extends Context.Service<SupervisorBridge, PiSupervisorBri
   "pi-subagents/boundary/host-pi-supervisor-extension/SupervisorBridge",
 ) {}
 
+import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
+
 interface SupervisorBridgeSessionInput {
   readonly configPath: string;
 }
@@ -113,6 +115,7 @@ export default function registerPiSubagentSupervisorBridge(
     default: false,
   });
   const openaiFastMode = pi.getFlag("pi-subagents-fast-mode") === true;
+  let detachRelay: (() => void) | undefined;
   const slot = makePiSessionRuntimeSlot<
     SupervisorBridgeSessionInput,
     SupervisorBridge,
@@ -305,6 +308,27 @@ export default function registerPiSubagentSupervisorBridge(
               return result;
             });
           };
+          try {
+            detachRelay = publishChildQuestionnaireRelay(
+              pi.events,
+              ctx.sessionManager.getSessionId(),
+              () => !shuttingDown && slot.isCurrent(token),
+              (request, signal) =>
+                callBridge(
+                  token,
+                  SUPERVISOR_MCP_PROXY_TOOL_NAME,
+                  { tool: request.tool, arguments_json: request.argumentsJson },
+                  signal,
+                ).then((source) => {
+                  const result = decodeSubagentProxyResult(source);
+                  if (!result)
+                    throw new Error("Root coordinator returned an invalid questionnaire response.");
+                  return result;
+                }),
+            );
+          } catch {
+            /* Missing session discovery disables only the optional questionnaire relay. */
+          }
           registerSubagentTools(pi, {
             environment: { cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() },
             proxyCall: (input, signal) => proxyCall(input, signal),
@@ -390,6 +414,8 @@ export default function registerPiSubagentSupervisorBridge(
 
   pi.on("session_shutdown", () => {
     shuttingDown = true;
+    detachRelay?.();
+    detachRelay = undefined;
     currentToken = undefined;
     return slot.shutdown();
   });

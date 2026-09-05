@@ -1,6 +1,11 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import {
+  decodeQuestionnaireRequest,
+  QuestionnaireRequestSchema,
+  type AskUserRequest,
+} from "pi-ask-user/protocol";
 import type { Static, TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
@@ -43,6 +48,21 @@ export const encodeSubagentProxyInput = (input: SubagentToolInput): SubagentProx
 };
 
 const MAX_PROXY_JSON_CHARS = 2 * 1024 * 1024;
+const decodeQuestionnaireJson = Schema.decodeUnknownOption(
+  Schema.fromJsonString(QuestionnaireRequestSchema),
+  { onExcessProperty: "error" },
+);
+
+/** A separate bounded wire request, never a synthetic SubagentToolInput action. */
+export const decodeQuestionnaireProxyRequest = (
+  request: SubagentProxyRequest,
+): AskUserRequest | InvalidSubagentRequestError => {
+  if (request.tool !== "ask_user" || request.argumentsJson.length > 131_072)
+    return invalid("Nested questionnaire arguments exceeded the structured request bound.");
+  const decoded = decodeQuestionnaireJson(request.argumentsJson);
+  const value = Option.isSome(decoded) ? decodeQuestionnaireRequest(decoded.value) : undefined;
+  return value ?? invalid("Nested questionnaire arguments failed strict validation.");
+};
 
 export const encodeSubagentProxyPayload = <ValueInput>(value: ValueInput): string | undefined => {
   try {

@@ -91,40 +91,43 @@ it.effect("waits only for mounting, admits independent work, and retains automat
   }),
 );
 
-it.effect(
-  "rejects competing async and blocking dialogs without replacing the pending request",
-  () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      yield* Deferred.succeed(f.mount, undefined);
-      yield* Effect.gen(function* () {
-        const service = yield* AskUserService;
-        const receipt = yield* service.startAsync(request);
-        expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
-        expect(yield* Effect.flip(service.ask(request))).toMatchObject({ reason: "busy" });
-        const result = yield* service.controlAsync({
-          action: "cancel",
-          requestId: receipt.requestId,
-        });
-        expect(result.requests[0]?.status).toBe("cancelled");
-        expect(result.requests[0]?.outcome?.answers).toEqual([]);
-        expect(yield* Ref.get(f.messages)).toEqual([]);
-      }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
-    }),
+it.effect("queues competing async and blocking dialogs without replacing the pending request", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* Deferred.succeed(f.mount, undefined);
+    yield* Effect.gen(function* () {
+      const service = yield* AskUserService;
+      const receipt = yield* service.startAsync(request);
+      expect(yield* service.startAsync(request)).toMatchObject({
+        status: "pending",
+        presentation: "queued",
+      });
+      const blocking = yield* Effect.forkChild(service.ask(request), { startImmediately: true });
+      expect(blocking.pollUnsafe()).toBeUndefined();
+      yield* Fiber.interrupt(blocking);
+      const result = yield* service.controlAsync({
+        action: "cancel",
+        requestId: receipt.requestId,
+      });
+      expect(result.requests[0]?.status).toBe("cancelled");
+      expect(result.requests[0]?.outcome?.answers).toEqual([]);
+      expect(yield* Ref.get(f.messages)).toEqual([]);
+    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+  }),
 );
 
-it.effect("does not queue async behind an active blocking dialog", () =>
+it.effect("queues async behind an active blocking dialog", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Effect.gen(function* () {
       const service = yield* AskUserService;
       const blocking = yield* Effect.forkChild(service.ask(request));
       yield* Deferred.await(f.entered);
-      expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
+      const receipt = yield* service.startAsync(request);
+      expect(receipt.presentation).toBe("queued");
       yield* Fiber.interrupt(blocking);
       yield* Deferred.succeed(f.mount, undefined);
-      const receipt = yield* service.startAsync(request);
-      expect(receipt.status).toBe("pending");
+      yield* service.controlAsync({ action: "cancel", requestId: receipt.requestId });
     }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
   }),
 );
@@ -567,6 +570,69 @@ it.effect("acknowledging failed openings recovers a full registry after host rec
         ),
       ).toMatchObject({ reason: "not-found" });
     }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
+  }),
+);
+
+it.effect(
+  "queued cancellation preserves FIFO, waits for cleanup, and does not mount successors early",
+  () =>
+    Effect.gen(function* () {
+      const answers = yield* Effect.all([
+        Deferred.make<AskUserOutcome>(),
+        Deferred.make<AskUserOutcome>(),
+        Deferred.make<AskUserOutcome>(),
+      ]);
+      const cleanup = yield* Deferred.make<void>();
+      const mounted = yield* Ref.make<string[]>([]);
+      const host: AskUserHost = (input, opened) =>
+        Effect.gen(function* () {
+          const key = input.questions[0]!.key;
+          yield* Ref.update(mounted, (items) => [...items, key]);
+          if (opened) yield* Deferred.succeed(opened, undefined);
+          return yield* Deferred.await(answers[Number(key)]!);
+        }).pipe(
+          Effect.ensuring(input.questions[0]!.key === "0" ? Deferred.await(cleanup) : Effect.void),
+        );
+      const input = (index: number) => ({
+        ...request,
+        questions: [{ ...request.questions[0]!, key: String(index) }],
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* AskUserService;
+        const first = yield* service.startAsync(input(0));
+        const second = yield* service.startAsync(input(1));
+        const third = yield* service.startAsync(input(2));
+        expect(second.presentation).toBe("queued");
+        expect(third.presentation).toBe("queued");
+        yield* service.controlAsync({ action: "cancel", requestId: second.requestId });
+        expect(yield* Ref.get(mounted)).toEqual(["0"]);
+        yield* Deferred.succeed(answers[0]!, outcome);
+        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+        expect(yield* Ref.get(mounted)).toEqual(["0"]);
+        yield* Deferred.succeed(cleanup, undefined);
+        yield* service.controlAsync({ action: "await", requestId: first.requestId });
+        for (let i = 0; i < 30; i++) yield* Effect.yieldNow;
+        expect(yield* Ref.get(mounted)).toEqual(["0", "2"]);
+        yield* service.controlAsync({ action: "cancel", requestId: third.requestId });
+      }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
+    }),
+);
+
+it.effect("queued admission is bounded and shutdown never mounts waiting requests", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* Deferred.succeed(f.mount, undefined);
+    const scope = yield* Scope.make();
+    const context = yield* Layer.buildWithScope(AskUserService.layer(f.host, f.delivery), scope);
+    const service = Context.get(context, AskUserService);
+    for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) yield* service.startAsync(request);
+    expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
+    expect((yield* service.controlAsync({ action: "status" })).requests).toHaveLength(
+      MAX_RETAINED_REQUESTS,
+    );
+    yield* Scope.close(scope, Exit.void);
+    expect(yield* Ref.get(f.released)).toBe(1);
+    expect(yield* Ref.get(f.messages)).toEqual([]);
   }),
 );
 

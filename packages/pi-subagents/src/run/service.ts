@@ -1,4 +1,6 @@
 import { hasObjectRuntimeType } from "pi-cosmic-core";
+import type { AskUserRequest, QuestionnaireOwner } from "pi-ask-user/protocol";
+import { makeQuestionnaireLifetimes } from "./questionnaire-lifetime.ts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -18,7 +20,7 @@ import type {
 } from "../boundary/host-notifier.ts";
 import { WriterLeaseService } from "../boundary/writer-lease.ts";
 import {
-  type InvalidSubagentRequestError,
+  InvalidSubagentRequestError,
   isOutcomeUncertain,
   type SubagentError,
   SubagentNotFoundError,
@@ -53,7 +55,10 @@ import { emptyProjection, sortRuns } from "./projection.ts";
 import { sanitizeOutputText, snapshotView } from "./state.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { descendantRunIds, isRunInSubtree, leafFirst, projectRunTree } from "./tree.ts";
-import { encodeSubagentProxyPayload } from "../tools/proxy-protocol.ts";
+import {
+  decodeQuestionnaireProxyRequest,
+  encodeSubagentProxyPayload,
+} from "../tools/proxy-protocol.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { makeRunWriteClaimControl } from "./write-claim-control.ts";
 
@@ -67,6 +72,10 @@ export type SubagentNotificationCallback =
 export interface SubagentServiceOptions {
   readonly publish?: (projection: SubagentProjection) => void;
   readonly notify?: SubagentNotificationCallback;
+  readonly questionnaireHandler?: (
+    request: AskUserRequest,
+    owner: QuestionnaireOwner,
+  ) => Effect.Effect<BackendProxyResult, SubagentError>;
   readonly proxyHandler?:
     | ((
         service: SubagentServiceContract,
@@ -241,6 +250,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   let nextRetryClaimOrdinal = 1;
   let nextAssignmentAttemptOrdinal = 1;
   let closed = false;
+  const questionnaires = makeQuestionnaireLifetimes(() => closed);
 
   const withLock = lock.withPermits(1);
   const withCompletionGate = completionGate.withPermits(1);
@@ -293,20 +303,24 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     });
   };
   const publish = Effect.uninterruptible(
-    Effect.suspend(() =>
-      // Late cleanup still commits record state, but a closed projection channel
-      // must neither interrupt that cleanup nor publish into a replaced session.
-      closed
-        ? Effect.void
-        : SubscriptionRef.updateAndGet(projectionRef, (current) =>
-            frozenProjection(current.revision + 1),
-          ).pipe(
-            Effect.flatMap((projection) =>
-              options.publish
-                ? Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore)
-                : Effect.void,
-            ),
-          ),
+    questionnaires.invalidate.pipe(
+      Effect.andThen(
+        Effect.suspend(() =>
+          // Late cleanup still commits record state, but a closed projection channel
+          // must neither interrupt that cleanup nor publish into a replaced session.
+          closed
+            ? Effect.void
+            : SubscriptionRef.updateAndGet(projectionRef, (current) =>
+                frozenProjection(current.revision + 1),
+              ).pipe(
+                Effect.flatMap((projection) =>
+                  options.publish
+                    ? Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore)
+                    : Effect.void,
+                ),
+              ),
+        ),
+      ),
     ),
   );
   const waitForRevision = (after: number): Effect.Effect<void, SubagentRuntimeClosedError> =>
@@ -473,9 +487,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     reclaimRecordRunState,
     markCleanupPending,
     retainCleanupQuarantine,
-    closeRecordScope,
+    closeRecordScope: closeOwnedRecordScope,
     closeExitedScope,
   } = makeRunRecordCleanup({ withLock, publish, writerLeases, writerPools });
+
+  const closeRecordScope: typeof closeOwnedRecordScope = (record, scope) =>
+    questionnaires.drain(record).pipe(Effect.andThen(closeOwnedRecordScope(record, scope)));
 
   const sendPeerNotices = makeRunPeerNotifier(records);
 
@@ -627,7 +644,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         Effect.asVoid,
       );
     if (
-      !options.proxyHandler ||
+      (event.tool === "ask_user" ? !options.questionnaireHandler : !options.proxyHandler) ||
       record.view.runtime !== "pi" ||
       record.stoppedByParent ||
       !isActiveRunState(record.view.state)
@@ -665,7 +682,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           }) ?? "{}",
         )
         .pipe(Effect.ignore);
-    const execute = options.proxyHandler(service, record.view.id, event).pipe(
+    const questionnaire =
+      event.tool === "ask_user" ? decodeQuestionnaireProxyRequest(event) : undefined;
+    const dispatch =
+      questionnaire instanceof InvalidSubagentRequestError
+        ? Effect.fail(questionnaire)
+        : questionnaire && options.questionnaireHandler
+          ? questionnaires.own(record, event.requestId, (owner) =>
+              options.questionnaireHandler!(questionnaire, owner),
+            )
+          : options.proxyHandler!(service, record.view.id, event);
+    const execute = dispatch.pipe(
       Effect.provideService(SubagentProfileService, profileService),
       Effect.provideService(SubagentBackendRegistry, backendRegistry),
       Effect.matchEffect({
@@ -863,6 +890,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         closed = true;
       }),
     ).pipe(
+      Effect.andThen(questionnaires.invalidate),
       Effect.andThen(
         Effect.forEach(
           leafFirst(records.values()),

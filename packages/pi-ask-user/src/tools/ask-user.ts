@@ -73,7 +73,7 @@ export function registerAskUserTool(
     name: "ask_user",
     label: "Ask User",
     description:
-      "Present one structured questionnaire containing one to four questions. Each question has two to four concrete choices, an automatic custom-answer action, optional answer notes, and optional markdown previews. Use this only when a decision is needed to proceed safely.",
+      "Present one structured questionnaire containing one to four questions. Each question has two to four concrete choices, an automatic custom-answer action, optional answer notes, and optional markdown previews. Use this only when a decision is needed to proceed safely. Questionnaires open automatically in FIFO order, sharing a session queue of at most 16 pending requests; the tool waits for answers, not merely admission. Local and Herdr Pi child requests route to the root UI with authenticated run ownership.",
     promptSnippet:
       "Ask one structured batch of questions when concrete user decisions are required",
     promptGuidelines: [

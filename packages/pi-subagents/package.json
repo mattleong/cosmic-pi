@@ -55,6 +55,7 @@
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "jiti": "2.7.0",
+    "pi-ask-user": "workspace:*",
     "pi-better-openai": "workspace:*",
     "pi-code-previews": "workspace:*",
     "pi-cosmic-core": "workspace:*",

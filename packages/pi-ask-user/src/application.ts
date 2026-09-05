@@ -18,6 +18,12 @@ import {
   createQuestionnaireGeneration,
   makeAsyncDelivery,
 } from "./boundary/host-delivery.ts";
+import {
+  makeQuestionnaireActivity,
+  type QuestionnaireActivityBridge,
+} from "./boundary/host-activity.ts";
+import { registerQuestionnaireCapability } from "./boundary/host-proxy.ts";
+import { askAtQuestionnaireBoundary, requiresQuestionnaireRelay } from "./boundary/host-relay.ts";
 import { registerAsyncAskUserTools } from "./tools/ask-user-async.ts";
 import { makeAskUserPromptGate } from "./boundary/host-prompt.ts";
 import { asyncBusy } from "./questionnaire/async-service.ts";
@@ -33,6 +39,8 @@ interface AskUserSessionInput {
   readonly projectTrusted: boolean;
   readonly generation: string;
   active: boolean;
+  activity?: QuestionnaireActivityBridge;
+  revokeCapability?: () => void;
 }
 
 type PreviewSettingsLoader = (
@@ -63,8 +71,16 @@ export function askUserWithDependencies(
     never,
     AskUserRuntimeError
   >({
-    makeRuntime: (input) =>
-      makePiManagedRuntime(
+    makeRuntime: (input) => {
+      input.activity = makeQuestionnaireActivity({
+        bridge,
+        isCurrent: () => input.active,
+        run: (effect, signal) =>
+          input.active
+            ? slot.run(effect, signal)
+            : Promise.reject(new Error("Questionnaire session was replaced.")),
+      });
+      return makePiManagedRuntime(
         pi,
         makeAskUserLayer(
           input.ctx,
@@ -72,12 +88,14 @@ export function askUserWithDependencies(
           makeAsyncDelivery(pi, input.generation, () => input.active),
           input.generation,
           promptGate,
+          input.activity.observer,
         ),
         {
           agentDirectory: getAgentDir,
           packageName: "pi-ask-user",
         },
-      ),
+      );
+    },
     startup: ({ cwd, projectTrusted }) =>
       bestEffortHostBootstrap("pi-ask-user.preview-settings", (signal) =>
         loadPreviewSettings(cwd, projectTrusted, signal),
@@ -87,24 +105,52 @@ export function askUserWithDependencies(
       input.active = true;
       currentGeneration = input.generation;
       bridge.setContext(ctx);
+      let sessionId = "";
+      try {
+        sessionId = ctx.sessionManager.getSessionId();
+      } catch {
+        /* No public session identity. */
+      }
+      try {
+        if (sessionId) input.activity?.activate(pi.events, sessionId);
+      } catch {
+        /* Activity is optional; questionnaires still open without it. */
+      }
+      if (sessionId && !requiresQuestionnaireRelay()) {
+        try {
+          input.revokeCapability = registerQuestionnaireCapability({
+            events: pi.events,
+            sessionId,
+            generation: input.generation,
+            isCurrent: () => input.active && slot.isCurrent(token),
+            run: (effect, signal) =>
+              slot.isCurrent(token)
+                ? slot.run(effect, signal)
+                : Promise.reject(
+                    new AskUserRuntimeClosedError({
+                      message: "The root questionnaire session was replaced.",
+                    }),
+                  ),
+          });
+        } catch {
+          /* Missing host event bus leaves local questionnaires available. */
+        }
+      }
       registerAskUserTool(pi, (request, signal) =>
         slot.isCurrent(token)
-          ? slot.run(
-              AskUserService.use((service) => service.ask(request)),
-              signal,
-            )
+          ? slot.run(askAtQuestionnaireBoundary(pi.events, sessionId, request), signal)
           : Promise.reject(
               new AskUserRuntimeClosedError({
                 message: "The ask-user session runtime is not active.",
               }),
             ),
       );
-      if (ctx.mode === "tui")
+      if (ctx.mode === "tui" && !requiresQuestionnaireRelay())
         registerAsyncAskUserTools(
           pi,
           (request, signal) =>
             slot.isCurrent(token)
-              ? !promptGate.canOpen()
+              ? !promptGate.canQueue()
                 ? Promise.reject(asyncBusy())
                 : slot.run(
                     AskUserService.use((service) => service.startAsync(request)),
@@ -130,6 +176,8 @@ export function askUserWithDependencies(
     },
     onDeactivated: (input) => {
       input.active = false;
+      input.revokeCapability?.();
+      input.activity?.dispose();
       currentGeneration = undefined;
       bridge.clear();
       bridge.setContext(undefined);
@@ -147,7 +195,8 @@ export function askUserWithDependencies(
   const startSession = (ctx: ExtensionContext) => {
     historicalDeliveries = captureHistoricalDeliveries(ctx);
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable" || !ctx.hasUI) return slot.shutdown();
+    if (captured._tag === "Unavailable" || (!ctx.hasUI && !requiresQuestionnaireRelay()))
+      return slot.shutdown();
     // ctx.signal belongs to the current agent turn, not this session-owned runtime.
     return slot
       .start({

@@ -15,6 +15,8 @@ import { FooterRegistryService, type FooterRegistryBridge } from "./footer/regis
 import { CosmicUiService, type CosmicUiProjection } from "./protocol/service.ts";
 import { makeFooterProtocolHostLayer, type FooterProtocolBuffer } from "./protocol/host.ts";
 import { WorkingTimerService } from "./working/service.ts";
+import { ActivityService, type ActivityServiceContract } from "./activity/service.ts";
+import type { ActivityHost } from "./boundary/host-activity.ts";
 
 /** Plain session values captured by the Pi adapter before runtime construction. */
 export interface CosmicUiSessionInput {
@@ -33,6 +35,7 @@ export interface CosmicUiApplicationLayerOptions {
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly protocolBuffer: FooterProtocolBuffer;
   readonly requestRender: () => void;
+  readonly activityHost?: ActivityHost;
 }
 
 /** Compose the complete Cosmic UI dependency graph for one Pi session. */
@@ -72,7 +75,25 @@ export const makeCosmicUiApplicationLayer = (
     callbacks: options.callbacks,
   });
   const workingTimer = WorkingTimerService.layer(workingMessageHost);
-  return Layer.mergeAll(service, protocol, workingTimer);
+  const activity = Layer.effect(
+    ActivityService,
+    Effect.suspend(() => {
+      let connected: ActivityServiceContract | undefined;
+      return ActivityService.make({
+        publish: (rows) => {
+          if (connected) options.activityHost?.publish(connected, rows);
+        },
+        tick: (now) => {
+          if (connected) options.activityHost?.tick(connected, now);
+        },
+        connect: (value) => {
+          connected = value;
+          return options.activityHost?.bind(value) ?? (() => undefined);
+        },
+      });
+    }),
+  );
+  return Layer.mergeAll(service, protocol, workingTimer, activity);
 };
 
 export type CosmicUiApplicationLayer = ReturnType<typeof makeCosmicUiApplicationLayer>;

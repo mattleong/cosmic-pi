@@ -2,7 +2,19 @@
 
 ## Purpose
 
-Hosts the composable Pi footer, repository information, elapsed working-time indicator, settings, and the plain-data contribution protocol used by other extensions.
+Hosts the composable Pi footer, repository information, elapsed working-time indicator, session activity tree, settings, and the plain-data contribution protocols used by other extensions.
+
+## Activity ownership
+
+`src/activity/service.ts` owns the session provider registry, registration generations, retained summaries, and scoped clock. It uses core's frozen projection transaction, with interruptible validation and lock waiting and a narrow atomic publication commit. The Layer composes this service into the existing session runtime. Invalid snapshots withdraw that provider's rows and acknowledgement; a later valid publication can register or restore it.
+
+`src/activity/protocol.ts`, exported as `pi-cosmic-ui/activity`, is the v1 producer client and plain summary contract. Every handshake carries the exact session ID, an opaque host activation nonce, and a producer registration token. Replayed old envelopes cannot enter a replacement host even when the session ID is unchanged. Revoked registrations cannot return. Summaries are bounded, detached, terminal-sanitized, and credential-redacted before broadcast and again on host ingress. Callbacks remain checked capabilities, never Effect services or runtimes. A provider's legacy panel hides only after a successfully returned widget installation and accepted snapshot acknowledge replacement ownership. Widget disposal, invalid publication, and host teardown restore fallback availability.
+
+The service retains completed descendants, capped at 128 removable completed rows per branch and 1,024 across the session, plus at most 100 finished root branches. Live rows and their ancestors are never evicted. Omission metadata reports lower bounds without double-counting repeated snapshots. Explicit parent references alone determine hierarchy; missing or cyclic references become roots. `/activity` and the at-most-eight-row editor widget consume the same hierarchy. Session-owned presentation preferences retain selection, branch collapse, and branch focus across manager openings.
+
+`src/activity/component.ts` uses the shared manager chrome, keymap, key-label, and list/detail shell. It keeps displayed action revisions stable and requires a separate confirmation for producer-supplied destructive-action prompts. Needs-you navigation expands only the selected item's ancestor path. Lazy detail requests happen on explicit open/refresh, not rendering or broadcast. Previous details remain marked stale across updates. The service bounds and redacts returned text, checks capability currency before and after fetching, and supplies Effect cancellation signals to detail and action callbacks. Producers must independently recheck their own session generation, revision, and operation policy.
+
+`src/boundary/host-activity.ts` owns scoped Pi subscriptions, synchronous render projections, widget installation/disposal acknowledgement, and single-owner manager admission. The service scope releases each binding. Its overlay boundary follows the pinned Pi onHandle/owned-guard pattern used by Ask User and Advisor, including late mounting, interrupted dialogs, failed cleanup, and newer overlays. Each opening has its own close and detail-cancellation capability. The manager closes before invoking producer actions; it does not implement questionnaire rendering. Only the named Pi host boundary submits activity Effects to the existing runtime.
 
 ## Host surface
 

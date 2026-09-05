@@ -199,6 +199,28 @@ describe("subagent activity widget host", () => {
     expect(() => bridge.clear()).not.toThrow();
   });
 
+  it("only yields widget ownership after acknowledgement and restores the same presentation leases", () => {
+    const { getFactory, setWidget } = captureFactory();
+    const bridge = makeSubagentProjectionBridge(undefined, { startTicker: () => () => undefined });
+    bridge.publish(projection([view({ id: "run" })]));
+    const ctx = context(setWidget);
+    bridge.setContext(ctx);
+    const component = getFactory()?.(tui(), theme);
+    const presentation = bridge.bindToolPresentation();
+    const release = presentation.beginAwait(["run"], "all_finished");
+    const leased = component?.render(100);
+    bridge.setActivityAvailable(true);
+    expect(component?.render(100)).toEqual([]);
+    expect(presentation.isLiveHierarchyAvailable()).toBe(true);
+    bridge.setContext(ctx);
+    bridge.setActivityAvailable(false);
+    const restored = getFactory()?.(tui(), theme);
+    expect(restored?.render(100)).toEqual(leased);
+    release();
+    expect(restored?.render(100)).not.toEqual(leased);
+    bridge.clear();
+  });
+
   it("uses status fallback in RPC mode without installing a component widget", () => {
     const setWidget = vi.fn();
     const setStatus = vi.fn();

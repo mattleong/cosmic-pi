@@ -91,7 +91,7 @@ layout separately.
 Each extension has one host-owned session runtime. `PiApi` and the package application Layer are composed once at startup; implementation Layers hide their dependencies before entering the runtime.
 
 - `pi-cosmic-core` supplies the managed-runtime facade/session slot, typed HTTP and document adapters, `SafeFile`, `AgentDirectory`, subscription refresh coordination, security utilities, and deterministic test Layers.
-- `pi-cosmic-ui` composes its config store, narrow Pi process execution, project probing, footer host state, and the plain-data footer protocol client.
+- `pi-cosmic-ui` composes its config store, narrow Pi process execution, project probing, footer host state, and the plain-data footer protocol client. Its session-scoped activity registry consumes checked provider capabilities and detached summaries, owns bounded history and the display clock, and publishes the unified persistent tree and `/activity` manager. Feature packages retain authoritative agent, process, and questionnaire state.
 - Better OpenAI and Better xAI compose provider-local config/auth/request schemas with the shared refresh engine and Cosmic UI client. Better xAI isolates Pi's Promise-shaped model-registry credential lookup behind `ModelRegistryAuth`. OpenAI fast-mode state and persistence are owned by `FastModeService`, with a frozen synchronous request projection and bounded diagnostic ingress returned only through current-session activation. OpenAI additionally scopes image streaming, Sharp, safe input reads, and atomic output writes.
 - `pi-code-mode` composes its trusted-project scoped config store, session runtime slot,
   interruptible settings dialogs, and one `code_mode` tool over seven core Pi built-ins,

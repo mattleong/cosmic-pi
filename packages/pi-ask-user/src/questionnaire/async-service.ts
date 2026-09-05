@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import type * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "effect/Semaphore";
 import { AskUserAsyncError, AskUserHostError, AskUserValidationError } from "./errors.ts";
 import { MAX_RETAINED_REQUESTS, type AsyncQuestionnaireSnapshot } from "./async-model.ts";
 import {
@@ -11,7 +11,8 @@ import {
   type AskUserAsyncControl,
   type AskUserAsyncRequest,
 } from "./schema.ts";
-import type { AskUserHost } from "./service.ts";
+import type { QuestionnaireQueue, QuestionnaireTicket } from "./queue.ts";
+import type { AskUserHost, QuestionnaireActivity } from "./service.ts";
 import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
 
 export type AsyncDelivery = (
@@ -43,14 +44,16 @@ const notFound = () =>
 /** Private controller under AskUserService's Layer scope, sharing its dialog permit. */
 export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(function* (
   host: AskUserHost,
-  lock: Semaphore.Semaphore,
+  queue: QuestionnaireQueue,
   delivery: AsyncDelivery | undefined,
   idPrefix: string,
+  activity?: QuestionnaireActivity,
 ) {
   const parentScope = yield* Effect.scope;
   const scope = yield* Scope.fork(parentScope, "sequential");
   const state = yield* Ref.make<ReadonlyArray<Entry>>([]);
   const counter = yield* Ref.make(0);
+  const admission = yield* Semaphore.make(1);
   const closed = yield* Ref.make(false);
   yield* Scope.addFinalizer(parentScope, Ref.set(closed, true));
 
@@ -118,23 +121,54 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
       }
     });
 
-  const present = (entry: Entry, request: AskUserAsyncRequest): Effect.Effect<void> =>
+  const present = (
+    entry: Entry,
+    request: AskUserAsyncRequest,
+    ticket: QuestionnaireTicket,
+  ): Effect.Effect<void> =>
     Effect.gen(function* () {
+      const show = Effect.gen(function* () {
+        yield* update(entry.snapshot.requestId, (current) => ({
+          ...current,
+          snapshot: { ...current.snapshot, presentation: "opening" },
+        }));
+        if (activity) yield* activity.presenting(entry.snapshot.requestId);
+        yield* Effect.forkChild(
+          Deferred.await(entry.opened).pipe(
+            Effect.andThen(
+              update(entry.snapshot.requestId, (current) =>
+                current.snapshot.status === "pending"
+                  ? { ...current, snapshot: { ...current.snapshot, presentation: "open" } }
+                  : current,
+              ),
+            ),
+            Effect.ignore,
+          ),
+        );
+        return yield* host(request, entry.opened, !ticket.immediate);
+      });
       const result = yield* Effect.exit(
         Effect.raceFirst(
-          host(request, entry.opened),
+          ticket.run(show),
           Deferred.await(entry.cancel).pipe(
             Effect.as({ outcome: "cancelled", answers: [] } as const),
           ),
-        ),
+        ).pipe(Effect.ensuring(ticket.close)),
       );
       const outcome = Exit.isSuccess(result) ? result.value : undefined;
       yield* update(entry.snapshot.requestId, (current) => ({
         ...current,
         snapshot: outcome
-          ? { ...current.snapshot, status: outcome.outcome, delivery: "pending", outcome }
-          : { ...current.snapshot, status: "failed", delivery: "none" },
+          ? {
+              ...current.snapshot,
+              status: outcome.outcome,
+              presentation: "settled",
+              delivery: "pending",
+              outcome,
+            }
+          : { ...current.snapshot, status: "failed", presentation: "settled", delivery: "none" },
       }));
+      if (activity) yield* activity.settled(entry.snapshot.requestId, outcome?.outcome ?? "failed");
       yield* Deferred.fail(
         entry.opened,
         new AskUserHostError({
@@ -144,7 +178,7 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
       );
       yield* Deferred.succeed(entry.completed, undefined);
       yield* deliver(entry.snapshot.requestId);
-    }).pipe(Effect.ensuring(lock.release(1)));
+    });
 
   const start = Effect.fn("AskUserService.startAsync")(function* (request: AskUserAsyncRequest) {
     if (!delivery)
@@ -164,50 +198,79 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
         message: "Work descriptions must be nonblank and at most 500 characters.",
       });
     }
-    return yield* Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        if (!(yield* lock.takeIfAvailable(1))) return yield* asyncBusy();
-        const sequence = yield* Ref.updateAndGet(counter, (n) => n + 1);
-        const requestId = `${idPrefix}-${sequence}`;
-        const snapshot: AsyncQuestionnaireSnapshot = {
-          requestId,
-          deliveryId: `${requestId}-answer`,
-          status: "pending",
-          delivery: "pending",
-          independentWork: request.independentWork.trim(),
-          blockedWork: request.blockedWork.trim(),
-        };
-        const entry: Entry = {
-          snapshot,
-          opened: yield* Deferred.make<void, AskUserHostError>(),
-          completed: yield* Deferred.make<void>(),
-          cancel: yield* Deferred.make<void>(),
-          deliveryAttempts: 0,
-        };
-        const admitted = yield* Ref.modify(state, (entries) => {
-          const evict =
-            entries.length >= MAX_RETAINED_REQUESTS
-              ? entries.find(
-                  (item) =>
-                    !item.waiter &&
-                    item.snapshot.status !== "pending" &&
-                    ["sent", "waiter"].includes(item.snapshot.delivery),
-                )
-              : undefined;
-          if (entries.length >= MAX_RETAINED_REQUESTS && !evict) return [false, entries] as const;
-          return [true, [...entries.filter((item) => item !== evict), entry]] as const;
-        });
-        if (!admitted) {
-          yield* lock.release(1);
-          return yield* asyncBusy();
-        }
-        yield* Effect.forkIn(present(entry, { ...request, ...normalized }), scope, {
-          startImmediately: true,
-        });
-        yield* restore(Deferred.await(entry.opened));
-        return snapshot;
-      }),
+    const admittedRequest = yield* admission.withPermit(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          if (yield* Ref.get(closed)) return yield* notFound();
+          const ticket = yield* queue.admit;
+          const reserved = ticket.immediate;
+          const sequence = yield* Ref.updateAndGet(counter, (n) => n + 1);
+          const requestId = `${idPrefix}-${sequence}`;
+          const snapshot: AsyncQuestionnaireSnapshot = {
+            requestId,
+            deliveryId: `${requestId}-answer`,
+            status: "pending",
+            presentation: reserved ? "opening" : "queued",
+            delivery: "pending",
+            independentWork: request.independentWork.trim(),
+            blockedWork: request.blockedWork.trim(),
+          };
+          const entry: Entry = {
+            snapshot,
+            opened: yield* Deferred.make<void, AskUserHostError>(),
+            completed: yield* Deferred.make<void>(),
+            cancel: yield* Deferred.make<void>(),
+            deliveryAttempts: 0,
+          };
+          const admitted = yield* Ref.modify(
+            state,
+            (
+              entries,
+            ): readonly [
+              { readonly evicted: string | undefined } | undefined,
+              ReadonlyArray<Entry>,
+            ] => {
+              const evict =
+                entries.length >= MAX_RETAINED_REQUESTS
+                  ? entries.find(
+                      (item) =>
+                        !item.waiter &&
+                        item.snapshot.status !== "pending" &&
+                        ["sent", "waiter"].includes(item.snapshot.delivery),
+                    )
+                  : undefined;
+              if (entries.length >= MAX_RETAINED_REQUESTS && !evict)
+                return [undefined, entries] as const;
+              return [
+                { evicted: evict?.snapshot.requestId },
+                [...entries.filter((item) => item !== evict), entry],
+              ] as const;
+            },
+          );
+          if (!admitted) {
+            yield* ticket.close;
+            return yield* asyncBusy();
+          }
+          if (activity) {
+            if (admitted.evicted) yield* activity.removed(admitted.evicted);
+            yield* activity.admitted(
+              requestId,
+              normalized,
+              Deferred.succeed(entry.cancel, undefined).pipe(Effect.asVoid),
+            );
+          }
+          yield* Effect.forkIn(present(entry, { ...request, ...normalized }, ticket), scope, {
+            startImmediately: true,
+          });
+          return { reserved, snapshot, entry };
+        }),
+      ),
     );
+    if (admittedRequest.reserved) {
+      yield* Deferred.await(admittedRequest.entry.opened);
+      return { ...admittedRequest.snapshot, presentation: "open" as const };
+    }
+    return admittedRequest.snapshot;
   });
 
   const wait = (id: string, cancel: boolean) =>

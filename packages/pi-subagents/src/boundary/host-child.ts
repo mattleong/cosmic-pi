@@ -23,6 +23,8 @@ import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../tools/schema.ts";
+import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
+import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
@@ -83,6 +85,9 @@ const LIVE_CHILD_BRIDGE_BOUNDARIES: SubagentChildBridgeBoundaries = {
 };
 
 interface ChildSessionInput {
+  readonly sessionId: string | undefined;
+  readonly questionnaires: Set<string>;
+  detachRelay?: (() => void) | undefined;
   readonly cwd: string;
   readonly projectTrusted: boolean;
   token: number | undefined;
@@ -165,7 +170,11 @@ export function registerSubagentChildBridge(
     );
 
   const deactivate = (input: ChildSessionInput | undefined): void => {
-    if (input) input.token = undefined;
+    if (input) {
+      input.token = undefined;
+      input.detachRelay?.();
+      input.detachRelay = undefined;
+    }
     if (currentSession === input) currentSession = undefined;
     removeProxyNames();
     rejectPending();
@@ -257,13 +266,13 @@ export function registerSubagentChildBridge(
   const proxyCall = (
     input: ChildSessionInput,
     token: number,
-    toolInput: SubagentToolInput,
+    encoded: SubagentProxyRequest,
     signal: AbortSignal | undefined,
   ): Promise<AgentToolResult<unknown>> => {
     if (!isActivationCurrent(input, token))
       return Promise.reject(new Error("Subagent proxy is unavailable for this session."));
     const requestId = `proxy-${process.pid}-${nextRequest++}`;
-    const encoded = encodeSubagentProxyInput(toolInput);
+    if (encoded.tool === "ask_user") input.questionnaires.add(requestId);
     return slot
       .run(
         correlate(
@@ -281,13 +290,17 @@ export function registerSubagentChildBridge(
               slot.fork(
                 ipc
                   .sendContact({ channel: "pi-subagents", type: "proxy_cancel", requestId })
-                  .pipe(Effect.ignore),
+                  .pipe(
+                    Effect.ignore,
+                    Effect.ensuring(Effect.sync(() => input.questionnaires.delete(requestId))),
+                  ),
               );
           },
         ),
         signal,
       )
       .then((result) => {
+        input.questionnaires.delete(requestId);
         if (!isActivationCurrent(input, token))
           throw new Error("Subagent proxy is unavailable for this session.");
         return result;
@@ -388,7 +401,25 @@ export function registerSubagentChildBridge(
                 },
               }),
             ),
-            (detach) => Effect.sync(detach).pipe(Effect.ensuring(Effect.sync(rejectPending))),
+            (detach) =>
+              Effect.suspend(() =>
+                Effect.forEach(
+                  [...input.questionnaires],
+                  (requestId) =>
+                    ipc
+                      .sendContact({ channel: "pi-subagents", type: "proxy_cancel", requestId })
+                      .pipe(Effect.ignore),
+                  { discard: true },
+                ),
+              ).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    input.questionnaires.clear();
+                    detach();
+                    rejectPending();
+                  }),
+                ),
+              ),
           ).pipe(Effect.asVoid),
         ),
       ),
@@ -400,8 +431,15 @@ export function registerSubagentChildBridge(
       if (!isSessionCurrent(input) || !slot.isCurrent(token)) return;
       input.token = token;
       const call = (toolInput: SubagentToolInput, signal?: AbortSignal) =>
-        proxyCall(input, token, toolInput, signal);
+        proxyCall(input, token, encodeSubagentProxyInput(toolInput), signal);
       try {
+        if (input.sessionId)
+          input.detachRelay = publishChildQuestionnaireRelay(
+            pi.events,
+            input.sessionId,
+            () => isActivationCurrent(input, token),
+            (request, signal) => proxyCall(input, token, request, signal),
+          );
         registerSubagentTools(pi, {
           environment: { cwd: input.cwd, projectTrusted: input.projectTrusted },
           proxyCall: (toolInput, signal) => call(toolInput, signal),
@@ -427,7 +465,15 @@ export function registerSubagentChildBridge(
     deactivate(currentSession);
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") return slot.shutdown();
+    let sessionId: string | undefined;
+    try {
+      sessionId = ctx.sessionManager.getSessionId();
+    } catch {
+      /* Questionnaire discovery fails closed without a stable session. */
+    }
     const input: ChildSessionInput = {
+      sessionId,
+      questionnaires: new Set(),
       cwd: captured.cwd,
       projectTrusted: isProjectTrusted(ctx),
       token: undefined,

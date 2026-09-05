@@ -6,6 +6,7 @@ export interface AsyncQuestionnaireSnapshot {
   readonly requestId: string;
   readonly deliveryId: string;
   readonly status: "pending" | "submitted" | "cancelled" | "failed";
+  readonly presentation?: "queued" | "opening" | "open" | "hidden" | "settled";
   readonly independentWork: string;
   readonly blockedWork: string;
   readonly delivery: "pending" | "sending" | "sent" | "failed" | "waiter" | "none";

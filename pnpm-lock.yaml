@@ -533,6 +533,9 @@ importers:
       jiti:
         specifier: 2.7.0
         version: 2.7.0
+      pi-ask-user:
+        specifier: workspace:*
+        version: link:../pi-ask-user
       pi-better-openai:
         specifier: workspace:*
         version: link:../pi-better-openai

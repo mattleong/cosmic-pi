@@ -7,7 +7,7 @@ import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import { askUserWithDependencies } from "../src/application.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
@@ -40,6 +40,11 @@ interface CapturedTool {
 interface CapturedCommand {
   readonly handler: (args: string, ctx: ExtensionContext) => Promise<void>;
 }
+
+beforeEach(() => {
+  vi.stubEnv("PI_SUBAGENT_CHILD", undefined);
+  vi.stubEnv("PI_SUBAGENT_RUN_ID", undefined);
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -281,6 +286,26 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       expect(notify).toHaveBeenCalledOnce();
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
+  );
+
+  it.effect(
+    "marked TUI children expose only blocking relay, never a child-local async dialog",
+    () =>
+      Effect.gen(function* () {
+        vi.stubEnv("PI_SUBAGENT_CHILD", "1");
+        vi.stubEnv("PI_SUBAGENT_RUN_ID", "child-run");
+        const h = yield* harness(() => Promise.resolve(), { mode: "tui" });
+        yield* Effect.promise(() => h.emit("session_start"));
+        expect(h.tools.has("ask_user")).toBe(true);
+        expect(h.tools.has("ask_user_async")).toBe(false);
+        expect(h.tools.has("ask_user_async_control")).toBe(false);
+        yield* Effect.promise(() =>
+          expect(
+            h.tools.get("ask_user")!.execute("call", request, undefined, undefined, h.ctx),
+          ).rejects.toMatchObject({ operation: "relay" }),
+        );
+        yield* Effect.promise(() => h.emit("session_shutdown"));
+      }),
   );
 
   it.effect(

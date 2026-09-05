@@ -1,4 +1,6 @@
 // Promise-shaped child Pi host boundary tests.
+import { EventEmitter } from "node:events";
+import { queryQuestionnaireRelay } from "pi-ask-user/protocol";
 import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -38,6 +40,18 @@ const deferred = <A>() => {
 
 const makeHarness = (options: HarnessOptions = {}) => {
   const handlers = new Map<string, Handler>();
+  const emitter = new EventEmitter();
+  const events = {
+    on: (name: string, handler: (event: any) => void) => {
+      emitter.on(name, handler);
+      return () => {
+        emitter.off(name, handler);
+      };
+    },
+    emit: (name: string, event: any) => {
+      emitter.emit(name, event);
+    },
+  };
   const tools: CapturedTool[] = [];
   const contacts: LocalPiContact[] = [];
   const listeners: ListenerRecord[] = [];
@@ -61,6 +75,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
   };
   // SAFETY: This test double implements only the ExtensionAPI members exercised by the bridge.
   const pi = extensionApiFixture({
+    events,
     registerFlag: vi.fn(),
     getFlag: vi.fn(() => false),
     registerProvider: vi.fn(),
@@ -85,6 +100,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
   const context = (cwd = "/child") =>
     extensionContextFixture({
       cwd,
+      sessionManager: { getSessionId: () => cwd },
       signal: undefined,
       isProjectTrusted: () => true,
       hasUI: false,
@@ -105,6 +121,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     return listener;
   };
   return {
+    events,
     activeTools: () => [...active],
     contacts,
     currentListener,
@@ -140,6 +157,39 @@ afterEach(() => {
 });
 
 describe("local Pi child bridge", () => {
+  effectTest("cancels an owned questionnaire on reload and revokes the old relay", function* () {
+    const harness = makeHarness();
+    yield* step(() => harness.start("/old"));
+    const relay = queryQuestionnaireRelay(harness.events, "/old")!;
+    const answer = rejection(
+      relay.ask(
+        {
+          questions: [
+            {
+              key: "pick",
+              title: "Pick",
+              prompt: "Which?",
+              mode: "single",
+              choices: [
+                { value: "a", label: "A", description: "First" },
+                { value: "b", label: "B", description: "Second" },
+              ],
+            },
+          ],
+        },
+        new AbortController().signal,
+      ),
+    );
+    yield* step(() =>
+      vi.waitFor(() => expect(contactOfType(harness.contacts, "proxy_request")).toBeDefined()),
+    );
+    const request = contactOfType(harness.contacts, "proxy_request")!;
+    yield* step(() => harness.start("/new"));
+    expect(contactOfType(harness.contacts, "proxy_cancel")?.requestId).toBe(request.requestId);
+    expect(queryQuestionnaireRelay(harness.events, "/old")).toBeUndefined();
+    expect(yield* step(() => answer)).toBeInstanceOf(Error);
+    yield* step(harness.shutdown);
+  });
   effectTest("aborts superseded preview loading and ignores its late settlement", function* () {
     const first = deferred<void>();
     const second = deferred<void>();

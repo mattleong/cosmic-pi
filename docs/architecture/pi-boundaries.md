@@ -56,6 +56,10 @@ The permit covers process scope closure. A 30-second execution deadline requests
 
 Cosmic UI events carry plain data and explicitly checked function capabilities. Providers import the narrow `pi-cosmic-ui/protocol` and `pi-cosmic-ui/client` subpaths, never the extension root. Events never carry Effect services, Layers, refs, scopes, fibers, or runtimes. The host answers discovery synchronously and retains a bounded, ordered pre-session event buffer; once a session starts, `FooterProtocolHost` drains it into a scoped ingress worker. `FooterRegistryService` serializes contribution state, owns surface child scopes and exact-once detach/dispose finalizers, and publishes only a frozen contribution snapshot plus checked render capabilities. Hostile callbacks are isolated by operation name, and bounded diagnostics never retain callback errors or payloads.
 
+The activity protocol uses a host-activation nonce and producer registration identity in addition to the stable session ID. Widget availability is acknowledged only after successful installation and revoked on disposal. Producers retain their fallback UI until acknowledgement. Action and lazy-detail capabilities recheck generation and revision, receive an abort signal, and return bounded redacted content. Cosmic UI owns the manager overlay by handle; closing it cannot pop a newer questionnaire.
+
+Ask User owns a bounded FIFO shared by blocking, async, and explicitly routed Pi-child questionnaires. Child relays carry structured requests through the authenticated subagent coordinator, which supplies assignment ownership. Parent-agent coordination questions remain separate. The root capability exposes exact-owner cancellation acknowledgement, so subagent cleanup joins questionnaire/editor finalizers without making the answer wait uninterruptible. Native supervisor and async child questionnaires are not routed by this protocol.
+
 ## Imperative boundaries
 
 Effect runners are intentionally localized to these call owners:

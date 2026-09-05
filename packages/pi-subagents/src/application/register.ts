@@ -13,6 +13,8 @@ import {
   makePiSessionRuntimeSlot,
   type PiSessionRuntimeSlot,
 } from "pi-cosmic-core";
+import { registerSubagentActivity } from "../boundary/host-activity.ts";
+import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { BackendProxyRequest } from "../backend/model.ts";
@@ -104,6 +106,11 @@ export function registerSubagentApplication(
 ): void {
   const bridge = makeSubagentProjectionBridge(pi.events);
   const notify = makeHostNotifier(pi);
+  let releaseActivity: (() => void) | undefined;
+  const revokeActivity = () => {
+    releaseActivity?.();
+    releaseActivity = undefined;
+  };
   let currentActivation: CapturedActivation | undefined;
   let startupFailureTools: ReadonlyArray<string> = [];
   let profileGeneration = 0;
@@ -147,6 +154,13 @@ export function registerSubagentApplication(
             profileOverrideHandoff.publish(generation, activeProfileGeneration, seed),
           publish: bridge.publish,
           notify,
+          questionnaireHandler: (request, owner) =>
+            askParentQuestionnaire(
+              pi.events,
+              activation.ctx.sessionManager.getSessionId(),
+              request,
+              owner,
+            ),
           proxyHandler: (
             service: SubagentServiceContract,
             callerRunId: string,
@@ -221,13 +235,27 @@ export function registerSubagentApplication(
         bridge.setContext(activation.ctx);
         reactivateSubagentTools(pi, startupFailureTools);
         startupFailureTools = [];
+        if (activation.sessionKey && slot.isCurrent(token))
+          releaseActivity = registerSubagentActivity({
+            events: pi.events,
+            sessionId: activation.sessionKey,
+            bridge,
+            isCurrent: () => slot.isCurrent(token) && currentActivation === activation,
+            act: (id, action, signal) =>
+              run(
+                SubagentService.use((service) => service[action](id)),
+                signal,
+              ).then(() => undefined),
+          });
         if (!slot.isCurrent(token)) {
+          revokeActivity();
           rememberDisabledTools(deactivateSubagentTools(pi));
           currentActivation = undefined;
           bridge.clear();
         }
       },
       onDeactivated: () => {
+        revokeActivity();
         rememberDisabledTools(deactivateSubagentTools(pi));
         currentActivation = undefined;
         bridge.clear();
@@ -361,6 +389,7 @@ export function registerSubagentApplication(
     preserveSessionOverrides: boolean,
     restoreReloadHandoff: boolean,
   ): Promise<void> => {
+    revokeActivity();
     bridge.clear();
     // No registered Subagents tool may target the inactive slot while capture or replacement is
     // pending. Preserve only names that were active before deactivation.
@@ -405,6 +434,7 @@ export function registerSubagentApplication(
   pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, true, false));
 
   pi.on("session_shutdown", (event, ctx) => {
+    revokeActivity();
     activeProfileGeneration = -1;
     const sessionKey = profileReloadSessionKey(ctx) ?? currentActivation?.sessionKey;
     if (event.reason === "reload") {

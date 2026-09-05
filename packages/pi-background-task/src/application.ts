@@ -13,6 +13,7 @@ import {
   backgroundTaskCodeModeSessionId,
   makeBackgroundTaskCodeModeHost,
 } from "./boundary/host-code-mode.ts";
+import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
 import { makeProjectionBridge } from "./boundary/host-ui.ts";
 import { BackgroundTaskConfigStore } from "./config/store.ts";
 import { BackgroundTaskService } from "./task/service.ts";
@@ -39,6 +40,11 @@ export function registerBackgroundTaskApplication(
 ): void {
   const bridge = makeProjectionBridge(pi.events);
   const codeModeHost = makeBackgroundTaskCodeModeHost(pi.events);
+  let releaseActivity: (() => void) | undefined;
+  const revokeActivity = () => {
+    releaseActivity?.();
+    releaseActivity = undefined;
+  };
 
   const slot = makePiSessionRuntimeSlot<
     BackgroundTaskSessionInput,
@@ -85,8 +91,22 @@ export function registerBackgroundTaskApplication(
       });
       bridge.setFooterEnabled(prepared.showFooterStatus);
       bridge.setContext(ctx);
+      const sessionId = backgroundTaskCodeModeSessionId(ctx);
+      if (sessionId)
+        releaseActivity = registerBackgroundTaskActivity({
+          events: pi.events,
+          sessionId,
+          bridge,
+          isCurrent: () => slot.isCurrent(token) && slot.isActive(),
+          stop: (id, signal) =>
+            run(
+              BackgroundTaskService.use((service) => service.stop(id)),
+              signal,
+            ).then(() => undefined),
+        });
     },
     onDeactivated: () => {
+      revokeActivity();
       codeModeHost.deactivate();
       bridge.clear();
     },
@@ -116,6 +136,7 @@ export function registerBackgroundTaskApplication(
   });
 
   pi.on("session_start", (_event, ctx) => {
+    revokeActivity();
     codeModeHost.deactivate();
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable" || captured.aborted) {
@@ -132,6 +153,7 @@ export function registerBackgroundTaskApplication(
   });
 
   pi.on("session_shutdown", () => {
+    revokeActivity();
     codeModeHost.deactivate();
     bridge.clear();
     return slot.shutdown().finally(codeModeHost.dispose);

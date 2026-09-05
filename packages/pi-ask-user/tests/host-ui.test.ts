@@ -1,10 +1,42 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
+import { it } from "@effect/vitest";
+import * as Fiber from "effect/Fiber";
+import * as Effect from "effect/Effect";
+import { makeAskUserPromptGate } from "../src/boundary/host-prompt.ts";
 import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 
 // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const context = (setStatus: (key: string, value: string | undefined) => void) =>
   ({ mode: "tui", ui: { setStatus } }) as ExtensionContext;
+
+it.effect(
+  "queued mount waits for coalesced unrelated prompts, not just the owned overlay cleanup",
+  () =>
+    Effect.gen(function* () {
+      const gate = makeAskUserPromptGate();
+      const release = gate.enter();
+      gate.started();
+      expect(gate.canQueue()).toBe(true);
+      let mounted = false;
+      const waiting = yield* Effect.forkChild(
+        gate.awaitOpen.pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              mounted = true;
+            }),
+          ),
+        ),
+      );
+      release();
+      yield* Effect.yieldNow;
+      expect(mounted).toBe(false);
+      expect(gate.canQueue()).toBe(false);
+      gate.ended();
+      yield* Fiber.join(waiting);
+      expect(mounted).toBe(true);
+    }),
+);
 
 describe("ask-user dialog bridge", () => {
   it("resumes the active dialog and ignores stale cleanup", () => {

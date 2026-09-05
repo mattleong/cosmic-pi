@@ -27,8 +27,9 @@ export const makeAskUserTuiHost =
     bridge: AskUserDialogBridge,
     promptGate?: AskUserPromptGate,
   ): AskUserHost =>
-  (request, opened) =>
+  (request, opened, queued) =>
     Effect.tryPromise(() => import("../ui/dialog.ts")).pipe(
+      Effect.tap(() => (queued && promptGate ? promptGate.awaitOpen : Effect.void)),
       Effect.flatMap(({ AskUserDialog }) =>
         Effect.suspend(() => {
           const editorCommand = captureExternalEditorCommand(ctx);
@@ -41,6 +42,7 @@ export const makeAskUserTuiHost =
           let bridgeToken: number | undefined;
           let dialog: InstanceType<typeof AskUserDialog> | undefined;
           let releasePrompt: (() => void) | undefined;
+          let blocked = false;
           const editors = new Set<Promise<void>>();
           const editExternally = (tui: TUI, value: string): Promise<string | undefined> => {
             if (authority.signal.aborted) return Promise.resolve(undefined);
@@ -95,8 +97,10 @@ export const makeAskUserTuiHost =
 
           return Effect.tryPromise(() => {
             // Recheck after the lazy import, in the same synchronous call as custom().
-            if (opened && promptGate && !promptGate.canOpen())
+            if ((opened || queued) && promptGate && !promptGate.canOpen()) {
+              blocked = true;
               throw new Error("Another UI prompt owns input.");
+            }
             releasePrompt = promptGate?.enter();
             return ctx.ui.custom<AskUserOutcome>(
               (tui, theme, keybindings, done) => {
@@ -139,11 +143,28 @@ export const makeAskUserTuiHost =
                     return;
                   }
                   dialog?.setOverlayHandle(handle);
+                  if (bridgeToken !== undefined) bridge.markOpened(bridgeToken);
                   if (opened) Deferred.doneUnsafe(opened, Effect.void);
                 },
               },
             );
-          }).pipe(Effect.ensuring(cleanup));
+          }).pipe(
+            Effect.ensuring(cleanup),
+            Effect.catch(() =>
+              blocked && queued && promptGate
+                ? promptGate.awaitOpen.pipe(
+                    Effect.andThen(
+                      makeAskUserTuiHost(ctx, bridge, promptGate)(request, opened, queued),
+                    ),
+                  )
+                : Effect.fail(
+                    new AskUserHostError({
+                      operation: "render",
+                      message: "Unable to render the user questionnaire.",
+                    }),
+                  ),
+            ),
+          );
         }),
       ),
       Effect.mapError(

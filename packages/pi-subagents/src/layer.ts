@@ -56,6 +56,7 @@ export interface SubagentLayerOptions {
   readonly publish: (projection: SubagentProjection) => void;
   readonly notify: (notification: SubagentNotification) => SubagentNotificationDelivery | undefined;
   readonly proxyHandler?: SubagentServiceOptions["proxyHandler"] | undefined;
+  readonly questionnaireHandler?: SubagentServiceOptions["questionnaireHandler"] | undefined;
 }
 
 export const makeSubagentLayer = (options: SubagentLayerOptions) => {
@@ -91,6 +92,7 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   const serviceOptions: SubagentServiceOptions = {
     publish: options.publish,
     notify: options.notify,
+    ...(options.questionnaireHandler && { questionnaireHandler: options.questionnaireHandler }),
   };
   const service = SubagentService.layer(
     options.proxyHandler

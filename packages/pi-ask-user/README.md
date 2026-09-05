@@ -18,7 +18,7 @@ Restart pi after installation. If another questionnaire extension is installed, 
 - Markdown previews beside choices on wide terminals and stacked below them on narrow terminals.
 - A review step before answers are submitted.
 - RPC fallback through Pi's native `select` and `input` dialogs.
-- No tool registration in JSON or print modes where a user cannot answer.
+- No local questionnaire tool in ordinary JSON or print modes. Marked local and Herdr Pi children use a root relay instead.
 
 The extension never makes model calls and does not persist answers outside Pi's ordinary session history.
 
@@ -80,7 +80,7 @@ Cancellation returns `{ "outcome": "cancelled", "answers": [] }`; unsubmitted dr
 - `independentWork`: useful work the agent can do without the answers.
 - `blockedWork`: decisions or work that must wait for the answers.
 
-The tool immediately opens and focuses the questionnaire. It returns a pending `requestId` and stable `deliveryId` once the overlay is mounted, without waiting for an answer. The agent should then do only the declared independent work. Use blocking `ask_user` when no such work exists.
+With no earlier questionnaire, the tool opens and focuses the overlay and returns a pending `requestId` and stable `deliveryId` once it is mounted. Otherwise it returns `presentation: queued` immediately. The queued overlay opens automatically when earlier questionnaires and unrelated prompts close. Neither receipt is an answer, and queued admission does not acknowledge mounting. The agent should then do only the declared independent work. Use blocking `ask_user` when no such work exists.
 
 `ask_user_async_control` supports:
 
@@ -97,11 +97,17 @@ Submission and user cancellation normally arrive as a custom answer message usin
 
 Results remain available for recovery. The registry holds at most 16 requests. New admission evicts only delivered terminal results without an active waiter; failed or undelivered results stay retained. When no result is eligible for eviction, admission rejects instead. Delivery IDs stay unchanged across status and await results. `sent` means the public host call returned, not that the model acknowledged the answer. Pi's public sender returns `void`, so later host delivery failures cannot be detected here. A synchronous delivery failure is marked `failed` and retried at most twice, one second apart. Await recovery suppresses pending retries, and runtime shutdown cancels them. Either kind of failure can be recovered through status or await. Repeated delivery IDs refer to the same answer, not a new decision.
 
-There is one pending questionnaire per runtime. Async admission fails rather than queuing behind another questionnaire or an unrelated public UI prompt, and blocking `ask_user` rejects while an async questionnaire is pending. Blocking calls still serialize with each other.
+Blocking, async, and routed child questionnaires share a FIFO queue of at most 16 pending requests. Only one questionnaire is presented at a time. This limit is separate from the 16 retained async results. Cancelling a queued request settles its caller promptly, but its queue slot remains occupied until earlier requests close, preventing cancellation churn from growing background cleanup work. Full queues reject admission. Async admission still rejects unrelated public UI prompts; already queued requests wait for safe mounting.
 
 Shutdown, reload, session replacement, and tree navigation close the questionnaire and revoke its IDs. Nothing is restored as pending work. A small versioned delivery receipt is recorded in Pi's session history immediately before sending an answer. Historical answers with a receipt on the active branch remain conversation history. Stale queued messages without that branch evidence stay filtered from model context, including after further navigation or reload. Other extensions' queues are untouched.
 
 Async tools are TUI-only. RPC keeps the existing blocking `ask_user` behavior. The same hide/resume controls work in both TUI variants, without replacing or overwriting the main editor. Pi still counts a hidden custom dialog as an open UI prompt for status reporting.
+
+## Activity view and child questions
+
+Cosmic UI lists queued, open, hidden, and settled questionnaires in its unified activity view. You can resume a hidden questionnaire or confirm cancellation there. The overlay still opens automatically, so you never need to open the activity manager to answer. Hiding and resuming preserve drafts and the main editor. `/ask-user` remains available without Cosmic UI.
+
+Explicit blocking `ask_user` calls from local and Herdr Pi subagents route to the root UI. The root coordinator supplies authenticated run ownership, so those questions appear beneath the owning agent. Standalone questions stay at the root. Answers return to the requesting child, never as root automatic answer messages. Run cancellation or session replacement cancels waiting or mounted requests. If a required child relay disappears, the tool fails instead of opening a child-local RPC dialog. Native Claude/Codex prompts and ordinary `contact_parent` questions are not redirected.
 
 ## TUI controls
 
@@ -113,7 +119,7 @@ Async tools are TUI-only. RPC keeps the existing blocking `ask_user` behavior. T
 - `n`: add or edit a note for the current question.
 - Pi's configured external-editor binding: edit a custom answer or note externally.
 - `b`: hide the questionnaire without losing state.
-- `/ask-user`: resume a hidden questionnaire.
+- `/ask-user` or activity Resume: resume a hidden questionnaire.
 - `Esc`: leave an editor or cancel the questionnaire.
 
 The overlay shows question/answer progress, live text limits, mode-specific controls, and the selected count for multi-select questions. Review highlights unanswered questions; activating the primary review action jumps to the next unanswered item before submission.

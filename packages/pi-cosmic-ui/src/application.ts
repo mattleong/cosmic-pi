@@ -58,6 +58,8 @@ import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
 import { WorkingTimerService, type WorkingTimerServiceContract } from "./working/service.ts";
 import { makeWorkingRunOwnerState } from "./working/owner.ts";
+import { ActivityService, type ActivityServiceContract } from "./activity/service.ts";
+import { makeActivityHost } from "./boundary/host-activity.ts";
 
 export interface CosmicUiApplicationDependencies {
   readonly shutdownHostUiTickers?: () => Promise<void>;
@@ -172,7 +174,7 @@ export function cosmicUiWithDependencies(
     CosmicUiApplication,
     never,
     CosmicUiRuntimeError,
-    WorkingTimerServiceContract
+    { readonly timer: WorkingTimerServiceContract; readonly activity: ActivityServiceContract }
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
@@ -183,6 +185,7 @@ export function cosmicUiWithDependencies(
           projection,
           protocolBuffer,
           requestRender,
+          activityHost,
         }),
         { agentDirectory: getAgentDir, packageName: "pi-cosmic-ui" },
       ),
@@ -190,11 +193,16 @@ export function cosmicUiWithDependencies(
       Effect.gen(function* () {
         yield* CosmicUiService;
         yield* FooterRegistryService;
-        return yield* WorkingTimerService;
+        return { timer: yield* WorkingTimerService, activity: yield* ActivityService };
       }),
     onActivated: ({ ctx, context, signal }, token, activeWorkingTimer) => {
       currentContext = context;
-      workingOwners.activate({ token, timer: activeWorkingTimer });
+      workingOwners.activate({ token, timer: activeWorkingTimer.timer });
+      callbacks.invoke(
+        "host-query",
+        () => activityHost.activate(ctx, activeWorkingTimer.activity),
+        undefined,
+      );
       footerInstallation.update(ctx);
       publishHostState();
       slot.fork(
@@ -206,6 +214,7 @@ export function cosmicUiWithDependencies(
       releaseSignal();
       if (currentContext === context) currentContext = undefined;
       workingOwners.deactivate(token);
+      activityHost.deactivate();
       footerInstallation.uninstall();
       publishHostState();
     },
@@ -217,6 +226,14 @@ export function cosmicUiWithDependencies(
         undefined,
       );
     },
+  });
+
+  const activityHost = makeActivityHost(pi, (effect, signal) => {
+    slot.fork(effect.pipe(Effect.ignore), signal);
+  });
+  pi.registerCommand("activity", {
+    description: "Browse session activity and actions",
+    handler: (_args, ctx) => runFrom(activityHost.open(ctx).pipe(Effect.ignore), ctx),
   });
 
   const runFrom = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, ctx: ExtensionContext) => {
