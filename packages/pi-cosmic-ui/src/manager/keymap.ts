@@ -76,7 +76,18 @@ const selectionMatch = (
 ): boolean =>
   matchesKey(data, key) || (allowConfigured && configuredMatch(data, id, matchesKeybinding));
 
-const SHARED_PRINTABLE_ACTIONS = new Set(["g", "G", "j", "k", "h", "l", "/", "q", "Q", "?"]);
+export const FULL_SCREEN_NAVIGATION_SHORTCUTS: ReadonlySet<string> = new Set([
+  "g",
+  "G",
+  "j",
+  "k",
+  "h",
+  "l",
+  "/",
+  "q",
+  "Q",
+  "?",
+]);
 
 /** Stateful, synchronous resolver for extension-owned full-screen navigation. */
 export class FullScreenKeymap {
@@ -93,7 +104,9 @@ export class FullScreenKeymap {
     const textOwnsPrintable =
       (mode === "search" || mode === "text-input") && printable !== undefined;
     const sharedActionOwnsPrintable =
-      mode === "navigation" && printable !== undefined && SHARED_PRINTABLE_ACTIONS.has(printable);
+      mode === "navigation" &&
+      printable !== undefined &&
+      FULL_SCREEN_NAVIGATION_SHORTCUTS.has(printable);
     if (
       (mode === "navigation" || mode === "confirmation") &&
       printable !== undefined &&

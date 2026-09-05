@@ -1,8 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import { framedFill, framedScreen, listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
-import type { ProfileSetPickerEntry } from "./profile-set-picker-model.ts";
+import {
+  qualifiedProfileSetLabel,
+  type ProfileSetPickerEntry,
+} from "./profile-set-picker-model.ts";
+import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 
 export interface ProfileSetPickerRenderState {
   readonly entries: ReadonlyArray<ProfileSetPickerEntry>;
@@ -28,15 +33,26 @@ export interface ProfileSetPickerRenderState {
 const windowStart = (length: number, selected: number, visible: number): number =>
   Math.max(0, Math.min(Math.max(0, length - visible), selected - Math.floor(visible / 2)));
 
-const footer = (state: ProfileSetPickerRenderState, width: number): string => {
+const footer = (
+  state: ProfileSetPickerRenderState,
+  width: number,
+  keybindingLabel: SearchableSelectHostOptions["keybindingLabel"],
+): string => {
+  const label = keybindingLabel ?? ((_id, fallback) => fallback);
+  const reserved = new Set(state.actionMenu || state.pendingDeleteLabel ? [] : ["/", "s", "u"]);
+  const confirm = filterReservedKeyLabel(label("tui.select.confirm", "Enter"), reserved, "Enter");
+  const cancel = filterReservedKeyLabel(label("tui.select.cancel", "Esc"), reserved, "Esc");
   if (state.pendingDeleteLabel)
-    return renderResponsiveManagerFooter(width, [["Enter Confirm · Esc Cancel"]]);
-  if (state.actionMenu) return renderResponsiveManagerFooter(width, [["Enter Choose · Esc Back"]]);
+    return renderResponsiveManagerFooter(width, [[`${confirm} Confirm · ${cancel} Cancel`]]);
+  if (state.actionMenu)
+    return renderResponsiveManagerFooter(width, [[`${confirm} Choose · ${cancel} Back`]]);
   if (state.searching)
-    return renderResponsiveManagerFooter(width, [["Type to filter · Enter Actions · Esc Clear"]]);
+    return renderResponsiveManagerFooter(width, [
+      [`Type to filter · ${confirm} Edit · ${cancel} Clear`],
+    ]);
   return renderResponsiveManagerFooter(width, [
-    ["Enter Actions", "s Save Current Session", "Esc Back"],
-    ["Enter", "s Save Current Session", "Esc"],
+    [`${confirm} Edit`, "u Use", "s Save Current Session", "? More", `${cancel} Back`],
+    [`${confirm} Edit`, "u Use", "? More", `${cancel} Back`],
   ]);
 };
 
@@ -69,8 +85,6 @@ const libraryRows = (
 ): ReadonlyArray<string> => {
   const header = [
     theme.fg("accent", theme.bold("Saved profile sets")),
-    theme.fg("muted", 'Saved sets stay separate until you choose "Use in Current Session".'),
-    theme.fg("accent", "s  Save Current Session as a new set"),
     ...(state.searching ? [theme.fg("muted", `Search /${state.query}`)] : []),
     ...(state.message
       ? [
@@ -84,8 +98,10 @@ const libraryRows = (
           ),
         ]
       : []),
+    theme.fg("muted", 'Saved sets stay separate until you choose "Use in Current Session".'),
+    theme.fg("accent", "s  Save Current Session as a new set"),
     "",
-  ];
+  ].slice(0, Math.max(0, height - 1));
   const logical: Array<{ readonly text: string; readonly entryIndex?: number }> = [];
   let scope: "project" | "global" | undefined;
   for (let index = 0; index < state.entries.length; index += 1) {
@@ -122,7 +138,11 @@ const libraryRows = (
 
 export const renderProfileSetPicker = (
   state: ProfileSetPickerRenderState,
-  options: { readonly theme: Theme; readonly width: number; readonly height: number },
+  options: Pick<SearchableSelectHostOptions, "keybindingLabel"> & {
+    readonly theme: Theme;
+    readonly width: number;
+    readonly height: number;
+  },
 ): string[] => {
   const width = Math.max(0, Math.floor(options.width));
   const height = Math.max(0, Math.floor(options.height));
@@ -132,7 +152,7 @@ export const renderProfileSetPicker = (
   const frame = listDetailFrame(theme);
   const inner = width - 2;
   const title = truncateToWidth(" /subagents profiles › Profile sets ", inner, "");
-  const bottom = truncateToWidth(footer(state, inner), inner, "");
+  const bottom = truncateToWidth(footer(state, inner, options.keybindingLabel), inner, "");
   return framedScreen(frame, {
     width,
     height,
@@ -143,7 +163,7 @@ export const renderProfileSetPicker = (
         ? [
             theme.fg("warning", theme.bold(`Delete ${state.pendingDeleteLabel}?`)),
             theme.fg("warning", "This deletes the saved set. Current Session will not change."),
-            theme.fg("warning", "Enter confirms · Esc cancels"),
+            theme.fg("warning", footer(state, inner, options.keybindingLabel)),
           ]
         : state.actionMenu
           ? menuRows(state, theme, bodyHeight)
@@ -165,11 +185,14 @@ export const renderProfileSetPicker = (
           : state.actionMenu
             ? compactMenu
             : [
-                ...(state.projectTrusted === false
-                  ? [theme.fg("warning", "Trust this project to view its saved profile sets")]
-                  : []),
-                rows.find((row) => visibleWidth(row) > 0) ?? "Saved profile sets",
-                theme.fg("dim", "Enter Actions · s Save Current Session · Esc Back"),
+                (() => {
+                  const entry = state.entries[state.selectedIndex];
+                  return entry
+                    ? `> ${entry.kind === "set" ? qualifiedProfileSetLabel(entry.ref) : entry.label}`
+                    : "No saved sets";
+                })(),
+                ...(state.message ? [state.message.text] : []),
+                theme.fg("dim", footer(state, inner, options.keybindingLabel)),
               ];
         return framedFill(frame, safety.slice(0, bodyHeight), bodyHeight, inner);
       }

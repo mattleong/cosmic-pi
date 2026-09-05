@@ -118,7 +118,7 @@ const settle = (): Promise<void> =>
   Effect.runPromise(Effect.yieldNow.pipe(Effect.andThen(Effect.yieldNow)));
 
 const openFields = (component: ProfileWorkspaceComponent): void => {
-  component.handleInput("\r");
+  component.handleInput("f");
   component.handleInput("\r");
 };
 
@@ -158,7 +158,10 @@ const modelEditor = (count = 3) => {
   );
   openFields(component);
   const selectField = (field: ProfileWorkspaceField): void => {
-    const rows = candidateFieldRows(original[0]!, "generalist");
+    const rows = candidateFieldRows(original[0]!, "generalist", "high", undefined, false, {
+      index: 0,
+      count: candidates.length,
+    });
     const index = rows.findIndex((row) => row.field === field);
     if (index < 0) throw new Error(`Missing field ${field}`);
     component.handleInput("g");
@@ -230,11 +233,13 @@ describe("direct profile model actions", () => {
   );
 
   effectTest(
-    "keeps single-model moves inert and disables the profile only after confirmed deletion",
+    "omits single-model moves and disables the profile only after confirmed deletion",
     function* () {
       const editor = modelEditor(1);
-      editor.selectField("move-up");
-      editor.selectField("move-down");
+      const fields = candidateFieldRows(editor.original[0]!, "generalist").map((row) => row.field);
+      expect(fields).not.toContain("move-up");
+      expect(fields).not.toContain("move-down");
+      expect(fields).toContain("remove");
       editor.selectField("remove");
       expect(editor.saveDraft).not.toHaveBeenCalled();
       editor.component.handleInput("\r");
@@ -248,6 +253,28 @@ describe("direct profile model actions", () => {
 });
 
 describe("profile workspace navigation", () => {
+  it("honors configured confirmation and cancellation without bypassing the warning", () => {
+    const saveDraft = vi.fn(() => Promise.resolve({ inspection: makeInspection() }));
+    const component = new ProfileWorkspaceComponent(
+      baseOptions({
+        saveDraft,
+        matchesKeybinding: (data, id) =>
+          (id === "tui.select.confirm" && data === "\u0018") ||
+          (id === "tui.select.cancel" && data === "\u0014"),
+      }),
+    );
+    chooseDisable(component);
+    component.handleInput("\u0014");
+    expect(saveDraft).not.toHaveBeenCalled();
+    chooseDisable(component);
+    expect(saveDraft).not.toHaveBeenCalled();
+    component.handleInput("\u0018");
+    expect(saveDraft).toHaveBeenCalledWith({ kind: "session" }, "generalist", {
+      kind: "disabled",
+      candidates: [],
+    });
+  });
+
   it("opens the saved-set library from p and preserves the selected profile", () => {
     const close = vi.fn();
     const component = new ProfileWorkspaceComponent(
@@ -256,7 +283,9 @@ describe("profile workspace navigation", () => {
 
     component.handleInput("p");
 
-    expect(close).toHaveBeenCalledWith({ action: "sets", profile: "planner" });
+    expect(close).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "sets", profile: "planner" }),
+    );
   });
 
   it("does not expose numeric scope switching", () => {

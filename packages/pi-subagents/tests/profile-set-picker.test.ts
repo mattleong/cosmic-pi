@@ -156,22 +156,21 @@ describe("saved profile-set library", () => {
     expect(entries[0]).toMatchObject({ kind: "scope-note", key: "project:locked" });
 
     const picker = makePicker({ projectTrusted: false, initialScope: "project" });
+    picker.component.handleInput("g");
+    picker.component.handleInput("g");
     picker.component.handleInput("\r");
     expect(picker.close).not.toHaveBeenCalled();
   });
 
   it("emits Use, Edit, and Make default as distinct actions", () => {
     const use = makePicker();
-    use.component.handleInput("\r");
-    use.component.handleInput("\r");
+    use.component.handleInput("u");
     expect(use.close).toHaveBeenCalledWith({
       action: "use-current",
       target: { scope: "global", name: "gold" },
     });
 
     const edit = makePicker();
-    edit.component.handleInput("\r");
-    edit.component.handleInput("j");
     edit.component.handleInput("\r");
     expect(edit.close).toHaveBeenCalledWith({
       action: "edit",
@@ -180,9 +179,7 @@ describe("saved profile-set library", () => {
 
     const makeDefault = makePicker();
     makeDefault.component.handleInput("k");
-    makeDefault.component.handleInput("\r");
-    makeDefault.component.handleInput("j");
-    makeDefault.component.handleInput("j");
+    makeDefault.component.handleInput("?");
     makeDefault.component.handleInput("\r");
     expect(makeDefault.close).toHaveBeenCalledWith({
       action: "make-default",
@@ -192,9 +189,7 @@ describe("saved profile-set library", () => {
 
   it("clears a scope default before its selected set can be deleted", () => {
     const picker = makePicker({ initialScope: "project" });
-    picker.component.handleInput("\r");
-    picker.component.handleInput("j");
-    picker.component.handleInput("j");
+    picker.component.handleInput("?");
     picker.component.handleInput("\r");
 
     expect(picker.close).toHaveBeenCalledWith({
@@ -210,6 +205,30 @@ describe("saved profile-set library", () => {
     );
 
     expect(partial).toMatchObject({ invalid: true, repairable: true, invalidProfileCount: 1 });
+  });
+
+  it("blocks Use for invalid sets without preventing repair", () => {
+    const picker = makePicker({ value: invalidInspection(), projectTrusted: false });
+    picker.component.handleInput("u");
+    expect(picker.close).not.toHaveBeenCalled();
+    picker.component.handleInput("\r");
+    expect(picker.close).toHaveBeenCalledWith({
+      action: "edit",
+      target: { scope: "global", name: "broken" },
+    });
+  });
+
+  it("cancels More without changing the selected set", () => {
+    const picker = makePicker();
+    picker.component.handleInput("?");
+    picker.component.handleInput("j");
+    picker.component.handleInput("\u001b");
+    expect(picker.close).not.toHaveBeenCalled();
+    picker.component.handleInput("\r");
+    expect(picker.close).toHaveBeenCalledWith({
+      action: "edit",
+      target: { scope: "global", name: "gold" },
+    });
   });
 
   it("routes an invalid but repairable set to editing", () => {
@@ -255,8 +274,8 @@ describe("saved profile-set library", () => {
   it("requires a separate confirmation before deletion", () => {
     const picker = makePicker();
     picker.component.handleInput("k");
-    picker.component.handleInput("\r");
-    for (let index = 0; index < 5; index += 1) picker.component.handleInput("j");
+    picker.component.handleInput("?");
+    for (let index = 0; index < 3; index += 1) picker.component.handleInput("j");
     picker.component.handleInput("\r");
     expect(picker.close).not.toHaveBeenCalled();
     picker.component.handleInput("\x1b[13;1:2u");
@@ -294,6 +313,19 @@ describe("saved profile-set library", () => {
     picker.component.handleInput("\r");
 
     expect(picker.close).not.toHaveBeenCalled();
+  });
+
+  it.each([5, 6, 7, 8, 9])("keeps the search selection visible at height %s", (height) => {
+    const picker = makePicker({ height });
+    picker.component.handleInput("/");
+    picker.component.handleInput("c");
+    picker.component.handleInput("\u001b[B");
+    const rendered = picker.component.render(120).join("\n");
+    picker.component.handleInput("\r");
+    const action = picker.close.mock.calls[0]?.[0];
+    expect(action?.action).toBe("edit");
+    if (action?.action !== "edit") throw new Error("Expected an editable search selection");
+    expect(rendered).toContain(action.target.name);
   });
 
   it("ignores input and rendering after disposal", () => {

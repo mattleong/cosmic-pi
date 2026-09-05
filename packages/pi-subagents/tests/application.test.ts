@@ -449,7 +449,6 @@ describe("subagent Pi registration", () => {
       registerFreshApplication();
 
       let component: Component | undefined;
-      let closeOverlay: ((value: boolean) => void) | undefined;
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const theme = {
         fg: (_color: string, text: string) => text,
@@ -460,7 +459,6 @@ describe("subagent Pi registration", () => {
         confirm: vi.fn().mockResolvedValue(false),
         custom: vi.fn((factory: (...args: unknown[]) => Component) => {
           const closed = deferred<boolean>();
-          closeOverlay = closed.resolve;
           component = factory(
             { terminal: { rows: 24 }, requestRender: vi.fn() },
             theme,
@@ -514,21 +512,27 @@ describe("subagent Pi registration", () => {
       };
 
       yield* settle(() => handlers.get("session_start")?.({ reason: "startup" }, ctx));
-      const editing = command?.("profiles", ctx) ?? Promise.resolve();
+      let editorClosed = false;
+      const editing = (command?.("profiles", ctx) ?? Promise.resolve()).then(() => {
+        editorClosed = true;
+      });
       yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
-      component?.handleInput?.("\r");
-      component?.handleInput?.("\r");
-      for (let index = 0; index < 5; index += 1) component?.handleInput?.("j");
-      component?.handleInput?.("\r");
+      component?.handleInput?.("a"); // Open the original Actions menu directly.
       for (let index = 0; index < 3; index += 1) component?.handleInput?.("j");
-      component?.handleInput?.("\r");
-      component?.handleInput?.("\r");
+      component?.handleInput?.("\r"); // Select Disable.
+      component?.handleInput?.("\r"); // Confirm.
       yield* step(() =>
         vi.waitFor(() =>
           Effect.runPromise(hasSessionOverride(ctx)).then((value) => expect(value).toBe(true)),
         ),
       );
-      closeOverlay?.(false);
+      // The session mutation can be visible before the editor finishes refreshing after save.
+      yield* step(() =>
+        vi.waitFor(() => {
+          component?.handleInput?.("\u001b");
+          expect(editorClosed).toBe(true);
+        }),
+      );
       yield* step(() => editing);
 
       yield* settle(() => handlers.get("session_tree")?.({}, ctx));

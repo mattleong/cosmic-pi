@@ -122,6 +122,8 @@ export interface ModelPickerPageOptions<
   readonly scopedModels: ReadonlyArray<M>;
   readonly allModels?: ReadonlyArray<M> | undefined;
   readonly initialScope?: ModelPickerScope | undefined;
+  /** Start ready to type; Escape cancels directly instead of leaving search first. */
+  readonly initialSearchMode?: boolean | undefined;
   readonly current?: string | undefined;
   readonly notice?: string | undefined;
   readonly actions?: ReadonlyArray<ModelPickerAction> | undefined;
@@ -207,7 +209,8 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
       notice: this.options.notice,
       emptyText: "No matching models",
       initialQuery: search?.query,
-      initialSearchMode: search?.active,
+      initialSearchMode: search?.active ?? this.options.initialSearchMode,
+      cancelBehavior: this.options.initialSearchMode ? "close" : "clear-search",
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
       matchesKeybinding: this.options.matchesKeybinding,

@@ -71,7 +71,7 @@ export function createProfileModelChoices(input: {
             ),
             description: sanitizeTerminalLine(
               canonical
-                ? `${input.parentModel?.name ? `${boundedMiddle(sanitizeTerminalLine(input.parentModel.name), 48)} · ` : ""}current Pi model · ${input.parentModel?.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts?.join(", ") || "none"}`
+                ? `${input.parentModel?.name ? `${boundedMiddle(sanitizeTerminalLine(input.parentModel.name), 48)} · ` : ""}${input.parentModel?.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts?.join(", ") || "none"}`
                 : "Use the current Pi model when this run starts",
             ),
           },
@@ -121,6 +121,14 @@ export function createProfileModelChoices(input: {
   return result;
 }
 
+const nativeModelStatus = (model: NativeRuntimeModel, currentSelector: string): string => {
+  const labels = [
+    model.isDefault ? "default" : undefined,
+    model.selector === currentSelector ? "current" : undefined,
+  ].filter((label) => label !== undefined);
+  return labels.length ? ` · ${labels.join(", ")}` : "";
+};
+
 export const createNativeModelChoices = (
   models: ReadonlyArray<NativeRuntimeModel>,
   currentSelector: string,
@@ -132,10 +140,10 @@ export const createNativeModelChoices = (
       item: compactSelectItem(
         model.selector,
         sanitizeTerminalLine(
-          `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
+          `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${nativeModelStatus(model, currentSelector)}`,
         ),
         sanitizeTerminalLine(
-          `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}${model.isDefault ? "default model · " : ""}reasoning levels: ${model.supportedEfforts.join(", ") || "default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
+          `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}reasoning levels: ${model.supportedEfforts.join(", ") || "default"}${model.supportedServiceTiers.includes(FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
         ),
       ),
       searchText: sanitizeTerminalLine(
@@ -199,6 +207,12 @@ export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOption
     scopedModels: options.scopedChoices ? projectPickerChoices(options.scopedChoices) : [],
     allModels: projectPickerChoices(options.choices),
     current: options.initialSelection,
+    initialSearchMode: true,
+    initialScope: options.scopedChoices?.some(
+      (choice) => choiceValue(choice.choice) === options.initialSelection,
+    )
+      ? "scoped"
+      : "all",
     notice: options.notice,
     getHeight: options.getHeight,
     requestRender: options.requestRender,

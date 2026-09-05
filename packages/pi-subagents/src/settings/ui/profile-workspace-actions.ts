@@ -216,6 +216,7 @@ export const profileWorkspaceConfirmation = (input: {
 }): ProfileWorkspaceConfirmation => {
   if (input.action === "remove")
     return {
+      preview: input.currentSummary ? [input.currentSummary] : undefined,
       title: `Remove ${input.candidateIndex === 0 ? "Primary" : `Fallback ${input.candidateIndex}`} from ${input.profile}?`,
       detail:
         input.candidateCount === 1

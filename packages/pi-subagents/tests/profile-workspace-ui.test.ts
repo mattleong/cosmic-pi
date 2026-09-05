@@ -137,6 +137,40 @@ const expectBounded = (lines: ReadonlyArray<string>, width: number, height: numb
 };
 
 describe("profile workspace state projection", () => {
+  it("keeps the focused model visible after successful saves on short terminals", () => {
+    for (const height of [4, 5, 6, 8]) {
+      const lines = render(
+        { pane: "fields", message: { kind: "success", text: "Saved" } },
+        80,
+        height,
+      );
+      expectBounded(lines, 80, height);
+      expect(lines.join("\n")).toContain(route[0]!.model);
+    }
+  });
+
+  it("cancels profile search once without selecting or changing the current profile", () => {
+    for (const initialQuery of ["", "worker"]) {
+      const cancel = vi.fn();
+      const select = vi.fn();
+      const search = makeProfileSearchSelector({
+        theme,
+        inspection: inspection(),
+        current: "scout",
+        parentEffort: "high",
+        target: { kind: "session" },
+        initialQuery,
+        getHeight: () => 24,
+        requestRender: vi.fn(),
+        cancel,
+        select,
+      });
+      search.handleInput("\u001b");
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(select).not.toHaveBeenCalled();
+    }
+  });
+
   it("offers every supported host and runtime combination", () => {
     expect(
       candidateFieldChoices(routeOption("openai/primary"), "runWith", {}).map(

@@ -46,7 +46,8 @@ const SHIFT_LABEL_PREFIX = "⇧";
  * Drops configured key labels that collide with screen-reserved printable actions, so hints
  * never advertise a reserved shortcut as movement. Bare printable labels ("m") and
  * shift-modified printable labels ("⇧J") are matched against their effective printable
- * (case-sensitively, mirroring the keymap's reserved-key check). A label that is exactly the
+ * (case-sensitively, mirroring the keymap's reserved-key check). Named labels such as Space
+ * can also be reserved. A label that is exactly the
  * "/" key is treated as that printable. Multi-key labels that contain a "/" key cannot be
  * distinguished from the "/" separators of this display representation without an API
  * redesign, so such labels are deliberately returned unchanged instead of being parsed
@@ -62,9 +63,19 @@ export const filterReservedKeyLabel = (
   // An empty segment means a literal "/" key inside a multi-key label; deferred as ambiguous.
   if (parts.some((part) => part.length === 0)) return label;
   const collides = (part: string): boolean =>
-    (part.length === 1 && reservedKeys.has(part)) ||
+    reservedKeys.has(part) ||
     (part.length === 2 &&
       part.startsWith(SHIFT_LABEL_PREFIX) &&
       reservedKeys.has(part.slice(SHIFT_LABEL_PREFIX.length)));
   return parts.filter((part) => !collides(part)).join("/") || fallback;
 };
+
+// Text input owns printable keys even when they are configured as selection bindings.
+const TEXT_INPUT_KEY_LABELS = new Set([
+  ...Array.from({ length: 95 }, (_, index) => String.fromCharCode(index + 32)),
+  "Space",
+  "⇧Space",
+]);
+
+export const filterTextInputKeyLabel = (label: string, fallback: string): string =>
+  filterReservedKeyLabel(label, TEXT_INPUT_KEY_LABELS, fallback);

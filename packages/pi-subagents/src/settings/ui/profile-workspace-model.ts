@@ -264,22 +264,26 @@ export const candidateFieldRows = (
   return [
     ...essential,
     ...(advancedExpanded ? advanced : []),
-    {
-      field: "move-up",
-      label: "Move up",
-      value: "earlier in fallback order",
-      fixed: position.index === 0,
-      ...(position.index === 0 && { fixedReason: "This model is already Primary." }),
-    },
-    {
-      field: "move-down",
-      label: "Move down",
-      value: "later in fallback order",
-      fixed: position.index >= position.count - 1,
-      ...(position.index >= position.count - 1 && {
-        fixedReason: "This model is already last in the fallback order.",
-      }),
-    },
+    ...(position.count > 1
+      ? [
+          {
+            field: "move-up" as const,
+            label: "Move up",
+            value: "earlier in fallback order",
+            fixed: position.index === 0,
+            ...(position.index === 0 && { fixedReason: "This model is already Primary." }),
+          },
+          {
+            field: "move-down" as const,
+            label: "Move down",
+            value: "later in fallback order",
+            fixed: position.index >= position.count - 1,
+            ...(position.index >= position.count - 1 && {
+              fixedReason: "This model is already last in the fallback order.",
+            }),
+          },
+        ]
+      : []),
     {
       field: "remove",
       label: "Delete model",
@@ -357,9 +361,7 @@ export const candidateFieldChoices = (
       {
         value: "default",
         label: effectiveDefault ? `${effectiveDefault} (profile default)` : "Profile default",
-        description: effectiveDefault
-          ? `Use the profile default reasoning level, currently ${effectiveDefault}`
-          : "Use the profile's default reasoning level",
+        description: "Follow the profile's default reasoning level instead of pinning an override.",
       },
       ...runtimeEfforts(candidate.runtime, options.supportedEfforts).map((effort) => ({
         value: effort,

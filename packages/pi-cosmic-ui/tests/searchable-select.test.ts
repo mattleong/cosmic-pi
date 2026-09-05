@@ -47,10 +47,51 @@ const page = (height = 14, notice?: string) => {
   const component = new SearchableSelectPage<string>(
     notice ? { ...baseOptions, notice } : baseOptions,
   );
-  return { component, select };
+  return { component, select, options: baseOptions };
 };
 
 describe("searchable selector state", () => {
+  it("closes opt-in search on one cancel without selecting a value", () => {
+    for (const initialQuery of ["", "two"]) {
+      for (const input of ["\u001b", "\u0003"]) {
+        const fixture = page();
+        const component = new SearchableSelectPage({
+          ...fixture.options,
+          initialSearchMode: true,
+          initialQuery,
+          cancelBehavior: "close",
+          matchesKeybinding: (data, id) => id === "tui.select.cancel" && data === "\u0003",
+        });
+        component.handleInput(input);
+        expect(fixture.options.cancel).toHaveBeenCalledTimes(1);
+        expect(fixture.select).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("keeps printable selection bindings as search text", () => {
+    for (const input of ["x", "X", " "]) {
+      for (const binding of [
+        "tui.select.up",
+        "tui.select.down",
+        "tui.select.confirm",
+        "tui.select.cancel",
+      ]) {
+        const fixture = page();
+        const component = new SearchableSelectPage({
+          ...fixture.options,
+          initialSearchMode: true,
+          cancelBehavior: "close",
+          matchesKeybinding: (data, id) => id === binding && data === input,
+        });
+        component.handleInput(input);
+        expect(component.searchState.query).toBe(input);
+        expect(fixture.options.cancel).not.toHaveBeenCalled();
+        expect(fixture.select).not.toHaveBeenCalled();
+      }
+    }
+  });
+
   it("preserves stable selection through detail toggles and a cleared filter", () => {
     const moved = page();
     moved.component.handleInput("\u001b[B");

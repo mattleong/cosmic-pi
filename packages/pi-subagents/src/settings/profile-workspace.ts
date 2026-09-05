@@ -4,6 +4,7 @@ import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import { FullScreenKeymap, pageSteps } from "pi-cosmic-ui/manager/keymap";
 import {
   PROFILE_IDS,
+  MAX_PROFILE_CANDIDATES,
   sameProfileCandidate,
   type ProfileCandidate,
   type ProfileId,
@@ -11,6 +12,8 @@ import {
 import type { SubagentEffort } from "../domain/routing.ts";
 import {
   declaredRouteForDraft,
+  addRouteCandidate,
+  defaultRouteCandidate,
   hasOwnProfileRouteDeclaration,
   inheritProjectDraft,
   inheritSessionDraft,
@@ -35,6 +38,7 @@ import {
   profileRouteDraftSummary,
   targetProfileRouteDraft,
   type ProfileWorkspacePane,
+  type ProfileWorkspaceField,
   type SelectableCandidateField,
 } from "./ui/profile-workspace-model.ts";
 import {
@@ -43,6 +47,7 @@ import {
   type ProfileWorkspaceDraftAction,
 } from "./ui/profile-workspace-actions.ts";
 import { renderProfileWorkspace } from "./ui/profile-workspace-render.ts";
+import { PROFILE_WORKSPACE_SHORTCUTS } from "./ui/profile-workspace-keys.ts";
 import {
   makeCandidateFieldSelector,
   makeProfileSearchSelector,
@@ -62,7 +67,14 @@ export type ProfileWorkspaceSaveResult =
 
 export type ProfileWorkspaceCloseResult =
   | false
-  | { readonly action: "sets"; readonly profile: ProfileId };
+  | {
+      readonly action: "sets" | "select-target" | "save-session" | "use-current";
+      readonly profile: ProfileId;
+      readonly field?: ProfileWorkspaceField | undefined;
+      readonly candidateIndex?: number | undefined;
+      readonly pane?: ProfileWorkspacePane | undefined;
+      readonly advancedExpanded?: boolean | undefined;
+    };
 
 export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
@@ -70,6 +82,10 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly projectTrusted: boolean;
   readonly target: ProfileWorkspaceTarget;
   readonly initialProfile?: ProfileId | undefined;
+  readonly initialField?: ProfileWorkspaceField | undefined;
+  readonly initialCandidateIndex?: number | undefined;
+  readonly initialFocus?: ProfileWorkspacePane | undefined;
+  readonly initialAdvancedExpanded?: boolean | undefined;
   readonly preferredPiModel: () => string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
@@ -111,6 +127,15 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private candidateIndex = 0;
   private fieldIndex = 0;
   private advancedExpanded = false;
+  private addingCandidate = false;
+  private readonly selections = new Map<
+    ProfileId,
+    {
+      candidateIndex: number;
+      field: ProfileWorkspaceField;
+      advancedExpanded: boolean;
+    }
+  >();
   private optimisticDraft: ProfileRouteDraft | undefined;
   private optimisticProfile: ProfileId | undefined;
   private busy = false;
@@ -130,7 +155,11 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.inspection = options.inspection;
     this.scope = profileWorkspaceScope(options.target);
     this.profileIndex = Math.max(0, PROFILE_IDS.indexOf(options.initialProfile ?? "generalist"));
+    this.candidateIndex = options.initialCandidateIndex ?? 0;
+    this.pane = options.initialFocus ?? "profiles";
+    this.advancedExpanded = options.initialAdvancedExpanded ?? false;
     this.reconcile();
+    this.selectField(options.initialField ?? "model");
   }
 
   get focused(): boolean {
@@ -190,10 +219,35 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.message = { kind, text };
   }
 
+  private rememberSelection(): void {
+    this.selections.set(this.profile(), {
+      candidateIndex: this.candidateIndex,
+      field: this.rows()[this.fieldIndex]?.field ?? "model",
+      advancedExpanded: this.advancedExpanded,
+    });
+  }
+
+  private selectField(field: ProfileWorkspaceField): void {
+    if (["context", "openaiFastMode", "closeOnReport"].includes(field))
+      this.advancedExpanded = true;
+    this.fieldIndex = Math.max(
+      0,
+      this.rows().findIndex((row) => row.field === field),
+    );
+  }
+
+  private selectCandidate(index: number): void {
+    const field = this.rows()[this.fieldIndex]?.field ?? "model";
+    this.candidateIndex = Math.max(0, Math.min(this.draft().candidates.length - 1, index));
+    this.selectField(field);
+  }
+
   private resetSelectionForProfile(): void {
-    this.candidateIndex = 0;
-    this.fieldIndex = 0;
-    this.advancedExpanded = false;
+    const selection = this.selections.get(this.profile());
+    this.candidateIndex = selection?.candidateIndex ?? 0;
+    this.advancedExpanded = selection?.advancedExpanded ?? false;
+    this.reconcile();
+    this.selectField(selection?.field ?? "model");
     this.pendingAction = undefined;
     this.message = undefined;
   }
@@ -203,6 +257,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     description: string,
     preferredCandidateIndex = this.candidateIndex,
     optimisticDraft: ProfileRouteDraft = next,
+    successNotice?: string,
   ): void {
     if (this.busy) return;
     if (this.refreshBlocked) {
@@ -220,9 +275,11 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       return;
     }
     const profile = this.profile();
+    const field = this.rows()[this.fieldIndex]?.field ?? "model";
     this.optimisticDraft = optimisticDraft;
     this.optimisticProfile = profile;
     this.candidateIndex = preferredCandidateIndex;
+    this.selectField(field);
     this.busy = true;
     this.pendingAction = undefined;
     this.setMessage(
@@ -244,11 +301,11 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           this.optimisticDraft = undefined;
           this.optimisticProfile = undefined;
           this.setMessage(
-            result.conflictMessage ? "warning" : "success",
-            result.conflictMessage ??
-              `Saved ${targetSaveLabel(this.options.target)} · ${profile} · ${description}`,
+            result.conflictMessage ? "warning" : successNotice ? "info" : "success",
+            result.conflictMessage ?? (successNotice ? `Saved · ${successNotice}` : "Saved"),
           );
         }
+        this.selectField(field);
         this.renderSoon();
       })
       .catch((error) => {
@@ -266,8 +323,26 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private applyCandidateUpdate(update: CandidateUpdate | undefined, description: string): void {
     if (!update) return;
     if (update.error || !update.candidate) {
+      this.addingCandidate = false;
       this.setMessage("warning", update.error ?? "That change could not be applied.");
       this.renderSoon();
+      return;
+    }
+    if (this.addingCandidate) {
+      this.addingCandidate = false;
+      const draft = this.draft();
+      const next = addRouteCandidate(draft, update.candidate);
+      if (next) {
+        this.pane = "fields";
+        this.fieldIndex = 0;
+        this.persist(
+          next,
+          "Candidate added",
+          draft.candidates.length,
+          next,
+          update.notices.join(" "),
+        );
+      }
       return;
     }
     const current = this.draft().candidates[this.candidateIndex];
@@ -276,11 +351,8 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.renderSoon();
       return;
     }
-    const notice = update.notices.length > 0 ? ` · ${update.notices.join(" ")}` : "";
-    this.persist(
-      replaceRouteCandidate(this.draft(), this.candidateIndex, update.candidate),
-      `${description}${notice}`,
-    );
+    const next = replaceRouteCandidate(this.draft(), this.candidateIndex, update.candidate);
+    this.persist(next, description, this.candidateIndex, next, update.notices.join(" "));
   }
 
   private beginCatalogLoad(message: string): AbortController {
@@ -304,6 +376,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     if (!controller) return;
     this.catalogLoad = undefined;
     this.busy = false;
+    this.addingCandidate = false;
     controller.abort();
     this.setMessage("info", "Stopped loading models.");
     this.renderSoon();
@@ -345,8 +418,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         if (
           field === "runWith" &&
           update.candidate &&
-          update.candidate.runtime !== candidate.runtime &&
-          update.candidate.runtime !== "pi"
+          update.candidate.runtime !== candidate.runtime
         ) {
           this.openModelPicker(
             update.candidate,
@@ -437,13 +509,18 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     description = "Model changed",
     priorNotices: ReadonlyArray<string> = [],
   ): void {
-    const candidateIndex = this.candidateIndex;
-    const controller = this.beginCatalogLoad("Loading models…");
+    const candidateIndex = this.addingCandidate
+      ? this.draft().candidates.length
+      : this.candidateIndex;
+    const controller = this.beginCatalogLoad(
+      this.addingCandidate ? "Choose a model for the new fallback…" : "Loading models…",
+    );
     void this.options
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
         if (!this.finishCatalogLoad(controller)) return;
         if (picker.choices.length === 0) {
+          this.addingCandidate = false;
           this.setMessage(
             "warning",
             picker.warning ?? "No models are available for this selection.",
@@ -466,7 +543,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           keybindingLabel: this.options.keybindingLabel,
           select: (choice: ProfileModelChoice) => {
             this.modelPicker = undefined;
-            this.candidateIndex = candidateIndex;
+            if (!this.addingCandidate) this.candidateIndex = candidateIndex;
             const update = updateCandidateFromModelChoice(candidate, picker, choice);
             this.applyCandidateUpdate(
               update.candidate
@@ -477,6 +554,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
           },
           cancel: () => {
             this.modelPicker = undefined;
+            this.addingCandidate = false;
             this.setMessage(
               "info",
               preferAdvertisedDefault
@@ -494,6 +572,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       })
       .catch((error) => {
         if (!this.finishCatalogLoad(controller)) return;
+        this.addingCandidate = false;
         this.setMessage("error", error instanceof Error ? error.message : "Could not load models.");
         this.renderSoon();
       });
@@ -513,9 +592,10 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       keybindingLabel: this.options.keybindingLabel,
       select: (profile: ProfileId) => {
         this.selectPage = undefined;
+        this.rememberSelection();
         this.profileIndex = PROFILE_IDS.indexOf(profile);
         this.resetSelectionForProfile();
-        this.pane = "candidates";
+        this.pane = this.draft().candidates.length <= 1 ? "fields" : "candidates";
         this.renderSoon();
       },
       cancel: () => {
@@ -562,6 +642,23 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   }
 
   private performDraftAction(action: ProfileWorkspaceDraftAction): void {
+    if (action === "add") {
+      if (this.refreshBlocked || this.draft().candidates.length >= MAX_PROFILE_CANDIDATES) {
+        this.setMessage(
+          "warning",
+          this.refreshBlocked
+            ? "Close and reopen the editor before making changes."
+            : "The 32-candidate limit has been reached.",
+        );
+        this.renderSoon();
+        return;
+      }
+      this.addingCandidate = true;
+      this.openModelPicker(
+        this.draft().candidates[this.candidateIndex] ?? defaultRouteCandidate(this.profile()),
+      );
+      return;
+    }
     const result = applyProfileWorkspaceDraftAction({
       action,
       draft: this.draft(),
@@ -583,10 +680,6 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       this.setMessage("info", "No profile change was needed.");
       this.renderSoon();
     } else {
-      if (action !== "move-up" && action !== "move-down") {
-        this.fieldIndex = 0;
-        this.advancedExpanded = false;
-      }
       const restoringInvalidLowerRoute =
         action === "reset" && this.scope !== "global" && result.draft.kind === "invalid";
       this.persist(
@@ -665,38 +758,58 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.message = undefined;
     this.pendingAction = undefined;
     this.keymap.resetChord();
-    if (this.pane === "fields") this.pane = "candidates";
+    if (this.pane === "fields")
+      this.pane = this.draft().candidates.length <= 1 ? "profiles" : "candidates";
     else if (this.pane === "candidates") this.pane = "profiles";
     else this.options.close(false);
+    this.renderSoon();
   }
 
   private forward(): void {
     this.message = undefined;
-    if (this.pane === "profiles") this.pane = "candidates";
-    else if (this.pane === "candidates") {
-      this.pane = "fields";
-      this.fieldIndex = 0;
-      this.advancedExpanded = false;
-    } else this.openSelectedField();
+    if (this.pane === "profiles")
+      this.pane = this.draft().candidates.length <= 1 ? "fields" : "candidates";
+    else if (this.pane === "candidates") this.pane = "fields";
+    else this.openSelectedField();
     this.keymap.resetChord();
+    this.renderSoon();
   }
 
   /** Endpoint jumps set the raw pane index without clearing the message or resetting panes. */
   private moveToEndpoint(action: "first" | "last"): void {
     const last = action === "last";
-    if (this.pane === "profiles") this.profileIndex = last ? PROFILE_IDS.length - 1 : 0;
-    else if (this.pane === "candidates")
-      this.candidateIndex = last ? Math.max(0, this.draft().candidates.length - 1) : 0;
+    if (this.pane === "profiles") {
+      this.rememberSelection();
+      this.profileIndex = last ? PROFILE_IDS.length - 1 : 0;
+      this.resetSelectionForProfile();
+    } else if (this.pane === "candidates")
+      this.selectCandidate(last ? this.draft().candidates.length - 1 : 0);
     else this.fieldIndex = last ? Math.max(0, this.rows().length - 1) : 0;
   }
 
   /** One Shortcut press; returns whether it fully consumed the input. */
   private handleShortcutKey(key: string): boolean {
-    if (key === "p") {
-      this.options.close({ action: "sets", profile: this.profile() });
+    if (key === "p" || key === "s" || key === "t") {
+      this.options.close({
+        action: key === "p" ? "sets" : key === "s" ? "save-session" : "select-target",
+        profile: this.profile(),
+        candidateIndex: this.candidateIndex,
+        field: this.rows()[this.fieldIndex]?.field,
+        pane: this.pane,
+        advancedExpanded: this.advancedExpanded,
+      });
       return true;
     }
-    if (key === "/" && this.pane === "profiles") this.openProfileSearch();
+    if (key === "m" || key === "e" || key === "r") {
+      this.selectField(key === "m" ? "model" : key === "e" ? "effort" : "runWith");
+      this.pane = "fields";
+      this.openSelectedField();
+    } else if (key === "a") this.openActions();
+    else if (key === "+") this.performDraftAction("add");
+    else if (key === "f") this.pane = "candidates";
+    else if (key === "[" || key === "]")
+      this.selectCandidate(this.candidateIndex + (key === "[" ? -1 : 1));
+    else if (key === "/" && this.pane === "profiles") this.openProfileSearch();
     return false;
   }
 
@@ -740,7 +853,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
-      reservedKeys: new Set(["/", "p"]),
+      reservedKeys: PROFILE_WORKSPACE_SHORTCUTS,
     });
     if (!resolution) return;
     if (resolution._tag === "Shortcut") {
@@ -751,18 +864,14 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     const steps = pageSteps(this.options.getHeight() - 8);
     const move = (offset: number): void => {
       if (this.pane === "profiles") {
+        this.rememberSelection();
         this.profileIndex = Math.max(
           0,
           Math.min(PROFILE_IDS.length - 1, this.profileIndex + offset),
         );
         this.resetSelectionForProfile();
       } else if (this.pane === "candidates") {
-        this.candidateIndex = Math.max(
-          0,
-          Math.min(Math.max(0, this.draft().candidates.length - 1), this.candidateIndex + offset),
-        );
-        this.fieldIndex = 0;
-        this.advancedExpanded = false;
+        this.selectCandidate(this.candidateIndex + offset);
       } else {
         this.fieldIndex = Math.max(0, Math.min(this.rows().length - 1, this.fieldIndex + offset));
       }
@@ -796,8 +905,19 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         if (this.pane === "profiles") this.openProfileSearch();
         return false;
       case "help":
+        this.setMessage(
+          "info",
+          "m Model · e Reasoning · r Run with · a Actions · + Add fallback · f Fallbacks · [ / ] Previous/next candidate · p Saved sets · s Save session · t Editing target",
+        );
+        return true;
       case "next-pane":
+        if (this.pane === "fields") this.pane = "profiles";
+        else this.forward();
+        return true;
       case "previous-pane":
+        if (this.pane === "profiles") this.pane = "fields";
+        else this.back();
+        return true;
       case "pending-first":
         return true;
     }

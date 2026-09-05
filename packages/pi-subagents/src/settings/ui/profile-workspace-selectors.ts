@@ -94,7 +94,7 @@ export const makeCandidateFieldSelector = (
         value: choice.value,
         item: {
           value: choice.value,
-          label: `${choice.label}${choice.value === current ? " (current)" : ""}`,
+          label: choice.label,
           description: choice.description,
         },
         searchText: `${choice.value} ${choice.label} ${choice.description}`,
@@ -194,6 +194,7 @@ export const makeProfileSearchSelector = (
     }),
     current: options.current,
     initialSearchMode: true,
+    cancelBehavior: "close" as const,
     emptyText: "No matching profiles",
     getHeight: options.getHeight,
     requestRender: options.requestRender,

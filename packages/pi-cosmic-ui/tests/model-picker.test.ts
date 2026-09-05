@@ -40,6 +40,44 @@ describe("model picker projection", () => {
 });
 
 describe("ModelPickerPage", () => {
+  it("can opt into immediate typing without changing default navigation", () => {
+    const select = vi.fn();
+    const page = makeModelPickerPage({
+      theme,
+      scopedModels: [],
+      allModels: all,
+      initialSearchMode: true,
+      current: modelSelector(scoped[0]!),
+      getHeight: () => 14,
+      requestRender: vi.fn(),
+      select,
+      cancel: vi.fn(),
+    });
+    page.focused = true;
+    page.handleInput("claude");
+    page.handleInput("\r");
+    expect(select).toHaveBeenCalledWith(all[1]);
+  });
+
+  it("uses injected cancellation for immediate search without swallowing typed keys", () => {
+    const cancel = vi.fn();
+    const page = makeModelPickerPage({
+      theme,
+      scopedModels: scoped,
+      initialSearchMode: true,
+      getHeight: () => 14,
+      requestRender: vi.fn(),
+      select: vi.fn(),
+      cancel,
+      matchesKeybinding: (data, id) =>
+        id === "tui.select.cancel" && (data === "\u001b[17~" || data === "s"),
+    });
+    page.handleInput("s");
+    expect(cancel).not.toHaveBeenCalled();
+    page.handleInput("\u001b[17~");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("starts scoped and switches to all authenticated models with Tab", () => {
     const select = vi.fn();
     const page = makeModelPickerPage({

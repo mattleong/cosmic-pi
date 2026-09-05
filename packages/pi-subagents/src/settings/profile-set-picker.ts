@@ -35,7 +35,7 @@ export type ProfileSetPickerAction =
 
 export interface ProfileSetPickerOptions extends Pick<
   SearchableSelectHostOptions,
-  "getHeight" | "requestRender" | "matchesKeybinding"
+  "getHeight" | "requestRender" | "matchesKeybinding" | "keybindingLabel"
 > {
   readonly theme: Theme;
   readonly inspection: ProfileSettingsInspection;
@@ -80,30 +80,6 @@ const actionChoices = (entry: ActionableProfileSetPickerEntry): ReadonlyArray<Sa
         },
       ]
     : [
-        ...(!entry.invalid
-          ? [
-              {
-                action: "use-current" as const,
-                label: "Use in Current Session",
-                description: "Copy all seven profiles into Current Session",
-                enabled: true,
-              },
-            ]
-          : []),
-        {
-          action: "edit",
-          label:
-            entry.invalid && !entry.repairable
-              ? "Cannot edit"
-              : entry.invalid
-                ? "Fix invalid profiles"
-                : "Edit saved set",
-          description:
-            entry.invalid && !entry.repairable
-              ? "This set has an invalid structure. Delete it and create a new set"
-              : "Edit this saved set. Current Session will not change",
-          enabled: !entry.invalid || entry.repairable,
-        },
         ...(entry.scopeDefault
           ? [
               {
@@ -203,6 +179,19 @@ export class ProfileSetPickerComponent implements Component {
       Math.min(Math.max(0, entries.length - 1), this.selectedIndex + offset),
     );
     this.message = undefined;
+  }
+
+  private activate(action: "edit" | "use-current"): void {
+    const entry = this.selected();
+    if (entry?.kind !== "set") {
+      this.openActions();
+      return;
+    }
+    if (entry.invalid && (action === "use-current" || !entry.repairable)) {
+      this.setMessage("warning", entry.description);
+      return;
+    }
+    this.options.close({ action, target: entry.ref });
   }
 
   private openActions(): void {
@@ -342,7 +331,7 @@ export class ProfileSetPickerComponent implements Component {
         this.searching = false;
         this.query = "";
         this.selectedIndex = this.allEntries.indexOf(selected);
-        this.openActions();
+        this.activate("edit");
         break;
       }
       case "quit":
@@ -383,7 +372,7 @@ export class ProfileSetPickerComponent implements Component {
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
-      reservedKeys: new Set(["/", "s"]),
+      reservedKeys: new Set(["/", "s", "u"]),
     });
     if (!resolution) return;
     if (resolution._tag === "Shortcut") {
@@ -392,6 +381,9 @@ export class ProfileSetPickerComponent implements Component {
         this.query = "";
         this.selectedIndex = 0;
         this.message = undefined;
+      } else if (resolution.key === "u") {
+        this.activate("use-current");
+        return;
       } else if (resolution.key === "s") {
         this.options.close({ action: "save-session", preferredScope: this.saveScope() });
         return;
@@ -412,7 +404,7 @@ export class ProfileSetPickerComponent implements Component {
         return;
       case "confirm":
       case "forward":
-        this.openActions();
+        this.activate("edit");
         return;
       case "search":
         this.searching = true;
@@ -420,6 +412,8 @@ export class ProfileSetPickerComponent implements Component {
         this.selectedIndex = 0;
         break;
       case "help":
+        this.openActions();
+        return;
       case "next-pane":
       case "previous-pane":
       case "pending-first":
@@ -474,6 +468,7 @@ export class ProfileSetPickerComponent implements Component {
       theme: this.options.theme,
       width,
       height: this.options.getHeight(),
+      keybindingLabel: this.options.keybindingLabel,
     });
   }
 

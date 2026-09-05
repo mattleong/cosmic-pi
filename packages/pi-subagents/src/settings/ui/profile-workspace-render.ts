@@ -39,6 +39,7 @@ import {
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
 import type { SettingsSelectKeybindingId } from "pi-cosmic-ui/manager/searchable-select";
+import { profileWorkspaceKeys, type ProfileWorkspaceKeys } from "./profile-workspace-keys.ts";
 
 export interface ProfileWorkspaceConfirmation {
   readonly title: string;
@@ -104,13 +105,14 @@ const confirmationNotices = (
   theme: Theme,
   width: number,
   height: number,
+  keys: ProfileWorkspaceKeys,
 ): ReadonlyArray<string> => {
   const title = wrapped(theme.fg("warning", theme.bold(`Confirm · ${confirmation.title}`)), width);
   const detail = wrapped(theme.fg("warning", confirmation.detail), width);
   const preview = (confirmation.preview ?? []).flatMap((line) =>
     wrapped(theme.fg("toolOutput", line), width),
   );
-  const hint = theme.fg("warning", "Enter confirms · Esc cancels");
+  const hint = theme.fg("warning", `${keys.confirm} confirms · ${keys.cancel} cancels`);
   const all = [...title, ...detail, ...preview, hint];
   const limit = Math.max(0, height);
   if (all.length <= limit) return all;
@@ -141,19 +143,19 @@ const notices = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
-  height = Number.POSITIVE_INFINITY,
+  height: number,
+  keys: ProfileWorkspaceKeys,
 ): ReadonlyArray<string> => {
   if (state.pendingConfirmation)
-    return confirmationNotices(state.pendingConfirmation, theme, width, height);
+    return confirmationNotices(state.pendingConfirmation, theme, width, height, keys);
+  if (state.message?.kind === "success") return [];
   if (state.message) {
     const color =
       state.message.kind === "error"
         ? "error"
         : state.message.kind === "warning"
           ? "warning"
-          : state.message.kind === "success"
-            ? "success"
-            : "muted";
+          : "muted";
     return wrapped(
       theme.fg(color, `${managerNoticeGlyph(state.message.kind)} ${state.message.text}`),
       width,
@@ -206,6 +208,7 @@ const profileDetail = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
+  keys: ProfileWorkspaceKeys,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   return [
@@ -224,7 +227,10 @@ const profileDetail = (
             : "Profile disabled",
         ]),
     "",
-    theme.fg("dim", "↑/↓ selects profiles · Enter edits Primary and fallbacks"),
+    theme.fg(
+      "dim",
+      `${keys.up}/${keys.down} selects profiles · ${keys.confirm} edits Primary and fallbacks`,
+    ),
   ];
 };
 
@@ -253,6 +259,7 @@ const candidateDetail = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
+  keys: ProfileWorkspaceKeys,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
@@ -265,7 +272,7 @@ const candidateDetail = (
         ? "This profile won't run until fixed."
         : "This profile is disabled and won't run.",
       "",
-      theme.fg("dim", "Enter opens Actions so you can add or fix the profile"),
+      theme.fg("dim", `${keys.confirm} opens Actions so you can add or fix the profile`),
     ];
   return [
     theme.fg("accent", theme.bold(`${profile} · ${profileRouteOptionLabel(state.candidateIndex)}`)),
@@ -276,7 +283,10 @@ const candidateDetail = (
     `File access ${candidate.writeIntent}`,
     `Run with    ${runWithLabel(candidate)}`,
     "",
-    theme.fg("dim", "↑/↓ selects Primary and fallbacks · Enter edits these settings"),
+    theme.fg(
+      "dim",
+      `${keys.up}/${keys.down} selects Primary and fallbacks · ${keys.confirm} edits these settings`,
+    ),
   ];
 };
 
@@ -339,6 +349,7 @@ const fieldDetail = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
+  keys: ProfileWorkspaceKeys,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const row = fieldRows(state)[state.fieldIndex] ?? fieldRows(state)[0];
@@ -351,7 +362,10 @@ const fieldDetail = (
     "",
     `Current  ${row.value}`,
     "",
-    theme.fg("dim", "↑/↓ selects settings · Enter changes the selected row"),
+    theme.fg(
+      "dim",
+      `${keys.up}/${keys.down} selects settings · ${keys.confirm} changes the selected row`,
+    ),
     ...(row.fixedReason ? ["", ...wrapped(theme.fg("warning", row.fixedReason), width)] : []),
   ];
 };
@@ -361,47 +375,67 @@ const pageRows = (
   theme: Theme,
   listHeight: number,
   detailWidth: number,
+  keys: ProfileWorkspaceKeys,
 ) => {
   if (state.pane === "profiles")
     return {
       list: profileList(state, theme, listHeight),
-      detail: profileDetail(state, theme, detailWidth),
+      detail: profileDetail(state, theme, detailWidth, keys),
     };
   if (state.pane === "candidates")
     return {
       list: candidateList(state, theme, listHeight),
-      detail: candidateDetail(state, theme, detailWidth),
+      detail: candidateDetail(state, theme, detailWidth, keys),
     };
   return {
     list: fieldsList(state, theme, listHeight),
-    detail: fieldDetail(state, theme, detailWidth),
+    detail: fieldDetail(state, theme, detailWidth, keys),
   };
 };
 
-const footer = (state: ProfileWorkspaceRenderState, width: number): string => {
+const footer = (
+  state: ProfileWorkspaceRenderState,
+  width: number,
+  labels: ProfileWorkspaceRenderOptions["keybindingLabel"],
+): string => {
+  const { confirm: enter, cancel: escape } = profileWorkspaceKeys(
+    labels,
+    Boolean(state.pendingConfirmation) || state.busy,
+  );
   if (state.pendingConfirmation)
-    return renderResponsiveManagerFooter(width, [["Enter Confirm · Esc Cancel"]]);
+    return renderResponsiveManagerFooter(width, [
+      [`${enter} Confirm`, `${escape} Cancel`],
+      [enter, escape],
+    ]);
   if (state.busy)
     return renderResponsiveManagerFooter(width, [
-      [state.cancellableBusy ? "Loading models · Esc Cancel" : "Saving · please wait"],
+      [state.cancellableBusy ? `Loading models · ${escape} Cancel` : "Saving · please wait"],
     ]);
-  if (state.pane === "profiles")
-    return renderResponsiveManagerFooter(width, [
-      ["Enter Edit", "p Profile sets", "Esc Close"],
-      ["Enter", "p Sets", "Esc"],
-    ]);
-  if (state.pane === "candidates")
-    return renderResponsiveManagerFooter(width, [["Enter Edit · Esc Profiles"]]);
   const row = fieldRows(state)[state.fieldIndex];
+  const edit =
+    state.pane !== "fields"
+      ? "Edit"
+      : row?.field === "actions"
+        ? "Actions"
+        : row?.field === "advanced"
+          ? "Show or hide"
+          : "Change";
+  const back =
+    state.pane === "profiles"
+      ? "Close"
+      : state.pane === "fields" && state.draft.candidates.length > 1
+        ? "Choices"
+        : "Profiles";
   return renderResponsiveManagerFooter(width, [
     [
-      row?.field === "actions"
-        ? "Enter Actions"
-        : row?.field === "advanced"
-          ? "Enter Show or hide"
-          : "Enter Change",
-      "Esc Choices",
+      `${enter} ${edit}`,
+      "m Model · e Reasoning · r Run with",
+      "a Actions · + Add · p Sets · ? Help",
+      `${escape} ${back}`,
     ],
+    [`${enter} ${edit}`, "m Model · a Actions · p Sets · ? Help", `${escape} ${back}`],
+    [`${enter} ${edit}`, "a Actions · ? Help", `${escape} ${back}`],
+    [enter, "? Help", escape],
   ]);
 };
 
@@ -410,22 +444,21 @@ const compactBody = (
   theme: Theme,
   height: number,
   width: number,
+  keys: ProfileWorkspaceKeys,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
-  const warning = notices(state, theme, width)[0];
   const selected =
     state.pane === "profiles"
       ? `${profile} · ${profileRouteDraftSummary(profile, state.draft, state.parentEffort, state.parentModel)}`
       : state.pane === "candidates"
         ? state.draft.candidates[state.candidateIndex]
           ? candidateRow(state, profile, state.candidateIndex, true)
-          : "Profile disabled · Enter to fix"
+          : `Profile disabled · ${keys.confirm} to fix`
         : (() => {
             const row = fieldRows(state)[state.fieldIndex] ?? fieldRows(state)[0];
             return row ? `${row.label.trim()} · ${row.value}` : "No settings to edit";
           })();
   const rows = [
-    ...(warning ? [warning] : []),
     theme.fg("accent", theme.bold(selected)),
     ...wrapped(theme.fg("muted", profileDescription(profile)), width),
   ];
@@ -443,32 +476,55 @@ export const renderProfileWorkspace = (
   const theme = options.theme;
   const frame = listDetailFrame(theme);
   const inner = width - 2;
-  const heading = truncateToWidth(` ${workspaceHeading(state)} `, inner, "");
-  const bottom = truncateToWidth(footer(state, inner), inner, "");
+  const keys = profileWorkspaceKeys(options.keybindingLabel);
+  const confirmationKeys = profileWorkspaceKeys(options.keybindingLabel, true);
+  const saved = state.message?.kind === "success" ? `${theme.fg("muted", "Saved")} · ` : "";
+  const heading = truncateToWidth(` ${saved}${workspaceHeading(state)} `, inner, "");
+  const bottom = truncateToWidth(footer(state, inner, options.keybindingLabel), inner, "");
   return framedScreen(frame, {
     width,
     height,
     top: heading,
     bottom,
     body: (bodyHeight) => {
-      const noticeLines = notices(state, theme, inner, bodyHeight);
+      const noticeLines = notices(state, theme, inner, bodyHeight, confirmationKeys);
       if (bodyHeight <= 6) {
         const rows =
-          state.pendingConfirmation || state.message
+          state.pendingConfirmation || (state.message && state.message.kind !== "success")
             ? noticeLines
-            : compactBody(state, theme, bodyHeight, inner);
+            : compactBody(state, theme, bodyHeight, inner, keys);
         return framedFill(frame, rows, bodyHeight, inner);
       }
       const available = Math.max(0, bodyHeight - noticeLines.length);
       const layout = managerLayoutTier(width);
       if (layout === "narrow") {
-        const detail = pageRows(state, theme, available, inner).detail;
+        const detail = pageRows(state, theme, available, inner, keys).detail;
         const rows = [...noticeLines, ...detail].slice(0, bodyHeight);
         return framedFill(frame, rows, bodyHeight, inner);
       }
       if (layout === "wide") {
-        const geometry = wideListDetailGeometry(width, 30, 0.34);
-        const rows = pageRows(state, theme, available, geometry.detailWidth);
+        const naturalList =
+          state.pane === "profiles"
+            ? profileList(state, theme, PROFILE_IDS.length + 1)
+            : state.pane === "candidates"
+              ? state.draft.candidates.map((_candidate, index) =>
+                  candidateRow(state, selectedProfile(state), index, false),
+                )
+              : (() => {
+                  const rows = fieldRows(state);
+                  const labels = Math.max(...rows.map((row) => visibleWidth(row.label)));
+                  return [
+                    " ".repeat(labels + 4) +
+                      (state.draft.candidates[state.candidateIndex]?.model ?? ""),
+                  ];
+                })();
+        const desired = Math.max(30, ...naturalList.map((row) => visibleWidth(row)));
+        const geometry = wideListDetailGeometry(
+          width,
+          30,
+          Math.min(0.5, Math.max(0.34, desired / inner)),
+        );
+        const rows = pageRows(state, theme, available, geometry.detailWidth, keys);
         return [
           ...framedFill(frame, noticeLines, noticeLines.length, inner),
           ...framedWideRows(frame, {
@@ -489,7 +545,7 @@ export const renderProfileWorkspace = (
             : fieldRows(state).length,
       );
       const detailHeight = Math.max(0, available - listHeight - 1);
-      const rows = pageRows(state, theme, listHeight, inner);
+      const rows = pageRows(state, theme, listHeight, inner, keys);
       return [
         ...framedFill(frame, noticeLines, noticeLines.length, inner),
         ...framedStackedRows(frame, {

@@ -13,7 +13,13 @@ import {
 import { renderResponsiveManagerFooter } from "./chrome.ts";
 import { padListDetailRow } from "./list-detail.ts";
 import { isListMotion, nextListMotionIndex } from "./list-navigation.ts";
-import { FullScreenKeymap, pageSteps, type FullScreenSelectionKeybindingId } from "./keymap.ts";
+import {
+  FULL_SCREEN_NAVIGATION_SHORTCUTS,
+  FullScreenKeymap,
+  pageSteps,
+  type FullScreenSelectionKeybindingId,
+} from "./keymap.ts";
+import { filterReservedKeyLabel, filterTextInputKeyLabel } from "./key-labels.ts";
 import { fullScreenSettingsHint } from "./settings-adapter.ts";
 
 export interface SearchableSelectPageChoice<A> {
@@ -49,6 +55,8 @@ export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOpti
   readonly emptyText?: string | undefined;
   readonly initialQuery?: string | undefined;
   readonly initialSearchMode?: boolean | undefined;
+  /** Default preserves the existing Escape-clears-search interaction. */
+  readonly cancelBehavior?: "close" | "clear-search" | undefined;
   readonly select: (value: A) => void;
   readonly cancel: () => void;
 }
@@ -158,7 +166,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   private handleSelectAction(action: string): void {
     switch (action) {
       case "cancel":
-        if (this.searchMode) this.clearSearchAndExit();
+        if (this.searchMode && this.options.cancelBehavior !== "close") this.clearSearchAndExit();
         else this.options.cancel();
         break;
       case "quit":
@@ -251,26 +259,36 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   }
 
   private footer(inner: number): string {
-    const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
-      this.options.keybindingLabel?.(id, fallback) || fallback;
+    const key = (id: SettingsSelectKeybindingId, fallback: string): string => {
+      const label = this.options.keybindingLabel?.(id, fallback) || fallback;
+      return this.searchMode
+        ? filterTextInputKeyLabel(label, fallback)
+        : filterReservedKeyLabel(label, FULL_SCREEN_NAVIGATION_SHORTCUTS, fallback);
+    };
     const confirm = key("tui.select.confirm", "Enter");
     const cancel = key("tui.select.cancel", "Esc");
     const configuredNavigation = this.options.keybindingLabel
       ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
       : undefined;
     const normalNavigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
+    const searchNavigation = configuredNavigation ?? "↑/↓";
+    const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
+    const searchCancel = this.options.cancelBehavior === "close" ? "Cancel" : "Done";
     return this.searchMode
       ? renderResponsiveManagerFooter(inner, [
-          ["Type to filter · ↑/↓ Navigate", `${confirm} Select · ${cancel} Done`],
-          [`${confirm} Select`, `${cancel} Done`],
+          [
+            `Type to filter · ${searchNavigation} Navigate`,
+            `${confirm} Select · ${cancel} ${searchCancel}`,
+          ],
+          [`${confirm} Select`, `${cancel} ${searchCancel}`],
         ])
       : this.alternateHelp
         ? renderResponsiveManagerFooter(inner, [
             [
-              `${normalNavigation} Navigate · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
+              `${normalNavigation} Navigate · C-u/d Half · ${pages} Page · gg/G Ends`,
               `/ Filter · l/${confirm} Select · h/q/${cancel} Back · ? Less`,
             ],
-            [`${normalNavigation} · C-u/d · PgUp/PgDn · gg/G`, `? Less · q Back`],
+            [`${normalNavigation} · C-u/d · ${pages} · gg/G`, `? Less · q Back`],
           ])
         : renderResponsiveManagerFooter(inner, [
             [

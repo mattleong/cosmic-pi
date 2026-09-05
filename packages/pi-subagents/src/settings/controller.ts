@@ -2,12 +2,7 @@
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-  completeSettingsArguments,
-  hasObjectRuntimeType,
-  isProjectTrusted,
-  synchronousNow,
-} from "pi-cosmic-core";
+import { completeSettingsArguments, isProjectTrusted, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
@@ -18,15 +13,14 @@ import {
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
-import { resolveNamedProfileSet, type ResolvedNamedProfileSet } from "../config/options.ts";
 import {
   MAX_DIRECT_CHILDREN,
   MAX_SUBAGENT_DEPTH,
   MIN_DIRECT_CHILDREN,
   MIN_SUBAGENT_DEPTH,
-  normalizeProfileSetName,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
+import { SubagentConfigStoreError } from "../config/store.ts";
 import type {
   SubagentCopyProfileSetPatch,
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -44,7 +38,6 @@ import {
   type ProfileId,
 } from "../profiles/model.ts";
 import {
-  SessionProfileConflictError,
   type SessionNestingPatch,
   type SessionProfilePatch,
   type SessionProfileSetPatch,
@@ -71,7 +64,13 @@ import {
   type ProfileWorkspaceOptions,
   type ProfileWorkspaceSaveResult,
 } from "./profile-workspace.ts";
-import { ProfileSetPickerComponent, type ProfileSetPickerAction } from "./profile-set-picker.ts";
+import {
+  openProfileDashboard,
+  profileSetPatchBase,
+  isSessionProfileConflict,
+  captureProjectWriteTrust,
+  type ProfileEditorPosition,
+} from "./profile-dashboard.ts";
 
 export interface SessionProfileSetSnapshotWrite extends Omit<
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -214,47 +213,12 @@ const fastModeAvailable = (
   return supportsSubagentFastMode(candidate.runtime, candidate.model);
 };
 
-const profileSetPatchBase = (
-  inspection: ProfileSettingsInspection,
-  scope: "global" | "project",
-  projectTrusted: boolean,
-) => {
-  const expectedDocument =
-    scope === "global" ? inspection.globalDocument : inspection.projectDocument;
-  return {
-    scope,
-    expectedExists: expectedDocument !== undefined,
-    ...(expectedDocument !== undefined && { expectedDocument }),
-    projectTrusted,
-  };
-};
-
-const isSessionProfileConflict = <ErrorInput>(error: ErrorInput): boolean =>
-  error instanceof SessionProfileConflictError ||
-  (hasObjectRuntimeType(error) &&
-    error !== null &&
-    // SAFETY: hasObjectRuntimeType established an object before this optional tag read.
-    (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError");
-
-const captureProjectWriteTrust = (
-  ctx: ExtensionCommandContext,
-  scope: "global" | "project",
-  message: string,
-): { readonly projectTrusted: boolean } | undefined => {
-  const projectTrusted = isProjectTrusted(ctx);
-  if (scope === "project" && !projectTrusted) {
-    ctx.ui.notify(message, "warning");
-    return undefined;
-  }
-  return { projectTrusted };
-};
-
 function openProfileEditor(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   actions: FleetManagerActions,
   target: ProfileWorkspaceTarget,
-  initialProfile: ProfileId = "generalist",
+  position: ProfileEditorPosition,
 ): Promise<ProfileWorkspaceCloseResult> {
   if (ctx.mode !== "tui" || !ctx.hasUI || !Predicate.isFunction(ctx.ui.custom)) {
     if (ctx.hasUI) ctx.ui.notify("/subagents profiles requires interactive TUI mode.", "warning");
@@ -343,7 +307,21 @@ function openProfileEditor(
             profile,
             ...(declaration.route !== undefined && { route: declaration.route }),
           })
-          .then(() => refreshInspection());
+          .then(
+            () => refreshInspection(),
+            (error) => {
+              if (
+                error instanceof SubagentConfigStoreError &&
+                error.operation === "update" &&
+                error.message ===
+                  "Subagents settings changed on disk; reopen /subagents profiles and try again."
+              )
+                return refreshInspection(
+                  "Saved settings changed on disk. Your change was not applied. The editor now shows the latest profiles. Try again.",
+                );
+              throw error;
+            },
+          );
       };
       return ctx.ui
         .custom<ProfileWorkspaceCloseResult>(
@@ -354,7 +332,7 @@ function openProfileEditor(
               inspection,
               projectTrusted,
               target,
-              initialProfile,
+              ...position,
               parentEffort,
               preferredPiModel: () => preferredHerdrPiSelector(modelCatalog.capture(), parentModel),
               getHeight: () => tui.terminal.rows,
@@ -417,379 +395,6 @@ function openProfileEditor(
       return false;
     },
   );
-}
-
-const replacementPreview = (resolved: ResolvedNamedProfileSet): string =>
-  PROFILE_IDS.map((profile) => {
-    const candidates = resolved.profiles[profile].candidates;
-    const route = candidates[0]
-      ? `${candidates[0].model}${candidates.length > 1 ? ` + ${candidates.length - 1} fallback${candidates.length === 2 ? "" : "s"}` : ""}`
-      : "disabled";
-    return `${profile}: ${route}`;
-  }).join("\n");
-
-const hasInvalidEffectiveProfileSource = (inspection: ProfileSettingsInspection): boolean =>
-  PROFILE_IDS.some((profile) => {
-    const source = inspection.session.effectiveConfig.profileSources[profile];
-    return source === "global-invalid" || source === "project-invalid";
-  });
-
-function openProfileSetLibrary(
-  pi: ExtensionAPI,
-  ctx: ExtensionCommandContext,
-  actions: FleetManagerActions,
-  initialProfile: ProfileId,
-): Promise<void> {
-  let inspection: ProfileSettingsInspection;
-  let projectTrusted = isProjectTrusted(ctx);
-  let preferredScope: "global" | "project" = projectTrusted ? "project" : "global";
-
-  const refresh = (): Promise<void> => {
-    projectTrusted = isProjectTrusted(ctx);
-    return actions.inspectProfiles(projectTrusted).then((next) => {
-      inspection = next;
-    });
-  };
-  const promptName = (title: string, initial = ""): Promise<string | undefined> =>
-    ctx.ui.input(title, initial).then((value) => {
-      if (value === undefined) return undefined;
-      const normalized = normalizeProfileSetName(value);
-      if (normalized) return normalized;
-      ctx.ui.notify(
-        "Use 1 to 64 characters. Start and end with a letter or number. Spaces, periods, underscores, and hyphens are allowed.",
-        "error",
-      );
-      return undefined;
-    });
-  const showPicker = (): Promise<ProfileSetPickerAction | undefined> =>
-    ctx.ui.custom<ProfileSetPickerAction | undefined>(
-      (tui, theme, keybindings, done) =>
-        new ProfileSetPickerComponent({
-          theme,
-          inspection,
-          projectTrusted,
-          initialScope: preferredScope,
-          getHeight: () => tui.terminal.rows,
-          requestRender: () => tui.requestRender(),
-          matchesKeybinding: (data, id) => keybindings.matches(data, id),
-          close: done,
-        }),
-      {
-        overlay: true,
-        overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
-      },
-    );
-  const applySet = (target: { readonly scope: "global" | "project"; readonly name: string }) => {
-    if (target.scope === "project" && !isProjectTrusted(ctx)) {
-      ctx.ui.notify("Trust this project to use its saved profile sets.", "warning");
-      return refresh();
-    }
-    const resolveInput = {
-      scope: target.scope,
-      name: target.name,
-      global: inspection.global,
-    };
-    const resolved = resolveNamedProfileSet(
-      inspection.project ? { ...resolveInput, project: inspection.project } : resolveInput,
-    );
-    if (resolved.status !== "resolved" || resolved.invalidProfiles.length > 0) {
-      ctx.ui.notify(
-        "This saved set is invalid. Fix it before using it in Current Session.",
-        "warning",
-      );
-      return Promise.resolve();
-    }
-    const expectedRevision = inspection.session.revision;
-    return ctx.ui
-      .confirm(
-        `Use ${target.scope === "project" ? "Project" : "Global"}/${target.name} in Current Session?`,
-        `This replaces all seven Current Session profiles. Later changes to Current Session or the saved set will stay separate. Active runs will not change.\n\n${replacementPreview(resolved)}`,
-      )
-      .then((confirmed) => {
-        if (!confirmed) return;
-        if (target.scope === "project" && !isProjectTrusted(ctx)) {
-          ctx.ui.notify(
-            "This project is no longer trusted. Current Session was not changed.",
-            "warning",
-          );
-          return refresh();
-        }
-        return actions
-          .replaceSessionProfiles({
-            origin: resolved.origin,
-            profiles: resolved.profiles,
-            profileSources: resolved.profileSources,
-            expectedRevision,
-          })
-          .then(
-            () => refresh().then(() => true),
-            (error) => {
-              if (isSessionProfileConflict(error))
-                return refresh().then(() => {
-                  ctx.ui.notify(
-                    "Current Session changed before this update could be applied. Nothing was replaced.",
-                    "warning",
-                  );
-                  return false;
-                });
-              throw error;
-            },
-          )
-          .then((replaced) => {
-            if (!replaced) return;
-            ctx.ui.notify(
-              `Copied ${target.scope === "project" ? "Project" : "Global"}/${target.name} into Current Session. Later changes to either one will not affect the other. Active runs did not change.`,
-              "info",
-            );
-          });
-      });
-  };
-  const saveSession = (action: Extract<ProfileSetPickerAction, { action: "save-session" }>) => {
-    if (hasInvalidEffectiveProfileSource(inspection)) {
-      ctx.ui.notify(
-        "Current Session has invalid profiles. Fix or disable them in Current Session before saving a set.",
-        "warning",
-      );
-      return Promise.resolve();
-    }
-    const displayedRevision = inspection.session.revision;
-    const destinationChoices = projectTrusted
-      ? action.preferredScope === "project"
-        ? ["Project", "Global"]
-        : ["Global", "Project"]
-      : ["Global"];
-    return ctx.ui.select("Save Current Session as", destinationChoices).then((destination) => {
-      if (!destination) return;
-      const scope = destination === "Project" ? "project" : "global";
-      preferredScope = scope;
-      return promptName(`Name for new ${destination} set`).then((name) => {
-        if (!name) return;
-        const inspectionTrust = isProjectTrusted(ctx);
-        return actions.inspectProfiles(inspectionTrust).then((latest) => {
-          inspection = latest;
-          if (latest.session.revision !== displayedRevision) {
-            ctx.ui.notify(
-              "Current Session changed while you were choosing where to save it. Nothing was saved. Review the latest profiles and try again.",
-              "warning",
-            );
-            return;
-          }
-          if (hasInvalidEffectiveProfileSource(latest)) {
-            ctx.ui.notify(
-              "Current Session has invalid profiles. Fix or disable them in Current Session before saving a set.",
-              "warning",
-            );
-            return;
-          }
-          const writeTrust = captureProjectWriteTrust(
-            ctx,
-            scope,
-            "This project is no longer trusted. Nothing was saved.",
-          );
-          projectTrusted = writeTrust?.projectTrusted ?? false;
-          if (!writeTrust) return;
-          return actions
-            .createProfileSetFromSnapshot({
-              ...profileSetPatchBase(latest, scope, writeTrust.projectTrusted),
-              profileSet: name,
-              expectedRevision: displayedRevision,
-            })
-            .then(
-              () =>
-                refresh().then(() => {
-                  ctx.ui.notify(
-                    `Saved all seven Current Session profiles as ${destination}/${name}. The default for new sessions did not change.`,
-                    "info",
-                  );
-                }),
-              (error) => {
-                if (!isSessionProfileConflict(error)) throw error;
-                return refresh().then(() => {
-                  ctx.ui.notify(
-                    "Current Session changed while the set was being saved. Nothing was saved. Review the latest profiles and try again.",
-                    "warning",
-                  );
-                });
-              },
-            );
-        });
-      });
-    });
-  };
-  const handleAction = (action: ProfileSetPickerAction): Promise<void> => {
-    if (action.action === "clear-scope-default") preferredScope = action.scope;
-    else if ("target" in action) preferredScope = action.target.scope;
-    if (action.action === "use-current") return applySet(action.target);
-    if (action.action === "edit")
-      return openProfileEditor(
-        pi,
-        ctx,
-        actions,
-        { kind: "profile-set", set: action.target },
-        initialProfile,
-      ).then(() => refresh());
-    if (action.action === "make-default")
-      return refresh().then(() => {
-        const resolveInput = {
-          scope: action.target.scope,
-          name: action.target.name,
-          global: inspection.global,
-        };
-        const resolved = resolveNamedProfileSet(
-          inspection.project ? { ...resolveInput, project: inspection.project } : resolveInput,
-        );
-        if (resolved.status !== "resolved" || resolved.invalidProfiles.length > 0) {
-          ctx.ui.notify(
-            "This saved set is invalid. Fix or recreate it before making it the default.",
-            "warning",
-          );
-          return;
-        }
-        const writeTrust = captureProjectWriteTrust(
-          ctx,
-          action.target.scope,
-          "This project is no longer trusted. The default did not change.",
-        );
-        projectTrusted = writeTrust?.projectTrusted ?? false;
-        if (!writeTrust) return;
-        return actions
-          .patchDefaultProfileSet({
-            ...profileSetPatchBase(inspection, action.target.scope, writeTrust.projectTrusted),
-            defaultProfileSet: action.target.name,
-          })
-          .then(() => refresh())
-          .then(() => {
-            const projectSelection = inspection.config.currentProfileSet;
-            const shadowed =
-              action.target.scope === "global" && projectSelection.scope === "project";
-            const shadowNotice = shadowed ? " This project's default still takes priority." : "";
-            ctx.ui.notify(
-              `${action.target.scope === "project" ? "Project" : "Global"}/${action.target.name} is now the default for new sessions.${shadowNotice} Current Session did not change.`,
-              "info",
-            );
-          });
-      });
-    if (action.action === "clear-scope-default") {
-      const selectedName =
-        action.scope === "project"
-          ? inspection.project?.file.defaultProfileSet
-          : inspection.global.file.defaultProfileSet;
-      const writeTrust = captureProjectWriteTrust(
-        ctx,
-        action.scope,
-        "This project is no longer trusted. The default did not change.",
-      );
-      projectTrusted = writeTrust?.projectTrusted ?? false;
-      if (!writeTrust) return refresh();
-      return actions
-        .patchDefaultProfileSet({
-          ...profileSetPatchBase(inspection, action.scope, writeTrust.projectTrusted),
-        })
-        .then(() => refresh())
-        .then(() => {
-          const scopeLabel = action.scope === "project" ? "Project" : "Global";
-          const inheritance =
-            action.scope === "project"
-              ? "New sessions in this project will use Global, then built-in profiles."
-              : "New sessions without a Project default will use built-in profiles.";
-          const savedNotice = selectedName ? ` ${scopeLabel}/${selectedName} is still saved.` : "";
-          ctx.ui.notify(
-            `${scopeLabel} will no longer use a saved set by default. ${inheritance}${savedNotice} Current Session did not change.`,
-            "info",
-          );
-        });
-    }
-    if (action.action === "save-session") return saveSession(action);
-    if (action.action === "copy") {
-      preferredScope = action.source.scope;
-      return promptName(
-        `Copy ${action.source.scope === "project" ? "Project" : "Global"}/${action.source.name} as`,
-        `${action.source.name} copy`,
-      ).then((name) => {
-        if (!name) return;
-        const writeTrust = captureProjectWriteTrust(
-          ctx,
-          action.source.scope,
-          "This project is no longer trusted. Nothing was saved.",
-        );
-        projectTrusted = writeTrust?.projectTrusted ?? false;
-        if (!writeTrust) return refresh();
-        return actions
-          .copyProfileSet({
-            ...profileSetPatchBase(inspection, action.source.scope, writeTrust.projectTrusted),
-            sourceProfileSet: action.source.name,
-            profileSet: name,
-          })
-          .then(() => refresh());
-      });
-    }
-    if (action.action === "rename")
-      return promptName("New name for saved set", action.target.name).then((name) => {
-        if (!name) return;
-        const writeTrust = captureProjectWriteTrust(
-          ctx,
-          action.target.scope,
-          "This project is no longer trusted. Nothing was saved.",
-        );
-        projectTrusted = writeTrust?.projectTrusted ?? false;
-        if (!writeTrust) return refresh();
-        return actions
-          .renameProfileSet({
-            ...profileSetPatchBase(inspection, action.target.scope, writeTrust.projectTrusted),
-            profileSet: action.target.name,
-            nextProfileSet: name,
-          })
-          .then(() => refresh());
-      });
-    const writeTrust = captureProjectWriteTrust(
-      ctx,
-      action.target.scope,
-      "This project is no longer trusted. Nothing was deleted.",
-    );
-    projectTrusted = writeTrust?.projectTrusted ?? false;
-    if (!writeTrust) return refresh();
-    return actions
-      .deleteProfileSet({
-        ...profileSetPatchBase(inspection, action.target.scope, writeTrust.projectTrusted),
-        profileSet: action.target.name,
-      })
-      .then(() => refresh());
-  };
-  const loop = (): Promise<void> =>
-    showPicker().then((action) => {
-      if (!action) return;
-      return handleAction(action).then(
-        () => loop(),
-        (error) => {
-          ctx.ui.notify(
-            error instanceof Error ? error.message : "Could not update saved profile sets.",
-            "error",
-          );
-          return refresh().then(loop, () => undefined);
-        },
-      );
-    });
-  return refresh().then(loop, (error) => {
-    ctx.ui.notify(
-      error instanceof Error ? error.message : "Could not inspect profile settings.",
-      "error",
-    );
-  });
-}
-
-function openProfileDashboard(
-  pi: ExtensionAPI,
-  ctx: ExtensionCommandContext,
-  actions: FleetManagerActions,
-): Promise<void> {
-  let profile: ProfileId = "generalist";
-  const loop = (): Promise<void> =>
-    openProfileEditor(pi, ctx, actions, { kind: "session" }, profile).then((result) => {
-      if (result === false) return;
-      profile = result.profile;
-      return openProfileSetLibrary(pi, ctx, actions, profile).then(loop);
-    });
-  return loop();
 }
 
 const boundedInteger = (value: string, minimum: number, maximum: number): number | undefined => {
@@ -923,18 +528,38 @@ export function registerSubagentManagerCommand(
 ): void {
   pi.registerCommand("subagents", {
     description: "Open the subagent fleet or configure profiles",
-    getArgumentCompletions: (prefix) =>
-      completeSettingsArguments(prefix, [
+    getArgumentCompletions: (prefix) => {
+      const profilePrefix = /^profiles\s+([^\s]*)$/u.exec(prefix.trimStart());
+      if (profilePrefix) {
+        const matches = PROFILE_IDS.filter((profile) =>
+          profile.startsWith(profilePrefix[1] ?? ""),
+        ).map((profile) => ({
+          value: `profiles ${profile}`,
+          label: profile,
+          description: `Edit ${profile} in Current Session`,
+        }));
+        return matches.length ? matches : null;
+      }
+      return completeSettingsArguments(prefix, [
         { id: "profiles", description: "Edit Current Session profiles and saved sets" },
         { id: "settings", description: "Configure nesting limits" },
-      ]),
+      ]);
+    },
     handler: (args, ctx) => {
-      const command = args.trim().toLowerCase();
+      const command = args.trim();
       if (!command) return openFleetManager(ctx, bridge, actions);
       if (command === "settings") return openNestingSettings(ctx, actions);
-      if (command === "profiles") return openProfileDashboard(pi, ctx, actions);
+      const parts = command.split(/\s+/u);
+      const profile = PROFILE_IDS.find((id) => id === parts[1]);
+      if (parts[0] === "profiles" && (parts.length === 1 || (parts.length === 2 && profile)))
+        return openProfileDashboard(
+          ctx,
+          actions,
+          (target, position) => openProfileEditor(pi, ctx, actions, target, position),
+          profile,
+        );
       ctx.ui.notify(
-        "Usage: /subagents [settings | profiles]; omit arguments for the fleet inspector.",
+        "Usage: /subagents [settings | profiles [profile]]; use a known profile name. Omit arguments for the fleet inspector.",
         "error",
       );
       return Promise.resolve();
