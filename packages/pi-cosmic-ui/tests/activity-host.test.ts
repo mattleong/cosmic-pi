@@ -86,9 +86,12 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     return handle;
   };
   // SAFETY: The host only reads these TUI methods and terminal rows in this suite.
+  let redraws = 0;
   const tui = tuiFixture({
     terminal: { rows: 24 },
-    requestRender() {},
+    requestRender() {
+      redraws++;
+    },
     showOverlay() {
       if (failGuard) throw new Error("guard unavailable");
       const handle = makeHandle();
@@ -154,8 +157,8 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     Effect.gen(function* () {
       let connected: ActivityServiceContract | undefined;
       const value = yield* ActivityService.make({
-        publish: (rows) => {
-          if (connected) host.publish(connected, rows);
+        publish: (rows, starting) => {
+          if (connected) host.publish(connected, rows, starting);
         },
         connect: (current) => {
           connected = current;
@@ -179,6 +182,8 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     drain,
     mount,
     mountWidget,
+    renderWidget: () => mountedWidget?.render(80) ?? [],
+    redraws: () => redraws,
     foreignOverlay,
     pendingWork: () => work.length,
     disposeWidget: () => mountedWidget?.dispose?.(),
@@ -190,6 +195,54 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
 }
 
 describe("activity host lifecycle", () => {
+  it.effect("renders launch metadata without rows and withdraws it on invalidation or revoke", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      const service = yield* fixture.service();
+      let starting = 2;
+      const provider = registerActivityProvider(fixture.bus, {
+        sessionId: "session",
+        providerId: "agents",
+        snapshot: () => [],
+        starting: () => starting,
+        invoke: () => Promise.resolve(),
+      });
+      fixture.host.activate(fixture.ctx, service);
+      yield* fixture.drain();
+      fixture.host.tick(service, 0);
+      const first = fixture.renderWidget();
+      expect(first).toHaveLength(1);
+      expect(yield* service.snapshot).toEqual([]);
+      starting = 3;
+      provider.publish();
+      yield* fixture.drain();
+      expect(fixture.renderWidget()).toEqual(first);
+      const beforeTick = fixture.redraws();
+      fixture.host.tick(service, 100);
+      expect(fixture.redraws()).toBeGreaterThan(beforeTick);
+      expect(fixture.renderWidget()).not.toEqual(first);
+      fixture.host.tick(service, 0);
+      starting = -1;
+      provider.publish();
+      yield* fixture.drain();
+      expect(fixture.renderWidget()).toEqual([]);
+      expect(provider.isAvailable()).toBe(false);
+      starting = 2;
+      provider.publish();
+      yield* fixture.drain();
+      expect(fixture.renderWidget()).toEqual(first);
+      provider.dispose();
+      yield* fixture.drain();
+      expect(fixture.renderWidget()).toEqual([]);
+      const afterRevoke = fixture.redraws();
+      fixture.host.tick(service, 100);
+      expect(fixture.redraws()).toBe(afterRevoke);
+      fixture.host.deactivate();
+      const afterDeactivate = fixture.redraws();
+      fixture.host.tick(service, 200);
+      expect(fixture.redraws()).toBe(afterDeactivate);
+    }),
+  );
   it.effect("does not acknowledge a factory invoked by a failing setWidget", () =>
     Effect.gen(function* () {
       const fixture = harness("throws-after-factory");

@@ -22,7 +22,8 @@ export function retainActivity(
   const old = new Map(previous.map((row) => [row.key, row]));
   const next = new Map(current.map((row) => [row.key, row]));
   for (const row of previous)
-    if (!next.has(row.key) && isFinished(row)) next.set(row.key, { ...row, actions: [] });
+    if (!next.has(row.key) && isFinished(row))
+      next.set(row.key, { ...row, actions: [], awaited: false });
   const rows = [...next.values()];
   const parents = new Map<string, string>();
   const roots = new Map<string, string>();
@@ -46,7 +47,7 @@ export function retainActivity(
     }
   }
   const protectedKeys = new Set<string>();
-  for (const row of rows.filter((value) => !isFinished(value))) {
+  for (const row of rows.filter((value) => !isFinished(value) || value.awaited)) {
     let key: string | undefined = row.key;
     while (key && !protectedKeys.has(key)) {
       protectedKeys.add(key);

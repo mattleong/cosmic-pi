@@ -34,6 +34,7 @@ const EnvelopeSchema = Schema.Struct({
   token: Schema.ObjectKeyword,
   hostToken: Schema.ObjectKeyword,
   items: Schema.optional(Schema.Unknown),
+  starting: Schema.optional(Schema.Unknown),
   invoke: Schema.optional(
     Schema.declare<ActivityProviderOptions["invoke"]>(
       (value): value is ActivityProviderOptions["invoke"] => Predicate.isFunction(value),
@@ -64,6 +65,7 @@ interface Binding {
   readonly service: ActivityServiceContract;
   readonly rows: MutableRef.MutableRef<readonly ActivityRow[]>;
   readonly now: MutableRef.MutableRef<number>;
+  readonly starting: MutableRef.MutableRef<number>;
   readonly presentation: ActivityPresentation;
   readonly nonce: object;
   readonly cleanups: Array<() => void>;
@@ -77,7 +79,11 @@ interface Binding {
 }
 export interface ActivityHost {
   readonly bind: (service: ActivityServiceContract) => () => void;
-  readonly publish: (service: ActivityServiceContract, rows: readonly ActivityRow[]) => void;
+  readonly publish: (
+    service: ActivityServiceContract,
+    rows: readonly ActivityRow[],
+    starting?: number,
+  ) => void;
   readonly tick: (service: ActivityServiceContract, now: number) => void;
   readonly activate: (ctx: ExtensionContext, service: ActivityServiceContract) => void;
   readonly deactivate: () => void;
@@ -117,6 +123,7 @@ export function makeActivityHost(
       const binding: Binding = {
         service,
         rows: MutableRef.make([]),
+        starting: MutableRef.make(0),
         now: MutableRef.make(0),
         presentation: makeActivityPresentation(),
         nonce: {},
@@ -133,17 +140,22 @@ export function makeActivityHost(
         bindings.delete(service);
       };
     },
-    publish(service, rows) {
+    publish(service, rows, starting = 0) {
       const binding = bindings.get(service);
       if (!binding) return;
       MutableRef.set(binding.rows, rows);
+      MutableRef.set(binding.starting, starting);
       if (binding.active) safe(binding.render);
     },
     tick(service, now) {
       const binding = bindings.get(service);
       if (!binding) return;
       MutableRef.set(binding.now, now);
-      if (binding.active && MutableRef.get(binding.rows).length) safe(binding.render);
+      if (
+        binding.active &&
+        (MutableRef.get(binding.rows).length || MutableRef.get(binding.starting) > 0)
+      )
+        safe(binding.render);
     },
     activate(ctx, service) {
       const binding = bindings.get(service);
@@ -174,6 +186,7 @@ export function makeActivityHost(
             hostToken: data.hostToken,
             operation: data.operation,
             items: data.items,
+            starting: data.starting,
           };
           if (data.invoke) Object.assign(event, { invoke: data.invoke });
           if (data.getDetail) Object.assign(event, { getDetail: data.getDetail });
@@ -227,6 +240,7 @@ export function makeActivityHost(
               render: (width) =>
                 binding.active && binding.installed
                   ? renderActivityWidget(MutableRef.get(binding.rows), width, 8, {
+                      starting: MutableRef.get(binding.starting),
                       theme,
                       now: MutableRef.get(binding.now),
                       collapsed: binding.presentation.collapsed,
@@ -331,6 +345,7 @@ export function makeActivityHost(
                     };
                     return new ActivityComponent({
                       snapshot: () => MutableRef.get(binding.rows),
+                      starting: () => MutableRef.get(binding.starting),
                       presentation: binding.presentation,
                       theme,
                       now: () => MutableRef.get(binding.now),

@@ -10,6 +10,7 @@ import {
 } from "pi-cosmic-core";
 import {
   ActivitySnapshotSchema,
+  ActivityStartingSchema,
   activityKey,
   type ActivityEnvelope,
   type ActivityProviderOptions,
@@ -26,6 +27,7 @@ interface Provider {
   readonly getDetail?: ActivityProviderOptions["getDetail"];
   readonly acknowledge: (available: boolean) => void;
   readonly items: readonly ActivityRow[];
+  readonly starting: number;
 }
 interface State {
   readonly closed: boolean;
@@ -48,8 +50,12 @@ export interface ActivityServiceContract {
   readonly detail: (request: ActivityDetailRequest) => Effect.Effect<string, ActivityError>;
   readonly snapshot: Effect.Effect<readonly ActivityRow[]>;
 }
+interface ActivityViewSnapshot {
+  readonly rows: readonly ActivityRow[];
+  readonly starting: number;
+}
 export interface ActivityServiceOptions {
-  readonly publish: (rows: readonly ActivityRow[]) => void;
+  readonly publish: (rows: readonly ActivityRow[], starting: number) => void;
   readonly tick?: (now: number) => void;
   readonly connect?: (service: ActivityServiceContract) => () => void;
 }
@@ -67,10 +73,20 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
 ) {
   static make = (options: ActivityServiceOptions) =>
     Effect.gen(function* () {
-      const state = yield* makeFrozenProjection<State, readonly ActivityRow[]>(
+      const state = yield* makeFrozenProjection<State, ActivityViewSnapshot>(
         { closed: false, serial: 0, providers: new Map(), retired: new Set(), rows: [] },
-        (value) => value.rows,
-        options.publish,
+        (value) => ({
+          rows: value.rows,
+          starting: [...value.providers.values()].reduce(
+            (count, provider) =>
+              count +
+              (provider.starting ||
+                provider.items.filter((item) => item.kind === "agent" && item.status === "pending")
+                  .length),
+            0,
+          ),
+        }),
+        (view) => options.publish(view.rows, view.starting),
       ).pipe(Effect.mapError(failed));
       const receive = (event: ActivityEnvelope) =>
         Effect.gen(function* () {
@@ -100,6 +116,9 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
                 // Decoding and lock waiting stay interruptible. Core owns only the narrow projection commit.
                 const decoded = yield* Schema.decodeUnknownEffect(ActivitySnapshotSchema)(
                   event.items,
+                ).pipe(Effect.mapError(() => new ActivityError({ reason: "invalid" })));
+                const starting = yield* Schema.decodeUnknownEffect(ActivityStartingSchema)(
+                  event.starting === undefined ? 0 : event.starting,
                 ).pipe(Effect.mapError(() => new ActivityError({ reason: "invalid" })));
                 if (
                   new Set(decoded.map((item) => item.id)).size !== decoded.length ||
@@ -149,10 +168,11 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
                       token: event.token,
                       generation,
                       items,
+                      starting,
                       invoke: event.invoke!,
                       acknowledge: event.acknowledge!,
                     }
-                  : { ...current!, items };
+                  : { ...current!, items, starting };
                 if (isNew && event.getDetail)
                   Object.assign(provider, { getDetail: event.getDetail });
                 const providers = new Map(old.providers).set(event.providerId, provider);
@@ -194,6 +214,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
                 const providers = new Map(old.providers).set(event.providerId, {
                   ...provider,
                   items: [],
+                  starting: 0,
                 });
                 return Effect.succeed([
                   provider.acknowledge,
@@ -213,7 +234,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
           }),
         );
       const checkedRow = (request: ActivityDetailRequest): ActivityRow => {
-        const row = state.getSnapshot().find((item) => item.key === request.key);
+        const row = state.getSnapshot().rows.find((item) => item.key === request.key);
         if (!row || row.generation !== request.generation || row.revision !== request.revision)
           throw new ActivityError({ reason: "stale" });
         return row;
@@ -288,7 +309,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
         receive,
         invoke,
         detail,
-        snapshot: Effect.sync(state.getSnapshot),
+        snapshot: Effect.sync(() => state.getSnapshot().rows),
       } satisfies ActivityServiceContract;
       if (options.connect)
         yield* Effect.acquireRelease(
@@ -304,15 +325,15 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
         yield* updateClock;
         yield* Effect.forkScoped(
           Effect.forever(
-            Effect.suspend(() =>
-              Effect.sleep(
-                state
-                  .getSnapshot()
-                  .some((row) => row.status === "running" || row.status === "pending")
+            Effect.suspend(() => {
+              const { rows, starting } = state.getSnapshot();
+              return Effect.sleep(
+                starting > 0 ||
+                  rows.some((row) => row.status === "running" || row.status === "pending")
                   ? "100 millis"
                   : "1 second",
-              ).pipe(Effect.andThen(updateClock)),
-            ),
+              ).pipe(Effect.andThen(updateClock));
+            }),
           ),
         );
       }

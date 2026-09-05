@@ -29,13 +29,15 @@ export function subagentActivityItems(
   projection: SubagentProjection,
   presentation: SubagentActivityPresentationSnapshot = emptyActivityPresentation(),
 ): readonly ActivityItem[] {
+  const awaited = new Set(presentation.awaits.flatMap((lease) => lease.runIds));
   const runs = projectFleetTree(projection.runs, "root", new Set()).rows.map(({ run }) => {
     const item: ActivityItem = {
       id: run.id,
       kind: "agent" as const,
       title: sanitizeDiagnosticContent(run.name, { maximumLength: 512 }),
       status: run.writeAdmissionPaused ? "blocked" : RUN_STATUS[run.state],
-      revision: String(projection.revision),
+      revision: `${projection.revision}:${presentation.revision}`,
+      awaited: awaited.has(run.id),
       startedAt: run.startedAt,
       updatedAt: run.lastActivityAt,
       summary: sanitizeDiagnosticContent(
@@ -79,29 +81,7 @@ export function subagentActivityItems(
       });
     return Object.freeze(item);
   });
-  const leases: ActivityItem[] = [];
-  const starts = presentation.starts.reduce((total, lease) => total + lease.requestedCount, 0);
-  if (starts > 0)
-    leases.push(
-      Object.freeze({
-        id: "$launching",
-        kind: "agent",
-        title: `Launching ${starts} subagents`,
-        status: "pending",
-        revision: String(presentation.revision),
-      }),
-    );
-  if (presentation.awaits.length > 0)
-    leases.push(
-      Object.freeze({
-        id: "$awaiting",
-        kind: "agent",
-        title: `Awaiting ${new Set(presentation.awaits.flatMap((lease) => lease.runIds)).size} subagents`,
-        status: "pending",
-        revision: String(presentation.revision),
-      }),
-    );
-  return Object.freeze([...runs, ...leases]);
+  return Object.freeze(runs);
 }
 
 export function subagentActivityDetail(
@@ -156,6 +136,12 @@ export function registerSubagentActivity(options: {
     sessionId: options.sessionId,
     providerId: PROVIDER,
     snapshot: () => (current() ? snapshot() : []),
+    starting: () =>
+      current()
+        ? options.bridge
+            .getActivityPresentation()
+            .starts.reduce((total, lease) => total + lease.requestedCount, 0)
+        : 0,
     getDetail: (id, revision, signal) =>
       Promise.resolve().then(() => {
         if (signal.aborted) throw new Error("Activity detail request was cancelled.");

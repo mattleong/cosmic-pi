@@ -119,17 +119,75 @@ describe("subagent activity provider", () => {
     expect(JSON.stringify(items)).not.toContain("parent only");
   });
 
-  it("publishes only live presentation leases during launch and await", () => {
+  it("publishes launch leases as metadata before rows exist and releases overlapping requests independently", () => {
+    const transport = host();
     const bridge = makeSubagentProjectionBridge();
+    const dispose = registerSubagentActivity({
+      events: transport.events,
+      sessionId: "session",
+      bridge,
+      isCurrent: () => true,
+      act: () => Promise.resolve(),
+    });
+    const presentation = bridge.bindToolPresentation();
+    const first = presentation.beginStart(2);
+    expect(transport.get()?.starting).toBe(2);
+    expect(transport.get()?.items).toEqual([]);
+    const second = presentation.beginStart(1);
+    expect(transport.get()?.starting).toBe(3);
+    bridge.publish({ revision: 1, runs: [view({ id: "run", state: "starting" })] });
+    expect(transport.get()?.starting).toBe(3);
+    expect(transport.get()?.items).toEqual([expect.objectContaining({ id: "run" })]);
+    first();
+    first();
+    expect(transport.get()?.starting).toBe(1);
+    second();
+    expect(transport.get()?.starting).toBe(0);
+    const oldRelease = presentation.beginStart(2);
+    bridge.clear();
+    const fresh = bridge.bindToolPresentation();
+    const release = fresh.beginStart(1);
+    oldRelease();
+    presentation.beginStart(5)();
+    expect(transport.get()?.starting).toBe(1);
+    release();
+    dispose();
+  });
+
+  it("marks exact await targets without adding rows or implicitly marking descendants", () => {
+    const bridge = makeSubagentProjectionBridge();
+    bridge.publish({
+      revision: 1,
+      runs: [
+        view({ id: "run" }),
+        view({ id: "child", parentRunId: "run", depth: 2 }),
+        view({ id: "other" }),
+      ],
+    });
     const presentation = bridge.bindToolPresentation();
     const stopStart = presentation.beginStart(2);
     const stopAwait = presentation.beginAwait(["run"], "all_finished");
+    const overlap = presentation.beginAwait(["run", "child"], "all_finished");
     const items = () => subagentActivityItems(bridge.get(), bridge.getActivityPresentation());
-    expect(items()).toHaveLength(2);
+    expect(items()).toHaveLength(3);
     stopStart();
-    expect(items()).toHaveLength(1);
+    expect(items().map((item) => item.id)).toEqual(["run", "child", "other"]);
+    expect(
+      items()
+        .filter((item) => item.awaited)
+        .map((item) => item.id),
+    ).toEqual(["run", "child"]);
+    const revision = items()[0]!.revision;
+    overlap();
+    expect(
+      items()
+        .filter((item) => item.awaited)
+        .map((item) => item.id),
+    ).toEqual(["run"]);
+    expect(items()[0]!.revision).not.toBe(revision);
     stopAwait();
-    expect(items()).toEqual([]);
+    expect(items().some((item) => item.awaited)).toBe(false);
+    expect(items()).toHaveLength(3);
     bridge.clear();
   });
 
@@ -154,34 +212,42 @@ describe("subagent activity provider", () => {
         hostToken: transport.hostToken,
         available: true,
       });
+      const revision = subagentActivityItems(bridge.get(), bridge.getActivityPresentation())[0]!
+        .revision;
       const invoke = transport.capability()?.invoke;
       const getDetail = transport.capability()?.getDetail;
       const signal = yield* Effect.abortSignal;
       expect(invoke).toBeDefined();
       yield* Effect.promise(() =>
-        expect(getDetail?.("run", "1", signal)).resolves.toContain("running"),
+        expect(getDetail?.("run", revision, signal)).resolves.toContain("running"),
       );
       const cancelled = new AbortController();
-      const pending = invoke!("run", "stop", "1", cancelled.signal);
+      const pending = invoke!("run", "stop", revision, cancelled.signal);
       cancelled.abort();
       yield* Effect.promise(() => expect(pending).rejects.toThrow());
       yield* Effect.promise(() =>
-        expect(getDetail?.("run", "1", cancelled.signal)).rejects.toThrow(),
+        expect(getDetail?.("run", revision, cancelled.signal)).rejects.toThrow(),
       );
-      yield* Effect.promise(() => invoke!("run", "stop", "1", signal));
+      yield* Effect.promise(() => invoke!("run", "stop", revision, signal));
       expect(act).toHaveBeenCalledWith("run", "stop", signal);
       bridge.publish({ revision: 2, runs: [view({ id: "run", state: "completed" })] });
       expect(transport.get()?.items).toEqual(
         expect.arrayContaining([expect.objectContaining({ id: "run", status: "done" })]),
       );
-      yield* Effect.promise(() => expect(invoke?.("run", "stop", "1", signal)).rejects.toThrow());
+      yield* Effect.promise(() =>
+        expect(invoke?.("run", "stop", revision, signal)).rejects.toThrow(),
+      );
       bridge.publish({ revision: 1, runs: [view({ id: "run" })] });
       current = false;
-      yield* Effect.promise(() => expect(invoke?.("run", "stop", "1", signal)).rejects.toThrow());
+      yield* Effect.promise(() =>
+        expect(invoke?.("run", "stop", revision, signal)).rejects.toThrow(),
+      );
       current = true;
       dispose();
-      yield* Effect.promise(() => expect(invoke?.("run", "stop", "1", signal)).rejects.toThrow());
-      yield* Effect.promise(() => expect(getDetail?.("run", "1", signal)).rejects.toThrow());
+      yield* Effect.promise(() =>
+        expect(invoke?.("run", "stop", revision, signal)).rejects.toThrow(),
+      );
+      yield* Effect.promise(() => expect(getDetail?.("run", revision, signal)).rejects.toThrow());
       expect(act).toHaveBeenCalledTimes(1);
       expect(transport.get()?.operation).toBe("revoke");
       expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);

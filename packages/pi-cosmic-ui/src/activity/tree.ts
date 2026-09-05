@@ -80,7 +80,7 @@ export function activityTree(
       waiting: Number(row.status === "needs-input"),
       blocked: Number(row.status === "blocked"),
       failed: Number(row.status === "failed"),
-      finished: isFinished(row),
+      finished: isFinished(row) && !row.awaited,
     };
     for (const child of children.get(row.key) ?? []) {
       const summary = summarize(child);

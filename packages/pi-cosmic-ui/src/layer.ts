@@ -80,8 +80,8 @@ export const makeCosmicUiApplicationLayer = (
     Effect.suspend(() => {
       let connected: ActivityServiceContract | undefined;
       return ActivityService.make({
-        publish: (rows) => {
-          if (connected) options.activityHost?.publish(connected, rows);
+        publish: (rows, starting) => {
+          if (connected) options.activityHost?.publish(connected, rows, starting);
         },
         tick: (now) => {
           if (connected) options.activityHost?.tick(connected, now);

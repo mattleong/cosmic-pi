@@ -10,11 +10,16 @@ export const ACTIVITY_HOST = "cosmic-ui:activity:host:v1";
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
 const Text = Schema.String.check(Schema.isMaxLength(4096));
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+export const ActivityStartingSchema = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(16384),
+);
 export const ActivityItemSchema = Schema.Struct({
   id: Id,
   kind: Schema.Literals(["agent", "command", "question"]),
   title: Schema.String.check(Schema.isMaxLength(512)),
   profile: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
+  awaited: Schema.optional(Schema.Boolean),
   status: Schema.Literals([
     "pending",
     "running",
@@ -50,6 +55,8 @@ export interface ActivityProviderOptions {
   readonly sessionId: string;
   readonly providerId: string;
   readonly snapshot: () => readonly ActivityItem[];
+  /** Active launch requests, including the interval before run rows exist. */
+  readonly starting?: () => number;
   /** Recheck session, revision, ownership and allowed action immediately before operating. */
   readonly invoke: (
     itemId: string,
@@ -73,6 +80,7 @@ export interface ActivityEnvelope {
   readonly hostToken: object;
   readonly operation: "register" | "publish" | "revoke";
   readonly items?: unknown;
+  readonly starting?: unknown;
   readonly invoke?: ActivityProviderOptions["invoke"];
   readonly getDetail?: ActivityProviderOptions["getDetail"];
   readonly acknowledge?: (available: boolean) => void;
@@ -144,7 +152,10 @@ export function registerActivityProvider(
         operation,
       };
       if (operation !== "revoke")
-        Object.assign(envelope, { items: detachedSummaries(options.snapshot()) });
+        Object.assign(envelope, {
+          items: detachedSummaries(options.snapshot()),
+          starting: options.starting?.() ?? 0,
+        });
       if (operation === "register")
         Object.assign(envelope, {
           invoke: (itemId: string, actionId: string, revision: string, signal: AbortSignal) => {

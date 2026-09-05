@@ -5,7 +5,7 @@ import {
   managerActivityGlyph,
   managerNoticeGlyph,
 } from "../manager/chrome.ts";
-import type { ActivityRow } from "./model.ts";
+import { isFinished, type ActivityRow } from "./model.ts";
 import {
   activityPath,
   activityTree,
@@ -21,8 +21,18 @@ export const activityGlyph = (row: ActivityRow, now = 0): string =>
         row.status === "cancelled" ? "stopped" : row.status,
         Math.floor(now / 100),
       );
-export const activityStatus = (row: ActivityRow): string =>
-  row.status === "needs-input" ? "waiting" : row.status;
+export const activityStatus = (row: ActivityRow): string => {
+  if (row.status === "needs-input") return "waiting";
+  return row.kind === "agent" && row.status === "pending" ? "starting" : row.status;
+};
+export const activityStartupGlyph = (
+  rows: readonly ActivityRow[],
+  starting: number,
+  now = 0,
+): string =>
+  starting > 0 && !rows.some((row) => !isFinished(row))
+    ? managerActivityGlyph("pending", Math.floor(now / 100))
+    : "";
 export const activityElapsed = (row: ActivityRow, now?: number, compact = false): string => {
   if (row.startedAt === undefined) return "";
   const seconds = Math.floor(
@@ -80,23 +90,29 @@ export function activityRowLine(
       ]
         .filter(Boolean)
         .join(" · ");
-  const status =
-    warnings || `${activityStatus(row)} ${activityElapsed(row, now, width < 60)}`.trim();
+  const attention =
+    row.status === "needs-input" || row.status === "blocked" || row.status === "failed"
+      ? activityStatus(row)
+      : "";
+  const status = warnings || `${attention} ${activityElapsed(row, now, width < 60)}`.trim();
   const color =
     row.status === "needs-input" || row.status === "blocked"
       ? "warning"
       : managerActivityColor(row.status === "cancelled" ? "stopped" : row.status);
   const typeColor = row.kind === "agent" ? "accent" : row.kind === "question" ? "warning" : "muted";
   const paint = (tone: Parameters<Theme["fg"]>[0], text: string) => theme?.fg(tone, text) ?? text;
+  const awaited = row.kind === "agent" && row.awaited ? "◎ " : "";
+  const markerWidth = visibleWidth(awaited);
   const profileName = row.kind === "agent" ? (row.profile ?? "") : "";
   const identityWidth = visibleWidth(kind) + (profileName ? visibleWidth(profileName) + 1 : 0);
-  const rightBudget = Math.max(0, width - identityWidth - 6);
+  const rightBudget = Math.max(0, width - identityWidth - markerWidth - 6);
   const showStatus =
+    status.length > 0 &&
     (width >= 48 || (warnings.length > 0 && width >= 32)) &&
     rightBudget >= Math.min(9, visibleWidth(status));
   const rightWidth = showStatus ? Math.min(visibleWidth(status), rightBudget) : 0;
   const leftWidth = Math.max(0, width - (showStatus ? rightWidth + 2 : 0));
-  const guideBudget = Math.max(0, leftWidth - identityWidth - 3);
+  const guideBudget = Math.max(0, leftWidth - identityWidth - markerWidth - 3);
   const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - 4) / 3)));
   const guide = paint(
     "dim",
@@ -106,7 +122,7 @@ export function activityRowLine(
   const profile = profileName ? `${profileName} · ` : "";
   const omitted = row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
   const left = truncateToWidth(
-    `${guide}${glyph} ${paint(typeColor, kind)} ${paint("muted", profile)}${paint("text", row.title)}${paint("dim", omitted)}`,
+    `${guide}${paint("accent", awaited)}${glyph} ${paint(typeColor, kind)} ${paint("muted", profile)}${paint("text", row.title)}${paint("dim", omitted)}`,
     leftWidth,
     "…",
   );
@@ -115,6 +131,7 @@ export function activityRowLine(
     : left;
 }
 interface WidgetOptions extends ActivityTreeOptions {
+  readonly starting?: number;
   readonly now?: number;
   readonly theme?: Pick<Theme, "fg">;
 }
@@ -125,7 +142,8 @@ export function renderActivityWidget(
   maxRows = 8,
   options: WidgetOptions = {},
 ): string[] {
-  if (width <= 0 || rows.length === 0 || maxRows <= 0) return [];
+  const starting = options.starting ?? 0;
+  if (width <= 0 || (rows.length === 0 && starting === 0) || maxRows <= 0) return [];
   const tree = activityTree(rows, options);
   const urgent = needsYou(rows);
   const live = tree.filter((entry) => !entry.history);
@@ -135,14 +153,16 @@ export function renderActivityWidget(
     width < 22 && urgent.length
       ? `Needs you: ${urgent.length}`
       : `Activity${urgent.length ? ` · Needs you: ${urgent.length}` : ""}`;
-  const hint = visibleWidth(`${heading}  /activity`) <= width ? "  /activity" : "";
-  if (live.length === 0) {
+  const startup = activityStartupGlyph(rows, starting, options.now);
+  const combined = `${heading}${startup ? ` ${startup}` : ""}`;
+  const hint = visibleWidth(`${combined}  /activity`) <= width ? "  /activity" : "";
+  if (live.length === 0 && starting === 0) {
     const failed = rows.filter((row) => row.status === "failed").length;
     const summary = `Activity · ${history} finished ${history === 1 ? "branch" : "branches"}${failed ? ` · ${failed} failed` : ""}`;
     const open = visibleWidth(`${summary}  /activity`) <= width ? "  /activity" : "";
     return [truncateToWidth(style(`${summary}${open}`), width, "…")];
   }
-  const lines = [style(`${heading}${hint}`)];
+  const lines = [style(`${combined}${hint}`)];
   if (urgent.length)
     lines.push(
       style(

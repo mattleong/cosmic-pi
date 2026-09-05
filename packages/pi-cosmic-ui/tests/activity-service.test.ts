@@ -48,6 +48,82 @@ const action = (row: ActivityRow): ActivityActionRequest => ({
   actionId: "stop",
 });
 describe("activity service", () => {
+  it.effect(
+    "publishes starting counts without rows and clears stale or invalid metadata atomically",
+    () =>
+      Effect.gen(function* () {
+        let rows: readonly ActivityRow[] = [];
+        let starting = 0;
+        const service = yield* ActivityService.make({
+          publish: (next, count) => {
+            rows = next;
+            starting = count;
+          },
+        });
+        const event = { ...registration({}, undefined, []), starting: 2 };
+        yield* service.receive(event);
+        expect(rows).toEqual([]);
+        expect(starting).toBe(2);
+        yield* service.receive({ ...event, operation: "publish", starting: 3 });
+        expect(starting).toBe(3);
+        const pending: ActivityItem[] = ["a", "b", "c"].map((id) => ({
+          ...item(),
+          id,
+          kind: "agent",
+          status: "pending",
+        }));
+        yield* service.receive({ ...event, operation: "publish", items: pending });
+        expect(starting).toBe(2); // Lease counts are requested work, not additional pending rows.
+        yield* service.receive({ ...event, operation: "publish", items: pending, starting: 0 });
+        expect(starting).toBe(3); // Resume/start rows still count without a start-tool lease.
+        for (const invalid of [-1, 1.5, Infinity, 16385, "2", null]) {
+          yield* service.receive({ ...event, operation: "publish", items: pending });
+          const result = yield* Effect.exit(
+            service.receive({ ...event, operation: "publish", starting: invalid }),
+          );
+          expect(Exit.isFailure(result)).toBe(true);
+          expect(rows).toEqual([]);
+          expect(starting).toBe(0);
+        }
+        const replacement = { ...event, token: {}, starting: 1 };
+        yield* service.receive(replacement);
+        yield* service.receive({ ...event, operation: "publish", starting: 8 });
+        yield* service.receive({ ...event, operation: "revoke" });
+        expect(starting).toBe(1);
+        yield* service.receive({ ...replacement, operation: "revoke" });
+        expect(starting).toBe(0);
+        yield* service.receive({ ...replacement, operation: "publish", starting: 8 });
+        expect(starting).toBe(0);
+      }),
+  );
+  it.effect("animates metadata-only startup and settles once the launch clears", () =>
+    Effect.gen(function* () {
+      let rows: readonly ActivityRow[] = [];
+      let starting = 0;
+      let rendered: readonly string[] = [];
+      const service = yield* ActivityService.make({
+        publish: (next, count) => {
+          rows = next;
+          starting = count;
+        },
+        tick: (now) => {
+          rendered = renderActivityWidget(rows, 80, 8, { now, starting });
+        },
+      });
+      const event = { ...registration({}, undefined, []), starting: 2 };
+      yield* service.receive(event);
+      yield* TestClock.adjust("1 second");
+      const first = rendered;
+      expect(first).toHaveLength(1);
+      yield* TestClock.adjust("100 millis");
+      expect(rendered).not.toEqual(first);
+      yield* service.receive({ ...event, operation: "publish", starting: 0 });
+      yield* TestClock.adjust("1 second");
+      expect(rendered).toEqual([]);
+      yield* TestClock.adjust("1 second");
+      expect(rendered).toEqual([]);
+    }),
+  );
   it.effect("animates running work between elapsed-second updates", () =>
     Effect.gen(function* () {
       let rows: readonly ActivityRow[] = [];

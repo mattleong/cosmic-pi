@@ -19,6 +19,7 @@ import type { ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
 import { activityPath, activityTree, needsYou } from "./tree.ts";
 import {
+  activityStartupGlyph,
   activityElapsed,
   activityOwnerLabel,
   activityRowLine,
@@ -41,6 +42,7 @@ export const makeActivityPresentation = (): ActivityPresentation => ({
 });
 export interface ActivityComponentOptions {
   readonly snapshot: () => readonly ActivityRow[];
+  readonly starting?: () => number;
   readonly presentation?: ActivityPresentation;
   readonly theme: Pick<Theme, "fg"> & Partial<Pick<Theme, "bg">>;
   readonly height: () => number;
@@ -244,6 +246,11 @@ export class ActivityComponent {
     const inner = Math.max(0, width - 2);
     const frame = listDetailFrame(this.options.theme);
     const urgent = needsYou(this.options.snapshot());
+    const startup = activityStartupGlyph(
+      this.options.snapshot(),
+      this.options.starting?.() ?? 0,
+      this.options.now?.(),
+    );
     const hint = (id: FullScreenSelectionKeybindingId, fallback: string) =>
       filterReservedKeyLabel(
         this.options.keybindingLabel?.(id, fallback) ?? fallback,
@@ -281,7 +288,7 @@ export class ActivityComponent {
     return framedScreen(frame, {
       width,
       height,
-      top: ` Activity${breadcrumb ? ` › ${breadcrumb}` : ""}${urgent.length ? ` · Needs you ${urgent.length}` : ""} `,
+      top: ` Activity${breadcrumb ? ` › ${breadcrumb}` : ""}${urgent.length ? ` · Needs you ${urgent.length}` : ""}${startup ? ` ${startup}` : ""} `,
       bottom,
       body: (bodyHeight) => {
         if (this.confirmation)

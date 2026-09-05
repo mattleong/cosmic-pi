@@ -21,6 +21,15 @@ const row = (
   return value;
 };
 describe("activity ownership", () => {
+  it("keeps an explicitly awaited finished run visible only while its lease remains live", () => {
+    const awaited = { ...row("finished", "done"), awaited: true };
+    expect(activityTree([awaited])[0]?.history).toBe(false);
+    const released = { ...awaited, awaited: false };
+    expect(activityTree([released])[0]?.history).toBe(true);
+    const retained = retainActivity([awaited], []);
+    expect(retained[0]?.awaited).toBe(false);
+    expect(activityTree(retained)[0]?.history).toBe(true);
+  });
   it("summarizes hidden descendant problems without counting the parent twice", () => {
     const values = [
       row("root", "needs-input"),
