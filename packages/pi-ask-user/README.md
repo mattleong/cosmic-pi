@@ -1,6 +1,6 @@
 # pi-ask-user
 
-Structured, responsive questionnaires for [pi](https://github.com/earendil-works/pi-mono). The `ask_user` agent tool batches one to four decisions into one dialog instead of making the model guess or interrupting repeatedly.
+Structured, responsive questionnaires for [pi](https://github.com/earendil-works/pi-mono). The `ask_user` agent tool batches one to four decisions into one blocking dialog. In the TUI, `ask_user_async` opens the same dialog while the agent continues independent work.
 
 ## Install
 
@@ -73,6 +73,36 @@ Submitted results contain stable values and user-facing labels:
 
 Cancellation returns `{ "outcome": "cancelled", "answers": [] }`; unsubmitted drafts are discarded.
 
+## Async questionnaires
+
+`ask_user_async` accepts the same `questions` array plus two required, nonblank descriptions, each limited to 500 characters:
+
+- `independentWork`: useful work the agent can do without the answers.
+- `blockedWork`: decisions or work that must wait for the answers.
+
+The tool immediately opens and focuses the questionnaire. It returns a pending `requestId` and stable `deliveryId` once the overlay is mounted, without waiting for an answer. The agent should then do only the declared independent work. Use blocking `ask_user` when no such work exists.
+
+`ask_user_async_control` supports:
+
+```json
+{ "action": "status" }
+{ "action": "status", "requestId": "<returned ID>" }
+{ "action": "await", "requestId": "<returned ID>" }
+{ "action": "cancel", "requestId": "<returned ID>" }
+```
+
+`status` without an ID lists retained metadata; with an ID it returns the full result. It never consumes an answer. Use `await` when independent work is exhausted, not repeated status polling. Only one caller can own answer delivery at a time. Cancel still closes the questionnaire when another caller is awaiting it. Interrupting an await leaves the questionnaire open and restores automatic answer delivery. Interrupting the opening tool after admission also leaves the session-owned request alive; `status` can recover its ID.
+
+Submission and user cancellation normally arrive as a custom answer message using Pi's `steer` delivery with `triggerTurn: true`. While the agent is busy, Pi delivers it after the current tool batch; while idle, it starts a turn. An active await or cancel caller receives the result instead, without an additional automatic message. Cancellation is not approval and includes no drafts.
+
+Results remain available for recovery. The registry holds at most 16 requests. New admission evicts only delivered terminal results without an active waiter; failed or undelivered results stay retained. When no result is eligible for eviction, admission rejects instead. Delivery IDs stay unchanged across status and await results. `sent` means the public host call returned, not that the model acknowledged the answer. Pi's public sender returns `void`, so later host delivery failures cannot be detected here. A synchronous delivery failure is marked `failed` and retried at most twice, one second apart. Await recovery suppresses pending retries, and runtime shutdown cancels them. Either kind of failure can be recovered through status or await. Repeated delivery IDs refer to the same answer, not a new decision.
+
+There is one pending questionnaire per runtime. Async admission fails rather than queuing behind another questionnaire or an unrelated public UI prompt, and blocking `ask_user` rejects while an async questionnaire is pending. Blocking calls still serialize with each other.
+
+Shutdown, reload, session replacement, and tree navigation close the questionnaire and revoke its IDs. Nothing is restored as pending work. A small versioned delivery receipt is recorded in Pi's session history immediately before sending an answer. Historical answers with a receipt on the active branch remain conversation history. Stale queued messages without that branch evidence stay filtered from model context, including after further navigation or reload. Other extensions' queues are untouched.
+
+Async tools are TUI-only. RPC keeps the existing blocking `ask_user` behavior. The same hide/resume controls work in both TUI variants, without replacing or overwriting the main editor. Pi still counts a hidden custom dialog as an open UI prompt for status reporting.
+
 ## TUI controls
 
 - `Tab` or `←`/`→`: move between questions and Review.
@@ -90,12 +120,12 @@ The overlay shows question/answer progress, live text limits, mode-specific cont
 
 ## Mode behavior
 
-| Mode  | Behavior                                                               |
-| ----- | ---------------------------------------------------------------------- |
-| TUI   | Full tabbed overlay, previews, notes, collapse/resume, external editor |
-| RPC   | Native answer, optional-note, and review/edit/submit/cancel dialogs    |
-| JSON  | Tool omitted                                                           |
-| Print | Tool omitted                                                           |
+| Mode  | Behavior                                                                              |
+| ----- | ------------------------------------------------------------------------------------- |
+| TUI   | Blocking and async tools; full overlay, previews, notes, hide/resume, external editor |
+| RPC   | Native answer, optional-note, and review/edit/submit/cancel dialogs                   |
+| JSON  | Tool omitted                                                                          |
+| Print | Tool omitted                                                                          |
 
 RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, and side-by-side preview layout are TUI-only. RPC uses interruption-linked native dialogs, includes bounded preview text in question titles, and offers an optional bounded note after each answer. Multi-select questions first ask whether to choose listed options or write a custom answer; the listed path accepts only in-range choice numbers and re-prompts invalid input. A final native review shows sanitized answer summaries and lets the user submit, edit any answer, or cancel. Cancellation always discards every answer and note draft.
 

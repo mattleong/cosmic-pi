@@ -52,6 +52,8 @@ Each migrated package must prove:
 
 Test Layers are merged and provided once at the test entry point so resource lifetimes match production. No test installs a global telemetry exporter. Session/Pi harnesses, fault policies, and fiber probes remain package-local because the current host/session and failure shapes are materially different; they should move into core only when a second consumer would use the same contract. Schema boundaries are exercised through the shared schema-aware HTTP/document fakes rather than a second assertion DSL.
 
+Async questionnaire tests separate the TUI factory from the `onHandle` mount handshake and protect the shared dialog permit, waiter claims, cancellation, opening failure, delivery failure, bounded retention, and scope shutdown. Host fakes model Pi's global-pop custom-dialog cleanup so submission and abort must preserve unrelated stacked overlays, including abort before a late mount. A low-yield-budget regression interrupts waiter delivery at the masked commit/cleanup boundary. TestClock covers bounded retries, await recovery, and retry shutdown. History tests use branch receipts to preserve valid answers while rejecting late revoked steering messages across repeated tree navigation and reload. Prompt tests reject competing public prompts at admission and during lazy loading without stealing focus. A returned public `sendMessage` call is not tested as model acknowledgement.
+
 ## Validation order
 
 Run the narrow package gate first, then the workspace gate:

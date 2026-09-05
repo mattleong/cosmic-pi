@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
@@ -29,6 +29,10 @@ const opaqueHostFixture = <Value>(value: Value): never => {
   return value as never;
 };
 
+const mountedHandle = (): OverlayHandle =>
+  opaqueHostFixture({ hide: vi.fn(), setHidden: vi.fn(), focus: vi.fn() });
+type TestDialogOptions = { onHandle: (handle: OverlayHandle) => void };
+
 type TestDialogFactory = (
   tui: TUI,
   theme: Theme,
@@ -43,7 +47,7 @@ interface TestDialogFactoryHost {
 }
 
 const dialogFactoryHost = (): TestDialogFactoryHost => ({
-  tui: opaqueHostFixture({ requestRender: vi.fn() }),
+  tui: opaqueHostFixture({ requestRender: vi.fn(), showOverlay: () => ({ hide: vi.fn() }) }),
   theme: opaqueHostFixture({
     bold: (value: string) => value,
     fg: (_color: string, value: string) => value,
@@ -357,7 +361,7 @@ describe("TUI questionnaire boundary", () => {
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
       const done = vi.fn<(outcome: AskUserOutcome) => void>();
-      const custom = vi.fn((factory: TestDialogFactory) => {
+      const custom = vi.fn((factory: TestDialogFactory, options: TestDialogOptions) => {
         const completed = controllable<AskUserOutcome>();
         const host = dialogFactoryHost();
         const keybindings: KeybindingsManager = opaqueHostFixture({
@@ -367,6 +371,7 @@ describe("TUI questionnaire boundary", () => {
           done(outcome);
           completed.resolve(outcome);
         });
+        options.onHandle(mountedHandle());
         component.handleInput?.("1");
         component.handleInput?.("\r");
         return completed.promise;
@@ -421,9 +426,10 @@ describe("TUI questionnaire boundary", () => {
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
       const done = vi.fn<(outcome: AskUserOutcome) => void>();
-      const custom = vi.fn((factory: TestDialogFactory) => {
+      const custom = vi.fn((factory: TestDialogFactory, options: TestDialogOptions) => {
         const host = dialogFactoryHost();
         factory(host.tui, host.theme, host.keybindings, done);
+        options.onHandle(mountedHandle());
         return nonsettling<AskUserOutcome>();
       });
       const ctx = opaqueHostFixture({
@@ -451,9 +457,10 @@ describe("TUI questionnaire boundary", () => {
       const bridge = makeAskUserDialogBridge();
       const done = vi.fn<(outcome: AskUserOutcome) => void>();
       const replacementResume = vi.fn();
-      const custom = vi.fn((factory: TestDialogFactory) => {
+      const custom = vi.fn((factory: TestDialogFactory, options: TestDialogOptions) => {
         const host = dialogFactoryHost();
         factory(host.tui, host.theme, host.keybindings, done);
+        options.onHandle(mountedHandle());
         bridge.activate(replacementResume);
         return nonsettling<AskUserOutcome>();
       });

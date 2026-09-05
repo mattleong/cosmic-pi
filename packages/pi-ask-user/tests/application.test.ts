@@ -10,19 +10,30 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, expect, vi } from "vitest";
 import { askUserWithDependencies } from "../src/application.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
-import type { AskUserRequest } from "../src/questionnaire/schema.ts";
+import type {
+  AskUserRequest,
+  AskUserAsyncRequest,
+  AskUserAsyncControl,
+} from "../src/questionnaire/schema.ts";
+import type {
+  AsyncQuestionnaireSnapshot,
+  AsyncQuestionnaireResult,
+} from "../src/questionnaire/async-model.ts";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 
 type Handler = ExtensionHandler<any, any>;
 interface CapturedTool {
+  readonly name: string;
   readonly execute: (
     id: string,
-    input: AskUserRequest,
+    input: AskUserRequest | AskUserAsyncRequest | AskUserAsyncControl,
     signal: AbortSignal | undefined,
     update: undefined,
     ctx: ExtensionContext,
   ) => Promise<{
     readonly content: readonly { readonly type: string; readonly text: string }[];
-    readonly details: AskUserOutcome;
+    readonly details: AskUserOutcome | AsyncQuestionnaireSnapshot | AsyncQuestionnaireResult;
   }>;
 }
 interface CapturedCommand {
@@ -36,13 +47,13 @@ interface PromiseGate<A> {
   readonly resolve: (value: A | PromiseLike<A>) => void;
 }
 
-const controlled = () =>
+const controlled = <A = void>() =>
   // SAFETY: Every supported Node version implements Promise.withResolvers; ES2023 libs omit it.
   (
     Promise as PromiseConstructor & {
       withResolvers<A>(): PromiseGate<A>;
     }
-  ).withResolvers<void>();
+  ).withResolvers<A>();
 
 const harness = (
   loadPreviewSettings: (
@@ -50,6 +61,7 @@ const harness = (
     projectTrusted: boolean,
     signal?: AbortSignal,
   ) => Promise<void>,
+  overrides: Partial<ExtensionContext> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -59,6 +71,7 @@ const harness = (
     const handlers = new Map<string, Handler>();
     let command: CapturedCommand | undefined;
     let tool: CapturedTool | undefined;
+    const tools = new Map<string, CapturedTool>();
     const fixture = {
       on(name: string, handler: Handler) {
         handlers.set(name, handler);
@@ -66,8 +79,11 @@ const harness = (
       registerCommand: vi.fn((name: string, definition: CapturedCommand) => {
         if (name === "ask-user") command = definition;
       }),
+      sendMessage: vi.fn(),
+      appendEntry: vi.fn(),
       registerTool: vi.fn((definition: CapturedTool) => {
         tool = definition;
+        tools.set(definition.name, definition);
       }),
     };
     // SAFETY: The application uses only the ExtensionAPI methods supplied by this lifecycle fixture.
@@ -79,6 +95,7 @@ const harness = (
       mode: "rpc",
       ui: { notify: vi.fn() },
       isProjectTrusted: () => true,
+      ...overrides,
     };
     // SAFETY: The startup path reads only the context fields supplied by this fixture.
     const ctx = contextFixture as typeof contextFixture & ExtensionContext;
@@ -87,6 +104,8 @@ const harness = (
       ctx,
       emit,
       fixture,
+      tools,
+      handlers,
       get command() {
         return command;
       },
@@ -106,6 +125,67 @@ const request: AskUserRequest = {
       choices: [{ value: "a", label: "A", description: "Choose A." }],
     },
   ],
+};
+
+const asyncUi = () => {
+  let component: Component | undefined;
+  let mounted: (() => void) | undefined;
+  const done = vi.fn();
+  const ui = {
+    notify: vi.fn(),
+    setStatus: vi.fn(),
+    custom: (
+      factory: (
+        tui: TUI,
+        theme: Theme,
+        keys: KeybindingsManager,
+        done: (outcome: AskUserOutcome) => void,
+      ) => Component,
+      options: { onHandle: (handle: OverlayHandle) => void },
+    ) => {
+      const completed = controlled<AskUserOutcome>();
+      // SAFETY: The fake supplies the TUI/theme/keybinding members used by the dialog boundary.
+      const opaque = <A>(value: A): never => value as never;
+      component = factory(
+        opaque({ requestRender: vi.fn(), showOverlay: () => ({ hide: vi.fn() }) }),
+        opaque({
+          fg: (_c: string, text: string) => text,
+          bg: (_c: string, text: string) => text,
+          bold: (text: string) => text,
+        }),
+        opaque({
+          matches: (data: string, key: string) => data === "\r" && key === "tui.select.confirm",
+        }),
+        (outcome) => {
+          done(outcome);
+          completed.resolve(outcome);
+        },
+      );
+      mounted = () =>
+        options.onHandle(opaque({ hide: vi.fn(), setHidden: vi.fn(), focus: vi.fn() }));
+      return completed.promise;
+    },
+  };
+  return {
+    ui,
+    done,
+    get mounted() {
+      return mounted;
+    },
+    get component() {
+      return component;
+    },
+  };
+};
+
+const asyncRequest: AskUserAsyncRequest = {
+  ...request,
+  independentWork: "Inspect fixtures",
+  blockedWork: "Implement choice",
+  questions: request.questions.map((question) => ({
+    ...question,
+    choices: [...question.choices, { value: "b", label: "B", description: "Choose B." }],
+  })),
 };
 
 layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
@@ -180,6 +260,151 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       // SAFETY: The captured handler reads only the notify field supplied here.
       yield* Effect.promise(() => command.handler("", { ui: { notify } } as never));
       expect(notify).toHaveBeenCalledOnce();
+      yield* Effect.promise(() => h.emit("session_shutdown"));
+    }),
+  );
+
+  it.effect(
+    "TUI async acquisition returns before answer, survives tool abort, and tree replacement revokes it",
+    () =>
+      Effect.gen(function* () {
+        const ui = asyncUi();
+        const turn = new AbortController();
+        // SAFETY: This UI fake supplies the custom/notification/status members used by the TUI flow.
+        const h = yield* harness(() => Promise.resolve(), {
+          mode: "tui",
+          ui: ui.ui as never,
+          signal: turn.signal,
+        });
+        yield* Effect.promise(() => h.emit("session_start"));
+        expect(h.tools.has("ask_user_async")).toBe(true);
+        const start = h.tools.get("ask_user_async")!;
+        const control = h.tools.get("ask_user_async_control")!;
+        const signal = new AbortController();
+        const opening = start.execute("call", asyncRequest, signal.signal, undefined, h.ctx);
+        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mounted).toBeDefined()));
+        ui.mounted!();
+        const receipt = yield* Effect.promise(() => opening);
+        expect(receipt.details).toMatchObject({ status: "pending" });
+        if (!("requestId" in receipt.details)) throw new Error("Missing async receipt");
+        const requestId = receipt.details.requestId;
+        signal.abort();
+        turn.abort();
+        expect(ui.done).not.toHaveBeenCalled();
+        const status = yield* Effect.promise(() =>
+          control.execute("status", { action: "status", requestId }, undefined, undefined, h.ctx),
+        );
+        expect(status.details).toMatchObject({ requests: [{ status: "pending" }] });
+        yield* Effect.promise(() => h.emit("session_tree"));
+        expect(ui.done).toHaveBeenCalledOnce();
+        yield* Effect.promise(() =>
+          expect(
+            control.execute("stale", { action: "status" }, undefined, undefined, h.ctx),
+          ).rejects.toMatchObject({ _tag: "AskUserRuntimeClosedError" }),
+        );
+        const fresh = h.tools.get("ask_user_async_control")!;
+        const result = yield* Effect.promise(() =>
+          fresh.execute("fresh", { action: "status" }, undefined, undefined, h.ctx),
+        );
+        expect(result.details).toEqual({ requests: [] });
+        yield* Effect.promise(() => h.emit("session_shutdown"));
+        yield* Effect.promise(() => h.emit("session_shutdown"));
+        expect(ui.done).toHaveBeenCalledOnce();
+      }),
+  );
+
+  it.effect(
+    "tree replacement preserves already-recorded answers but filters late old steering",
+    () =>
+      Effect.gen(function* () {
+        const ui = asyncUi();
+        const branch: Array<
+          | { type: "custom_message"; customType: string; details: object }
+          | { type: "custom"; customType: string; data: object }
+        > = [];
+        // SAFETY: Startup and history filtering read only getBranch on this session manager fixture.
+        const sessionManager: ExtensionContext["sessionManager"] = {
+          getBranch: () => branch,
+        } as never;
+        // SAFETY: The fake supplies only the UI methods used by this questionnaire flow.
+        const h = yield* harness(() => Promise.resolve(), {
+          mode: "tui",
+          ui: ui.ui as never,
+          sessionManager,
+        });
+        yield* Effect.promise(() => h.emit("session_start"));
+        const opening = h.tools
+          .get("ask_user_async")!
+          .execute("open", asyncRequest, undefined, undefined, h.ctx);
+        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mounted).toBeDefined()));
+        ui.mounted!();
+        yield* Effect.promise(() => opening);
+        ui.component!.handleInput?.("1");
+        ui.component!.handleInput?.("\r");
+        yield* Effect.promise(() =>
+          vi.waitFor(() => expect(h.fixture.sendMessage).toHaveBeenCalledOnce()),
+        );
+        const sent = h.fixture.sendMessage.mock.calls[0]![0];
+        const [customType, data] = h.fixture.appendEntry.mock.calls[0]!;
+        branch.push({ type: "custom", customType, data });
+        branch.push({ type: "custom_message", customType: sent.customType, details: sent.details });
+        yield* Effect.promise(() => h.emit("session_tree"));
+        const recorded = { role: "custom", ...sent };
+        const late = {
+          role: "custom",
+          ...sent,
+          details: { ...sent.details, deliveryId: "late-old-answer" },
+        };
+        const foreign = { role: "custom", customType: "another-extension", content: "keep" };
+        const result = yield* Effect.promise(() =>
+          Promise.resolve(
+            h.handlers.get("context")!({ messages: [recorded, late, foreign] }, h.ctx),
+          ),
+        );
+        expect(result).toEqual({ messages: [recorded, foreign] });
+        // Pi can persist a revoked queued message after navigation. It is not a receipt.
+        branch.push({ type: "custom_message", customType: late.customType, details: late.details });
+        for (const activation of ["session_tree", "session_start", "session_tree"]) {
+          yield* Effect.promise(() => h.emit(activation));
+          const again = yield* Effect.promise(() =>
+            Promise.resolve(
+              h.handlers.get("context")!({ messages: [recorded, late, foreign] }, h.ctx),
+            ),
+          );
+          expect(again).toEqual({ messages: [recorded, foreign] });
+        }
+        yield* Effect.promise(() => h.emit("session_shutdown"));
+      }),
+  );
+
+  it.effect("async admission respects unrelated coalesced UI prompts", () =>
+    Effect.gen(function* () {
+      const ui = asyncUi();
+      // SAFETY: The fixture supplies the UI members used by this flow.
+      const h = yield* harness(() => Promise.resolve(), { mode: "tui", ui: ui.ui as never });
+      yield* Effect.promise(() => h.emit("session_start"));
+      yield* Effect.promise(() => h.emit("ui_prompt_start"));
+      const start = h.tools.get("ask_user_async")!;
+      yield* Effect.promise(() =>
+        expect(
+          start.execute("busy", asyncRequest, undefined, undefined, h.ctx),
+        ).rejects.toMatchObject({ reason: "busy" }),
+      );
+      expect(ui.mounted).toBeUndefined();
+      yield* Effect.promise(() => h.emit("ui_prompt_end"));
+      const pending = start.execute("open", asyncRequest, undefined, undefined, h.ctx);
+      yield* Effect.promise(() => vi.waitFor(() => expect(ui.mounted).toBeDefined()));
+      ui.mounted!();
+      yield* Effect.promise(() => pending);
+      yield* Effect.promise(() => h.emit("session_shutdown"));
+    }),
+  );
+
+  it.effect("RPC retains only the compatible blocking tool", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(() => Promise.resolve());
+      yield* Effect.promise(() => h.emit("session_start"));
+      expect([...h.tools.keys()]).toEqual(["ask_user"]);
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
   );

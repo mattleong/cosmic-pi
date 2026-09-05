@@ -10,6 +10,14 @@ export class AskUserHostError extends Schema.TaggedError<AskUserHostError>()("As
   message: Schema.String,
 }) {}
 
+export class AskUserAsyncError extends Schema.TaggedError<AskUserAsyncError>()(
+  "AskUserAsyncError",
+  {
+    reason: Schema.Literals(["busy", "unavailable", "not-found", "invalid-control"]),
+    message: Schema.String,
+  },
+) {}
+
 export class AskUserRuntimeClosedError extends Schema.TaggedError<AskUserRuntimeClosedError>()(
   "AskUserRuntimeClosedError",
   { message: Schema.String },

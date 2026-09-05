@@ -16,7 +16,8 @@ import {
   type AskUserQuestion,
   type AskUserRequest,
 } from "../questionnaire/schema.ts";
-import { captureExternalEditorCommand, editWithExternalEditor } from "./host-external-editor.ts";
+import type { AskUserPromptGate } from "./host-prompt.ts";
+import { makeAskUserTuiHost } from "./host-tui.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 const hostError = (operation: string) =>
@@ -282,83 +283,11 @@ const runRpc = (
     }
   });
 
-/** Pi's custom overlay has no signal option, so this boundary closes it during finalization. */
-const runTui = (
+export const makeAskUserHost = (
   ctx: ExtensionContext,
   bridge: AskUserDialogBridge,
-  request: AskUserRequest,
-): Effect.Effect<AskUserOutcome, AskUserHostError> =>
-  Effect.tryPromise(() => import("../ui/dialog.ts")).pipe(
-    Effect.flatMap(({ AskUserDialog }) =>
-      Effect.suspend(() => {
-        const editorCommand = captureExternalEditorCommand(ctx);
-        const authority = new AbortController();
-        let settled = false;
-        let hostDone: ((outcome: AskUserOutcome) => void) | undefined;
-        let bridgeToken: number | undefined;
-        let dialog: InstanceType<typeof AskUserDialog> | undefined;
-
-        const clearOwnedBridge = (): void => {
-          const token = bridgeToken;
-          if (token === undefined) return;
-          bridgeToken = undefined;
-          bridge.clear(token);
-        };
-        const finish = (outcome: AskUserOutcome): void => {
-          if (settled || hostDone === undefined) return;
-          settled = true;
-          hostDone(outcome);
-        };
-        const close = (): void => {
-          authority.abort();
-          finish(cancelQuestionnaire());
-          clearOwnedBridge();
-        };
-
-        return Effect.tryPromise(() =>
-          ctx.ui.custom<AskUserOutcome>(
-            (tui, theme, keybindings, done) => {
-              hostDone = done;
-              dialog = new AskUserDialog({
-                tui,
-                theme,
-                keybindings,
-                request,
-                done: finish,
-                editExternally: (value) =>
-                  editWithExternalEditor(tui, editorCommand, value, authority.signal),
-                onCollapse: () => {
-                  const token = bridgeToken;
-                  if (!authority.signal.aborted && token !== undefined) {
-                    bridge.markCollapsed(token);
-                  }
-                },
-              });
-              bridgeToken = bridge.activate(() => {
-                if (!authority.signal.aborted) dialog?.resume();
-              });
-              return dialog;
-            },
-            {
-              overlay: true,
-              overlayOptions: {
-                anchor: "bottom-center",
-                width: "100%",
-                maxHeight: "100%",
-                margin: { left: 0, right: 0, bottom: 0 },
-              },
-              onHandle: (handle) => {
-                if (!authority.signal.aborted) dialog?.setOverlayHandle(handle);
-              },
-            },
-          ),
-        ).pipe(Effect.ensuring(Effect.sync(close)));
-      }),
-    ),
-    Effect.mapError(() => hostError("render")),
-  );
-
-export const makeAskUserHost = (ctx: ExtensionContext, bridge: AskUserDialogBridge): AskUserHost =>
+  promptGate?: AskUserPromptGate,
+): AskUserHost =>
   ctx.mode === "tui"
-    ? (request) => runTui(ctx, bridge, request)
+    ? makeAskUserTuiHost(ctx, bridge, promptGate)
     : (request) => runRpc(ctx, request);

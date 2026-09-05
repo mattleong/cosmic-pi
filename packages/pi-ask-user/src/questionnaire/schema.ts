@@ -65,6 +65,41 @@ export const AskUserParameters = Type.Object({
   }),
 });
 
+export const MAX_WORK_DESCRIPTION_LENGTH = 500;
+
+const WorkDescription = Type.String({
+  minLength: 1,
+  maxLength: MAX_WORK_DESCRIPTION_LENGTH,
+  pattern: "\\S",
+});
+
+export const AskUserAsyncParameters = Type.Object({
+  ...AskUserParameters.properties,
+  independentWork: Type.String({
+    ...WorkDescription,
+    description: "Specific work you can safely do without these answers.",
+  }),
+  blockedWork: Type.String({
+    ...WorkDescription,
+    description: "Specific decisions or work that must wait for these answers.",
+  }),
+});
+
+export const AskUserAsyncControlParameters = Type.Object({
+  action: StringEnum(["status", "await", "cancel"] as const),
+  requestId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 100,
+      description:
+        "Request ID. Required for await/cancel; omit for status to list retained requests.",
+    }),
+  ),
+});
+
+export type AskUserAsyncRequest = Static<typeof AskUserAsyncParameters>;
+export type AskUserAsyncControl = Static<typeof AskUserAsyncControlParameters>;
+
 export type AskUserChoice = Static<typeof AskUserChoiceSchema>;
 export type AskUserQuestion = Static<typeof AskUserQuestionSchema>;
 export type AskUserRequest = Static<typeof AskUserParameters>;

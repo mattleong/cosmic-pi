@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import { withCodePreviewShell } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
+import { formatAskUserOutcome } from "../questionnaire/format.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import {
   AskUserParameters,
@@ -13,22 +14,6 @@ import {
   MAX_QUESTIONS,
   type AskUserRequest,
 } from "../questionnaire/schema.ts";
-
-function formatAskUserOutcome(outcome: AskUserOutcome): string {
-  if (outcome.outcome === "cancelled") {
-    return "The user cancelled the questionnaire. Do not immediately ask the same questions again.";
-  }
-  const lines = ["The user submitted these answers:"];
-  for (const answer of outcome.answers) {
-    const value =
-      answer.kind === "choices"
-        ? answer.values.map((item, index) => `${item} (${answer.labels[index] ?? item})`).join(", ")
-        : answer.text;
-    lines.push(`- ${stripTerminalControls(answer.key)}: ${stripTerminalControls(value)}`);
-    if (answer.note) lines.push(`  Note: ${stripTerminalControls(answer.note)}`);
-  }
-  return lines.join("\n");
-}
 
 const CallTitlesProjection = Schema.Struct({
   questions: Schema.Array(Schema.Struct({ title: Schema.String })).check(
