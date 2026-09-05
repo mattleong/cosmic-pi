@@ -33,7 +33,6 @@ tools the host supplies.
 - `ARCHITECTURE.md` - source map and public/private boundaries.
 - `PROVENANCE.md` - upstream origin, pinned commit, deviations, resync policy.
 - `THIRD_PARTY_NOTICES.md` - upstream MIT license notice.
-- `docs/adr/0003-code-mode-runtime.md` (repository root) - the decision record.
 
 ## Verification
 

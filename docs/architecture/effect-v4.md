@@ -1,7 +1,5 @@
 # Effect v4 architecture
 
-The numbered audit implementation is mapped in [effect-audit-mapping.md](effect-audit-mapping.md).
-
 ## Definition
 
 Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, failures, concurrency, resources, state transitions, clocks, configuration, persistence, HTTP, logging, and tests. Pure deterministic functions remain pure and may use Effect data modules when they improve the model.
@@ -56,6 +54,10 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
   higher-order use when a function is overloaded, generic, or accepts optional extra arguments.
 - Add spans around provider requests, refreshes, image streams, advisor checkpoints, and resource initialization without recording secrets.
 
+## Version policy
+
+Jointly released Effect packages use synchronized exact catalog pins in `pnpm-workspace.yaml`. Independently versioned tooling is pinned separately. Do not use ranges or moving tags for these dependencies. Keep prerelease upgrades isolated, treat them as potentially breaking, and run the full validation gate.
+
 ## RC-specific rules
 
 Pinned declarations are the source of truth when older documentation disagrees:
@@ -93,9 +95,9 @@ Each extension has one host-owned session runtime. `PiApi` and the package appli
 - `pi-code-mode` composes its trusted-project scoped config store, session runtime slot,
   interruptible settings dialogs, and one `code_mode` tool over seven core Pi built-ins,
   Windows-only PowerShell, and the explicit Background Tasks stable-session adapter. Each slot input owns a publication flag that deactivation revokes before state clearing and disposal. Slot startup runs core's interruptible best-effort preview bootstrap and returns `void`; current-owner, current-token `onActivated` rereads the guarded live state before it builds, wraps, registers, and activates. The custom settings boundary returns tagged close, integer-prompt, and failure outcomes. An `ensuring` finalizer aborts stale callbacks and closes Pi's editor exactly once without replacing a normal prompt result. Scope selection, list-before-input sequencing, pending preset-write joins, custom application, and fresh-snapshot reopening run in one outer session Effect. A throwing host signal getter fails closed as aborted. Executions and nested Promise calls also run on that runtime; direct built-in dispatch still
-  bypasses Pi middleware and registered overrides (ADR 0004). Background Tasks keeps the sole
+  bypasses Pi middleware and registered overrides. Background Tasks keeps the sole
   process registry and publishes only a token-checked Promise capability through its versioned
-  protocol (ADR 0006). The controller owns renderer ticker cleanup and captures bounded host expand keys once when it builds the definition. Pure rendering and defensive details normalization live in separate UI files. The private host-neutral interpreter's TypeScript source ships under `packages/pi-code-mode/runtime/src/` and Pi/Jiti loads it through one relative-path boundary door.
+  protocol. The controller owns renderer ticker cleanup and captures bounded host expand keys once when it builds the definition. Pure rendering and defensive details normalization live in separate UI files. The private host-neutral interpreter's TypeScript source ships under `packages/pi-code-mode/runtime/src/` and Pi/Jiti loads it through one relative-path boundary door.
 - `pi-code-previews` composes session capability, settings/environment services, scoped Shiki state, and scoped before-write state. Pure diff/layout/rendering remains outside Effect.
 - `pi-ask-user` composes a serialized questionnaire service, abort-aware TUI/RPC host dialog boundary, responsive pure dialog state and presentation, scoped external-editor flow, and cooperative tool renderer.
 - `pi-advisor` composes the parent controller, child runtime, read-only filesystem, and typed Pi command boundary. Lifecycle constructs the scoped review queue directly under the captured application scope instead of providing a queue service Layer. Immediate ingestion remains a bounded synchronous controller mutation.

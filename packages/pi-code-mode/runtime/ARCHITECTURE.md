@@ -15,7 +15,7 @@ through the relative-path boundary door `src/boundary/codemode-runtime.ts`.
 The `pi-code-mode` extension owns every
 Pi-facing concern above this boundary: the outer `code_mode` agent tool, adapters for seven core
 `tools.pi` built-ins and Windows PowerShell, the explicit Background Tasks session adapter, their
-authority policies (ADRs 0004 and 0006), and the Pi host limits (program source size, cumulative
+[authority policies](../ARCHITECTURE.md), and the Pi host limits (program source size, cumulative
 nested output).
 
 ## Source map

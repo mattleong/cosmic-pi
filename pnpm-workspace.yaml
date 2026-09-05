@@ -1,7 +1,7 @@
 packages:
   - packages/*
   # The private Code Mode runtime is nested inside the public pi-code-mode package so its
-  # TypeScript source ships inside the pi-code-mode tarball (see ADR 0003).
+  # TypeScript source ships inside the pi-code-mode tarball.
   - packages/pi-code-mode/runtime
 
 catalog:

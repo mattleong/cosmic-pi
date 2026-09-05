@@ -227,5 +227,5 @@ Upstream updates are pulled by pinned manual review only:
    hook**, and **the deviation-10 closed interpreter value domain**; do not adopt
    upstream OpenAPI or host-adapter code. Re-run the confinement and lifecycle
    tests.
-4. Update the pinned commit here and in `docs/adr/0003-code-mode-runtime.md`,
-   then run the full package and workspace validation gates.
+4. Update the pinned commit here, then run the full package and workspace
+   validation gates.

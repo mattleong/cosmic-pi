@@ -27,7 +27,7 @@ session.
 
 ## Lifecycle
 
-Background tasks are non-interactive in the MVP and are always terminated when the Pi session reloads, switches, forks, or shuts down. Tasks have no default runtime timeout; the agent may provide one per start. A failed or unconfirmed stop remains active in `stopping` and retains capacity until the operating-system process handle confirms exit; the tool reports a typed termination failure rather than fabricating completion.
+Background tasks are non-interactive. Session reload, switch, fork, and shutdown initiate process-tree cleanup. Cleanup cannot be guaranteed after host `SIGKILL` or machine loss; Windows post-leader cleanup is best effort without Job Objects. Tasks have no default runtime timeout; the agent may provide one per start. A failed or unconfirmed stop remains active in `stopping` and retains capacity until the operating-system process handle confirms exit; the tool reports a typed termination failure rather than fabricating completion.
 
 ## Configuration
 

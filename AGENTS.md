@@ -7,7 +7,7 @@
 - `packages/pi-better-openai/` contains the Better OpenAI pi extension.
 - `packages/pi-better-xai/` contains the Better xAI subscription usage extension.
 - `packages/pi-background-task/` contains the session-scoped background task extension.
-- `packages/pi-code-mode/` contains the Code Mode Pi extension: the `code_mode` agent tool (confined interpreted programs over all seven `tools.pi` built-ins), trusted-project-only scoped settings, session lifecycle, and `/code-mode-settings`. Nested built-ins deliberately use direct fresh definitions rather than Pi middleware or registered overrides (ADR 0004).
+- `packages/pi-code-mode/` contains the Code Mode Pi extension: the `code_mode` agent tool (confined interpreted programs over all seven `tools.pi` built-ins), trusted-project-only scoped settings, session lifecycle, and `/code-mode-settings`. Nested built-ins deliberately use direct fresh definitions rather than Pi middleware or registered overrides.
 - `packages/pi-code-mode/runtime/` contains the private, host-neutral Code Mode execution runtime vendored from OpenCode 2 (no Pi imports; see its `PROVENANCE.md`). It is a nested workspace package whose TypeScript `src/` ships inside the `pi-code-mode` tarball; Pi/Jiti loads it only through `pi-code-mode`'s `src/boundary/codemode-runtime.ts` door.
 - `packages/pi-code-previews/` contains the code-preview pi extension.
 - `packages/pi-cosmic-core/` contains shared Effect-first runtime foundations for the extension packages.
@@ -153,7 +153,7 @@ Mock owned domain boundaries, not external provider protocols. Test command hand
 ## Effect architecture
 
 - The workspace is being rearchitected around the exact Effect v4 prerelease versions in `pnpm-workspace.yaml`.
-- Read `docs/adr/0001-effect-v4-beta.md` and `docs/architecture/` before changing application architecture.
+- Read `docs/architecture/` before changing application architecture.
 - Treat pinned Effect declarations as authoritative over older docs. Reassess this policy when the pin changes or Effect v4 becomes stable.
 - New or migrated packages must extend `tsconfig.effect.json`; all packages must inherit the Effect language-service plugin.
 - Keep Effect runners at named Pi host boundaries, scope every resource and background fiber, use Effect Schema at unknown boundaries, and model expected failures with typed tagged errors.

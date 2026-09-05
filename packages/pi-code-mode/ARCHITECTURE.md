@@ -7,8 +7,7 @@ confined JavaScript program over seven core Pi built-ins under `tools.pi`: `read
 `tools.session.backgroundTask` leaf reaches the current `pi-background-task` runtime through its
 versioned session protocol. The private runtime supplies `tools.$codemode.search`.
 
-The interpreter is the nested `pi-code-mode-runtime` workspace package under `runtime/` (ADR
-0003). Its TypeScript source ships in this package and loads through one computed relative import
+The interpreter is the nested `pi-code-mode-runtime` workspace package under `runtime/`. Its TypeScript source ships in this package and loads through one computed relative import
 in `src/boundary/codemode-runtime.ts`. The nested package name is never resolved at runtime, so a
 packed install needs no private registry package and uses the extension's single Effect instance.
 Only runtime source plus its README, legal, and provenance documents ship.
@@ -120,9 +119,9 @@ Grep context is a non-negative safe integer. Bash and PowerShell timeouts are po
 numbers and may be fractional. Invalid numeric input fails before a fresh Pi definition runs.
 
 Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and `tool_result`
-middleware, approvals, previews, registered overrides, and session-specific operations (ADR 0004).
+middleware, approvals, previews, registered overrides, and session-specific operations.
 Background Tasks calls query one stable-session, token-checked Promise capability on each
-invocation. They never dispatch the registered top-level definition (ADR 0006).
+invocation. They never dispatch the registered top-level definition.
 
 Interpreter confinement limits JavaScript, not supplied-tool authority. Bash has full local-user
 process, environment, network, and filesystem authority. Read, edit, and write accept relative,

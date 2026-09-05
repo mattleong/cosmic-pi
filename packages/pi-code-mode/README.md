@@ -7,12 +7,12 @@ program orchestrating seven core Pi built-ins (`tools.pi.read`, `tools.pi.bash`,
 single tool call, with trusted-project-only scoped settings.
 
 The program is TypeScript-transpiled, Acorn-parsed, and executed by a vendored tree-walk
-interpreter (OpenCode 2 Code Mode; see ADR 0003) — never `eval`, `Function`, `node:vm`, or a
-child JavaScript process. The interpreter provides no ambient filesystem, network, process,
+interpreter from OpenCode 2 Code Mode. See [runtime provenance](runtime/PROVENANCE.md).
+It never uses `eval`, `Function`, `node:vm`, or a child JavaScript process. The interpreter provides no ambient filesystem, network, process,
 environment, module, or timer APIs; programs can only call the supplied tool tree and the
 runtime's own `tools.$codemode.search` discovery tool. Supplied shell, edit, write, and
 background-task start operations intentionally confer full local-user process, network,
-environment, and unrestricted filesystem authority (ADRs 0004 and 0006). The interpreter lives in the private
+environment, and unrestricted filesystem authority. The interpreter lives in the private
 `pi-code-mode-runtime` workspace package nested at `runtime/` inside this package; its
 TypeScript `runtime/src/` tree ships inside this package and Pi/Jiti loads it directly.
 
@@ -65,13 +65,13 @@ Shell tools can execute processes, use the inherited environment and network, an
 arbitrary paths. Read, edit, and write accept paths outside the project, including absolute
 and home-relative paths. `code_mode` is an orchestration runtime, not a permission, process,
 network, filesystem, or project-containment sandbox. MCP and arbitrary dynamic dispatch remain
-separate. See ADR 0004.
+separate. See [Architecture](ARCHITECTURE.md).
 
 `tools.session.backgroundTask` is one reviewed adapter, not registered-tool dispatch. It queries
 a versioned `pi-background-task` capability for the same stable Pi session on each invocation.
 The provider must be loaded, current, and active. A started task may outlive the Code Mode call;
 Background Tasks owns it and terminates it at Pi session shutdown. Deactivating the top-level
-`background_task` tool also makes the nested adapter unavailable. See ADR 0006.
+`background_task` tool also makes the nested adapter unavailable. See the [Background Tasks architecture](../pi-background-task/ARCHITECTURE.md).
 
 ## Availability policy
 
