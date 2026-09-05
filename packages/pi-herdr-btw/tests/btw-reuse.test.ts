@@ -592,8 +592,6 @@ describe("herdr-btw reuse workflow", () => {
           outcome: "uncertain",
           paneId: "w1:p2",
         });
-        expect(result.failure.message).toContain("may have been recorded");
-        expect(result.failure.message).toContain("Do not retry");
         expect(result.failure.message).toContain("Pane w1:p2 was retained");
       }
       expect(test.recordAttempts).toHaveLength(1);

@@ -171,7 +171,7 @@ export class AskUserDialog implements Focusable {
     const trimmed = value.trim();
     const maximum = input.kind === "note" ? MAX_NOTE_LENGTH : MAX_CUSTOM_ANSWER_LENGTH;
     if (input.kind === "custom" && trimmed.length === 0) {
-      this.inputError = "A custom answer cannot be empty.";
+      this.inputError = "Write an answer first.";
       this.refresh();
       return;
     }

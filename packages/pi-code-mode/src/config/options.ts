@@ -152,7 +152,7 @@ export const CODE_MODE_SETTING_DESCRIPTORS: readonly CodeModeSettingDescriptor[]
   integerDescriptor({
     id: "timeoutMs",
     label: "Program timeout (ms)",
-    description: "Wall-clock budget per Code Mode program, in milliseconds.",
+    description: "Maximum runtime for each Code Mode program, in milliseconds.",
     values: ["5000", "15000", "30000", "60000", "120000", "300000"],
   }),
   integerDescriptor({
@@ -176,7 +176,7 @@ export const CODE_MODE_SETTING_DESCRIPTORS: readonly CodeModeSettingDescriptor[]
   integerDescriptor({
     id: "maxCumulativeChildOutputBytes",
     label: "Max child output bytes",
-    description: "Cumulative bytes of child tool output one program may consume.",
+    description: "Maximum total tool output one program can receive, in bytes.",
     values: ["524288", "1048576", "2097152", "8388608"],
   }),
   integerDescriptor({

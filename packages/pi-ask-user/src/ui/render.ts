@@ -141,7 +141,7 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
   });
   lines.push("");
   const complete = isQuestionnaireComplete(model.state);
-  const actions = [complete ? "Submit answers" : "Answer next unanswered", "Cancel"];
+  const actions = [complete ? "Submit answers" : "Answer next question", "Cancel"];
   actions.forEach((action, index) => {
     const focused = model.state.reviewCursor === index;
     append(

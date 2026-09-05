@@ -11,12 +11,15 @@ import type {
   AsyncQuestionnaireResult,
 } from "../questionnaire/async-model.ts";
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";
+import { ASYNC_MESSAGE_TYPE } from "../boundary/host-delivery.ts";
+import { renderAsyncCall, renderAsyncResult, renderAsyncMessage } from "../ui/async-tool-render.ts";
 
 export function registerAsyncAskUserTools(
   pi: ExtensionAPI,
   start: (input: AskUserAsyncRequest, signal?: AbortSignal) => Promise<AsyncQuestionnaireSnapshot>,
   control: (input: AskUserAsyncControl, signal?: AbortSignal) => Promise<AsyncQuestionnaireResult>,
 ): void {
+  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, renderAsyncMessage);
   pi.registerTool(
     withCodePreviewShell(
       defineTool({
@@ -31,6 +34,10 @@ export function registerAsyncAskUserTools(
           "Apply ask_user's question batching, choice, recommendation, and credential-safety rules to ask_user_async. Cancellation is not approval; do not repeat a cancelled questionnaire immediately.",
           "Async answer messages and control results carry stable delivery IDs. Treat repeated IDs as the same decision. Runtime shutdown, reload, replacement, and tree navigation revoke pending questionnaires.",
         ],
+        renderCall(args, theme, context) {
+          return renderAsyncCall(args, theme, context.expanded);
+        },
+        renderResult: renderAsyncResult,
         parameters: AskUserAsyncParameters,
         executionMode: "sequential",
         execute(_id, input, signal) {
@@ -51,6 +58,10 @@ export function registerAsyncAskUserTools(
           "Inspect, await, or cancel a session-local async questionnaire. status returns the full request result, or metadata for all retained requests when requestId is omitted. await and cancel require requestId. Await interruption leaves the questionnaire open and restores automatic delivery. Cancel still closes it while another caller owns await delivery. Status is non-consuming. Results carry stable delivery IDs; sent means host call returned, not model acknowledgement. Delivery failures retain the answer for status/await recovery.",
         promptSnippet:
           "Await async answers when independent work is exhausted, or inspect/cancel a questionnaire",
+        renderCall(args, theme, context) {
+          return renderAsyncCall(args, theme, context.expanded, true);
+        },
+        renderResult: renderAsyncResult,
         parameters: AskUserAsyncControlParameters,
         executionMode: "sequential",
         execute(_id, input, signal) {

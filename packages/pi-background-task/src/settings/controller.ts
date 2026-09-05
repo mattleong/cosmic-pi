@@ -71,7 +71,12 @@ function openTaskManager(
   actions: TaskManagerActions,
 ): Promise<void> {
   if (ctx.mode !== "tui") {
-    if (ctx.hasUI) notifyAtHostBoundary(ctx, "/tasks requires interactive TUI mode.", "warning");
+    if (ctx.hasUI)
+      notifyAtHostBoundary(
+        ctx,
+        "Open Pi in an interactive terminal to view background tasks with /tasks.",
+        "warning",
+      );
     return Promise.resolve();
   }
   return ctx.ui.custom<void>(

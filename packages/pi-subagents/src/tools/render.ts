@@ -76,7 +76,7 @@ const expandedRunReportSections = (
       sections.push({
         name,
         kind: "report",
-        text: "Report content was omitted from this persisted card; use subagent_status for this run.",
+        text: "This saved card does not include the report content; use subagent_status for this run.",
       });
     if (run.error)
       sections.push({
@@ -88,7 +88,7 @@ const expandedRunReportSections = (
       sections.push({
         name,
         kind: "failure",
-        text: "Failure detail was omitted from this persisted card; use subagent_status for this run.",
+        text: "This saved card does not include the failure detail; use subagent_status for this run.",
       });
     return sections;
   });
@@ -322,7 +322,7 @@ const runOverviewComponent = (
               truncateToWidth(
                 theme.fg(
                   "dim",
-                  `${sanitizeTerminalLine(run.name)} is retained · use subagent_send for its next assignment.`,
+                  `${sanitizeTerminalLine(run.name)} is ready for another assignment · use subagent_send.`,
                 ),
                 safeWidth,
               ),
@@ -485,7 +485,7 @@ const includeContentOmission = (
 ): SemanticOutcomeBanner | undefined => {
   if (!omitted) return banner;
   const warning =
-    "Some report content was omitted from the persisted card; use subagent_status for individual runs";
+    "This saved card does not include some report content; use subagent_status for individual runs";
   return banner
     ? { color: "warning", text: `${banner.text} · ${warning}` }
     : { color: "warning", text: warning };
@@ -499,11 +499,7 @@ const recoveredOmittedFallback = (
   if (!fallback) return undefined;
   const container = new Container();
   container.addChild(
-    new Text(
-      theme.fg("warning", theme.bold("Recovered omitted output · bounded complete result follows")),
-      0,
-      0,
-    ),
+    new Text(theme.fg("warning", theme.bold("Recovered output shown below")), 0, 0),
   );
   container.addChild(new Text(theme.fg("toolOutput", fallback), 2, 0));
   return container;

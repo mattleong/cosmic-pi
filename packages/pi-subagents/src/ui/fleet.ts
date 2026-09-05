@@ -381,8 +381,8 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (confirmed && run && canStop(run)) {
       this.pendingStop = undefined;
       this.performAction(
-        `Stopping subtree at ${sanitizeTerminalLine(run.name)}…`,
-        `Stopped subtree at ${sanitizeTerminalLine(run.name)}.`,
+        `Stopping ${sanitizeTerminalLine(run.name)} and its child agents…`,
+        `Stopped ${sanitizeTerminalLine(run.name)} and its child agents.`,
         () => this.options.actions.stop(run.id),
       );
       return;

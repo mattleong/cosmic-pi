@@ -80,6 +80,7 @@ const harness = (
         if (name === "ask-user") command = definition;
       }),
       sendMessage: vi.fn(),
+      registerMessageRenderer: vi.fn(),
       appendEntry: vi.fn(),
       registerTool: vi.fn((definition: CapturedTool) => {
         tool = definition;

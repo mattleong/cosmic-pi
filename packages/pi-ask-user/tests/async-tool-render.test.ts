@@ -1,0 +1,151 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { describe, expect, it } from "vitest";
+import {
+  renderAsyncCall,
+  renderAsyncMessage,
+  renderAsyncResult,
+} from "../src/ui/async-tool-render.ts";
+
+// SAFETY: The fixture supplies every theme operation used by these renderers.
+const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as Theme;
+const output = (component: Component) => component.render(240).join("\n");
+const outcome = {
+  outcome: "submitted",
+  answers: [
+    { key: "route", kind: "choices", labels: ["Scenic"], note: "Avoid tolls" },
+    { key: "time", kind: "custom", text: "Tomorrow morning" },
+  ],
+};
+const snapshot = {
+  requestId: "request-private-id",
+  deliveryId: "delivery-private-id",
+  status: "submitted",
+  delivery: "sent",
+  outcome,
+};
+const message = {
+  details: { ...snapshot, generation: "generation-private-id" },
+  content: "Complete agent guidance remains available.",
+};
+const result = <Details, Content>(details: Details, expanded = false, content?: Content) =>
+  output(renderAsyncResult({ details, content }, { expanded, isPartial: false }, theme));
+
+describe("async questionnaire replay rendering", () => {
+  it("projects answers and notes without exposing delivery metadata until expanded", () => {
+    for (const rendered of [
+      result(snapshot),
+      result({ requests: [snapshot] }),
+      output(renderAsyncMessage(message, { expanded: false, outputPad: 0 }, theme)),
+    ]) {
+      expect(rendered).toContain("Scenic");
+      expect(rendered).toContain("Tomorrow morning");
+      expect(rendered).toContain("Avoid tolls");
+      expect(rendered).not.toContain(snapshot.requestId);
+      expect(rendered).not.toContain(snapshot.deliveryId);
+    }
+    for (const rendered of [
+      result(snapshot, true, message.content),
+      output(renderAsyncMessage(message, { expanded: true, outputPad: 0 }, theme)),
+    ]) {
+      expect(rendered).toContain(snapshot.requestId);
+      expect(rendered).toContain(snapshot.deliveryId);
+      expect(rendered).toContain(message.content);
+    }
+  });
+
+  it("does not show stale submitted answers for pending, failed, cancelled, or partial results", () => {
+    for (const status of ["pending", "failed", "cancelled"]) {
+      expect(result({ ...snapshot, status })).not.toContain("Scenic");
+    }
+    expect(
+      output(renderAsyncResult({ details: snapshot }, { expanded: false, isPartial: true }, theme)),
+    ).not.toContain("Scenic");
+    expect(
+      output(
+        renderAsyncMessage(
+          {
+            ...message,
+            details: {
+              ...message.details,
+              outcome: { outcome: "cancelled", answers: outcome.answers },
+            },
+          },
+          { expanded: false, outputPad: 0 },
+          theme,
+        ),
+      ),
+    ).not.toContain("Scenic");
+  });
+
+  it("falls back safely for malformed, oversized, and hostile replay data", () => {
+    const hostile = Object.defineProperty({}, "details", {
+      get() {
+        throw new Error("hostile getter");
+      },
+    });
+    const invalid = [
+      null,
+      { ...snapshot, outcome: { outcome: "submitted", answers: [{ kind: "custom" }] } },
+      { requests: Array.from({ length: 17 }, () => snapshot) },
+      {
+        ...snapshot,
+        outcome: {
+          outcome: "submitted",
+          answers: Array.from({ length: 5 }, () => outcome.answers[0]),
+        },
+      },
+    ];
+    const content = [
+      { type: "text", text: "safe\u001b[31m fallback" },
+      { type: "image", data: "secret" },
+      { type: "text", text: 123 },
+      null,
+    ];
+    for (const details of invalid) {
+      const rendered = result(details, false, content);
+      expect(rendered).toContain("safe fallback");
+      expect(rendered).not.toContain("secret");
+      expect(rendered).not.toContain("\u001b");
+    }
+    expect(() =>
+      renderAsyncResult(hostile, { expanded: true, isPartial: false }, theme),
+    ).not.toThrow();
+    expect(() =>
+      renderAsyncMessage(hostile, { expanded: true, outputPad: 0 }, theme),
+    ).not.toThrow();
+    expect(() =>
+      renderAsyncCall(
+        Object.defineProperty({}, "questions", {
+          get() {
+            throw new Error("hostile getter");
+          },
+        }),
+        theme,
+        false,
+      ),
+    ).not.toThrow();
+  });
+
+  it("sanitizes answers, notes, titles, metadata and notification fallback text", () => {
+    const dirty = "value\u001b[31m";
+    const details = {
+      ...snapshot,
+      requestId: dirty,
+      deliveryId: dirty,
+      outcome: {
+        outcome: "submitted",
+        answers: [{ key: dirty, kind: "custom", text: dirty, note: dirty }],
+      },
+    };
+    const rendered = [
+      result(details, true),
+      output(renderAsyncMessage({ content: dirty }, { expanded: false, outputPad: 0 }, theme)),
+      output(renderAsyncCall({ questions: [{ title: dirty }] }, theme, false)),
+    ];
+    for (const text of rendered) {
+      expect(text).toContain("value");
+      expect(text).not.toContain("\u001b");
+    }
+  });
+});

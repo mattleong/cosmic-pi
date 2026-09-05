@@ -270,7 +270,7 @@ export class TaskManagerComponent implements Component {
         ? `f ${this.follow ? "Unfollow" : "Follow"}`
         : undefined,
       selected && isActiveTaskState(selected.state) ? "x Stop" : undefined,
-      tasks.some((task) => !isActiveTaskState(task.state)) ? "c Clear" : undefined,
+      tasks.some((task) => !isActiveTaskState(task.state)) ? "c Clear finished" : undefined,
     ].filter((item): item is string => item !== undefined);
     const joinedActions = actions.length > 0 ? actions.join(" · ") : undefined;
     // The expanded ? overlay is the discoverable place for the full motion vocabulary.
@@ -364,7 +364,7 @@ export class TaskManagerComponent implements Component {
     }
     if (task.droppedLogBytes > 0)
       lines.push(
-        this.options.theme.fg("warning", `… ${task.droppedLogBytes} earlier bytes discarded`),
+        this.options.theme.fg("warning", `… ${task.droppedLogBytes} bytes of older output removed`),
       );
     const beforeLogs = lines.length;
     for (const line of this.logLines(task.logs)) lines.push(line);

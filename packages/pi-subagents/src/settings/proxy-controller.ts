@@ -91,7 +91,11 @@ export const registerSubagentProxyManagerCommand = (
         return Promise.resolve();
       }
       if (ctx.mode !== "tui") {
-        if (ctx.hasUI) ctx.ui.notify("/subagents requires interactive TUI mode.", "warning");
+        if (ctx.hasUI)
+          ctx.ui.notify(
+            "Open Pi in an interactive terminal to view agents with /subagents.",
+            "warning",
+          );
         return Promise.resolve();
       }
       let revision = 0;

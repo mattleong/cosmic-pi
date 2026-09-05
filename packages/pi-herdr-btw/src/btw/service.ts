@@ -86,7 +86,7 @@ const linkRecordFailure = (result: Exclude<HerdrBtwLinkRecordResult, "recorded">
         operation: "record BTW link",
         code: "herdr_btw_link_record_outcome_uncertain",
         message:
-          "The side session started, and its reusable link may have been recorded, but the parent append did not return normally. Do not retry the command until you inspect the retained pane and parent session.",
+          "The side session started, but Pi couldn't confirm whether its link was saved. Inspect the open pane and parent conversation before retrying the command.",
         outcome: "uncertain",
       });
 

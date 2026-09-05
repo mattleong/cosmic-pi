@@ -120,7 +120,10 @@ export function registerSettingsController(
     updateContext(ctx);
     if (!hasTerminalUI(ctx)) {
       safeHostUi(() =>
-        ctx.ui.notify("Better OpenAI settings require interactive TUI mode.", "warning"),
+        ctx.ui.notify(
+          "Open Pi in an interactive terminal to change Better OpenAI settings.",
+          "warning",
+        ),
       );
       return Promise.resolve();
     }

@@ -12,7 +12,10 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
     handler: (_args, ctx) => {
       if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
         if (ctx.hasUI)
-          ctx.ui.notify("Code preview settings require interactive TUI mode.", "warning");
+          ctx.ui.notify(
+            "Open Pi in an interactive terminal to change code preview settings.",
+            "warning",
+          );
         return Promise.resolve();
       }
       return ctx.ui.custom((tui, theme, keybindings, done) => {

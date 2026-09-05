@@ -118,7 +118,7 @@ function openAdvisorSetup(
 ): Effect.Effect<void, PiCommandError> {
   if (ctx.mode !== "tui")
     return Effect.sync(() =>
-      ctx.ui.notify("Advisor setup requires interactive TUI mode.", "error"),
+      ctx.ui.notify("Open Pi in an interactive terminal to run /advisor setup.", "error"),
     );
   return selectAdvisorOnboardingAtHostBoundary(ctx).pipe(
     Effect.flatMap((selected) => {
@@ -143,7 +143,7 @@ function requestReview(
   if (!modelReady)
     return Effect.sync(() =>
       ctx.ui.notify(
-        "Advisor needs an available authenticated model. Run /advisor setup.",
+        "Choose an advisor model with a working sign-in or API credentials. Run /advisor setup.",
         "warning",
       ),
     );

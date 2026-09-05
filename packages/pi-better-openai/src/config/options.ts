@@ -23,7 +23,7 @@ const NonBlankStringSchema = Schema.String.check(
 export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "persistState",
-    label: "Persist fast state",
+    label: "Remember fast mode",
     currentValue: (cfg) => String(cfg.persistState),
     values: ["true", "false"],
     description: "Remember fast-mode state across sessions.",
@@ -59,7 +59,7 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
     label: "Image model",
     currentValue: (cfg) => cfg.image.defaultModel,
     values: ["gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5"],
-    description: "Mainline model used for image generation when current model is not openai-codex.",
+    description: "Model to use for image generation when the current model isn't OpenAI Codex.",
     decoder: NonBlankStringSchema,
   },
   {

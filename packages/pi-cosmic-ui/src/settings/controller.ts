@@ -119,7 +119,7 @@ export function registerSettingsCommand(
       const notify = (message: string, level: "warning" | "error") =>
         options.callbacks.invoke("notify", () => ctx.ui.notify(message, level), undefined);
       if (hostQuery(() => ctx.mode, "rpc") !== "tui") {
-        notify("Cosmic UI settings require interactive TUI mode.", "warning");
+        notify("Open Pi in an interactive terminal to change Cosmic UI settings.", "warning");
         return Promise.resolve();
       }
       const abort = snapshotHostAbortSignal(options.callbacks, () => ctx.signal);

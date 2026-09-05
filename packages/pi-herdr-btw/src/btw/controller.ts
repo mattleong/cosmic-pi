@@ -28,7 +28,7 @@ const registerCommand = (
     description,
     handler: (args, ctx) => {
       if (ctx.mode !== "tui") {
-        notifyHerdrBtw(ctx, `/${name} is available only in Pi's interactive TUI.`, "error");
+        notifyHerdrBtw(ctx, `Open Pi in an interactive terminal to use /${name}.`, "error");
         return Promise.resolve();
       }
 
@@ -52,7 +52,7 @@ export const registerHerdrBtwCommands = (
   registerCommand(
     pi,
     "herdr-btw",
-    "Reuse or open this session's durable Herdr BTW pane in the current tab.",
+    "Open or return to a side conversation in the current tab.",
     handlers.open,
   );
   registerCommand(
