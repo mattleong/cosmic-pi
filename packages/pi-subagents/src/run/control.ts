@@ -581,8 +581,16 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         return yield* withLock(
           Effect.gen(function* () {
             const selected = yield* requireRecord(id);
-            if (isTerminalRunState(selected.view.state) || selected.view.state === "stopping")
-              return { record: selected, cleanupRequired: false as const };
+            if (isTerminalRunState(selected.view.state))
+              return {
+                record: selected,
+                cleanupRequired: selected.cleanupPending,
+                preserveOutcome: true,
+              };
+            // Overlapping subtree traversals must join descendant cleanup before
+            // closing an ancestor, even when another stop already claimed it.
+            if (selected.view.state === "stopping")
+              return { record: selected, cleanupRequired: true as const };
             selected.stoppedByParent = true;
             selected.cleanupPending = true;
             selected.activeTools.clear();
@@ -599,9 +607,15 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           }),
         );
       }),
-      ({ record, cleanupRequired }) =>
+      ({ record, cleanupRequired, preserveOutcome }) =>
         cleanupRequired
-          ? closeRecordScope(record).pipe(Effect.andThen(settle(record, "stopped")))
+          ? closeRecordScope(record).pipe(
+              Effect.andThen(() =>
+                preserveOutcome
+                  ? Effect.succeed(snapshotView(record.view))
+                  : settle(record, "stopped"),
+              ),
+            )
           : Effect.succeed(snapshotView(record.view)),
     );
 

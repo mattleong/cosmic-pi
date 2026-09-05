@@ -123,7 +123,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             ),
           (ownedLease) =>
             !handedOff || pool.releaseState.authorized
-              ? writerLeases.release(ownedLease).pipe(Effect.interruptible, Effect.orDie)
+              ? writerLeases.release(ownedLease).pipe(Effect.orDie)
               : Effect.void,
         ).pipe(Effect.provideService(Scope.Scope, pool.leaseScope));
         const attached = yield* withLock(
@@ -361,60 +361,97 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
         }),
       );
     });
-  const closeRecordScope = (record: RunRecord, scope: Scope.Closeable = record.scope) =>
-    Effect.gen(function* () {
-      const closeSettled = yield* Deferred.make<void>();
-      const claim = yield* withLock(
-        Effect.sync(() => {
-          if (record.closingScope === scope)
+  const closeRecordScope = (
+    record: RunRecord,
+    scope: Scope.Closeable = record.scope,
+  ): Effect.Effect<void> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const closeSettled = yield* Deferred.make<void>();
+        const claim = yield* withLock(
+          Effect.sync(() => {
+            if (record.scope !== scope) return { close: false as const, settled: undefined };
+            if (record.closingScope === scope)
+              return {
+                close: false as const,
+                settled: record.closingScopeSettled,
+              };
+            record.closingScope = scope;
+            record.closingScopeSettled = closeSettled;
             return {
-              close: false as const,
-              settled: record.closingScopeSettled,
+              close: true as const,
+              settled: closeSettled,
+              spawnSettled:
+                record.backendSpawnAttempt?.scope === scope
+                  ? record.backendSpawnAttempt.settled
+                  : undefined,
             };
-          record.closingScope = scope;
-          record.closingScopeSettled = closeSettled;
-          return {
-            close: true as const,
-            settled: closeSettled,
-            spawnSettled:
-              record.backendSpawnAttempt?.scope === scope
-                ? record.backendSpawnAttempt.settled
-                : undefined,
-          };
-        }),
-      );
-      if (!claim.close) {
-        if (claim.settled) yield* Deferred.await(claim.settled);
-        return;
-      }
-      yield* (claim.spawnSettled ? Deferred.await(claim.spawnSettled) : Effect.void).pipe(
-        Effect.andThen(Scope.close(scope, Exit.void)),
-        Effect.andThen(detachWriterPoolAfterCleanup(record, scope)),
-        Effect.exit,
-        Effect.flatMap((exit) =>
-          Exit.isSuccess(exit)
-            ? clearCleanupPending(record, scope)
-            : retainCleanupQuarantine(record, scope).pipe(
-                Effect.andThen(
-                  Effect.logWarning("Subagent cleanup failed; the run remains quarantined.").pipe(
-                    Effect.annotateLogs("runId", record.view.id),
+          }),
+        );
+        if (!claim.close) {
+          if (!claim.settled) return;
+          yield* restore(Deferred.await(claim.settled));
+          const abandoned = yield* withLock(
+            Effect.sync(
+              () => record.scope === scope && record.closingScopeSettled !== claim.settled,
+            ),
+          );
+          // A pre-close owner can relinquish its claim. Existing joiners must retry,
+          // not mistake that owner's wakeup for completed resource cleanup.
+          if (abandoned) yield* restore(closeRecordScope(record, scope));
+          return;
+        }
+        if (claim.spawnSettled)
+          yield* restore(Deferred.await(claim.spawnSettled)).pipe(
+            Effect.onInterrupt(() =>
+              withLock(
+                Effect.sync(() => {
+                  if (
+                    record.closingScope === scope &&
+                    record.closingScopeSettled === closeSettled
+                  ) {
+                    record.closingScope = undefined;
+                    record.closingScopeSettled = undefined;
+                  }
+                  // The scope is still open. Keep cleanupDisposition and its shared
+                  // settlement pending so late launch compensation can finish cleanup.
+                  Deferred.doneUnsafe(closeSettled, Effect.void);
+                }),
+              ),
+            ),
+          );
+        // Scope.close marks the scope closed before running finalizers. Once started,
+        // its owned releases and outcome publication must finish before a shutdown
+        // interrupt can settle the shared latch. A stalled release therefore keeps
+        // shutdown waiting; it must not be reported as completed cleanup.
+        yield* Scope.close(scope, Exit.void).pipe(
+          Effect.andThen(detachWriterPoolAfterCleanup(record, scope)),
+          Effect.exit,
+          Effect.flatMap((exit) =>
+            Exit.isSuccess(exit)
+              ? clearCleanupPending(record, scope)
+              : retainCleanupQuarantine(record, scope).pipe(
+                  Effect.andThen(
+                    Effect.logWarning("Subagent cleanup failed; the run remains quarantined.").pipe(
+                      Effect.annotateLogs("runId", record.view.id),
+                    ),
                   ),
                 ),
-              ),
-        ),
-        Effect.catch((error) =>
-          retainCleanupQuarantine(record, scope).pipe(
-            Effect.andThen(
-              Effect.logWarning(`Subagent cleanup failed: ${error.message}`).pipe(
-                Effect.annotateLogs("runId", record.view.id),
+          ),
+          Effect.catch((error) =>
+            retainCleanupQuarantine(record, scope).pipe(
+              Effect.andThen(
+                Effect.logWarning(`Subagent cleanup failed: ${error.message}`).pipe(
+                  Effect.annotateLogs("runId", record.view.id),
+                ),
               ),
             ),
           ),
-        ),
-        Effect.onInterrupt(() => retainCleanupQuarantine(record, scope)),
-        Effect.ensuring(Effect.sync(() => Deferred.doneUnsafe(closeSettled, Effect.void))),
-      );
-    });
+          Effect.onInterrupt(() => retainCleanupQuarantine(record, scope)),
+          Effect.ensuring(Effect.sync(() => Deferred.doneUnsafe(closeSettled, Effect.void))),
+        );
+      }),
+    );
   const closeExitedScope = (record: RunRecord, scope: Scope.Closeable): Effect.Effect<void> =>
     withLock(
       Effect.sync(() => {
