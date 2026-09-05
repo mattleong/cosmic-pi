@@ -2,178 +2,101 @@
 
 ## Repository layout
 
-- `packages/pi-advisor/` contains the automatic advisor and revision extension.
-- `packages/pi-ask-user/` contains the structured user-questionnaire extension.
-- `packages/pi-better-openai/` contains the Better OpenAI pi extension.
-- `packages/pi-better-xai/` contains the Better xAI subscription usage extension.
-- `packages/pi-background-task/` contains the session-scoped background task extension.
-- `packages/pi-code-mode/` contains the Code Mode Pi extension: the `code_mode` agent tool (confined interpreted programs over all seven `tools.pi` built-ins), trusted-project-only scoped settings, session lifecycle, and `/code-mode-settings`. Nested built-ins deliberately use direct fresh definitions rather than Pi middleware or registered overrides.
-- `packages/pi-code-mode/runtime/` contains the private, host-neutral Code Mode execution runtime vendored from OpenCode 2 (no Pi imports; see its `PROVENANCE.md`). It is a nested workspace package whose TypeScript `src/` ships inside the `pi-code-mode` tarball; Pi/Jiti loads it only through `pi-code-mode`'s `src/boundary/codemode-runtime.ts` door.
-- `packages/pi-code-previews/` contains the code-preview pi extension.
-- `packages/pi-cosmic-core/` contains shared Effect-first runtime foundations for the extension packages.
-- `packages/pi-cosmic-ui/` contains composable shared UI elements, including the responsive footer.
-- `packages/pi-directory-models/` contains per-directory model and thinking-level preference restoration.
-- `packages/pi-herdr-btw/` contains the deterministic, reusable Herdr BTW side-session extension.
-- `packages/pi-subagents/` contains the session-scoped background subagent extension.
-- The repository is a pnpm workspace. Pi/Jiti loads all Cosmic Pi packages directly from TypeScript source; do not add generated `dist/` runtime dependencies or package build prerequisites. Keep shared workspace configuration at the root and package-specific source and tests inside each package.
+This is a pnpm workspace. Shared configuration lives at the root; package source and tests live inside each package.
 
-## Package layout conventions
+- `packages/pi-advisor/`: automatic advisor and revision extension.
+- `packages/pi-ask-user/`: structured user questionnaires.
+- `packages/pi-background-task/`: session-scoped background tasks.
+- `packages/pi-better-openai/`: Better OpenAI extension.
+- `packages/pi-better-xai/`: Better xAI subscription usage.
+- `packages/pi-code-mode/`: confined interpreted programs over Pi built-ins and an explicit Background Tasks adapter.
+- `packages/pi-code-previews/`: code previews and the cooperative tool-rendering shell.
+- `packages/pi-cosmic-core/`: shared Effect runtime and platform code.
+- `packages/pi-cosmic-ui/`: shared UI components and responsive footer.
+- `packages/pi-directory-models/`: per-directory model and thinking-level preferences.
+- `packages/pi-herdr-btw/`: reusable Herdr BTW side sessions.
+- `packages/pi-subagents/`: session-scoped background subagents.
 
-Keep these names aligned across extension packages so the same role is discoverable everywhere.
+Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. The private Code Mode runtime ships inside `packages/pi-code-mode/runtime/` and loads only through `src/boundary/codemode-runtime.ts`. Preserve its vendored-code rules in `runtime/PROVENANCE.md`.
 
-### Canonical small extension
+## Package layout
+
+Use this layout proportionally to the package's size. Read its `ARCHITECTURE.md` for current ownership and lifecycle details.
 
 ```text
 src/
-  extension.ts          # Pi registration
-  layer.ts              # Effect composition root; omit when trivial
-  application.ts        # orchestration; omit when registration-only
+  extension.ts          # required Pi registration entrypoint
+  layer.ts              # only when Effect composition is needed
+  application.ts        # small-package orchestration
+  application/          # replaces application.ts in larger packages
+    register.ts         # non-trivial command/event registration
+    lifecycle.ts        # start, replace, shutdown
+    state.ts            # application state
   config/
-    schema.ts           # shape + defaults
-    options.ts          # optional resolve/normalize
-    store.ts            # persistence service
-    index.ts            # optional barrel
+    schema.ts           # shape, defaults, enums, codecs
+    options.ts          # optional normalization and resolution
+    store.ts            # single persistence entrypoint
   settings/
-    controller.ts       # commands / pickers only
-  boundary/             # foreign APIs only (Pi, Node, Sharp, …)
-    host-*.ts
-  <feature>/            # usage | footer | image | auth | …
-    controller.ts       # optional host-facing commands
-    service.ts          # Effect resource
-    format.ts           # pure helpers
-  ui/                   # pure presentation / primitives only
+    controller.ts       # settings commands and pickers
+    ui/                 # optional settings presentation
+  boundary/             # I/O and third-party adapters
+    host-*.ts           # dedicated Pi host adapters
+  <feature>/            # feature services, policy, and helpers
+  ui/                   # pure rendering and projection
+  compat/               # temporary legacy call shapes, when needed
 tests/**/*.test.ts
 ARCHITECTURE.md
 ```
 
-### Canonical large extension
+- Only `extension.ts`, `layer.ts`, `application.ts`, and an optional `protocol.ts` re-export belong at an extension's `src/` root. Nest other modules by feature.
+- Use `controller.ts` for a real command or service API, not a re-export hub. Registration-only packages may omit application and Layer modules.
+- Config has one public persistence entrypoint, `config/store.ts`, including any Promise compatibility helpers. Do not add a peer `persistence.ts` or a separate service API for the same job. Name persistence modules store/service, never repository. Existing `resolve.ts` names may remain until renamed.
+- Keep Effect resources and authoritative state in feature services. Top-level `ui/` is pure. Feature-local rendering is allowed; document it in `ARCHITECTURE.md`.
+- Boundaries contain I/O or third-party adapters, not pure helpers. Dedicated Pi adapters use the `host-*` prefix. Leave direct stateless host calls at their call site rather than wrapping them solely for placement.
+- Prefer one public entrypoint per role and small implementation files. Split before roughly 400 to 500 lines of hard logic; do not merge files merely to reduce file count.
+- Put tests under package-root `tests/`, never under `src/`, and use `*.test.ts`, never `*.spec.ts`. Large packages should mirror source structure; small packages may use flat test names.
+- Keep each package's `ARCHITECTURE.md` concise and focused on ownership, boundaries, and lifecycle, not a full file tree. Update it when those change. Package-level `AGENTS.md` files must not conflict with this file.
+- Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages. Group core modules by concern and keep its public `index.ts` and `testing.ts` exports stable.
 
-```text
-src/
-  extension.ts
-  layer.ts
-  application/
-    register.ts         # Pi commands/events (when registration is non-trivial)
-    lifecycle.ts        # start/replace/shutdown
-    state.ts            # app/domain state
-    # controller.ts only if there is a real controller surface
-  config/               # same roles as small packages
-  settings/
-    controller.ts
-  boundary/
-  <feature>/…
-  ui/                   # or feature-local presentation; document which in ARCHITECTURE.md
-tests/                  # flat or mirrored src/; suffix always .test.ts
-ARCHITECTURE.md
-```
+## Tool rendering
 
-### Hard rules
+Tools with previewable code, file, diff, or command output use `withCodePreviewShell` and list `pi-code-previews` as a runtime dependency. Other tools need neither.
 
-1. **Entry / composition:** `extension.ts` is required. Add `layer.ts` only for real Effect composition; registration-only extensions may omit `layer.ts` and `application.ts`.
-2. **Application orchestration:**
-   - Small packages with orchestration use one `application.ts` (split early if it gets heavy).
-   - Larger packages: an `application/` folder with explicit roles (`register.ts`, `lifecycle.ts`, `state.ts`).
-   - `controller.ts` only when there is a real Context/service API — not a re-export hub.
-3. **Config doors:** one public persistence entry — prefer `config/store.ts`.
-   - `schema.ts` = shape + defaults (+ enums/codecs).
-   - `options.ts` = normalize/resolve/descriptors (legacy name `resolve.ts` is allowed until renamed).
-   - `store.ts` = the persistence **door** (Effect service and any promise/compat helpers).
-   - Extra config files are internal **rooms** (document IO, env, state). Do not add a second peer API (`persistence.ts`, façade `store` + separate `service`) for the same job.
-   - Use **store/service** naming only — never `repository` for config persistence.
-4. **Settings UI/commands:** live under `settings/` with `controller.ts` for command registration (not under `ui/`).
-5. **UI policy:**
-   - Top-level `ui/` = pure projection/render/primitives only (no Effect resources/services).
-   - Settings chrome under `settings/ui/` when needed.
-   - Feature-local presentation (`preview/`, `tools/renderers/`, footer components) is fine; document it in `ARCHITECTURE.md`.
-   - Effect status/resources stay in feature modules, not under `ui/`.
-6. **Boundaries:** package-local `boundary/` adapters are for I/O and third-party APIs only. No pure helpers.
-   - Dedicated Pi host adapters live under `boundary/` with the `host-*` prefix. Keep direct stateless host calls at their call site; do not wrap them only for placement.
-7. **Doors vs rooms:** prefer one public entrypoint per role; keep implementation in small files. Collapse duplicate APIs, not file count. Nest peer-soup directories instead of merging into giant files. Soft guide: split before ~400–500 LOC of hard logic accumulates in one file.
-8. **Extension `src/` root allowlist:** `extension.ts`, `layer.ts`, `application.ts`, and an optional package `protocol.ts` re-export. Nest everything else (`auth/`, features, etc.).
-9. **Provider feature modules:** nest multi-file features (`usage/`, `footer/`, `image/`, `auth/`) rather than scattering `*-controller.ts` at `src/` root.
-10. **Tests:** package-root `tests/` (not colocated under `src/`). File suffix is always `*.test.ts` (never `*.spec.ts`). Large packages should mirror `src/`; smaller packages may use flat names without package-name prefixes.
-11. **Docs:** each package keeps a concise `ARCHITECTURE.md` covering ownership, boundaries, and lifecycle, not a full file tree. Package-level `AGENTS.md` is optional and must not conflict with this file.
-12. **Compat:** temporary legacy call shapes go under an explicit `compat/` file or folder, not a second architectural door.
-13. **Tool rendering:** tools with previewable code, file, diff, or command output use `withCodePreviewShell`. Other tools need no `pi-code-previews` dependency.
-
-- When used, list `pi-code-previews` as a runtime dependency.
-- When trusted project settings apply, call `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())` before wrapping and registering tools inside `session_start`; the wrapper captures its shell mode at registration time.
-- Wrap only tools owned by the extension, never tools registered by another extension.
-
-Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages.
-
-### Library package (`pi-cosmic-core`)
-
-Group by concern; keep the public barrel (`index.ts` / `testing.ts`) stable:
-
-```text
-src/
-  runtime/              # managed runtime, session slot, Pi API service
-  coordination/         # refresh, subscription refresh, synchronous ingress
-  platform/             # Node, HTTP, documents, files, process coordination
-  config/               # scoped store, tolerant fields
-  testing/              # shared test layers/probes
-  host-session.ts        # pure Pi host session capture helpers
-  projection.ts
-  security.ts
-  subscription-format.ts
-  usage-projection.ts    # shared usage eligibility transitions
-```
-
-### PR layout checklist
-
-- [ ] New files match the canonical tree for the package size
-- [ ] No new extension `src/*.ts` outside the root allowlist
-- [ ] Config has one persistence door (`store`); no peer `persistence`/façade APIs
-- [ ] Config persistence named store/service (not repository)
-- [ ] New `boundary/` files are real I/O or third-party adapters
-- [ ] Dedicated `host-*` adapters live under `boundary/`
-- [ ] `ui/` stays pure; Effect services stay in features
-- [ ] No new re-export hub files; no giant-file merges to “simplify”
-- [ ] Tests are `tests/**/*.test.ts`
-- [ ] `ARCHITECTURE.md` reflects ownership, boundary, or lifecycle changes
-- [ ] Tools with useful details use the `pi-code-previews` cooperative shell
+When trusted project settings apply, call `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())` before wrapping and registering tools inside `session_start`. The wrapper captures its shell mode at registration time. Wrap only tools owned by the extension, never another extension's tools.
 
 ## Testing policy
 
-Tests must protect durable behavior, not implementation details or third-party assumptions.
+Tests protect durable behavior, not implementation details or third-party assumptions. Keep coverage for domain logic, persistence, security, lifecycle, concurrency, cancellation, cleanup, and failure recovery.
 
-Keep tests for domain logic, persistence, security, lifecycle, concurrency, cancellation, cleanup, and failure recovery.
-
-Do not test implementation details or upstream contracts:
+Do not test:
 
 - Bare symbol existence. Test registration only when discovery or conditional wiring can fail outside TypeScript.
 - Contracts already enforced by TypeScript or schemas.
 - Exact provider payloads, endpoints, headers, events, or model catalogs.
 - Exact UI copy, layout, colors, icons, ANSI output, or key hints.
-- Internal call order/counts without an observable behavioral consequence.
+- Internal call order or counts without an observable behavioral consequence.
 
-Mock owned domain boundaries, not external provider protocols. Test command handlers and UI state transitions rather than their wiring or presentation. A behavior-preserving refactor should not break a test.
+Mock owned domain boundaries, not external provider protocols. Test command handlers and UI state transitions rather than wiring or presentation. A behavior-preserving refactor should not break a test.
 
 ## Effect architecture
 
-- The workspace is being rearchitected around the exact Effect v4 prerelease versions in `pnpm-workspace.yaml`.
+- The workspace uses exact Effect v4 prerelease versions pinned in `pnpm-workspace.yaml`.
 - Read `docs/architecture/` before changing application architecture.
 - Treat pinned Effect declarations as authoritative over older docs. Reassess this policy when the pin changes or Effect v4 becomes stable.
 - New or migrated packages must extend `tsconfig.effect.json`; all packages must inherit the Effect language-service plugin.
 - Keep Effect runners at named Pi host boundaries, scope every resource and background fiber, use Effect Schema at unknown boundaries, and model expected failures with typed tagged errors.
 - Do not add Zod. TypeBox or literal JSON Schema is allowed only where Pi requires tool parameter schemas.
-- Run the relevant package checks and `pnpm validate` after architecture changes; rely on TypeScript, Oxlint, the Effect language service, and tests for enforcement.
 
 ## Verification
 
-Install dependencies from the repository root:
-
-```bash
-pnpm install
-```
-
-Run the narrowest relevant package command first, then the full validation gate:
+Install dependencies from the repository root with `pnpm install`. Run the narrowest relevant package checks first, then the full validation gate:
 
 ```bash
 pnpm --filter <package-name> test
 pnpm validate
 ```
+
+Run both after architecture changes. TypeScript, Oxlint, the Effect language service, and tests enforce the architecture rules.
 
 Do not commit `node_modules/`, generated `dist/` output, local `.pi/` state, credentials, or generated images.
 
