@@ -116,7 +116,7 @@ export const effectProcessExit = (
       ? failure.reason.cause
       : failure;
   const message = source instanceof Error ? source.message : String(source);
-  // Pinned rc.111 exposes the signal only through this stable nested cause text.
+  // Pinned rc.112 exposes the signal only through this stable nested cause text.
   return { code: null, signal: /receipt of signal: '([^']+)'/u.exec(message)?.[1] ?? null };
 };
 

@@ -59,7 +59,7 @@ confined to the additions listed there and do not alter upstream execution resul
 2. Tests import from `@effect/vitest` instead of `bun:test` and live under
    `tests/` (repository rule) instead of `test/`; Node + Vitest replace Bun as
    the runner.
-3. `effect` is consumed at the workspace-pinned `4.0.0-rc.111` instead of the
+3. `effect` is consumed at the workspace-pinned `4.0.0-rc.112` instead of the
    upstream catalog `4.0.0-beta.83`; the RC migration renamed the local
    schema-backed `ToolError` base from `Schema.TaggedErrorClass` to
    `Schema.TaggedError`. The model-visible signature renderer also recognizes

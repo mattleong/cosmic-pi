@@ -120,6 +120,7 @@ export const makeSupervisorRpcServerProtocol = (
         supportsTransferables: false,
         supportsSpanPropagation: true,
         supportsNotifications: true,
+        codecFor: serialization.codecFor,
       });
     });
 
