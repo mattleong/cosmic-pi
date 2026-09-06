@@ -81,7 +81,7 @@ export function activityRowLine(
   width: number,
   now?: number,
   theme?: Pick<Theme, "fg">,
-  showHistory = true,
+  presentation: "manager" | "widget" = "manager",
 ): string {
   const row = entry.row;
   const kind = activityType(row);
@@ -95,8 +95,10 @@ export function activityRowLine(
       : managerActivityColor(row.status === "cancelled" ? "stopped" : row.status);
   const typeColor = row.kind === "agent" ? "accent" : row.kind === "question" ? "warning" : "muted";
   const paint = (tone: Parameters<Theme["fg"]>[0], text: string) => theme?.fg(tone, text) ?? text;
-  // Keep the state icon and identity fixed when await ownership changes.
-  const awaited = row.awaited ? "◎ " : "  ";
+  // Only the interactive manager reserves alignment slots for optional markers.
+  const interactive = presentation === "manager";
+  const awaited = row.awaited ? "◎ " : interactive ? "  " : "";
+  const fold = interactive ? foldMarker(entry) : "";
   const markerWidth = visibleWidth(awaited);
   const profileName = row.kind === "agent" ? (row.profile ?? "") : "";
   const identityWidth = visibleWidth(kind) + (profileName ? visibleWidth(profileName) + 1 : 0);
@@ -108,14 +110,14 @@ export function activityRowLine(
   const rightWidth = showStatus ? Math.min(visibleWidth(status), rightBudget) : 0;
   const leftWidth = Math.max(0, width - (showStatus ? rightWidth + 2 : 0));
   const guideBudget = Math.max(0, leftWidth - identityWidth - markerWidth - 3);
-  const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - 4) / 3)));
+  const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - visibleWidth(fold) - 2) / 3)));
   const guide = paint(
     "dim",
-    truncateToWidth(`${treeGuide(entry, levels)}${foldMarker(entry)}`, guideBudget, ""),
+    truncateToWidth(`${treeGuide(entry, levels)}${fold}`, guideBudget, ""),
   );
   const glyph = paint(color, activityGlyph(row, now));
   const profile = profileName ? `${profileName} · ` : "";
-  const omitted = showHistory && row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
+  const omitted = interactive && row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
   const left = truncateToWidth(
     `${guide}${paint("accent", awaited)}${glyph} ${paint(typeColor, kind)} ${paint("muted", profile)}${paint("text", row.title)}${paint("dim", omitted)}`,
     leftWidth,
@@ -163,7 +165,7 @@ export function renderActivityWidget(
   lines.push(
     ...live
       .slice(0, capacity)
-      .map((entry) => activityRowLine(entry, width, options.now, options.theme, false)),
+      .map((entry) => activityRowLine(entry, width, options.now, options.theme, "widget")),
   );
   const hidden = Math.max(0, live.length - capacity);
   if (hidden) lines.push(style(`+${hidden} rows`));
