@@ -74,6 +74,13 @@ const treeGuide = (entry: ActivityTreeRow, levels: number): string => {
     )
     .join("")}`;
 };
+// Use theme palette tokens for blue, violet, and amber rather than fixed RGB colors.
+const widgetTypeColors = {
+  command: "syntaxKeyword",
+  agent: "thinkingHigh",
+  question: "warning",
+} as const;
+
 const foldMarker = (entry: ActivityTreeRow): string =>
   entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  ";
 export function activityRowLine(
@@ -84,6 +91,7 @@ export function activityRowLine(
   presentation: "manager" | "widget" = "manager",
 ): string {
   const row = entry.row;
+  const interactive = presentation === "manager";
   const kind = activityType(row);
   const warnings = entry.expanded ? "" : activityAttentionLabels(entry.attention).join(" · ");
   const attention =
@@ -92,11 +100,18 @@ export function activityRowLine(
   const color =
     row.status === "needs-input" || row.status === "blocked"
       ? "warning"
-      : managerActivityColor(row.status === "cancelled" ? "stopped" : row.status);
-  const typeColor = row.kind === "agent" ? "accent" : row.kind === "question" ? "warning" : "muted";
+      : !interactive && row.status === "running"
+        ? "accent"
+        : managerActivityColor(row.status === "cancelled" ? "stopped" : row.status);
+  const typeColor = !interactive
+    ? widgetTypeColors[row.kind]
+    : row.kind === "agent"
+      ? "accent"
+      : row.kind === "question"
+        ? "warning"
+        : "muted";
   const paint = (tone: Parameters<Theme["fg"]>[0], text: string) => theme?.fg(tone, text) ?? text;
   // Only the interactive manager reserves alignment slots for optional markers.
-  const interactive = presentation === "manager";
   const awaited = row.awaited ? "◎ " : interactive ? "  " : "";
   const fold = interactive ? foldMarker(entry) : "";
   const markerWidth = visibleWidth(awaited);
@@ -123,8 +138,9 @@ export function activityRowLine(
     leftWidth,
     "…",
   );
+  const statusColor = warnings ? "warning" : !interactive && !attention ? "muted" : color;
   return showStatus
-    ? `${left}${" ".repeat(Math.max(1, width - visibleWidth(left) - rightWidth))}${paint(warnings ? "warning" : color, truncateToWidth(status, rightWidth, "…"))}`
+    ? `${left}${" ".repeat(Math.max(1, width - visibleWidth(left) - rightWidth))}${paint(statusColor, truncateToWidth(status, rightWidth, "…"))}`
     : left;
 }
 interface WidgetOptions extends ActivityTreeOptions {
