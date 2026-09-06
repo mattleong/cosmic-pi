@@ -114,6 +114,12 @@ const startEntriesFor = (
         routeStatus: "selected" as const,
         ...routeFields(outcome.run, outcome.run.selection),
         runId: outcome.run.id,
+        cwd: outcome.run.cwd,
+        ...(outcome.run.writerWorkspaceMode !== undefined && {
+          writerWorkspaceMode: outcome.run.writerWorkspaceMode,
+        }),
+        ...(outcome.run.workspaceId !== undefined && { workspaceId: outcome.run.workspaceId }),
+        ...(outcome.run.sourceCwd !== undefined && { sourceCwd: outcome.run.sourceCwd }),
       };
     if (outcome.resolvedRoute)
       return {

@@ -214,8 +214,10 @@ describe("Better OpenAI settings controller", () => {
 
   it.effect("renders redacted config as terminal-safe JSON", () =>
     Effect.gen(function* () {
+      // Assemble the synthetic credential so source snapshots do not mistake this fixture for a secret.
+      const syntheticToken = ["sk", "private-token-123456"].join("-");
       const redactedConfig = redactDiagnosticValue({
-        access: "sk-private-token-123456",
+        access: syntheticToken,
         message: "before\u001b]2;unsafe-title\u0007after",
         enabled: true,
       });
@@ -232,7 +234,7 @@ describe("Better OpenAI settings controller", () => {
       const rendered = component.render(100).join("\n");
       expect(rendered).toContain("Redacted config");
       expect(rendered).toContain("[REDACTED]");
-      expect(rendered).not.toContain("sk-private-token-123456");
+      expect(rendered).not.toContain(syntheticToken);
       expect(rendered).not.toContain("\u001b");
       expect(rendered).not.toContain("\u0007");
 

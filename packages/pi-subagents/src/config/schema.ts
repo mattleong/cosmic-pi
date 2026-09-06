@@ -25,6 +25,11 @@ export const MIGRATED_PROFILE_SET_NAME = "default";
 export const MAX_PROFILE_SETS = 32;
 export const MAX_PROFILE_SET_NAME_CHARS = 64;
 
+export const WRITER_WORKSPACE_MODES = ["worktree", "shared-checkout"] as const;
+export type WriterWorkspaceMode = (typeof WRITER_WORKSPACE_MODES)[number];
+export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checkout";
+export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
+
 export const DEFAULT_MAX_DIRECT_CHILDREN = 12;
 export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 export const MIN_DIRECT_CHILDREN = 1;
@@ -61,6 +66,7 @@ export interface SubagentConfigFile {
   readonly defaultProfileSet?: string | undefined;
   readonly profileSets?: Readonly<Record<string, SubagentProfileSet>> | undefined;
   readonly nesting?: SubagentNestingPolicy | undefined;
+  readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -388,7 +394,13 @@ const ConfigVersionSchema = Schema.Literals([
 const ROOT_KEYS_BY_VERSION = {
   [LEGACY_SUBAGENT_CONFIG_VERSION]: ["version", "profiles"],
   [PREVIOUS_SUBAGENT_CONFIG_VERSION]: ["version", "profiles", "nesting"],
-  [SUBAGENT_CONFIG_VERSION]: ["version", "defaultProfileSet", "profileSets", "nesting"],
+  [SUBAGENT_CONFIG_VERSION]: [
+    "version",
+    "defaultProfileSet",
+    "profileSets",
+    "nesting",
+    "writerWorkspaceMode",
+  ],
 } as const;
 
 const rootKeysFor = (version: 4 | 5 | 6 | undefined): ReadonlySet<string> =>
@@ -396,6 +408,18 @@ const rootKeysFor = (version: 4 | 5 | 6 | undefined): ReadonlySet<string> =>
 
 /** Current-version body decode: file fields plus null-prototype invalid-set bookkeeping. */
 const decodeCurrentBody = (rawRoot: Readonly<JsonObject>, scope: string, diagnostics: string[]) => {
+  const workspaceField = readField(
+    rawRoot,
+    "writerWorkspaceMode",
+    `${scope}.writerWorkspaceMode`,
+    diagnostics,
+  );
+  let writerWorkspaceMode: WriterWorkspaceMode | undefined;
+  if (workspaceField.present) {
+    const mode = Schema.decodeUnknownOption(WriterWorkspaceModeSchema)(workspaceField.value);
+    if (Option.isNone(mode)) diagnostics.push(`${scope}.writerWorkspaceMode`);
+    else writerWorkspaceMode = mode.value;
+  }
   const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
   const decoded = setsField.present
     ? decodeProfileSets(
@@ -426,6 +450,7 @@ const decodeCurrentBody = (rawRoot: Readonly<JsonObject>, scope: string, diagnos
     file: {
       ...(decoded && Object.keys(decoded.sets).length > 0 && { profileSets: decoded.sets }),
       ...(defaultProfileSet !== undefined && { defaultProfileSet }),
+      ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
     },
     invalidProfileSetRoutes: decoded?.invalidRoutes ?? {},
     invalidProfileSets: decoded?.invalidSets ?? [],

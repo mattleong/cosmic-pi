@@ -899,6 +899,7 @@ describe("subagent v6 profile configuration and resolution", () => {
       renameProfileSet: () => Effect.die("unused"),
       deleteProfileSet: () => Effect.die("unused"),
       patchNesting: () => Effect.die("unused"),
+      patchWriterWorkspace: () => Effect.die("unused"),
     });
     let attempts = 0;
     return Effect.runPromise(
@@ -942,6 +943,7 @@ describe("subagent v6 profile configuration and resolution", () => {
       renameProfileSet: () => Effect.die("unused"),
       deleteProfileSet: () => Effect.die("unused"),
       patchNesting: () => Effect.die("unused"),
+      patchWriterWorkspace: () => Effect.die("unused"),
     });
     return Effect.runPromise(
       SubagentProfileService.use((service) =>

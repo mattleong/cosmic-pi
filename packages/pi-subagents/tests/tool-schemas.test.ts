@@ -11,6 +11,7 @@ import {
   SendParameters,
   StartParameters,
   StatusParameters,
+  WorkspaceParameters,
   type SubagentClaimsInput,
 } from "../src/tools/schema.ts";
 import { SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
@@ -32,6 +33,7 @@ const TOOL_PARAMETERS = {
   subagent_lifecycle: LifecycleParameters,
   subagent_rename: RenameParameters,
   subagent_claims: ClaimsParameters,
+  subagent_workspace: WorkspaceParameters,
 } as const;
 
 describe("subagent tool parameter schemas", () => {

@@ -109,6 +109,28 @@ describe("subagent tool", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  effectTest("includes effective and source workspaces in launch receipts", function* () {
+    for (const writerWorkspaceMode of ["worktree", "shared-checkout"] as const) {
+      const workspace =
+        writerWorkspaceMode === "worktree"
+          ? { workspaceId: "workspace-1", cwd: "/private/workspace-1", sourceCwd: "/project" }
+          : { cwd: "/project" };
+      const service = subagentServiceDouble({
+        start: () =>
+          Effect.succeed(view({ writeIntent: "writer", writerWorkspaceMode, ...workspace })),
+      });
+      const tool = captureSubagentTools(service).get("subagent_start");
+      const result = yield* invokeOptionalTool(tool, {
+        agents: [{ task: "Implement token parsing", profile: "worker" }],
+      });
+      expect(result?.details).toMatchObject({
+        startEntries: [{ status: "started", writerWorkspaceMode, ...workspace }],
+      });
+      expect(result?.content[0]?.text).toContain(writerWorkspaceMode);
+      expect(result?.content[0]?.text).toContain(workspace.cwd);
+    }
+  });
+
   effectTest("threads exact writes claims only through writer profiles", function* () {
     const requests: StartSubagentRequest[] = [];
     const tools = captureSubagentTools(startCapturingService(requests));

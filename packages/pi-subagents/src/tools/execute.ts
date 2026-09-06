@@ -45,6 +45,7 @@ import {
 import { formatAwaitProgress } from "./render-await.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import { executeModelsAction } from "./execute-models.ts";
+import { executeWorkspaceAction } from "./execute-workspace.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 import type { SubagentToolInput } from "./schema.ts";
 import { claimsOperationError } from "./schema.ts";
@@ -163,6 +164,7 @@ export const executeSubagentActionEffect = (
   SubagentService | SubagentProfileService | SubagentBackendRegistry
 > => {
   if (input.action === "models") return executeModelsAction(input, pi, ctx);
+  if (input.action === "workspace") return executeWorkspaceAction(input.operation, callerRunId);
 
   let latestAwaitRuns: ReadonlyArray<SubagentRunView> = [];
   let latestAwaitContextRuns: ReadonlyArray<SubagentRunView> = [];

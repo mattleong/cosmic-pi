@@ -6,7 +6,8 @@ import type {
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
-import type { SubagentNestingPolicy } from "../config/schema.ts";
+import type { SubagentNestingPolicy, WriterWorkspaceMode } from "../config/schema.ts";
+import type { WorkspaceHandle } from "../workspace/model.ts";
 import type {
   ProfileId,
   ProfileRouteContinuation,
@@ -139,6 +140,10 @@ export interface SubagentRunView {
   /** Continuation encountered ownership uncertainty and is permanently fail-closed. */
   readonly retryBlocked?: boolean | undefined;
   readonly cwd: string;
+  /** Frozen session writer mode and private artifact identity, never a per-worker override. */
+  readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
+  readonly workspaceId?: string | undefined;
+  readonly sourceCwd?: string | undefined;
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
@@ -234,6 +239,9 @@ export interface StartSubagentRequest {
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
   /** Internal exclusive predecessor claim consumed atomically by successor admission. */
   readonly supersedes?: SubagentRetrySupersession | undefined;
+  /** Coordinator-only prepared artifact. Public and proxy schemas cannot supply this. */
+  readonly workspace?: WorkspaceHandle | undefined;
+  readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;

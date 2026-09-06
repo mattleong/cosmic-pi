@@ -23,6 +23,8 @@ import {
   SendParameters,
   StartParameters,
   StatusParameters,
+  WorkspaceParameters,
+  workspaceOperationError,
   type SubagentToolInput,
 } from "./schema.ts";
 
@@ -39,7 +41,11 @@ export const encodeSubagentProxyInput = (input: SubagentToolInput): SubagentProx
     case "stop":
       return { tool: SUBAGENT_TOOL_NAME.lifecycle, argumentsJson: JSON.stringify(input) };
     case "claims":
-      return { tool: SUBAGENT_TOOL_NAME.claims, argumentsJson: JSON.stringify(input.operation) };
+    case "workspace":
+      return {
+        tool: SUBAGENT_TOOL_NAME[input.action],
+        argumentsJson: JSON.stringify(input.operation),
+      };
     default: {
       const { action, ...args } = input;
       return { tool: SUBAGENT_TOOL_NAME[action], argumentsJson: JSON.stringify(args) };
@@ -111,6 +117,13 @@ const decodeTaggedArguments = <
     ? { ...args, action }
     : invalid(`Nested ${tool} arguments failed strict validation.`);
 
+const decodeWorkspaceArguments = <ValueInput>(
+  args: ValueInput,
+): SubagentToolInput | InvalidSubagentRequestError =>
+  Check(WorkspaceParameters, args) && workspaceOperationError(args) === undefined
+    ? { action: "workspace", operation: args }
+    : invalid("Nested subagent_workspace arguments failed strict validation.");
+
 /** Strict server-side decode for authenticated private Pi proxy calls. */
 export const decodeSubagentProxyRequest = (
   request: SubagentProxyRequest,
@@ -147,6 +160,8 @@ export const decodeSubagentProxyRequest = (
       return Check(ClaimsParameters, args) && claimsOperationError(args) === undefined
         ? { action: "claims", operation: args }
         : invalid("Nested subagent_claims arguments failed strict validation.");
+    case SUBAGENT_TOOL_NAME.workspace:
+      return decodeWorkspaceArguments(args);
     default:
       return invalid("Nested Pi requested an unknown coordinator tool.");
   }

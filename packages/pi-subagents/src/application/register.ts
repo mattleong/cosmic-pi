@@ -143,6 +143,7 @@ export function registerSubagentApplication(
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
         const sessionOverrides = restoredReload ?? profileOverrideHandoff.capture();
         const layerOptions: SubagentLayerOptions = {
+          ...(activation.sessionKey && { workspaceOwnerId: activation.sessionKey }),
           cwd: activation.cwd,
           agentDirectory: activation.agentDirectory,
           projectTrusted: activation.projectTrusted,
@@ -168,18 +169,25 @@ export function registerSubagentApplication(
           ) => {
             const input = decodeSubagentProxyRequest(request);
             if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
-            return executeSubagentActionEffect(
-              pi,
-              {
-                cwd: activation.cwd,
-                projectTrusted: activation.projectTrusted,
-              },
-              input,
-              undefined,
-              undefined,
-              activation.ctx,
-              callerRunId,
-            ).pipe(Effect.provideService(SubagentService, service));
+            return Effect.gen(function* () {
+              const caller = (yield* service.visibleList(callerRunId)).find(
+                (run) => run.id === callerRunId,
+              );
+              if (!caller)
+                return yield* new InvalidSubagentRequestError({
+                  code: "parent_run_not_found",
+                  message: "The authenticated caller is no longer registered.",
+                });
+              return yield* executeSubagentActionEffect(
+                pi,
+                { cwd: caller.cwd, projectTrusted: activation.projectTrusted },
+                input,
+                undefined,
+                undefined,
+                activation.ctx,
+                callerRunId,
+              ).pipe(Effect.provideService(SubagentService, service));
+            });
           },
         };
         return makePiManagedRuntime(pi, makeSubagentLayer(layerOptions), {
@@ -340,6 +348,36 @@ export function registerSubagentApplication(
           if (currentActivation !== activation) throw new Error("Subagents session was replaced.");
           return inspection;
         }),
+      ),
+    inspectWriterWorkspace: () =>
+      run(SubagentService.use((service) => service.inspectWriterWorkspace)),
+    setWriterWorkspaceMode: (mode) =>
+      withCurrentActivation((activation) =>
+        run(
+          Effect.gen(function* () {
+            const store = yield* SubagentConfigStore;
+            const service = yield* SubagentService;
+            const projectTrusted = activation.ctx.isProjectTrusted();
+            const inspection = yield* store.inspect(
+              activation.cwd,
+              activation.agentDirectory,
+              projectTrusted,
+            );
+            const scope = projectTrusted ? "project" : "global";
+            const document =
+              scope === "project" ? inspection.projectDocument : inspection.globalDocument;
+            yield* service.setWriterWorkspaceMode(
+              mode,
+              store.patchWriterWorkspace(activation.cwd, activation.agentDirectory, {
+                scope,
+                expectedExists: document !== undefined,
+                expectedDocument: document,
+                projectTrusted,
+                writerWorkspaceMode: mode,
+              }),
+            );
+          }),
+        ),
       ),
     patchProfile: withConfigStore((store) => store.patchProfile),
     patchDefaultProfileSet: withConfigStore((store) => store.patchDefaultProfileSet),

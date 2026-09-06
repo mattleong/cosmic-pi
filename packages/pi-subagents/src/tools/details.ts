@@ -213,6 +213,25 @@ const projectSelection = (
   };
 };
 
+const projectWorkspaceFields = (value: {
+  readonly writerWorkspaceMode?: "worktree" | "shared-checkout" | undefined;
+  readonly workspaceId?: string | undefined;
+  readonly cwd?: string | undefined;
+  readonly sourceCwd?: string | undefined;
+}) => ({
+  ...(value.writerWorkspaceMode !== undefined && {
+    writerWorkspaceMode: value.writerWorkspaceMode,
+  }),
+  ...(value.workspaceId !== undefined && {
+    workspaceId: requiredText(value.workspaceId, MAX_PROTOCOL_ID_CHARS, "unknown-workspace"),
+  }),
+  ...(value.writerWorkspaceMode !== undefined &&
+    value.cwd !== undefined && { cwd: requiredText(value.cwd, 1_024, "unknown-cwd") }),
+  ...(value.sourceCwd !== undefined && {
+    sourceCwd: requiredText(value.sourceCwd, 1_024, "unknown-cwd"),
+  }),
+});
+
 const projectWriteCardFields = (
   run: SubagentRunView,
   density: DetailDensity,
@@ -227,6 +246,7 @@ const projectWriteCardFields = (
   const violationLimit =
     density === "minimal" && !run.writeViolationOffender ? 0 : limits.writeViolations;
   return {
+    ...projectWorkspaceFields(run),
     ...(projectedClaims !== undefined && {
       writeClaims: projectedClaims,
       writeClaimCount: nonNegativeInteger(run.writeClaims?.length ?? 0),
@@ -402,6 +422,7 @@ const projectStartEntry = (
     return { ...identity, status: "failed", routeStatus: "unavailable" };
   const warning = optionalText(entry.warning, limits.startWarning);
   const selectedFields = {
+    ...projectWorkspaceFields(entry),
     routeStatus: "selected" as const,
     host: entry.host,
     runtime: entry.runtime,

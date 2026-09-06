@@ -44,7 +44,7 @@ const StartSpecFields = {
   profile: Type.Optional(
     StringEnum(PROFILE_IDS, {
       description:
-        "Behavior and model-routing profile. Omit to use the fixed generalist fallback. The selected profile always determines the model route.",
+        "Behavior and model-routing profile, selected by deliverable: scout locates and explains existing code; researcher investigates external sources; planner recommends implementation strategies and ordered changes; worker implements; reviewer evaluates code, plans, and simplification opportunities before or after implementation; oracle analyzes inherited decisions; generalist handles other work. Read-only or initial work is not automatically scouting. Omit to use the fixed generalist fallback. The selected profile always determines the model route.",
     }),
   ),
   writes: Type.Optional(
@@ -219,6 +219,80 @@ export const claimsOperationError = (operation: SubagentClaimsInput): string | u
   }
 };
 
+export const WorkspaceParameters = Type.Object(
+  {
+    action: StringEnum(["list", "review", "prepare", "integrate", "discard", "revise"] as const, {
+      description:
+        "list needs no target. review freezes a cleaned-up workspace or pages an exact revision. prepare needs revisionId; integrate also needs preparationId. revise needs message and invalidates prior review/preparation. discard needs workspaceId only.",
+    }),
+    workspaceId: Type.Optional(RunIdParameter),
+    revisionId: Type.Optional(RunIdParameter),
+    preparationId: Type.Optional(RunIdParameter),
+    offset: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER,
+        description: "Zero-based character offset for list or immutable diff paging.",
+      }),
+    ),
+    limit: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 16_000,
+        description:
+          "Maximum review characters per page; default 16000. Read every page before integration.",
+      }),
+    ),
+    message: Type.Optional(MessageParameters),
+  },
+  strictObjectOptions,
+);
+
+export type SubagentWorkspaceInput = Static<typeof WorkspaceParameters>;
+
+type WorkspaceField = Exclude<keyof SubagentWorkspaceInput, "action">;
+const WORKSPACE_ACTION_FIELDS = {
+  list: { required: [], optional: ["offset"] },
+  review: { required: ["workspaceId"], optional: ["revisionId", "offset", "limit"] },
+  prepare: { required: ["workspaceId", "revisionId"], optional: [] },
+  integrate: { required: ["workspaceId", "revisionId", "preparationId"], optional: [] },
+  discard: { required: ["workspaceId"], optional: [] },
+  revise: { required: ["workspaceId", "message"], optional: [] },
+} satisfies Record<
+  SubagentWorkspaceInput["action"],
+  {
+    readonly required: ReadonlyArray<WorkspaceField>;
+    readonly optional: ReadonlyArray<WorkspaceField>;
+  }
+>;
+const WORKSPACE_FIELDS: ReadonlyArray<WorkspaceField> = [
+  "workspaceId",
+  "revisionId",
+  "preparationId",
+  "offset",
+  "limit",
+  "message",
+];
+
+/** Enforce action-specific requirements without provider-incompatible union tool schemas. */
+export const workspaceOperationError = (operation: SubagentWorkspaceInput): string | undefined => {
+  const fields = WORKSPACE_ACTION_FIELDS[operation.action];
+  const missing = fields.required.find((field) => operation[field] === undefined);
+  if (missing) return `Workspace ${operation.action} requires ${missing}.`;
+  const allowed = new Set<WorkspaceField>([...fields.required, ...fields.optional]);
+  const unexpected = WORKSPACE_FIELDS.find(
+    (field) => operation[field] !== undefined && !allowed.has(field),
+  );
+  if (unexpected) return `Workspace ${operation.action} does not accept ${unexpected}.`;
+  if (
+    operation.action === "review" &&
+    (operation.offset ?? 0) > 0 &&
+    operation.revisionId === undefined
+  )
+    return "Review paging requires the exact revisionId returned by the first page.";
+  return undefined;
+};
+
 export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentModelsInput = Static<typeof ModelsParameters>;
 export type SubagentStartInput = Static<typeof StartParameters>;
@@ -241,7 +315,8 @@ export type SubagentToolInput =
   | ({ readonly action: "reply" } & SubagentReplyInput)
   | SubagentLifecycleInput
   | ({ readonly action: "rename" } & SubagentRenameInput)
-  | { readonly action: "claims"; readonly operation: SubagentClaimsInput };
+  | { readonly action: "claims"; readonly operation: SubagentClaimsInput }
+  | { readonly action: "workspace"; readonly operation: SubagentWorkspaceInput };
 
 export const prepareSubagentStartArguments = <ArgsInput>(args: ArgsInput): SubagentStartInput => {
   // Pi performs the authoritative TypeBox validation immediately after this friendly preflight.

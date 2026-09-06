@@ -10,6 +10,8 @@ import {
 } from "../profiles/model.ts";
 import {
   DEFAULT_SUBAGENT_NESTING_POLICY,
+  DEFAULT_WRITER_WORKSPACE_MODE,
+  type WriterWorkspaceMode,
   type DecodedSubagentConfig,
   type SubagentNestingPolicy,
 } from "./schema.ts";
@@ -31,6 +33,7 @@ export interface ResolvedSubagentConfig {
   readonly fallbackProfile: ProfileId;
   readonly currentProfileSet: ResolvedProfileSetSelection;
   readonly nesting: SubagentNestingPolicy;
+  readonly writerWorkspaceMode: WriterWorkspaceMode;
   readonly nestingSource: "builtin" | "global" | "project" | "session";
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
@@ -236,6 +239,10 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     fallbackProfile: "generalist",
     currentProfileSet: selectedSet(input.global, project),
     nesting: { ...nesting },
+    writerWorkspaceMode:
+      project?.file.writerWorkspaceMode ??
+      input.global.file.writerWorkspaceMode ??
+      DEFAULT_WRITER_WORKSPACE_MODE,
     nestingSource,
     profiles: effective.profiles,
     profileSources: effective.profileSources,

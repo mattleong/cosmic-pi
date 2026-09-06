@@ -183,7 +183,10 @@ const formatRunHeader = (run: SubagentRunView, route: string): string => {
   const native = run.nativeActivity
     ? ` · native=${run.nativeActivity.active}/${run.nativeActivity.total}`
     : "";
-  return `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}`;
+  const workspace = run.writerWorkspaceMode
+    ? ` · workspace=${run.writerWorkspaceMode}${run.workspaceId ? `:${sanitizeTerminalLine(run.workspaceId)}` : ""}`
+    : "";
+  return `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}${workspace}`;
 };
 
 const identityStatusFields = (
@@ -249,6 +252,16 @@ const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefin
   return [
     statusField("Context", run.context),
     statusField("Intent", run.writeIntent),
+    optionalStatusField("Workspace mode", run.writerWorkspaceMode),
+    optionalStatusField("Workspace ID", run.workspaceId),
+    statusField("Cwd", run.cwd),
+    optionalStatusField("Source cwd", run.sourceCwd),
+    run.workspaceId
+      ? statusField(
+          "Proposal",
+          `Use subagent_workspace review with workspaceId=${run.workspaceId} after process cleanup. Inspect ALL immutable diff pages, prepare combined changes, run relevant tests in the prepared cwd, then integrate the exact revisionId and preparationId. A report does not approve integration.`,
+        )
+      : undefined,
     run.writeIntent === "writer"
       ? statusField("Writes", run.writeClaims?.join(", ") || "exclusive whole cwd")
       : undefined,

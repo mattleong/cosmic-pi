@@ -62,6 +62,20 @@ const nonNegativeNumber = Schema.Number.check(
   Schema.isLessThanOrEqualTo(MAX_SAFE_NUMBER),
 );
 const nonNegativeInteger = nonNegativeNumber.check(Schema.isInt());
+
+/** Workspace history keeps receipt metadata only, never immutable patch bodies. */
+export const WorkspaceToolDetailsSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  action: Schema.Literal("workspace"),
+  operation: Schema.Literals(["list", "review", "prepare", "integrate", "discard", "revise"]),
+  workspaceId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  revisionId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  preparationId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  offset: Schema.optionalKey(nonNegativeInteger),
+  totalChars: Schema.optionalKey(nonNegativeInteger),
+  nextOffset: Schema.optionalKey(nonNegativeInteger),
+});
+export type WorkspaceToolDetails = typeof WorkspaceToolDetailsSchema.Type;
 const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>
   Schema.Array(schema).check(Schema.isMaxLength(maximum));
 
@@ -119,7 +133,15 @@ const WriteAuditSchema = Schema.Struct({
   bashWriteHints: nonNegativeInteger,
 });
 
+const WorkspaceCardFields = {
+  writerWorkspaceMode: Schema.optionalKey(Schema.Literals(["worktree", "shared-checkout"])),
+  workspaceId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  cwd: Schema.optionalKey(boundedString(1_024, 1)),
+  sourceCwd: Schema.optionalKey(boundedString(1_024, 1)),
+};
+
 export const SubagentRunCardSchema = Schema.Struct({
+  ...WorkspaceCardFields,
   id: boundedString(MAX_PROTOCOL_ID_CHARS, 1),
   name: boundedString(MAX_NAME_CHARS, 1),
   state: Schema.Literals(SUBAGENT_RUN_STATES),
@@ -194,6 +216,7 @@ const StartEntryIdentityFields = {
   profile: boundedString(MAX_PROFILE_CHARS, 1),
 };
 const SelectedStartEntryFields = {
+  ...WorkspaceCardFields,
   routeStatus: Schema.Literal("selected"),
   host: HostSchema,
   runtime: RuntimeSchema,

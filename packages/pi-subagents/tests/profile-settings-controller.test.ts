@@ -141,6 +141,8 @@ const actions = (value: ProfileSettingsInspection): FleetManagerActions => ({
   renameProfileSet: vi.fn(() => Promise.resolve()),
   deleteProfileSet: vi.fn(() => Promise.resolve()),
   patchNesting: vi.fn(() => Promise.resolve()),
+  inspectWriterWorkspace: vi.fn(() => Promise.resolve({ mode: "worktree" as const })),
+  setWriterWorkspaceMode: vi.fn(() => Promise.resolve()),
   patchSessionProfile: vi.fn(() => Promise.resolve()),
   replaceSessionProfiles: vi.fn(() => Promise.resolve()),
   patchSessionNesting: vi.fn(() => Promise.resolve()),
@@ -807,13 +809,123 @@ describe("profile settings controller", () => {
     yield* closeLibraryAndDashboard(fixture, running);
   });
 
+  effectTest("saves a writer workspace selection only through the coordinator", function* () {
+    const fixture = setup();
+    fixture.ui.select
+      .mockResolvedValueOnce("Writer workspace")
+      .mockResolvedValueOnce("Shared checkout");
+    yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
+    expect(fixture.managerActions.setWriterWorkspaceMode).toHaveBeenCalledWith("shared-checkout");
+    expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "info");
+  });
+
+  effectTest(
+    "does not offer a workspace switch while the coordinator reports a blocker",
+    function* () {
+      const fixture = setup();
+      vi.mocked(fixture.managerActions.inspectWriterWorkspace).mockResolvedValue({
+        mode: "worktree",
+        blockedReason: "Pending integration",
+      });
+      fixture.ui.select
+        .mockResolvedValueOnce("Writer workspace")
+        .mockResolvedValueOnce("Shared checkout");
+      yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
+      expect(fixture.managerActions.setWriterWorkspaceMode).not.toHaveBeenCalled();
+      expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+    },
+  );
+
+  effectTest(
+    "keeps a rejected workspace switch unsuccessful and permits a later retry",
+    function* () {
+      const fixture = setup();
+      vi.mocked(fixture.managerActions.setWriterWorkspaceMode).mockRejectedValueOnce(
+        new Error("Writer reservation acquired"),
+      );
+      fixture.ui.select
+        .mockResolvedValueOnce("Writer workspace")
+        .mockResolvedValueOnce("Shared checkout");
+      yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
+      expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
+      expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "info");
+      fixture.ui.select
+        .mockResolvedValueOnce("Writer workspace")
+        .mockResolvedValueOnce("Shared checkout");
+      yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
+      expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "info");
+    },
+  );
+
+  effectTest("cancelling the workspace picker leaves the mode unchanged", function* () {
+    const fixture = setup();
+    fixture.ui.select.mockResolvedValueOnce("Writer workspace").mockResolvedValueOnce(undefined);
+    yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
+    expect(fixture.managerActions.setWriterWorkspaceMode).not.toHaveBeenCalled();
+  });
+
+  effectTest(
+    "a workspace picker from a replaced session cannot change its successor",
+    function* () {
+      const fixture = setup();
+      let current = true;
+      vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
+        isCurrent: () => current,
+        run: (effect, signal) => Effect.runPromise(effect, { signal }),
+      });
+      fixture.ui.select.mockResolvedValueOnce("Writer workspace").mockImplementationOnce(() => {
+        current = false;
+        return Promise.resolve("Shared checkout");
+      });
+      yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
+      expect(fixture.managerActions.setWriterWorkspaceMode).not.toHaveBeenCalled();
+      expect(fixture.ui.notify).not.toHaveBeenCalled();
+    },
+  );
+
+  for (const choice of ["Writer workspace", "Nesting limits"]) {
+    for (const transition of ["replacement", "unavailable"]) {
+      effectTest(`ignores an outer ${choice} selection after ${transition}`, function* () {
+        const fixture = setup();
+        const pending = Deferred.makeUnsafe<string>();
+        let generation = 0;
+        let available = true;
+        vi.spyOn(fixture.managerActions, "isAvailable").mockImplementation(() => available);
+        vi.spyOn(fixture.managerActions, "captureModelRefresh").mockImplementation(() => {
+          const captured = generation;
+          return {
+            isCurrent: () => captured === generation,
+            run: (effect, signal) => Effect.runPromise(effect, { signal }),
+          };
+        });
+        fixture.ui.select.mockImplementationOnce(() => Effect.runPromise(Deferred.await(pending)));
+        const running = fixture.command?.("settings", fixture.ctx) ?? Promise.resolve();
+        expect(fixture.ui.select).toHaveBeenCalledTimes(1);
+        if (transition === "replacement") generation += 1;
+        else available = false;
+        Deferred.doneUnsafe(pending, Effect.succeed(choice));
+        yield* step(() => running);
+        expect(fixture.ui.select).toHaveBeenCalledTimes(1);
+        expect(fixture.ui.custom).not.toHaveBeenCalled();
+        expect(fixture.managerActions.inspectWriterWorkspace).not.toHaveBeenCalled();
+        expect(fixture.managerActions.inspectProfiles).not.toHaveBeenCalled();
+        expect(fixture.managerActions.setWriterWorkspaceMode).not.toHaveBeenCalled();
+        expect(fixture.managerActions.patchNesting).not.toHaveBeenCalled();
+        expect(fixture.managerActions.patchSessionNesting).not.toHaveBeenCalled();
+      });
+    }
+  }
+
   for (const choice of ["Inherit limits", "Set limits"]) {
     effectTest(`rechecks Project trust after ${choice} prompts`, function* () {
       const fixture = setup();
-      fixture.ui.select.mockResolvedValueOnce("Project").mockImplementationOnce(() => {
-        if (choice === "Inherit limits") fixture.setProjectTrusted(false);
-        return Promise.resolve(choice);
-      });
+      fixture.ui.select
+        .mockResolvedValueOnce("Nesting limits")
+        .mockResolvedValueOnce("Project")
+        .mockImplementationOnce(() => {
+          if (choice === "Inherit limits") fixture.setProjectTrusted(false);
+          return Promise.resolve(choice);
+        });
       fixture.ui.input.mockResolvedValueOnce("4").mockImplementationOnce(() => {
         fixture.setProjectTrusted(false);
         return Promise.resolve("2");

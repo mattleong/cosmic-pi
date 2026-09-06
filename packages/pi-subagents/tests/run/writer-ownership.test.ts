@@ -61,6 +61,7 @@ describe("SubagentService", () => {
         },
       });
       const layer = SubagentService["layer"]({
+        writerWorkspaceMode: "shared-checkout",
         publish: (projection) => projections.push(projection),
       }).pipe(
         Layer.provide(Layer.merge(registry, leases)),

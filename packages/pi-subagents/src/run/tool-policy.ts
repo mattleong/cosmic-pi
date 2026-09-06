@@ -15,6 +15,7 @@ export const SUBAGENT_TOOL_NAME = Object.freeze({
   lifecycle: "subagent_lifecycle",
   rename: "subagent_rename",
   claims: "subagent_claims",
+  workspace: "subagent_workspace",
 } as const);
 
 export const SUBAGENT_TOOL_NAMES = [
@@ -28,6 +29,7 @@ export const SUBAGENT_TOOL_NAMES = [
   SUBAGENT_TOOL_NAME.lifecycle,
   SUBAGENT_TOOL_NAME.rename,
   SUBAGENT_TOOL_NAME.claims,
+  SUBAGENT_TOOL_NAME.workspace,
 ] as const;
 
 /** Competing orchestrators stay disabled even when the root session has them active. */
@@ -130,17 +132,29 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
     "Use contact_parent(kind=warning) to record a material non-blocking risk in parent-visible run status, and repeat that risk in the final report. Use kind=question instead when the parent must act before you can continue or the risk could invalidate work the parent is doing now.",
     "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.",
+    ...(request.workspace
+      ? [
+          `Your isolated workspace is ${request.workspace.cwd}. Its source checkout is ${request.workspace.sourceCwd}. Work only in the isolated workspace; do not write into the source checkout or another worker's directory.`,
+          "Your final report is a proposal, not integration approval. Do not stage, commit, merge, or integrate your own proposal. Your direct parent reviews every immutable diff page and runs combined tests in a prepared workspace before integrating uncommitted edits. Isolation is not a filesystem or confidentiality sandbox.",
+        ]
+      : []),
     request.writeIntent === "writer"
       ? request.writes
         ? [
-            "You are one of several cooperative writers in a shared working directory. Native edit, write, and Bash remain available, but file claims are coordination rules rather than filesystem isolation.",
+            request.workspace
+              ? "You have an isolated working directory. Exact-file claims still constrain the assigned scope; native tools remain available."
+              : "You are one of several cooperative writers in a shared working directory. Native edit, write, and Bash remain available, but file claims are coordination rules rather than filesystem isolation.",
             `Your exact write claims:\n${request.writes.map((path) => `- ${path}`).join("\n")}`,
-            "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently.",
+            request.workspace
+              ? "Read repository files as needed, but modify only the claimed paths inside your isolated cwd."
+              : "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently.",
             "Use Bash for targeted validation and ordinary work, but do not mutate files outside your claims. Do not run Git mutation, package installation, broad formatting, snapshot updates, or broad code generation unless every affected file is explicitly claimed.",
             "If another file is needed, contact the parent with kind=question, name the exact workspace-relative paths, and wait. Only a parent claim grant followed by its reply expands your scope. Peers cannot transfer claims.",
             "Report every changed file, validation command, and any possible out-of-claim side effect in the final report.",
           ].join("\n\n")
-        : "You are the exclusive declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
+        : request.workspace
+          ? "You are the writer in an isolated working directory. Keep edits narrowly within the assigned task and report changed files and validation."
+          : "You are the exclusive declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
       : "Your run is declared read-only as a prompt and writer-lease policy, not a tool-capability boundary. Inherited tools may still be capable of mutation; use them only for inspection and validation, and do not edit, write, patch, generate, or otherwise mutate project files. Use a writer assignment for intentional project changes.",
   ].join("\n\n");
 

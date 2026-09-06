@@ -20,6 +20,7 @@ import {
   SendParameters,
   StartParameters,
   StatusParameters,
+  WorkspaceParameters,
   prepareSubagentStartArguments,
 } from "./schema.ts";
 
@@ -81,15 +82,15 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: SUBAGENT_TOOL_NAME.start,
     label: "Start Subagents",
     description:
-      "Launch one to thirty-two session-scoped background subagents, subject to the caller's configured direct-child capacity, for bounded independent workstreams such as codebase reconnaissance, research, planning, review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. A claimless writer remains exclusive; writers with disjoint claims may share the checkout cooperatively. Native edit, write, and Bash are unchanged. Ordered readiness failures fall through only before spawn; an unsupported Herdr protocol first retries the same candidate on the local host and forces closeOnReport=true. An admitted failed start reports its run ID and settled cleanup/retry disposition. Post-ownership uncertainty never falls through.",
+      "Launch one to thirty-two session-scoped background subagents, subject to the caller's configured direct-child capacity, for bounded independent workstreams such as codebase reconnaissance, research, planning, review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. The session uses shared-checkout mode by default or opt-in worktree isolation, with no per-worker override. Worktree writers currently require a root caller; nested read-only and shared-checkout launches remain supported. Shared-checkout writers are exclusive without claims or may share with disjoint claims. Native edit, write, and Bash are unchanged. Ordered readiness failures fall through only before spawn; an unsupported Herdr protocol first retries the same candidate on the local host and forces closeOnReport=true. An admitted failed start reports its run ID and settled cleanup/retry disposition. Post-ownership uncertainty never falls through.",
     promptSnippet:
       "Parallelize independent reconnaissance, research, planning, and review with background subagents",
     promptGuidelines: [
       "Before substantial work, check for independent workstreams. When two or more exist, use subagent_start early to launch one to three read-only subagents in one batch; skip subagent_start only for trivial or tightly serial tasks.",
-      "Use subagent_start for bounded slices rather than the whole assignment: give each scout one narrow reconnaissance question and a concrete deliverable while allowing it to follow relevant evidence as deeply as needed; use researcher for sourced external research, planner for implementation planning, reviewer for independent verification, oracle for inherited-decision analysis, and generalist for other read-only work.",
+      "Use subagent_start for bounded slices rather than the whole assignment. Choose the profile by the required deliverable, not whether the task is read-only or comes first: scout locates and explains existing code; planner recommends implementation strategies and ordered changes; reviewer evaluates code, plans, or simplification opportunities before or after implementation. Read-only does not imply scout. Do not assign scouts substantive reviews, safety judgments, or implementation design. Give each subagent a narrow question and concrete deliverable while allowing it to follow relevant evidence as deeply as needed. Use researcher for sourced external research, oracle for inherited-decision analysis, and generalist for work without a matching specialized role.",
       "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. The selected version 6 profile-set route supplies runtime, model, effort, context, write intent, OpenAI fast mode, and normal host/close behavior; writes only narrows a writer to exact cooperative file claims. If Herdr reports an unsupported protocol before ownership, subagent_start visibly falls back to the same runtime on the local host and forces closeOnReport=true.",
       "After subagent_start, continue independent work instead of waiting idle. Use subagent_await only when progress or final synthesis depends on a report; unclaimed completion reports are delivered automatically.",
-      "Use profile=worker only for explicit implementation handoffs. While any writer pool is active, the parent coordinates and reviews but does not edit. Launch multiple shared-cwd writers only with pairwise-disjoint exact writes claims; native tools and Bash are cooperative rather than per-file sandboxed.",
+      "Use profile=worker only for explicit implementation handoffs. While shared-checkout writers are active, the parent coordinates and reviews but does not edit. Isolated worktree writers do not share the parent cwd, so the parent may keep editing. Launch multiple shared-cwd writers only with pairwise-disjoint exact writes claims; native tools and Bash are cooperative rather than per-file sandboxed. Worktree reports are proposals, not approval: use subagent_workspace to review, test combined changes, and integrate.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",
       "When a profiled run fails and its start receipt or status reports an eligible remaining route candidate, call subagent_lifecycle with action=retry for that run before launching any generalist replacement. Retry creates a new run on the next candidate from the original frozen route and never re-attempts the failed candidate.",
     ],
@@ -266,6 +267,37 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     renderResult: sharedRenderResult,
   });
 
+  const workspace = defineTool({
+    name: SUBAGENT_TOOL_NAME.workspace,
+    label: "Manage Writer Workspace",
+    description:
+      "Manage isolated writer proposals as their direct parent. list pages accessible workspaces; review freezes after confirmed process cleanup and returns an immutable diff in pages of at most 16000 characters. Read ALL pages of the same revisionId. prepare builds a separate cwd combining that revision with current parent edits. Run relevant combined tests there before integrate with the exact revisionId and preparationId. Integration applies uncommitted edits and preserves the parent index; stale or conflicting inputs fail closed. revise requests another writer pass and invalidates previous review/preparation; discard deletes a rejected proposal after cleanup. Reports never imply approval. Caller identity is bound by the coordinator, not tool arguments.",
+    promptSnippet:
+      "Review isolated writer diffs, test combined changes, and integrate uncommitted edits",
+    promptGuidelines: [
+      "After a worktree writer finishes, use subagent_workspace review and inspect every diff page using the returned revisionId and nextOffset. A report or summary is not a review or approval.",
+      "Use subagent_workspace prepare for the reviewed revision, then run relevant tests in its returned combined cwd. Do not edit that prepared tree. Only after review and passing tests, automatically call integrate with that exact revisionId and preparationId. Do not commit or stage parent changes.",
+      "If review or tests fail, use subagent_workspace revise with concrete feedback, then await its successor and review the new workspace revision from the beginning. Stale preparation or parent changes require a fresh prepare and test pass. Use discard only for a proposal you intend to delete.",
+    ],
+    parameters: WorkspaceParameters,
+    execute: (_id, input, signal, onUpdate, ctx) =>
+      executeSubagentAction(
+        pi,
+        runtime,
+        { action: "workspace", operation: input },
+        signal,
+        onUpdate,
+        ctx,
+      ),
+    renderCall: (args, theme) =>
+      renderSubagentCall(
+        "Writer workspace",
+        `${args.action ?? ""} ${args.workspaceId ?? ""}`,
+        theme,
+      ),
+    renderResult: sharedRenderResult,
+  });
+
   for (const tool of [
     models,
     start,
@@ -277,6 +309,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     lifecycle,
     rename,
     claims,
+    workspace,
   ])
     pi.registerTool(withCodePreviewShell(tool));
 }

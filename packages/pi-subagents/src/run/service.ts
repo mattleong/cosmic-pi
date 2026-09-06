@@ -61,6 +61,9 @@ import {
 } from "../tools/proxy-protocol.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { makeRunWriteClaimControl } from "./write-claim-control.ts";
+import { makeWorkspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
+import { WorkspaceService } from "../workspace/service.ts";
+import { DEFAULT_WRITER_WORKSPACE_MODE, type WriterWorkspaceMode } from "../config/schema.ts";
 
 let nextRuntimeNamespace = 1;
 const allocateRuntimeNamespace = (): string => `r${(nextRuntimeNamespace++).toString(36)}`;
@@ -70,6 +73,9 @@ export type SubagentNotificationCallback =
   | ((notification: SubagentNotification) => void);
 
 export interface SubagentServiceOptions {
+  readonly writerWorkspaceMode?: WriterWorkspaceMode;
+  readonly workspaceOwnerId?: string;
+  readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;
   readonly notify?: SubagentNotificationCallback;
   readonly questionnaireHandler?: (
@@ -108,7 +114,7 @@ export interface SubagentStatusObservations {
   readonly missingIds: ReadonlyArray<string>;
 }
 
-export interface SubagentServiceContract {
+export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
   /** Submit one launch to the session owner; cancelling the waiter never abandons ownership. */
   readonly startSessionOwned: (
@@ -226,6 +232,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const backendRegistry = yield* SubagentBackendRegistry;
   const profileService = yield* SubagentProfileService;
   const writerLeases = yield* WriterLeaseService;
+  const workspaceEngine = yield* Effect.serviceOption(WorkspaceService);
+  const initialProfiles = yield* profileService.capture;
   const ownerScope = yield* Effect.scope;
   // Keyed parent-proxy executions for the `${runId}:${requestId}` identity. Effect rc.111
   // FiberMap.make registers one acquireRelease finalizer on the service scope that marks the
@@ -254,6 +262,20 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const withLock = lock.withPermits(1);
   const withCompletionGate = completionGate.withPermits(1);
+  const workspaces = makeWorkspaceControl({
+    engine: Option.getOrUndefined(workspaceEngine),
+    initialMode:
+      options.writerWorkspaceMode ??
+      initialProfiles.effectiveConfig.writerWorkspaceMode ??
+      DEFAULT_WRITER_WORKSPACE_MODE,
+    ownerId: options.workspaceOwnerId ?? runtimeNamespace,
+    ...(options.workspaceSourceCwd && { sourceCwd: options.workspaceSourceCwd }),
+    writerLeases,
+    records,
+    writerPools,
+    withLock,
+    isClosed: () => closed,
+  });
   interface TurnInputAdmission {
     count: number;
     drained: Deferred.Deferred<void> | undefined;
@@ -772,7 +794,15 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     submitPrompt: assignment.submitPrompt,
     initializeProcess,
     sendPeerNotices,
+    bindWorkspace: workspaces.bind,
   });
+
+  const startWithWorkspace: SubagentServiceContract["start"] = (request) =>
+    launch.validate(request).pipe(Effect.andThen(workspaces.withLaunch(request, launch.start)));
+  const startWorkspaceSessionOwned: SubagentServiceContract["startSessionOwned"] = (request) =>
+    runSessionOwned(ownerScope, Effect.void, () => startWithWorkspace(request)).pipe(
+      Effect.map((view) => observations.redactCompletionReport(view)),
+    );
 
   const resume = makeRunResume({
     ownerScope,
@@ -792,6 +822,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeRecordScope,
     retainUncertainAssignment: assignment.retainUncertainAssignment,
     sendPeerNotices,
+    invalidateWorkspace: workspaces.invalidateForResume,
   });
 
   const writeClaims = makeRunWriteClaimControl({
@@ -805,13 +836,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] = (request) =>
     runSessionOwned(ownerScope, Effect.void, () =>
-      launch
-        .start(request)
-        .pipe(
-          Effect.ensuring(
-            retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
-          ),
+      startWithWorkspace(request).pipe(
+        Effect.ensuring(
+          retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
         ),
+      ),
     ).pipe(Effect.map((view) => observations.redactCompletionReport(view)));
 
   const list = SubscriptionRef.get(projectionRef).pipe(Effect.map((current) => current.runs));
@@ -837,8 +866,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     callerRunId,
     request,
   ) =>
-    authorizeTargets(callerRunId, [callerRunId]).pipe(
-      Effect.andThen(launch.startSessionOwned({ ...request, parentRunId: callerRunId })),
+    withLock(requireRecord(callerRunId).pipe(Effect.map((record) => record.view.cwd))).pipe(
+      Effect.flatMap((cwd) =>
+        startWorkspaceSessionOwned({ ...request, cwd, parentRunId: callerRunId }),
+      ),
     );
   const status: SubagentServiceContract["status"] = (id) =>
     observations
@@ -856,8 +887,20 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const projection = SubscriptionRef.get(projectionRef);
 
   const service: SubagentServiceContract = {
-    start: launch.start,
-    startSessionOwned: launch.startSessionOwned,
+    start: startWithWorkspace,
+    startSessionOwned: startWorkspaceSessionOwned,
+    workspaceList: workspaces.workspaceList,
+    workspaceReview: workspaces.workspaceReview,
+    workspacePrepare: workspaces.workspacePrepare,
+    workspaceIntegrate: workspaces.workspaceIntegrate,
+    workspaceDiscard: workspaces.workspaceDiscard,
+    workspaceRevise: workspaces.revise((request, handle) =>
+      runSessionOwned(ownerScope, Effect.void, () =>
+        workspaces.withLaunch(request, launch.start, handle),
+      ),
+    ),
+    inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
+    setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
     startSessionOwnedFrom,
     visibleList,
     authorizeTargets,

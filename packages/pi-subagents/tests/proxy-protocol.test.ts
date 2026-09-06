@@ -62,6 +62,19 @@ const proxyRoundTripCases = [
       operation: { action: "grant", runId: "agent-1", paths: ["src/fixture.ts"] },
     },
   },
+  {
+    label: "workspace",
+    tool: "subagent_workspace",
+    input: {
+      action: "workspace",
+      operation: {
+        action: "integrate",
+        workspaceId: "workspace-1",
+        revisionId: "revision-1",
+        preparationId: "prepared-1",
+      },
+    },
+  },
 ] satisfies ReadonlyArray<{
   readonly label: string;
   readonly tool: string;
@@ -69,6 +82,30 @@ const proxyRoundTripCases = [
 }>;
 
 describe("nested Pi proxy protocol", () => {
+  it.each([
+    { action: "integrate", workspaceId: "w", revisionId: "r" },
+    { action: "review", workspaceId: "w", offset: 1 },
+    { action: "review", workspaceId: "w", limit: 16_001 },
+    { action: "review", workspaceId: "w", offset: -1 },
+    { action: "list", callerRunId: "root" },
+    { action: "discard", workspaceId: "w", ownerId: "root" },
+    { action: "review", workspaceId: "w", processCleanupConfirmed: true },
+    {
+      action: "prepare",
+      workspaceId: "w",
+      revisionId: "r",
+      writerWorkspaceMode: "shared-checkout",
+    },
+    { action: "integrate", workspaceId: "w", revisionId: "r", preparationId: "p", approved: true },
+    { action: "revise", workspaceId: "w", message: " " },
+  ])("rejects invalid or forged workspace arguments %j", (args) => {
+    expect(
+      decodeSubagentProxyRequest({
+        tool: "subagent_workspace",
+        argumentsJson: JSON.stringify(args),
+      }),
+    ).toBeInstanceOf(InvalidSubagentRequestError);
+  });
   it("keeps the named map frozen and the ordered tuple stable", () => {
     expect(Object.isFrozen(SUBAGENT_TOOL_NAME)).toBe(true);
     expect(SUBAGENT_TOOL_NAMES).toEqual(proxyRoundTripCases.map(({ tool }) => tool));

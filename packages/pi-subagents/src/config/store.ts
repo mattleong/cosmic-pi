@@ -28,6 +28,8 @@ import {
   SUBAGENT_CONFIG_BASENAME,
   SUBAGENT_CONFIG_VERSION,
   type SubagentNestingPolicy,
+  type WriterWorkspaceMode,
+  WriterWorkspaceModeSchema,
 } from "./schema.ts";
 
 export class SubagentConfigStoreError extends Schema.TaggedError<SubagentConfigStoreError>()(
@@ -99,6 +101,11 @@ export interface SubagentNestingPatch extends SubagentConfigPatchBase {
   readonly nesting?: SubagentNestingPolicy | undefined;
 }
 
+export interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
+  /** Undefined removes the saved preference and restores inheritance. */
+  readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
+}
+
 export interface SubagentConfigStoreContract {
   readonly paths: (cwd: string, agentDirectory: string) => Effect.Effect<SubagentConfigPaths>;
   readonly load: (
@@ -145,6 +152,11 @@ export interface SubagentConfigStoreContract {
     cwd: string,
     agentDirectory: string,
     patch: SubagentDeleteProfileSetPatch,
+  ) => Effect.Effect<void, SubagentConfigStoreError>;
+  readonly patchWriterWorkspace: (
+    cwd: string,
+    agentDirectory: string,
+    patch: SubagentWriterWorkspacePatch,
   ) => Effect.Effect<void, SubagentConfigStoreError>;
   readonly patchNesting: (
     cwd: string,
@@ -592,6 +604,21 @@ const applyNestingPatch = (
   return next;
 };
 
+const applyWriterWorkspacePatch = (
+  current: JsonObject,
+  patch: SubagentWriterWorkspacePatch,
+  path: string,
+): JsonObject | SubagentConfigStoreError => {
+  const upgraded = upgradeDocument(current, path);
+  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
+  const next = { ...upgraded };
+  if (patch.writerWorkspaceMode === undefined) delete next.writerWorkspaceMode;
+  else if (!Schema.is(WriterWorkspaceModeSchema)(patch.writerWorkspaceMode))
+    return mutationError(path, "Invalid writer workspace mode.");
+  else next.writerWorkspaceMode = patch.writerWorkspaceMode;
+  return next;
+};
+
 export const subagentConfigStoreLayer = Layer.effect(
   SubagentConfigStore,
   Effect.gen(function* () {
@@ -622,7 +649,10 @@ export const subagentConfigStoreLayer = Layer.effect(
           return yield* unsupportedVersionError(locations.global);
         if (
           global.diagnostics.some(
-            (diagnostic) => diagnostic === "global.<unknown>" || diagnostic === "global.nesting",
+            (diagnostic) =>
+              diagnostic === "global.<unknown>" ||
+              diagnostic === "global.nesting" ||
+              diagnostic === "global.writerWorkspaceMode",
           )
         )
           return yield* unsupportedFieldsError(locations.global);
@@ -632,7 +662,10 @@ export const subagentConfigStoreLayer = Layer.effect(
           return yield* unsupportedVersionError(locations.project);
         if (
           project?.diagnostics.some(
-            (diagnostic) => diagnostic === "project.<unknown>" || diagnostic === "project.nesting",
+            (diagnostic) =>
+              diagnostic === "project.<unknown>" ||
+              diagnostic === "project.nesting" ||
+              diagnostic === "project.writerWorkspaceMode",
           )
         )
           return yield* unsupportedFieldsError(locations.project);
@@ -726,6 +759,14 @@ export const subagentConfigStoreLayer = Layer.effect(
         patchDocument(cwd, agentDirectory, patch, applyRenameProfileSet),
       deleteProfileSet: (cwd, agentDirectory, patch) =>
         patchDocument(cwd, agentDirectory, patch, applyDeleteProfileSet, true),
+      patchWriterWorkspace: (cwd, agentDirectory, patch) =>
+        patchDocument(
+          cwd,
+          agentDirectory,
+          patch,
+          applyWriterWorkspacePatch,
+          patch.writerWorkspaceMode === undefined,
+        ),
       patchNesting: (cwd, agentDirectory, patch) =>
         patchDocument(cwd, agentDirectory, patch, applyNestingPatch, patch.nesting === undefined),
     });

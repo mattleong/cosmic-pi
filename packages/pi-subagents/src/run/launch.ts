@@ -57,6 +57,11 @@ const validateStartRequest = (
         code: "task_required",
         message: "Subagent task is required.",
       });
+    if (request.task.length > MAX_TASK_CHARS)
+      return yield* new InvalidSubagentRequestError({
+        code: "task_too_large",
+        message: "Subagent task is too large.",
+      });
     const normalizedClaims =
       request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
     if (normalizedClaims && !normalizedClaims.ok)
@@ -130,6 +135,7 @@ export interface RunLaunchDependencies {
     record: RunRecord,
   ) => Effect.Effect<BackendStartupState, SubagentError>;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
+  readonly bindWorkspace: (record: RunRecord, request: StartSubagentRequest) => void;
 }
 
 /**
@@ -204,11 +210,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             cwd: canonicalWriterCwd?.path ?? request.cwd,
           }),
         );
-        if (request.task.length > MAX_TASK_CHARS)
-          return yield* new InvalidSubagentRequestError({
-            code: "task_too_large",
-            message: "Subagent task is too large.",
-          });
         const requestedName = sanitizeName(request.name ?? "");
         const now = yield* Clock.currentTimeMillis;
         // Reclaim-before-admit eviction transaction. Phase A (`reserveOrClaim`)
@@ -368,6 +369,13 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               skippedCandidates: [],
             },
             cwd: canonicalWriterCwd?.path ?? request.cwd,
+            ...(request.writerWorkspaceMode && {
+              writerWorkspaceMode: request.writerWorkspaceMode,
+            }),
+            ...(request.workspace && {
+              workspaceId: request.workspace.workspaceId,
+              sourceCwd: request.workspace.sourceCwd,
+            }),
             state: "starting",
             context: request.context,
             writeIntent: request.writeIntent,
@@ -505,6 +513,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               predecessor.view = { ...predecessor.view, supersededByRunId: id };
             }
             records.set(id, record);
+            dependencies.bindWorkspace(record, request);
             yield* publish;
             return record;
           });
@@ -734,6 +743,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     );
 
   return {
+    /** Cheap input/platform checks also run before private workspace acquisition. */
+    validate: (request: StartSubagentRequest) =>
+      validateStartRequest(request, writerLeases.platform),
     /** Admission, eviction, record construction, initialization, prompt issue, compensation. */
     start,
     /** Session-owned launch; cancelling the waiter never abandons ownership. */

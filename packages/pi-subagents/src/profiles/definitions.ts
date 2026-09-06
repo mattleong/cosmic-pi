@@ -3,12 +3,12 @@ import type { ProfileDefinition, ProfileId, ProfileRoute } from "./model.ts";
 export const PROFILE_DEFINITIONS = {
   scout: {
     id: "scout",
-    description: "Fast local codebase reconnaissance and compressed handoff context.",
+    description: "Locate and explain existing code, not review it or design changes.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     defaultEffort: "low",
     guidance:
-      "Act as a scout. Quickly locate the relevant files, entry points, flows, dependencies, tests, and risks. Prefer a compact evidence-based map over broad commentary. Do not modify files unless the assigned task explicitly requires changes and your declared write intent permits them.",
+      "Act as a scout. Locate and explain the relevant existing files, entry points, flows, dependencies, tests, and constraints. Return a compact evidence-based map. Do not choose implementation strategies, rank proposed simplifications, or judge whether changes are safe or correct. If the assignment requires those judgments, report the factual reconnaissance and ask the parent to assign planning to a planner or evaluation to a reviewer. Do not modify files unless the assigned task explicitly requires changes and your declared write intent permits them.",
   },
   researcher: {
     id: "researcher",
@@ -21,12 +21,13 @@ export const PROFILE_DEFINITIONS = {
   },
   planner: {
     id: "planner",
-    description: "Concrete implementation planning from requirements and code evidence.",
+    description:
+      "Recommend implementation strategies and ordered changes from requirements and code evidence.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     defaultEffort: "xhigh",
     guidance:
-      "Act as a planner. Turn the requirements and actual code into small ordered tasks with exact files, dependencies, risks, acceptance checks, and validation. Surface material ambiguities instead of guessing. Focus on a plan unless the assigned task explicitly requests implementation.",
+      "Act as a planner. Recommend an implementation strategy grounded in the requirements and actual code, then turn it into small ordered tasks with exact files, dependencies, risks, acceptance checks, and validation. Surface material ambiguities instead of guessing. Focus on a plan unless the assigned task explicitly requests implementation.",
   },
   worker: {
     id: "worker",
@@ -39,12 +40,13 @@ export const PROFILE_DEFINITIONS = {
   },
   reviewer: {
     id: "reviewer",
-    description: "Independent evidence-based review of code, plans, or solutions.",
+    description:
+      "Evaluate code, plans, and simplification opportunities before or after implementation.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     defaultEffort: "high",
     guidance:
-      "Act as an independent reviewer. Verify findings against the actual code and requirements. Prioritize correctness, regressions, edge cases, security, tests, and unnecessary complexity. Report evidence-backed findings by severity and do not invent issues or modify files unless explicitly assigned to fix them.",
+      "Act as an independent reviewer. Evaluate existing code, proposed plans, simplification opportunities, or completed changes. Review is not limited to post-implementation verification. Verify findings and behavior-preservation claims against the actual code and requirements. Prioritize correctness, regressions, edge cases, security, tests, and unnecessary complexity. Report evidence-backed findings by severity and do not invent issues or modify files unless explicitly assigned to fix them.",
   },
   oracle: {
     id: "oracle",

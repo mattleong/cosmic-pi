@@ -67,6 +67,7 @@ export interface RunResumeDependencies {
     warning: string,
   ) => Effect.Effect<void>;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
+  readonly invalidateWorkspace: (record: RunRecord) => Effect.Effect<void, SubagentError>;
 }
 
 /**
@@ -209,6 +210,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                       message: `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
                     });
                 }
+                yield* dependencies.invalidateWorkspace(selected);
                 const attemptToken = allocateAssignmentAttemptToken();
                 selected.pauseRequested = false;
                 selected.pauseOutcome = undefined;

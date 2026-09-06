@@ -526,7 +526,7 @@ export const serviceLayer = (
   profiles = profileLayerFor({}),
   writerLeases: Layer.Layer<WriterLeaseService> = fakeWriterLeaseLayer(),
 ) =>
-  SubagentService["layer"](options).pipe(
+  SubagentService["layer"]({ writerWorkspaceMode: "shared-checkout", ...options }).pipe(
     Layer.provide(Layer.merge(localPiBackendRegistryLayer, writerLeases)),
     Layer.provideMerge(profiles),
   );
@@ -656,7 +656,7 @@ export const retainedServiceLayer = (
   backend: ReturnType<typeof fakeRetainedBackendLayer>,
   options: SubagentServiceOptions = {},
 ) =>
-  SubagentService["layer"](options).pipe(
+  SubagentService["layer"]({ writerWorkspaceMode: "shared-checkout", ...options }).pipe(
     Layer.provide(Layer.merge(backend.layer, fakeWriterLeaseLayer())),
     Layer.provideMerge(profileLayerFor({})),
   );

@@ -19,6 +19,7 @@ import {
   MIN_DIRECT_CHILDREN,
   MIN_SUBAGENT_DEPTH,
   type SubagentNestingPolicy,
+  type WriterWorkspaceMode,
 } from "../config/schema.ts";
 import { SubagentConfigStoreError } from "../config/store.ts";
 import type {
@@ -99,6 +100,12 @@ export interface FleetManagerActions {
   readonly renameProfileSet: (patch: SubagentRenameProfileSetPatch) => Promise<void>;
   readonly deleteProfileSet: (patch: SubagentDeleteProfileSetPatch) => Promise<void>;
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
+  readonly inspectWriterWorkspace: () => Promise<{
+    readonly mode: WriterWorkspaceMode;
+    readonly blockedReason?: string;
+  }>;
+  /** The coordinator rejects unsafe switches and persists accepted preferences for new sessions. */
+  readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<void>;
   readonly replaceSessionProfiles: (patch: SessionProfileSetPatch) => Promise<void>;
   readonly patchSessionNesting: (patch: SessionNestingPatch) => Promise<void>;
@@ -529,6 +536,63 @@ function openNestingSettings(
   );
 }
 
+function openWriterWorkspaceSettings(
+  ctx: ExtensionCommandContext,
+  actions: FleetManagerActions,
+): Promise<void> {
+  const owner = actions.captureModelRefresh();
+  return actions
+    .inspectWriterWorkspace()
+    .then((snapshot) => {
+      if (!owner.isCurrent() || !actions.isAvailable()) return;
+      if (snapshot.blockedReason) {
+        ctx.ui.notify(snapshot.blockedReason, "warning");
+        return;
+      }
+      const labels =
+        snapshot.mode === "worktree"
+          ? ["Worktree", "Shared checkout"]
+          : ["Shared checkout", "Worktree"];
+      return ctx.ui.select("Writer workspace", labels).then((choice) => {
+        if (!owner.isCurrent() || !actions.isAvailable()) return;
+        const mode =
+          choice === "Worktree"
+            ? "worktree"
+            : choice === "Shared checkout"
+              ? "shared-checkout"
+              : undefined;
+        if (mode === undefined || mode === snapshot.mode) return;
+        return actions.setWriterWorkspaceMode(mode).then(() => {
+          if (owner.isCurrent())
+            ctx.ui.notify("Writer workspace updated and saved for new sessions.", "info");
+        });
+      });
+    })
+    .catch((error) => {
+      if (owner.isCurrent())
+        ctx.ui.notify(
+          error instanceof Error ? error.message : "Could not change writer workspace.",
+          "error",
+        );
+    });
+}
+
+function openSubagentSettings(
+  ctx: ExtensionCommandContext,
+  actions: FleetManagerActions,
+): Promise<void> {
+  if (!ctx.hasUI || !actions.isAvailable()) return Promise.resolve();
+  const owner = actions.captureModelRefresh();
+  return ctx.ui
+    .select("Subagents settings", ["Writer workspace", "Nesting limits"])
+    .then((choice) => {
+      if (!owner.isCurrent() || !actions.isAvailable()) return;
+      if (choice === "Writer workspace") return openWriterWorkspaceSettings(ctx, actions);
+      if (choice === "Nesting limits") return openNestingSettings(ctx, actions);
+      return;
+    });
+}
+
 export function registerSubagentManagerCommand(
   pi: ExtensionAPI,
   bridge: SubagentProjectionBridge,
@@ -550,13 +614,13 @@ export function registerSubagentManagerCommand(
       }
       return completeSettingsArguments(prefix, [
         { id: "profiles", description: "Edit Current Session profiles and saved sets" },
-        { id: "settings", description: "Configure nesting limits" },
+        { id: "settings", description: "Configure writer workspace and nesting limits" },
       ]);
     },
     handler: (args, ctx) => {
       const command = args.trim();
       if (!command) return openFleetManager(ctx, bridge, actions);
-      if (command === "settings") return openNestingSettings(ctx, actions);
+      if (command === "settings") return openSubagentSettings(ctx, actions);
       const parts = command.split(/\s+/u);
       const profile = PROFILE_IDS.find((id) => id === parts[1]);
       if (parts[0] === "profiles" && (parts.length === 1 || (parts.length === 2 && profile)))

@@ -15,12 +15,13 @@ import { LocalCliProcess } from "./boundary/local-cli-process.ts";
 import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
 import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
 import { WriterLeaseService } from "./boundary/writer-lease.ts";
+import { WorkspaceService } from "./workspace/service.ts";
 import type {
   SubagentNotification,
   SubagentNotificationDelivery,
 } from "./boundary/host-notifier.ts";
 import type { ResolvedSubagentConfig } from "./config/options.ts";
-import { subagentConfigStoreLayer } from "./config/store.ts";
+import { SubagentConfigStore, subagentConfigStoreLayer } from "./config/store.ts";
 import { subagentProfileServiceLayer } from "./profiles/service.ts";
 import type { SessionProfileOverrideSeed } from "./profiles/session-overrides.ts";
 import type { SubagentProjection } from "./run/model.ts";
@@ -46,6 +47,7 @@ const subagentBackendRegistryLayer = Layer.effect(
 );
 
 export interface SubagentLayerOptions {
+  readonly workspaceOwnerId?: string;
   readonly cwd: string;
   readonly agentDirectory: string;
   readonly projectTrusted: boolean;
@@ -89,16 +91,30 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
     agentDirectory: options.agentDirectory,
   });
   const writerLeases = WriterLeaseService.layer({ agentDirectory: options.agentDirectory });
+  const workspaces = WorkspaceService.layer({ agentDirectory: options.agentDirectory });
   const serviceOptions: SubagentServiceOptions = {
+    workspaceSourceCwd: options.cwd,
+    ...(options.workspaceOwnerId && { workspaceOwnerId: options.workspaceOwnerId }),
     publish: options.publish,
     notify: options.notify,
     ...(options.questionnaireHandler && { questionnaireHandler: options.questionnaireHandler }),
   };
-  const service = SubagentService.layer(
-    options.proxyHandler
-      ? { ...serviceOptions, proxyHandler: options.proxyHandler }
-      : serviceOptions,
-  ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles)));
+  const service = Layer.unwrap(
+    Effect.gen(function* () {
+      // Read the persisted mode separately from profile handoffs, which preserve an older route baseline.
+      const store = yield* SubagentConfigStore;
+      const inspection = yield* store.inspect(
+        options.cwd,
+        options.agentDirectory,
+        options.projectTrusted,
+      );
+      return SubagentService.layer({
+        ...serviceOptions,
+        writerWorkspaceMode: inspection.config.writerWorkspaceMode,
+        ...(options.proxyHandler && { proxyHandler: options.proxyHandler }),
+      });
+    }),
+  ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles, workspaces, configStore)));
   // Layer memoization shares both persistence and the backend registry with host preflight/service use.
   return Layer.mergeAll(service, profiles, configStore, backend, nativeModelCatalog);
 };

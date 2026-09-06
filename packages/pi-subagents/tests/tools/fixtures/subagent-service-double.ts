@@ -100,6 +100,15 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     revokeWriteClaims: base.revokeWriteClaims ?? (() => unexpected("revokeWriteClaims")),
     resumeWriterAdmission:
       base.resumeWriterAdmission ?? (() => unexpected("resumeWriterAdmission")),
+    workspaceList: base.workspaceList ?? (() => unexpected("workspaceList")),
+    workspaceReview: base.workspaceReview ?? (() => unexpected("workspaceReview")),
+    workspacePrepare: base.workspacePrepare ?? (() => unexpected("workspacePrepare")),
+    workspaceIntegrate: base.workspaceIntegrate ?? (() => unexpected("workspaceIntegrate")),
+    workspaceDiscard: base.workspaceDiscard ?? (() => unexpected("workspaceDiscard")),
+    workspaceRevise: base.workspaceRevise ?? (() => unexpected("workspaceRevise")),
+    inspectWriterWorkspace: base.inspectWriterWorkspace ?? unexpected("inspectWriterWorkspace"),
+    setWriterWorkspaceMode:
+      base.setWriterWorkspaceMode ?? (() => unexpected("setWriterWorkspaceMode")),
     projection: base.projection ?? unexpected("projection"),
   };
 }
