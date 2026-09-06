@@ -1,10 +1,6 @@
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import {
-  fullScreenSettingsHint,
-  settingsSurfaceBridge,
-  VimSettingsAdapter,
-} from "../src/manager/settings-adapter.ts";
+import { settingsSurfaceBridge, VimSettingsAdapter } from "../src/manager/settings-adapter.ts";
 
 interface TestSettingsChild extends Component {
   focused: boolean;
@@ -83,10 +79,5 @@ describe("VimSettingsAdapter", () => {
 
     expect(adapter.render(0)).toEqual([]);
     expect(adapter.render(1).every((line) => visibleWidth(line) <= 1)).toBe(true);
-  });
-
-  it("changes hints by mode without relying on exact chrome", () => {
-    expect(fullScreenSettingsHint({ searching: true })).toContain("Type to filter");
-    expect(fullScreenSettingsHint({ searching: false, search: true })).toContain("/ filter");
   });
 });

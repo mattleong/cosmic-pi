@@ -1,3 +1,4 @@
+import { ordinalChoices, defaultQuestion } from "./support/questionnaire.ts";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Context from "effect/Context";
@@ -24,14 +25,11 @@ const request: AskUserAsyncRequest = {
   blockedWork: "Choose the implementation",
   questions: [
     {
+      ...defaultQuestion,
       key: "library",
       title: "Library",
       prompt: "Which?",
-      mode: "single",
-      choices: [
-        { value: "a", label: "A", description: "First" },
-        { value: "b", label: "B", description: "Second" },
-      ],
+      choices: ordinalChoices,
     },
   ],
 };
@@ -39,6 +37,18 @@ const outcome: AskUserOutcome = {
   outcome: "submitted",
   answers: [{ key: "library", kind: "choices", values: ["a"], labels: ["A"] }],
 };
+
+// Acquisition stays at each caller's original boundary; the caller owns its scope.
+const acquireService = (...args: Parameters<typeof AskUserService.layer>) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.buildWithScope(AskUserService.layer(...args), yield* Effect.scope);
+    return Context.get(context, AskUserService);
+  });
+
+const statusOf = (service: Effect.Success<ReturnType<typeof acquireService>>, requestId?: string) =>
+  service
+    .controlAsync(requestId === undefined ? { action: "status" } : { action: "status", requestId })
+    .pipe(Effect.map((result) => result.requests[0]));
 
 const fixture = Effect.gen(function* () {
   const entered = yield* Deferred.make<void>();
@@ -65,29 +75,27 @@ const fixture = Effect.gen(function* () {
 it.effect("waits only for mounting, admits independent work, and retains automatic answers", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const start = yield* Effect.forkChild(service.startAsync(request));
-      yield* Deferred.await(f.entered);
-      expect(start.pollUnsafe()).toBeUndefined();
-      const pending = yield* service.controlAsync({ action: "status" });
-      expect(pending.requests[0]?.status).toBe("pending");
-      yield* Deferred.succeed(f.mount, undefined);
-      const receipt = yield* Fiber.join(start);
-      expect(receipt.status).toBe("pending");
-      expect(yield* Ref.get(f.released)).toBe(0);
-      expect(yield* Ref.get(f.messages)).toEqual([]);
-      yield* Deferred.succeed(f.answer, outcome);
-      yield* Deferred.await(f.delivered);
-      const status = yield* service.controlAsync({
-        action: "status",
-        requestId: receipt.requestId,
-      });
-      expect(status.requests[0]?.outcome).toEqual(outcome);
-      expect(status.requests[0]?.delivery).toBe("sent");
-      expect((yield* Ref.get(f.messages))[0]?.deliveryId).toBe(receipt.deliveryId);
-      expect(yield* Ref.get(f.released)).toBe(1);
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery, "test")));
+    const service = yield* acquireService(f.host, f.delivery, "test");
+    const start = yield* Effect.forkChild(service.startAsync(request));
+    yield* Deferred.await(f.entered);
+    expect(start.pollUnsafe()).toBeUndefined();
+    const pending = yield* service.controlAsync({ action: "status" });
+    expect(pending.requests[0]?.status).toBe("pending");
+    yield* Deferred.succeed(f.mount, undefined);
+    const receipt = yield* Fiber.join(start);
+    expect(receipt.status).toBe("pending");
+    expect(yield* Ref.get(f.released)).toBe(0);
+    expect(yield* Ref.get(f.messages)).toEqual([]);
+    yield* Deferred.succeed(f.answer, outcome);
+    yield* Deferred.await(f.delivered);
+    const status = yield* service.controlAsync({
+      action: "status",
+      requestId: receipt.requestId,
+    });
+    expect(status.requests[0]?.outcome).toEqual(outcome);
+    expect(status.requests[0]?.delivery).toBe("sent");
+    expect((yield* Ref.get(f.messages))[0]?.deliveryId).toBe(receipt.deliveryId);
+    expect(yield* Ref.get(f.released)).toBe(1);
   }),
 );
 
@@ -95,40 +103,36 @@ it.effect("queues competing async and blocking dialogs without replacing the pen
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Deferred.succeed(f.mount, undefined);
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const receipt = yield* service.startAsync(request);
-      expect(yield* service.startAsync(request)).toMatchObject({
-        status: "pending",
-        presentation: "queued",
-      });
-      const blocking = yield* Effect.forkChild(service.ask(request), { startImmediately: true });
-      expect(blocking.pollUnsafe()).toBeUndefined();
-      yield* Fiber.interrupt(blocking);
-      const result = yield* service.controlAsync({
-        action: "cancel",
-        requestId: receipt.requestId,
-      });
-      expect(result.requests[0]?.status).toBe("cancelled");
-      expect(result.requests[0]?.outcome?.answers).toEqual([]);
-      expect(yield* Ref.get(f.messages)).toEqual([]);
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+    const service = yield* acquireService(f.host, f.delivery);
+    const receipt = yield* service.startAsync(request);
+    expect(yield* service.startAsync(request)).toMatchObject({
+      status: "pending",
+      presentation: "queued",
+    });
+    const blocking = yield* Effect.forkChild(service.ask(request), { startImmediately: true });
+    expect(blocking.pollUnsafe()).toBeUndefined();
+    yield* Fiber.interrupt(blocking);
+    const result = yield* service.controlAsync({
+      action: "cancel",
+      requestId: receipt.requestId,
+    });
+    expect(result.requests[0]?.status).toBe("cancelled");
+    expect(result.requests[0]?.outcome?.answers).toEqual([]);
+    expect(yield* Ref.get(f.messages)).toEqual([]);
   }),
 );
 
 it.effect("queues async behind an active blocking dialog", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const blocking = yield* Effect.forkChild(service.ask(request));
-      yield* Deferred.await(f.entered);
-      const receipt = yield* service.startAsync(request);
-      expect(receipt.presentation).toBe("queued");
-      yield* Fiber.interrupt(blocking);
-      yield* Deferred.succeed(f.mount, undefined);
-      yield* service.controlAsync({ action: "cancel", requestId: receipt.requestId });
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+    const service = yield* acquireService(f.host, f.delivery);
+    const blocking = yield* Effect.forkChild(service.ask(request));
+    yield* Deferred.await(f.entered);
+    const receipt = yield* service.startAsync(request);
+    expect(receipt.presentation).toBe("queued");
+    yield* Fiber.interrupt(blocking);
+    yield* Deferred.succeed(f.mount, undefined);
+    yield* service.controlAsync({ action: "cancel", requestId: receipt.requestId });
   }),
 );
 
@@ -136,27 +140,23 @@ it.effect("an await owns answer delivery; status never consumes it", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Deferred.succeed(f.mount, undefined);
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const receipt = yield* service.startAsync(request);
-      const waiter = yield* Effect.forkChild(
-        service.controlAsync({ action: "await", requestId: receipt.requestId }),
-        { startImmediately: true },
-      );
-      expect((yield* service.controlAsync({ action: "status" })).requests[0]?.status).toBe(
-        "pending",
-      );
-      expect(
-        yield* Effect.flip(service.controlAsync({ action: "await", requestId: receipt.requestId })),
-      ).toMatchObject({ reason: "busy" });
-      yield* Deferred.succeed(f.answer, outcome);
-      const result = yield* Fiber.join(waiter);
-      expect(result.requests[0]).toMatchObject({ delivery: "waiter", outcome });
-      expect(yield* Ref.get(f.messages)).toEqual([]);
-      expect(
-        yield* service.controlAsync({ action: "await", requestId: receipt.requestId }),
-      ).toEqual(result);
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+    const service = yield* acquireService(f.host, f.delivery);
+    const receipt = yield* service.startAsync(request);
+    const waiter = yield* Effect.forkChild(
+      service.controlAsync({ action: "await", requestId: receipt.requestId }),
+      { startImmediately: true },
+    );
+    expect((yield* statusOf(service))?.status).toBe("pending");
+    expect(
+      yield* Effect.flip(service.controlAsync({ action: "await", requestId: receipt.requestId })),
+    ).toMatchObject({ reason: "busy" });
+    yield* Deferred.succeed(f.answer, outcome);
+    const result = yield* Fiber.join(waiter);
+    expect(result.requests[0]).toMatchObject({ delivery: "waiter", outcome });
+    expect(yield* Ref.get(f.messages)).toEqual([]);
+    expect(yield* service.controlAsync({ action: "await", requestId: receipt.requestId })).toEqual(
+      result,
+    );
   }),
 );
 
@@ -164,22 +164,18 @@ it.effect("interrupting an await leaves the UI alive and restores automatic deli
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Deferred.succeed(f.mount, undefined);
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const receipt = yield* service.startAsync(request);
-      const waiter = yield* Effect.forkChild(
-        service.controlAsync({ action: "await", requestId: receipt.requestId }),
-        { startImmediately: true },
-      );
-      yield* Fiber.interrupt(waiter);
-      expect(yield* Ref.get(f.released)).toBe(0);
-      expect((yield* service.controlAsync({ action: "status" })).requests[0]?.status).toBe(
-        "pending",
-      );
-      yield* Deferred.succeed(f.answer, outcome);
-      yield* Deferred.await(f.delivered);
-      expect(yield* Ref.get(f.messages)).toHaveLength(1);
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+    const service = yield* acquireService(f.host, f.delivery);
+    const receipt = yield* service.startAsync(request);
+    const waiter = yield* Effect.forkChild(
+      service.controlAsync({ action: "await", requestId: receipt.requestId }),
+      { startImmediately: true },
+    );
+    yield* Fiber.interrupt(waiter);
+    expect(yield* Ref.get(f.released)).toBe(0);
+    expect((yield* statusOf(service))?.status).toBe("pending");
+    yield* Deferred.succeed(f.answer, outcome);
+    yield* Deferred.await(f.delivered);
+    expect(yield* Ref.get(f.messages)).toHaveLength(1);
   }),
 );
 
@@ -187,46 +183,43 @@ it.effect("cancellation after final acknowledgement never redelivers the answer"
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Deferred.succeed(f.mount, undefined);
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const receipt = yield* service.startAsync(request);
-      const waiter = yield* Effect.forkChild(
-        service
-          .controlAsync({ action: "await", requestId: receipt.requestId })
-          .pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16)),
-        { startImmediately: true },
-      );
-      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-      expect(
-        yield* Effect.flip(service.controlAsync({ action: "await", requestId: receipt.requestId })),
-      ).toMatchObject({ reason: "busy" });
-      yield* Deferred.succeed(f.answer, outcome);
-      let observedCommit = false;
-      for (let i = 0; i < 100; i++) {
-        const status = yield* service.controlAsync({
-          action: "status",
-          requestId: receipt.requestId,
-        });
-        if (status.requests[0]?.delivery === "waiter") {
-          observedCommit = true;
-          waiter.interruptUnsafe();
-          break;
-        }
-        yield* Effect.yieldNow;
+    const service = yield* acquireService(f.host, f.delivery);
+    const receipt = yield* service.startAsync(request);
+    const waiter = yield* Effect.forkChild(
+      service
+        .controlAsync({ action: "await", requestId: receipt.requestId })
+        .pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16)),
+      { startImmediately: true },
+    );
+    for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+    expect(
+      yield* Effect.flip(service.controlAsync({ action: "await", requestId: receipt.requestId })),
+    ).toMatchObject({ reason: "busy" });
+    yield* Deferred.succeed(f.answer, outcome);
+    let observedCommit = false;
+    for (let i = 0; i < 100; i++) {
+      const status = yield* service.controlAsync({
+        action: "status",
+        requestId: receipt.requestId,
+      });
+      if (status.requests[0]?.delivery === "waiter") {
+        observedCommit = true;
+        waiter.interruptUnsafe();
+        break;
       }
-      expect(observedCommit).toBe(true);
-      expect(Exit.isFailure(yield* Fiber.await(waiter))).toBe(true);
-      for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
-      expect(
-        (yield* service.controlAsync({ action: "status", requestId: receipt.requestId }))
-          .requests[0]?.delivery,
-      ).toBe("waiter");
-      expect(yield* Ref.get(f.messages)).toEqual([]);
-      expect(
-        (yield* service.controlAsync({ action: "await", requestId: receipt.requestId }))
-          .requests[0],
-      ).toMatchObject({ delivery: "waiter", outcome });
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+      yield* Effect.yieldNow;
+    }
+    expect(observedCommit).toBe(true);
+    expect(Exit.isFailure(yield* Fiber.await(waiter))).toBe(true);
+    for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+    expect(
+      (yield* service.controlAsync({ action: "status", requestId: receipt.requestId })).requests[0]
+        ?.delivery,
+    ).toBe("waiter");
+    expect(yield* Ref.get(f.messages)).toEqual([]);
+    expect(
+      (yield* service.controlAsync({ action: "await", requestId: receipt.requestId })).requests[0],
+    ).toMatchObject({ delivery: "waiter", outcome });
   }),
 );
 
@@ -235,24 +228,22 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture;
-      yield* Effect.gen(function* () {
-        const service = yield* AskUserService;
-        const start = yield* Effect.forkChild(service.startAsync(request));
-        yield* Deferred.await(f.entered);
-        yield* Fiber.interrupt(start);
-        expect(yield* Ref.get(f.released)).toBe(0);
-        yield* Deferred.succeed(f.mount, undefined);
-        yield* Deferred.succeed(f.answer, outcome);
-        yield* Deferred.await(f.delivered);
-        const listed = yield* service.controlAsync({ action: "status" });
-        expect(listed.requests[0]?.outcome).toBeUndefined();
-        expect(
-          (yield* service.controlAsync({
-            action: "status",
-            requestId: listed.requests[0]!.requestId,
-          })).requests[0]?.outcome,
-        ).toEqual(outcome);
-      }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+      const service = yield* acquireService(f.host, f.delivery);
+      const start = yield* Effect.forkChild(service.startAsync(request));
+      yield* Deferred.await(f.entered);
+      yield* Fiber.interrupt(start);
+      expect(yield* Ref.get(f.released)).toBe(0);
+      yield* Deferred.succeed(f.mount, undefined);
+      yield* Deferred.succeed(f.answer, outcome);
+      yield* Deferred.await(f.delivered);
+      const listed = yield* service.controlAsync({ action: "status" });
+      expect(listed.requests[0]?.outcome).toBeUndefined();
+      expect(
+        (yield* service.controlAsync({
+          action: "status",
+          requestId: listed.requests[0]!.requestId,
+        })).requests[0]?.outcome,
+      ).toEqual(outcome);
     }),
 );
 
@@ -271,32 +262,30 @@ it.effect("retains answers when delivery fails and recovers through await with t
           ),
         ),
       );
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const receipt = yield* service.startAsync(request);
-      yield* Deferred.succeed(f.answer, outcome);
-      yield* Deferred.await(failed);
-      const status = yield* service.controlAsync({
-        action: "status",
-        requestId: receipt.requestId,
-      });
-      expect(status.requests[0]).toMatchObject({
-        outcome,
-        delivery: "failed",
-        deliveryId: receipt.deliveryId,
-      });
-      const recovered = yield* service.controlAsync({
-        action: "await",
-        requestId: receipt.requestId,
-      });
-      expect(recovered.requests[0]).toMatchObject({
-        outcome,
-        delivery: "waiter",
-        deliveryId: receipt.deliveryId,
-      });
-      yield* TestClock.adjust("10 seconds");
-      expect(yield* Ref.get(attempts)).toBe(1);
-    }).pipe(Effect.provide(AskUserService.layer(f.host, delivery)));
+    const service = yield* acquireService(f.host, delivery);
+    const receipt = yield* service.startAsync(request);
+    yield* Deferred.succeed(f.answer, outcome);
+    yield* Deferred.await(failed);
+    const status = yield* service.controlAsync({
+      action: "status",
+      requestId: receipt.requestId,
+    });
+    expect(status.requests[0]).toMatchObject({
+      outcome,
+      delivery: "failed",
+      deliveryId: receipt.deliveryId,
+    });
+    const recovered = yield* service.controlAsync({
+      action: "await",
+      requestId: receipt.requestId,
+    });
+    expect(recovered.requests[0]).toMatchObject({
+      outcome,
+      delivery: "waiter",
+      deliveryId: receipt.deliveryId,
+    });
+    yield* TestClock.adjust("10 seconds");
+    expect(yield* Ref.get(attempts)).toBe(1);
   }),
 );
 
@@ -304,22 +293,20 @@ it.effect("cancel signals the presenter while another caller owns await delivery
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Deferred.succeed(f.mount, undefined);
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const receipt = yield* service.startAsync(request);
-      const waiter = yield* Effect.forkChild(
-        service.controlAsync({ action: "await", requestId: receipt.requestId }),
-        { startImmediately: true },
-      );
-      const cancelled = yield* service.controlAsync({
-        action: "cancel",
-        requestId: receipt.requestId,
-      });
-      expect(cancelled.requests[0]?.status).toBe("cancelled");
-      expect((yield* Fiber.join(waiter)).requests[0]?.status).toBe("cancelled");
-      expect(yield* Ref.get(f.released)).toBe(1);
-      expect(yield* Ref.get(f.messages)).toEqual([]);
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+    const service = yield* acquireService(f.host, f.delivery);
+    const receipt = yield* service.startAsync(request);
+    const waiter = yield* Effect.forkChild(
+      service.controlAsync({ action: "await", requestId: receipt.requestId }),
+      { startImmediately: true },
+    );
+    const cancelled = yield* service.controlAsync({
+      action: "cancel",
+      requestId: receipt.requestId,
+    });
+    expect(cancelled.requests[0]?.status).toBe("cancelled");
+    expect((yield* Fiber.join(waiter)).requests[0]?.status).toBe("cancelled");
+    expect(yield* Ref.get(f.released)).toBe(1);
+    expect(yield* Ref.get(f.messages)).toEqual([]);
   }),
 );
 
@@ -334,24 +321,23 @@ it.effect("failed delivery retries are bounded and do not hold admission", () =>
           Effect.fail(new AskUserHostError({ operation: "deliver", message: "Failed" })),
         ),
       );
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const first = yield* service.startAsync(request);
-      yield* Deferred.succeed(f.answer, outcome);
-      yield* Effect.yieldNow;
-      expect(yield* Ref.get(attempts)).toBe(1);
-      yield* TestClock.adjust("1 second");
-      expect(yield* Ref.get(attempts)).toBe(2);
-      yield* TestClock.adjust("1 second");
-      expect(yield* Ref.get(attempts)).toBe(3);
-      yield* TestClock.adjust("10 seconds");
-      expect(yield* Ref.get(attempts)).toBe(3);
-      expect(
-        (yield* service.controlAsync({ action: "status", requestId: first.requestId })).requests[0],
-      ).toMatchObject({ delivery: "failed", outcome });
-      const next = yield* service.startAsync(request);
-      expect(next.requestId).not.toBe(first.requestId);
-    }).pipe(Effect.provide(AskUserService.layer(f.host, delivery)));
+    const service = yield* acquireService(f.host, delivery);
+    const first = yield* service.startAsync(request);
+    yield* Deferred.succeed(f.answer, outcome);
+    yield* Effect.yieldNow;
+    expect(yield* Ref.get(attempts)).toBe(1);
+    yield* TestClock.adjust("1 second");
+    expect(yield* Ref.get(attempts)).toBe(2);
+    yield* TestClock.adjust("1 second");
+    expect(yield* Ref.get(attempts)).toBe(3);
+    yield* TestClock.adjust("10 seconds");
+    expect(yield* Ref.get(attempts)).toBe(3);
+    expect(yield* statusOf(service, first.requestId)).toMatchObject({
+      delivery: "failed",
+      outcome,
+    });
+    const next = yield* service.startAsync(request);
+    expect(next.requestId).not.toBe(first.requestId);
   }),
 );
 
@@ -394,9 +380,7 @@ it.effect("retention rejects capacity rather than discarding undelivered answers
         yield* Effect.yieldNow;
       }
       expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
-      expect(
-        (yield* service.controlAsync({ action: "status", requestId: oldest })).requests[0],
-      ).toMatchObject({ delivery: "failed", outcome });
+      expect(yield* statusOf(service, oldest)).toMatchObject({ delivery: "failed", outcome });
       yield* service.controlAsync({ action: "await", requestId: oldest });
       yield* service.startAsync(request);
       expect(
@@ -420,9 +404,7 @@ it.effect("propagates opening failure and releases admission", () =>
       expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({
         _tag: "AskUserHostError",
       });
-      expect((yield* service.controlAsync({ action: "status" })).requests[0]?.status).toBe(
-        "failed",
-      );
+      expect((yield* statusOf(service))?.status).toBe("failed");
       expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({
         _tag: "AskUserHostError",
       });
@@ -444,22 +426,20 @@ it.effect("retention evicts old terminal requests and IDs never repeat", () =>
         if (opened) yield* Deferred.succeed(opened, undefined);
         return outcome;
       });
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const ids: string[] = [];
-      for (let i = 0; i < MAX_RETAINED_REQUESTS + 3; i++) {
-        const receipt = yield* service.startAsync(request);
-        ids.push(receipt.requestId);
-        yield* service.controlAsync({ action: "await", requestId: receipt.requestId });
-      }
-      expect(new Set(ids).size).toBe(ids.length);
-      expect((yield* service.controlAsync({ action: "status" })).requests).toHaveLength(
-        MAX_RETAINED_REQUESTS,
-      );
-      expect(
-        yield* Effect.flip(service.controlAsync({ action: "status", requestId: ids[0]! })),
-      ).toMatchObject({ reason: "not-found" });
-    }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
+    const service = yield* acquireService(host, () => Effect.void);
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_RETAINED_REQUESTS + 3; i++) {
+      const receipt = yield* service.startAsync(request);
+      ids.push(receipt.requestId);
+      yield* service.controlAsync({ action: "await", requestId: receipt.requestId });
+    }
+    expect(new Set(ids).size).toBe(ids.length);
+    expect((yield* service.controlAsync({ action: "status" })).requests).toHaveLength(
+      MAX_RETAINED_REQUESTS,
+    );
+    expect(
+      yield* Effect.flip(service.controlAsync({ action: "status", requestId: ids[0]! })),
+    ).toMatchObject({ reason: "not-found" });
   }),
 );
 
@@ -470,27 +450,25 @@ it.effect("retention stays bounded when an old result is claimed during new admi
         if (opened) yield* Deferred.succeed(opened, undefined);
         return outcome;
       });
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      let oldest = "";
-      for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
-        const receipt = yield* service.startAsync(request);
-        if (i === 0) oldest = receipt.requestId;
-        yield* service.controlAsync({ action: "await", requestId: receipt.requestId });
-      }
-      // Force scheduler handoffs between Effect operations in the competing transitions.
-      const results = yield* Effect.all(
-        [
-          Effect.exit(service.startAsync(request)),
-          Effect.exit(service.controlAsync({ action: "await", requestId: oldest })),
-        ],
-        { concurrency: "unbounded" },
-      ).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16));
-      expect(Exit.isSuccess(results[0]!)).toBe(true);
-      expect((yield* service.controlAsync({ action: "status" })).requests).toHaveLength(
-        MAX_RETAINED_REQUESTS,
-      );
-    }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
+    const service = yield* acquireService(host, () => Effect.void);
+    let oldest = "";
+    for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
+      const receipt = yield* service.startAsync(request);
+      if (i === 0) oldest = receipt.requestId;
+      yield* service.controlAsync({ action: "await", requestId: receipt.requestId });
+    }
+    // Force scheduler handoffs between Effect operations in the competing transitions.
+    const results = yield* Effect.all(
+      [
+        Effect.exit(service.startAsync(request)),
+        Effect.exit(service.controlAsync({ action: "await", requestId: oldest })),
+      ],
+      { concurrency: "unbounded" },
+    ).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16));
+    expect(Exit.isSuccess(results[0]!)).toBe(true);
+    expect((yield* service.controlAsync({ action: "status" })).requests).toHaveLength(
+      MAX_RETAINED_REQUESTS,
+    );
   }),
 );
 
@@ -515,7 +493,7 @@ it.effect("rejects blank work descriptions and unavailable async hosts before op
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
+      const service = yield* acquireService(f.host, f.delivery);
       for (const work of [" ", "x".repeat(501)])
         expect(
           yield* Effect.flip(service.startAsync({ ...request, blockedWork: work })),
@@ -524,7 +502,7 @@ it.effect("rejects blank work descriptions and unavailable async hosts before op
         reason: "invalid-control",
       });
       expect(yield* Ref.get(f.released)).toBe(0);
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+    }).pipe(Effect.scoped);
     yield* Effect.gen(function* () {
       expect(yield* Effect.flip((yield* AskUserService).startAsync(request))).toMatchObject({
         reason: "unavailable",
@@ -543,33 +521,31 @@ it.effect("acknowledging failed openings recovers a full registry after host rec
         if (opened) yield* Deferred.succeed(opened, undefined);
         return yield* Effect.never;
       });
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
-        expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({
-          _tag: "AskUserHostError",
-        });
-      }
-      const listed = yield* service.controlAsync({ action: "status" });
-      expect(listed.requests).toHaveLength(MAX_RETAINED_REQUESTS);
+    const service = yield* acquireService(host, () => Effect.void);
+    for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
+      expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({
+        _tag: "AskUserHostError",
+      });
+    }
+    const listed = yield* service.controlAsync({ action: "status" });
+    expect(listed.requests).toHaveLength(MAX_RETAINED_REQUESTS);
+    expect(
+      listed.requests.every((item) => item.status === "failed" && item.delivery === "none"),
+    ).toBe(true);
+    expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
+    for (const item of listed.requests) {
       expect(
-        listed.requests.every((item) => item.status === "failed" && item.delivery === "none"),
-      ).toBe(true);
-      expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
-      for (const item of listed.requests) {
-        expect(
-          (yield* service.controlAsync({ action: "await", requestId: item.requestId })).requests[0],
-        ).toMatchObject({ status: "failed", delivery: "waiter" });
-      }
-      yield* Ref.set(recovered, true);
-      const receipt = yield* service.startAsync(request);
-      expect(receipt.status).toBe("pending");
-      expect(
-        yield* Effect.flip(
-          service.controlAsync({ action: "status", requestId: listed.requests[0]!.requestId }),
-        ),
-      ).toMatchObject({ reason: "not-found" });
-    }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
+        (yield* service.controlAsync({ action: "await", requestId: item.requestId })).requests[0],
+      ).toMatchObject({ status: "failed", delivery: "waiter" });
+    }
+    yield* Ref.set(recovered, true);
+    const receipt = yield* service.startAsync(request);
+    expect(receipt.status).toBe("pending");
+    expect(
+      yield* Effect.flip(
+        service.controlAsync({ action: "status", requestId: listed.requests[0]!.requestId }),
+      ),
+    ).toMatchObject({ reason: "not-found" });
   }),
 );
 
@@ -597,24 +573,22 @@ it.effect(
         ...request,
         questions: [{ ...request.questions[0]!, key: String(index) }],
       });
-      yield* Effect.gen(function* () {
-        const service = yield* AskUserService;
-        const first = yield* service.startAsync(input(0));
-        const second = yield* service.startAsync(input(1));
-        const third = yield* service.startAsync(input(2));
-        expect(second.presentation).toBe("queued");
-        expect(third.presentation).toBe("queued");
-        yield* service.controlAsync({ action: "cancel", requestId: second.requestId });
-        expect(yield* Ref.get(mounted)).toEqual(["0"]);
-        yield* Deferred.succeed(answers[0]!, outcome);
-        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-        expect(yield* Ref.get(mounted)).toEqual(["0"]);
-        yield* Deferred.succeed(cleanup, undefined);
-        yield* service.controlAsync({ action: "await", requestId: first.requestId });
-        for (let i = 0; i < 30; i++) yield* Effect.yieldNow;
-        expect(yield* Ref.get(mounted)).toEqual(["0", "2"]);
-        yield* service.controlAsync({ action: "cancel", requestId: third.requestId });
-      }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
+      const service = yield* acquireService(host, () => Effect.void);
+      const first = yield* service.startAsync(input(0));
+      const second = yield* service.startAsync(input(1));
+      const third = yield* service.startAsync(input(2));
+      expect(second.presentation).toBe("queued");
+      expect(third.presentation).toBe("queued");
+      yield* service.controlAsync({ action: "cancel", requestId: second.requestId });
+      expect(yield* Ref.get(mounted)).toEqual(["0"]);
+      yield* Deferred.succeed(answers[0]!, outcome);
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      expect(yield* Ref.get(mounted)).toEqual(["0"]);
+      yield* Deferred.succeed(cleanup, undefined);
+      yield* service.controlAsync({ action: "await", requestId: first.requestId });
+      for (let i = 0; i < 30; i++) yield* Effect.yieldNow;
+      expect(yield* Ref.get(mounted)).toEqual(["0", "2"]);
+      yield* service.controlAsync({ action: "cancel", requestId: third.requestId });
     }),
 );
 
@@ -674,7 +648,7 @@ for (const prior of ["none", "pending", "failed"] as const) {
                 });
               yield* Deferred.succeed(f.mount, undefined);
               yield* Effect.gen(function* () {
-                const service = yield* AskUserService;
+                const service = yield* acquireService(f.host, delivery);
                 const receipt = yield* service.startAsync(request);
                 const awaitResult = service.controlAsync({
                   action: "await",
@@ -753,7 +727,7 @@ for (const prior of ["none", "pending", "failed"] as const) {
                     acknowledged ? "waiter" : "sent",
                   );
                 }
-              }).pipe(Effect.provide(AskUserService.layer(f.host, delivery)));
+              }).pipe(Effect.scoped);
             }
             expect(beforeCommit).toBe(true);
             expect(afterCommit).toBe(true);
@@ -766,46 +740,39 @@ for (const prior of ["none", "pending", "failed"] as const) {
 it.effect("cancellation after final failed-opening acknowledgement retains it", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      const opening = yield* Effect.forkChild(service.startAsync(request));
-      yield* Deferred.await(f.entered);
-      const id = (yield* service.controlAsync({ action: "status" })).requests[0]!.requestId;
-      const waiter = yield* Effect.forkChild(
-        service
-          .controlAsync({ action: "await", requestId: id })
-          .pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16)),
-        { startImmediately: true },
-      );
-      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-      yield* Deferred.fail(
-        f.answer,
-        new AskUserHostError({ operation: "open", message: "Unavailable" }),
-      );
-      yield* Deferred.succeed(f.mount, undefined);
-      let observedCommit = false;
-      for (let i = 0; i < 100; i++) {
-        if (
-          (yield* service.controlAsync({ action: "status", requestId: id })).requests[0]
-            ?.delivery === "waiter"
-        ) {
-          observedCommit = true;
-          waiter.interruptUnsafe();
-          break;
-        }
-        yield* Effect.yieldNow;
+    const service = yield* acquireService(f.host, f.delivery);
+    const opening = yield* Effect.forkChild(service.startAsync(request));
+    yield* Deferred.await(f.entered);
+    const id = (yield* statusOf(service))!.requestId;
+    const waiter = yield* Effect.forkChild(
+      service
+        .controlAsync({ action: "await", requestId: id })
+        .pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16)),
+      { startImmediately: true },
+    );
+    for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+    yield* Deferred.fail(
+      f.answer,
+      new AskUserHostError({ operation: "open", message: "Unavailable" }),
+    );
+    yield* Deferred.succeed(f.mount, undefined);
+    let observedCommit = false;
+    for (let i = 0; i < 100; i++) {
+      if ((yield* statusOf(service, id))?.delivery === "waiter") {
+        observedCommit = true;
+        waiter.interruptUnsafe();
+        break;
       }
-      expect(observedCommit).toBe(true);
-      expect(Exit.isFailure(yield* Fiber.await(waiter))).toBe(true);
-      yield* Fiber.await(opening);
-      for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
-      expect(
-        (yield* service.controlAsync({ action: "status", requestId: id })).requests[0],
-      ).toMatchObject({ status: "failed", delivery: "waiter" });
-      expect(yield* Ref.get(f.messages)).toEqual([]);
-      expect(
-        (yield* service.controlAsync({ action: "await", requestId: id })).requests[0]?.delivery,
-      ).toBe("waiter");
-    }).pipe(Effect.provide(AskUserService.layer(f.host, f.delivery)));
+      yield* Effect.yieldNow;
+    }
+    expect(observedCommit).toBe(true);
+    expect(Exit.isFailure(yield* Fiber.await(waiter))).toBe(true);
+    yield* Fiber.await(opening);
+    for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+    expect(yield* statusOf(service, id)).toMatchObject({ status: "failed", delivery: "waiter" });
+    expect(yield* Ref.get(f.messages)).toEqual([]);
+    expect(
+      (yield* service.controlAsync({ action: "await", requestId: id })).requests[0]?.delivery,
+    ).toBe("waiter");
   }),
 );

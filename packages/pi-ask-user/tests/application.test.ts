@@ -1,3 +1,4 @@
+import { defaultQuestion } from "./support/questionnaire.ts";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -126,15 +127,7 @@ const harness = (
   });
 
 const request: AskUserRequest = {
-  questions: [
-    {
-      key: "choice",
-      title: "Choice",
-      prompt: "Choose.",
-      mode: "single",
-      choices: [{ value: "a", label: "A", description: "Choose A." }],
-    },
-  ],
+  questions: [{ ...defaultQuestion, choices: [defaultQuestion.choices[0]!] }],
 };
 
 const asyncUi = () => {

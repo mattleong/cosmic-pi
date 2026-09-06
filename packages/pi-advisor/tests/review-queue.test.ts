@@ -748,7 +748,10 @@ describe("AdvisorReviewQueue", () => {
     }),
   );
 
-  it.effect("cancelling a reset failure prevents any stale re-prime", () =>
+  it.effect.each([
+    { operation: "cancel", error: AdvisorQueueCancelledError },
+    { operation: "dispose", error: AdvisorQueueDisposedError },
+  ] as const)("$operation of a reset failure prevents any stale re-prime", ({ operation, error }) =>
     Effect.gen(function* () {
       let reprimes = 0;
       const checkpointStarted = yield* Deferred.make<void>();
@@ -775,57 +778,16 @@ describe("AdvisorReviewQueue", () => {
         { getReprimeState: () => ({ seed: "stale" }) },
       );
       queue.ingest(1, { type: "user", text: "reset" });
-      const request = yield* forkCheckpoint(queue, { checkpointId: "cancel", focus: "standard" });
+      const request = yield* forkCheckpoint(queue, { checkpointId: operation, focus: "standard" });
       yield* Deferred.await(checkpointStarted);
-      const cancellation = yield* queue
-        .cancelCheckpointEffect("cancel")
-        .pipe(Effect.forkChild({ startImmediately: true }));
+      const termination = yield* (
+        operation === "cancel" ? queue.cancelCheckpointEffect(operation) : queue.disposeEffect()
+      ).pipe(Effect.forkChild({ startImmediately: true }));
       yield* Deferred.await(abortStarted);
       yield* Deferred.succeed(checkpointRelease, undefined);
       yield* Deferred.succeed(abortRelease, undefined);
-      yield* Fiber.join(cancellation);
-      expect(queueError(yield* Fiber.await(request))).toBeInstanceOf(AdvisorQueueCancelledError);
-      expect(reprimes).toBe(0);
-    }),
-  );
-
-  it.effect("disposal of a reset failure prevents any stale re-prime", () =>
-    Effect.gen(function* () {
-      let reprimes = 0;
-      const checkpointStarted = yield* Deferred.make<void>();
-      const checkpointRelease = yield* Deferred.make<void>();
-      const abortStarted = yield* Deferred.make<void>();
-      const abortRelease = yield* Deferred.make<void>();
-      const queue = yield* makeAdvisorReviewQueue(
-        makeRuntime({
-          checkpoint: () =>
-            Deferred.succeed(checkpointStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(checkpointRelease)),
-              Effect.andThen(Effect.fail(resetRequired())),
-            ),
-          reprime: () =>
-            Effect.sync(() => {
-              reprimes += 1;
-            }),
-          abort: () =>
-            Deferred.succeed(abortStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(abortRelease)),
-              Effect.asVoid,
-            ),
-        }),
-        { getReprimeState: () => ({ seed: "stale" }) },
-      );
-      queue.ingest(1, { type: "user", text: "reset" });
-      const request = yield* forkCheckpoint(queue, { checkpointId: "dispose", focus: "standard" });
-      yield* Deferred.await(checkpointStarted);
-      const disposal = yield* queue
-        .disposeEffect()
-        .pipe(Effect.forkChild({ startImmediately: true }));
-      yield* Deferred.await(abortStarted);
-      yield* Deferred.succeed(checkpointRelease, undefined);
-      yield* Deferred.succeed(abortRelease, undefined);
-      yield* Fiber.join(disposal);
-      expect(queueError(yield* Fiber.await(request))).toBeInstanceOf(AdvisorQueueDisposedError);
+      yield* Fiber.join(termination);
+      expect(queueError(yield* Fiber.await(request))).toBeInstanceOf(error);
       expect(reprimes).toBe(0);
     }),
   );

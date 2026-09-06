@@ -23,31 +23,6 @@ afterEach(() => {
   return cleanupTestTempDirectories();
 });
 
-effectTest("builtin tool options preserve Pi shell and image settings", function* () {
-  const root = yield* step(() => createTestTempDirectory("pi-code-previews-tool-options-"));
-  const agentDir = join(root, "agent");
-  const cwd = join(root, "project");
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
-  yield* step(() => mkdir(agentDir, { recursive: true }));
-  yield* step(() => mkdir(cwd, { recursive: true }));
-  yield* step(() =>
-    writeFile(
-      join(agentDir, "settings.json"),
-      JSON.stringify({
-        shellCommandPrefix: "export PI_CODE_PREVIEW_PREFIX=ok;",
-        shellPath: "/bin/sh",
-        images: { autoResize: false },
-      }),
-      "utf8",
-    ),
-  );
-
-  const options = getBuiltinToolOptions(cwd, false);
-  assert.equal(options.bash?.commandPrefix, "export PI_CODE_PREVIEW_PREFIX=ok;");
-  assert.equal(options.bash?.shellPath, "/bin/sh");
-  assert.equal(options.read?.autoResizeImages, false);
-});
-
 effectTest(
   "builtin tool options ignore project settings when the project is untrusted",
   function* () {

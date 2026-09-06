@@ -3,7 +3,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, vi } from "vitest";
-import { effectTest, maybe, step } from "../support/effect-test.ts";
+import { effectTest, step } from "../support/effect-test.ts";
 import {
   resolveProfileStart,
   type SubagentProfileStartSpec,
@@ -21,6 +21,7 @@ import { type SubagentServiceContract } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
+  invokeOptionalTool,
   context,
   fallbackProfileService,
   profileServiceFor,
@@ -68,17 +69,9 @@ describe("subagent tool", () => {
         "workflow_future",
       ]).get("subagent_start");
 
-      const result = yield* maybe(() =>
-        tool?.execute(
-          "call",
-          {
-            agents: [{ task: "Review auth" }],
-          },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      const result = yield* invokeOptionalTool(tool, {
+        agents: [{ task: "Review auth" }],
+      });
 
       expect(result?.content[0]?.text).toContain("agent-1");
       expect(request).toMatchObject({
@@ -110,9 +103,7 @@ describe("subagent tool", () => {
       presentation,
     ).get("subagent_start");
 
-    yield* maybe(() =>
-      tool?.execute("call", { agents: [{ task: "Review auth" }] }, undefined, undefined, context),
-    );
+    yield* invokeOptionalTool(tool, { agents: [{ task: "Review auth" }] });
 
     expect(presentation.beginStart).toHaveBeenCalledWith(1);
     expect(release).toHaveBeenCalledOnce();
@@ -123,42 +114,24 @@ describe("subagent tool", () => {
     const tools = captureSubagentTools(startCapturingService(requests));
     const start = tools.get("subagent_start");
 
-    const result = yield* maybe(() =>
-      start?.execute(
-        "call",
+    const result = yield* invokeOptionalTool(start, {
+      agents: [
         {
-          agents: [
-            {
-              task: "Implement token parsing",
-              profile: "worker",
-              writes: ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"],
-            },
-          ],
+          task: "Implement token parsing",
+          profile: "worker",
+          writes: ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"],
         },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
+      ],
+    });
     expect(result?.content[0]?.text).toContain("agent-1");
     expect(requests[0]).toMatchObject({
       writeIntent: "writer",
       writes: ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"],
     });
 
-    const rejected = yield* maybe(() =>
-      start?.execute(
-        "call",
-        {
-          agents: [
-            { task: "Inspect auth", profile: "scout", writes: ["packages/auth/src/token.ts"] },
-          ],
-        },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
+    const rejected = yield* invokeOptionalTool(start, {
+      agents: [{ task: "Inspect auth", profile: "scout", writes: ["packages/auth/src/token.ts"] }],
+    });
     expect(rejected?.content[0]?.text).toContain(
       "writes may be supplied only for a writer profile",
     );
@@ -192,23 +165,15 @@ describe("subagent tool", () => {
     const start = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
       "subagent_start",
     );
-    yield* maybe(() =>
-      start?.execute(
-        "call",
+    yield* invokeOptionalTool(start, {
+      agents: [
         {
-          agents: [
-            {
-              task: "Implement auth",
-              profile: "worker",
-              writes: ["src/auth.ts"],
-            },
-          ],
+          task: "Implement auth",
+          profile: "worker",
+          writes: ["src/auth.ts"],
         },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
+      ],
+    });
     expect(requests[0]).toMatchObject({
       writeIntent: "writer",
       writes: ["src/auth.ts"],
@@ -225,17 +190,15 @@ describe("subagent tool", () => {
     const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    yield* maybe(() =>
-      tool?.execute(
-        "call",
-        { agents: [{ task: "Inspect auth", profile: "scout" }] },
-        undefined,
-        undefined,
-        extensionContextFixture({
+    yield* invokeOptionalTool(
+      tool,
+      { agents: [{ task: "Inspect auth", profile: "scout" }] },
+      {
+        context: extensionContextFixture({
           ...context,
           ui: { confirm },
         }),
-      ),
+      },
     );
 
     expect(confirm).not.toHaveBeenCalled();
@@ -251,15 +214,7 @@ describe("subagent tool", () => {
         "subagent_start",
       );
 
-      yield* maybe(() =>
-        tool?.execute(
-          "call",
-          { agents: [{ task: "Inspect auth" }] },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      yield* invokeOptionalTool(tool, { agents: [{ task: "Inspect auth" }] });
 
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({
@@ -298,25 +253,13 @@ describe("subagent tool", () => {
       },
     });
     const tools = captureSubagentTools(startCapturingService(requests), ["read"], profiles);
-    const models = yield* maybe(() =>
-      tools
-        .get("subagent_models")
-        ?.execute("call", { profile: "reviewer" }, undefined, undefined, context),
-    );
+    const models = yield* invokeOptionalTool(tools.get("subagent_models"), { profile: "reviewer" });
     expect(models?.content[0]?.text).toContain("source=session");
     expect(models?.content[0]?.text).toContain("openai-codex/gpt-5.6-sol:low");
 
-    yield* maybe(() =>
-      tools
-        .get("subagent_start")
-        ?.execute(
-          "call",
-          { agents: [{ task: "Review auth", profile: "reviewer" }] },
-          undefined,
-          undefined,
-          context,
-        ),
-    );
+    yield* invokeOptionalTool(tools.get("subagent_start"), {
+      agents: [{ task: "Review auth", profile: "reviewer" }],
+    });
     expect(requests[0]).toMatchObject({
       profile: "reviewer",
       model: "openai-codex/gpt-5.6-sol",
@@ -334,20 +277,12 @@ describe("subagent tool", () => {
       const requests: StartSubagentRequest[] = [];
       const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
-      yield* maybe(() =>
-        tool?.execute(
-          "call",
-          {
-            agents: PROFILE_IDS.map((profile) => ({
-              profile,
-              task: `Smoke test ${profile}`,
-            })),
-          },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      yield* invokeOptionalTool(tool, {
+        agents: PROFILE_IDS.map((profile) => ({
+          profile,
+          task: `Smoke test ${profile}`,
+        })),
+      });
 
       expect(requests.map((request) => request.profile)).toEqual(PROFILE_IDS);
       const expectedEffort = {
@@ -383,57 +318,30 @@ describe("subagent tool", () => {
     },
   );
 
-  effectTest(
-    "uses profile context defaults and never degrades a Pi oracle fork to fresh",
-    function* () {
-      const requests: StartSubagentRequest[] = [];
-      const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+  effectTest("never degrades a Pi oracle fork to fresh for an ephemeral parent", function* () {
+    const requests: StartSubagentRequest[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
-      yield* maybe(() =>
-        tool?.execute(
-          "call",
-          {
-            agents: [
-              { profile: "reviewer", task: "Review" },
-              { profile: "oracle", task: "Advise" },
-            ],
-          },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
-
-      expect(requests.map((request) => [request.profile, request.context])).toEqual([
-        ["reviewer", "fresh"],
-        ["oracle", "fork"],
-      ]);
-
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const ephemeral = extensionContextFixture({
-        ...context,
-        sessionManager: {
-          ...context.sessionManager,
-          getSessionFile: () => undefined,
-          getLeafEntry: () => undefined,
-        },
-      });
-      const failed = yield* maybe(() =>
-        tool?.execute(
-          "call",
-          {
-            agents: [{ profile: "oracle", task: "Advise" }],
-          },
-          undefined,
-          undefined,
-          ephemeral,
-        ),
-      );
-      expect(failed?.details).toMatchObject({
-        startFailures: [{ code: "fork_context_unavailable" }],
-      });
-    },
-  );
+    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const ephemeral = extensionContextFixture({
+      ...context,
+      sessionManager: {
+        ...context.sessionManager,
+        getSessionFile: () => undefined,
+        getLeafEntry: () => undefined,
+      },
+    });
+    const failed = yield* invokeOptionalTool(
+      tool,
+      {
+        agents: [{ profile: "oracle", task: "Advise" }],
+      },
+      { context: ephemeral },
+    );
+    expect(failed?.details).toMatchObject({
+      startFailures: [{ code: "fork_context_unavailable" }],
+    });
+  });
 
   effectTest(
     "falls back from configured unsupported backends before local Pi service start",
@@ -466,15 +374,7 @@ describe("subagent tool", () => {
         "subagent_start",
       );
 
-      yield* maybe(() =>
-        tool?.execute(
-          "call",
-          { agents: [{ profile: "reviewer", task: "Review" }] },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      yield* invokeOptionalTool(tool, { agents: [{ profile: "reviewer", task: "Review" }] });
 
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({
@@ -538,16 +438,11 @@ describe("subagent tool", () => {
               : Effect.succeed(driverFor(selection.runtime)),
         };
 
-        const result = yield* maybe(() =>
-          captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry)
-            .get("subagent_start")
-            ?.execute(
-              "call",
-              { agents: [{ profile: "reviewer", task: "Review" }] },
-              undefined,
-              undefined,
-              context,
-            ),
+        const result = yield* invokeOptionalTool(
+          captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
+            "subagent_start",
+          ),
+          { agents: [{ profile: "reviewer", task: "Review" }] },
         );
 
         expect(requests).toHaveLength(1);
@@ -618,24 +513,19 @@ describe("subagent tool", () => {
           : Effect.succeed(testBackendDriver),
     };
 
-    yield* maybe(() =>
-      captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry)
-        .get("subagent_start")
-        ?.execute(
-          "call",
+    yield* invokeOptionalTool(
+      captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
+        "subagent_start",
+      ),
+      {
+        agents: [
           {
-            agents: [
-              {
-                profile: "worker",
-                task: "Implement auth",
-                writes: ["src/auth.ts"],
-              },
-            ],
+            profile: "worker",
+            task: "Implement auth",
+            writes: ["src/auth.ts"],
           },
-          undefined,
-          undefined,
-          context,
-        ),
+        ],
+      },
     );
 
     expect(requests[0]).toMatchObject({
@@ -685,16 +575,11 @@ describe("subagent tool", () => {
               ),
       };
 
-      const result = yield* maybe(() =>
-        captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry)
-          .get("subagent_start")
-          ?.execute(
-            "call",
-            { agents: [{ profile: "reviewer", task: "Review" }] },
-            undefined,
-            undefined,
-            context,
-          ),
+      const result = yield* invokeOptionalTool(
+        captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
+          "subagent_start",
+        ),
+        { agents: [{ profile: "reviewer", task: "Review" }] },
       );
 
       expect(requests).toEqual([]);
@@ -759,16 +644,11 @@ describe("subagent tool", () => {
                 )
               : Effect.succeed(testBackendDriver),
       };
-      yield* maybe(() =>
-        captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry)
-          .get("subagent_start")
-          ?.execute(
-            "call",
-            { agents: [{ profile: "reviewer", task: "Review" }] },
-            undefined,
-            undefined,
-            context,
-          ),
+      yield* invokeOptionalTool(
+        captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
+          "subagent_start",
+        ),
+        { agents: [{ profile: "reviewer", task: "Review" }] },
       );
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({
@@ -821,16 +701,11 @@ describe("subagent tool", () => {
             )
           : Effect.succeed(testBackendDriver),
     };
-    const result = yield* maybe(() =>
-      captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry)
-        .get("subagent_start")
-        ?.execute(
-          "call",
-          { agents: [{ profile: "reviewer", task: "Review" }] },
-          undefined,
-          undefined,
-          context,
-        ),
+    const result = yield* invokeOptionalTool(
+      captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
+        "subagent_start",
+      ),
+      { agents: [{ profile: "reviewer", task: "Review" }] },
     );
     expect(requests).toEqual([]);
     expect(result?.details).toMatchObject({
@@ -853,16 +728,11 @@ describe("subagent tool", () => {
         },
       },
     });
-    const result = yield* maybe(() =>
-      captureSubagentTools(startCapturingService(requests), ["read"], profiles)
-        .get("subagent_start")
-        ?.execute(
-          "call",
-          { agents: [{ profile: "reviewer", task: "Review" }] },
-          undefined,
-          undefined,
-          context,
-        ),
+    const result = yield* invokeOptionalTool(
+      captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
+        "subagent_start",
+      ),
+      { agents: [{ profile: "reviewer", task: "Review" }] },
     );
     expect(requests).toEqual([]);
     expect(result?.details).toMatchObject({
@@ -912,18 +782,11 @@ describe("subagent tool", () => {
         start: failStart,
         startSessionOwned: failStart,
       });
-      const result = yield* maybe(() =>
-        captureSubagentTools(service, ["read"], profiles)
-          .get("subagent_start")
-          ?.execute(
-            "call",
-            {
-              agents: [{ profile: "reviewer", task: "Review" }],
-            },
-            undefined,
-            undefined,
-            context,
-          ),
+      const result = yield* invokeOptionalTool(
+        captureSubagentTools(service, ["read"], profiles).get("subagent_start"),
+        {
+          agents: [{ profile: "reviewer", task: "Review" }],
+        },
       );
       expect(starts).toBe(1);
       expect(result?.details).toMatchObject({
@@ -980,20 +843,12 @@ describe("subagent tool", () => {
       const tool = captureSubagentTools(startCapturingService(requests), ["read"], emptyRoute).get(
         "subagent_start",
       );
-      const result = yield* maybe(() =>
-        tool?.execute(
-          "call",
-          {
-            agents: [
-              { profile: "future", task: "Unknown" },
-              { profile: "reviewer", task: "Review" },
-            ],
-          },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      const result = yield* invokeOptionalTool(tool, {
+        agents: [
+          { profile: "future", task: "Unknown" },
+          { profile: "reviewer", task: "Review" },
+        ],
+      });
       expect(requests).toEqual([]);
       expect(result?.details).toMatchObject({
         startEntries: [
@@ -1051,9 +906,7 @@ describe("subagent tool", () => {
     });
     const tool = captureSubagentTools(service, ["read", "grep"]).get("subagent_start");
 
-    const result = yield* maybe(() =>
-      tool?.execute("call", { agents }, undefined, undefined, context),
-    );
+    const result = yield* invokeOptionalTool(tool, { agents });
 
     expect(requests.map((request) => request.task)).toEqual(agents.map((agent) => agent.task));
     expect(requests).toHaveLength(32);
@@ -1160,18 +1013,16 @@ describe("subagent tool", () => {
       const requests: StartSubagentRequest[] = [];
       const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
-      const result = yield* maybe(() =>
-        tool?.execute(
-          "call",
-          {
-            agents: [{ task: "Review auth" }],
-          },
-          undefined,
-          () => {
+      const result = yield* invokeOptionalTool(
+        tool,
+        {
+          agents: [{ task: "Review auth" }],
+        },
+        {
+          update: () => {
             throw new Error("stale renderer");
           },
-          context,
-        ),
+        },
       );
 
       expect(requests).toHaveLength(1);
@@ -1192,9 +1043,7 @@ describe("subagent tool", () => {
     });
     const tool = captureSubagentTools(service).get("subagent_start");
 
-    const result = yield* maybe(() =>
-      tool?.execute("call", { agents: [{ task: "Review auth" }] }, undefined, undefined, context),
-    );
+    const result = yield* invokeOptionalTool(tool, { agents: [{ task: "Review auth" }] });
 
     expect(sessionOwnedStarts).toBe(1);
     expect(result?.content[0]?.text).toContain("agent-1");
@@ -1214,20 +1063,12 @@ describe("subagent tool", () => {
       "subagent_start",
     );
 
-    yield* maybe(() =>
-      tool?.execute(
-        "call",
-        {
-          agents: [
-            { task: "One", profile: "scout" },
-            { task: "Two", profile: "reviewer" },
-          ],
-        },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
+    yield* invokeOptionalTool(tool, {
+      agents: [
+        { task: "One", profile: "scout" },
+        { task: "Two", profile: "reviewer" },
+      ],
+    });
 
     expect(captures).toBe(1);
     expect(requests).toHaveLength(2);

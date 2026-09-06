@@ -13,7 +13,13 @@ import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
+import {
+  fakeChildLayer,
+  request,
+  serviceLayer,
+  contactParentFrame,
+  localServiceFixture,
+} from "./fixtures/service-harness.ts";
 
 describe("SubagentService", () => {
   it.effect("rejects parallel await ownership and releases only the cancelled claim", () => {
@@ -67,8 +73,7 @@ describe("SubagentService", () => {
   it.effect(
     "does not miss a publication triggered between the locked check and subscription",
     () => {
-      const fake = fakeChildLayer();
-      const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+      const { fake, layer } = localServiceFixture();
       return Effect.gen(function* () {
         const service = yield* SubagentService;
         const run = yield* service.start(request({ name: "revision-race" }));
@@ -96,8 +101,7 @@ describe("SubagentService", () => {
   );
 
   it.effect("supplies descendant projection context with await updates", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const parent = yield* service.start(request({ name: "await-parent" }));
@@ -129,11 +133,7 @@ describe("SubagentService", () => {
   it.effect(
     "wakes multiple subscribers across consecutive non-terminal and terminal revisions",
     () => {
-      const fake = fakeChildLayer();
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        publish: (projection) => projections.push(projection),
-      }).pipe(Layer.provide(fake.layer));
+      const { fake, projections, layer } = localServiceFixture();
       return Effect.gen(function* () {
         const service = yield* SubagentService;
         const first = yield* service.start(request({ name: "revision-first" }));
@@ -167,8 +167,7 @@ describe("SubagentService", () => {
   );
 
   it.effect("fails subscribed awaits when the service scope closes", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture();
     return Effect.gen(function* () {
       const serviceScope = yield* Scope.make();
       const context = yield* Layer.buildWithScope(layer, serviceScope);
@@ -246,11 +245,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("returns an await when a selected run needs a parent reply", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "awaiting-question" }));
@@ -258,13 +253,9 @@ describe("SubagentService", () => {
         .awaitTerminal([run.id], "all_finished")
         .pipe(Effect.forkScoped);
 
-      fake.controls[0]?.offerIpc({
-        channel: "pi-subagents",
-        type: "contact_parent",
-        requestId: "question-during-await",
-        kind: "question",
-        message: "Should I update the fixture?",
-      });
+      fake.controls[0]?.offerIpc(
+        contactParentFrame("question-during-await", "question", "Should I update the fixture?"),
+      );
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
 
       const [attention] = yield* Fiber.join(awaiting);
@@ -277,8 +268,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("returns an await when a selected run is paused", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "awaiting-pause" }));
@@ -292,11 +282,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("waits for an offending writer to pause but returns an admission-paused peer", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const offender = yield* service.start(
@@ -344,8 +330,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("reports every missing await ID before waiting", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* Effect.flip(
@@ -363,11 +348,12 @@ describe("SubagentService", () => {
   it.effect("delivers a claimed failure through await without a background notification", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => notifications.push(notification),
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { projections, layer } = localServiceFixture(
+      {
+        notify: (notification) => notifications.push(notification),
+      },
+      fake,
+    );
 
     return Effect.gen(function* () {
       const service = yield* SubagentService;
@@ -415,8 +401,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("rejects empty awaits at the service boundary", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       for (const until of ["all_finished", "any_finished"] as const) {
@@ -448,11 +433,12 @@ describe("SubagentService", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
     const updates: SubagentProjection["runs"][] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => notifications.push(notification),
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { projections, layer } = localServiceFixture(
+      {
+        notify: (notification) => notifications.push(notification),
+      },
+      fake,
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "cancelled-await" }));
@@ -504,8 +490,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("returns found status observations alongside every stale ID", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "status-selection" }));
@@ -523,11 +508,12 @@ describe("SubagentService", () => {
   it.effect("holds a completion claim through observation formatting and consumption", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => notifications.push(notification),
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { projections, layer } = localServiceFixture(
+      {
+        notify: (notification) => notifications.push(notification),
+      },
+      fake,
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "leased-observation" }));
@@ -559,11 +545,12 @@ describe("SubagentService", () => {
   it.effect("coalesces unclaimed fleet completions into one notification", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => notifications.push(notification),
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { projections, layer } = localServiceFixture(
+      {
+        notify: (notification) => notifications.push(notification),
+      },
+      fake,
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const first = yield* service.start(request({ name: "notify-one" }));
@@ -774,11 +761,12 @@ describe("SubagentService", () => {
   it.effect("emits only one completion for repeated terminal events", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => notifications.push(notification),
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { projections, layer } = localServiceFixture(
+      {
+        notify: (notification) => notifications.push(notification),
+      },
+      fake,
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "single-settlement" }));

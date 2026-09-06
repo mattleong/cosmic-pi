@@ -18,6 +18,7 @@ import {
   profileLayerFor,
   request,
   serviceLayer,
+  localServiceFixture,
 } from "./fixtures/service-harness.ts";
 
 describe("SubagentService", () => {
@@ -100,11 +101,10 @@ describe("SubagentService", () => {
   );
 
   it.effect("quarantines a writer when awaitExit failure finalization defects", () => {
-    const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, { releaseDefect: true }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(
@@ -181,9 +181,7 @@ describe("SubagentService", () => {
           releases += 1;
         },
       });
-      const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-        Layer.provide(fake.layer),
-      );
+      const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
 
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
@@ -239,11 +237,7 @@ describe("SubagentService", () => {
   );
 
   it.effect("does not resume a completed writer while another writer owns the cwd", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const first = yield* service.start(
@@ -261,15 +255,14 @@ describe("SubagentService", () => {
   });
 
   it.effect("resolves completed-writer resume uncertainty and releases ownership on exit", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialTransportFailures: [
-        { spawnIndex: 1, type: "prompt", code: "transport_outcome_uncertain" },
-      ],
-    });
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        initialTransportFailures: [
+          { spawnIndex: 1, type: "prompt", code: "transport_outcome_uncertain" },
+        ],
+      }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(
@@ -319,9 +312,7 @@ describe("SubagentService", () => {
         acquisitions += 1;
       },
     });
-    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-      Layer.provide(fake.layer),
-    );
+    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const first = yield* service.start(
@@ -360,9 +351,7 @@ describe("SubagentService", () => {
           acquisitions += 1;
         },
       });
-      const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-        Layer.provide(fake.layer),
-      );
+      const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
       return Effect.gen(function* () {
         const service = yield* SubagentService;
         const first = yield* service.start(
@@ -404,9 +393,7 @@ describe("SubagentService", () => {
         acquisitions += 1;
       },
     });
-    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-      Layer.provide(fake.layer),
-    );
+    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -443,9 +430,7 @@ describe("SubagentService", () => {
         acquisitions += 1;
       },
     });
-    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-      Layer.provide(fake.layer),
-    );
+    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const reader = yield* service.start(request({ name: "reader", writeIntent: "read-only" }));
@@ -459,9 +444,7 @@ describe("SubagentService", () => {
   it.effect("fails typed writer canonicalization before reservation or backend spawn", () => {
     const fake = fakeChildLayer();
     const writerLeases = fakeWriterLeaseLayer({ failCanonicalization: true });
-    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-      Layer.provide(fake.layer),
-    );
+    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -481,9 +464,7 @@ describe("SubagentService", () => {
     () => {
       const fake = fakeChildLayer();
       const writerLeases = fakeWriterLeaseLayer({ failAcquire: true });
-      const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-        Layer.provide(fake.layer),
-      );
+      const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
       return Effect.gen(function* () {
         const service = yield* SubagentService;
         const conflict = yield* service
@@ -557,9 +538,7 @@ describe("SubagentService", () => {
       onMark: () => void order.push("lease-spawn-started"),
       onRelease: () => void order.push("lease-release"),
     });
-    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-      Layer.provide(fake.layer),
-    );
+    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const writer = yield* service.start(
@@ -586,9 +565,7 @@ describe("SubagentService", () => {
       onMark: () => void order.push("lease-mark-attempt"),
       onRelease: () => void order.push("lease-release"),
     });
-    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-      Layer.provide(fake.layer),
-    );
+    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -654,9 +631,7 @@ describe("SubagentService", () => {
         releases += 1;
       },
     });
-    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-      Layer.provide(fake.layer),
-    );
+    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const writer = yield* service.start(
@@ -688,9 +663,7 @@ describe("SubagentService", () => {
     const writerLeases = fakeWriterLeaseLayer({
       onRelease: (lease) => void order.push(`lease-${lease.evidence.runId}`),
     });
-    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-      Layer.provide(fake.layer),
-    );
+    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return Effect.gen(function* () {
       const ids = yield* Effect.gen(function* () {
         const service = yield* SubagentService;
@@ -712,8 +685,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("releases shared-cwd writer ownership after scope cleanup succeeds", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const first = yield* service.start(
@@ -755,9 +727,7 @@ describe("SubagentService", () => {
           releases += 1;
         },
       });
-      const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
-        Layer.provide(fake.layer),
-      );
+      const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
       return Effect.gen(function* () {
         const service = yield* SubagentService;
         const first = yield* service.start(
@@ -789,8 +759,7 @@ describe("SubagentService", () => {
   );
 
   it.effect("rejects overlapping claimed writers while admitting another exact file", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const first = yield* service.start(
@@ -826,8 +795,10 @@ describe("SubagentService", () => {
   });
 
   it.effect("quarantines an entire claimed pool when one member cleanup defects", () => {
-    const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, { releaseDefect: true }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const defective = yield* service.start(
@@ -861,8 +832,10 @@ describe("SubagentService", () => {
   });
 
   it.effect("quarantines writer ownership when child scope cleanup defects", () => {
-    const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, { releaseDefect: true }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const first = yield* service.start(
@@ -888,11 +861,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("retains failed writer ownership until its child scope is released", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       yield* service.start(request({ name: "failed-writer", writeIntent: "writer" }));

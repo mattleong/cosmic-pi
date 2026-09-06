@@ -24,6 +24,7 @@ import { SubagentService, type SubagentServiceContract } from "../../../src/run/
 import type { SubagentToolRuntime } from "../../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../../src/tools/subagent.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
+import { maybe } from "../../support/effect-test.ts";
 
 type NativeCapturedTool = ToolDefinition<any, any, any>;
 type NativeExecute = NativeCapturedTool["execute"];
@@ -272,6 +273,29 @@ const makeContextFixture = (): ExtensionContext => {
   return contextFixture as typeof contextFixture & ExtensionContext;
 };
 export const context = makeContextFixture();
+
+type InvocationOptions = {
+  readonly callID?: Parameters<NativeExecute>[0];
+  readonly signal?: Parameters<NativeExecute>[2];
+  readonly update?: Parameters<NativeExecute>[3];
+  readonly context?: Parameters<NativeExecute>[4];
+};
+
+// Preserve optional captured-tool calls at the existing Promise test boundary.
+export const invokeOptionalTool = (
+  tool: CapturedTool | undefined,
+  params: Parameters<NativeExecute>[1],
+  options: InvocationOptions = {},
+) =>
+  maybe(() =>
+    tool?.execute(
+      options.callID ?? "call",
+      params,
+      options.signal,
+      options.update,
+      options.context ?? context,
+    ),
+  );
 
 export const startCapturingService = (requests: StartSubagentRequest[]) =>
   subagentServiceDouble({

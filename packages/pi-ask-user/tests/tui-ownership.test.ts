@@ -1,3 +1,4 @@
+import { ordinalChoices, defaultQuestion } from "./support/questionnaire.ts";
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { it } from "@effect/vitest";
@@ -16,14 +17,11 @@ const opaque = <A>(value: A): never => value as never;
 const request: AskUserRequest = {
   questions: [
     {
+      ...defaultQuestion,
       key: "k",
       title: "Title",
       prompt: "Choose",
-      mode: "single",
-      choices: [
-        { value: "a", label: "A", description: "First" },
-        { value: "b", label: "B", description: "Second" },
-      ],
+      choices: ordinalChoices,
     },
   ],
 };

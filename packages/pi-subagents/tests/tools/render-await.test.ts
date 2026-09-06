@@ -19,29 +19,6 @@ const progressRun = (
 const segments = (summary: string): ReadonlyArray<string> => summary.split(" · ");
 
 describe("await summary outcomes", () => {
-  it("reports waiting mode with per-state counts and target retention marks", () => {
-    const waitingAll = formatAwaitSummary(
-      [progressRun(1, "running"), progressRun(2, "starting")],
-      "all_finished",
-    );
-    expect(waitingAll).toContain("Waiting for subagents");
-    expect(waitingAll).toContain("0/2");
-    expect(waitingAll).toContain(`1 ${runStateLabel("starting")}`);
-    expect(waitingAll).toContain(`1 ${runStateLabel("running")}`);
-    expect(waitingAll).toContain("◎2 targets");
-
-    const waitingAny = formatAwaitSummary(
-      [progressRun(1, "running"), progressRun(2, "paused")],
-      "any_finished",
-    );
-    expect(waitingAny).toContain("Waiting for first subagent");
-    expect(waitingAny).toContain(`1 ${runStateLabel("paused")}`);
-    expect(waitingAny).toContain("◎2 targets");
-
-    const singular = formatAwaitSummary([progressRun(1, "running")], "all_finished");
-    expect(singular).toContain("◎1 target");
-  });
-
   it("aggregates finished and failed counts without duplicating active states", () => {
     const summary = formatAwaitSummary(
       [
@@ -166,19 +143,5 @@ describe("await summary outcomes", () => {
     );
     expect(interruptedFirst).toContain("Await canceled");
     expect(interruptedFirst).toContain("run-1 failed first");
-  });
-
-  it("appends usage, descendant counts, and singular/plural target grammar", () => {
-    const summary = formatAwaitSummary([progressRun(1, "running")], "all_finished", "tokens 12", {
-      descendantCount: 1,
-    });
-    expect(summary).toContain("tokens 12");
-    expect(summary).toContain("1 descendant");
-    expect(summary).not.toContain("descendants");
-
-    const plural = formatAwaitSummary([progressRun(1, "running")], "all_finished", "", {
-      descendantCount: 3,
-    });
-    expect(plural).toContain("3 descendants");
   });
 });

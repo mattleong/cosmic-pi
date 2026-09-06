@@ -1,9 +1,8 @@
 // Test harness boundary: Pi callbacks and fake child sessions are Promise-shaped fixtures.
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { hasObjectRuntimeType, type JsonObject } from "pi-cosmic-core";
+import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
@@ -14,16 +13,11 @@ import type {
   AdvisorRuntimeStartOptions,
 } from "../src/runtime/runtime.ts";
 import { AdvisorModelError } from "../src/runtime/client.ts";
-import {
-  normalizeAdvisorConfig,
-  patchAdvisorConfig,
-  type ResolvedAdvisorConfig,
-} from "../src/config/options.ts";
-import { AdvisorConfigStoreError, ConfigStore } from "../src/config/store.ts";
+import { type ResolvedAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 import { deferred, tick } from "./support/async.ts";
 import { finalTurn, passCheckpoint as pass } from "./support/checkpoints.ts";
-import { resolvedAdvisorConfig } from "./support/config.ts";
+import { memoryAdvisorConfigStore, resolvedAdvisorConfig } from "./support/config.ts";
 import { configStoreLayerFromLoad, failureLoggerLayerFromLog } from "./support/layers.ts";
 import {
   advisorExtensionApi,
@@ -133,34 +127,9 @@ function harness(
   });
   const logFailure = vi.fn();
   const initialConfig = resolvedAdvisorConfig(overrides);
-  const baseConfigDocument: JsonObject = {
-    enabled: initialConfig.enabled,
-    setupDismissed: initialConfig.setupDismissed,
-  };
-  const providerConfigDocument: JsonObject = initialConfig.provider
-    ? { ...baseConfigDocument, provider: initialConfig.provider }
-    : baseConfigDocument;
-  let configDocument: JsonObject = initialConfig.model
-    ? { ...providerConfigDocument, model: initialConfig.model }
-    : providerConfigDocument;
-  const memoryConfigStore = Layer.succeed(
-    ConfigStore,
-    ConfigStore.of({
-      load: (path = initialConfig.configPath) =>
-        Effect.succeed(normalizeAdvisorConfig(configDocument, path)),
-      patch: (patch, path = initialConfig.configPath, afterCommit) => {
-        if (options.configPatchError)
-          return Effect.fail(
-            new AdvisorConfigStoreError({
-              operation: "update",
-              message: "Advisor configuration update failed.",
-            }),
-          );
-        configDocument = patchAdvisorConfig(configDocument, patch);
-        const next = normalizeAdvisorConfig(configDocument, path);
-        return (afterCommit ? afterCommit(next) : Effect.void).pipe(Effect.as(next));
-      },
-    }),
+  const memoryConfigStore = memoryAdvisorConfigStore(
+    initialConfig,
+    options.configPatchError ? "Advisor configuration update failed." : undefined,
   );
   createAdvisorExtension({
     configStore:

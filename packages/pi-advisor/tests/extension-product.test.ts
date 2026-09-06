@@ -1,17 +1,15 @@
+import { memoryAdvisorConfigStore } from "./support/config.ts";
 // Pi callbacks and fake child sessions are Promise-shaped test boundaries.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, test } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import { vi } from "vitest";
-import { type JsonObject } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   ADVISOR_CHECKPOINT_ENTRY_TYPE,
   type AdvisorCheckpointLedger,
 } from "../src/checkpoint/ledger.ts";
-import { normalizeAdvisorConfig, patchAdvisorConfig } from "../src/config/options.ts";
-import { AdvisorConfigStoreError, ConfigStore } from "../src/config/store.ts";
+import { normalizeAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
 import { ADVISOR_REVIEW_ACTION_TYPE, ADVISOR_REVIEW_CARD_TYPE } from "../src/ui/review-card.ts";
@@ -170,34 +168,9 @@ function harness(
       : { enabled: true, provider: "p", model: "m", setupDismissed: true },
     "/config",
   );
-  const baseDocument: JsonObject = {
-    enabled: loadedConfig.enabled,
-    setupDismissed: loadedConfig.setupDismissed,
-  };
-  const providerDocument: JsonObject = loadedConfig.provider
-    ? { ...baseDocument, provider: loadedConfig.provider }
-    : baseDocument;
-  let configDocument: JsonObject = loadedConfig.model
-    ? { ...providerDocument, model: loadedConfig.model }
-    : providerDocument;
-  const memoryConfigStore = Layer.succeed(
-    ConfigStore,
-    ConfigStore.of({
-      load: (path = loadedConfig.configPath) =>
-        Effect.succeed(normalizeAdvisorConfig(configDocument, path)),
-      patch: (patch, path = loadedConfig.configPath, afterCommit) => {
-        if (options.failConfigPatch)
-          return Effect.fail(
-            new AdvisorConfigStoreError({
-              operation: "update",
-              message: "sensitive persistence failure",
-            }),
-          );
-        configDocument = patchAdvisorConfig(configDocument, patch);
-        const next = normalizeAdvisorConfig(configDocument, path);
-        return (afterCommit ? afterCommit(next) : Effect.void).pipe(Effect.as(next));
-      },
-    }),
+  const memoryConfigStore = memoryAdvisorConfigStore(
+    loadedConfig,
+    options.failConfigPatch ? "sensitive persistence failure" : undefined,
   );
   createAdvisorExtension({
     configStore:

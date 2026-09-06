@@ -1,3 +1,4 @@
+import { defaultQuestion } from "./support/questionnaire.ts";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,20 +10,7 @@ import { AskUserService, type AskUserHost } from "../src/questionnaire/service.t
 
 const provideLayer = Effect.provide;
 
-const request: AskUserRequest = {
-  questions: [
-    {
-      key: "choice",
-      title: "Choice",
-      prompt: "Choose.",
-      mode: "single",
-      choices: [
-        { value: "a", label: "A", description: "Choose A." },
-        { value: "b", label: "B", description: "Choose B." },
-      ],
-    },
-  ],
-};
+const request: AskUserRequest = { questions: [defaultQuestion] };
 
 const invalidRequest: AskUserRequest = {
   questions: [

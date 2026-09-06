@@ -2,26 +2,21 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import {
   fakeChildLayer,
   fakeRetainedBackendLayer,
   request,
-  retainedServiceLayer,
-  serviceLayer,
+  contactParentFrame,
+  localServiceFixture,
+  retainedServiceFixture,
 } from "./fixtures/service-harness.ts";
 
 describe("shared-cwd write claims", () => {
   it.effect("grants and revokes claims while a claim requester waits for the parent", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const first = yield* service.start(
@@ -54,13 +49,9 @@ describe("shared-cwd write claims", () => {
         toolName: "mcp__pi_subagents_supervisor__supervisor_question",
         args: { message: "May I also edit src/c.ts?" },
       });
-      fake.controls[0]?.offerIpc({
-        channel: "pi-subagents",
-        type: "contact_parent",
-        requestId: "claim-question",
-        kind: "question",
-        message: "May I also edit src/c.ts?",
-      });
+      fake.controls[0]?.offerIpc(
+        contactParentFrame("claim-question", "question", "May I also edit src/c.ts?"),
+      );
       yield* yieldUntil(
         () =>
           projections.at(-1)?.runs.find((run) => run.id === first.id)?.state ===
@@ -87,11 +78,7 @@ describe("shared-cwd write claims", () => {
   });
 
   it.effect("interrupts an out-of-claim native edit and pauses new writer admission", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const first = yield* service.start(
@@ -205,13 +192,12 @@ describe("shared-cwd write claims", () => {
   it.effect("stops a starting writer when a violating edit races task issue", () =>
     Effect.gen(function* () {
       const promptGate = yield* Deferred.make<void>();
-      const fake = fakeChildLayer(Effect.void, {
-        initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }],
-      });
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        publish: (projection) => projections.push(projection),
-      }).pipe(Layer.provide(fake.layer));
+      const { fake, projections, layer } = localServiceFixture(
+        {},
+        fakeChildLayer(Effect.void, {
+          initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }],
+        }),
+      );
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
         const starting = yield* service
@@ -263,11 +249,7 @@ describe("shared-cwd write claims", () => {
   );
 
   it.effect("repairs a confirmed paused offender without repeating the violation", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(
@@ -329,11 +311,7 @@ describe("shared-cwd write claims", () => {
   });
 
   it.effect("rejects claim changes for ordinary pauses and non-offending peers", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const ordinary = yield* service.start(
@@ -373,13 +351,13 @@ describe("shared-cwd write claims", () => {
   });
 
   it.effect("stops an interrupt-capable backend that cannot resume", () => {
-    const backend = fakeRetainedBackendLayer({
-      capabilities: ["interrupt", "rename-display"],
-    });
-    const projections: SubagentProjection[] = [];
-    const layer = retainedServiceLayer(backend, {
-      publish: (projection) => projections.push(projection),
-    });
+    const { backend, projections, layer } = retainedServiceFixture(
+      fakeRetainedBackendLayer({
+        capabilities: ["interrupt", "rename-display"],
+      }),
+      {},
+      { publishReturnsCount: true },
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(
@@ -410,11 +388,7 @@ describe("shared-cwd write claims", () => {
   });
 
   it.effect("keeps admission paused until terminal offender cleanup is confirmed", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(
@@ -455,11 +429,7 @@ describe("shared-cwd write claims", () => {
   });
 
   it.effect("records likely mutating Bash as an audit notice without a sticky warning", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(

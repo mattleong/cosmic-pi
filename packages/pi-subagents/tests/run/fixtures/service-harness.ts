@@ -32,7 +32,8 @@ import {
   type ChildWireEvent,
 } from "../../../src/boundary/child-process.ts";
 import { SubagentProcessError } from "../../../src/run/errors.ts";
-import type { StartSubagentRequest } from "../../../src/run/model.ts";
+import type { StartSubagentRequest, SubagentProjection } from "../../../src/run/model.ts";
+import type { SubagentNotification } from "../../../src/boundary/host-notifier.ts";
 import { SubagentService, type SubagentServiceOptions } from "../../../src/run/service.ts";
 
 type RpcWireValue = Extract<ChildWireEvent, { readonly type: "rpc_message" }>["value"];
@@ -660,6 +661,59 @@ export const retainedServiceLayer = (
     Layer.provideMerge(profileLayerFor({})),
   );
 
+export function localServiceFixture(
+  options: SubagentServiceOptions = {},
+  fake = fakeChildLayer(),
+  profiles = profileLayerFor({}),
+  writerLeases = fakeWriterLeaseLayer(),
+) {
+  const projections: SubagentProjection[] = [];
+  const layer = serviceLayer(
+    { publish: (projection) => projections.push(projection), ...options },
+    profiles,
+    writerLeases,
+  ).pipe(Layer.provide(fake.layer));
+  return { fake, projections, layer };
+}
+
+export function retainedServiceFixture(
+  backend = fakeRetainedBackendLayer(),
+  options: SubagentServiceOptions = {},
+  capture: { readonly notifications?: boolean; readonly publishReturnsCount?: boolean } = {},
+) {
+  const projections: SubagentProjection[] = [];
+  const notifications: SubagentNotification[] = [];
+  const publish = capture.publishReturnsCount
+    ? (projection: SubagentProjection) => projections.push(projection)
+    : (projection: SubagentProjection) => void projections.push(projection);
+  const captureOptions: SubagentServiceOptions = capture.notifications
+    ? { publish, notify: (notification) => void notifications.push(notification) }
+    : { publish };
+  const layer = retainedServiceLayer(backend, { ...captureOptions, ...options });
+  return { backend, projections, notifications, layer };
+}
+
+export const retainedReportFrame = (
+  runId: string,
+  assignmentEpoch: number,
+  sequence: number,
+  deliveryId: string,
+  text: string,
+): Extract<BackendEvent, { readonly type: "report" }> => ({
+  type: "report",
+  runId,
+  assignmentEpoch,
+  sequence,
+  deliveryId,
+  text,
+});
+
+export const contactParentFrame = (
+  requestId: string,
+  kind: "progress" | "warning" | "question",
+  message: string,
+): IpcWireValue => ({ channel: "pi-subagents", type: "contact_parent", requestId, kind, message });
+
 export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRequest => ({
   host: "local",
   runtime: "pi",
@@ -679,3 +733,13 @@ export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSub
   parentLeafId: "parent-leaf",
   ...overrides,
 });
+
+export const retainedRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
+  request({
+    host: "herdr",
+    runtime: "claude",
+    closeOnReport: false,
+    model: "claude-retained",
+    effortWasExplicit: false,
+    ...overrides,
+  });

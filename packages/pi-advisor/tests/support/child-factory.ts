@@ -17,6 +17,27 @@ import {
 import { toModelError } from "../../src/runtime/session.ts";
 import { createAdvisorToolsEffect } from "../../src/runtime/tools.ts";
 
+import type { AdvisorRuntimeStartOptions } from "../../src/runtime/runtime.ts";
+import { resolvedAdvisorConfig } from "./config.ts";
+
+export const testChildModel = () => ({
+  // SAFETY: Runtime tests never invoke the model's provider implementation.
+  modelRuntime: {} as never,
+  // SAFETY: The fixture exercises identity only, not provider model capabilities.
+  model: { provider: "p", id: "m" } as never,
+  thinkingLevel: "medium" as const,
+});
+
+export const testRuntimeOptions = (
+  overrides: Partial<AdvisorRuntimeStartOptions> = {},
+): AdvisorRuntimeStartOptions => ({
+  // SAFETY: Tests supply model creation through their child factory.
+  ctx: { cwd: process.cwd(), modelRegistry: {} as never },
+  config: resolvedAdvisorConfig({ configPath: "/tmp/config" }),
+  seed: "seed",
+  ...overrides,
+});
+
 export interface TestChildFactoryOverrides {
   readonly createChildModel?: (
     ctx: Pick<ExtensionContext, "modelRegistry">,

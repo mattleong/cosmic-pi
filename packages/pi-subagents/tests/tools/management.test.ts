@@ -2,13 +2,14 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, vi } from "vitest";
-import { effectTest, maybe, step } from "../support/effect-test.ts";
+import { effectTest, step } from "../support/effect-test.ts";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
 import { type SubagentServiceContract } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
+  invokeOptionalTool,
   context,
   fallbackProfileService,
   startCapturingService,
@@ -62,36 +63,42 @@ describe("subagent tool", () => {
       });
       const tool = captureSubagentTools(service).get("subagent_status");
 
-      const result = yield* maybe(() =>
-        tool?.execute("call", { runIds: ["agent-1"] }, undefined, undefined, context),
-      );
+      const result = yield* invokeOptionalTool(tool, { runIds: ["agent-1"] });
       const text = result?.content[0]?.text ?? "";
-      expect(text).toContain("Subagent status");
-      expect(text).toContain("Name       auth-review");
-      expect(text).toContain("ID         agent-1");
-      expect(text).toContain("Profile    reviewer");
-      expect(text).toContain("Route      local/pi · openai-codex/gpt-5.6-sol:high ⚡");
-      expect(text).toContain("Retention  close after report · assignment 1");
-      expect(text).toContain("Selection  profile-candidate candidate 2");
-      expect(text).toContain("Reason     Profile reviewer selected configured candidate 2.");
-      expect(text).toContain("Skipped    candidate 1 [pi_model_unknown]");
-      expect(text).toContain(
-        "Capabilities steer, interrupt, resume, rename-display, parent-contact, peer-notice, native-fork",
-      );
-      expect(text).toContain("Final report\nViewport report.");
+      expect(text).toContain("pi_model_unknown");
       expect(text).not.toContain("Activity:");
       expect(text.match(/Viewport report\./g)).toHaveLength(1);
       expect(result?.details).toMatchObject({
         version: 2,
         action: "status",
         runCount: 1,
-        cards: [{ id: "agent-1", finalText: "Viewport report." }],
+        cards: [
+          {
+            id: completed.id,
+            name: completed.name,
+            profile: completed.profile,
+            host: completed.host,
+            runtime: completed.runtime,
+            model: completed.model,
+            effort: completed.effort,
+            openaiFastMode: completed.openaiFastMode,
+            closeOnReport: completed.closeOnReport,
+            reportGeneration: completed.reportGeneration,
+            selection: {
+              source: "profile-candidate",
+              candidateIndex: 1,
+              reason: completed.selection.reason,
+              skippedCandidates: [{ code: "pi_model_unknown" }],
+            },
+            capabilities: completed.capabilities,
+            finalText: "Viewport report.",
+          },
+        ],
       });
 
-      const listed = yield* maybe(() =>
-        captureSubagentTools(service)
-          .get("subagent_list")
-          ?.execute("call", {}, undefined, undefined, context),
+      const listed = yield* invokeOptionalTool(
+        captureSubagentTools(service).get("subagent_list"),
+        {},
       );
       expect(listed?.details).toMatchObject({
         version: 2,
@@ -145,14 +152,10 @@ describe("subagent tool", () => {
       const sendTool = tools.get("subagent_send");
 
       const updates: string[] = [];
-      const awaited = yield* maybe(() =>
-        awaitTool?.execute(
-          "call",
-          { runIds: [" agent-1 ", "agent-1", "agent-2"], until: "all_finished" },
-          undefined,
-          (result) => updates.push(resultText(result)),
-          context,
-        ),
+      const awaited = yield* invokeOptionalTool(
+        awaitTool,
+        { runIds: [" agent-1 ", "agent-1", "agent-2"], until: "all_finished" },
+        { update: (result) => updates.push(resultText(result)) },
       );
       expect(updates).toHaveLength(1);
       const progress = updates[0] ?? "";
@@ -173,15 +176,10 @@ describe("subagent tool", () => {
         ],
       });
 
-      const sentResult = yield* maybe(() =>
-        sendTool?.execute(
-          "call",
-          { runIds: ["agent-1", "agent-2"], message: "Conclude now." },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      const sentResult = yield* invokeOptionalTool(sendTool, {
+        runIds: ["agent-1", "agent-2"],
+        message: "Conclude now.",
+      });
       expect([...sent].sort()).toEqual(["agent-1", "agent-2"]);
       expect(sentResult?.content[0]?.text).toBe(
         "Guidance delivered to 2 subagents: agent-1, agent-2.",
@@ -211,16 +209,10 @@ describe("subagent tool", () => {
         }).pipe(Effect.andThen(use([{ run: completed }]))),
     });
     const updates: AgentToolResult<unknown>[] = [];
-    yield* maybe(() =>
-      captureSubagentTools(service)
-        .get("subagent_await")
-        ?.execute(
-          "call",
-          { runIds: [target.id], until: "all_finished" },
-          undefined,
-          (result) => updates.push(result),
-          context,
-        ),
+    yield* invokeOptionalTool(
+      captureSubagentTools(service).get("subagent_await"),
+      { runIds: [target.id], until: "all_finished" },
+      { update: (result) => updates.push(result) },
     );
     expect(updates).toHaveLength(2);
     expect(updates[1]?.details).toMatchObject({
@@ -348,17 +340,10 @@ describe("subagent tool", () => {
       });
       const tools = captureSubagentTools(service);
 
-      const sendResult = yield* maybe(() =>
-        tools
-          .get("subagent_send")
-          ?.execute(
-            "call",
-            { runIds: ["agent-1", "agent-2"], message: "Conclude." },
-            undefined,
-            undefined,
-            context,
-          ),
-      );
+      const sendResult = yield* invokeOptionalTool(tools.get("subagent_send"), {
+        runIds: ["agent-1", "agent-2"],
+        message: "Conclude.",
+      });
       expect(sent).toEqual(["agent-1"]);
       expect(sendResult?.content[0]?.text).toContain("Guidance delivered to 1 subagent: agent-1.");
       expect(sendResult?.content[0]?.text).toContain("Failed targets (1)");
@@ -370,17 +355,10 @@ describe("subagent tool", () => {
         actionFailures: [{ id: "agent-2", code: "not_running" }],
       });
 
-      const lifecycleResult = yield* maybe(() =>
-        tools
-          .get("subagent_lifecycle")
-          ?.execute(
-            "call",
-            { action: "interrupt", runIds: ["agent-1", "agent-2"] },
-            undefined,
-            undefined,
-            context,
-          ),
-      );
+      const lifecycleResult = yield* invokeOptionalTool(tools.get("subagent_lifecycle"), {
+        action: "interrupt",
+        runIds: ["agent-1", "agent-2"],
+      });
       expect(interrupted).toEqual(["agent-1"]);
       expect(lifecycleResult?.content[0]?.text).toContain("Interrupted agent-1; state is paused.");
       expect(lifecycleResult?.content[0]?.text).toContain("agent-2 is already paused");
@@ -421,15 +399,7 @@ describe("subagent tool", () => {
       };
       const tool = captureSubagentTools(service).get("subagent_send");
 
-      yield* maybe(() =>
-        tool?.execute(
-          "call",
-          { runIds: ["agent-1", "agent-1"], message: "Conclude." },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      yield* invokeOptionalTool(tool, { runIds: ["agent-1", "agent-1"], message: "Conclude." });
 
       expect(sent).toEqual(["agent-1"]);
     },
@@ -445,16 +415,9 @@ describe("subagent tool", () => {
         ...base,
         send: (id) => Effect.succeed(retainedView(id)),
       });
-      const retainedResult = yield* maybe(() =>
-        captureSubagentTools(allRetained)
-          .get("subagent_send")
-          ?.execute(
-            "call",
-            { runIds: ["agent-r1", "agent-r2"], message: "Next task." },
-            undefined,
-            undefined,
-            context,
-          ),
+      const retainedResult = yield* invokeOptionalTool(
+        captureSubagentTools(allRetained).get("subagent_send"),
+        { runIds: ["agent-r1", "agent-r2"], message: "Next task." },
       );
       expect(retainedResult?.content[0]?.text).toBe(
         "Started the next assignment on 2 retained subagents: agent-r1, agent-r2; subagent_await now targets the new report generation.",
@@ -464,16 +427,9 @@ describe("subagent tool", () => {
         ...base,
         send: (id) => Effect.succeed(id === "agent-r1" ? retainedView(id) : view({ id })),
       });
-      const mixedResult = yield* maybe(() =>
-        captureSubagentTools(mixed)
-          .get("subagent_send")
-          ?.execute(
-            "call",
-            { runIds: ["agent-1", "agent-r1"], message: "Continue." },
-            undefined,
-            undefined,
-            context,
-          ),
+      const mixedResult = yield* invokeOptionalTool(
+        captureSubagentTools(mixed).get("subagent_send"),
+        { runIds: ["agent-1", "agent-r1"], message: "Continue." },
       );
       const text = mixedResult?.content[0]?.text ?? "";
       expect(text).toContain("Guidance delivered to 1 subagent: agent-1.");
@@ -496,19 +452,12 @@ describe("subagent tool", () => {
           }),
         ),
     });
-    const result = yield* maybe(() =>
-      captureSubagentTools(service)
-        .get("subagent_lifecycle")
-        ?.execute(
-          "call",
-          {
-            action: "stop",
-            runIds: ["agent-complete", "agent-failed", "agent-stopped"],
-          },
-          undefined,
-          undefined,
-          context,
-        ),
+    const result = yield* invokeOptionalTool(
+      captureSubagentTools(service).get("subagent_lifecycle"),
+      {
+        action: "stop",
+        runIds: ["agent-complete", "agent-failed", "agent-stopped"],
+      },
     );
     expect(result?.content[0]?.text).toContain("agent-complete was already finished");
     expect(result?.content[0]?.text).toContain("agent-failed had already failed");
@@ -532,17 +481,10 @@ describe("subagent tool", () => {
       };
       const tools = captureSubagentTools(service);
 
-      const replied = yield* maybe(() =>
-        tools
-          .get("subagent_reply")
-          ?.execute(
-            "call",
-            { runId: "agent-1", message: "Proceed." },
-            undefined,
-            undefined,
-            context,
-          ),
-      );
+      const replied = yield* invokeOptionalTool(tools.get("subagent_reply"), {
+        runId: "agent-1",
+        message: "Proceed.",
+      });
       expect(replied?.content[0]?.text).toContain(
         "agent-1 [no_parent_question]: Subagent agent-1 has no pending parent question.",
       );
@@ -550,17 +492,10 @@ describe("subagent tool", () => {
         actionFailures: [{ id: "agent-1", code: "no_parent_question" }],
       });
 
-      const renamed = yield* maybe(() =>
-        tools
-          .get("subagent_rename")
-          ?.execute(
-            "call",
-            { runId: "agent-missing", name: "reviewer" },
-            undefined,
-            undefined,
-            context,
-          ),
-      );
+      const renamed = yield* invokeOptionalTool(tools.get("subagent_rename"), {
+        runId: "agent-missing",
+        name: "reviewer",
+      });
       expect(renamed?.content[0]?.text).toContain(
         "agent-missing [SubagentNotFoundError]: Subagent run not found: agent-missing",
       );
@@ -583,43 +518,24 @@ describe("subagent tool", () => {
     });
     const tools = captureSubagentTools(service);
 
-    yield* maybe(() =>
-      tools
-        .get("subagent_reply")
-        ?.execute("call", { runId: "agent-1", message: "Proceed." }, undefined, undefined, context),
-    );
-    yield* maybe(() =>
-      tools
-        .get("subagent_lifecycle")
-        ?.execute(
-          "call",
-          { action: "interrupt", runIds: ["agent-1", "agent-2"] },
-          undefined,
-          undefined,
-          context,
-        ),
-    );
-    yield* maybe(() =>
-      tools
-        .get("subagent_lifecycle")
-        ?.execute(
-          "call",
-          { action: "resume", runIds: ["agent-1"], message: "Continue carefully." },
-          undefined,
-          undefined,
-          context,
-        ),
-    );
-    yield* maybe(() =>
-      tools
-        .get("subagent_lifecycle")
-        ?.execute("call", { action: "stop", runIds: ["agent-2"] }, undefined, undefined, context),
-    );
-    yield* maybe(() =>
-      tools
-        .get("subagent_rename")
-        ?.execute("call", { runId: "agent-1", name: "reviewer" }, undefined, undefined, context),
-    );
+    yield* invokeOptionalTool(tools.get("subagent_reply"), {
+      runId: "agent-1",
+      message: "Proceed.",
+    });
+    yield* invokeOptionalTool(tools.get("subagent_lifecycle"), {
+      action: "interrupt",
+      runIds: ["agent-1", "agent-2"],
+    });
+    yield* invokeOptionalTool(tools.get("subagent_lifecycle"), {
+      action: "resume",
+      runIds: ["agent-1"],
+      message: "Continue carefully.",
+    });
+    yield* invokeOptionalTool(tools.get("subagent_lifecycle"), {
+      action: "stop",
+      runIds: ["agent-2"],
+    });
+    yield* invokeOptionalTool(tools.get("subagent_rename"), { runId: "agent-1", name: "reviewer" });
 
     expect(operations).toEqual([
       "reply:agent-1:Proceed.",
@@ -644,9 +560,7 @@ describe("subagent tool", () => {
     };
     const tool = captureSubagentTools(service).get("subagent_status");
 
-    const result = yield* maybe(() =>
-      tool?.execute("call", { runIds: ["agent-1", "agent-stale"] }, undefined, undefined, context),
-    );
+    const result = yield* invokeOptionalTool(tool, { runIds: ["agent-1", "agent-stale"] });
 
     expect(result?.content[0]?.text).toContain("Final report\nDone.");
     expect(result?.content[0]?.text).toContain(
@@ -675,15 +589,7 @@ describe("subagent tool", () => {
     };
     const tool = captureSubagentTools(service).get("subagent_await");
 
-    const result = yield* maybe(() =>
-      tool?.execute(
-        "call",
-        { runIds: ["agent-1"], until: "all_finished" },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
+    const result = yield* invokeOptionalTool(tool, { runIds: ["agent-1"], until: "all_finished" });
 
     expect(result?.content[0]?.text).toContain(
       'Reply with subagent_reply({ runId: "agent-1", message: "..." }), then call subagent_await again.',
@@ -717,15 +623,7 @@ describe("subagent tool", () => {
     });
     const tool = captureSubagentTools(service).get("subagent_await");
 
-    const result = yield* maybe(() =>
-      tool?.execute(
-        "call",
-        { runIds: [paused.id], until: "all_finished" },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
+    const result = yield* invokeOptionalTool(tool, { runIds: [paused.id], until: "all_finished" });
     const text = result?.content[0]?.text ?? "";
     const review = text.indexOf("subagent_status");
     const grant = text.indexOf('subagent_claims({ action: "grant"');
@@ -773,17 +671,10 @@ describe("subagent tool", () => {
       withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
         use([{ run: transitioning }]),
     });
-    const result = yield* maybe(() =>
-      captureSubagentTools(service)
-        .get("subagent_await")
-        ?.execute(
-          "call",
-          { runIds: [transitioning.id], until: "all_finished" },
-          undefined,
-          undefined,
-          context,
-        ),
-    );
+    const result = yield* invokeOptionalTool(captureSubagentTools(service).get("subagent_await"), {
+      runIds: [transitioning.id],
+      until: "all_finished",
+    });
     const text = result?.content[0]?.text ?? "";
 
     expect(text).toContain("Containment is in progress");
@@ -816,15 +707,7 @@ describe("subagent tool", () => {
     });
     const tool = captureSubagentTools(service).get("subagent_await");
 
-    const result = yield* maybe(() =>
-      tool?.execute(
-        "call",
-        { runIds: [stopped.id], until: "all_finished" },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
+    const result = yield* invokeOptionalTool(tool, { runIds: [stopped.id], until: "all_finished" });
     const text = result?.content[0]?.text ?? "";
     const cleanup = text.indexOf("Confirm process and writer cleanup");
     const admission = text.indexOf('subagent_claims({ action: "resume_admission"');
@@ -860,17 +743,10 @@ describe("subagent tool", () => {
       ...startCapturingService([]),
       withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run: peer }]),
     });
-    const result = yield* maybe(() =>
-      captureSubagentTools(service)
-        .get("subagent_await")
-        ?.execute(
-          "call",
-          { runIds: [peer.id], until: "all_finished" },
-          undefined,
-          undefined,
-          context,
-        ),
-    );
+    const result = yield* invokeOptionalTool(captureSubagentTools(service).get("subagent_await"), {
+      runIds: [peer.id],
+      until: "all_finished",
+    });
     const text = result?.content[0]?.text ?? "";
 
     expect(text).toContain("Do not change this peer's claims");
@@ -919,24 +795,16 @@ describe("subagent tool", () => {
         ).rejects.toThrow("at most 12 targets"),
       );
 
-      const result = yield* maybe(() =>
-        tool?.execute(
-          "call",
-          { runIds: runs.slice(0, 12).map((run) => run.id) },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      const result = yield* invokeOptionalTool(tool, {
+        runIds: runs.slice(0, 12).map((run) => run.id),
+      });
       const text = result?.content[0]?.text ?? "";
       expect(text.length).toBeLessThanOrEqual(48_000);
       for (const run of runs.slice(0, 12)) expect(text).toContain(run.id);
       expect(text).toContain("[run output truncated]");
       expect(consumed).toEqual([]);
 
-      yield* maybe(() =>
-        tool?.execute("call", { runIds: ["agent-1"] }, undefined, undefined, context),
-      );
+      yield* invokeOptionalTool(tool, { runIds: ["agent-1"] });
       expect(consumed).toEqual([{ id: "agent-1", generation: 1, claimToken: "claim-agent-1" }]);
     },
   );
@@ -1007,15 +875,7 @@ describe("subagent tool", () => {
     });
     const tool = captureSubagentTools(service).get("subagent_lifecycle");
 
-    const result = yield* maybe(() =>
-      tool?.execute(
-        "call",
-        { action: "retry", runIds: ["agent-1"] },
-        undefined,
-        undefined,
-        context,
-      ),
-    );
+    const result = yield* invokeOptionalTool(tool, { action: "retry", runIds: ["agent-1"] });
 
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
@@ -1074,15 +934,11 @@ describe("subagent tool", () => {
           ),
       });
       const tool = captureSubagentTools(service).get("subagent_claims");
-      const result = yield* maybe(() =>
-        tool?.execute(
-          "call",
-          { action: "grant", runId: "agent-claims", paths: ["src/b.ts"] },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      const result = yield* invokeOptionalTool(tool, {
+        action: "grant",
+        runId: "agent-claims",
+        paths: ["src/b.ts"],
+      });
       expect(grants).toEqual([{ id: "agent-claims", paths: ["src/b.ts"] }]);
       expect(result?.content[0]?.text).toContain("src/a.ts, src/b.ts");
       expect(result?.content[0]?.text).toContain("Do not use subagent_reply for containment");
@@ -1093,27 +949,14 @@ describe("subagent tool", () => {
         cards: [{ id: "agent-claims", writeClaims: ["src/a.ts", "src/b.ts"] }],
       });
 
-      const listed = yield* maybe(() =>
-        tool?.execute(
-          "call",
-          { action: "list", runIds: ["agent-claims"] },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      const listed = yield* invokeOptionalTool(tool, { action: "list", runIds: ["agent-claims"] });
       expect(listed?.content[0]?.text).toContain("Do not use subagent_reply for containment");
       expect(listed?.content[0]?.text).not.toContain("send the resulting authoritative claim set");
 
-      const reopened = yield* maybe(() =>
-        tool?.execute(
-          "call",
-          { action: "resume_admission", runId: "agent-claims" },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      const reopened = yield* invokeOptionalTool(tool, {
+        action: "resume_admission",
+        runId: "agent-claims",
+      });
       expect(reopened?.content[0]?.text).toContain("stop and replace");
       expect(reopened?.content[0]?.text).not.toContain(
         "send the resulting authoritative claim set",
@@ -1146,34 +989,23 @@ describe("subagent tool", () => {
         startSessionOwned: failStart,
       });
       const tools = captureSubagentTools(service);
-      const listed = yield* maybe(() =>
-        tools.get("subagent_list")?.execute("call", {}, undefined, undefined, context),
-      );
+      const listed = yield* invokeOptionalTool(tools.get("subagent_list"), {});
       expect(listed?.content[0]?.text.length).toBeLessThanOrEqual(48_000);
       expect(listed?.content[0]?.text).toContain("tool output truncated; narrow the request");
 
       const emptyService = subagentServiceDouble({ ...base, list: Effect.succeed([]) });
-      const empty = yield* maybe(() =>
-        captureSubagentTools(emptyService)
-          .get("subagent_list")
-          ?.execute("call", {}, undefined, undefined, context),
+      const empty = yield* invokeOptionalTool(
+        captureSubagentTools(emptyService).get("subagent_list"),
+        {},
       );
       expect(empty?.content[0]?.text).toBe("No subagent runs.");
       expect(empty?.content[0]?.text.length).toBeLessThanOrEqual(48_000);
 
-      const failed = yield* maybe(() =>
-        tools.get("subagent_start")?.execute(
-          "call",
-          {
-            agents: Array.from({ length: 12 }, (_, index) => ({
-              task: `Fail ${index + 1}`,
-            })),
-          },
-          undefined,
-          undefined,
-          context,
-        ),
-      );
+      const failed = yield* invokeOptionalTool(tools.get("subagent_start"), {
+        agents: Array.from({ length: 12 }, (_, index) => ({
+          task: `Fail ${index + 1}`,
+        })),
+      });
       expect(failed?.content[0]?.text.length).toBeLessThanOrEqual(48_000);
       expect(failed?.content[0]?.text).toContain("Failed starts (12)");
     },

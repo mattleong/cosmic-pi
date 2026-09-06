@@ -1,3 +1,4 @@
+import { backendSupervisor, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -16,10 +17,7 @@ import type {
   LocalCliOutboundFrame,
   LocalCliWireEvent,
 } from "../src/boundary/local-cli-transport.ts";
-import type {
-  SupervisorChannelContract,
-  SupervisorChannelHandle,
-} from "../src/boundary/supervisor-channel.ts";
+import type { SupervisorChannelContract } from "../src/boundary/supervisor-channel.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 
 const SUPERVISOR_TOOLS = [
@@ -291,44 +289,12 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     };
     const supervisors: SupervisorChannelContract = {
       open: ({ runId }) => {
-        const handle: SupervisorChannelHandle = {
-          runId,
-          metadata: {
-            runId,
-            host: "127.0.0.1",
-            port: 1,
-            stateDirectory: "/private/fixture",
-            connectionConfigPath: "/private/fixture/connection.json",
-            helperPath: "/private/helper.mjs",
-            claudeMcp: {
-              mcpServers: {
-                pi_subagents_supervisor: {
-                  type: "stdio",
-                  command: process.execPath,
-                  args: ["/private/helper.mjs"],
-                  env: {},
-                },
-              },
-            },
-            codexMcp: {
-              serverName: "pi_subagents_supervisor",
-              command: process.execPath,
-              args: ["/private/helper.mjs"],
-              enabledTools: [...SUPERVISOR_TOOLS],
-              tomlFragment: "[mcp_servers.pi_subagents_supervisor]\nrequired = true",
-            },
-          },
-          events: supervisorEvents,
-          awaitReady: Effect.void,
-          setAssignmentEpoch: () => Effect.void,
+        const handle = backendSupervisor(supervisorMetadata(runId), supervisorEvents, {
           hasAcceptedReport: () => Effect.succeed(true),
           acceptedReportForEpoch: (epoch) =>
             Effect.succeed(acceptedReport?.assignmentEpoch === epoch ? acceptedReport : undefined),
-          deliverNotification: () => Effect.void,
-          reply: () => Effect.void,
-          cancelPending: () => {},
           close: Effect.sync(() => Queue.endUnsafe(supervisorEvents)),
-        };
+        });
         return Effect.succeed(handle);
       },
     };

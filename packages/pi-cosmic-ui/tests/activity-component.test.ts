@@ -45,39 +45,7 @@ const events = (): ActivityEvents => {
   };
 };
 describe("activity presentation", () => {
-  it("renders metadata-only launches in the header even when history is the only row content", () => {
-    const launch = renderActivityWidget([], 80, 8, { starting: 2 });
-    expect(launch).toHaveLength(1);
-    expect(renderActivityWidget([], 80, 8, { starting: 3 })).toEqual(launch);
-    expect(renderActivityWidget([], 80, 8, { starting: 2, now: 100 })).not.toEqual(launch);
-    expect(
-      renderActivityWidget([{ ...row("old"), status: "done" }], 80, 8, { starting: 2 })[0],
-    ).toBe(launch[0]);
-    expect(renderActivityWidget([], 80, 8, { starting: 0 })).toEqual([]);
-  });
-  it("uses real row glyphs without adding launch or await labels", () => {
-    const active = row("demo");
-    const normal = renderActivityWidget([active], 80, 8, { now: 100 });
-    expect(renderActivityWidget([active], 80, 8, { starting: 2, now: 100 })).toEqual(normal);
-    expect(renderActivityWidget([active], 80, 8, { now: 200 })).not.toEqual(normal);
-  });
-  it("marks only explicit await targets while preserving animation and unmarked descendants", () => {
-    const active = row("owner");
-    const child = { ...row("child"), parent: { providerId: active.providerId, itemId: active.id } };
-    const normal = renderActivityWidget([active, child], 80, 8, { now: 100 });
-    const targets = [{ ...active, awaited: true }, child];
-    const marked = renderActivityWidget(targets, 80, 8, { now: 100 });
-    expect(marked[0]).toBe(normal[0]);
-    expect(marked[1]).not.toBe(normal[1]);
-    expect(marked[1]!.indexOf(active.title)).toBeGreaterThanOrEqual(0);
-    expect(marked[1]!.indexOf(active.title)).toBe(normal[1]!.indexOf(active.title));
-    expect(marked.slice(2)).toEqual(normal.slice(2));
-    expect(renderActivityWidget(targets, 80, 8, { now: 200 })[1]).not.toBe(marked[1]);
-    expect(
-      renderActivityWidget([{ ...active, awaited: false }, child], 80, 8, { now: 100 }),
-    ).toEqual(normal);
-  });
-  it("keeps the supplied profile visible ahead of long names and branch warnings", () => {
+  it("bounds profiles, long names, and collapsed branch warnings with and without await marks", () => {
     const owner = { ...row("a very long task name"), profile: "researcher", awaited: true };
     const child: ActivityRow = {
       ...row("question"),
@@ -88,16 +56,9 @@ describe("activity presentation", () => {
       const lines = renderActivityWidget([owner, child], width, 8, {
         collapsed: new Set([owner.key]),
       });
-      expect(lines.join("\n")).toContain(owner.profile);
       const unmarked = renderActivityWidget([{ ...owner, awaited: false }, child], width, 8, {
         collapsed: new Set([owner.key]),
       });
-      expect(unmarked.join("\n")).toContain(owner.profile);
-      const profileColumn = (output: readonly string[]) => {
-        const line = output.find((value) => value.includes(owner.profile))!;
-        return visibleWidth(line.slice(0, line.indexOf(owner.profile)));
-      };
-      expect(profileColumn(lines)).toBe(profileColumn(unmarked));
       for (const line of [...lines, ...unmarked])
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }

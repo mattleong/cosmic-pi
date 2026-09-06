@@ -12,7 +12,7 @@ import {
   sanitizeLocalCliEnvironment,
 } from "../src/boundary/local-cli-harness.ts";
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
-import type { SupervisorConnectionMetadata } from "../src/boundary/supervisor-channel.ts";
+import { supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
 const { join } = nodePath;
@@ -37,36 +37,12 @@ const setup = () =>
       }));
   });
 
-const supervisor = (directory: string): SupervisorConnectionMetadata => ({
-  runId: "agent-local-cli",
-  host: "127.0.0.1",
-  port: 1,
-  stateDirectory: join(directory, "supervisor"),
-  connectionConfigPath: join(directory, "supervisor", "connection.json"),
-  helperPath: "/private/helper.mjs",
-  claudeMcp: {
-    mcpServers: {
-      pi_subagents_supervisor: {
-        type: "stdio",
-        command: process.execPath,
-        args: ["/private/helper.mjs", "--config", "/private/connection.json"],
-        env: {},
-      },
-    },
-  },
-  codexMcp: {
-    serverName: "pi_subagents_supervisor",
-    command: process.execPath,
+const supervisor = (directory: string) =>
+  supervisorMetadata("agent-local-cli", {
+    stateDirectory: join(directory, "supervisor"),
+    connectionConfigPath: join(directory, "supervisor", "connection.json"),
     args: ["/private/helper.mjs", "--config", "/private/connection.json"],
-    enabledTools: [
-      "supervisor_progress",
-      "supervisor_warning",
-      "supervisor_question",
-      "supervisor_submit_report",
-    ],
-    tomlFragment: "[mcp_servers.pi_subagents_supervisor]\nrequired = true",
-  },
-});
+  });
 
 const launch = (): BackendLaunchRequest => ({
   runId: "agent-local-cli",

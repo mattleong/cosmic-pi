@@ -18,6 +18,7 @@ import {
   fakeWriterLeaseLayer,
   request,
   serviceLayer,
+  contactParentFrame,
 } from "./fixtures/service-harness.ts";
 
 const cycles = 4;
@@ -174,13 +175,9 @@ describe("SubagentService lifecycle stress", () => {
             const resumedControl = fake.controls.at(-1)!;
             siblingControl.offer({ type: "agent_start" });
             siblingControl.offer({ type: "agent_settled" });
-            leafControl.offerIpc({
-              channel: "pi-subagents",
-              type: "contact_parent",
-              requestId: `late-${cycle}`,
-              kind: "question",
-              message: "Arrived during stop",
-            });
+            leafControl.offerIpc(
+              contactParentFrame(`late-${cycle}`, "question", "Arrived during stop"),
+            );
             leafControl.offer({ type: "agent_settled" });
             yield* Deferred.succeed(release, undefined);
             expect((yield* Fiber.join(stoppingChild)).state).toBe("stopped");
@@ -277,13 +274,9 @@ describe("SubagentService lifecycle stress", () => {
             for (const control of fake.controls) {
               control.offer({ type: "agent_start" });
               control.offer({ type: "agent_settled" });
-              control.offerIpc({
-                channel: "pi-subagents",
-                type: "contact_parent",
-                requestId: `closed-${cycle}`,
-                kind: "question",
-                message: "Arrived after shutdown",
-              });
+              control.offerIpc(
+                contactParentFrame(`closed-${cycle}`, "question", "Arrived after shutdown"),
+              );
               control.exit(1);
             }
             yield* TestClock.adjust("30 seconds");

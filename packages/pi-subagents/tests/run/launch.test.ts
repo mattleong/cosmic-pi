@@ -9,7 +9,12 @@ import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts
 import { SubagentService } from "../../src/run/service.ts";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
+import {
+  fakeChildLayer,
+  request,
+  serviceLayer,
+  localServiceFixture,
+} from "./fixtures/service-harness.ts";
 
 describe("SubagentService", () => {
   it.effect("namespaces run IDs across runtime replacement and rejects stale IDs", () =>
@@ -38,8 +43,7 @@ describe("SubagentService", () => {
   );
 
   it.effect("allocates concurrent unnamed IDs, ordinals, and fallback names atomically", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const runs = yield* Effect.all(
@@ -56,8 +60,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("rejects an unsupported backend before reserving or spawning a run", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* Effect.flip(
@@ -73,8 +76,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("injects profile guidance and retains selection provenance", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const started = yield* service.start(
@@ -98,8 +100,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("preserves selected fork context through run state and child launch", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const started = yield* service.start(
@@ -114,8 +115,10 @@ describe("SubagentService", () => {
     "keeps soft-effort runs alive on a non-reasoning model and reports the effective level",
     () => {
       // Models the parent's Pi child resolving to a non-reasoning model whose effective level is off.
-      const fake = fakeChildLayer(Effect.void, { stateThinkingLevel: "off" });
-      const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+      const { layer } = localServiceFixture(
+        {},
+        fakeChildLayer(Effect.void, { stateThinkingLevel: "off" }),
+      );
       return Effect.gen(function* () {
         const service = yield* SubagentService;
         const started = yield* service.start(request({ effort: "high", effortWasExplicit: false }));
@@ -133,12 +136,14 @@ describe("SubagentService", () => {
   );
 
   it.effect("maps an uncertain writer start prompt to start_outcome_uncertain", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialTransportFailures: [
-        { spawnIndex: 0, type: "prompt", code: "transport_outcome_uncertain" },
-      ],
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        initialTransportFailures: [
+          { spawnIndex: 0, type: "prompt", code: "transport_outcome_uncertain" },
+        ],
+      }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -154,8 +159,10 @@ describe("SubagentService", () => {
   });
 
   it.effect("fails an explicit-effort start when the backend resolves another effort", () => {
-    const fake = fakeChildLayer(Effect.void, { stateThinkingLevel: "medium" });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, { stateThinkingLevel: "medium" }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -172,11 +179,7 @@ describe("SubagentService", () => {
   it.effect(
     "keeps direct-child capacity reserved until terminal process cleanup is confirmed",
     () => {
-      const fake = fakeChildLayer();
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
-        Layer.provide(fake.layer),
-      );
+      const { fake, projections, layer } = localServiceFixture();
       return Effect.gen(function* () {
         const service = yield* SubagentService;
         const runs: SubagentRunView[] = [];
@@ -224,11 +227,7 @@ describe("SubagentService", () => {
   );
 
   it.effect("retains bounded cleanup timeout while cleanup ownership holds capacity", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const gates = yield* Effect.all(Array.from({ length: 12 }, () => Deferred.make<void>()));
@@ -323,18 +322,19 @@ describe("SubagentService", () => {
         return reclaimFails;
       },
     });
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) =>
-        notification.type === "completed"
-          ? {
-              deliveredCompletionKeys: notification.runs.map(
-                (run) => `${run.id}:${run.generation}`,
-              ),
-            }
-          : undefined,
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { projections, layer } = localServiceFixture(
+      {
+        notify: (notification) =>
+          notification.type === "completed"
+            ? {
+                deliveredCompletionKeys: notification.runs.map(
+                  (run) => `${run.id}:${run.generation}`,
+                ),
+              }
+            : undefined,
+      },
+      fake,
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       let firstId = "";
@@ -391,18 +391,19 @@ describe("SubagentService", () => {
           return reclaimGate;
         },
       });
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        notify: (notification) =>
-          notification.type === "completed"
-            ? {
-                deliveredCompletionKeys: notification.runs.map(
-                  (run) => `${run.id}:${run.generation}`,
-                ),
-              }
-            : undefined,
-        publish: (projection) => projections.push(projection),
-      }).pipe(Layer.provide(fake.layer));
+      const { projections, layer } = localServiceFixture(
+        {
+          notify: (notification) =>
+            notification.type === "completed"
+              ? {
+                  deliveredCompletionKeys: notification.runs.map(
+                    (run) => `${run.id}:${run.generation}`,
+                  ),
+                }
+              : undefined,
+        },
+        fake,
+      );
       return Effect.gen(function* () {
         const service = yield* SubagentService;
         const activeWriter = yield* service.start(
@@ -472,18 +473,19 @@ describe("SubagentService", () => {
         return gate;
       },
     });
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) =>
-        notification.type === "completed"
-          ? {
-              deliveredCompletionKeys: notification.runs.map(
-                (run) => `${run.id}:${run.generation}`,
-              ),
-            }
-          : undefined,
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    const { projections, layer } = localServiceFixture(
+      {
+        notify: (notification) =>
+          notification.type === "completed"
+            ? {
+                deliveredCompletionKeys: notification.runs.map(
+                  (run) => `${run.id}:${run.generation}`,
+                ),
+              }
+            : undefined,
+      },
+      fake,
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       for (let index = 0; index < 10; index += 1)
@@ -517,9 +519,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("rejects capacity before reclaiming resumable history", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
+    const { fake, projections, layer } = localServiceFixture({
       notify: (notification) =>
         notification.type === "completed"
           ? {
@@ -528,8 +528,7 @@ describe("SubagentService", () => {
               ),
             }
           : undefined,
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
+    });
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       let oldestId = "";
@@ -558,8 +557,7 @@ describe("SubagentService", () => {
   });
 
   it.effect("retains only the newest 50 terminal records", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       let firstId = "";

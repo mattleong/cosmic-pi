@@ -1,3 +1,4 @@
+import { routeRequest as request } from "./support/questionnaire.ts";
 import { expect } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -5,22 +6,7 @@ import * as Exit from "effect/Exit";
 import type { ActivityProviderOptions } from "pi-cosmic-ui/activity";
 import { makeQuestionnaireActivity } from "../src/boundary/host-activity.ts";
 import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
-import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 
-const request: AskUserRequest = {
-  questions: [
-    {
-      key: "route",
-      title: "Route",
-      prompt: "Choose route",
-      mode: "single",
-      choices: [
-        { value: "a", label: "A", description: "First" },
-        { value: "b", label: "B", description: "Second" },
-      ],
-    },
-  ],
-};
 const fixture = () => {
   const bridge = makeAskUserDialogBridge();
   let current = true;

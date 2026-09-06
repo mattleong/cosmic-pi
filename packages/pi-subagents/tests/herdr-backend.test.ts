@@ -12,17 +12,14 @@ import { makeHerdrBackendDriver, withHerdrSupervisorInstructions } from "../src/
 import type { BackendLaunchRequest, BackendReport } from "../src/backend/model.ts";
 import type { HerdrAgent } from "../src/boundary/herdr-cli.ts";
 import type { HerdrHostContract } from "../src/boundary/herdr-host.ts";
-import type {
-  SupervisorChannelContract,
-  SupervisorChannelHandle,
-  SupervisorConnectionMetadata,
-} from "../src/boundary/supervisor-channel.ts";
+import type { SupervisorChannelContract } from "../src/boundary/supervisor-channel.ts";
 import { SubagentProcessError, processError } from "../src/run/errors.ts";
+import { backendSupervisor, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
+import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 import {
   SUPERVISOR_MCP_REGISTRATION,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../src/supervisor/mcp-contract.ts";
-import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 
 const request = (writeIntent: "read-only" | "writer" = "read-only"): BackendLaunchRequest => ({
   runId: "agent-r1-1",
@@ -55,31 +52,15 @@ const baseAgent: HerdrAgent = {
   nativeSession: "native-1",
 };
 
-const metadata: SupervisorConnectionMetadata = {
-  runId: request().runId,
-  host: "127.0.0.1",
+const metadata = supervisorMetadata(request().runId, {
   port: 31_337,
   stateDirectory: "/private/supervisor",
   connectionConfigPath: "/private/supervisor/connection.json",
   helperPath: "/private/supervisor/helper.mjs",
-  claudeMcp: {
-    mcpServers: {
-      [SUPERVISOR_MCP_REGISTRATION]: {
-        type: "stdio",
-        command: "node",
-        args: [],
-        env: {},
-      },
-    },
-  },
-  codexMcp: {
-    serverName: SUPERVISOR_MCP_REGISTRATION,
-    command: "node",
-    args: [],
-    enabledTools: SUPERVISOR_MCP_TOOL_NAMES,
-    tomlFragment: "",
-  },
-};
+  command: "node",
+  args: [],
+  tomlFragment: "",
+});
 
 interface PromptState {
   readonly getRemote: () => HerdrAgent;
@@ -107,22 +88,15 @@ const makeBackendHarness = (options: HerdrBackendHarnessOptions = {}) =>
         remote = agent;
       },
     };
-    const supervisor: SupervisorChannelHandle = {
-      runId: request().runId,
-      metadata,
-      events: supervisorEvents,
-      awaitReady: Effect.void,
+    const supervisor = backendSupervisor(metadata, supervisorEvents, {
       setAssignmentEpoch: (epoch) =>
         Effect.sync(() => {
           assignmentEpochs.push(epoch);
         }),
       hasAcceptedReport: () => Effect.sync(() => accepted),
       acceptedReportForEpoch: () => Effect.sync((): BackendReport | undefined => undefined),
-      deliverNotification: () => Effect.void,
-      reply: () => Effect.void,
-      cancelPending: () => {},
       close: Effect.void,
-    };
+    });
     const supervisors: SupervisorChannelContract = {
       open: () => Effect.succeed(supervisor),
     };

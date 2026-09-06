@@ -9,7 +9,7 @@ import type { Scope } from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
 import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
-import type { SupervisorChannelHandle } from "../src/boundary/supervisor-channel.ts";
+import { backendSupervisor, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 import { makeLocalCliRawEventOwnership } from "../src/backend/local-cli-events.ts";
 import { makeLocalCodexBackendDriver } from "../src/backend/local-codex.ts";
@@ -162,43 +162,15 @@ describe("local Codex event driver raw safety", () => {
           acknowledge: (raw) => void acknowledged.push(raw),
           terminate: () => Effect.sync(() => Queue.endUnsafe(childEvents)),
         };
-        const supervisor: SupervisorChannelHandle = {
-          runId: codexLaunch.runId,
-          metadata: {
-            runId: codexLaunch.runId,
-            host: "127.0.0.1",
-            port: 1,
-            stateDirectory: "/private/fixture",
-            connectionConfigPath: "/private/fixture/connection.json",
-            helperPath: "/private/helper.mjs",
-            claudeMcp: {
-              mcpServers: {
-                pi_subagents_supervisor: {
-                  type: "stdio" as const,
-                  command: process.execPath,
-                  args: ["/private/helper.mjs"],
-                  env: {},
-                },
-              },
-            },
-            codexMcp: {
-              serverName: "pi_subagents_supervisor",
-              command: process.execPath,
-              args: ["/private/helper.mjs"],
-              enabledTools: [],
-              tomlFragment: "",
-            },
+        const supervisor = backendSupervisor(
+          supervisorMetadata(codexLaunch.runId, { enabledTools: [], tomlFragment: "" }),
+          supervisorEvents,
+          {
+            hasAcceptedReport: () => Effect.succeed(true),
+            acceptedReportForEpoch: () => Effect.sync(() => undefined),
+            close: Effect.sync(() => Queue.endUnsafe(supervisorEvents)),
           },
-          events: supervisorEvents,
-          awaitReady: Effect.void,
-          setAssignmentEpoch: () => Effect.void,
-          hasAcceptedReport: () => Effect.succeed(true),
-          acceptedReportForEpoch: () => Effect.sync(() => undefined),
-          deliverNotification: () => Effect.void,
-          reply: () => Effect.void,
-          cancelPending: () => {},
-          close: Effect.sync(() => Queue.endUnsafe(supervisorEvents)),
-        };
+        );
         const backend = yield* makeLocalCodexBackendDriver(
           { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
           { open: () => Effect.succeed(supervisor) },

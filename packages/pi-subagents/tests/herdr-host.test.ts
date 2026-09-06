@@ -12,16 +12,19 @@ import { HerdrHarness } from "../src/boundary/herdr-harness.ts";
 import { HerdrHost } from "../src/boundary/herdr-host.ts";
 import { fakeTopology, launch, supervisor } from "./fixtures/herdr-host-fixture.ts";
 
+const hostLayer = (fake: ReturnType<typeof fakeTopology>) =>
+  HerdrHost.layer.pipe(
+    Layer.provide(
+      Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+    ),
+  );
+
 describe("session-owned Herdr topology", () => {
   it.live(
     "splits the calling pane first, then the newest owned pane, and closes only owned panes",
     () => {
       const fake = fakeTopology();
-      const layer = HerdrHost.layer.pipe(
-        Layer.provide(
-          Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-        ),
-      );
+      const layer = hostLayer(fake);
       return Effect.gen(function* () {
         const host = yield* HerdrHost;
         const initialFocus = fake.focusedTopology();
@@ -64,11 +67,7 @@ describe("session-owned Herdr topology", () => {
   it.live("rejects an unresolvable calling pane before splitting", () => {
     const fake = fakeTopology();
     fake.mismatchCurrentPane();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const runScope = yield* Scope.make();
@@ -91,11 +90,7 @@ describe("session-owned Herdr topology", () => {
   it.live("interrupts pre-topology acquisition and removes the still-authorized harness", () => {
     const fake = fakeTopology();
     fake.blockSnapshotBeforeSplit();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const runScope = yield* Scope.make();
@@ -119,11 +114,7 @@ describe("session-owned Herdr topology", () => {
   it.live("interrupts after split, rolls back, and reauthorizes harness cleanup", () => {
     const fake = fakeTopology();
     fake.blockSnapshotAfterSplit();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const runScope = yield* Scope.make();
@@ -149,11 +140,7 @@ describe("session-owned Herdr topology", () => {
 
   it.live("uses the newest remaining owned pane after the latest pane closes", () => {
     const fake = fakeTopology();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const first = yield* host.launch("pi", launch("anchor-first"), supervisor);
@@ -185,11 +172,7 @@ describe("session-owned Herdr topology", () => {
 
   it.live("generates distinct Herdr 0.8-safe names for every hosted runtime", () => {
     const fake = fakeTopology();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const names: string[] = [];
@@ -211,11 +194,7 @@ describe("session-owned Herdr topology", () => {
     const fake = fakeTopology();
     fake.executeFirstActivationReceipt();
     fake.enableSecretBootstrap();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const hosted = yield* host.launch("pi", launch("agent-receipt-only"), {
@@ -245,11 +224,7 @@ describe("session-owned Herdr topology", () => {
   it.live("waits for a transient native pane occupant before spending activation probes", () => {
     const fake = fakeTopology();
     fake.delayInitialShellReadiness(3);
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const hosted = yield* host.launch("pi", launch("agent-delayed-shell"), {
@@ -264,11 +239,7 @@ describe("session-owned Herdr topology", () => {
   it.live("waits for stale post-activation agent detection before environment input", () => {
     const fake = fakeTopology();
     fake.delayPostActivationAgentClearance(4);
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const hosted = yield* host.launch("claude", launch("agent-post-activation-detection"), {
@@ -287,11 +258,7 @@ describe("session-owned Herdr topology", () => {
     const fake = fakeTopology();
     fake.dropEveryActivationProbe();
     fake.enableSecretBootstrap();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const initialFocus = fake.focusedTopology();
@@ -327,11 +294,7 @@ describe("session-owned Herdr topology", () => {
     const fake = fakeTopology();
     fake.executeFirstActivationReceipt();
     fake.failReceipt("environment-ready", "wrong");
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const failure = yield* host
@@ -357,11 +320,7 @@ describe("session-owned Herdr topology", () => {
     const fake = fakeTopology();
     fake.dropEveryActivationProbe();
     fake.switchToOtherTabAfterFirstProbe();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const result = yield* Effect.result(
@@ -387,11 +346,7 @@ describe("session-owned Herdr topology", () => {
   it.live("rolls back a confirmed pre-application agent_pane_busy rejection", () => {
     const fake = fakeTopology();
     fake.rejectStartWithPaneBusy();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const initialFocus = fake.focusedTopology();
@@ -416,11 +371,7 @@ describe("session-owned Herdr topology", () => {
   it.live("launches into the exact caller tab while another tab remains focused", () => {
     const fake = fakeTopology();
     fake.switchToOtherTab();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const initialFocus = fake.focusedTopology();
@@ -440,11 +391,7 @@ describe("session-owned Herdr topology", () => {
 
   it.live("closes a focused owned pane without issuing a focus command", () => {
     const fake = fakeTopology();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const hosted = yield* host.launch(
@@ -472,11 +419,7 @@ describe("session-owned Herdr topology", () => {
   it.live("quarantines startup when native-session identity is not returned atomically", () => {
     const fake = fakeTopology();
     fake.omitNativeSession();
-    const layer = HerdrHost.layer.pipe(
-      Layer.provide(
-        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-      ),
-    );
+    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const runScope = yield* Scope.make();
@@ -505,11 +448,7 @@ describe("session-owned Herdr topology", () => {
     () => {
       const fake = fakeTopology();
       fake.invalidateSecretAttestation();
-      const layer = HerdrHost.layer.pipe(
-        Layer.provide(
-          Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-        ),
-      );
+      const layer = hostLayer(fake);
       return Effect.gen(function* () {
         const host = yield* HerdrHost;
         const failure = yield* host
@@ -533,11 +472,7 @@ describe("session-owned Herdr topology", () => {
     () => {
       const fake = fakeTopology();
       fake.failAppliedStartAndRollbackSnapshot();
-      const layer = HerdrHost.layer.pipe(
-        Layer.provide(
-          Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-        ),
-      );
+      const layer = hostLayer(fake);
       return Effect.gen(function* () {
         const host = yield* HerdrHost;
         const runScope = yield* Scope.make();

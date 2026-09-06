@@ -24,6 +24,21 @@ const { join } = nodePath;
 
 const token = (character: string): string => character.repeat(64);
 
+const leaseOptions = (
+  agentDirectory: string,
+  ownerNonce: string,
+  randomCharacter: string,
+  overrides: Omit<
+    Parameters<typeof makeWriterLease>[0],
+    "agentDirectory" | "ownerNonce" | "randomToken"
+  > = {},
+): Parameters<typeof makeWriterLease>[0] => ({
+  agentDirectory,
+  ownerNonce,
+  randomToken: () => token(randomCharacter),
+  ...overrides,
+});
+
 const promiseGate = () => {
   const cell = Deferred.makeUnsafe<void>();
   return {
@@ -163,16 +178,8 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
           try: () => fs.symlink(project, alias, process.platform === "win32" ? "junction" : "dir"),
           catch: () => "fixture symlink failed" as const,
         }).pipe(Effect.orDie);
-        const first = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("a"),
-          randomToken: () => token("1"),
-        });
-        const second = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("b"),
-          randomToken: () => token("2"),
-        });
+        const first = makeWriterLease(leaseOptions(agentDirectory, token("a"), "1"));
+        const second = makeWriterLease(leaseOptions(agentDirectory, token("b"), "2"));
         const direct = yield* first.canonicalize(project);
         const throughAlias = yield* second.canonicalize(alias);
         expect(throughAlias).toEqual(direct);
@@ -197,15 +204,14 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
       Effect.gen(function* () {
         const entered = promiseGate();
         const gate = promiseGate();
-        const service = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("1"),
-          randomToken: () => token("2"),
-          beforeAcquireCommit: () => {
-            entered.open();
-            return gate.promise;
-          },
-        });
+        const service = makeWriterLease(
+          leaseOptions(agentDirectory, token("1"), "2", {
+            beforeAcquireCommit: () => {
+              entered.open();
+              return gate.promise;
+            },
+          }),
+        );
         const cwd = yield* service.canonicalize(project);
         const acquiring = yield* acquire(service, cwd, "pre-ownership-wait").pipe(
           Effect.forkScoped({ startImmediately: true }),
@@ -229,20 +235,15 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
       Effect.gen(function* () {
         const entered = promiseGate();
         const gate = promiseGate();
-        const owner = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("3"),
-          randomToken: () => token("4"),
-          afterAcquireDirectoryCreated: () => {
-            entered.open();
-            return gate.promise;
-          },
-        });
-        const contender = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("5"),
-          randomToken: () => token("6"),
-        });
+        const owner = makeWriterLease(
+          leaseOptions(agentDirectory, token("3"), "4", {
+            afterAcquireDirectoryCreated: () => {
+              entered.open();
+              return gate.promise;
+            },
+          }),
+        );
+        const contender = makeWriterLease(leaseOptions(agentDirectory, token("5"), "6"));
         const cwd = yield* owner.canonicalize(project);
         const acquiring = yield* acquire(owner, cwd, "commit-owner").pipe(
           Effect.forkScoped({ startImmediately: true }),
@@ -269,20 +270,15 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
       Effect.gen(function* () {
         const entered = promiseGate();
         const gate = promiseGate();
-        const owner = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("7"),
-          randomToken: () => token("8"),
-          beforeReleaseRename: () => {
-            entered.open();
-            return gate.promise;
-          },
-        });
-        const cleanup = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("9"),
-          randomToken: () => token("a"),
-        });
+        const owner = makeWriterLease(
+          leaseOptions(agentDirectory, token("7"), "8", {
+            beforeReleaseRename: () => {
+              entered.open();
+              return gate.promise;
+            },
+          }),
+        );
+        const cleanup = makeWriterLease(leaseOptions(agentDirectory, token("9"), "a"));
         const cwd = yield* owner.canonicalize(project);
         const lease = yield* acquire(owner, cwd, "cleanup-owner");
         const releasing = yield* owner
@@ -306,16 +302,8 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
     withFixture(({ root, agentDirectory, project }) =>
       Effect.gen(function* () {
         const renamedProject = join(root, "project-renamed");
-        const owner = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("a"),
-          randomToken: () => token("3"),
-        });
-        const contender = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("b"),
-          randomToken: () => token("4"),
-        });
+        const owner = makeWriterLease(leaseOptions(agentDirectory, token("a"), "3"));
+        const contender = makeWriterLease(leaseOptions(agentDirectory, token("b"), "4"));
         const beforeRename = yield* owner.canonicalize(project);
         yield* Effect.tryPromise(() => fs.rename(project, renamedProject)).pipe(Effect.orDie);
         const afterRename = yield* contender.canonicalize(renamedProject);
@@ -340,16 +328,8 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
   it.effect("conflicts with a live owner held by an isolated service instance", () =>
     withFixture(({ agentDirectory, project }) =>
       Effect.gen(function* () {
-        const owner = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("a"),
-          randomToken: () => token("3"),
-        });
-        const contender = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("b"),
-          randomToken: () => token("4"),
-        });
+        const owner = makeWriterLease(leaseOptions(agentDirectory, token("a"), "3"));
+        const contender = makeWriterLease(leaseOptions(agentDirectory, token("b"), "4"));
         const cwd = yield* owner.canonicalize(project);
         const lease = yield* acquire(owner, cwd, "live-owner");
         const result = yield* acquire(contender, cwd, "contender").pipe(Effect.flip);
@@ -368,18 +348,16 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
     withFixture(({ agentDirectory, project }) =>
       Effect.gen(function* () {
         const deadPid = 2_000_000_001;
-        const deadOwner = makeWriterLease({
-          agentDirectory,
-          parentPid: deadPid,
-          ownerNonce: token("a"),
-          randomToken: () => token("5"),
-        });
-        const contender = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("b"),
-          randomToken: () => token("6"),
-          probeOwner: (pid) => (pid === deadPid ? "dead" : "alive"),
-        });
+        const deadOwner = makeWriterLease(
+          leaseOptions(agentDirectory, token("a"), "5", {
+            parentPid: deadPid,
+          }),
+        );
+        const contender = makeWriterLease(
+          leaseOptions(agentDirectory, token("b"), "6", {
+            probeOwner: (pid) => (pid === deadPid ? "dead" : "alive"),
+          }),
+        );
         const cwd = yield* deadOwner.canonicalize(project);
         yield* acquire(deadOwner, cwd, "dead-owner");
         const replacement = yield* acquire(contender, cwd, "replacement");
@@ -407,18 +385,16 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
         (backend) =>
           Effect.gen(function* () {
             const deadPid = 2_000_000_101;
-            const deadOwner = makeWriterLease({
-              agentDirectory,
-              parentPid: deadPid,
-              ownerNonce: token("a"),
-              randomToken: () => token("7"),
-            });
-            const contender = makeWriterLease({
-              agentDirectory,
-              ownerNonce: token("b"),
-              randomToken: () => token("8"),
-              probeOwner: (pid) => (pid === deadPid ? "dead" : "alive"),
-            });
+            const deadOwner = makeWriterLease(
+              leaseOptions(agentDirectory, token("a"), "7", {
+                parentPid: deadPid,
+              }),
+            );
+            const contender = makeWriterLease(
+              leaseOptions(agentDirectory, token("b"), "8", {
+                probeOwner: (pid) => (pid === deadPid ? "dead" : "alive"),
+              }),
+            );
             const cwd = yield* deadOwner.canonicalize(project);
             const reserved = yield* acquire(deadOwner, cwd, "dead-spawn-owner");
             const marked = yield* deadOwner.markSpawnStarted(reserved);
@@ -458,18 +434,16 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
     withFixture(({ agentDirectory, project }) =>
       Effect.gen(function* () {
         const deadPid = 2_000_000_102;
-        const deadOwner = makeWriterLease({
-          agentDirectory,
-          parentPid: deadPid,
-          ownerNonce: token("a"),
-          randomToken: () => token("c"),
-        });
-        const contender = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("b"),
-          randomToken: () => token("d"),
-          probeOwner: (pid) => (pid === deadPid ? "dead" : "alive"),
-        });
+        const deadOwner = makeWriterLease(
+          leaseOptions(agentDirectory, token("a"), "c", {
+            parentPid: deadPid,
+          }),
+        );
+        const contender = makeWriterLease(
+          leaseOptions(agentDirectory, token("b"), "d", {
+            probeOwner: (pid) => (pid === deadPid ? "dead" : "alive"),
+          }),
+        );
         const cwd = yield* deadOwner.canonicalize(project);
         const reserved = yield* acquire(deadOwner, cwd, "transitional-owner");
         yield* Effect.tryPromise(() =>
@@ -493,12 +467,11 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
   it.effect("fails closed for corrupt and liveness-uncertain evidence", () =>
     withFixture(({ agentDirectory, project }) =>
       Effect.gen(function* () {
-        const service = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("a"),
-          randomToken: () => token("7"),
-          probeOwner: () => "uncertain",
-        });
+        const service = makeWriterLease(
+          leaseOptions(agentDirectory, token("a"), "7", {
+            probeOwner: () => "uncertain",
+          }),
+        );
         const cwd = yield* service.canonicalize(project);
         yield* Effect.tryPromise({
           try: () =>
@@ -523,12 +496,11 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
         yield* Effect.tryPromise(() =>
           fs.rm(writerLeasePath(agentDirectory, cwd.digest), { recursive: true, force: true }),
         ).pipe(Effect.orDie);
-        const uncertainOwner = makeWriterLease({
-          agentDirectory,
-          parentPid: 45_678,
-          ownerNonce: token("b"),
-          randomToken: () => token("8"),
-        });
+        const uncertainOwner = makeWriterLease(
+          leaseOptions(agentDirectory, token("b"), "8", {
+            parentPid: 45_678,
+          }),
+        );
         const uncertainLease = yield* acquire(uncertainOwner, cwd, "uncertain-owner");
         const uncertain = yield* acquire(service, cwd, "uncertain-contender").pipe(Effect.flip);
         expect(uncertain).toMatchObject({
@@ -544,11 +516,7 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
   it.effect("does not mark spawn-started when ownership presents the wrong token", () =>
     withFixture(({ agentDirectory, project }) =>
       Effect.gen(function* () {
-        const owner = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("a"),
-          randomToken: () => token("9"),
-        });
+        const owner = makeWriterLease(leaseOptions(agentDirectory, token("a"), "9"));
         const cwd = yield* owner.canonicalize(project);
         const lease = yield* acquire(owner, cwd, "mark-token-owner");
         const wrongMark = yield* owner
@@ -566,16 +534,8 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
   it.effect("does not unlock a lease when release presents the wrong token", () =>
     withFixture(({ agentDirectory, project }) =>
       Effect.gen(function* () {
-        const owner = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("a"),
-          randomToken: () => token("9"),
-        });
-        const contender = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("b"),
-          randomToken: () => token("a"),
-        });
+        const owner = makeWriterLease(leaseOptions(agentDirectory, token("a"), "9"));
+        const contender = makeWriterLease(leaseOptions(agentDirectory, token("b"), "a"));
         const cwd = yield* owner.canonicalize(project);
         const lease = yield* acquire(owner, cwd, "token-owner");
         const wrongRelease = yield* owner
@@ -599,29 +559,23 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
         const secondEntered = promiseGate();
         const firstGate = promiseGate();
         const secondGate = promiseGate();
-        const owner = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("a"),
-          randomToken: () => token("b"),
-          beforeReleaseRename: () => {
-            firstEntered.open();
-            return firstGate.promise;
-          },
-        });
-        const duplicateReleaser = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("e"),
-          randomToken: () => token("f"),
-          beforeReleaseRename: () => {
-            secondEntered.open();
-            return secondGate.promise;
-          },
-        });
-        const replacementOwner = makeWriterLease({
-          agentDirectory,
-          ownerNonce: token("c"),
-          randomToken: () => token("d"),
-        });
+        const owner = makeWriterLease(
+          leaseOptions(agentDirectory, token("a"), "b", {
+            beforeReleaseRename: () => {
+              firstEntered.open();
+              return firstGate.promise;
+            },
+          }),
+        );
+        const duplicateReleaser = makeWriterLease(
+          leaseOptions(agentDirectory, token("e"), "f", {
+            beforeReleaseRename: () => {
+              secondEntered.open();
+              return secondGate.promise;
+            },
+          }),
+        );
+        const replacementOwner = makeWriterLease(leaseOptions(agentDirectory, token("c"), "d"));
         const cwd = yield* owner.canonicalize(project);
         const lease = yield* owner.acquire({
           cwd,
@@ -656,12 +610,11 @@ describe.skipIf(process.platform === "win32")("cross-process writer leases", () 
     withFixture(({ agentDirectory, project }) =>
       Effect.gen(function* () {
         const deadPid = 2_000_000_002;
-        const deadOwner = makeWriterLease({
-          agentDirectory,
-          parentPid: deadPid,
-          ownerNonce: token("a"),
-          randomToken: () => token("b"),
-        });
+        const deadOwner = makeWriterLease(
+          leaseOptions(agentDirectory, token("a"), "b", {
+            parentPid: deadPid,
+          }),
+        );
         const cwd = yield* deadOwner.canonicalize(project);
         yield* acquire(deadOwner, cwd, "simultaneous-dead-owner");
         const contender = (ownerNonce: string, ownershipToken: string) =>

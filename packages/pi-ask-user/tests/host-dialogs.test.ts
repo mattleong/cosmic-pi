@@ -1,3 +1,4 @@
+import { defaultQuestion } from "./support/questionnaire.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
@@ -12,14 +13,10 @@ import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schem
 const request: AskUserRequest = {
   questions: [
     {
+      ...defaultQuestion,
       key: "library",
       title: "Library",
       prompt: "Which library?",
-      mode: "single",
-      choices: [
-        { value: "a", label: "A", description: "Choose A." },
-        { value: "b", label: "B", description: "Choose B." },
-      ],
     },
   ],
 };

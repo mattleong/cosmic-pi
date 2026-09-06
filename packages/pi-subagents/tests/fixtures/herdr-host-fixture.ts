@@ -6,40 +6,15 @@ import type {
   HerdrStartupReceiptPhase,
 } from "../../src/boundary/herdr-attestation.ts";
 import type { HerdrHarnessContract } from "../../src/boundary/herdr-harness.ts";
-import type { SupervisorConnectionMetadata } from "../../src/boundary/supervisor-channel.ts";
+import { supervisorMetadata } from "./backend-supervisor.ts";
 import type { BackendLaunchRequest } from "../../src/backend/model.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
 
-export const supervisor: SupervisorConnectionMetadata = {
-  runId: "agent-1",
-  host: "127.0.0.1",
-  port: 1,
+export const supervisor = supervisorMetadata("agent-1", {
   stateDirectory: "/private",
   connectionConfigPath: "/private/connection.json",
-  helperPath: "/private/helper.mjs",
-  claudeMcp: {
-    mcpServers: {
-      pi_subagents_supervisor: {
-        type: "stdio",
-        command: process.execPath,
-        args: ["/private/helper.mjs"],
-        env: {},
-      },
-    },
-  },
-  codexMcp: {
-    serverName: "pi_subagents_supervisor",
-    command: process.execPath,
-    args: ["/private/helper.mjs"],
-    enabledTools: [
-      "supervisor_progress",
-      "supervisor_warning",
-      "supervisor_question",
-      "supervisor_submit_report",
-    ],
-    tomlFragment: "[mcp_servers.pi_subagents_supervisor]",
-  },
-};
+  tomlFragment: "[mcp_servers.pi_subagents_supervisor]",
+});
 
 const startupReceiptPhases: ReadonlyArray<HerdrStartupReceiptPhase> = [
   "activation-1",

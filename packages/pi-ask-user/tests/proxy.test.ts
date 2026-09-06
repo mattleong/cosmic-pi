@@ -1,3 +1,4 @@
+import { routeRequest as request } from "./support/questionnaire.ts";
 import { afterEach, expect, vi } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -17,23 +18,9 @@ import {
   QUESTIONNAIRE_RELAY_QUERY,
   type QuestionnaireEvents,
   type QuestionnaireRelay,
-  type AskUserRequest,
   type AskUserOutcome,
 } from "../src/protocol.ts";
-const request: AskUserRequest = {
-  questions: [
-    {
-      key: "route",
-      title: "Route",
-      prompt: "Choose route",
-      mode: "single",
-      choices: [
-        { value: "a", label: "A", description: "First" },
-        { value: "b", label: "B", description: "Second" },
-      ],
-    },
-  ],
-};
+
 const answer: AskUserOutcome = {
   outcome: "submitted",
   answers: [{ key: "route", kind: "choices", values: ["a"], labels: ["A"] }],

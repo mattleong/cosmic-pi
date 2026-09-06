@@ -12,9 +12,14 @@ import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { advisorDelayEffect } from "../src/boundary/clock.ts";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
-import { makeTestChildFactory, type TestChildFactoryOverrides } from "./support/child-factory.ts";
+import {
+  testChildModel,
+  testRuntimeOptions as runtimeOptions,
+  makeTestChildFactory,
+  type TestChildFactoryOverrides,
+} from "./support/child-factory.ts";
 import { standaloneAdvisorExecutor } from "./support/executor.ts";
-import { agentSessionFixture } from "./support/agent-session.ts";
+import { defaultAgentSession } from "./support/agent-session.ts";
 import { ADVISOR_CATCH_UP_TIMEOUT_MS, awaitAdvisorCatchUpEffect } from "../src/extension.ts";
 import { LONG_TURN_REVIEW_MS } from "../src/review/trajectory.ts";
 import {
@@ -27,20 +32,6 @@ import {
   type AdvisorRuntimeServiceContract,
 } from "../src/runtime/runtime.ts";
 import { ADVISOR_OPERATION_TIMEOUT_MS } from "../src/config/options.ts";
-
-// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-const runtimeOptions = () => ({
-  ctx: { cwd: process.cwd(), modelRegistry: {} as never },
-  config: {
-    configPath: "/tmp/config",
-    enabled: true,
-    provider: "p",
-    model: "m",
-    setupDismissed: true,
-    configured: true,
-  },
-  seed: "seed",
-});
 
 const makeRuntime = (
   overrides: TestChildFactoryOverrides,
@@ -62,27 +53,12 @@ const lateSession = (
   dispose: () => void,
   abort: () => Promise<void> = () => Promise.resolve(),
 ): AgentSession =>
-  agentSessionFixture({
-    sessionFile: undefined,
-    messages: [],
-    isStreaming: false,
-    getActiveToolNames: () => [],
-    getToolDefinition: () => undefined,
-    subscribe: () => () => undefined,
-    prompt: () => Promise.resolve(),
-    steer: () => Promise.resolve(),
-    followUp: () => Promise.resolve(),
+  defaultAgentSession({
     abort: vi.fn(abort),
     dispose: vi.fn(dispose),
   });
 
-// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-const childModel = () =>
-  Promise.resolve({
-    modelRuntime: {} as never,
-    model: { provider: "p", id: "m" } as never,
-    thinkingLevel: "medium" as const,
-  });
+const childModel = () => Promise.resolve(testChildModel());
 
 const assertExactDelay = (milliseconds: number) =>
   Effect.gen(function* () {

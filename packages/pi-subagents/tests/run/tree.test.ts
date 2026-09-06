@@ -8,7 +8,12 @@ import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { SubagentService } from "../../src/run/service.ts";
-import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
+import {
+  fakeChildLayer,
+  request,
+  serviceLayer,
+  localServiceFixture,
+} from "./fixtures/service-harness.ts";
 
 const policy = (maxDirectChildren: number, maxDepth: number) => ({
   maxDirectChildren,
@@ -321,10 +326,12 @@ describe("root-owned subagent run tree", () => {
 
   it.effect("stops an explicit subtree leaf-first", () => {
     const releaseOrder: number[] = [];
-    const fake = fakeChildLayer(Effect.void, {
-      onRelease: (index) => releaseOrder.push(index),
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        onRelease: (index) => releaseOrder.push(index),
+      }),
+    );
     return SubagentService.use((service) =>
       Effect.gen(function* () {
         const parent = yield* service.start(request({ name: "parent" }));

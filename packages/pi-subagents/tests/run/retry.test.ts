@@ -3,13 +3,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { ProfileCandidate, ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { getFailedStartRecovery } from "../../src/run/launch.ts";
 import { SubagentService } from "../../src/run/service.ts";
-import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
+import { fakeChildLayer, request, localServiceFixture } from "./fixtures/service-harness.ts";
 
 const candidate = (model: string): ProfileCandidate => ({
   host: "local",
@@ -35,10 +34,12 @@ const continuation = (
 
 describe("explicit profile-route retry", () => {
   it.effect("returns settled eligible recovery for an admitted failed start", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+      }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -62,11 +63,13 @@ describe("explicit profile-route retry", () => {
   it.effect("does not return admitted-failure recovery before cleanup settles", () => {
     const promptGate = Deferred.makeUnsafe<void>();
     const cleanupGate = Deferred.makeUnsafe<void>();
-    const fake = fakeChildLayer(Effect.void, {
-      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
-      initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }],
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+        initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }],
+      }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const completed = yield* Deferred.make<void>();
@@ -93,10 +96,12 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("reports frozen-route exhaustion on an admitted failed start", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+      }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -112,8 +117,7 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("admits one linked successor and atomically supersedes the failed predecessor", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failedRun = yield* service.start(
@@ -185,8 +189,7 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("waits for confirmed cleanup before granting the retry claim", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failedRun = yield* service.start(
@@ -211,8 +214,7 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("releases the predecessor claim when successor admission never starts", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failedRun = yield* service.start(
@@ -235,8 +237,7 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("revalidates the exclusive predecessor claim at successor admission", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failedRun = yield* service.start(
@@ -258,12 +259,14 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("refuses continuation after uncertain task delivery", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialTransportFailures: [
-        { spawnIndex: 0, type: "prompt", code: "transport_outcome_uncertain" },
-      ],
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        initialTransportFailures: [
+          { spawnIndex: 0, type: "prompt", code: "transport_outcome_uncertain" },
+        ],
+      }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -283,11 +286,13 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("returns blocked recovery when admitted-start cleanup is quarantined", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      releaseDefect: true,
-      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        releaseDefect: true,
+        initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+      }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -306,8 +311,10 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("blocks continuation when failed-run cleanup is quarantined", () => {
-    const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, { releaseDefect: true }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failedRun = yield* service.start(
@@ -322,10 +329,12 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("returns writer recovery only after exact ownership is released", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+      }),
+    );
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failure = yield* service
@@ -355,8 +364,7 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("reserves a failed writer's exact claims while retry resolution is in progress", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failedRun = yield* service.start(
@@ -398,8 +406,7 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("publishes exhaustion and blocks repeated continuation", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    const { fake, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failedRun = yield* service.start(
