@@ -100,6 +100,50 @@ describe("questionnaire reducer", () => {
     });
   });
 
+  it.each([{}, { note: "Keep the note" }])(
+    "replaces custom answers and omits empty selections while retaining note %s",
+    (notes) => {
+      let state = createQuestionnaireState(request);
+      state = {
+        ...state,
+        drafts: [
+          { cursor: 0 },
+          {
+            cursor: 1,
+            answer: { kind: "custom", text: "Other checks" },
+            ...notes,
+          },
+        ],
+      };
+      state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
+      expect(state.drafts[1]).toEqual({
+        cursor: 1,
+        answer: { kind: "choices", values: ["unit"] },
+        ...notes,
+      });
+      state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
+      expect(state.drafts[1]).toEqual({ cursor: 1, ...notes });
+    },
+  );
+
+  it("discards unknown selections and removes every duplicate of a toggled value", () => {
+    let state = createQuestionnaireState(request);
+    state = {
+      ...state,
+      drafts: [
+        { cursor: 0 },
+        {
+          cursor: 0,
+          answer: { kind: "choices", values: ["unknown", "integration", "unit", "unit"] },
+        },
+      ],
+    };
+    state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
+    expect(state.drafts[1]?.answer).toEqual({ kind: "choices", values: ["integration"] });
+    state = reduceQuestionnaire(state, { type: "toggle-many", question: 1, choice: 0 });
+    expect(state.drafts[1]?.answer).toEqual({ kind: "choices", values: ["unit", "integration"] });
+  });
+
   it("requires every question and discards drafts on cancellation", () => {
     const state = reduceQuestionnaire(createQuestionnaireState(request), {
       type: "select-one",

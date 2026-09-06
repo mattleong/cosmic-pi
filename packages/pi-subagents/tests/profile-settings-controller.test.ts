@@ -807,20 +807,27 @@ describe("profile settings controller", () => {
     yield* closeLibraryAndDashboard(fixture, running);
   });
 
-  effectTest("rechecks Project trust after nesting prompts", function* () {
-    const fixture = setup();
-    fixture.ui.select.mockResolvedValueOnce("Project").mockImplementationOnce(() => {
-      fixture.setProjectTrusted(false);
-      return Promise.resolve("Inherit limits");
-    });
+  for (const choice of ["Inherit limits", "Set limits"]) {
+    effectTest(`rechecks Project trust after ${choice} prompts`, function* () {
+      const fixture = setup();
+      fixture.ui.select.mockResolvedValueOnce("Project").mockImplementationOnce(() => {
+        if (choice === "Inherit limits") fixture.setProjectTrusted(false);
+        return Promise.resolve(choice);
+      });
+      fixture.ui.input.mockResolvedValueOnce("4").mockImplementationOnce(() => {
+        fixture.setProjectTrusted(false);
+        return Promise.resolve("2");
+      });
 
-    yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
-    expect(fixture.managerActions.patchNesting).not.toHaveBeenCalled();
-    expect(fixture.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("This project is no longer trusted"),
-      "warning",
-    );
-  });
+      yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
+      expect(fixture.managerActions.patchNesting).not.toHaveBeenCalled();
+      expect(fixture.managerActions.patchSessionNesting).not.toHaveBeenCalled();
+      expect(fixture.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("This project is no longer trusted"),
+        "warning",
+      );
+    });
+  }
 
   effectTest("keeps Current Session unchanged while editing a saved set", function* () {
     const fixture = setup();

@@ -85,24 +85,14 @@ export class SessionProfileConflictError extends Schema.TaggedError<SessionProfi
 const SessionRouteInputSchema = Schema.Struct({
   candidates: Schema.Array(Schema.Unknown),
 });
-const SessionOverridesInputSchema = Schema.Struct({
-  scout: Schema.optional(SessionRouteInputSchema),
-  researcher: Schema.optional(SessionRouteInputSchema),
-  planner: Schema.optional(SessionRouteInputSchema),
-  worker: Schema.optional(SessionRouteInputSchema),
-  reviewer: Schema.optional(SessionRouteInputSchema),
-  oracle: Schema.optional(SessionRouteInputSchema),
-  generalist: Schema.optional(SessionRouteInputSchema),
-});
-const SessionBaselineProfilesInputSchema = Schema.Struct({
-  scout: SessionRouteInputSchema,
-  researcher: SessionRouteInputSchema,
-  planner: SessionRouteInputSchema,
-  worker: SessionRouteInputSchema,
-  reviewer: SessionRouteInputSchema,
-  oracle: SessionRouteInputSchema,
-  generalist: SessionRouteInputSchema,
-});
+const SessionOverridesInputSchema = Schema.Record(
+  Schema.Literals(PROFILE_IDS),
+  Schema.optional(SessionRouteInputSchema),
+);
+const SessionBaselineProfilesInputSchema = Schema.Record(
+  Schema.Literals(PROFILE_IDS),
+  SessionRouteInputSchema,
+);
 const ProfileRouteSourceInputSchema = Schema.Literals([
   "session",
   "project",
@@ -111,15 +101,10 @@ const ProfileRouteSourceInputSchema = Schema.Literals([
   "project-invalid",
   "global-invalid",
 ]);
-const SessionBaselineSourcesInputSchema = Schema.Struct({
-  scout: ProfileRouteSourceInputSchema,
-  researcher: ProfileRouteSourceInputSchema,
-  planner: ProfileRouteSourceInputSchema,
-  worker: ProfileRouteSourceInputSchema,
-  reviewer: ProfileRouteSourceInputSchema,
-  oracle: ProfileRouteSourceInputSchema,
-  generalist: ProfileRouteSourceInputSchema,
-});
+const SessionBaselineSourcesInputSchema = Schema.Record(
+  Schema.Literals(PROFILE_IDS),
+  ProfileRouteSourceInputSchema,
+);
 const SessionProfileOriginInputSchema = Schema.Union([
   Schema.Struct({ scope: Schema.Literal("builtin") }),
   Schema.Struct({

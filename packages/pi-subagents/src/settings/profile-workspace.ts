@@ -443,24 +443,32 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
     this.renderSoon();
   }
 
-  private openFastModePicker(candidate: ProfileCandidate): void {
+  private openCapabilityPicker(
+    candidate: ProfileCandidate,
+    field: "openaiFastMode" | "effort",
+  ): void {
     const candidateIndex = this.candidateIndex;
-    const controller = this.beginCatalogLoad("Checking fast mode…");
+    const fastMode = field === "openaiFastMode";
+    const controller = this.beginCatalogLoad(
+      fastMode ? "Checking fast mode…" : "Loading reasoning levels…",
+    );
     void this.options
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
         if (!this.finishCatalogLoad(controller)) return;
         const current = picker.choices.find((choice) =>
-          candidate.model === "parent"
+          fastMode && candidate.model === "parent"
             ? choice.choice.kind === "parent"
             : choice.choice.kind === "model" && choice.choice.selector === candidate.model,
         );
         this.candidateIndex = candidateIndex;
         this.showFieldPicker(
           candidate,
-          "openaiFastMode",
-          undefined,
-          current?.fastModeAvailable ?? this.options.fastModeAvailable(candidate),
+          field,
+          fastMode ? undefined : current?.supportedEfforts,
+          fastMode
+            ? (current?.fastModeAvailable ?? this.options.fastModeAvailable(candidate))
+            : undefined,
           picker.warning,
         );
       })
@@ -468,36 +476,11 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         if (!this.finishCatalogLoad(controller)) return;
         this.setMessage(
           "error",
-          error instanceof Error ? error.message : "Could not check fast mode.",
-        );
-        this.renderSoon();
-      });
-  }
-
-  private openNativeEffortPicker(candidate: ProfileCandidate): void {
-    const candidateIndex = this.candidateIndex;
-    const controller = this.beginCatalogLoad("Loading reasoning levels…");
-    void this.options
-      .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
-      .then((picker) => {
-        if (!this.finishCatalogLoad(controller)) return;
-        const current = picker.choices.find(
-          (choice) => choice.choice.kind === "model" && choice.choice.selector === candidate.model,
-        );
-        this.candidateIndex = candidateIndex;
-        this.showFieldPicker(
-          candidate,
-          "effort",
-          current?.supportedEfforts,
-          undefined,
-          picker.warning,
-        );
-      })
-      .catch((error) => {
-        if (!this.finishCatalogLoad(controller)) return;
-        this.setMessage(
-          "error",
-          error instanceof Error ? error.message : "Could not load reasoning levels.",
+          error instanceof Error
+            ? error.message
+            : fastMode
+              ? "Could not check fast mode."
+              : "Could not load reasoning levels.",
         );
         this.renderSoon();
       });
@@ -740,11 +723,11 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       return;
     }
     if (field === "effort" && candidate.runtime !== "pi") {
-      this.openNativeEffortPicker(candidate);
+      this.openCapabilityPicker(candidate, "effort");
       return;
     }
     if (field === "openaiFastMode") {
-      this.openFastModePicker(candidate);
+      this.openCapabilityPicker(candidate, "openaiFastMode");
       return;
     }
     this.showFieldPicker(

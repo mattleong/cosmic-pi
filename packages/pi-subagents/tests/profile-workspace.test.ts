@@ -467,48 +467,73 @@ describe("profile workspace disposal", () => {
     });
   });
 
-  it("aborts model loading and ignores its late result", () => {
-    type PickerData = Awaited<ReturnType<ProfileWorkspaceOptions["loadModelPicker"]>>;
-    const pickerCell = Deferred.makeUnsafe<PickerData>();
-    const picker = Effect.runPromise(Deferred.await(pickerCell));
-    let capturedSignal: AbortSignal | undefined;
-    const requestRender = vi.fn();
-    const close = vi.fn();
-    const component = new ProfileWorkspaceComponent(
-      baseOptions({
-        requestRender,
-        close,
-        loadModelPicker: (_profile, _index, _candidate, signal) => {
-          capturedSignal = signal;
-          return picker;
-        },
-      }),
-    );
+  it.each(["model", "effort", "openaiFastMode"] as const)(
+    "aborts %s loading and ignores its late result",
+    (field) => {
+      type PickerData = Awaited<ReturnType<ProfileWorkspaceOptions["loadModelPicker"]>>;
+      const pickerCell = Deferred.makeUnsafe<PickerData>();
+      const picker = Effect.runPromise(Deferred.await(pickerCell));
+      let capturedSignal: AbortSignal | undefined;
+      const requestRender = vi.fn();
+      const close = vi.fn();
+      const component = new ProfileWorkspaceComponent(
+        baseOptions({
+          requestRender,
+          close,
+          initialFocus: "fields",
+          initialField: field,
+          initialAdvancedExpanded: true,
+          inspection: makeInspection({
+            revision: 1,
+            overrides: {
+              generalist: {
+                candidates: [
+                  {
+                    host: "local",
+                    runtime: "codex",
+                    model: "gpt-5.4",
+                    effort: "high",
+                    context: "fresh",
+                    writeIntent: "read-only",
+                    openaiFastMode: true,
+                    closeOnReport: true,
+                  },
+                ],
+              },
+            },
+          }),
+          loadModelPicker: (_profile, _index, _candidate, signal) => {
+            capturedSignal = signal;
+            return picker;
+          },
+        }),
+      );
 
-    openFields(component);
-    component.handleInput("\r");
-    expect(capturedSignal).toBeDefined();
-    component.dispose();
-    expect(capturedSignal?.aborted).toBe(true);
-    const rendersAtDispose = requestRender.mock.calls.length;
-    Deferred.doneUnsafe(
-      pickerCell,
-      Effect.succeed({
-        choices: [],
-        current: "parent",
-        context: {
-          profile: "generalist",
-          candidateIndex: 0,
-          host: "local",
-          runtime: "pi",
-        },
-      }),
-    );
-    return settle().then(() => {
-      expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
-      expect(close).not.toHaveBeenCalled();
-    });
-  });
+      component.handleInput("\r");
+      expect(capturedSignal).toBeDefined();
+      component.dispose();
+      expect(capturedSignal?.aborted).toBe(true);
+      const rendersAtDispose = requestRender.mock.calls.length;
+      Deferred.doneUnsafe(
+        pickerCell,
+        Effect.succeed({
+          choices: [],
+          current: "parent",
+          context: {
+            profile: "generalist",
+            candidateIndex: 0,
+            host: "local",
+            runtime: "pi",
+          },
+        }),
+      );
+      return settle().then(() => {
+        expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
+        expect(close).not.toHaveBeenCalled();
+        expect(component.render(100)).toEqual([]);
+      });
+    },
+  );
 
   it("shows optimistic conflict feedback after refreshing Current Session", () => {
     const refreshed = makeInspection();

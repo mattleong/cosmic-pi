@@ -26,6 +26,14 @@ const review = {
     },
   ],
 };
+const validCard = {
+  version: 1 as const,
+  cardId: "arc_x",
+  kind: "issues" as const,
+  summary: "x",
+  items: [{ issue: "x", evidence: "y", suggestedFix: "z" }],
+};
+
 describe("Advisor local review cards", () => {
   test("creates a bounded strict v1 card without hidden metadata", () => {
     const card = makeAdvisorReviewCard("arc_test", review)!;
@@ -61,15 +69,7 @@ describe("Advisor local review cards", () => {
 
   test("strictly rejects old and malformed render data", () => {
     expect(decodeAdvisorReviewCard({ review, provider: "p", model: "m" })).toBeUndefined();
-    expect(
-      decodeAdvisorReviewCard({
-        version: 1,
-        cardId: "arc_x",
-        kind: "issues",
-        summary: "x",
-        items: [],
-      }),
-    ).toBeUndefined();
+    expect(decodeAdvisorReviewCard({ ...validCard, items: [] })).toBeUndefined();
     expect(decodeAdvisorReviewAction({ version: 1, cardId: "arc_x", action: "fix" })).toEqual({
       version: 1,
       cardId: "arc_x",
@@ -81,25 +81,8 @@ describe("Advisor local review cards", () => {
     expect(
       decodeAdvisorReviewAction({ version: 1, cardId: "arc_x", action: "fix", extra: true }),
     ).toBeUndefined();
-    expect(
-      decodeAdvisorReviewCard({
-        version: 1,
-        cardId: "arc_x",
-        kind: "issues",
-        summary: "x",
-        items: [{ issue: "x", evidence: "y", suggestedFix: "z" }],
-        extra: true,
-      }),
-    ).toBeUndefined();
-    expect(
-      decodeAdvisorReviewCard({
-        version: 1,
-        cardId: "arc_x",
-        kind: "issues",
-        summary: "x".repeat(801),
-        items: [{ issue: "x", evidence: "y", suggestedFix: "z" }],
-      }),
-    ).toBeUndefined();
+    expect(decodeAdvisorReviewCard({ ...validCard, extra: true })).toBeUndefined();
+    expect(decodeAdvisorReviewCard({ ...validCard, summary: "x".repeat(801) })).toBeUndefined();
   });
 
   test("enforces card bounds at their exact limits", () => {
@@ -109,9 +92,8 @@ describe("Advisor local review cards", () => {
       suggestedFix: "f".repeat(1_200),
     };
     const bounded = {
-      version: 1 as const,
+      ...validCard,
       cardId: `arc_${"a".repeat(80)}`,
-      kind: "issues" as const,
       summary: "s".repeat(800),
       items: Array.from({ length: 5 }, () => item),
     };
@@ -134,11 +116,10 @@ describe("Advisor local review cards", () => {
   test("rejects excess properties inside card items", () => {
     expect(
       decodeAdvisorReviewCard({
-        version: 1,
+        ...validCard,
         cardId: "arc_nested",
-        kind: "issues",
         summary: "summary",
-        items: [{ issue: "x", evidence: "y", suggestedFix: "z", extra: true }],
+        items: [{ ...validCard.items[0]!, extra: true }],
       }),
     ).toBeUndefined();
   });

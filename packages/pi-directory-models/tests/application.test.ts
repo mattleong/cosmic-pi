@@ -225,6 +225,12 @@ const harness = (
       agentDirectory,
       initial,
       remembered,
+      seedRememberedPreference: () =>
+        writePreference(agentDirectory, cwd, {
+          provider: remembered.provider,
+          model: remembered.id,
+          thinkingLevel: "high",
+        }),
       alternate,
       notify,
       getEntries,
@@ -273,11 +279,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
   it.effect("restores model and thinking for fresh startup and /new", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      yield* writePreference(h.agentDirectory, h.cwd, {
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      yield* h.seedRememberedPreference();
 
       yield* h.start();
       expect(h.setModel).toHaveBeenCalledWith(h.remembered);
@@ -296,11 +298,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     const settlementPromise = Effect.runPromise(Deferred.await(settlement));
     return Effect.gen(function* () {
       const h = yield* harness({ setModelSettlement: settlementPromise });
-      yield* writePreference(h.agentDirectory, h.cwd, {
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      yield* h.seedRememberedPreference();
 
       const first = yield* h.start().pipe(Effect.forkScoped({ startImmediately: true }));
       yield* Effect.promise(() =>
@@ -401,11 +399,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
   it.effect("restores /new without querying a hostile session manager", () =>
     Effect.gen(function* () {
       const h = yield* harness({ sessionReadFailure: "both" });
-      yield* writePreference(h.agentDirectory, h.cwd, {
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      yield* h.seedRememberedPreference();
 
       yield* h.start("new");
       expect(h.getEntries).not.toHaveBeenCalled();
@@ -446,11 +440,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     Effect.gen(function* () {
       for (const reason of ["resume", "fork", "reload"] as const) {
         const h = yield* harness();
-        yield* writePreference(h.agentDirectory, h.cwd, {
-          provider: h.remembered.provider,
-          model: h.remembered.id,
-          thinkingLevel: "high",
-        });
+        yield* h.seedRememberedPreference();
         yield* h.start(reason);
         expect(h.setModel).not.toHaveBeenCalled();
         yield* h.shutdown();
@@ -522,11 +512,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
   it.effect("keeps thinking events delayed past restoration idempotent", () =>
     Effect.gen(function* () {
       const h = yield* harness({ delayThinkingEvents: true });
-      yield* writePreference(h.agentDirectory, h.cwd, {
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      yield* h.seedRememberedPreference();
       yield* h.start();
 
       h.select(h.alternate, "medium");
@@ -549,11 +535,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
   it.effect("keeps the preference and session state intact when setModel resolves false", () =>
     Effect.gen(function* () {
       const h = yield* harness({ setModelDenied: true });
-      yield* writePreference(h.agentDirectory, h.cwd, {
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      yield* h.seedRememberedPreference();
 
       yield* h.start();
       expect(h.model()).toBe(h.initial);
@@ -571,11 +553,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
   it.effect("retains the preference when Pi's current model getter fails", () =>
     Effect.gen(function* () {
       const h = yield* harness({ modelReadFailure: true });
-      yield* writePreference(h.agentDirectory, h.cwd, {
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      yield* h.seedRememberedPreference();
 
       yield* h.start();
       expect(h.setModel).not.toHaveBeenCalled();
@@ -719,11 +697,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
   it.effect("suppresses the atomic restore when a CLI preference is explicit", () =>
     Effect.gen(function* () {
       const h = yield* harness({ explicitPreference: true });
-      yield* writePreference(h.agentDirectory, h.cwd, {
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      yield* h.seedRememberedPreference();
 
       yield* h.start();
       expect(h.setModel).not.toHaveBeenCalled();

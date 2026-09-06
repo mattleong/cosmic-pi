@@ -54,18 +54,12 @@ export function reduceQuestionnaire(
       const choice = question?.choices[action.choice];
       if (!choice) return state;
       return updateDraft(state, action.question, (draft) => {
-        const current =
-          draft.answer?.kind === "choices"
-            ? draft.answer
-            : { kind: "choices" as const, values: [] };
-        const selected = current.values.includes(choice.value);
-        const selectedValues = selected
-          ? current.values.filter((value) => value !== choice.value)
-          : [...current.values, choice.value];
-        const selectedChoices = question.choices.filter((candidate) =>
-          selectedValues.includes(candidate.value),
-        );
-        const values = selectedChoices.map((candidate) => candidate.value);
+        const selected = new Set(draft.answer?.kind === "choices" ? draft.answer.values : []);
+        if (selected.has(choice.value)) selected.delete(choice.value);
+        else selected.add(choice.value);
+        const values = question.choices
+          .filter((candidate) => selected.has(candidate.value))
+          .map((candidate) => candidate.value);
         if (values.length > 0) return { ...draft, answer: { kind: "choices", values } };
         return draft.note ? { cursor: draft.cursor, note: draft.note } : { cursor: draft.cursor };
       });

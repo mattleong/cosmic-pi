@@ -151,31 +151,26 @@ export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState"
   );
 });
 
-function settingsOverrides(
-  settings: CodePreviewSettings,
-  context: SettingsSaveContext,
-  latestGlobalDocument: JsonObject,
-): JsonObject {
-  const overrides = flatCodePreviewSettings(latestGlobalDocument);
-  for (const key of CODE_PREVIEW_SETTING_KEYS) {
-    const value = settings[key];
-    if (settingValuesEqual(value, context.loaded[key])) continue;
-    if (settingValuesEqual(value, context.baseline[key])) delete overrides[key];
-    else Object.assign(overrides, { [key]: value });
-  }
-  return overrides;
-}
-
 /** Flat current-shape package document: unknown root fields are preserved untouched. */
 function settingsDocument(
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
   latestGlobalDocument: JsonObject,
 ): JsonObject {
-  const overrides = settingsOverrides(settings, context, latestGlobalDocument);
   const document = { ...latestGlobalDocument };
   for (const key of CODE_PREVIEW_SETTING_KEYS) delete document[key];
-  return { ...document, ...overrides };
+  // Preserve existing known-key order before appending newly edited overrides.
+  for (const key of CODE_PREVIEW_SETTING_KEYS) {
+    const value = latestGlobalDocument[key];
+    if (value !== undefined) document[key] = value;
+  }
+  for (const key of CODE_PREVIEW_SETTING_KEYS) {
+    const value = settings[key];
+    if (settingValuesEqual(value, context.loaded[key])) continue;
+    if (settingValuesEqual(value, context.baseline[key])) delete document[key];
+    else document[key] = value;
+  }
+  return document;
 }
 
 type CodePreviewSettingValue = CodePreviewSettings[keyof CodePreviewSettings];

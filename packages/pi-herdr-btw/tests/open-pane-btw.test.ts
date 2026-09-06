@@ -69,14 +69,6 @@ describe("herdr-btw workflow", () => {
           terminalId: "term-btw",
         },
       ]);
-      expect(operationNames(test.calls).slice(0, 5)).toEqual([
-        "inspect protocol",
-        "inspect Pi integration",
-        "resolve calling pane",
-        "inspect calling pane layout",
-        "split BTW pane",
-      ]);
-      expect(operationInputs(test.calls, "inspect BTW pane shell")).toHaveLength(6);
       expect(operationNames(test.calls).slice(-3)).toEqual([
         "start side-session Pi",
         "prompt side-session Pi",

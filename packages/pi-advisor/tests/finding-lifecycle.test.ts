@@ -14,11 +14,12 @@ import type { AdvisorFinding } from "../src/review/schema.ts";
 function lifecycleDriver() {
   let state: AdvisorFindingLifecycleState = emptyAdvisorFindingLifecycle();
   return {
-    reconcile(
-      findings: readonly AdvisorFinding[],
-      options: { scope: string; completedTurn: number; complete: boolean },
-    ) {
-      const result = reconcileAdvisorFindings(state, findings, options);
+    reconcile(findings: readonly AdvisorFinding[], completedTurn: number, complete = false) {
+      const result = reconcileAdvisorFindings(state, findings, {
+        scope: "session",
+        completedTurn,
+        complete,
+      });
       state = result.state;
       return result.findings;
     },
@@ -48,16 +49,8 @@ const finding: AdvisorFinding = {
 describe("advisor finding lifecycle", () => {
   test("keeps stable IDs and acknowledges only after delivery", () => {
     const lifecycle = lifecycleDriver();
-    const first = lifecycle.reconcile([finding], {
-      scope: "session",
-      completedTurn: 1,
-      complete: false,
-    });
-    const second = lifecycle.reconcile([{ ...finding, issue: "Reworded" }], {
-      scope: "session",
-      completedTurn: 2,
-      complete: false,
-    });
+    const first = lifecycle.reconcile([finding], 1);
+    const second = lifecycle.reconcile([{ ...finding, issue: "Reworded" }], 2);
     expect(second[0]?.id).toBe(first[0]?.id);
     expect(first[0]?.status).toBe("open");
     lifecycle.acknowledge([first[0]!.id!]);
@@ -66,60 +59,31 @@ describe("advisor finding lifecycle", () => {
 
   test("reopens an acknowledged finding only when its severity escalates", () => {
     const lifecycle = lifecycleDriver();
-    const first = lifecycle.reconcile([finding], {
-      scope: "session",
-      completedTurn: 1,
-      complete: false,
-    });
+    const first = lifecycle.reconcile([finding], 1);
     lifecycle.acknowledge([first[0]!.id!]);
-    expect(
-      lifecycle.reconcile([finding], { scope: "session", completedTurn: 2, complete: false })[0]
-        ?.status,
-    ).toBe("acknowledged");
-    expect(
-      lifecycle.reconcile([{ ...finding, severity: "blocker" }], {
-        scope: "session",
-        completedTurn: 3,
-        complete: false,
-      })[0]?.status,
-    ).toBe("open");
+    expect(lifecycle.reconcile([finding], 2)[0]?.status).toBe("acknowledged");
+    expect(lifecycle.reconcile([{ ...finding, severity: "blocker" }], 3)[0]?.status).toBe("open");
   });
 
   test("restores stable IDs and lifecycle state from bounded durable records", () => {
     const original = lifecycleDriver();
-    const first = original.reconcile([finding], {
-      scope: "session",
-      completedTurn: 1,
-      complete: false,
-    });
+    const first = original.reconcile([finding], 1);
     original.acknowledge([first[0]!.id!]);
     const restored = lifecycleDriver();
     restored.restore(original.snapshot());
-    const next = restored.reconcile([finding], {
-      scope: "session",
-      completedTurn: 2,
-      complete: false,
-    });
+    const next = restored.reconcile([finding], 2);
     expect(next[0]?.id).toBe(first[0]?.id);
     expect(next[0]?.status).toBe("acknowledged");
   });
 
   test("restores legacy superseded records and opens a new generation", () => {
     const lifecycle = lifecycleDriver();
-    const current = lifecycle.reconcile([finding], {
-      scope: "session",
-      completedTurn: 1,
-      complete: false,
-    });
+    const current = lifecycle.reconcile([finding], 1);
     lifecycle.restore(
       lifecycle.snapshot().map((record) => ({ ...record, status: "superseded" as const })),
     );
 
-    const next = lifecycle.reconcile([finding], {
-      scope: "session",
-      completedTurn: 2,
-      complete: false,
-    });
+    const next = lifecycle.reconcile([finding], 2);
     const snapshot = lifecycle.snapshot();
     expect(next[0]?.id).not.toBe(current[0]?.id);
     expect(next[0]?.status).toBe("open");
@@ -130,11 +94,7 @@ describe("advisor finding lifecycle", () => {
   test("hard-bounds open records with oldest-first eviction", () => {
     const lifecycle = lifecycleDriver();
     for (let index = 0; index < MAX_FINDING_LIFECYCLE_RECORDS + 6; index += 1) {
-      lifecycle.reconcile([{ ...finding, fingerprint: `open-${index}` }], {
-        scope: "session",
-        completedTurn: index + 1,
-        complete: false,
-      });
+      lifecycle.reconcile([{ ...finding, fingerprint: `open-${index}` }], index + 1);
     }
     const records = lifecycle.snapshot();
     expect(records).toHaveLength(MAX_FINDING_LIFECYCLE_RECORDS);
@@ -147,11 +107,7 @@ describe("advisor finding lifecycle", () => {
     const records = Array.from(
       { length: MAX_FINDING_LIFECYCLE_RECORDS },
       (_, index) =>
-        lifecycle.reconcile([{ ...finding, fingerprint: `bounded-${index}` }], {
-          scope: "session",
-          completedTurn: index + 1,
-          complete: false,
-        })[0]!,
+        lifecycle.reconcile([{ ...finding, fingerprint: `bounded-${index}` }], index + 1)[0]!,
     );
     const supersededId = records.at(-1)!.id!;
     lifecycle.restore(
@@ -161,11 +117,10 @@ describe("advisor finding lifecycle", () => {
           record.id === supersededId ? { ...record, status: "superseded" as const } : record,
         ),
     );
-    lifecycle.reconcile([{ ...finding, fingerprint: "bounded-new" }], {
-      scope: "session",
-      completedTurn: MAX_FINDING_LIFECYCLE_RECORDS + 1,
-      complete: false,
-    });
+    lifecycle.reconcile(
+      [{ ...finding, fingerprint: "bounded-new" }],
+      MAX_FINDING_LIFECYCLE_RECORDS + 1,
+    );
     const retained = lifecycle.snapshot();
     expect(retained).toHaveLength(MAX_FINDING_LIFECYCLE_RECORDS);
     expect(retained.some((record) => record.id === records.at(-1)!.id)).toBe(false);
@@ -174,10 +129,10 @@ describe("advisor finding lifecycle", () => {
 
   test("resolves omitted findings only at complete checkpoints", () => {
     const lifecycle = lifecycleDriver();
-    lifecycle.reconcile([finding], { scope: "session", completedTurn: 1, complete: false });
-    lifecycle.reconcile([], { scope: "session", completedTurn: 2, complete: false });
+    lifecycle.reconcile([finding], 1);
+    lifecycle.reconcile([], 2);
     expect(lifecycle.snapshot()[0]?.status).toBe("open");
-    lifecycle.reconcile([], { scope: "session", completedTurn: 3, complete: true });
+    lifecycle.reconcile([], 3, true);
     expect(lifecycle.snapshot()[0]?.status).toBe("resolved");
   });
 });

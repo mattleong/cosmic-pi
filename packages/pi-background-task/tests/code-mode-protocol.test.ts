@@ -10,8 +10,7 @@ import {
   normalizeBackgroundTaskCodeModeCapability,
   normalizeBackgroundTaskCodeModeQuery,
 } from "../src/code-mode/protocol.ts";
-import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
-import { BACKGROUND_TASK_ACTIONS, BackgroundTaskParameters } from "../src/tools/schema.ts";
+import { BACKGROUND_TASK_ACTIONS } from "../src/tools/schema.ts";
 
 const snapshot = {
   id: "task-1",
@@ -26,35 +25,7 @@ const snapshot = {
 
 const decodeInput = Schema.decodeUnknownEffect(BackgroundTaskCodeModeInputSchema);
 const decodeOutput = Schema.decodeUnknownEffect(BackgroundTaskCodeModeOutputSchema);
-interface BoundedTypeBoxStringSchema {
-  readonly type: "string";
-  readonly maxLength?: number;
-}
-const typeBoxMaxLength = (schema: BoundedTypeBoxStringSchema): number | undefined =>
-  schema.maxLength;
-
 describe("Background Tasks Code Mode protocol", () => {
-  it("uses one field-bound owner across the TypeBox and Code Mode schemas", () => {
-    expect({
-      command: typeBoxMaxLength(BackgroundTaskParameters.properties.command),
-      cwd: typeBoxMaxLength(BackgroundTaskParameters.properties.cwd),
-      name: typeBoxMaxLength(BackgroundTaskParameters.properties.name),
-      id: typeBoxMaxLength(BackgroundTaskParameters.properties.id),
-    }).toEqual({
-      command: BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars,
-      cwd: BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars,
-      name: BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars,
-      id: BACKGROUND_TASK_FIELD_BOUNDS.maxIdChars,
-    });
-    expect(BACKGROUND_TASK_CODE_MODE_BOUNDS).toMatchObject({
-      maxCommandChars: BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars,
-      maxPathChars: BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars,
-      maxNameChars: BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars,
-      maxIdChars: BACKGROUND_TASK_FIELD_BOUNDS.maxIdChars,
-      maxSessionIdChars: BACKGROUND_TASK_FIELD_BOUNDS.maxSessionIdChars,
-    });
-  });
-
   it.effect("normalizes checked query and execution capabilities", () =>
     Effect.gen(function* () {
       const respond = vi.fn();

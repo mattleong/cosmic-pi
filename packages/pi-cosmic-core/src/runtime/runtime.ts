@@ -52,10 +52,10 @@ const rotateHostLog = (fs: FileSystem.FileSystem, logPath: string) =>
     const info = yield* fs.stat(logPath);
     if (info.size < BigInt(MAX_HOST_LOG_BYTES)) return;
     const previous = `${logPath}.1`;
-    yield* fs.remove(previous).pipe(Effect.catch(() => Effect.void));
+    yield* fs.remove(previous).pipe(Effect.ignore);
     yield* fs.rename(logPath, previous);
     yield* fs.chmod(previous, 0o600);
-  }).pipe(Effect.catchCause(() => Effect.void));
+  }).pipe(Effect.ignoreCause);
 
 /**
  * Opens the package's JSONL host log, degrading to a discarding logger when the

@@ -137,7 +137,7 @@ export class JsonDocumentStore extends Context.Service<
               (ownedPath) =>
                 fs
                   .remove(pathService.dirname(ownedPath), { recursive: true })
-                  .pipe(Effect.catchCause(() => Effect.void)),
+                  .pipe(Effect.ignoreCause),
             );
             yield* fs
               .writeFileString(temporaryPath, `${source}\n`, { mode: 0o600 })

@@ -458,29 +458,31 @@ function openNestingSettings(
             : scope === "project"
               ? (inspection.project?.file.nesting ?? inspection.config.nesting)
               : (inspection.global.file.nesting ?? inspection.config.nesting);
+        const saveNesting = (nesting?: SubagentNestingPolicy): Promise<void> | undefined => {
+          const patch = nesting ? { nesting } : {};
+          if (scope === "session")
+            return actions.patchSessionNesting({
+              expectedRevision: inspection.session.revision,
+              ...patch,
+            });
+          const writeTrust = captureProjectWriteTrust(
+            ctx,
+            scope,
+            "This project is no longer trusted. Nesting limits were not saved.",
+          );
+          if (!writeTrust) return;
+          return actions
+            .patchNesting({
+              ...profileSetPatchBase(inspection, scope, writeTrust.projectTrusted),
+              ...patch,
+            })
+            .then(() => ctx.ui.notify("Nesting limits saved. Run /reload to apply them.", "info"));
+        };
         return ctx.ui
           .select("Choose nesting limits", ["Set limits", "Inherit limits"])
           .then((choice) => {
             if (!choice) return;
-            if (choice.startsWith("Inherit")) {
-              if (scope === "session")
-                return actions.patchSessionNesting({
-                  expectedRevision: inspection.session.revision,
-                });
-              const writeTrust = captureProjectWriteTrust(
-                ctx,
-                scope,
-                "This project is no longer trusted. Nesting limits were not saved.",
-              );
-              if (!writeTrust) return;
-              return actions
-                .patchNesting({
-                  ...profileSetPatchBase(inspection, scope, writeTrust.projectTrusted),
-                })
-                .then(() =>
-                  ctx.ui.notify("Nesting limits saved. Run /reload to apply them.", "info"),
-                );
-            }
+            if (choice.startsWith("Inherit")) return saveNesting();
             return ctx.ui
               .input(
                 `Maximum direct children (${MIN_DIRECT_CHILDREN} to ${MAX_DIRECT_CHILDREN})`,
@@ -519,26 +521,7 @@ function openNestingSettings(
                       );
                       return;
                     }
-                    const nesting = { maxDirectChildren, maxDepth };
-                    if (scope === "session")
-                      return actions.patchSessionNesting({
-                        expectedRevision: inspection.session.revision,
-                        nesting,
-                      });
-                    const writeTrust = captureProjectWriteTrust(
-                      ctx,
-                      scope,
-                      "This project is no longer trusted. Nesting limits were not saved.",
-                    );
-                    if (!writeTrust) return;
-                    return actions
-                      .patchNesting({
-                        ...profileSetPatchBase(inspection, scope, writeTrust.projectTrusted),
-                        nesting,
-                      })
-                      .then(() =>
-                        ctx.ui.notify("Nesting limits saved. Run /reload to apply them.", "info"),
-                      );
+                    return saveNesting({ maxDirectChildren, maxDepth });
                   });
               });
           });

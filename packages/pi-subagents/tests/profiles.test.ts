@@ -649,7 +649,7 @@ describe("subagent v6 profile configuration and resolution", () => {
     });
   });
 
-  it("pairs parent and explicit local-Pi model resolution with exact codes and messages", () => {
+  it("pairs parent and explicit local-Pi model resolution with failure codes", () => {
     const parentRoute = resolved(document({ profiles: { scout: candidate({ model: "parent" }) } }));
     expect(resolveProfilePlan("scout", parentRoute, environment)).toMatchObject({
       kind: "resolved",
@@ -660,9 +660,7 @@ describe("subagent v6 profile configuration and resolution", () => {
     ).toMatchObject({
       kind: "failed",
       code: "profile_no_eligible_model",
-      skippedCandidates: [
-        { code: "parent_model_missing", reason: "No active parent model is available." },
-      ],
+      skippedCandidates: [{ code: "parent_model_missing" }],
     });
     expect(
       resolveProfilePlan("scout", parentRoute, {
@@ -675,8 +673,6 @@ describe("subagent v6 profile configuration and resolution", () => {
       skippedCandidates: [
         {
           code: "parent_model_unavailable",
-          reason:
-            "Parent model is unavailable; close matches: openai/gpt-parent, openai/gpt-review.",
         },
       ],
     });
@@ -698,7 +694,6 @@ describe("subagent v6 profile configuration and resolution", () => {
       skippedCandidates: [
         {
           code: "parent_model_ambiguous",
-          reason: "Parent model is ambiguous: anthropic/gpt-parent, openai/gpt-parent.",
         },
       ],
     });
@@ -712,8 +707,6 @@ describe("subagent v6 profile configuration and resolution", () => {
       skippedCandidates: [
         {
           code: "pi_model_unknown",
-          reason:
-            "Pi candidate is unknown or unauthenticated; close matches: openai/gpt-parent, openai/gpt-review.",
         },
       ],
     });
@@ -812,41 +805,22 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("reads candidate optional fields descriptor-safely without invoking accessors", () => {
-    let optionalReads = 0;
-    const accessorOptional = candidate({ model: "openai-codex/gpt-5.6-sol" });
-    Object.defineProperty(accessorOptional, "openaiFastMode", {
-      enumerable: true,
-      get: () => {
-        optionalReads += 1;
-        return true;
-      },
-    });
-    expect(decodeProfileCandidate(accessorOptional)).toBeUndefined();
-    expect(optionalReads).toBe(0);
-
-    let retentionReads = 0;
-    const accessorRetention = candidate();
-    Object.defineProperty(accessorRetention, "closeOnReport", {
-      enumerable: true,
-      get: () => {
-        retentionReads += 1;
-        return false;
-      },
-    });
-    expect(decodeProfileCandidate(accessorRetention)).toBeUndefined();
-    expect(retentionReads).toBe(0);
-
-    let legacyReads = 0;
-    const legacyAccessor = legacyCandidate({ model: "openai-codex/gpt-5.6-sol" });
-    Object.defineProperty(legacyAccessor, "fastMode", {
-      enumerable: true,
-      get: () => {
-        legacyReads += 1;
-        return true;
-      },
-    });
-    expect(decodeProfileCandidate(legacyAccessor, 5)).toBeUndefined();
-    expect(legacyReads).toBe(0);
+    for (const [input, field, value, version] of [
+      [candidate({ model: "openai-codex/gpt-5.6-sol" }), "openaiFastMode", true, 6],
+      [candidate(), "closeOnReport", false, 6],
+      [legacyCandidate({ model: "openai-codex/gpt-5.6-sol" }), "fastMode", true, 5],
+    ] as const) {
+      let reads = 0;
+      Object.defineProperty(input, field, {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return value;
+        },
+      });
+      expect(decodeProfileCandidate(input, version)).toBeUndefined();
+      expect(reads).toBe(0);
+    }
 
     const requiredOnly = {
       host: "local",

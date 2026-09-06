@@ -38,6 +38,9 @@ const fixture = () =>
         agentDirectory,
         globalPath: join(agentDirectory, "pi-subagents.json"),
         projectPath: join(cwd, CONFIG_DIR_NAME, "pi-subagents.json"),
+        load: (trusted: boolean) => withStore((store) => store.load(cwd, agentDirectory, trusted)),
+        inspect: (trusted: boolean) =>
+          withStore((store) => store.inspect(cwd, agentDirectory, trusted)),
       }));
   });
 
@@ -64,9 +67,7 @@ describe("SubagentConfigStore v6", () => {
       ),
     );
     yield* step(() => writeFile(paths.projectPath, JSON.stringify({ version: 4 })));
-    const config = yield* step(() =>
-      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-    );
+    const config = yield* step(() => paths.load(true));
     expect(config.profiles.worker).toEqual({
       candidates: [
         {
@@ -91,9 +92,7 @@ describe("SubagentConfigStore v6", () => {
     for (const value of [{ version: 1 }, { version: 2 }, {}, { version: "4" }]) {
       yield* step(() => writeFile(paths.globalPath, JSON.stringify(value)));
       yield* step(() =>
-        expect(
-          withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-        ).rejects.toMatchObject({
+        expect(paths.load(true)).rejects.toMatchObject({
           operation: "activate",
           path: paths.globalPath,
         }),
@@ -106,18 +105,14 @@ describe("SubagentConfigStore v6", () => {
       ),
     );
     yield* step(() =>
-      expect(
-        withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-      ).rejects.toMatchObject({
+      expect(paths.load(true)).rejects.toMatchObject({
         operation: "activate",
         message: expect.stringContaining("must declare version 4"),
       }),
     );
     yield* step(() => writeFile(paths.globalPath, JSON.stringify({ version: 4 })));
     yield* step(() => writeFile(paths.projectPath, "{ not json"));
-    const config = yield* step(() =>
-      withStore((store) => store.load(paths.cwd, paths.agentDirectory, false)),
-    );
+    const config = yield* step(() => paths.load(false));
     expect(config.projectConfigExists).toBe(false);
   });
 
@@ -133,9 +128,7 @@ describe("SubagentConfigStore v6", () => {
         }),
       ),
     );
-    const config = yield* step(() =>
-      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-    );
+    const config = yield* step(() => paths.load(true));
     expect(config.currentProfileSet).toEqual({
       scope: "global",
       name: "missing",
@@ -149,9 +142,7 @@ describe("SubagentConfigStore v6", () => {
     const paths = yield* step(fixture);
     yield* step(() => writeFile(paths.globalPath, "{ not json"));
     yield* step(() =>
-      expect(
-        withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-      ).rejects.toMatchObject({
+      expect(paths.load(true)).rejects.toMatchObject({
         operation: "read",
         path: paths.globalPath,
       }),
@@ -195,9 +186,7 @@ describe("SubagentConfigStore v6", () => {
       },
     };
     yield* step(() => writeFile(paths.globalPath, JSON.stringify(initial)));
-    const inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    const inspection = yield* step(() => paths.inspect(true));
     yield* step(() =>
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {
@@ -233,9 +222,7 @@ describe("SubagentConfigStore v6", () => {
       openaiFastMode: true,
       closeOnReport: true,
     });
-    const refreshed = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    const refreshed = yield* step(() => paths.inspect(true));
     expect(refreshed.config.profiles.scout.candidates[0]?.openaiFastMode).toBe(true);
   });
 
@@ -248,9 +235,10 @@ describe("SubagentConfigStore v6", () => {
     ]) {
       yield* step(() => writeFile(paths.globalPath, JSON.stringify(document)));
       yield* step(() =>
-        expect(
-          withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-        ).rejects.toMatchObject({ operation: "activate", path: paths.globalPath }),
+        expect(paths.load(true)).rejects.toMatchObject({
+          operation: "activate",
+          path: paths.globalPath,
+        }),
       );
     }
     yield* step(() =>
@@ -259,9 +247,7 @@ describe("SubagentConfigStore v6", () => {
         JSON.stringify({ version: 4, profiles: { delegate: "disabled" } }),
       ),
     );
-    const config = yield* step(() =>
-      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-    );
+    const config = yield* step(() => paths.load(true));
     expect(config.profileSources.generalist).toBe("builtin");
     expect(config.diagnostics).toContain("global.profiles.<unknown>");
   });
@@ -284,9 +270,7 @@ describe("SubagentConfigStore v6", () => {
       },
     };
     yield* step(() => writeFile(paths.projectPath, JSON.stringify(project)));
-    const inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    const inspection = yield* step(() => paths.inspect(true));
     yield* step(() =>
       expect(
         withStore((store) =>
@@ -432,9 +416,7 @@ describe("SubagentConfigStore v6", () => {
       const paths = yield* step(fixture);
       const raw = JSON.stringify({ version: 4 });
       yield* step(() => writeFile(paths.globalPath, raw));
-      const inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      const inspection = yield* step(() => paths.inspect(true));
       yield* step(() =>
         withStore((store) =>
           store.patchProfile(paths.cwd, paths.agentDirectory, {
@@ -473,14 +455,10 @@ describe("SubagentConfigStore v6", () => {
         }),
       ),
     );
-    const trusted = yield* step(() =>
-      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
-    );
+    const trusted = yield* step(() => paths.load(true));
     expect(trusted.nesting).toEqual({ maxDirectChildren: 4, maxDepth: 2 });
     expect(trusted.nestingSource).toBe("project");
-    const untrusted = yield* step(() =>
-      withStore((store) => store.load(paths.cwd, paths.agentDirectory, false)),
-    );
+    const untrusted = yield* step(() => paths.load(false));
     expect(untrusted.nesting).toEqual({ maxDirectChildren: 20, maxDepth: 6 });
     expect(untrusted.nestingSource).toBe("global");
 
@@ -493,9 +471,10 @@ describe("SubagentConfigStore v6", () => {
     ]) {
       yield* step(() => writeFile(paths.globalPath, JSON.stringify({ version: 5, nesting })));
       yield* step(() =>
-        expect(
-          withStore((store) => store.load(paths.cwd, paths.agentDirectory, false)),
-        ).rejects.toMatchObject({ operation: "activate", path: paths.globalPath }),
+        expect(paths.load(false)).rejects.toMatchObject({
+          operation: "activate",
+          path: paths.globalPath,
+        }),
       );
     }
   });
@@ -505,9 +484,7 @@ describe("SubagentConfigStore v6", () => {
     function* () {
       const paths = yield* step(fixture);
       yield* step(() => writeFile(paths.globalPath, JSON.stringify({ version: 4 })));
-      const inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      const inspection = yield* step(() => paths.inspect(true));
       yield* step(() =>
         withStore((store) =>
           store.patchNesting(paths.cwd, paths.agentDirectory, {
@@ -545,9 +522,7 @@ describe("SubagentConfigStore v6", () => {
       nesting: { maxDirectChildren: 10, maxDepth: 4 },
     };
     yield* step(() => writeFile(paths.globalPath, JSON.stringify(legacy)));
-    let inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    let inspection = yield* step(() => paths.inspect(true));
     yield* step(() =>
       withStore((store) =>
         store.patchNesting(paths.cwd, paths.agentDirectory, {
@@ -589,9 +564,7 @@ describe("SubagentConfigStore v6", () => {
       },
     ]) {
       yield* step(() => writeFile(paths.globalPath, JSON.stringify(invalid)));
-      inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      inspection = yield* step(() => paths.inspect(true));
       yield* step(() =>
         expect(
           withStore((store) =>
@@ -625,9 +598,7 @@ describe("SubagentConfigStore v6", () => {
         }),
       ),
     );
-    let inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    let inspection = yield* step(() => paths.inspect(true));
     yield* step(() =>
       expect(
         withStore((store) =>
@@ -652,9 +623,7 @@ describe("SubagentConfigStore v6", () => {
         }),
       ),
     );
-    inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    inspection = yield* step(() => paths.inspect(true));
     expect(inspection.global.invalidProfileSets).toEqual([]);
     expect(inspection.global.file.profileSets).toHaveProperty("valid");
   });
@@ -669,9 +638,7 @@ describe("SubagentConfigStore v6", () => {
       },
     };
     yield* step(() => writeFile(paths.globalPath, JSON.stringify(document)));
-    const inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    const inspection = yield* step(() => paths.inspect(true));
     expect(inspection.global.invalidProfileSetRoutes.broken).toEqual(["worker"]);
 
     yield* step(() =>
@@ -708,9 +675,7 @@ describe("SubagentConfigStore v6", () => {
           }),
         ),
       );
-      let inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      let inspection = yield* step(() => paths.inspect(true));
       yield* step(() =>
         withStore((store) =>
           store.patchProfile(paths.cwd, paths.agentDirectory, {
@@ -732,9 +697,7 @@ describe("SubagentConfigStore v6", () => {
           }),
         ),
       );
-      inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      inspection = yield* step(() => paths.inspect(true));
       yield* step(() =>
         withStore((store) =>
           store.copyProfileSet(paths.cwd, paths.agentDirectory, {
@@ -747,9 +710,7 @@ describe("SubagentConfigStore v6", () => {
           }),
         ),
       );
-      inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      inspection = yield* step(() => paths.inspect(true));
       yield* step(() =>
         withStore((store) =>
           store.patchDefaultProfileSet(paths.cwd, paths.agentDirectory, {
@@ -761,9 +722,7 @@ describe("SubagentConfigStore v6", () => {
           }),
         ),
       );
-      inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      inspection = yield* step(() => paths.inspect(true));
       yield* step(() =>
         withStore((store) =>
           store.renameProfileSet(paths.cwd, paths.agentDirectory, {
@@ -776,9 +735,7 @@ describe("SubagentConfigStore v6", () => {
           }),
         ),
       );
-      inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      inspection = yield* step(() => paths.inspect(true));
       yield* step(() =>
         expect(
           withStore((store) =>
@@ -826,9 +783,7 @@ describe("SubagentConfigStore v6", () => {
         }),
       ),
     );
-    const inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    const inspection = yield* step(() => paths.inspect(true));
     const profiles = {
       ...inspection.config.profiles,
       reviewer: {
@@ -891,9 +846,7 @@ describe("SubagentConfigStore v6", () => {
     "rejects snapshot candidate accessors and custom iterators without invoking them",
     function* () {
       const paths = yield* step(fixture);
-      const inspection = yield* step(() =>
-        withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-      );
+      const inspection = yield* step(() => paths.inspect(true));
       let accessorReads = 0;
       let iteratorCalls = 0;
       const routeWithCandidatesAccessor = Object.defineProperty({}, "candidates", {
@@ -963,9 +916,7 @@ describe("SubagentConfigStore v6", () => {
 
   effectTest("requires fresh Project trust for full-snapshot creation", function* () {
     const paths = yield* step(fixture);
-    const inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, false)),
-    );
+    const inspection = yield* step(() => paths.inspect(false));
     const patch = {
       scope: "project" as const,
       profileSet: "session-copy",
@@ -1015,9 +966,7 @@ describe("SubagentConfigStore v6", () => {
         }),
       ),
     );
-    const inspection = yield* step(() =>
-      withStore((store) => store.inspect(paths.cwd, paths.agentDirectory, true)),
-    );
+    const inspection = yield* step(() => paths.inspect(true));
     yield* step(() =>
       writeFile(
         paths.globalPath,

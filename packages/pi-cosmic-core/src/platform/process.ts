@@ -155,7 +155,7 @@ const sweepExitedProcessTree = (
     Effect.map(Option.isSome),
     // The leader has already exited. Match the previous Windows adapter, which
     // treats a non-zero taskkill result as settled in that state.
-    Effect.catch(() => Effect.succeed(true)),
+    Effect.orElseSucceed(() => true),
   );
 };
 

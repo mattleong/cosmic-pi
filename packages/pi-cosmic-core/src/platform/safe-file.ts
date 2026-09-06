@@ -142,7 +142,7 @@ const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(
           return yield* failRead();
         return { path: resolvedPath, bytes: new Uint8Array(bytes) } satisfies SafeFileResult;
       }),
-    (handle) => closeSafeFileHandle(handle).pipe(Effect.catch(() => Effect.void)),
+    (handle) => closeSafeFileHandle(handle).pipe(Effect.ignore),
   );
 });
 

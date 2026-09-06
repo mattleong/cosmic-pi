@@ -9,7 +9,7 @@ import {
   type AdvisorConfigPatch,
   type ResolvedAdvisorConfig,
 } from "../src/config/options.ts";
-import type { AdvisorSessionMetrics } from "../src/domain/metrics.ts";
+import { emptyAdvisorSessionMetrics, type AdvisorSessionMetrics } from "../src/domain/metrics.ts";
 import {
   completeAdvisorCommandArguments,
   handleAdvisorCommand,
@@ -20,17 +20,6 @@ import type {
   AdvisorCommandState,
 } from "../src/settings/types.ts";
 import { deferred } from "./support/async.ts";
-
-const sessionMetrics = (overrides: Partial<AdvisorSessionMetrics> = {}): AdvisorSessionMetrics => ({
-  cards: 0,
-  corrections: 0,
-  cost: 0,
-  modelResponses: 0,
-  settledReviews: 0,
-  totalDurationMs: 0,
-  totalTokens: 0,
-  ...overrides,
-});
 
 function harness(
   initial: ResolvedAdvisorConfig = normalizeAdvisorConfig(
@@ -64,7 +53,7 @@ function harness(
     const state: AdvisorCommandState = {
       snapshot: {
         config,
-        metrics: snapshot.metrics ?? sessionMetrics(),
+        metrics: snapshot.metrics ?? emptyAdvisorSessionMetrics(),
         activity: snapshot.activity ?? "idle",
         hasLastCandidate: snapshot.hasLastCandidate ?? false,
       },
@@ -229,7 +218,8 @@ describe("Advisor commands", () => {
   it.effect("usage emits one informational session summary", () =>
     Effect.gen(function* () {
       const value = harness(undefined, {
-        metrics: sessionMetrics({
+        metrics: {
+          ...emptyAdvisorSessionMetrics(),
           cards: 3,
           corrections: 2,
           cost: 0.125,
@@ -238,7 +228,7 @@ describe("Advisor commands", () => {
           settledReviews: 3,
           totalDurationMs: 1_500,
           totalTokens: 12_345,
-        }),
+        },
       });
       const ctx = context();
       yield* value.handler("usage", ctx);

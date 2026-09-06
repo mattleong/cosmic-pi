@@ -111,6 +111,30 @@ const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
     ),
   );
 
+type FooterData = Parameters<NonNullable<Parameters<ExtensionContext["ui"]["setFooter"]>[0]>>[2];
+
+function footerData(overrides: Partial<FooterData> = {}): FooterData {
+  return {
+    getGitBranch: () => null,
+    getExtensionStatuses: () => new Map(),
+    getAvailableProviderCount: () => 1,
+    onBranchChange: () => vi.fn(),
+    ...overrides,
+  };
+}
+
+function makeFooter(
+  factory: (
+    tui: { requestRender(): void },
+    theme: { fg(color: string, text: string): string },
+    data: FooterData,
+  ) => { render(width: number): string[]; dispose(): void },
+  data: Partial<FooterData> = {},
+  requestRender: () => void = vi.fn(),
+) {
+  return factory({ requestRender }, { fg: (_color, text) => text }, footerData(data));
+}
+
 type ExecResult = Awaited<ReturnType<ReturnType<typeof harness>["exec"]>>;
 
 function installPendingExec(h: ReturnType<typeof harness>) {
@@ -281,16 +305,7 @@ describe("Cosmic UI extension", () => {
       expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
       expect(h.setFooter).toHaveBeenCalledTimes(3);
       const factory = h.setFooter.mock.calls[2]?.[0];
-      const footer = factory(
-        { requestRender: vi.fn() },
-        { fg: (_color: string, text: string) => text },
-        {
-          getGitBranch: () => null,
-          getExtensionStatuses: () => new Map(),
-          getAvailableProviderCount: () => 1,
-          onBranchChange: () => vi.fn(),
-        },
-      );
+      const footer = makeFooter(factory);
       const rendered = footer.render(100);
       expect(rendered[0]).toBe("Model   second-model • high");
       expect(rendered[1]).toContain("Repo    /tmp/second-project");
@@ -344,16 +359,7 @@ describe("Cosmic UI extension", () => {
         expect(pending.aborted()).toBe(2);
         expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
         const factory = h.setFooter.mock.calls.at(-1)?.[0];
-        const footer = factory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          {
-            getGitBranch: () => null,
-            getExtensionStatuses: () => new Map(),
-            getAvailableProviderCount: () => 1,
-            onBranchChange: () => vi.fn(),
-          },
-        );
+        const footer = makeFooter(factory);
         expect(footer.render(100).join("\n")).toContain("/tmp/replacement");
       }),
   );
@@ -391,18 +397,7 @@ describe("Cosmic UI extension", () => {
       );
       yield* waitUntil(() => pending.started() === 2);
       const factory = h.setFooter.mock.calls[0]?.[0];
-      expect(() =>
-        factory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          {
-            getGitBranch: () => null,
-            getExtensionStatuses: () => new Map(),
-            getAvailableProviderCount: () => 1,
-            onBranchChange: () => vi.fn(),
-          },
-        ),
-      ).not.toThrow();
+      expect(() => makeFooter(factory)).not.toThrow();
       const shutdown = yield* emit(h, "session_shutdown").pipe(
         Effect.forkScoped({ startImmediately: true }),
       );
@@ -492,16 +487,7 @@ describe("Cosmic UI extension", () => {
         });
         yield* emit(h, "session_start");
         const firstFactory = h.setFooter.mock.calls[0]?.[0];
-        const firstFooter = firstFactory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          {
-            getGitBranch: () => null,
-            getExtensionStatuses: () => new Map(),
-            getAvailableProviderCount: () => 1,
-            onBranchChange: () => vi.fn(),
-          },
-        );
+        const firstFooter = makeFooter(firstFactory);
         expect(firstFooter.render(100).join("\n")).toContain("↑100");
 
         yield* emit(h, "session_compact");
@@ -520,16 +506,7 @@ describe("Cosmic UI extension", () => {
         } as ExtensionContext;
         yield* emit(h, "session_start", {}, secondContext);
         const secondFactory = h.setFooter.mock.calls.at(-1)?.[0];
-        const secondFooter = secondFactory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          {
-            getGitBranch: () => null,
-            getExtensionStatuses: () => new Map(),
-            getAvailableProviderCount: () => 1,
-            onBranchChange: () => vi.fn(),
-          },
-        );
+        const secondFooter = makeFooter(secondFactory);
         expect(secondFooter.render(100).join("\n")).not.toContain("↑100");
         yield* emit(h, "session_shutdown");
       }),
@@ -560,16 +537,7 @@ describe("Cosmic UI extension", () => {
       h.ctx.sessionManager.getEntries = getEntries;
       yield* emit(h, "session_start");
       const factory = h.setFooter.mock.calls[0]?.[0];
-      const footer = factory(
-        { requestRender: vi.fn() },
-        { fg: (_color: string, text: string) => text },
-        {
-          getGitBranch: () => null,
-          getExtensionStatuses: () => new Map(),
-          getAvailableProviderCount: () => 1,
-          onBranchChange: () => vi.fn(),
-        },
-      );
+      const footer = makeFooter(factory);
       const input = vi.fn(() => {
         throw new Error("nested usage failure");
       });
@@ -606,16 +574,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "turn_end", { message: { role: "assistant", usage: usage(0) } });
       expect(initialEntries).toHaveBeenCalledOnce();
       const factory = h.setFooter.mock.calls[0]?.[0];
-      const footer = factory(
-        { requestRender: vi.fn() },
-        { fg: (_color: string, text: string) => text },
-        {
-          getGitBranch: () => null,
-          getExtensionStatuses: () => new Map(),
-          getAvailableProviderCount: () => 1,
-          onBranchChange: () => vi.fn(),
-        },
-      );
+      const footer = makeFooter(factory);
       expect(footer.render(100).join("\n")).toContain("↑50");
 
       // A partially valid rescan is discarded atomically when a later record is invalid.
@@ -812,21 +771,16 @@ describe("Cosmic UI extension", () => {
       const unsubscribe = vi.fn(() => {
         throw new Error("unsubscribe host failure");
       });
-      const footer = factory(
+      const footer = makeFooter(
+        factory,
         {
-          requestRender() {
-            throw new Error("render host failure");
-          },
-        },
-        { fg: (_color: string, text: string) => text },
-        {
-          getGitBranch: () => null,
-          getExtensionStatuses: () => new Map(),
-          getAvailableProviderCount: () => 1,
           onBranchChange(callback: () => void) {
             branchChanged = callback;
             return unsubscribe;
           },
+        },
+        () => {
+          throw new Error("render host failure");
         },
       );
 
@@ -843,18 +797,11 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "session_start");
       const factory = h.setFooter.mock.calls[0]?.[0];
       expect(() =>
-        factory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          {
-            getGitBranch: () => null,
-            getExtensionStatuses: () => new Map(),
-            getAvailableProviderCount: () => 1,
-            onBranchChange() {
-              throw new Error("subscription host failure");
-            },
+        makeFooter(factory, {
+          onBranchChange() {
+            throw new Error("subscription host failure");
           },
-        ),
+        }),
       ).not.toThrow();
       yield* emit(h, "session_shutdown");
     }),
@@ -866,27 +813,14 @@ describe("Cosmic UI extension", () => {
       let staleFooter: { dispose(): void } | undefined;
       let activeFooter: { dispose(): void } | undefined;
       const staleUnsubscribe = vi.fn();
-      const footerData = (unsubscribe: () => void) => ({
-        getGitBranch: () => null,
-        getExtensionStatuses: () => new Map(),
-        getAvailableProviderCount: () => 1,
-        onBranchChange: () => unsubscribe,
-      });
       h.setFooter
         .mockImplementationOnce((factory) => {
-          staleFooter = factory(
-            { requestRender: vi.fn() },
-            { fg: (_color: string, text: string) => text },
-            footerData(staleUnsubscribe),
-          );
+          staleFooter = makeFooter(factory, { onBranchChange: () => staleUnsubscribe });
           throw new Error("setFooter failed after factory creation");
         })
         .mockImplementationOnce((factory) => {
-          activeFooter = factory(
-            { requestRender: vi.fn() },
-            { fg: (_color: string, text: string) => text },
-            footerData(vi.fn()),
-          );
+          const unsubscribe = vi.fn();
+          activeFooter = makeFooter(factory, { onBranchChange: () => unsubscribe });
         });
 
       yield* emit(h, "session_start");
@@ -908,19 +842,8 @@ describe("Cosmic UI extension", () => {
       const secondUnsubscribe = vi.fn();
       yield* emit(h, "session_start");
       const factory = h.setFooter.mock.calls[0]?.[0];
-      const makeFooter = (unsubscribe: () => void) =>
-        factory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          {
-            getGitBranch: () => null,
-            getExtensionStatuses: () => new Map(),
-            getAvailableProviderCount: () => 1,
-            onBranchChange: () => unsubscribe,
-          },
-        );
-      const first = makeFooter(firstUnsubscribe);
-      makeFooter(secondUnsubscribe);
+      const first = makeFooter(factory, { onBranchChange: () => firstUnsubscribe });
+      makeFooter(factory, { onBranchChange: () => secondUnsubscribe });
 
       first.dispose();
       expect(firstUnsubscribe).toHaveBeenCalledOnce();
@@ -957,16 +880,7 @@ describe("Cosmic UI extension", () => {
       let removalAttempts = 0;
       h.setFooter.mockImplementation((factory) => {
         if (factory !== undefined) {
-          installedFooter = factory(
-            { requestRender: vi.fn() },
-            { fg: (_color: string, text: string) => text },
-            {
-              getGitBranch: () => null,
-              getExtensionStatuses: () => new Map(),
-              getAvailableProviderCount: () => 1,
-              onBranchChange: () => unsubscribe,
-            },
-          );
+          installedFooter = makeFooter(factory, { onBranchChange: () => unsubscribe });
           return;
         }
         removalAttempts++;
@@ -1101,16 +1015,7 @@ describe("Cosmic UI extension", () => {
         yield* emit(h, "session_start");
         expect(h.exec).toHaveBeenCalledTimes(3);
         const factory = h.setFooter.mock.calls[0]?.[0];
-        const footer = factory(
-          { requestRender: vi.fn() },
-          { fg: (_color: string, text: string) => text },
-          {
-            getGitBranch: () => "main",
-            getExtensionStatuses: () => new Map(),
-            getAvailableProviderCount: () => 1,
-            onBranchChange: () => vi.fn(),
-          },
-        );
+        const footer = makeFooter(factory, { getGitBranch: () => "main" });
         h.exec.mockResolvedValueOnce({
           stdout: "## main...origin/main\n",
           stderr: "",
@@ -1167,16 +1072,7 @@ describe("Cosmic UI extension", () => {
       expect(shutdownHostUiTickers).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
       yield* emit(h, "session_start");
-      const footer = h.setFooter.mock.calls.at(-1)?.[0](
-        { requestRender: vi.fn() },
-        { fg: (_color: string, text: string) => text },
-        {
-          getGitBranch: () => null,
-          getExtensionStatuses: () => new Map(),
-          getAvailableProviderCount: () => 1,
-          onBranchChange: () => vi.fn(),
-        },
-      );
+      const footer = makeFooter(h.setFooter.mock.calls.at(-1)?.[0]);
       const replacementState = footer.render(100);
       yield* Deferred.succeed(finishTickerShutdown, undefined);
       yield* Fiber.join(shutdown);
