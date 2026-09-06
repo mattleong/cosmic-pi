@@ -50,6 +50,8 @@ describe("activity presentation", () => {
     const child: ActivityRow = {
       ...row("question"),
       status: "needs-input",
+      inputTarget: "user",
+      blockedReason: undefined,
       parent: { providerId: owner.providerId, itemId: owner.id },
     };
     for (const width of [24, 32, 48]) {
@@ -140,7 +142,12 @@ describe("activity presentation", () => {
     });
     component.render(80);
     component.handleInput("c");
-    rows = rows.map((entry) => ({ ...entry, status: "done" }));
+    rows = rows.map((entry) => ({
+      ...entry,
+      status: "done",
+      inputTarget: undefined,
+      blockedReason: undefined,
+    }));
     component.render(80);
     component.handleInput("c");
     component.render(80);
@@ -153,7 +160,13 @@ describe("activity presentation", () => {
         ...row(String(index)),
         title: "长い所有者の名前 ".repeat(8),
         kind: index === 15 ? "question" : index === 14 ? "command" : "agent",
-        status: index === 15 ? "needs-input" : "running",
+        ...(index === 15
+          ? {
+              status: "needs-input" as const,
+              inputTarget: "user" as const,
+              blockedReason: undefined,
+            }
+          : { status: "running" as const, inputTarget: undefined, blockedReason: undefined }),
       };
       if (index)
         Object.assign(entry, { parent: { providerId: "agents", itemId: String(index - 1) } });
@@ -293,6 +306,8 @@ describe("activity presentation", () => {
       ...row("question"),
       kind: "question" as const,
       status: "needs-input" as const,
+      inputTarget: "user" as const,
+      blockedReason: undefined,
       parent: { providerId: "agents", itemId: "parent" },
     };
     const component = new ActivityComponent({
@@ -313,6 +328,51 @@ describe("activity presentation", () => {
     component.handleInput("f");
     component.render(40);
     expect(component.shell.state.selectedId).toBe(child.key);
+  });
+  it("n skips parent questions and blocked rows and preserves state when no human needs input", () => {
+    const owner = row("owner");
+    const parent: ActivityRow = {
+      ...row("parent"),
+      status: "needs-input",
+      inputTarget: "parent",
+      blockedReason: undefined,
+    };
+    const blocked: ActivityRow = {
+      ...row("blocked"),
+      status: "blocked",
+      inputTarget: undefined,
+      blockedReason: "file-access-review",
+    };
+    const human: ActivityRow = {
+      ...row("human"),
+      status: "needs-input",
+      inputTarget: "user",
+      blockedReason: undefined,
+      parent: { providerId: owner.providerId, itemId: owner.id },
+    };
+    let rows = [owner, parent, blocked, human];
+    const component = new ActivityComponent({
+      snapshot: () => rows,
+      theme: { fg: (_color, text) => text },
+      height: () => 12,
+      close: () => undefined,
+      requestRender: () => undefined,
+    });
+    component.render(80);
+    component.handleInput("c");
+    component.handleInput("n");
+    expect(component.shell.state.selectedId).toBe(human.key);
+    expect(component.presentation.collapsed.has(owner.key)).toBe(false);
+    rows = [owner, parent, blocked];
+    component.render(80);
+    component.handleInput("f");
+    const selected = component.shell.state.selectedId;
+    const focus = component.presentation.focus;
+    const collapsed = [...component.presentation.collapsed];
+    component.handleInput("n");
+    expect(component.shell.state.selectedId).toBe(selected);
+    expect(component.presentation.focus).toBe(focus);
+    expect([...component.presentation.collapsed]).toEqual(collapsed);
   });
   it("bounds persistent rows and every line at narrow and wide terminal sizes", () => {
     const rows = Array.from({ length: 80 }, (_, index) => row(`Long activity ${index} 界界界`));

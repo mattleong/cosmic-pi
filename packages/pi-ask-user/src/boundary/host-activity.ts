@@ -84,6 +84,8 @@ export function makeQuestionnaireActivity(options: {
           item: {
             ...row.item,
             status: outcome === "submitted" ? "done" : outcome,
+            inputTarget: undefined,
+            blockedReason: undefined,
             summary: outcome,
             actions: [],
           },
@@ -112,6 +114,8 @@ export function makeQuestionnaireActivity(options: {
           item: {
             ...row.item,
             status: "needs-input",
+            inputTarget: "user",
+            blockedReason: undefined,
             summary: event.phase,
             actions:
               event.phase === "hidden"

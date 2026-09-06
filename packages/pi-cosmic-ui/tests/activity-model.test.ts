@@ -12,7 +12,7 @@ const row = (
     id,
     title: id,
     kind: "agent",
-    status,
+    ...(status === "needs-input" ? { status, inputTarget: "user" as const } : { status }),
     providerId: "agents",
     generation: 1,
     revision: "1",
@@ -41,13 +41,33 @@ describe("activity ownership", () => {
     ];
     const tree = activityTree(values, { collapsed: new Set([values[0]!.key]) });
     expect(tree.find((entry) => entry.row.id === "root")?.attention).toEqual({
-      waiting: 1,
+      user: 1,
+      parent: 0,
       blocked: 1,
       failed: 1,
     });
     expect(tree.some((entry) => entry.row.id === "question")).toBe(false);
     const focused = activityTree(values, { focus: values[1]!.key });
-    expect(focused[0]?.attention).toEqual({ waiting: 1, blocked: 1, failed: 0 });
+    expect(focused[0]?.attention).toEqual({ user: 1, parent: 0, blocked: 1, failed: 0 });
+  });
+  it("counts human input separately from parent waits and blocked descendants", () => {
+    const owner = row("owner");
+    const human = row("human", "needs-input", owner.id);
+    const parent: ActivityRow = {
+      ...row("parent", "needs-input", owner.id),
+      status: "needs-input",
+      inputTarget: "parent",
+      blockedReason: undefined,
+    };
+    const blocked = row("blocked", "blocked", owner.id);
+    const values = [owner, parent, blocked, human];
+    expect(needsYou(values)).toEqual([human]);
+    const collapsed = activityTree(values, { collapsed: new Set([owner.key]) });
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0]?.attention).toEqual({ user: 1, parent: 1, blocked: 1, failed: 0 });
+    expect(activityTree(values, { focus: owner.key })[0]?.attention).toEqual(
+      collapsed[0]?.attention,
+    );
   });
   it("preserves sibling ancestry across collapse, history ordering, and branch focus", () => {
     const values = [

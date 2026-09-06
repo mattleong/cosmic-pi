@@ -1,13 +1,13 @@
 import { activityKey, type ActivityItem } from "./protocol.ts";
 
-export interface ActivityRow extends ActivityItem {
+export type ActivityRow = ActivityItem & {
   readonly key: string;
   readonly providerId: string;
   readonly generation: number;
   /** Lower bounds, not exact lifetime totals. Repeated snapshots never inflate them. */
   readonly omittedChildren?: number;
   readonly omittedHistory?: number;
-}
+};
 export const isFinished = (item: Pick<ActivityItem, "status">): boolean =>
   item.status === "done" || item.status === "failed" || item.status === "cancelled";
 export const COMPLETED_BRANCH_LIMIT = 128;

@@ -5,6 +5,13 @@ import {
   managerActivityGlyph,
   managerNoticeGlyph,
 } from "../manager/chrome.ts";
+import {
+  activityAttention,
+  activityAttentionLabels,
+  activityAttentionTotals,
+  activityStatus,
+} from "./attention.ts";
+export { activityStatus } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 import {
   activityPath,
@@ -21,10 +28,6 @@ export const activityGlyph = (row: ActivityRow, now = 0): string =>
         row.status === "cancelled" ? "stopped" : row.status,
         Math.floor(now / 100),
       );
-export const activityStatus = (row: ActivityRow): string => {
-  if (row.status === "needs-input") return "waiting";
-  return row.kind === "agent" && row.status === "pending" ? "starting" : row.status;
-};
 export const activityStartupGlyph = (
   rows: readonly ActivityRow[],
   starting: number,
@@ -81,19 +84,9 @@ export function activityRowLine(
 ): string {
   const row = entry.row;
   const kind = activityType(row);
-  const warnings = entry.expanded
-    ? ""
-    : [
-        entry.attention.waiting ? `${entry.attention.waiting} waiting` : "",
-        entry.attention.blocked ? `${entry.attention.blocked} blocked` : "",
-        entry.attention.failed ? `${entry.attention.failed} failed` : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
+  const warnings = entry.expanded ? "" : activityAttentionLabels(entry.attention).join(" · ");
   const attention =
-    row.status === "needs-input" || row.status === "blocked" || row.status === "failed"
-      ? activityStatus(row)
-      : "";
+    activityAttention(row) !== undefined || row.status === "failed" ? activityStatus(row) : "";
   const status = warnings || `${attention} ${activityElapsed(row, now, width < 60)}`.trim();
   const color =
     row.status === "needs-input" || row.status === "blocked"
@@ -150,10 +143,12 @@ export function renderActivityWidget(
   const live = tree.filter((entry) => !entry.history);
   const history = tree.filter((entry) => entry.history && entry.depth === 0).length;
   const style = (text: string) => options.theme?.fg("muted", text) ?? text;
+  const counts = activityAttentionTotals(rows);
+  const attention = activityAttentionLabels({ ...counts, failed: 0 }).join(" · ");
   const heading =
     width < 22 && urgent.length
-      ? `Needs you: ${urgent.length}`
-      : `Activity${urgent.length ? ` · Needs you: ${urgent.length}` : ""}`;
+      ? activityAttentionLabels({ ...counts, parent: 0, blocked: 0, failed: 0 }).join(" · ")
+      : `Activity${attention ? ` · ${attention}` : ""}`;
   const startup = activityStartupGlyph(rows, starting, options.now);
   const combined = `${heading}${startup ? ` ${startup}` : ""}`;
   const hint = visibleWidth(`${combined}  /activity`) <= width ? "  /activity" : "";

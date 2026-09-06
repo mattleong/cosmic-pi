@@ -1,3 +1,8 @@
+import {
+  activityAttention,
+  activityAttentionCounts,
+  type ActivityAttentionCounts,
+} from "./attention.ts";
 import { activityKey } from "./protocol.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 
@@ -9,16 +14,9 @@ export interface ActivityTreeRow {
   /** Each level records whether another sibling follows that ancestor. */
   readonly continuations: readonly boolean[];
   readonly expanded: boolean;
-  readonly attention: {
-    readonly waiting: number;
-    readonly blocked: number;
-    readonly failed: number;
-  };
+  readonly attention: ActivityAttentionCounts;
 }
-interface ActivityBranchSummary {
-  readonly waiting: number;
-  readonly blocked: number;
-  readonly failed: number;
+interface ActivityBranchSummary extends ActivityAttentionCounts {
   readonly finished: boolean;
 }
 
@@ -77,14 +75,13 @@ export function activityTree(
     const cached = summaries.get(row.key);
     if (cached) return cached;
     const total = {
-      waiting: Number(row.status === "needs-input"),
-      blocked: Number(row.status === "blocked"),
-      failed: Number(row.status === "failed"),
+      ...activityAttentionCounts(row),
       finished: isFinished(row) && !row.awaited,
     };
     for (const child of children.get(row.key) ?? []) {
       const summary = summarize(child);
-      total.waiting += summary.waiting;
+      total.user += summary.user;
+      total.parent += summary.parent;
       total.blocked += summary.blocked;
       total.failed += summary.failed;
       total.finished &&= summary.finished;
@@ -106,10 +103,12 @@ export function activityTree(
       !options.collapsed?.has(row.key) &&
       !(depth === 0 && history && !options.expandedHistory?.has(row.key));
     const summary = summarize(row);
+    const own = activityAttentionCounts(row);
     const attention = {
-      waiting: summary.waiting - Number(row.status === "needs-input"),
-      blocked: summary.blocked - Number(row.status === "blocked"),
-      failed: summary.failed - Number(row.status === "failed"),
+      user: summary.user - own.user,
+      parent: summary.parent - own.parent,
+      blocked: summary.blocked - own.blocked,
+      failed: summary.failed - own.failed,
     };
     result.push({
       row,
@@ -131,4 +130,4 @@ export function activityTree(
 }
 
 export const needsYou = (rows: readonly ActivityRow[]): readonly ActivityRow[] =>
-  rows.filter((row) => row.status === "needs-input");
+  rows.filter((row) => activityAttention(row) === "user");

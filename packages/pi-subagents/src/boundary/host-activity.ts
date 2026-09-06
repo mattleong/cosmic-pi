@@ -5,7 +5,13 @@ import {
 } from "pi-cosmic-ui/activity";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { projectFleetTree } from "../ui/run-tree-rows.ts";
-import { isActiveRunState, type SubagentProjection, type SubagentRunState } from "../run/model.ts";
+import {
+  isActiveRunState,
+  isParentActionRequiredRun,
+  type SubagentProjection,
+  type SubagentRunState,
+  type SubagentRunView,
+} from "../run/model.ts";
 import {
   emptyActivityPresentation,
   type SubagentActivityPresentationSnapshot,
@@ -16,7 +22,7 @@ const PROVIDER = "pi-subagents";
 const RUN_STATUS = {
   starting: "pending",
   running: "running",
-  waiting_for_parent: "needs-input",
+  waiting_for_parent: "blocked",
   paused: "blocked",
   reported: "done",
   completed: "done",
@@ -24,6 +30,23 @@ const RUN_STATUS = {
   stopping: "stopping",
   stopped: "cancelled",
 } satisfies Readonly<Record<SubagentRunState, ActivityItem["status"]>>;
+
+function runAttention(run: SubagentRunView) {
+  if (run.writeAdmissionPaused) {
+    // An older question does not make active claim containment ready for parent recovery.
+    const blockedReason = run.writeViolationOffender
+      ? isParentActionRequiredRun({ ...run, question: undefined })
+        ? "file-access-review"
+        : "write-containment"
+      : "file-access";
+    return { status: "blocked", blockedReason } as const;
+  }
+  if (run.state === "waiting_for_parent" && run.question !== undefined)
+    return { status: "needs-input", inputTarget: "parent" } as const;
+  if (run.state === "paused" || run.state === "waiting_for_parent")
+    return { status: "blocked", blockedReason: "parent-review" } as const;
+  return { status: RUN_STATUS[run.state] } as const;
+}
 
 export function subagentActivityItems(
   projection: SubagentProjection,
@@ -35,7 +58,7 @@ export function subagentActivityItems(
       id: run.id,
       kind: "agent" as const,
       title: sanitizeDiagnosticContent(run.name, { maximumLength: 512 }),
-      status: run.writeAdmissionPaused ? "blocked" : RUN_STATUS[run.state],
+      ...runAttention(run),
       revision: `${projection.revision}:${presentation.revision}`,
       awaited: awaited.has(run.id),
       startedAt: run.startedAt,

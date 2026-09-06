@@ -71,6 +71,8 @@ describe("activity service", () => {
           id,
           kind: "agent",
           status: "pending",
+          inputTarget: undefined,
+          blockedReason: undefined,
         }));
         yield* service.receive({ ...event, operation: "publish", items: pending });
         expect(starting).toBe(2); // Lease counts are requested work, not additional pending rows.
@@ -95,6 +97,51 @@ describe("activity service", () => {
         yield* service.receive({ ...replacement, operation: "publish", starting: 8 });
         expect(starting).toBe(0);
       }),
+  );
+  it.effect("withdraws invalid attention metadata and restores valid publication and actions", () =>
+    Effect.gen(function* () {
+      let rows: readonly ActivityRow[] = [];
+      let starting = 0;
+      let available = false;
+      const service = yield* ActivityService.make({
+        publish: (next, count) => {
+          rows = next;
+          starting = count;
+        },
+      });
+      const valid = { ...item(), status: "needs-input", inputTarget: "user" };
+      const event = {
+        ...registration({}),
+        items: [valid],
+        starting: 2,
+        acknowledge: (next: boolean) => {
+          available = next;
+        },
+      };
+      for (const metadata of [
+        { status: "needs-input" },
+        { status: "needs-input", inputTarget: "agent" },
+        { status: "needs-input", inputTarget: "parent", blockedReason: "parent-review" },
+        { status: "blocked", blockedReason: "unknown" },
+        { status: "blocked", inputTarget: "user" },
+      ]) {
+        yield* service.receive(event);
+        expect(available).toBe(true);
+        expect(rows[0]?.inputTarget).toBe("user");
+        const result = yield* Effect.exit(
+          service.receive({ ...event, operation: "publish", items: [{ ...item(), ...metadata }] }),
+        );
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(rows).toEqual([]);
+        expect(starting).toBe(0);
+        expect(available).toBe(false);
+      }
+      yield* service.receive({ ...event, items: [{ ...valid, inputTarget: "parent" }] });
+      expect(available).toBe(true);
+      expect(rows[0]?.inputTarget).toBe("parent");
+      expect(starting).toBe(2);
+      yield* service.invoke(action(rows[0]!));
+    }),
   );
   it.effect("animates metadata-only startup and settles once the launch clears", () =>
     Effect.gen(function* () {

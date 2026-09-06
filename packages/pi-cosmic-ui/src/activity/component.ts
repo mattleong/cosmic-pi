@@ -17,6 +17,7 @@ import {
 } from "../manager/list-detail-shell.ts";
 import type { ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
+import { activityAttentionLabels, activityAttentionTotals } from "./attention.ts";
 import { activityPath, activityTree, needsYou } from "./tree.ts";
 import {
   activityStartupGlyph,
@@ -246,6 +247,10 @@ export class ActivityComponent {
     const inner = Math.max(0, width - 2);
     const frame = listDetailFrame(this.options.theme);
     const urgent = needsYou(this.options.snapshot());
+    const attention = activityAttentionLabels({
+      ...activityAttentionTotals(this.options.snapshot()),
+      failed: 0,
+    }).join(" · ");
     const startup = activityStartupGlyph(
       this.options.snapshot(),
       this.options.starting?.() ?? 0,
@@ -288,7 +293,7 @@ export class ActivityComponent {
     return framedScreen(frame, {
       width,
       height,
-      top: ` Activity${breadcrumb ? ` › ${breadcrumb}` : ""}${urgent.length ? ` · Needs you ${urgent.length}` : ""}${startup ? ` ${startup}` : ""} `,
+      top: ` Activity${breadcrumb ? ` › ${breadcrumb}` : ""}${attention ? ` · ${attention}` : ""}${startup ? ` ${startup}` : ""} `,
       bottom,
       body: (bodyHeight) => {
         if (this.confirmation)

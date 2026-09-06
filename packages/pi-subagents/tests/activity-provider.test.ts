@@ -119,6 +119,73 @@ describe("subagent activity provider", () => {
     expect(JSON.stringify(items)).not.toContain("parent only");
   });
 
+  it("distinguishes claim peers, containment, review and recovery without enabling unsafe actions", () => {
+    const question = { requestId: "q", message: "private parent question", createdAt: 1 };
+    const runs = [
+      view({ id: "question", state: "waiting_for_parent", question }),
+      view({ id: "missing", state: "waiting_for_parent" }),
+      view({ id: "paused", state: "paused", capabilities: ["resume"] }),
+      view({ id: "peer", state: "running", writeAdmissionPaused: true }),
+      view({
+        id: "offender",
+        state: "paused",
+        writeAdmissionPaused: true,
+        writeViolationOffender: true,
+        capabilities: ["resume"],
+      }),
+      view({
+        id: "containment",
+        state: "waiting_for_parent",
+        question,
+        writeAdmissionPaused: true,
+        writeViolationOffender: true,
+      }),
+      view({
+        id: "terminal",
+        state: "failed",
+        writeAdmissionPaused: true,
+        writeViolationOffender: true,
+        capabilities: ["resume"],
+      }),
+    ];
+    const items = subagentActivityItems({ revision: 1, runs });
+    expect(
+      items.map(({ status, inputTarget, blockedReason }) => [status, inputTarget, blockedReason]),
+    ).toEqual([
+      ["needs-input", "parent", undefined],
+      ["blocked", undefined, "parent-review"],
+      ["blocked", undefined, "parent-review"],
+      ["blocked", undefined, "file-access"],
+      ["blocked", undefined, "file-access-review"],
+      ["blocked", undefined, "write-containment"],
+      ["blocked", undefined, "file-access-review"],
+    ]);
+    expect(
+      items
+        .filter((item) => item.actions?.some((action) => action.id === "resume"))
+        .map((item) => item.id),
+    ).toEqual(["paused"]);
+    expect(JSON.stringify(items)).not.toContain(question.message);
+    const recovered = subagentActivityItems({
+      revision: 2,
+      runs: runs.map((run) => ({
+        ...run,
+        state: "running",
+        question: undefined,
+        writeAdmissionPaused: false,
+        writeViolationOffender: false,
+      })),
+    });
+    expect(
+      recovered.every(
+        (item) =>
+          item.status === "running" &&
+          item.inputTarget === undefined &&
+          item.blockedReason === undefined,
+      ),
+    ).toBe(true);
+  });
+
   it("publishes launch leases as metadata before rows exist and releases overlapping requests independently", () => {
     const transport = host();
     const bridge = makeSubagentProjectionBridge();

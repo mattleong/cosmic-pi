@@ -14,22 +14,12 @@ export const ActivityStartingSchema = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
   Schema.isLessThanOrEqualTo(16384),
 );
-export const ActivityItemSchema = Schema.Struct({
+const ActivityFields = {
   id: Id,
   kind: Schema.Literals(["agent", "command", "question"]),
   title: Schema.String.check(Schema.isMaxLength(512)),
   profile: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
   awaited: Schema.optional(Schema.Boolean),
-  status: Schema.Literals([
-    "pending",
-    "running",
-    "stopping",
-    "blocked",
-    "needs-input",
-    "done",
-    "failed",
-    "cancelled",
-  ]),
   revision: Id,
   startedAt: Schema.optional(Timestamp),
   endedAt: Schema.optional(Timestamp),
@@ -42,7 +32,29 @@ export const ActivityItemSchema = Schema.Struct({
       Schema.isMaxLength(16),
     ),
   ),
-});
+};
+export const ActivityItemSchema = Schema.Union([
+  Schema.Struct({
+    ...ActivityFields,
+    status: Schema.Literal("needs-input"),
+    inputTarget: Schema.Literals(["user", "parent"]),
+    blockedReason: Schema.optional(Schema.Never),
+  }),
+  Schema.Struct({
+    ...ActivityFields,
+    status: Schema.Literal("blocked"),
+    inputTarget: Schema.optional(Schema.Never),
+    blockedReason: Schema.optional(
+      Schema.Literals(["parent-review", "file-access-review", "file-access", "write-containment"]),
+    ),
+  }),
+  Schema.Struct({
+    ...ActivityFields,
+    status: Schema.Literals(["pending", "running", "stopping", "done", "failed", "cancelled"]),
+    inputTarget: Schema.optional(Schema.Never),
+    blockedReason: Schema.optional(Schema.Never),
+  }),
+]);
 export type ActivityItem = typeof ActivityItemSchema.Type;
 export const ActivitySnapshotSchema = Schema.Array(ActivityItemSchema).check(
   Schema.isMaxLength(512),

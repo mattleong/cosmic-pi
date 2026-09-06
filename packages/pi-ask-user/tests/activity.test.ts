@@ -42,7 +42,7 @@ it.effect("publishes queued, mounted, hidden and settled questions without copyi
     yield* f.activity.observer.presenting("one");
     const token = f.bridge.activate(() => {});
     f.bridge.markOpened(token);
-    expect(f.provider.snapshot()[0]?.status).toBe("needs-input");
+    expect(f.provider.snapshot()[0]).toMatchObject({ status: "needs-input", inputTarget: "user" });
     f.bridge.markCollapsed(token);
     const hidden = f.provider.snapshot()[0]!;
     expect(hidden.actions?.some((action) => action.id === "resume")).toBe(true);
@@ -54,6 +54,8 @@ it.effect("publishes queued, mounted, hidden and settled questions without copyi
     f.bridge.clear(token);
     yield* f.activity.observer.settled("one", "submitted");
     expect(f.provider.snapshot()[0]).toMatchObject({ status: "done", actions: [] });
+    expect(f.provider.snapshot()[0]?.inputTarget).toBeUndefined();
+    expect(f.provider.snapshot()[0]?.blockedReason).toBeUndefined();
     f.activity.dispose();
   }),
 );
