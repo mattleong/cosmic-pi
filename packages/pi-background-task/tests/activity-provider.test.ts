@@ -60,6 +60,14 @@ function host() {
 }
 
 describe("background task activity provider", () => {
+  it("projects wait ownership without changing task status", () => {
+    for (const awaited of [true, false]) {
+      const items = backgroundTaskActivityItems({ tasks: [{ ...task, awaited }] });
+      expect(items[0]?.awaited).toBe(awaited);
+      expect(items[0]?.status).toBe("running");
+    }
+  });
+
   it("publishes root-only metadata without logs", () => {
     const items = backgroundTaskActivityItems({ tasks: [task] });
     expect(items[0]?.parent).toBeUndefined();

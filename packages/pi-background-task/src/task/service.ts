@@ -52,6 +52,7 @@ interface TaskRecord {
   handleReady: Deferred.Deferred<LocalProcessHandle, LocalProcessError>;
   terminalOutcome?: "stopped" | "timed_out";
   ingressDroppedObserved: number;
+  awaiters: number;
 }
 
 type WaitInspection =
@@ -148,6 +149,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       [...tasks.values()].map((record) => ({
         ...record.snapshot,
         logs: record.logs.events,
+        awaited: record.awaiters > 0,
       })),
     ),
   });
@@ -544,6 +546,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
               completion: Deferred.makeUnsafe<BackgroundTaskSnapshot>(),
               handleReady: Deferred.makeUnsafe<LocalProcessHandle, LocalProcessError>(),
               ingressDroppedObserved: 0,
+              awaiters: 0,
             };
             tasks.set(id, created);
             publish();
@@ -653,6 +656,21 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       }
 
       const record = yield* admitRecord(request.id);
+      yield* Effect.acquireRelease(
+        withLock(
+          Effect.sync(() => {
+            record.awaiters += 1;
+            publish();
+          }),
+        ),
+        () =>
+          withLock(
+            Effect.sync(() => {
+              record.awaiters -= 1;
+              publish();
+            }),
+          ),
+      );
       const timeoutMillis = Math.min(waitSeconds, config.maxWaitSeconds) * 1_000;
       const deadline = (yield* Clock.currentTimeMillis) + timeoutMillis;
       let scanAfterCursor = request.afterCursor ?? 0;
@@ -729,7 +747,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             : waitResult(finalInspection.snapshot, finalInspection.slice, "timeout");
         }
       }
-    });
+    }).pipe(Effect.scoped);
 
   const stop: BackgroundTaskServiceContract["stop"] = (id, force) => requestStop(id, force);
   const stopAll: BackgroundTaskServiceContract["stopAll"] = (force = false) =>

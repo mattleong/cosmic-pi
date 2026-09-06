@@ -151,6 +151,29 @@ describe("activity ownership", () => {
     expect(retained.map((entry) => entry.id)).toEqual(["root", "child"]);
     expect(retained[1]?.actions).toEqual([]);
   });
+  it("hides finished branches while retaining owners of active descendants", () => {
+    const values = [
+      row("root", "done"),
+      row("finished", "done", "root"),
+      row("live", "running", "root"),
+      row("history", "done"),
+    ];
+    expect(activityTree(values, { hideHistory: true }).map((entry) => entry.row.id)).toEqual([
+      "root",
+      "live",
+    ]);
+    expect(activityTree(values).map((entry) => entry.row.id)).toEqual([
+      "root",
+      "finished",
+      "live",
+      "history",
+    ]);
+    expect(
+      activityTree(values, { hideHistory: true, collapsed: new Set([values[0]!.key]) }).map(
+        (entry) => entry.row.id,
+      ),
+    ).toEqual(["root"]);
+  });
   it("collapses finished branches into history but expands and focuses them explicitly", () => {
     const values = [row("root", "done"), row("child", "done", "root"), row("live")];
     expect(activityTree(values).map((entry) => [entry.row.id, entry.history])).toEqual([

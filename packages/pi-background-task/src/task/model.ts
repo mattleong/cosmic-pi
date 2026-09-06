@@ -45,6 +45,7 @@ export interface BackgroundLogSlice {
 }
 
 export interface BackgroundTaskView extends BackgroundTaskSnapshot {
+  readonly awaited?: boolean;
   readonly logs: ReadonlyArray<BackgroundLogEvent>;
 }
 

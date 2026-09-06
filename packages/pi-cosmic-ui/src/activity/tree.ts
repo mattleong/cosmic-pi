@@ -24,6 +24,7 @@ export interface ActivityTreeOptions {
   readonly collapsed?: ReadonlySet<string>;
   readonly expandedHistory?: ReadonlySet<string>;
   readonly focus?: string;
+  readonly hideHistory?: boolean;
 }
 
 /** Missing owners and cyclic ownership are roots, never inferred from timing or titles. */
@@ -80,6 +81,7 @@ export function activityTree(
     };
     for (const child of children.get(row.key) ?? []) {
       const summary = summarize(child);
+      if (options.hideHistory && summary.finished) continue;
       total.user += summary.user;
       total.parent += summary.parent;
       total.blocked += summary.blocked;
@@ -97,7 +99,9 @@ export function activityTree(
   const result: ActivityTreeRow[] = [];
   const visit = (row: ActivityRow, continuations: readonly boolean[], history: boolean) => {
     const depth = continuations.length;
-    const owned = children.get(row.key) ?? [];
+    const owned = (children.get(row.key) ?? []).filter(
+      (child) => !options.hideHistory || !branchFinished(child),
+    );
     const expanded =
       owned.length > 0 &&
       !options.collapsed?.has(row.key) &&
@@ -125,7 +129,7 @@ export function activityTree(
     );
   };
   for (const root of roots.filter((row) => !branchFinished(row))) visit(root, [], false);
-  for (const root of roots.filter(branchFinished)) visit(root, [], true);
+  if (!options.hideHistory) for (const root of roots.filter(branchFinished)) visit(root, [], true);
   return result;
 }
 

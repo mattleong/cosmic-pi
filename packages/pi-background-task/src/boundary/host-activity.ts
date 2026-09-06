@@ -30,6 +30,7 @@ export function backgroundTaskActivityItems(
                     : ("done" as const),
         revision: `${task.startedAt}:${task.state}:${task.logCursor}`,
         summary: task.state,
+        awaited: task.awaited === true,
         startedAt: task.startedAt,
         updatedAt: task.endedAt ?? task.logs.at(-1)?.timestamp ?? task.startedAt,
         actions: Object.freeze(

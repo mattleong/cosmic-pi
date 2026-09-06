@@ -182,6 +182,59 @@ const awaitState = (state: BackgroundTaskState) => {
 };
 
 describe("BackgroundTaskService", () => {
+  for (const outcome of ["exit", "output", "timeout", "interrupt"] as const) {
+    it.effect(`clears awaited activity after ${outcome}`, () => {
+      const admitted = Deferred.makeUnsafe<void>();
+      let latest: BackgroundTaskProjection = { tasks: [] };
+      const harness = serviceHarness({}, (projection) => {
+        latest = projection;
+        if (projection.tasks.some((task) => task.awaited))
+          Deferred.doneUnsafe(admitted, Effect.void);
+      });
+      return harness.run(function* (service) {
+        const started = yield* service.start(taskInput());
+        const waiting = yield* service
+          .wait(
+            outcome === "output"
+              ? outputWait(started.id)
+              : { id: started.id, until: "exit", waitSeconds: 5 },
+          )
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(admitted);
+        expect(latest.tasks[0]?.awaited).toBe(true);
+        if (outcome === "exit") harness.controls[0]?.complete();
+        else if (outcome === "output") harness.controls[0]?.offer("stdout", "ready");
+        else if (outcome === "timeout") yield* TestClock.adjust("5 seconds");
+        if (outcome === "interrupt") yield* Fiber.interrupt(waiting);
+        else yield* Fiber.join(waiting);
+        expect(latest.tasks[0]?.awaited).toBe(false);
+      });
+    });
+  }
+
+  it.effect("keeps a task awaited until its last concurrent waiter leaves", () => {
+    let admitted = Deferred.makeUnsafe<void>();
+    let latest: BackgroundTaskProjection = { tasks: [] };
+    const harness = serviceHarness({}, (projection) => {
+      latest = projection;
+      if (projection.tasks.some((task) => task.awaited)) Deferred.doneUnsafe(admitted, Effect.void);
+    });
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const first = yield* service.wait(outputWait(started.id)).pipe(Effect.forkScoped);
+      yield* Deferred.await(admitted);
+      admitted = Deferred.makeUnsafe<void>();
+      const second = yield* service
+        .wait({ id: started.id, until: "exit", waitSeconds: 30 })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(admitted);
+      yield* Fiber.interrupt(first);
+      expect(latest.tasks[0]?.awaited).toBe(true);
+      yield* Fiber.interrupt(second);
+      expect(latest.tasks[0]?.awaited).toBe(false);
+      expect((yield* service.status(started.id)).state).toBe("running");
+    });
+  });
   it.effect("publishes output once at the leading edge and once at the trailing deadline", () => {
     const projections: BackgroundTaskProjection[] = [];
     const trailing = Deferred.makeUnsafe<void>();

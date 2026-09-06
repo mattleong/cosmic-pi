@@ -81,6 +81,7 @@ export function activityRowLine(
   width: number,
   now?: number,
   theme?: Pick<Theme, "fg">,
+  showHistory = true,
 ): string {
   const row = entry.row;
   const kind = activityType(row);
@@ -95,7 +96,7 @@ export function activityRowLine(
   const typeColor = row.kind === "agent" ? "accent" : row.kind === "question" ? "warning" : "muted";
   const paint = (tone: Parameters<Theme["fg"]>[0], text: string) => theme?.fg(tone, text) ?? text;
   // Keep the state icon and identity fixed when await ownership changes.
-  const awaited = row.kind === "agent" && row.awaited ? "◎ " : "  ";
+  const awaited = row.awaited ? "◎ " : "  ";
   const markerWidth = visibleWidth(awaited);
   const profileName = row.kind === "agent" ? (row.profile ?? "") : "";
   const identityWidth = visibleWidth(kind) + (profileName ? visibleWidth(profileName) + 1 : 0);
@@ -114,7 +115,7 @@ export function activityRowLine(
   );
   const glyph = paint(color, activityGlyph(row, now));
   const profile = profileName ? `${profileName} · ` : "";
-  const omitted = row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
+  const omitted = showHistory && row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
   const left = truncateToWidth(
     `${guide}${paint("accent", awaited)}${glyph} ${paint(typeColor, kind)} ${paint("muted", profile)}${paint("text", row.title)}${paint("dim", omitted)}`,
     leftWidth,
@@ -138,10 +139,10 @@ export function renderActivityWidget(
 ): string[] {
   const starting = options.starting ?? 0;
   if (width <= 0 || (rows.length === 0 && starting === 0) || maxRows <= 0) return [];
-  const tree = activityTree(rows, options);
+  const tree = activityTree(rows, { ...options, hideHistory: true });
   const urgent = needsYou(rows);
   const live = tree.filter((entry) => !entry.history);
-  const history = tree.filter((entry) => entry.history && entry.depth === 0).length;
+  if (live.length === 0 && starting === 0) return [];
   const style = (text: string) => options.theme?.fg("muted", text) ?? text;
   const counts = activityAttentionTotals(rows);
   const attention = activityAttentionLabels({ ...counts, failed: 0 }).join(" · ");
@@ -151,14 +152,7 @@ export function renderActivityWidget(
       : `Activity${attention ? ` · ${attention}` : ""}`;
   const startup = activityStartupGlyph(rows, starting, options.now);
   const combined = `${heading}${startup ? ` ${startup}` : ""}`;
-  const hint = visibleWidth(`${combined}  /activity`) <= width ? "  /activity" : "";
-  if (live.length === 0 && starting === 0) {
-    const failed = rows.filter((row) => row.status === "failed").length;
-    const summary = `Activity · ${history} finished ${history === 1 ? "branch" : "branches"}${failed ? ` · ${failed} failed` : ""}`;
-    const open = visibleWidth(`${summary}  /activity`) <= width ? "  /activity" : "";
-    return [truncateToWidth(style(`${summary}${open}`), width, "…")];
-  }
-  const lines = [style(`${combined}${hint}`)];
+  const lines = [style(combined)];
   if (urgent.length)
     lines.push(
       style(
@@ -169,15 +163,9 @@ export function renderActivityWidget(
   lines.push(
     ...live
       .slice(0, capacity)
-      .map((entry) => activityRowLine(entry, width, options.now, options.theme)),
+      .map((entry) => activityRowLine(entry, width, options.now, options.theme, false)),
   );
   const hidden = Math.max(0, live.length - capacity);
-  const omitted = Math.max(0, ...rows.map((row) => row.omittedHistory ?? 0));
-  if (hidden || history || omitted)
-    lines.push(
-      style(
-        `${hidden ? `+${hidden} rows  ` : ""}${history ? `History: ${history} branches` : ""}${omitted ? ` · ≥${omitted} earlier branches omitted` : ""}`,
-      ),
-    );
+  if (hidden) lines.push(style(`+${hidden} rows`));
   return lines.slice(0, maxRows).map((line) => truncateToWidth(line, width, ""));
 }

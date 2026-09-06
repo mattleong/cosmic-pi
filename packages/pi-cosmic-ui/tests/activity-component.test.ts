@@ -45,6 +45,42 @@ const events = (): ActivityEvents => {
   };
 };
 describe("activity presentation", () => {
+  it("hides the widget after activity ends but keeps startup and awaited work visible", () => {
+    const finished: ActivityRow[] = [
+      { ...row("success"), status: "done", inputTarget: undefined, blockedReason: undefined },
+      { ...row("failure"), status: "failed", inputTarget: undefined, blockedReason: undefined },
+      {
+        ...row("cancelled"),
+        status: "cancelled",
+        inputTarget: undefined,
+        blockedReason: undefined,
+      },
+    ];
+    expect(renderActivityWidget([], 80)).toEqual([]);
+    expect(renderActivityWidget(finished, 80)).toEqual([]);
+    const active = row("active");
+    const history = finished.map((item) => ({
+      ...item,
+      parent: { providerId: active.providerId, itemId: active.id },
+    }));
+    for (const collapsed of [new Set<string>(), new Set([active.key])]) {
+      expect(
+        renderActivityWidget(
+          [{ ...active, omittedChildren: 3, omittedHistory: 2 }, ...history],
+          80,
+          8,
+          { collapsed },
+        ),
+      ).toEqual(renderActivityWidget([active], 80, 8, { collapsed }));
+    }
+    expect(renderActivityWidget(finished, 80, 8, { starting: 1 }).length).toBeGreaterThan(0);
+    for (const kind of ["agent", "command"] as const) {
+      expect(
+        renderActivityWidget([{ ...finished[0]!, kind, awaited: true }], 80).length,
+      ).toBeGreaterThan(0);
+    }
+    expect(renderActivityWidget([row("running")], 80).length).toBeGreaterThan(0);
+  });
   it("bounds profiles, long names, and collapsed branch warnings with and without await marks", () => {
     const owner = { ...row("a very long task name"), profile: "researcher", awaited: true };
     const child: ActivityRow = {
