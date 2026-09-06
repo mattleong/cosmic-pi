@@ -101,7 +101,8 @@ export function activityRowLine(
       : managerActivityColor(row.status === "cancelled" ? "stopped" : row.status);
   const typeColor = row.kind === "agent" ? "accent" : row.kind === "question" ? "warning" : "muted";
   const paint = (tone: Parameters<Theme["fg"]>[0], text: string) => theme?.fg(tone, text) ?? text;
-  const awaited = row.kind === "agent" && row.awaited ? "◎ " : "";
+  // Keep the state icon and identity fixed when await ownership changes.
+  const awaited = row.kind === "agent" && row.awaited ? "◎ " : "  ";
   const markerWidth = visibleWidth(awaited);
   const profileName = row.kind === "agent" ? (row.profile ?? "") : "";
   const identityWidth = visibleWidth(kind) + (profileName ? visibleWidth(profileName) + 1 : 0);

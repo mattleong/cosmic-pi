@@ -69,6 +69,8 @@ describe("activity presentation", () => {
     const marked = renderActivityWidget(targets, 80, 8, { now: 100 });
     expect(marked[0]).toBe(normal[0]);
     expect(marked[1]).not.toBe(normal[1]);
+    expect(marked[1]!.indexOf(active.title)).toBeGreaterThanOrEqual(0);
+    expect(marked[1]!.indexOf(active.title)).toBe(normal[1]!.indexOf(active.title));
     expect(marked.slice(2)).toEqual(normal.slice(2));
     expect(renderActivityWidget(targets, 80, 8, { now: 200 })[1]).not.toBe(marked[1]);
     expect(
@@ -87,7 +89,17 @@ describe("activity presentation", () => {
         collapsed: new Set([owner.key]),
       });
       expect(lines.join("\n")).toContain(owner.profile);
-      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      const unmarked = renderActivityWidget([{ ...owner, awaited: false }, child], width, 8, {
+        collapsed: new Set([owner.key]),
+      });
+      expect(unmarked.join("\n")).toContain(owner.profile);
+      const profileColumn = (output: readonly string[]) => {
+        const line = output.find((value) => value.includes(owner.profile))!;
+        return visibleWidth(line.slice(0, line.indexOf(owner.profile)));
+      };
+      expect(profileColumn(lines)).toBe(profileColumn(unmarked));
+      for (const line of [...lines, ...unmarked])
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
   });
   it("accepts only the latest detail refresh even for the same revision", () => {
